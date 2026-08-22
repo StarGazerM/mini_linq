@@ -37,7 +37,7 @@
                 "iterator-pipeline",
                 "final-rust"
             ],
-            "default": "relational-plan"
+            "default": "final-rust"
         }
     ]
 }

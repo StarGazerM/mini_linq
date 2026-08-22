@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn triangle_sql_deduplicates_inputs_and_orders_the_distinct_head() {
         let sql = translate(&parse(
-            "struct Q; relation R(c0: i32, c1: i32); relation S(c0: i32, c1: i32); relation T(c0: i32, c1: i32); q(x, y, z) :- R(x, y), S(y, z), T(z, x);",
+            "struct Q; relation R(c0: i32, c1: i32); relation S(c0: i32, c1: i32); relation T(c0: i32, c1: i32); q(x, y, z) :- R(x, y), S(y, z), T(z, x).",
         ))
         .unwrap();
 
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn self_joins_use_occurrence_aliases_and_normalize_raw_identifiers() {
         let sql = translate(&parse(
-            "struct Q; relation r#type(c0: i32, c1: i32); q(x, z) :- r#type(x, y), r#type(y, z);",
+            "struct Q; relation r#type(c0: i32, c1: i32); q(x, z) :- r#type(x, y), r#type(y, z).",
         ))
         .unwrap();
 
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn disconnected_atoms_remain_an_explicit_cross_product() {
         let sql = translate(&parse(
-            "struct Q; relation A(c0: i32); relation B(c0: i32, c1: i32); q(x, y, z) :- A(x), B(y, z);",
+            "struct Q; relation A(c0: i32); relation B(c0: i32, c1: i32); q(x, y, z) :- A(x), B(y, z).",
         ))
         .unwrap();
 
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn generated_cte_names_do_not_case_fold_caller_relation_names() {
         let sql = translate(&parse(
-            "struct Q; relation R(c0: i32); relation r(c0: i32); q(x) :- R(x), r(x);",
+            "struct Q; relation R(c0: i32); relation r(c0: i32); q(x) :- R(x), r(x).",
         ))
         .unwrap();
 

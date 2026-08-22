@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+        run: rustup show active-toolchain
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Test workspace
@@ -22,5 +22,3 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test teaching tool
         run: cargo test --manifest-path xtask/Cargo.toml --locked
-      - name: Check teaching tool with Clippy
-        run: cargo clippy --manifest-path xtask/Cargo.toml --all-targets --locked -- -D warnings

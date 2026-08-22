@@ -25,7 +25,7 @@ pub struct IndexRequirement {
 /// relation R(c0: i32, c1: i32);
 /// relation S(c0: i32, c1: i32);
 /// relation T(c0: i32, c1: i32);
-/// triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
+/// triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).
 /// relational {
 ///     r0 = rename R {c0 -> x, c1 -> y};
 ///     r1 = rename S {c0 -> y, c1 -> z};
@@ -33,7 +33,7 @@ pub struct IndexRequirement {
 ///     r3 = rename T {c0 -> z, c1 -> x};
 ///     r4 = natural_join r2 with r3;
 ///     r5 = project r4 keep {x, y, z};
-///     output r5 as triangle(x, y, z);
+///     output r5 as triangle(x, y, z).
 /// }
 /// indexes {
 ///     S[0];

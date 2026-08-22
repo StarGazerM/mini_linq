@@ -2,6 +2,9 @@ pub mod rust;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use proc_macro2::TokenStream;
+use quote::{ToTokens, TokenStreamExt};
+use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token, Type, Visibility, token};
 
 use crate::{CommaList, InputList, kw, symbol_name};
@@ -13,15 +16,51 @@ use crate::{CommaList, InputList, kw, symbol_name};
 ///             RelationDecl+
 ///             Query
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub visibility: Visibility,
     pub struct_token: Token![struct],
     pub name: Ident,
     pub declaration_semi: Token![;],
-    #[syn(repeat, peek = kw::relation, nonempty)]
     pub inputs: InputList,
     pub query: Query,
+}
+
+impl Parse for Program {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let visibility = input.parse()?;
+        let struct_token = input.parse()?;
+        let name = input.parse()?;
+        let declaration_semi = input.parse()?;
+
+        let mut inputs = Vec::new();
+        while input.peek(kw::relation) {
+            inputs.push(input.parse()?);
+        }
+        if inputs.is_empty() {
+            return Err(input.error("CQ program must declare at least one input relation"));
+        }
+
+        Ok(Self {
+            visibility,
+            struct_token,
+            name,
+            declaration_semi,
+            inputs,
+            query: input.parse()?,
+        })
+    }
+}
+
+impl ToTokens for Program {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.visibility.to_tokens(tokens);
+        self.struct_token.to_tokens(tokens);
+        self.name.to_tokens(tokens);
+        self.declaration_semi.to_tokens(tokens);
+        tokens.append_all(&self.inputs);
+        self.query.to_tokens(tokens);
+    }
 }
 
 /// One named, typed column in a declared input relation.
@@ -65,7 +104,7 @@ impl RelationDecl {
 /// One query, with a nonempty syntactic body.
 ///
 /// ```text
-/// Query ::= Atom ":-" BodyItem ("," BodyItem)* ";"
+/// Query ::= Atom ":-" BodyItem ("," BodyItem)* "."
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Query {
@@ -74,7 +113,7 @@ pub struct Query {
     pub minus_token: Token![-],
     #[parse(CommaList::parse_separated_nonempty)]
     pub body: CommaList<BodyItem>,
-    pub semi_token: Token![;],
+    pub dot_token: Token![.],
 }
 
 /// One clause with Rust syntax preserved for later analysis.
@@ -209,7 +248,7 @@ impl Atom {
 /// relation R(src: i32, dst: i32);
 /// relation S(src: i32, dst: i32);
 /// relation T(src: i32, dst: i32);
-/// triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
+/// triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Module {

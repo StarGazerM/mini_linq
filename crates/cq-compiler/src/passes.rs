@@ -14,6 +14,9 @@ use cq_ir::{cq, index_requirements, iterator_pipeline, relational_plan, rust_acc
 
 use crate::pass_contracts;
 
+#[path = "staff_r1.rs"]
+mod staff_r1;
+
 /// Basic Homework 1: lower a CQ to canonical named relational algebra.
 #[allow(unreachable_code, clippy::diverging_sub_expression)]
 #[contracts::contract(
@@ -35,8 +38,10 @@ use crate::pass_contracts;
     ),
 )]
 pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
-    // HOMEWORK 1: construct the complete canonical RelationalPlan.
-    todo!("Homework 1: implement CQ -> RelationalPlan")
+    // BASIC HOMEWORK 1: construct the complete canonical RelationalPlan.
+    // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): extend this lowering as specified
+    // in doc/HW4-OPTIONAL.md.
+    staff_r1::compile_cq(source)
 }
 
 /// Basic Homework 2: add the exact equality-index overlay to a logical plan.
@@ -61,7 +66,10 @@ pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
 pub fn compile_relational_plan(
     source: &relational_plan::Module,
 ) -> syn::Result<index_requirements::Module> {
-    todo!("later homework: implement RelationalPlan -> IndexRequirements")
+    // BASIC HOMEWORK 2: preserve the full logical plan and derive its keys.
+    // OPTIONAL HW4 — STUDENT 4/6 (INDEX): extend canonical key derivation as
+    // specified in doc/HW4-OPTIONAL.md.
+    staff_r1::compile_relational_plan(source)
 }
 
 /// Basic Homework 3: lower the required indexed join to staged, ordinary Rust.
@@ -83,7 +91,10 @@ pub fn compile_relational_plan(
     debug_ensures(!pass_contracts::physical_input_is_supported(source) -> ret.is_err()),
 )]
 pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::Result<syn::File> {
-    todo!("later homework: implement IndexRequirements -> staged Rust")
+    // BASIC HOMEWORK 3: lower the indexed logical plan to staged Rust.
+    // OPTIONAL HW4 — STUDENT 6/6 (PHYSICAL): emit the extended accesses as
+    // specified in doc/HW4-OPTIONAL.md.
+    staff_r1::compile_index_requirements(source)
 }
 
 /// Supplied pull strategy: expose a conventional named iterator plan.
@@ -159,7 +170,7 @@ pub fn compile_pull(source: &rust_access_plan::Plan) -> iterator_pipeline::Pipel
 
     syn::parse2(quote! {
         #(#definitions)*
-        return #distinct_stream;
+        return #distinct_stream.
     })
     .expect("a well-formed RustAccessPlan must lower to an IteratorPipeline")
 }

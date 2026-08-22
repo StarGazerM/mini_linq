@@ -30,7 +30,6 @@ fn supplied_pull_pass_skips_its_debug_precondition_when_disabled() {
 }
 
 #[test]
-#[ignore = "Homework 1: implement CQ -> RelationalPlan"]
 fn cq_to_relational_plan_contract() {
     for fixture in fixtures::cq_to_relational_plan_and_indexes() {
         harness::assert_cq_to_relational_plan(fixture);
@@ -38,7 +37,6 @@ fn cq_to_relational_plan_contract() {
 }
 
 #[test]
-#[ignore = "later homework: implement RelationalPlan -> IndexRequirements"]
 fn relational_plan_to_index_requirements_contract() {
     for fixture in fixtures::cq_to_relational_plan_and_indexes() {
         harness::assert_relational_plan_to_index_requirements(fixture);
@@ -46,7 +44,6 @@ fn relational_plan_to_index_requirements_contract() {
 }
 
 #[test]
-#[ignore = "later homework: implement IndexRequirements -> staged Rust"]
 fn index_requirements_to_staged_rust_contract() {
     for fixture in fixtures::index_requirements_to_staged_rust() {
         harness::assert_index_requirements_to_staged_rust(fixture);

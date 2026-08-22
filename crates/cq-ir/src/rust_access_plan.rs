@@ -19,7 +19,7 @@ use crate::{CommaList, cq, symbol_name};
 ///     R(x, y) => for (x, y,) in (rows0.iter()),
 ///     S(y, z) => for (z,) in
 ///         (index0.get(&(y.clone(),)).into_iter().flatten()),
-///     T(z, x) => if (index1.contains(&(z.clone(), x.clone(),)));
+///     T(z, x) => if (index1.contains(&(z.clone(), x.clone(),))).
 /// ```
 ///
 /// The logical query shape plus one Rust annotation on every occurrence. The
@@ -29,7 +29,7 @@ use crate::{CommaList, cq, symbol_name};
 /// arbitrary Rust source expression.
 ///
 /// ```text
-/// Plan ::= Output ":-" Clause ("," Clause)* ";"
+/// Plan ::= Output ":-" Clause ("," Clause)* "."
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Plan {
@@ -38,7 +38,7 @@ pub struct Plan {
     pub minus_token: Token![-],
     #[parse(CommaList::parse_separated_nonempty)]
     pub body: CommaList<Clause>,
-    pub semi_token: Token![;],
+    pub dot_token: Token![.],
 }
 
 /// The result occurrence paired directly with the Rust value to yield.

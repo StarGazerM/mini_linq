@@ -7,7 +7,7 @@ fn triangle_plan_tokens() -> proc_macro2::TokenStream {
             R(x, y) => for (x, y,) in (rows0.iter()),
             S(y, z) => for (z,) in
                 (index0.get(&(y.clone(),)).into_iter().flatten()),
-            T(z, x) => if (index1.contains(&(z.clone(), x.clone(),)));
+            T(z, x) => if (index1.contains(&(z.clone(), x.clone(),))).
     }
 }
 
@@ -37,35 +37,35 @@ fn access_shape_and_for_pattern_follow_source_order_bindings() {
         // Array/slice patterns belonged to the old homogeneous-row backend.
         quote! {
             answer(x) => ((x.clone(),)) :-
-                Seed(x) => for [x] in (rows0.iter());
+                Seed(x) => for [x] in (rows0.iter()).
         },
         // A clause with fresh variables enumerates; it cannot be a predicate.
         quote! {
             answer(x) => ((x.clone(),)) :-
-                Seed(x) => if (rows0.contains(&(x.clone(),)));
+                Seed(x) => if (rows0.contains(&(x.clone(),))).
         },
         // A fully bound occurrence is a predicate; it cannot bind again.
         quote! {
             answer(x) => ((x.clone(),)) :-
                 Seed(x) => for (x,) in (rows0.iter()),
-                Keep(x) => for () in (index0.get(&(x.clone(),)).into_iter());
+                Keep(x) => for () in (index0.get(&(x.clone(),)).into_iter()).
         },
         // The binding pattern follows fresh relation columns, not an arbitrary
         // variable ordering.
         quote! {
             answer(x, y) => ((x.clone(), y.clone(),)) :-
-                Pair(x, y) => for (y, x,) in (rows0.iter());
+                Pair(x, y) => for (y, x,) in (rows0.iter()).
         },
         // Bound key variables are not returned by a proper-key lookup.
         quote! {
             answer(x, z) => ((x.clone(), z.clone(),)) :-
                 Seed(x) => for (x,) in (rows0.iter()),
-                Edge(x, z) => for (x, z,) in (index0.get(&(x.clone(),)).into_iter());
+                Edge(x, z) => for (x, z,) in (index0.get(&(x.clone(),)).into_iter()).
         },
         // The output atom cannot mention a variable that no access bound.
         quote! {
             answer(y) => ((y.clone(),)) :-
-                Seed(x) => for (x,) in (rows0.iter());
+                Seed(x) => for (x,) in (rows0.iter()).
         },
     ];
 
@@ -81,7 +81,7 @@ fn raw_identifiers_compare_as_logical_symbols_in_binding_patterns() {
     let plan: rust_access_plan::Plan = syn::parse2(quote! {
         answer(r#x, z) => ((r#x.clone(), z.clone(),)) :-
             Seed(x) => for (r#x,) in (rows0.iter()),
-            Edge(r#x, z) => for (z,) in (index0.get(&(r#x.clone(),)).into_iter());
+            Edge(r#x, z) => for (z,) in (index0.get(&(r#x.clone(),)).into_iter()).
     })
     .unwrap();
 

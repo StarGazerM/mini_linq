@@ -64,8 +64,8 @@ Program           ::= RustVisibility? "struct" Ident ";"
                       Query
 RelationDecl      ::= Ident "(" ColumnDecl ("," ColumnDecl)* [","] ")" ";"
 ColumnDecl        ::= Ident ":" RustType
-Query             ::= Atom ":-" Atom ("," Atom)* ";"
-Atom              ::= Ident "(" [RustExpr ("," RustExpr)* [","]] ")"
+Query             ::= Atom ":-" Atom ("," Atom)* "."
+Atom              ::= Ident "(" Ident ("," Ident)* [","] ")"
 
 RelationalModule  ::= Program "relational" "{" RelationalPlan "}"
 RelationalPlan    ::= RelDefinition* RelOutput
@@ -75,14 +75,14 @@ RelOperator       ::= "unit"
                     | "natural_join" RelId "with" RelId
                     | "project" RelId "keep" "{" Ident ("," Ident)* [","] "}"
 RenameMap         ::= Ident "->" Ident
-RelOutput         ::= "output" RelId "as" Atom ";"
+RelOutput         ::= "output" RelId "as" Atom "."
 
 IndexModule       ::= RelationalModule "indexes" "{"
                       [IndexRequirement (";" IndexRequirement)* [";"]]
                       "}"
 IndexRequirement  ::= Ident "[" [Column ("," Column)* [","]] "]"
 
-RustAccessPlan    ::= Output ":-" Clause ("," Clause)* ";"
+RustAccessPlan    ::= Output ":-" Clause ("," Clause)* "."
 Output            ::= Atom "=>" "(" RustExpr ")"
 Clause            ::= Atom "=>" RustAccess
 RustAccess        ::= "for" RustPat "in" "(" RustExpr ")"
@@ -98,7 +98,7 @@ IterOperator      ::= "unit" "yield" RustExpr
                     | "filter" IterId "as" RustPat "if" "(" RustExpr ")"
                     | "project" IterId "as" RustPat "yield" "(" RustExpr ")"
                     | "distinct" IterId
-IterReturn        ::= "return" IterId ";"
+IterReturn        ::= "return" IterId "."
 ```
 
 The table above describes the basic semantic checkpoint. The supplied CQ
@@ -208,7 +208,7 @@ omitted declarations or pseudocode placeholders.
     triangle(x, y, z) :-
         R(x, y),
         S(y, z),
-        T(z, x);
+        T(z, x).
 }
 ```
 
@@ -226,7 +226,7 @@ operator nor an index or Rust execution choice.
     triangle(x, y, z) :-
         R(x, y),
         S(y, z),
-        T(z, x);
+        T(z, x).
     relational {
         r0 = rename R {c0 -> x, c1 -> y};
         r1 = rename S {c0 -> y, c1 -> z};
@@ -234,7 +234,7 @@ operator nor an index or Rust execution choice.
         r3 = rename T {c0 -> z, c1 -> x};
         r4 = natural_join r2 with r3;
         r5 = project r4 keep {x, y, z};
-        output r5 as triangle(x, y, z);
+        output r5 as triangle(x, y, z).
     }
 }
 ```
@@ -256,7 +256,7 @@ separate output metadata preserves the head name and tuple order.
     triangle(x, y, z) :-
         R(x, y),
         S(y, z),
-        T(z, x);
+        T(z, x).
     relational {
         r0 = rename R {c0 -> x, c1 -> y};
         r1 = rename S {c0 -> y, c1 -> z};
@@ -264,7 +264,7 @@ separate output metadata preserves the head name and tuple order.
         r3 = rename T {c0 -> z, c1 -> x};
         r4 = natural_join r2 with r3;
         r5 = project r4 keep {x, y, z};
-        output r5 as triangle(x, y, z);
+        output r5 as triangle(x, y, z).
     }
     indexes {
         S[0];
@@ -347,7 +347,7 @@ impl TriangleProgramStorage {
                 T(z, x) => if (
                 self.index1
                     .contains(&(::core::clone::Clone::clone(z), ::core::clone::Clone::clone(x)))
-            );
+            ).
         }
     }
     pub fn materialize(&self) -> ::std::vec::Vec<(i32, i32, i32)> {
@@ -439,7 +439,7 @@ impl TriangleProgramStorage {
                 )
             );
             iter4 = distinct iter3;
-            return iter4;
+            return iter4.
         }
     }
     pub fn materialize(&self) -> ::std::vec::Vec<(i32, i32, i32)> {

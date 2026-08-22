@@ -1,0 +1,144 @@
+# Private all-answers branch
+
+This branch is a self-contained, editor-facing checkout of the completed basic
+query-lowering checkpoint. It is private staff material and must not be pushed
+to the student repository or distributed before the release policy permits it.
+
+The three public homework functions remain in
+`crates/cq-compiler/src/passes.rs`. On this branch they delegate to the complete
+implementation in `crates/cq-compiler/src/staff_r1.rs`:
+
+```text
+compile_cq                  CQ -> RelationalPlan
+compile_relational_plan     RelationalPlan -> IndexRequirements
+compile_index_requirements  IndexRequirements -> staged syn::File
+```
+
+The supplied route then lowers the embedded RustAccessPlan to a named
+IteratorPipeline and that pipeline to an ordinary Rust `syn::Expr`.
+
+The general RelationalPlan parser/checker also contains the staff-supplied
+empty-heading `Unit` source for future global Optional-HW4 clauses. These basic
+answers intentionally never emit or physically accept it; HW4 extends those
+edges cumulatively.
+
+## Inspect every layer in VS Code
+
+The repository-owned stepper is the authoritative way to inspect intermediate
+compiler results. From the repository root, either run:
+
+```text
+cargo xtask explain triangle
+cargo xtask explain triangle --through index-requirements
+```
+
+Alternatively, choose **Tasks: Run Task** and **MiniLinq: Explain query** in
+VS Code.
+The task prompts for a catalog case and one of the six stopping stages. The
+command prints clickable absolute paths under
+`target/mini-linq-explain/<case>/`:
+
+```text
+01-cq.rs
+02-relational-plan.rs
+03-index-requirements.rs
+04-rust-access-plan.rs
+05-iterator-pipeline.rs
+06-final-rust.rs
+README.md
+```
+
+`explain` uses the lightweight tool build and does not compile DuckDB. The
+oracle is enabled automatically only for `golden` and `differential`.
+
+Every `.rs` file is the complete query program or staged Rust residual at that
+boundary. Select adjacent files in the Explorer with **Select for Compare**
+and **Compare with Selected**. If a pass fails, the stepper preserves the
+successful earlier files from that run, removes stale later files, and writes
+`ERROR.md` at the failed edge. The trace files live outside the Cargo crate
+graph and are intended for syntax inspection and diffs; Rust Analyzer does not
+type-check them as workspace modules.
+
+Rust Analyzer can still show the final generated code in its call-site
+context. Open a query such as
+`workloads/src/queries/classic/triangle.rs`, put the caret on
+`workload_query!`, and choose **rust-analyzer: Expand macro recursively at
+caret**. After switching between the student and all-answers branches in an
+open window, first run **rust-analyzer: Reload workspace** so cached
+proc-macro artifacts are replaced.
+
+The branch-local `.vscode/settings.json` enables
+`cq-workloads/compiled-queries`. That feature forwards
+`mini-linq/compiled-workloads`, so every direct `workload_query!` invocation
+still emits its typed-CQ catalog factory and directly calls all three completed
+student passes to emit its generated `Program` and `ProgramStorage`. It does
+not invoke a nested `mini_linq!` wrapper.
+
+Consequently, Rust Analyzer's recursive command is **not** a layer stepper: it
+returns the final ordinary Rust, and the first three typed results never exist
+as nested macro invocations in `workload_query!`. Do not try to expand again
+from the virtual `[EXPANSION].rs` buffer. Use `cargo xtask explain` for the six
+compiler boundaries.
+
+`Program::build` performs one-time input normalization and all physical
+construction. `Storage::query` returns one lazy, distinct result cursor;
+constructing it reads no stored row, and its first `next()` enters the outer
+`once_with`. `Storage::materialize` drains that already-distinct cursor into a
+`Vec` and sorts it. No second raw-result cursor is generated.
+
+The supplied `compile_pull` lowering preserves operator boundaries as an
+IteratorPipeline: `scan`, left-deep binary `join`, `filter`, `project`, and
+explicit `distinct`, with one named `iterN` result and a complete intermediate
+binding tuple at every edge. `compile_iterator_pipeline` then chooses the
+actual Rust `map`, `flat_map`, and `filter` adapters and emits one Rust local
+per `iterN`. Its returned `syn::Expr` is the final concrete IR; proc-macro
+`ToTokens` is pure emission.
+
+Generated query access borrows physical tuples: row scans use `.iter()` and
+proper-index payload traversal uses `.flatten()` without `.cloned()`. Bound
+positive variables are references, so lookup keys, membership tests, and
+projection clone only the fields needed to construct owned tuples. Lazy
+distinctness retains one clone of each first-seen owned result. An additional
+build-time representation likewise borrows the normalized relation and clones
+only the key and complement fields that new representation must own before the
+normalized relation's final move.
+
+Rust Analyzer does not provide MiniLinq-specific completion inside a custom
+token tree; the typed syntax, contracts, stepper artifacts, and focused tests
+own those diagnostics.
+
+## Verify the answer branch
+
+Check all authored queries through the same proc-macro route used by the
+editor:
+
+```text
+cargo check -p cq-workloads --features compiled-queries --locked
+```
+
+Run the complete baseline suite and its focused pass edges:
+
+```text
+cargo test --workspace --locked
+cargo test -p cq-compiler --test pass_contracts cq_to_relational_plan_contract
+cargo test -p cq-compiler --test pass_contracts relational_plan_to_index_requirements_contract
+cargo test -p cq-compiler --test pass_contracts index_requirements_to_staged_rust_contract
+cargo test -p cq-compiler --test documented_triangle
+```
+
+Run all generated programs against the independent DuckDB oracle:
+
+```text
+cargo xtask differential all tiny --scenario all
+```
+
+The separate `join-processing-datalog-reference` repository remains the
+release verifier. Its answer branch archives a pinned student checkpoint,
+overlays the same answer implementation, and proves compatibility without
+depending on this working tree.
+
+Optional Homework 4 is intentionally not implied by the completed basic
+answers. Its `hw4` feature gates only its optional test targets. On an HW4
+answer checkpoint, students cumulatively extend the production CQ,
+RelationalPlan, index, and physical passes while continuing to use
+`mini_linq!`; Cargo does not silently replace the baseline macro semantics.

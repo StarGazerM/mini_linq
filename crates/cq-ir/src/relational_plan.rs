@@ -8,6 +8,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use proc_macro2::TokenStream;
+use quote::{ToTokens, TokenStreamExt};
+use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token, token};
 
 use crate::{CommaList, cq, symbol_name};
@@ -33,13 +36,13 @@ pub mod kw {
 /// ```text
 /// struct TwoHopRoads;
 /// relation road(src: City, dst: City);
-/// two_hop(from, to) :- road(from, via), road(via, to);
+/// two_hop(from, to) :- road(from, via), road(via, to).
 /// relational {
 ///     r0 = rename road {src -> from, dst -> via};
 ///     r1 = rename road {src -> via, dst -> to};
 ///     r2 = natural_join r0 with r1;
 ///     r3 = project r2 keep {from, to};
-///     output r3 as two_hop(from, to);
+///     output r3 as two_hop(from, to).
 /// }
 /// ```
 ///
@@ -61,13 +64,39 @@ pub struct Module {
 /// ```text
 /// Plan       ::= Definition* Output
 /// Definition ::= RelationId "=" Operator ";"
-/// Output     ::= "output" RelationId "as" Atom ";"
+/// Output     ::= "output" RelationId "as" Atom "."
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plan {
-    #[syn(repeat, until = kw::output)]
     pub definitions: Vec<Definition>,
     pub output: Output,
+}
+
+impl Parse for Plan {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut definitions = Vec::new();
+        while !input.peek(kw::output) {
+            if input.is_empty() {
+                return Err(input.error("relational plan must end with `output result as head.`"));
+            }
+            definitions.push(input.parse()?);
+        }
+        let output = input.parse()?;
+        if !input.is_empty() {
+            return Err(input.error("unexpected tokens after relational plan output"));
+        }
+        Ok(Self {
+            definitions,
+            output,
+        })
+    }
+}
+
+impl ToTokens for Plan {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append_all(&self.definitions);
+        self.output.to_tokens(tokens);
+    }
 }
 
 /// One named relation result and the logical operator that defines it.
@@ -88,19 +117,42 @@ pub struct Definition {
 /// ```text
 /// Operator ::= Unit | Rename | NaturalJoin | Project
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operator {
     // Unit is supplied for global optional-HW4 clauses. OPTIONAL HW4 —
     // STUDENT 3/6 (LOGICAL): add AntiSemijoin and AggregateApply as described
     // in doc/HW4-OPTIONAL.md.
-    #[parse(peek = kw::unit)]
     Unit(Unit),
-    #[parse(peek = kw::rename)]
     Rename(Box<Rename>),
-    #[parse(peek = kw::natural_join)]
     NaturalJoin(Box<NaturalJoin>),
-    #[parse(peek = kw::project)]
     Project(Box<Project>),
+}
+
+impl Parse for Operator {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(kw::unit) {
+            input.parse().map(Self::Unit)
+        } else if input.peek(kw::rename) {
+            input.parse().map(Box::new).map(Self::Rename)
+        } else if input.peek(kw::natural_join) {
+            input.parse().map(Box::new).map(Self::NaturalJoin)
+        } else if input.peek(kw::project) {
+            input.parse().map(Box::new).map(Self::Project)
+        } else {
+            Err(input.error("expected `unit`, `rename`, `natural_join`, or `project`"))
+        }
+    }
+}
+
+impl ToTokens for Operator {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            Self::Unit(operator) => operator.to_tokens(tokens),
+            Self::Rename(operator) => operator.to_tokens(tokens),
+            Self::NaturalJoin(operator) => operator.to_tokens(tokens),
+            Self::Project(operator) => operator.to_tokens(tokens),
+        }
+    }
 }
 
 /// The singleton zero-column relation used to seed a global logical clause.
@@ -186,7 +238,7 @@ pub struct Project {
 /// Output is metadata, not a relational operator.
 ///
 /// ```text
-/// Output ::= "output" RelationId "as" Atom ";"
+/// Output ::= "output" RelationId "as" Atom "."
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Output {
@@ -194,7 +246,7 @@ pub struct Output {
     pub input: Ident,
     pub as_token: Token![as],
     pub head: cq::Atom,
-    pub semi_token: Token![;],
+    pub dot_token: Token![.],
 }
 
 /// The RelationalPlan contract in diagnostic and predicate form.
