@@ -8,3 +8,4 @@
 /workloads/golden/**/large.csv
 .DS_Store
 tmp
+.pi

@@ -1,0 +1,158 @@
+{"kind":"deck","id":"pr/skg667","name":"Deck"}
+{"kind":"layout","layoutId":"cdf3aa4d-0b90-4602-9f34-e9caa98702e8","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"6cc0157b-3485-407a-a3da-723e0e31bd49","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/8bn4t0","slide":1,"title":"MODERN QUERY PROCESSING","textShapes":6}
+{"kind":"textbox","id":"sh/adgbutgj","slide":1,"text":"MODERN QUERY PROCESSING","textPreview":"MODERN QUERY PROCESSING","textChars":23,"textLines":1,"bbox":[72,64,520,22]}
+{"kind":"textbox","id":"sh/xg7a5oza","slide":1,"name":"course-title","text":"Modern Query Processing","textPreview":"Modern Query Processing","textChars":23,"textLines":1,"bbox":[72,218,1136,106]}
+{"kind":"textbox","id":"sh/wfytwjyp","slide":1,"text":"Databases and Reasoning","textPreview":"Databases and Reasoning","textChars":23,"textLines":1,"bbox":[76,343,980,46]}
+{"kind":"shape","id":"sh/jips7yhg","slide":1,"bbox":[72,574,1136,0]}
+{"kind":"textbox","id":"sh/ihgbytgv","slide":1,"text":"Yihao Sun","textPreview":"Yihao Sun","textChars":9,"textLines":1,"bbox":[72,603,260,30]}
+{"kind":"textbox","id":"sh/5kru98z6","slide":1,"text":"yihao.sun@usu.edu","textPreview":"yihao.sun@usu.edu","textChars":17,"textLines":1,"bbox":[350,603,360,30]}
+{"kind":"textbox","id":"sh/kjyt03yl","slide":1,"text":"Fall 2026","textPreview":"Fall 2026","textChars":9,"textLines":1,"bbox":[980,603,228,30]}
+{"kind":"notes","id":"nt/8bn4t0","slide":1,"text":"Allow about 30-45 seconds. Greet the class and advance without previewing the definition of database.\n\n[Sources]\n- /Users/stargazermiao/workspace/join-processing-datalog/doc/notes/syllabus.md\n- /Users/stargazermiao/workspace/StarGazerM.github.io/_config.yml\n[/Sources]"}
+{"kind":"slide","id":"sl/dov6wf","slide":2,"title":"WHAT IS A DATABASE?","textShapes":15}
+{"kind":"textbox","id":"sh/qdcvudgb","slide":2,"text":"WHAT IS A DATABASE?","textPreview":"WHAT IS A DATABASE?","textChars":19,"textLines":1,"bbox":[72,28,440,20]}
+{"kind":"textbox","id":"sh/dg3e5sz2","slide":2,"name":"slide-title","text":"Every product remembers something.","textPreview":"Every product remembers something.","textChars":34,"textLines":1,"bbox":[72,60,1136,66]}
+{"kind":"shape","id":"sh/cfudwnyh","slide":2,"bbox":[72,137,1136,0]}
+{"kind":"textbox","id":"sh/vm1cvyho","slide":2,"text":"orders","textPreview":"orders","textChars":6,"textLines":1,"bbox":[76,312,152,26]}
+{"kind":"textbox","id":"sh/ulsvmtg3","slide":2,"text":"posts","textPreview":"posts","textChars":5,"textLines":1,"bbox":[282,312,152,26]}
+{"kind":"textbox","id":"sh/czutwbex","slide":2,"text":"playlists","textPreview":"playlists","textChars":9,"textLines":1,"bbox":[76,529,152,26]}
+{"kind":"textbox","id":"sh/d03a5gvi","slide":2,"text":"trips","textPreview":"trips","textChars":5,"textLines":1,"bbox":[282,529,152,26]}
+{"kind":"shape","id":"sh/qxcbu1w7","slide":2,"bbox":[492,170,0,438]}
+{"kind":"textbox","id":"sh/byls36dc","slide":2,"text":"YOUR FIRST PICTURE","textPreview":"YOUR FIRST PICTURE","textChars":18,"textLines":1,"bbox":[522,176,170,18]}
+{"kind":"shape","id":"sh/ova9sbe1","slide":2,"name":"sql-query","bbox":[508,319,144,78]}
+{"kind":"textbox","id":"sh/pw3a1wvm","slide":2,"text":"SELECT …","textPreview":"SELECT …","textChars":8,"textLines":1,"bbox":[522,329,116,58]}
+{"kind":"textbox","id":"sh/29srq1wv","slide":2,"text":"→","textPreview":"→","textChars":1,"textLines":1,"bbox":[652,323,40,62]}
+{"kind":"shape","id":"sh/3u1sz6dg","slide":2,"name":"mysql-server","bbox":[700,162,488,458]}
+{"kind":"textbox","id":"sh/8ret4ve5","slide":2,"text":"SERVER","textPreview":"SERVER","textChars":6,"textLines":1,"bbox":[726,182,100,18]}
+{"kind":"shape","id":"sh/hojah0nu","slide":2,"bbox":[738,292,412,56]}
+{"kind":"textbox","id":"sh/wnatov69","slide":2,"text":"SQL parser + optimizer","textPreview":"SQL parser + optimizer","textChars":22,"textLines":1,"bbox":[752,302,384,36]}
+{"kind":"shape","id":"sh/vm1sfq5o","slide":2,"bbox":[738,368,196,60]}
+{"kind":"textbox","id":"sh/ulsrmloj","slide":2,"text":"transactions","textPreview":"transactions","textChars":12,"textLines":1,"bbox":[752,378,168,40]}
+{"kind":"shape","id":"sh/9kjadgny","slide":2,"bbox":[954,368,196,60]}
+{"kind":"textbox","id":"sh/8ja9kb6d","slide":2,"text":"buffer pool","textPreview":"buffer pool","textChars":11,"textLines":1,"bbox":[968,378,168,40]}
+{"kind":"shape","id":"sh/7ihsbq5s","slide":2,"bbox":[738,450,412,66]}
+{"kind":"textbox","id":"sh/mh8rilo7","slide":2,"text":"tables + indexes","textPreview":"tables + indexes","textChars":16,"textLines":1,"bbox":[752,460,384,46]}
+{"kind":"shape","id":"sh/lgza9gnm","slide":2,"bbox":[738,540,412,50]}
+{"kind":"textbox","id":"sh/kfq9gb61","slide":2,"text":"redo / undo logs","textPreview":"redo / undo logs","textChars":16,"textLines":1,"bbox":[752,550,384,30]}
+{"kind":"image","id":"im/ulcv6hcb","slide":2,"name":"","alt":"Amazon logo","bbox":[96,188,112,112]}
+{"kind":"image","id":"im/vmlczmdw","slide":2,"name":"","alt":"Instagram logo","bbox":[302,188,112,112]}
+{"kind":"image","id":"im/gnud8ru1","slide":2,"name":"","alt":"Spotify logo","bbox":[96,405,112,112]}
+{"kind":"image","id":"im/ho3u1wvm","slide":2,"name":"","alt":"Uber logo","bbox":[302,405,112,112]}
+{"kind":"image","id":"im/y9kb6lob","slide":2,"name":"","alt":"MySQL logo","bbox":[851,170,190,112]}
+{"kind":"notes","id":"nt/dov6wf","slide":2,"text":"3 minutes. First spend about 45 seconds on the four familiar products. Ask what each must remember: orders, posts, playlists, or trips. The logos illustrate application variety only; do not suggest that these products all run on MySQL. Then let MySQL supply the students' likely picture: a client sends SQL to a server containing many subsystems. Ask them to name anything else they associate with a database server. Preserve the provisional answer: database means complicated software that stores and manages data. Do not correct it yet.\n\n[Sources]\n- https://dev.mysql.com/doc/dev/mysql-server/latest/PAGE_PROTOCOL.html\n- https://dev.mysql.com/doc/refman/9.2/en/innodb-architecture.html\n- https://upload.wikimedia.org/wikipedia/en/d/dd/MySQL_logo.svg\n- https://github.com/FortAwesome/Font-Awesome/blob/6.x/svgs/brands/amazon.svg\n- https://github.com/FortAwesome/Font-Awesome/blob/6.x/svgs/brands/instagram.svg\n- https://github.com/FortAwesome/Font-Awesome/blob/6.x/svgs/brands/spotify.svg\n- https://github.com/FortAwesome/Font-Awesome/blob/6.x/svgs/brands/uber.svg\n- /Users/stargazermiao/workspace/join-processing-datalog/doc/notes/01-a-little-database-a-few-questions.md\n[/Sources]"}
+{"kind":"slide","id":"sl/imfz3x","slide":3,"title":"WHAT CHANGED?","textShapes":17}
+{"kind":"textbox","id":"sh/54f6h0be","slide":3,"text":"WHAT CHANGED?","textPreview":"WHAT CHANGED?","textChars":13,"textLines":1,"bbox":[72,28,440,20]}
+{"kind":"textbox","id":"sh/i1o7mlc3","slide":3,"name":"slide-title","text":"Same tables. No server.","textPreview":"Same tables. No server.","textChars":23,"textLines":1,"bbox":[72,60,1136,66]}
+{"kind":"shape","id":"sh/j2xofqto","slide":3,"bbox":[72,137,1136,0]}
+{"kind":"shape","id":"sh/wf6pkbux","slide":3,"name":"sqlite-cli","bbox":[72,184,424,206]}
+{"kind":"textbox","id":"sh/hgf6dgbi","slide":3,"text":"$ sqlite3 app.db\nsqlite> SELECT name, city\n   ...> FROM users;","textPreview":"$ sqlite3 app.db | sqlite> SELECT name, city |    ...> FROM users;","textChars":62,"textLines":3,"bbox":[98,217,370,142]}
+{"kind":"textbox","id":"sh/ud47i1cr","slide":3,"text":"→","textPreview":"→","textChars":1,"textLines":1,"bbox":[510,248,50,62]}
+{"kind":"textbox","id":"sh/0bqpwfa1","slide":3,"text":"→","textPreview":"→","textChars":1,"textLines":1,"bbox":[798,248,50,62]}
+{"kind":"textbox","id":"sh/9c36pk7y","slide":3,"text":"app.db","textPreview":"app.db","textChars":6,"textLines":1,"bbox":[906,279,144,34]}
+{"kind":"textbox","id":"sh/8bupgfqd","slide":3,"text":"one file","textPreview":"one file","textChars":8,"textLines":1,"bbox":[888,412,180,24]}
+{"kind":"textbox","id":"sh/7alonaps","slide":3,"text":"users","textPreview":"users","textChars":5,"textLines":1,"bbox":[220,456,840,28]}
+{"kind":"shape","id":"sh/m9c7e587","slide":3,"name":"users-table","bbox":[220,492,840,150]}
+{"kind":"shape","id":"sh/l836lkrm","slide":3,"bbox":[220,492,840,38]}
+{"kind":"shape","id":"sh/knu5cfq1","slide":3,"bbox":[220,530,840,0]}
+{"kind":"shape","id":"sh/zmloja9g","slide":3,"bbox":[220,586,840,0]}
+{"kind":"shape","id":"sh/ylcna58b","slide":3,"bbox":[354.4,492,0,150]}
+{"kind":"shape","id":"sh/5476x47q","slide":3,"bbox":[673.6,492,0,150]}
+{"kind":"textbox","id":"sh/4jepozql","slide":3,"text":"id","textPreview":"id","textChars":2,"textLines":1,"bbox":[220,500,134.4,24]}
+{"kind":"textbox","id":"sh/4nm9k3yh","slide":3,"text":"name","textPreview":"name","textChars":4,"textLines":1,"bbox":[354.4,500,319.2,24]}
+{"kind":"textbox","id":"sh/pofqt8f2","slide":3,"text":"city","textPreview":"city","textChars":4,"textLines":1,"bbox":[673.6,500,386.4,24]}
+{"kind":"textbox","id":"sh/2l4ridgr","slide":3,"text":"42","textPreview":"42","textChars":2,"textLines":1,"bbox":[220,542,134.4,26]}
+{"kind":"textbox","id":"sh/3md8rixw","slide":3,"text":"Ada","textPreview":"Ada","textChars":3,"textLines":1,"bbox":[354.4,542,319.2,26]}
+{"kind":"textbox","id":"sh/gjm9g3yl","slide":3,"text":"Logan","textPreview":"Logan","textChars":5,"textLines":1,"bbox":[673.6,542,386.4,26]}
+{"kind":"textbox","id":"sh/hkvqp8f6","slide":3,"text":"81","textPreview":"81","textChars":2,"textLines":1,"bbox":[220,598,134.4,26]}
+{"kind":"textbox","id":"sh/uh4retgf","slide":3,"text":"Alice","textPreview":"Alice","textChars":5,"textLines":1,"bbox":[354.4,598,319.2,26]}
+{"kind":"textbox","id":"sh/fid8nyx0","slide":3,"text":"Provo","textPreview":"Provo","textChars":5,"textLines":1,"bbox":[673.6,598,386.4,26]}
+{"kind":"image","id":"im/i9k7et0b","slide":3,"name":"","alt":"SQLite logo","bbox":[570,208,224,106]}
+{"kind":"image","id":"im/w72pc3i5","slide":3,"name":"","alt":"Single database file","bbox":[888,170,180,232]}
+{"kind":"notes","id":"nt/imfz3x","slide":3,"text":"2.5 minutes. Read the command from left to right: a CLI opens app.db, passes SQL to SQLite, and reads the same kind of users table students expect from MySQL. Ask: where is the server? Then ask what they are calling the database: the file, the SQLite library, or the tables inside it. Hold all answers. The contrast should weaken the equation database equals server without yet supplying the definition.\n\n[Sources]\n- https://sqlite.org/quickstart.html\n- https://sqlite.org/about.html\n- https://commons.wikimedia.org/wiki/File:SQLite370.svg\n- https://github.com/FortAwesome/Font-Awesome/tree/6.x/svgs/regular/file.svg\n- /Users/stargazermiao/workspace/join-processing-datalog/doc/notes/01-a-little-database-a-few-questions.md\n[/Sources]"}
+{"kind":"slide","id":"sl/w9jnmi","slide":4,"title":"WHAT REMAINED?","textShapes":16}
+{"kind":"textbox","id":"sh/or6t0j69","slide":4,"text":"WHAT REMAINED?","textPreview":"WHAT REMAINED?","textChars":14,"textLines":1,"bbox":[72,28,440,20]}
+{"kind":"textbox","id":"sh/nqxs7e5o","slide":4,"name":"slide-title","text":"What if there are no tables?","textPreview":"What if there are no tables?","textChars":28,"textLines":1,"bbox":[72,60,1136,66]}
+{"kind":"shape","id":"sh/mpoby9o3","slide":4,"bbox":[72,137,1136,0]}
+{"kind":"textbox","id":"sh/wvqt4j65","slide":4,"text":"{","textPreview":"{","textChars":1,"textLines":1,"bbox":[72,80,120,450]}
+{"kind":"textbox","id":"sh/buhsby50","slide":4,"text":"}","textPreview":"}","textChars":1,"textLines":1,"bbox":[1088,80,120,450]}
+{"kind":"textbox","id":"sh/at8b2tof","slide":4,"text":"KEY","textPreview":"KEY","textChars":3,"textLines":1,"bbox":[220,178,220,18]}
+{"kind":"textbox","id":"sh/d0va147m","slide":4,"text":"VALUE","textPreview":"VALUE","textChars":5,"textLines":1,"bbox":[522,178,220,18]}
+{"kind":"textbox","id":"sh/czm9sz61","slide":4,"text":"\"user:42\"","textPreview":"\"user:42\"","textChars":9,"textLines":1,"bbox":[220,222,224,46]}
+{"kind":"textbox","id":"sh/axczixoz","slide":4,"text":":","textPreview":":","textChars":1,"textLines":1,"bbox":[458,220,42,50]}
+{"kind":"textbox","id":"sh/byl0r25k","slide":4,"text":"{ name: \"Ada\", city: \"Logan\" },","textPreview":"{ name: \"Ada\", city: \"Logan\" },","textChars":31,"textLines":1,"bbox":[522,222,548,50]}
+{"kind":"textbox","id":"sh/wzuhk765","slide":4,"text":"\"online\"","textPreview":"\"online\"","textChars":8,"textLines":1,"bbox":[220,326,224,46]}
+{"kind":"textbox","id":"sh/xk3itcnq","slide":4,"text":":","textPreview":":","textChars":1,"textLines":1,"bbox":[458,324,42,50]}
+{"kind":"textbox","id":"sh/ylczmh4b","slide":4,"text":"{ 42, 81, 105 },","textPreview":"{ 42, 81, 105 },","textChars":16,"textLines":1,"bbox":[522,326,548,50]}
+{"kind":"textbox","id":"sh/jml0vm5g","slide":4,"text":"\"visits\"","textPreview":"\"visits\"","textChars":8,"textLines":1,"bbox":[220,430,224,46]}
+{"kind":"textbox","id":"sh/knuhorm1","slide":4,"text":":","textPreview":":","textChars":1,"textLines":1,"bbox":[458,428,42,50]}
+{"kind":"textbox","id":"sh/lo3ixcnm","slide":4,"text":"19","textPreview":"19","textChars":2,"textLines":1,"bbox":[522,414,220,76]}
+{"kind":"shape","id":"sh/6pwzqh47","slide":4,"bbox":[72,570,1136,0]}
+{"kind":"textbox","id":"sh/7q50zm5s","slide":4,"name":"database-not-dbms","text":"database  ≠  DBMS","textPreview":"database  ≠  DBMS","textChars":17,"textLines":1,"bbox":[72,602,1136,48]}
+{"kind":"image","id":"im/cjyp0vat","slide":4,"name":"","alt":"Redis logo","bbox":[1018,51,170,54]}
+{"kind":"notes","id":"nt/w9jnmi","slide":4,"text":"3.5 minutes. Point to the outer braces first: conceptually, this is one map from keys to typed values, not three unrelated records. Let students read the entries before naming Redis. Ask whether a database must manage tables. Then ask why a Redis server is not merely a shared HashMap; accept persistence, concurrency, remote access, data operations, and similar suggestions verbally without listing them on the slide. Reveal only the distinction database is not DBMS. Do not define database yet. Transition exactly: We now know the database is not the same thing as its management software. To say what a database is, first ask what counts as data.\n\n[Sources]\n- https://redis.io/docs/latest/develop/data-types/\n- https://redis.io/docs/latest/develop/data-types/hashes/\n- https://commons.wikimedia.org/wiki/File:Redis_logo.svg\n- /Users/stargazermiao/workspace/join-processing-datalog/doc/notes/01-a-little-database-a-few-questions.md\n[/Sources]"}
+{"kind":"slide","id":"sl/rifj0b","slide":5,"title":"WHAT IS DATA?","textShapes":12}
+{"kind":"textbox","id":"sh/na1gz6d0","slide":5,"text":"WHAT IS DATA?","textPreview":"WHAT IS DATA?","textChars":13,"textLines":1,"bbox":[72,28,440,20]}
+{"kind":"textbox","id":"sh/8bax8bel","slide":5,"name":"slide-title","text":"Does data need a file?","textPreview":"Does data need a file?","textChars":22,"textLines":1,"bbox":[72,60,1136,66]}
+{"kind":"shape","id":"sh/9cjy1gv6","slide":5,"bbox":[72,137,1136,0]}
+{"kind":"textbox","id":"sh/yl8f21wj","slide":5,"text":"=","textPreview":"=","textChars":1,"textLines":1,"bbox":[392,302,50,72]}
+{"kind":"textbox","id":"sh/zmhgv6d4","slide":5,"text":"=","textPreview":"=","textChars":1,"textLines":1,"bbox":[780,302,50,72]}
+{"kind":"textbox","id":"sh/l8zyxgvu","slide":5,"text":"roads.xlsx","textPreview":"roads.xlsx","textChars":10,"textLines":1,"bbox":[82,370,300,34]}
+{"kind":"textbox","id":"sh/ihczelcn","slide":5,"text":"Logan → Salt Lake City\nSalt Lake City → Provo","textPreview":"Logan → Salt Lake City | Salt Lake City → Provo","textChars":45,"textLines":2,"bbox":[82,426,300,62]}
+{"kind":"textbox","id":"sh/jilg7qd8","slide":5,"text":"FILE","textPreview":"FILE","textChars":4,"textLines":1,"bbox":[82,526,300,20]}
+{"kind":"textbox","id":"sh/qh03ydg3","slide":5,"text":"roads.parquet","textPreview":"roads.parquet","textChars":13,"textLines":1,"bbox":[455,370,310,34]}
+{"kind":"textbox","id":"sh/dkr2tsze","slide":5,"text":"Logan → Salt Lake City\nSalt Lake City → Provo","textPreview":"Logan → Salt Lake City | Salt Lake City → Provo","textChars":45,"textLines":2,"bbox":[455,426,310,62]}
+{"kind":"textbox","id":"sh/cjil0ny9","slide":5,"text":"FILE","textPreview":"FILE","textChars":4,"textLines":1,"bbox":[455,526,310,20]}
+{"kind":"shape","id":"sh/zm94vixk","slide":5,"name":"roads-in-memory","bbox":[845,180,363,308]}
+{"kind":"textbox","id":"sh/el032dgz","slide":5,"text":"let roads = [\n    (\"Logan\",\n     \"Salt Lake City\"),\n    (\"Salt Lake City\",\n     \"Provo\"),\n];","textPreview":"let roads = [ |     (\"Logan\", |      \"Salt Lake City\"), |     (\"Salt Lake City\", |      \"Provo\"), | ];","textChars":92,"textLines":6,"bbox":[872,205,310,258]}
+{"kind":"textbox","id":"sh/lobmxsfq","slide":5,"text":"VALUE IN MEMORY","textPreview":"VALUE IN MEMORY","textChars":15,"textLines":1,"bbox":[845,526,363,20]}
+{"kind":"image","id":"im/pwje5sry","slide":5,"name":"","alt":"Microsoft Excel application icon","bbox":[157,184,150,154]}
+{"kind":"image","id":"im/c3ylczul","slide":5,"name":"","alt":"Apache Parquet project symbol","bbox":[525,180,170,170]}
+{"kind":"notes","id":"nt/rifj0b","slide":5,"text":"3 minutes. Ask in sequence: Is roads.xlsx data? Is roads.parquet data even if the format is unfamiliar? If a running program holds the same two road values, did they stop being data? Clarify one precise point: roads is a variable name or binding; the array value bound to it can serve as data. The equal signs mean the examples can carry the same logical values, not that their bytes or representations are identical. Do not teach XLSX or Parquet internals here. Conclude verbally: values are data; files and memory are different representations or locations. Transition exactly: However data is represented, software must turn a question into work. Where inside a DBMS does that happen?\n\n[Sources]\n- https://commons.wikimedia.org/wiki/File:Microsoft_Office_Excel_(2025%E2%80%93present).svg\n- https://www.microsoft.com/en-gb/microsoft-365\n- https://parquet.apache.org/\n- https://github.com/apache/parquet-format/tree/master/logo\n- /Users/stargazermiao/workspace/join-processing-datalog/doc/notes/01-a-little-database-a-few-questions.md\n[/Sources]"}
+{"kind":"slide","id":"sl/gjalmn","slide":6,"title":"COURSE SCOPE","textShapes":18}
+{"kind":"textbox","id":"sh/bit4buxo","slide":6,"text":"COURSE SCOPE","textPreview":"COURSE SCOPE","textChars":12,"textLines":1,"bbox":[72,28,440,20]}
+{"kind":"textbox","id":"sh/wj25kze9","slide":6,"name":"slide-title","text":"Inside the DBMS","textPreview":"Inside the DBMS","textChars":15,"textLines":1,"bbox":[72,60,1136,66]}
+{"kind":"shape","id":"sh/xkbmd4fu","slide":6,"bbox":[72,137,1136,0]}
+{"kind":"shape","id":"sh/mt03epw7","slide":6,"bbox":[600,302,170,0]}
+{"kind":"shape","id":"sh/nut47uxs","slide":6,"bbox":[600,348,170,0]}
+{"kind":"shape","id":"sh/of25gzed","slide":6,"name":"dbms-cutaway","bbox":[78,184,550,394]}
+{"kind":"textbox","id":"sh/9gbm94fi","slide":6,"text":"DBMS","textPreview":"DBMS","textChars":4,"textLines":1,"bbox":[108,203,120,20]}
+{"kind":"shape","id":"sh/ep03a5wv","slide":6,"bbox":[106,236,494,54]}
+{"kind":"textbox","id":"sh/zq943axg","slide":6,"text":"SQL / API","textPreview":"SQL / API","textChars":9,"textLines":1,"bbox":[130,252,446,22]}
+{"kind":"shape","id":"sh/fil876hs","slide":6,"name":"query-scope-band","bbox":[106,290,494,64]}
+{"kind":"textbox","id":"sh/ehs7e10n","slide":6,"text":"QUERY PROCESSING","textPreview":"QUERY PROCESSING","textChars":16,"textLines":1,"bbox":[130,311,446,22]}
+{"kind":"shape","id":"sh/1k3q9gzy","slide":6,"bbox":[106,354,494,54]}
+{"kind":"textbox","id":"sh/gjupgbid","slide":6,"text":"TRANSACTIONS","textPreview":"TRANSACTIONS","textChars":12,"textLines":1,"bbox":[130,370,446,22]}
+{"kind":"shape","id":"sh/3ml8bqh4","slide":6,"bbox":[106,408,494,62]}
+{"kind":"textbox","id":"sh/2lc7il0j","slide":6,"text":"STORAGE / INDEXES","textPreview":"STORAGE / INDEXES","textChars":17,"textLines":1,"bbox":[130,428,446,22]}
+{"kind":"shape","id":"sh/p83qd0za","slide":6,"bbox":[106,470,494,62]}
+{"kind":"textbox","id":"sh/o7upkvip","slide":6,"text":"FILES / MEMORY","textPreview":"FILES / MEMORY","textChars":14,"textLines":1,"bbox":[130,490,446,22]}
+{"kind":"shape","id":"sh/jq1ozm1k","slide":6,"name":"query-scope-lens","bbox":[744,174,432,432]}
+{"kind":"textbox","id":"sh/ip876h0f","slide":6,"text":"OUR SCOPE","textPreview":"OUR SCOPE","textChars":9,"textLines":1,"bbox":[812,213,296,20]}
+{"kind":"textbox","id":"sh/mh0jutoz","slide":6,"text":"query","textPreview":"query","textChars":5,"textLines":1,"bbox":[800,286,92,34]}
+{"kind":"textbox","id":"sh/7i9k3y5k","slide":6,"text":"→","textPreview":"→","textChars":1,"textLines":1,"bbox":[892,283,36,38]}
+{"kind":"textbox","id":"sh/8ji1w365","slide":6,"text":"plan","textPreview":"plan","textChars":4,"textLines":1,"bbox":[928,286,92,34]}
+{"kind":"textbox","id":"sh/9kr258nq","slide":6,"text":"→","textPreview":"→","textChars":1,"textLines":1,"bbox":[1020,283,36,38]}
+{"kind":"textbox","id":"sh/ydgjq9o3","slide":6,"text":"work","textPreview":"work","textChars":4,"textLines":1,"bbox":[1056,286,78,34]}
+{"kind":"shape","id":"sh/ze9kze5o","slide":6,"bbox":[824,388,272,0]}
+{"kind":"shape","id":"sh/kfi1sj6t","slide":6,"bbox":[846,388,0,17]}
+{"kind":"shape","id":"sh/lgr21one","slide":6,"bbox":[960,388,0,17]}
+{"kind":"shape","id":"sh/apgjm9or","slide":6,"bbox":[1074,388,0,17]}
+{"kind":"textbox","id":"sh/bqp0vepc","slide":6,"text":"↑","textPreview":"↑","textChars":1,"textLines":1,"bbox":[940,336,40,46]}
+{"kind":"shape","id":"sh/d4vm1c7u","slide":6,"bbox":[806,407,80,17]}
+{"kind":"shape","id":"sh/s3m587q9","slide":6,"bbox":[833,407,0,17]}
+{"kind":"shape","id":"sh/r2d4z2po","slide":6,"bbox":[860,407,0,17]}
+{"kind":"shape","id":"sh/qh4n6x8j","slide":6,"bbox":[806,429,80,17]}
+{"kind":"shape","id":"sh/5gvmxs7y","slide":6,"bbox":[833,429,0,17]}
+{"kind":"shape","id":"sh/4fml47qd","slide":6,"bbox":[860,429,0,17]}
+{"kind":"textbox","id":"sh/3ed4v2ps","slide":6,"text":"rows","textPreview":"rows","textChars":4,"textLines":1,"bbox":[801,462,90,20]}
+{"kind":"shape","id":"sh/idk32x87","slide":6,"bbox":[932,406,14,42]}
+{"kind":"shape","id":"sh/hcbmts7m","slide":6,"bbox":[952,406,14,42]}
+{"kind":"shape","id":"sh/gb2l0nq1","slide":6,"bbox":[972,406,14,42]}
+{"kind":"textbox","id":"sh/w3ulk7m1","slide":6,"text":"columns","textPreview":"columns","textChars":7,"textLines":1,"bbox":[915,462,90,20]}
+{"kind":"shape","id":"sh/x43mdc3m","slide":6,"bbox":[1046,405,56,7]}
+{"kind":"shape","id":"sh/a1s3ix4v","slide":6,"bbox":[1046,417,44,7]}
+{"kind":"shape","id":"sh/v214b2lg","slide":6,"bbox":[1046,429,32,7]}
+{"kind":"shape","id":"sh/k7ulo7mx","slide":6,"bbox":[1046,441,20,7]}
+{"kind":"textbox","id":"sh/583mhc3i","slide":6,"text":"index","textPreview":"index","textChars":5,"textLines":1,"bbox":[1029,462,90,20]}
+{"kind":"notes","id":"nt/gjalmn","slide":6,"text":"4 minutes. The slide intentionally has no visible question. Point once to the whole stack, then to the single black band: this course does not build an entire DBMS. Follow the magnification into query, plan, and work. Ask verbally: Why does our scope reach down into the data representation? Take at most two answers. Accept row or column layout, indexes, ordering, hashing, size, and statistics. Conclude exactly: We study how a query becomes executable work, but that work depends on what the data looks like. Transition: now you are the query processor.\n\n[Sources]\n- https://www.postgresql.org/docs/current/query-path.html\n- https://www.postgresql.org/files/developer/tour.pdf\n- https://dev.mysql.com/doc/dev/mysql-server/latest/PAGE_SQL_Optimizer.html\n- https://dev.mysql.com/doc/refman/8.0/en/execution-plan-information.html\n- https://dev.mysql.com/doc/refman/8.0/en/innodb-architecture.html\n- /Users/stargazermiao/workspace/join-processing-datalog/doc/notes/syllabus.md\n- /Users/stargazermiao/workspace/join-processing-datalog/doc/notes/project.md\n[/Sources]"}
