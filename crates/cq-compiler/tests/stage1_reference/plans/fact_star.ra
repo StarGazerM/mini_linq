@@ -1,0 +1,19 @@
+struct FactStar;
+relation F(k1: i32, k2: i32, k3: i32);
+relation A(key: i32, value: i32);
+relation B(key: i32, value: i32);
+relation C(key: i32, value: i32);
+answer(a, b, c) :- F(x, y, z), A(x, a), B(y, b), C(z, c).
+relational {
+    f = rename F {k1 -> x, k2 -> y, k3 -> z};
+    a0 = rename A {key -> x, value -> a};
+    b0 = rename B {key -> y, value -> b};
+    c0 = rename C {key -> z, value -> c};
+    fa = natural_join f with a0;
+    live_a = project fa keep {a, y, z};
+    fab = natural_join live_a with b0;
+    live_b = project fab keep {a, b, z};
+    fabc = natural_join live_b with c0;
+    result = project fabc keep {a, b, c};
+    output result as answer(a, b, c).
+}

@@ -24,6 +24,8 @@ pub mod kw {
     syn::custom_keyword!(relational);
     syn::custom_keyword!(rename);
     syn::custom_keyword!(unit);
+    syn::custom_keyword!(semijoin);
+    syn::custom_keyword!(select);
     syn::custom_keyword!(with);
 }
 
@@ -102,7 +104,7 @@ impl ToTokens for Plan {
 /// One named relation result and the logical operator that defines it.
 ///
 /// ```text
-/// Definition ::= RelationId "=" (Unit | Rename | NaturalJoin | Project) ";"
+/// Definition ::= RelationId "=" Operator ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Definition {
@@ -115,7 +117,7 @@ pub struct Definition {
 /// One logical set operator.
 ///
 /// ```text
-/// Operator ::= Unit | Rename | NaturalJoin | Project
+/// Operator ::= Unit | Rename | NaturalJoin | Project | Semijoin | Select
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operator {
@@ -126,6 +128,8 @@ pub enum Operator {
     Rename(Box<Rename>),
     NaturalJoin(Box<NaturalJoin>),
     Project(Box<Project>),
+    Semijoin(Box<Semijoin>),
+    Select(Box<Select>),
 }
 
 impl Parse for Operator {
@@ -138,8 +142,14 @@ impl Parse for Operator {
             input.parse().map(Box::new).map(Self::NaturalJoin)
         } else if input.peek(kw::project) {
             input.parse().map(Box::new).map(Self::Project)
+        } else if input.peek(kw::semijoin) {
+            input.parse().map(Box::new).map(Self::Semijoin)
+        } else if input.peek(kw::select) {
+            input.parse().map(Box::new).map(Self::Select)
         } else {
-            Err(input.error("expected `unit`, `rename`, `natural_join`, or `project`"))
+            Err(input.error(
+                "expected `unit`, `rename`, `natural_join`, `project`, `semijoin`, or `select`",
+            ))
         }
     }
 }
@@ -151,6 +161,8 @@ impl ToTokens for Operator {
             Self::Rename(operator) => operator.to_tokens(tokens),
             Self::NaturalJoin(operator) => operator.to_tokens(tokens),
             Self::Project(operator) => operator.to_tokens(tokens),
+            Self::Semijoin(operator) => operator.to_tokens(tokens),
+            Self::Select(operator) => operator.to_tokens(tokens),
         }
     }
 }
@@ -211,6 +223,25 @@ pub struct NaturalJoin {
     pub right: Ident,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Semijoin {
+    pub semijoin_token: kw::semijoin,
+    pub left: Ident,
+    pub with_token: kw::with,
+    pub right: Ident,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Select {
+    pub select_token: kw::select,
+    pub input: Ident,
+    pub if_token: Token![if],
+    #[syn(parenthesized)]
+    pub condition_paren: token::Paren,
+    #[syn(in = condition_paren)]
+    pub condition: cq::Predicate,
+}
+
 /// Set projection of an earlier result to a distinct subset of attributes.
 ///
 /// The attribute braces denote a set. Ordered output tuple layout belongs to
@@ -254,7 +285,8 @@ pub mod contract {
     /// Check the source program and its named relational-algebra residual.
     pub fn check(module: &super::Module) -> syn::Result<()> {
         super::cq::check_program(&module.program)?;
-        super::check_plan(module)
+        super::check_output_head(&module.program.query.head, &module.plan.output.head)?;
+        super::check_in(&module.program.inputs, &module.plan).map(|_| ())
     }
 
     /// Whether a parsed module satisfies the RelationalPlan contract.
@@ -265,22 +297,21 @@ pub mod contract {
 
 type Heading = BTreeSet<String>;
 
-#[derive(Clone)]
-struct RelationInfo {
-    heading: Heading,
+#[derive(Clone, Debug)]
+pub struct RelationInfo {
+    pub heading: Heading,
+    pub types: BTreeMap<String, syn::Type>,
     operands: Vec<String>,
 }
 
-fn check_plan(module: &Module) -> syn::Result<()> {
-    let declarations = module
-        .program
-        .inputs
-        .iter()
-        .map(|input| (symbol_name(&input.name), input))
-        .collect::<BTreeMap<_, _>>();
+pub fn check_in(
+    inputs: &[cq::RelationDecl],
+    plan: &Plan,
+) -> syn::Result<BTreeMap<String, RelationInfo>> {
+    let declarations = cq::check_input_declarations(inputs)?;
     let mut relations = BTreeMap::<String, RelationInfo>::new();
 
-    for definition in &module.plan.definitions {
+    for definition in &plan.definitions {
         let result_name = symbol_name(&definition.result);
         if relations.contains_key(&result_name) {
             return Err(syn::Error::new_spanned(
@@ -333,22 +364,57 @@ fn check_plan(module: &Module) -> syn::Result<()> {
                 }
                 (heading, vec![input_name])
             }
+            Operator::Semijoin(join) => {
+                let (left_name, left) = earlier_relation(&join.left, &relations)?;
+                let (right_name, _) = earlier_relation(&join.right, &relations)?;
+                (left.heading.clone(), vec![left_name, right_name])
+            }
+            Operator::Select(select) => {
+                let (name, input) = earlier_relation(&select.input, &relations)?;
+                select.condition.check_scope(&input.heading)?;
+                (input.heading.clone(), vec![name])
+            }
         };
 
-        relations.insert(result_name, RelationInfo { heading, operands });
+        let mut types = BTreeMap::new();
+        if let Operator::Rename(rename) = &definition.operator {
+            let declaration = declarations[&symbol_name(&rename.relation)];
+            for mapping in &rename.mapping {
+                let column = declaration
+                    .columns
+                    .iter()
+                    .find(|c| symbol_name(&c.name) == symbol_name(&mapping.source))
+                    .unwrap();
+                types.insert(symbol_name(&mapping.target), column.ty.clone());
+            }
+        } else {
+            for operand in &operands {
+                for (name, ty) in &relations[operand].types {
+                    if heading.contains(name) {
+                        types.entry(name.clone()).or_insert_with(|| ty.clone());
+                    }
+                }
+            }
+        }
+        relations.insert(
+            result_name,
+            RelationInfo {
+                heading,
+                types,
+                operands,
+            },
+        );
     }
 
-    let output_name = symbol_name(&module.plan.output.input);
+    let output_name = symbol_name(&plan.output.input);
     let Some(output) = relations.get(&output_name) else {
         return Err(syn::Error::new_spanned(
-            &module.plan.output.input,
+            &plan.output.input,
             format!("output result `{output_name}` is not defined"),
         ));
     };
-    check_output_head(&module.program.query.head, &module.plan.output.head)?;
 
-    let output_attributes = module
-        .plan
+    let output_attributes = plan
         .output
         .head
         .variables()
@@ -356,12 +422,19 @@ fn check_plan(module: &Module) -> syn::Result<()> {
         .collect::<BTreeSet<_>>();
     if output_attributes != output.heading {
         return Err(syn::Error::new_spanned(
-            &module.plan.output,
+            &plan.output,
             "output tuple attributes must exactly match its input heading",
         ));
     }
 
-    check_all_reachable(module, &relations, &output_name)
+    if output_attributes.len() != plan.output.head.variables.len() {
+        return Err(syn::Error::new_spanned(
+            &plan.output.head,
+            "output repeats a variable",
+        ));
+    }
+    check_all_reachable(plan, &relations, &output_name)?;
+    Ok(relations)
 }
 
 fn check_rename(rename: &Rename, declaration: &cq::RelationDecl) -> syn::Result<Heading> {
@@ -458,7 +531,7 @@ fn check_output_head(expected: &cq::Atom, actual: &cq::Atom) -> syn::Result<()> 
 }
 
 fn check_all_reachable(
-    module: &Module,
+    plan: &Plan,
     relations: &BTreeMap<String, RelationInfo>,
     root: &str,
 ) -> syn::Result<()> {
@@ -474,8 +547,7 @@ fn check_all_reachable(
     if reachable.len() == relations.len() {
         return Ok(());
     }
-    let unused = module
-        .plan
+    let unused = plan
         .definitions
         .iter()
         .find(|definition| !reachable.contains(&symbol_name(&definition.result)))

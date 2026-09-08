@@ -445,7 +445,7 @@ fn assert_full_key_indexes_supply_scans_without_row_copies(
     let mut coalesced_inputs = Vec::<usize>::new();
 
     for item in &source.relational_plan.program.query.body {
-        let atom = item.positive_atom().expect("positive fixture");
+        let atom = item.positive_atom().expect("positive R1/reference fixture");
         let is_empty_key_scan = atom
             .variables()
             .all(|variable| !bound.contains(&cq_ir::symbol_name(variable)));
@@ -826,7 +826,7 @@ fn result_row_type(source: &index_requirements::Module) -> syn::Type {
         .collect::<BTreeMap<_, _>>();
     let mut variables = BTreeMap::<String, syn::Type>::new();
     for item in &program.query.body {
-        let atom = item.positive_atom().expect("positive fixture");
+        let atom = item.positive_atom().expect("positive R1/reference fixture");
         let input = relations
             .get(&cq_ir::symbol_name(&atom.relation))
             .expect("well-formed body relation is declared");

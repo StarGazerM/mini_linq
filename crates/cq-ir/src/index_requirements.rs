@@ -1,15 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{Column, CommaList, SemicolonList, relational_plan, symbol_name};
-use syn::{Ident, token};
+use syn::{Ident, Token, token};
 
 /// A relation and a possibly empty, optionally trailing-comma index key.
 ///
 /// ```text
-/// IndexRequirement ::= Ident "[" [Column ("," Column)* [","]] "]"
+/// IndexRequirement ::= ["@"] Ident "[" [Column ("," Column)* [","]] "]"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct IndexRequirement {
+    /// `@` selects the named RA-result namespace. Its columns are ordinals
+    /// in that result's sorted heading; absent `@` keeps input-column order.
+    pub result_token: Option<Token![@]>,
     pub relation: Ident,
     #[syn(bracketed)]
     pub bracket_token: token::Bracket,
@@ -74,9 +77,20 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
         .map(|input| (symbol_name(&input.name), input.arity()))
         .collect::<BTreeMap<_, _>>();
     let mut seen = BTreeSet::new();
+    let results = relational_plan::check_in(
+        &module.relational_plan.program.inputs,
+        &module.relational_plan.plan,
+    )?;
 
     for index in &module.indexes {
-        let Some(arity) = schema.get(&symbol_name(&index.relation)) else {
+        let arity = if index.result_token.is_some() {
+            results
+                .get(&symbol_name(&index.relation))
+                .map(|r| r.heading.len())
+        } else {
+            schema.get(&symbol_name(&index.relation)).copied()
+        };
+        let Some(arity) = arity else {
             return Err(syn::Error::new_spanned(
                 index,
                 format!(
@@ -99,7 +113,7 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
             .iter()
             .map(|column| column.index as usize)
             .collect::<Vec<_>>();
-        if let Some(column) = columns.iter().copied().find(|column| column >= arity) {
+        if let Some(column) = columns.iter().copied().find(|column| *column >= arity) {
             return Err(syn::Error::new_spanned(
                 index,
                 format!(
@@ -117,7 +131,11 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
                 ),
             ));
         }
-        let key = (symbol_name(&index.relation), columns);
+        let key = (
+            index.result_token.is_some(),
+            symbol_name(&index.relation),
+            columns,
+        );
         if !seen.insert(key) {
             return Err(syn::Error::new_spanned(
                 index,

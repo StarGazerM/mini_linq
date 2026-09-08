@@ -5,6 +5,14 @@ syntax. It complements the [six complete Triangle
 artifacts](DSL.md#complete-triangle-expansion): the artifacts show the whole
 query at each boundary; this note explains how the boundaries relate.
 
+For the implemented planner alongside the canonical R1 route, see
+[Administrative join planning](ADMINISTRATIVE-JOIN-PLANNING.md). It gives
+occurrence-based assembly and safe-projection rules, join-tree extraction,
+and a semijoin extension while retaining the basic contracts below. Its
+[typed pass composition](PLANNED-PASS-IMPLEMENTATION.md) uses the same IRs,
+with separate edge contracts for the alternative algorithms. In the planned
+route, the staged file contains one local physical region per named RA result.
+
 The compilation sequence is:
 
 ```text

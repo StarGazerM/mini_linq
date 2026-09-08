@@ -20,7 +20,17 @@ DuckDB oracle.
 
 CQ, RelationalPlan, IndexRequirements, RustAccessPlan, and IteratorPipeline are IR syntax objects.
 The surrounding `syn::File` is a **staged Rust program** or **program residual**: ordinary Rust with
-one local IR hole.
+local IR holes: one in the basic route, several in the materialized route.
+
+The implemented [Stage I planner](doc/PLANNED-PASS-IMPLEMENTATION.md) supplies
+alternative typed passes through these same languages. `planned_query!`
+selects graph-based CQ-to-RA planning; `planned_relational_plan!` selects
+indexes for the written RA; `materialized!` emits one existing `pull!` region
+per named result. It supports bushy joins, alpha-acyclic semijoin reduction,
+cyclic binary fallback, bounded comparisons, and intermediate projection.
+Its `build` materializes the DAG; `query` iterates the stored answer.
+See the [verification matrix](doc/STAGE-I-VERIFICATION.md) and
+[complete boundary artifacts](doc/planned-example/01-cq.rs).
 
 ## Compiler boundaries
 

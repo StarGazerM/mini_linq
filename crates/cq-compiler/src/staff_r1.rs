@@ -48,7 +48,7 @@ pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
     let mut current = None::<syn::Ident>;
 
     for item in &source.program.query.body {
-        let cq::BodyItem::Positive { atom } = item;
+        let atom = item.positive_atom()?;
         let declaration = declarations
             .get(&cq_ir::symbol_name(&atom.relation))
             .expect("the CQ contract requires every body relation to be declared");
@@ -175,6 +175,12 @@ fn lowerable_access_sequence(
         let heading = match &definition.operator {
             // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): lower the supplied Unit
             // only as specified in doc/HW4-OPTIONAL.md.
+            relational_plan::Operator::Semijoin(_) | relational_plan::Operator::Select(_) => {
+                return Err(syn::Error::new_spanned(
+                    definition,
+                    "use the Stage I backend for semijoin and selection",
+                ));
+            }
             relational_plan::Operator::Unit(unit) => {
                 return Err(unsupported_unit_error(unit));
             }
@@ -364,6 +370,16 @@ fn relational_key_columns(
 
 /// Lower IndexRequirements to ordinary staged Rust with one local `pull!`.
 pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::Result<syn::File> {
+    if source
+        .indexes
+        .iter()
+        .any(|index| index.result_token.is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            source,
+            "the R1 physical route accepts base-relation indexes only",
+        ));
+    }
     let logical = lowerable_access_sequence(&source.relational_plan)?;
     let program = &source.relational_plan.program;
     let visibility = &program.visibility;
@@ -976,6 +992,7 @@ mod tests {
             .iter()
             .map(|clause| match &clause.item {
                 cq::BodyItem::Positive { atom } => cq_ir::symbol_name(&atom.relation),
+                _ => panic!("positive R1 fixture"),
             })
             .collect::<Vec<_>>();
         assert_eq!(labels, ["T", "S", "R"]);

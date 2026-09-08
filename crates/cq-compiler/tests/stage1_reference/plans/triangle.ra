@@ -1,0 +1,13 @@
+struct Triangle;
+relation R(first: i32, second: i32);
+relation S(first: i32, second: i32);
+relation T(first: i32, second: i32);
+answer(a, b, c) :- R(a, b), S(b, c), T(c, a).
+relational {
+    r = rename R {first -> a, second -> b};
+    s = rename S {first -> b, second -> c};
+    t = rename T {first -> c, second -> a};
+    rs = natural_join r with s;
+    result = natural_join rs with t;
+    output result as answer(a, b, c).
+}

@@ -19,6 +19,12 @@
 
 - [Project skeleton](PROJECT-SKELETON.md)
 - [IR formalization](IR-FORMALIZATION.md)
+- [Administrative join planning](ADMINISTRATIVE-JOIN-PLANNING.md): implemented
+  CQ-to-RA planner rules, join-tree analysis, Yannakakis lowering, and R2 scope.
+- [Stage I verification](STAGE-I-VERIFICATION.md): 25 authored RA fixtures,
+  executable reference tests, and the planner/backend acceptance gates.
+- [Planned-pass implementation](PLANNED-PASS-IMPLEMENTATION.md): transformation
+  ownership, code composition, and the complete materialized route.
 - [Rust tutorial design](RUST-TUTORIAL-DESIGN.md)
 - [Semester plan](semester.md)
 

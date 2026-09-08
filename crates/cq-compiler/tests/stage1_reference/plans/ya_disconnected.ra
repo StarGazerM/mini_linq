@@ -1,0 +1,16 @@
+// The tree link has an empty separator; both passes propagate emptiness.
+struct YaDisconnected;
+relation R(value: i32);
+relation S(first: i32, second: i32);
+answer(x) :- R(x), S(y, z).
+relational {
+    r0 = rename R {value -> x};
+    s0 = rename S {first -> y, second -> z};
+    up_r = natural_join r0 with s0;
+    r1 = project up_r keep {x};
+    down_s = natural_join s0 with r1;
+    s1 = project down_s keep {y, z};
+    exists = project s1 keep {};
+    result = natural_join r1 with exists;
+    output result as answer(x).
+}

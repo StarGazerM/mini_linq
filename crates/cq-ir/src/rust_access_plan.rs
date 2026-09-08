@@ -4,8 +4,8 @@ use syn::{Ident, Pat, Token};
 
 use crate::{CommaList, cq, symbol_name};
 
-/// A complete source-ordered query whose logical occurrences are paired with
-/// their selected Rust access or output expression.
+/// A local query region whose logical occurrences are paired with their
+/// selected Rust access or output expression.
 ///
 /// This is the residual query region embedded in the complete staged Rust
 /// file. The surrounding file already declares concrete collections,
@@ -27,6 +27,9 @@ use crate::{CommaList, cq, symbol_name};
 /// those plans are borrowed; keys and the owned output row explicitly
 /// dereference those bindings. The Plan language itself still accepts an
 /// arbitrary Rust source expression.
+/// The materialized route uses several regions over named row sets or index
+/// key sets. Empty headings use existence guards; a logical comparison must
+/// be paired with an `if` whose variables are already bound.
 ///
 /// ```text
 /// Plan ::= Output ":-" Clause ("," Clause)* "."
@@ -133,7 +136,17 @@ fn check_plan(query: &Plan) -> syn::Result<()> {
         // identifier pattern and binds only that result.
         match &clause.item {
             cq::BodyItem::Positive { atom } => {
-                check_positive_clause(position, atom, &clause.access, &mut bound)?;
+                check_positive_clause(position, atom, &clause.access, &mut bound)?
+            }
+            cq::BodyItem::Filter(filter) => {
+                if !matches!(&clause.access, RustAccess::If { .. })
+                    || !filter.condition.variables().is_subset(&bound)
+                {
+                    return Err(syn::Error::new_spanned(
+                        clause,
+                        "logical selection requires a Rust if access and bound variables",
+                    ));
+                }
             }
             _ => {
                 return Err(syn::Error::new_spanned(
@@ -243,14 +256,9 @@ fn simple_pattern_ident(pattern: &Pat) -> Option<&Ident> {
     .then_some(&pattern.ident)
 }
 
-fn check_distinct_variables(context: &str, variables: &CommaList<syn::Expr>) -> syn::Result<()> {
-    if variables.is_empty() {
-        return Err(syn::Error::new_spanned(
-            variables,
-            format!("{context} must have positive arity"),
-        ));
-    }
-
+fn check_distinct_variables(context: &str, variables: &CommaList<Ident>) -> syn::Result<()> {
+    // A local materialized projection may have heading {}. Its occurrence is
+    // an existence guard, never an enumerating access with fictitious values.
     let mut seen = BTreeSet::new();
     for argument in variables {
         let variable = cq::rust::variable(argument).ok_or_else(|| {

@@ -70,6 +70,36 @@ pub fn mini_linq(input: TokenStream) -> TokenStream {
     quote!(::mini_linq::relational_plan! { #target }).into()
 }
 
+/// Alternative CQ-to-RA pass; the target remains RelationalPlan.
+#[proc_macro]
+pub fn planned_query(input: TokenStream) -> TokenStream {
+    let source = syn::parse_macro_input!(input as cq::Module);
+    match cq_compiler::compile_cq_planned(&source) {
+        Ok(target) => quote!(::mini_linq::planned_relational_plan! { #target }).into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+/// Select indexes on named RA results, preserving the written algebra.
+#[proc_macro]
+pub fn planned_relational_plan(input: TokenStream) -> TokenStream {
+    let source = syn::parse_macro_input!(input as relational_plan::Module);
+    match cq_compiler::compile_result_indexes(&source) {
+        Ok(target) => quote!(::mini_linq::materialized! { #target }).into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+/// Indexed RA-to-staged-Rust pass; local holes use the existing pull route.
+#[proc_macro]
+pub fn materialized(input: TokenStream) -> TokenStream {
+    let source = syn::parse_macro_input!(input as index_requirements::Module);
+    match cq_compiler::compile_materialized(&source) {
+        Ok(target) => quote!(#target).into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
 /// Parse RelationalPlan syntax and add its exact base-relation index overlay.
 #[proc_macro]
 pub fn relational_plan(input: TokenStream) -> TokenStream {

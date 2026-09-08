@@ -1,0 +1,18 @@
+struct CycleFour;
+relation R(first: i32, second: i32);
+relation S(first: i32, second: i32);
+relation T(first: i32, second: i32);
+relation U(first: i32, second: i32);
+answer(a, c) :- R(a, b), S(b, c), T(c, d), U(d, a).
+relational {
+    r = rename R {first -> a, second -> b};
+    s = rename S {first -> b, second -> c};
+    t = rename T {first -> c, second -> d};
+    u = rename U {first -> d, second -> a};
+    rs = natural_join r with s;
+    left_side = project rs keep {a, c};
+    tu = natural_join t with u;
+    right_side = project tu keep {a, c};
+    result = natural_join left_side with right_side;
+    output result as answer(a, c).
+}

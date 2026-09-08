@@ -52,7 +52,50 @@ Syntax failures therefore remain span-aware `syn::Error` values. Semantic
 well-formedness is the typed pass contract; the macro entry does not duplicate
 that check.
 
-## Grammar summary
+## Planned alternatives through the same boundaries
+
+The [Stage I implementation](PLANNED-PASS-IMPLEMENTATION.md) adds alternative
+edges without replacing the basic homework contracts:
+
+| Macro entry | Typed transformation |
+|---|---|
+| `planned_query!` | `compile_cq_planned`: CQ -> RelationalPlan |
+| `planned_relational_plan!` | `compile_result_indexes`: RelationalPlan -> IndexRequirements |
+| `materialized!` | `compile_materialized`: IndexRequirements -> staged Rust |
+
+The target Rust file has one existing local `pull!` expression per named RA
+result. Materialized sets outside these expressions preserve shared DAG
+references. Each expression can be lowered independently by the existing
+pull and IteratorPipeline passes. `build` performs the materialization;
+`query` traverses the stored answer.
+
+The nominal languages additionally support the following forms:
+
+```ebnf
+BodyItem         ::= Atom | "if" "(" Predicate ")"
+Predicate        ::= Term ("==" | "!=" | "<" | "<=" | ">" | ">=") Term
+Term             ::= Ident | I32Literal
+RelOperator      ::= ... | "semijoin" RelId "with" RelId
+                        | "select" RelId "if" "(" Predicate ")"
+IndexRequirement ::= ["@"] Ident "[" Column ("," Column)* [","] "]"
+```
+
+Predicates are primitive i32 comparisons; Rust resolves aliases and rejects
+incompatible types. Calls and arithmetic are outside this movable fragment.
+`@r[0, 2]` refers to ordinals in result r's sorted heading; `R[0, 2]` retains
+declared input-column order. Empty shared headings need no index entry.
+The RA Semijoin keeps exactly its left heading and uses all shared attributes.
+Local physical regions permit empty headings and bound comparison clauses
+paired with Rust `if` accesses. The R1 passes reject forms outside their domain.
+
+Complete, executable artifacts demonstrate each boundary:
+[CQ](planned-example/01-cq.rs), [RA](planned-example/02-relational.rs),
+[indexes](planned-example/03-indexes.rs), [access regions](planned-example/04-access.rs),
+[pipelines](planned-example/05-pipelines.rs), and [Rust](planned-example/06-rust.rs).
+They also demonstrate partial lowering and quotation at the existing macro
+entries. A CQ-level embedding of arbitrary RA is not defined by these changes.
+
+## Basic grammar summary
 
 `RustVisibility`, `RustType`, `RustPat`, and `RustExpr` are parsed by `syn`.
 `Column` is an unsuffixed integer literal.

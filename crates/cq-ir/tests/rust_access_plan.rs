@@ -1,6 +1,32 @@
 use cq_ir::rust_access_plan;
 use quote::{ToTokens, quote};
 
+#[test]
+fn empty_headings_use_existence_guards_and_preserve_empty_tuple_output() {
+    let plan: rust_access_plan::Plan = syn::parse_quote! {
+        answer() => (()) :- key() => if (!rows.is_empty()).
+    };
+    rust_access_plan::contract::check(&plan).unwrap();
+    let invalid: rust_access_plan::Plan = syn::parse_quote! {
+        answer() => (()) :- key() => for () in (rows.iter()).
+    };
+    assert!(rust_access_plan::contract::check(&invalid).is_err());
+}
+
+#[test]
+fn selection_annotations_require_bound_variables_and_an_if_access() {
+    let valid: rust_access_plan::Plan = syn::parse_quote! {
+        answer(x) => ((x.clone(),)) :- R(x) => for (x,) in (rows.iter()),
+            if (x > 0) => if (*x > 0).
+    };
+    rust_access_plan::contract::check(&valid).unwrap();
+    let unbound: rust_access_plan::Plan = syn::parse_quote! {
+        answer(x) => ((x.clone(),)) :- R(x) => for (x,) in (rows.iter()),
+            if (y > 0) => if (*x > 0).
+    };
+    assert!(rust_access_plan::contract::check(&unbound).is_err());
+}
+
 fn triangle_plan_tokens() -> proc_macro2::TokenStream {
     quote! {
         triangle(x, y, z) => ((x.clone(), y.clone(), z.clone(),)) :-

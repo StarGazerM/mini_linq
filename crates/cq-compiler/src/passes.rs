@@ -14,6 +14,79 @@ use cq_ir::{cq, index_requirements, iterator_pipeline, relational_plan, rust_acc
 
 use crate::pass_contracts;
 
+/// Alternative CQ -> RelationalPlan edge, with automatic graph planning.
+pub fn compile_cq_planned(source: &cq::Module) -> syn::Result<relational_plan::Module> {
+    compile_cq_with_policy(source, crate::JoinPolicy::Auto)
+}
+
+/// Select a planning policy without changing either language boundary.
+pub fn compile_cq_with_policy(
+    source: &cq::Module,
+    policy: crate::JoinPolicy,
+) -> syn::Result<relational_plan::Module> {
+    explain_cq_plan(
+        source,
+        crate::PlanningOptions {
+            strategy: policy,
+            max_arity: None,
+        },
+    )
+    .map(|(plan, _)| plan)
+}
+
+/// Diagnostic entry: the target IR and its derivation report are separate.
+pub fn explain_cq_plan(
+    source: &cq::Module,
+    options: crate::PlanningOptions,
+) -> syn::Result<(relational_plan::Module, crate::JoinPlanReport)> {
+    cq::contract::check(source)?;
+    let (target, report) = crate::cq_to_relational::plan(source, options)?;
+    check_cq_plan(source, &target, &report)?;
+    Ok((target, report))
+}
+
+/// Explicit source-to-target relation; also used by the planned pass gate.
+pub fn check_cq_plan(
+    source: &cq::Module,
+    target: &relational_plan::Module,
+    report: &crate::JoinPlanReport,
+) -> syn::Result<()> {
+    pass_contracts::planned_join::check(source, target, report)
+}
+
+/// Apply an independently supplied schedule through the same rule semantics.
+pub fn compile_cq_derivation(
+    source: &cq::Module,
+    report: &crate::JoinPlanReport,
+) -> syn::Result<relational_plan::Module> {
+    cq::contract::check(source)?;
+    let target = crate::cq_to_relational::from_derivation(source, report)?;
+    check_cq_plan(source, &target, report)?;
+    Ok(target)
+}
+
+/// RelationalPlan -> IndexRequirements on exact named operand versions.
+pub fn compile_result_indexes(
+    source: &relational_plan::Module,
+) -> syn::Result<index_requirements::Module> {
+    relational_plan::contract::check(source)?;
+    let target = crate::relational_to_indexes::compile(source)?;
+    if !pass_contracts::result_indexes_are_exact(source, &target) {
+        return Err(syn::Error::new_spanned(
+            source,
+            "result-index pass violated its source-target contract",
+        ));
+    }
+    Ok(target)
+}
+
+/// Indexed set DAG -> staged Rust, with existing local pull-plan holes.
+pub fn compile_materialized(source: &index_requirements::Module) -> syn::Result<syn::File> {
+    index_requirements::contract::check(source)?;
+    crate::relational_to_indexes::check_coverage(source)?;
+    crate::indexes_to_rust::compile(source)
+}
+
 #[path = "staff_r1.rs"]
 mod staff_r1;
 
@@ -25,17 +98,18 @@ mod staff_r1;
         "source must satisfy the CQ local contract"
     ),
     debug_ensures(
-        ret.as_ref()
+        pass_contracts::r1_cq(source) -> ret.as_ref()
             .is_ok_and(relational_plan::contract::well_formed)
     ),
     debug_ensures(
-        ret.as_ref()
+        pass_contracts::r1_cq(source) -> ret.as_ref()
             .is_ok_and(|target| target.program == source.program)
     ),
     debug_ensures(
-        ret.as_ref()
+        pass_contracts::r1_cq(source) -> ret.as_ref()
             .is_ok_and(|target| pass_contracts::relational_plan_is_exact(source, target))
     ),
+    debug_ensures(!pass_contracts::r1_cq(source) -> ret.is_err()),
 )]
 pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
     // BASIC HOMEWORK 1: construct the complete canonical RelationalPlan.

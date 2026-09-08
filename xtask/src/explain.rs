@@ -479,6 +479,14 @@ fn format_relational_block(plan: &relational_plan::Plan) -> String {
 fn format_relational_operator(operator: &relational_plan::Operator) -> String {
     match operator {
         relational_plan::Operator::Unit(_) => "unit".to_owned(),
+        relational_plan::Operator::Semijoin(operator) => {
+            format!("semijoin {} with {}", operator.left, operator.right)
+        }
+        relational_plan::Operator::Select(operator) => format!(
+            "select {} if ({})",
+            operator.input,
+            quote::ToTokens::to_token_stream(&operator.condition)
+        ),
         relational_plan::Operator::Rename(operator) => {
             let mapping = operator
                 .mapping
@@ -518,7 +526,12 @@ fn format_index_block(module: &index_requirements::Module) -> String {
                 .map(|column| column.index.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{}[{columns}];", index.relation)
+            let namespace = if index.result_token.is_some() {
+                "@"
+            } else {
+                ""
+            };
+            format!("{namespace}{}[{columns}];", index.relation)
         })
         .collect::<Vec<_>>()
         .join("\n");

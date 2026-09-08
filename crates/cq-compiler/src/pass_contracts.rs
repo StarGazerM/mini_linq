@@ -1,5 +1,52 @@
 //! Small semantic relations used by the typed compiler-pass contracts.
 
+pub(crate) mod planned_join;
+
+/// Result-index selection preserves the entire algebra and adds exactly the
+/// first-use whole shared keys. This relation does not call the lowering.
+pub(crate) fn result_indexes_are_exact(
+    source: &cq_ir::relational_plan::Module,
+    target: &cq_ir::index_requirements::Module,
+) -> bool {
+    use cq_ir::{relational_plan::Operator, symbol_name};
+    if target.relational_plan != *source
+        || !cq_ir::index_requirements::contract::well_formed(target)
+    {
+        return false;
+    }
+    let Ok(info) = cq_ir::relational_plan::check_in(&source.program.inputs, &source.plan) else {
+        return false;
+    };
+    let mut expected = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for d in &source.plan.definitions {
+        let (l, r) = match &d.operator {
+            Operator::NaturalJoin(j) => (&j.left, &j.right),
+            Operator::Semijoin(j) => (&j.left, &j.right),
+            _ => continue,
+        };
+        let shared = info[&symbol_name(l)]
+            .heading
+            .intersection(&info[&symbol_name(r)].heading)
+            .collect::<std::collections::BTreeSet<_>>();
+        let key = info[&symbol_name(r)]
+            .heading
+            .iter()
+            .enumerate()
+            .filter_map(|(i, x)| shared.contains(x).then_some(i))
+            .collect::<Vec<_>>();
+        let signature = (true, symbol_name(r), key);
+        if !signature.2.is_empty() && seen.insert(signature.clone()) {
+            expected.push(signature);
+        }
+    }
+    target
+        .indexes
+        .iter()
+        .map(crate::relational_to_indexes::signature)
+        .eq(expected)
+}
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_ir::{cq, index_requirements, iterator_pipeline, relational_plan, rust_access_plan};
@@ -23,7 +70,7 @@ pub(crate) fn relational_plan_is_exact(
     let mut next_result = 0usize;
 
     for item in &source.program.query.body {
-        let cq::BodyItem::Positive { atom } = item else {
+        let Ok(atom) = item.positive_atom() else {
             return false;
         };
         let Some(rename_definition) = definitions.next() else {
@@ -133,7 +180,9 @@ pub(crate) fn basic_left_deep_plan(source: &relational_plan::Module) -> bool {
         let heading = match &definition.operator {
             // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): admit the supplied Unit
             // only when the extended global-clause lowering consumes it.
-            relational_plan::Operator::Unit(_) => return false,
+            relational_plan::Operator::Unit(_)
+            | relational_plan::Operator::Semijoin(_)
+            | relational_plan::Operator::Select(_) => return false,
             relational_plan::Operator::Rename(rename) => {
                 if projected {
                     return false;
@@ -226,7 +275,9 @@ pub(crate) fn covers_required_indexes(source: &index_requirements::Module) -> bo
 
 /// Whether the basic physical pass is defined and has all required indexes.
 pub(crate) fn physical_input_is_supported(source: &index_requirements::Module) -> bool {
-    basic_left_deep_plan(&source.relational_plan) && covers_required_indexes(source)
+    source.indexes.iter().all(|i| i.result_token.is_none())
+        && basic_left_deep_plan(&source.relational_plan)
+        && covers_required_indexes(source)
 }
 
 /// Whether `target` is exactly the explicit iterator pipeline denoted by
@@ -535,7 +586,9 @@ fn canonical_indexes(source: &relational_plan::Module) -> Option<Vec<IndexSignat
 
     for definition in &source.plan.definitions {
         let heading = match &definition.operator {
-            relational_plan::Operator::Unit(_) => return None,
+            relational_plan::Operator::Unit(_)
+            | relational_plan::Operator::Semijoin(_)
+            | relational_plan::Operator::Select(_) => return None,
             relational_plan::Operator::Rename(rename) => rename
                 .mapping
                 .iter()
@@ -598,6 +651,16 @@ fn symbols<'a>(identifiers: impl IntoIterator<Item = &'a syn::Ident>) -> Vec<Str
 fn same_atom(left: &cq::Atom, right: &cq::Atom) -> bool {
     symbol(&left.relation) == symbol(&right.relation)
         && symbols(left.variables()) == symbols(right.variables())
+}
+
+/// Domain of the unchanged R1 lowering.
+pub(crate) fn r1_cq(source: &cq::Module) -> bool {
+    source
+        .program
+        .query
+        .body
+        .iter()
+        .all(|item| matches!(item, cq::BodyItem::Positive { .. }))
 }
 
 #[cfg(test)]
