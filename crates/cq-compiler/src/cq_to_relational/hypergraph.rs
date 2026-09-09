@@ -1,7 +1,7 @@
-//! Occurrence-labeled hypergraphs. GYO changes analysis edges, never query atoms.
+//! G-PRIVATE / G-ABSORB reduce occurrence-labeled hypergraphs.
+//! Analysis never deletes executable atoms. See doc/ADMINISTRATIVE-JOIN-PLANNING.md.
+use super::Heading;
 use std::collections::{BTreeMap, BTreeSet};
-
-pub type Heading = BTreeSet<String>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GyoRule {
@@ -91,34 +91,41 @@ impl GyoState {
             GyoRule::Private {
                 occurrence,
                 variable,
-            } => {
-                if !self
-                    .residual
-                    .get(occurrence)
-                    .is_some_and(|h| h.contains(variable))
-                    || self
-                        .residual
-                        .iter()
-                        .any(|(i, h)| i != occurrence && h.contains(variable))
-                {
-                    return Err("GYO private-variable premise fails".into());
-                }
-                self.residual.get_mut(occurrence).unwrap().remove(variable);
-            }
-            GyoRule::Absorb { child, parent } => {
-                if child == parent
-                    || !self
-                        .residual
-                        .get(child)
-                        .zip(self.residual.get(parent))
-                        .is_some_and(|(a, b)| a.is_subset(b))
-                {
-                    return Err("GYO containment premise fails".into());
-                }
-                self.residual.remove(child);
-                self.parent[*child] = Some(*parent);
-            }
+            } => self.remove_private(*occurrence, variable),
+            GyoRule::Absorb { child, parent } => self.absorb(*child, *parent),
         }
+    }
+
+    /// G-PRIVATE: x belongs to this residual edge and to no other active edge.
+    fn remove_private(&mut self, occurrence: usize, variable: &str) -> Result<(), String> {
+        if !self
+            .residual
+            .get(&occurrence)
+            .is_some_and(|h| h.contains(variable))
+            || self
+                .residual
+                .iter()
+                .any(|(i, h)| *i != occurrence && h.contains(variable))
+        {
+            return Err("GYO private-variable premise fails".into());
+        }
+        self.residual.get_mut(&occurrence).unwrap().remove(variable);
+        Ok(())
+    }
+
+    /// G-ABSORB: the active child is contained in a distinct active parent.
+    fn absorb(&mut self, child: usize, parent: usize) -> Result<(), String> {
+        if child == parent
+            || !self
+                .residual
+                .get(&child)
+                .zip(self.residual.get(&parent))
+                .is_some_and(|(child, parent)| child.is_subset(parent))
+        {
+            return Err("GYO containment premise fails".into());
+        }
+        self.residual.remove(&child);
+        self.parent[child] = Some(parent);
         Ok(())
     }
 
@@ -178,6 +185,7 @@ mod oracle;
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn gyo_matches_independent_tree_enumeration_on_all_small_hypergraphs() {
         // All 4,680 ordered hypergraphs on 1..=4 occurrence nodes and three

@@ -37,9 +37,11 @@ type Schema = BTreeMap<String, RelationSchema>;
 
 /// Lower one positive CQ to the canonical named left-deep relational plan.
 pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
-    if !cq::rust::basic(source) {
-        return crate::cq_to_relational::ordered::plan(
+    if !source.program.query.is_basic() {
+        let analysis = crate::cq_to_relational::dependencies::ClauseDependencies::analyze(source)?;
+        return crate::cq_to_relational::clause_rules::plan(
             source,
+            &analysis,
             crate::PlanningOptions {
                 strategy: crate::JoinPolicy::Written,
                 max_arity: None,

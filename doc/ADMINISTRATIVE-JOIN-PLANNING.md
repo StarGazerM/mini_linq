@@ -1,5 +1,11 @@
 # Administrative join planning: CQ to planned relational algebra
 
+For the exact textbook terminology, course adaptations, and proof status, see
+the [LaTeX specification](formal/README.md) and its
+[source correspondence](formal/TERMINOLOGY.md). In mathematical prose below,
+**sort** is AHV's finite attribute set; source identifiers such as
+`retained_heading` retain their implementation spelling.
+
 Status: compiler design following notes revision `3f97151`, with R2 organized
 into Stage I (graph planning, compiled RA, and Yannakakis) and Stage II (WCOJ
 and cardinality estimation), as decided on 2026-09-06. Stage I is implemented
@@ -89,15 +95,16 @@ introduced, are separate policy inputs.
 
 ## 3. Administrative rules for answer assembly
 
-Fix a family of occurrence relations `L_i` with headings `X_i`. Initially
-`L_i = ρ_i(I(R_i))`, where `ρ_i` is the complete positional rename. Section 6
+Fix a family of occurrence relations `L_i` with sorts `X_i`. Initially
+`L_i = δ_{m_i}(I(R_i)) = Val_I(A_i)`, where `m_i` is the complete positional
+attribute renaming and `Val_I` is the course's valuation relation. Section 6
 also permits a frozen, reduced family whose complete join is unchanged.
 
 A planning state is `(D,F)`: `D` is the sequence of emitted named definitions,
 and `F` is a frontier of entries `(C,V,r)`. An entry means:
 
 \[
-\operatorname{heading}(r)=V,
+\operatorname{sort}(r)=V,
 \qquad K(C)\subseteq V\subseteq X(C),
 \qquad
 \llbracket r\rrbracket=\pi_V\left(\mathop{\bowtie}_{i\in C}L_i\right).
@@ -132,7 +139,7 @@ replace the two entries by (C ∪ E, V ∪ W, t)
 
 The join tests agreement on **every** variable in `V ∩ W`. All original
 crossing variables are still present: `X(C) ∩ X(E) ⊆ V ∩ W`, by the boundary
-premises. Thus the two partial valuations combine exactly when required.
+premises. Thus the two named tuples combine exactly when their shared attributes agree.
 
 If the intersection is empty this is a Cartesian product, which is legal.
 If `W ⊆ V`, the join only filters the left relation under set semantics.
@@ -150,7 +157,7 @@ replace the entry by (C, U, t)
 
 The default eager policy chooses `U = K(C)`. Identity projections can be
 omitted. Projection has set semantics, including duplicate elimination.
-An empty heading is valid: projecting a nonempty relation onto `{}` produces
+An empty sort is valid: projecting a nonempty relation onto `{}` produces
 `{()}`, whereas projecting an empty relation produces the empty relation.
 Consequently a disconnected component with no head variables still checks
 existence; it cannot simply disappear.
@@ -159,7 +166,7 @@ existence; it cannot simply disappear.
 
 When the sole frontier entry is `(B,V,r)`, trim to `H` if necessary and emit
 `output r as <original ordered head>.` Its denotation is the source CQ.
-Output tuple order belongs to this metadata, not to heading-set iteration.
+Output tuple order belongs to this metadata, not to sort-set iteration.
 
 ### Preservation and termination
 
@@ -169,10 +176,29 @@ it by projection composition and the remaining-use premise. At P-OUTPUT,
 `K(B) = H`, giving the CQ result.
 
 Each combination reduces the frontier size by one. Between combinations,
-each trim strictly reduces an entry's finite heading. A policy that continues
+each trim strictly reduces an entry's finite sort. A policy that continues
 combining until one entry remains therefore terminates. These rules construct
 sound plans; they do not enumerate every equivalent RA rewrite or perform CQ
 minimization.
+
+### Rule-to-code correspondence
+
+The state above is `JoinState` in
+[rules.rs](../crates/cq-compiler/src/cq_to_relational/rules.rs). Its `apply`
+dispatches to one method per transition: `introduce` (P-START), `select`
+(P-SELECT), `combine` (P-COMBINE), `trim` (P-TRIM), and `output` (P-OUTPUT).
+`retained_heading` computes K(C,P). `begin` (P-BEGIN) requires all ready local
+selections and enters reduction when a checked tree is present, otherwise
+assembly. `up`, `down`, and `freeze` implement Y-UP, Y-DOWN, and Y-FREEZE.
+Up and Down have distinct dependency premises and share only the emitted
+semijoin operation. `into_module` requires an already finished state.
+
+[hypergraph.rs](../crates/cq-compiler/src/cq_to_relational/hypergraph.rs)
+contains G-PRIVATE (`GyoState::remove_private`) and G-ABSORB
+(`GyoState::absorb`); those transitions change only the analysis graph.
+The [complete mapping](PLANNED-PASS-IMPLEMENTATION.md#administrative-rules-and-contracts)
+also points to the [expression judgments and prefix rules](RUST-EXPRESSIONS.md#dependency-judgments-and-their-code).
+Their separate domain and current limitations are explicit there.
 
 ### Enforced safety and eager-policy contracts
 
@@ -189,7 +215,7 @@ consumes that reduction state and transfers final references to assembly.
 Independent sibling reductions may be reordered; parent/child dependencies
 and completion of both passes are mandatory.
 
-All implemented planning policies use eager boundary pruning. The optional
+All policies in this graph-rule domain use eager boundary pruning. The optional
 `max_arity` bounds every named result, including full occurrence renames and
 joins before projection. It is not a cardinality or fractional-width bound.
 The GreedyWidth policy minimizes the next candidate's materialized column
@@ -316,23 +342,23 @@ RelationalPlan includes the following logical operator:
 Semijoin ::= "semijoin" RelationId "with" RelationId
 ```
 
-Both operands must name earlier results. Its heading is the left heading,
+Both operands must name earlier results. Its sort is the left sort,
 and its set denotation is:
 
 \[
 \llbracket\operatorname{semijoin}\;r\;\operatorname{with}\;s\rrbracket
-=\pi_{\operatorname{heading}(r)}
+=\pi_{\operatorname{sort}(r)}
   (\llbracket r\rrbracket\bowtie\llbracket s\rrbracket).
 \]
 
-The right operand may be an intermediate result. Empty shared headings mean
+The right operand may be an intermediate result. Empty shared sorts mean
 an existence test on the right. Multiple shared attributes form one joint
 key; separate per-column witnesses are insufficient.
 
 ### Y-START and Y-FILTER
 
 Given a checked join tree `T`, choose a root and deterministic child order.
-Let `I_i` be each full-heading renamed occurrence after its assigned local
+Let `I_i` be each full-sort renamed occurrence after its assigned local
 selections; in the positive-only fragment, `I_i = rho_i(I(R_i))`.
 Keep a compile-time map
 `current[i]` from occurrence IDs to their latest RA references.
@@ -421,7 +447,7 @@ cost model:
 Evaluate definitions in dependency order, once per definition; borrow
 predecessor sets while constructing owned result rows, and retain results
 needed by subsequent consumers. Shared DAG operands reuse the same result.
-Keep intermediate tuple layout deterministic and separate from heading-set
+Keep intermediate tuple layout deterministic and separate from sort-set
 semantics; the output uses the source head's explicit order. Fixed right-side
 index construction needs no cardinality estimator. Account for its cost in
 the work counters.
@@ -477,14 +503,14 @@ No tuple counts were needed to justify either projection.
 | Current code | Required change for this design |
 |---|---|
 | [`cq.rs`](../crates/cq-ir/src/cq.rs) | Reuse checked atoms and declarations; construct occurrence IDs and incidence without expanding the language |
-| [`relational_plan.rs`](../crates/cq-ir/src/relational_plan.rs) | Reuse general binary `NaturalJoin`, `Project`, named DAG references, inferred headings, and output metadata; add `Semijoin` for Section 6 |
+| [`relational_plan.rs`](../crates/cq-ir/src/relational_plan.rs) | Reuse general binary `NaturalJoin`, `Project`, named DAG references, inferred sorts, and output metadata; add `Semijoin` for Section 6 |
 | [`staff_r1.rs`](../crates/cq-compiler/src/staff_r1.rs) `compile_cq` | Retain the canonical HW1 route; add a separately named planner entry using these rules |
 | [`pass_contracts.rs`](../crates/cq-compiler/src/pass_contracts.rs) `relational_plan_is_exact` | Retain the R1 exact shape contract; give the planner a derivation-preservation contract instead |
 | `basic_left_deep_plan` and `lowerable_access_sequence` in those compiler files | Supply a physical route accepting the planned algebra; current code accepts direct right-hand renames and one final projection |
 | [`index_requirements.rs`](../crates/cq-ir/src/index_requirements.rs) | Existing source-relation keys do not describe indexes over reduced/intermediate results; define such physical requirements at the new route's boundary |
 | [`iterator_pipeline.rs`](../crates/cq-ir/src/iterator_pipeline.rs) | Current linear pull operators do not execute a shared reduction DAG; supply the required execution support explicitly |
 
-Local RA well-formedness remains a heading/reference judgment. It does not
+Local RA well-formedness remains a sort/reference judgment. It does not
 prove that a plan implements a particular CQ. The planner's edge contract
 must account for occurrence coverage, safe forgetting, and reduction
 preservation. Check rule traces and results independently; do not define
@@ -557,7 +583,7 @@ The Stage I implementation gate includes the following semantic cases:
 - The common-variable star has a cyclic SIP graph but admits a join tree;
   the triangle fails running intersection for every candidate tree.
 - Single-atom, duplicate-occurrence, disconnected, and empty-input cases
-  preserve occurrence coverage and empty-heading existence tests.
+  preserve occurrence coverage and empty-sort existence tests.
 - Premature projection fails on the notes' depot counterexample; valid
   trimming merges duplicate existential witnesses without changing answers.
 - On acyclic inputs, each reduced occurrence equals the corresponding
@@ -576,10 +602,10 @@ fixture is evidence about that fixture, not an optimality claim.
 
 On 2026-09-06, a standalone simulation of the stated graph rules agreed with
 independent enumeration of candidate join trees on 2,165 small hypergraphs
-(up to four variables and four occurrences, including duplicate headings).
+(up to four variables and four occurrences, including duplicate sorts).
 The delivery example and its full-reducer invariant agreed with a direct CQ
 valuation oracle on all 4,096 input families over a two-value domain.
-Empty-heading projection behavior was also checked. These are bounded checks
+Empty-sort projection behavior was also checked. These are bounded checks
 of this specification. The production implementations and their acceptance
 suite now use the existing typed pass chain; current gates are recorded in
 [STAGE-I-VERIFICATION.md](STAGE-I-VERIFICATION.md).

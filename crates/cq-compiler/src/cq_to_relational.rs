@@ -1,14 +1,20 @@
-//! CQ -> RelationalPlan: analysis, administrative rules, and scheduling policy.
-pub(crate) mod analysis;
+//! CQ -> RelationalPlan: dependency judgments, checked rules, and scheduling policy.
+pub(crate) mod clause_rules;
+pub(crate) mod dependencies;
+mod hypergraph;
 mod rules;
-
-pub use analysis::{GyoRule, JoinTree};
-use analysis::{GyoState, Heading};
-use cq_ir::{cq, relational_plan as ra, symbol_name};
-pub use rules::Rule;
-pub(crate) mod ordered;
 mod strategy;
-use rules::Kernel;
+
+use cq_ir::{cq, relational_plan as ra, symbol_name};
+use dependencies::ClauseDependencies;
+use hypergraph::GyoState;
+pub use hypergraph::{GyoRule, JoinTree};
+use proc_macro2::{TokenStream, TokenTree};
+use rules::JoinState;
+pub use rules::Rule;
+use std::collections::BTreeSet;
+
+type Heading = BTreeSet<String>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinPolicy {
@@ -44,19 +50,20 @@ pub fn plan(
     options: PlanningOptions,
 ) -> syn::Result<(ra::Module, JoinPlanReport)> {
     cq::contract::check(source)?;
-    if ordered::required(source) {
-        return ordered::plan(source, options);
+    let clauses = ClauseDependencies::analyze(source)?;
+    if !clauses.supports_graph_rules {
+        return clause_rules::plan(source, &clauses, options);
     }
     let edges = incidence(source);
     let (analysis, join_tree) = if options.strategy == JoinPolicy::Auto {
-        analysis::analyze(&edges)
+        hypergraph::analyze(&edges)
     } else {
         (Vec::new(), None)
     };
     if let Some(tree) = &join_tree {
         tree.check(&edges).map_err(error)?;
     }
-    let mut state = Kernel::new(source, join_tree.clone(), options.max_arity);
+    let mut state = JoinState::new(source, join_tree.clone(), options.max_arity);
     let mut derivation = Vec::new();
     for occurrence in 0..edges.len() {
         apply(&mut state, &mut derivation, Rule::Introduce { occurrence })?;
@@ -80,15 +87,15 @@ pub fn plan(
         }
         apply(&mut state, &mut derivation, Rule::Freeze)?;
     }
-    normalize(&mut state, &mut derivation)?;
+    select_and_trim(&mut state, &mut derivation)?;
     while state.frontier().len() > 1 {
         let (left, right) = strategy::choose_pair(&state, options.strategy, join_tree.as_ref());
         apply(&mut state, &mut derivation, Rule::Combine { left, right })?;
-        normalize(&mut state, &mut derivation)?;
+        select_and_trim(&mut state, &mut derivation)?;
     }
     let group = *state.frontier().first_key_value().unwrap().0;
     apply(&mut state, &mut derivation, Rule::Output { group })?;
-    let ra = state.finish()?;
+    let ra = state.into_module()?;
     let peak_arity = ra::check_in(source.program.inputs(), &ra.plan)?
         .values()
         .map(|r| r.heading.len())
@@ -104,13 +111,13 @@ pub fn plan(
     Ok((ra, planned))
 }
 
-fn apply(state: &mut Kernel<'_>, trace: &mut Vec<Rule>, rule: Rule) -> syn::Result<()> {
+fn apply(state: &mut JoinState<'_>, trace: &mut Vec<Rule>, rule: Rule) -> syn::Result<()> {
     state.apply(&rule)?;
     trace.push(rule);
     Ok(())
 }
 
-fn normalize(state: &mut Kernel<'_>, trace: &mut Vec<Rule>) -> syn::Result<()> {
+fn select_and_trim(state: &mut JoinState<'_>, trace: &mut Vec<Rule>) -> syn::Result<()> {
     while let Some(rule) = state.ready_selection().or_else(|| state.next_trim()) {
         apply(state, trace, rule)?;
     }
@@ -131,8 +138,9 @@ pub fn incidence(source: &cq::Module) -> Vec<Heading> {
 /// Entry for a separately implemented scheduling policy. The caller supplies
 /// administrative commands; the checked kernel constructs the residual RA.
 pub fn from_derivation(source: &cq::Module, report: &JoinPlanReport) -> syn::Result<ra::Module> {
-    if ordered::required(source) {
-        return ordered::replay(source, report);
+    let clauses = ClauseDependencies::analyze(source)?;
+    if !clauses.supports_graph_rules {
+        return clause_rules::replay(source, &clauses, report);
     }
     check_analysis(
         &incidence(source),
@@ -140,11 +148,11 @@ pub fn from_derivation(source: &cq::Module, report: &JoinPlanReport) -> syn::Res
         &report.analysis,
         &report.join_tree,
     )?;
-    let mut state = Kernel::new(source, report.join_tree.clone(), report.options.max_arity);
+    let mut state = JoinState::new(source, report.join_tree.clone(), report.options.max_arity);
     for rule in &report.derivation {
         state.apply(rule)?;
     }
-    state.finish()
+    state.into_module()
 }
 
 pub(crate) fn check_analysis(
@@ -170,4 +178,30 @@ pub(crate) fn check_analysis(
         tree.check(edges).map_err(error)?;
     }
     Ok(())
+}
+
+pub(crate) fn reserved(source: &cq::Module) -> BTreeSet<String> {
+    use quote::ToTokens;
+    fn visit(tokens: TokenStream, names: &mut BTreeSet<String>) {
+        for token in tokens {
+            match token {
+                TokenTree::Ident(id) => {
+                    names.insert(symbol_name(&id));
+                }
+                TokenTree::Group(g) => visit(g.stream(), names),
+                _ => (),
+            }
+        }
+    }
+    let mut names = BTreeSet::new();
+    visit(source.to_token_stream(), &mut names);
+    names
+}
+
+pub(crate) fn fresh(names: &mut BTreeSet<String>, clause: usize, arg: usize) -> proc_macro2::Ident {
+    let mut name = format!("__cq_{clause}_{arg}");
+    while !names.insert(name.clone()) {
+        name.push('_');
+    }
+    quote::format_ident!("{name}")
 }

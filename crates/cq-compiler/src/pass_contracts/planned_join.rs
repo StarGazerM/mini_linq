@@ -29,7 +29,8 @@ pub(crate) fn check(
         target.program == source.program,
         "planning changed the source annotation",
     )?;
-    if cq_to_relational::ordered::required(source) {
+    let clauses = cq_to_relational::dependencies::ClauseDependencies::analyze(source)?;
+    if !clauses.supports_graph_rules {
         let mut prefix = Vec::new();
         for (clause, item) in source.program.query.body.iter().enumerate() {
             if let cq::BodyItem::Positive { atom } = item {
@@ -51,10 +52,10 @@ pub(crate) fn check(
             .iter()
             .map(|rule| match rule {
                 Rule::Match { clause } | Rule::Bind { clause } | Rule::Guard { clause }
-                    if source.program.query.body.get(*clause).is_some_and(|item| {
-                        cq_to_relational::ordered::rule(*clause, item)
-                            .is_ok_and(|expected| *rule == expected)
-                    }) =>
+                    if clauses
+                        .clauses
+                        .get(*clause)
+                        .is_some_and(|info| *rule == info.rule) =>
                 {
                     Ok(*clause)
                 }
@@ -92,7 +93,7 @@ pub(crate) fn check(
         .body
         .iter()
         .filter_map(|item| match item {
-            cq::BodyItem::Filter(f) => cq::rust::comparison(&f.condition),
+            cq::BodyItem::Filter(f) => cq::Predicate::from_expr(&f.condition),
             _ => None,
         })
         .collect();
@@ -198,7 +199,7 @@ pub(crate) fn check(
                 )?;
                 let d = next(&mut definitions)?;
                 require(
-                    matches!(&d.operator, ra::Operator::Select(s) if symbol_name(&s.input) == g.result && cq::rust::comparison(&s.condition).as_ref() == Some(&predicates[predicate])),
+                    matches!(&d.operator, ra::Operator::Select(s) if symbol_name(&s.input) == g.result && cq::Predicate::from_expr(&s.condition).as_ref() == Some(&predicates[predicate])),
                     "selection changed its predicate or consumed an obsolete input",
                 )?;
                 groups.get_mut(&group).unwrap().result = symbol_name(&d.result);

@@ -19,6 +19,10 @@
 
 - [Project skeleton](PROJECT-SKELETON.md)
 - [IR formalization](IR-FORMALIZATION.md)
+- [Extended compiler research manuscript](formal/README.md):
+  language judgments, administrative rules, conditional proofs, source
+  correspondence, and executable counterexamples. This is an incomplete
+  correctness argument with explicitly recorded obligations.
 - [Administrative join planning](ADMINISTRATIVE-JOIN-PLANNING.md): implemented
   CQ-to-RA planner rules, join-tree analysis, Yannakakis lowering, and R2 scope.
 - [Stage I verification](STAGE-I-VERIFICATION.md): 25 authored RA fixtures,

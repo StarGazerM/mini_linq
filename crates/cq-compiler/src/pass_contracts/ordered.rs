@@ -43,7 +43,8 @@ fn err(message: &str) -> syn::Error {
 /// A legal schedule preserves each effect boundary and covers every clause once.
 /// Availability is additionally checked against each actual RA heading.
 pub(crate) fn check_order(source: &cq::Module, order: &[usize]) -> syn::Result<()> {
-    let body = &source.program.query.body;
+    let analysis = crate::cq_to_relational::dependencies::ClauseDependencies::analyze(source)?;
+    let body = &analysis.clauses;
     if order.len() != body.len()
         || order.iter().copied().collect::<BTreeSet<_>>() != (0..body.len()).collect()
     {
@@ -57,7 +58,7 @@ pub(crate) fn check_order(source: &cq::Module, order: &[usize]) -> syn::Result<(
     for (barrier, _) in body
         .iter()
         .enumerate()
-        .filter(|(_, item)| !cq::rust::movable(source, item))
+        .filter(|(_, clause)| !clause.reorderable)
     {
         if (0..body.len()).any(|other| {
             (other < barrier && positions[&other] > positions[&barrier])
@@ -65,6 +66,13 @@ pub(crate) fn check_order(source: &cq::Module, order: &[usize]) -> syn::Result<(
         }) {
             return Err(err("schedule crossed a Rust evaluation boundary"));
         }
+    }
+    let mut bound = BTreeSet::new();
+    for &clause in order {
+        if !body[clause].required.is_subset(&bound) {
+            return Err(err("schedule uses a logical input before its producer"));
+        }
+        bound.extend(body[clause].provided.iter().cloned());
     }
     Ok(())
 }
@@ -82,8 +90,8 @@ pub(crate) fn check_scheduled(
     target: &ra::Module,
     order: &[usize],
 ) -> syn::Result<()> {
-    check_order(source, order)?;
     cq::contract::check(source)?;
+    check_order(source, order)?;
     ra::contract::check(target)?;
     if source.program != target.program {
         return Err(err("source program changed"));
@@ -93,7 +101,7 @@ pub(crate) fn check_scheduled(
         current: None,
     };
     let mut bound = BTreeSet::new();
-    let mut reserved = cq::rust::reserved(source);
+    let mut reserved = crate::cq_to_relational::reserved(source);
     let mut constants = BTreeMap::new();
     // Independently consume the constant-to-let normalization prefix.
     for (clause, item) in source.program.query.body.iter().enumerate() {
@@ -106,7 +114,7 @@ pub(crate) fn check_scheduled(
             for (argument, (expr, column)) in atom.args.iter().zip(&declaration.columns).enumerate()
             {
                 if cq::rust::literal(expr) {
-                    let name = cq::rust::fresh(&mut reserved, clause, argument);
+                    let name = crate::cq_to_relational::fresh(&mut reserved, clause, argument);
                     let ty = &column.ty;
                     let input = cursor.input()?;
                     cursor.current = Some(cursor.accept(syn::parse_quote!(extend #input with {#name: #ty} value ({let #name: #ty = #expr; (#name,)})))?);
@@ -131,7 +139,7 @@ pub(crate) fn check_scheduled(
             cq::BodyItem::Let(binding) => {
                 let input = cursor.input()?;
                 let variables = cq::rust::bindings(&binding.pattern);
-                let typed = cq::rust::binding_types(binding);
+                let typed = binding.binding_types();
                 let columns = typed.iter().map(|(v, ty)| quote!(#v: #ty));
                 let pat = &binding.pattern;
                 let annotation = &binding.annotation;
@@ -156,12 +164,13 @@ pub(crate) fn check_scheduled(
                         if introduced.insert(symbol_name(v)) {
                             v.clone()
                         } else {
-                            let fresh = cq::rust::fresh(&mut reserved, clause, position);
+                            let fresh =
+                                crate::cq_to_relational::fresh(&mut reserved, clause, position);
                             tests.push(quote!(#fresh == #v));
                             fresh
                         }
                     } else {
-                        let fresh = cq::rust::fresh(&mut reserved, clause, position);
+                        let fresh = crate::cq_to_relational::fresh(&mut reserved, clause, position);
                         if !matches!(arg, syn::Expr::Infer(_)) {
                             let local = introduced.difference(&prefix).cloned().collect();
                             if cq::rust::free_variables(arg)

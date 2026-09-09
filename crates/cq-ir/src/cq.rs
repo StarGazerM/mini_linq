@@ -127,6 +127,28 @@ pub struct Query {
     pub semi_token: Token![;],
 }
 
+impl Query {
+    /// The positive, distinct-variable fragment accepted by the basic route.
+    pub fn is_basic(&self) -> bool {
+        let bound: BTreeSet<_> = self
+            .body
+            .iter()
+            .filter_map(BodyItem::atom)
+            .flat_map(Atom::variables)
+            .map(symbol_name)
+            .collect();
+        self.head.is_normalized()
+            && self
+                .head
+                .variables()
+                .all(|id| bound.contains(&symbol_name(id)))
+            && self
+                .body
+                .iter()
+                .all(|item| matches!(item, BodyItem::Positive { atom } if atom.is_normalized()))
+    }
+}
+
 /// One source-ordered logical body clause.
 ///
 /// Expressions retain Rust syntax. Whether a condition can move is a planner
@@ -166,6 +188,22 @@ pub struct Let {
     pub annotation: Option<TypeAnnotation>,
     pub eq_token: Token![=],
     pub expression: syn::Expr,
+}
+
+impl Let {
+    /// Written binding types; unannotated bindings retain Rust type inference.
+    pub fn binding_types(&self) -> Vec<(Ident, syn::Type)> {
+        let mut vars: Vec<_> = rust::bindings(&self.pattern)
+            .into_iter()
+            .map(|id| (id, syn::parse_quote!(_)))
+            .collect();
+        if let Some(annotation) = &self.annotation {
+            if vars.len() == 1 && matches!(self.pattern, syn::Pat::Ident(_)) {
+                vars[0].1 = annotation.ty.clone();
+            }
+        }
+        vars
+    }
 }
 
 /// The optional Rust type ascription on a CQ let binding.
@@ -285,7 +323,8 @@ pub(crate) fn check_program(program: &Program) -> syn::Result<()> {
                     }
                 }
                 BodyItem::Let(binding) => types.extend(
-                    rust::binding_types(binding)
+                    binding
+                        .binding_types()
                         .into_iter()
                         .map(|(id, ty)| (symbol_name(&id), ty)),
                 ),

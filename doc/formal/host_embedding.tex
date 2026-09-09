@@ -1,0 +1,317 @@
+\section{Native Rust inside a conjunctive-query language}
+\label{sec:host-embedding}
+The classical CQ account has an unusually strong separation of concerns:
+an atom constrains a valuation, and the conjunction of those constraints
+does not specify how to enumerate satisfying valuations. MiniLinq preserves
+that account for its relational fragment. An embedded Rust expression adds
+another language, with lexical binding, a type system, control flow, and
+observable evaluation. Its presence changes the justification of planning,
+even when the surface clause still resembles a relational selection.
+
+Our methodological starting point is a \emph{multi-language semantics}:
+make the boundary between the query language and the host explicit and
+state what crosses it. Matthews and Findler formulate language composition
+using such boundaries, separating properties of each language from the
+properties of their interaction~\cite{host-multilanguage}. Here the boundary
+passes a represented valuation into Rust and receives a value, a Boolean,
+or pattern bindings. It also admits the host observations of
+Section~\ref{sec:scope}. The boundary below is semantic notation for existing
+Rust leaves, not an additional IR or a proposed expression evaluator.
+
+\subsection{Six objects that must not be conflated}
+\label{sec:hostobjects}
+\begin{center}
+\small
+\begin{tabular}{p{0.20\linewidth}p{0.34\linewidth}p{0.36\linewidth}}
+\toprule
+Object & Question answered & What it does not establish \\
+\midrule
+Token tree & Which tokens and delimiters reached the macro? & Which
+identifiers denote values or bind other identifiers. \\
+Rust syntax tree & Which expressions, patterns, paths, and scopes were
+written? & Rust name resolution, typing, or effects. \\
+Resolved binding & Which declaration does an occurrence denote? & Whether
+evaluating its use is pure, total, or duplicable. \\
+Logical requirements & Which query variables must be available for this
+clause? & How often, or on which candidate valuations, its Rust runs. \\
+Evaluation domain & Which dynamic clause occurrences arise, and what
+earlier filtering permits them? & Whether two occurrences commute. \\
+Movement premise & Which administrative exchanges are licensed? & A
+general effect analysis of arbitrary Rust. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The implemented parser crosses only the first boundary. CQ constructors
+use derived parsing; their host leaves use \code{syn::Expr}, \code{syn::Pat},
+and \code{syn::Type}. Syn may parse \code{f(x)}, \code{|x| x + y},
+\code{match} expressions, and \code{m!(tokens)} as Rust expressions without
+making them alternative CQ clause forms. In particular, a macro invocation
+contains tokens whose grammar is chosen by that macro; those tokens are not
+automatically recursively parsed Rust expressions~\cite{host-synmacro}.
+
+Thus \emph{arbitrary host syntax} means delegating expression syntax to the
+host grammar, rather than recognizing a finite list of convenient functions
+or operators. It does not mean every parsed expression is well typed in
+every generated context. For example, \code{await}, \code{return}, and
+borrowing expressions impose requirements on their enclosing Rust context.
+Nor does parseability establish a successful CQ lowering: negation and
+aggregation parse into existing CQ constructors but presently have no
+implemented semantic lowering rules.
+
+\subsection{The semantic boundary carries more than a free-variable set}
+Let $\Gamma_Q$ assign types and representation modes to logical variables,
+and let $\Gamma_H$ describe host bindings visible at the eventual expansion
+site. Write
+\[
+ \Gamma_H;\Gamma_Q\vdash_H e:\tau
+ \qquad\text{and}\qquad
+ \rho\approx_{\Gamma_Q}\nu
+\]
+for host well-typedness in the elaborated context and agreement of a Rust
+environment with a logical valuation. The second judgment incorporates the
+value relation of Section~\ref{sec:scope}: an atom field is borrowed, whereas
+a computed binding can be an owned Rust value. It is stronger than saying
+that the same identifier strings are present. With the host evaluation
+relation, these judgments justify an application of the boundary:
+\[
+\Rule{H-Eval}
+ {\Gamma_H;\Gamma_Q\vdash_H e:\tau\quad
+  \rho\approx_{\Gamma_Q}\nu\quad
+  \langle e,\rho,\sigma\rangle\Downarrow_H(v,\sigma',\alpha)}
+ {\langle\mathsf{host}[e],\nu,\rho,\sigma\rangle
+  \Downarrow(v,\sigma',\alpha)}.
+\]
+Panic and divergence cross this boundary too. The display defines their
+successful counterpart, not a rule that erases unsuccessful observations.
+The implementation delegates the first judgment to rustc; its syntactic
+contract checks do not derive it.
+
+A relational expression interpretation is a further specialization. Under
+$\mathcal H_{\rm rel}$, the boundary induces a total function
+$\widehat e$ on the relevant valuations, independent of store and concrete
+representation. Then a guard has the familiar meaning
+$\sigma_{\widehat e}(L)$, and a binding extends each valuation with its
+computed value. Outside that specialization, neither an arbitrary function
+call nor an overloaded comparison is justified by the set-theoretic
+selection laws alone. Rust explicitly permits expression effects and
+trait-defined operator behavior~\cite{host-rustexpr}.
+
+\subsection{Lexical scope, resolution, and conservative liveness}
+The helper in \code{cq/rust.rs} operates before Rust name resolution.
+Its result $(F,o)$ consists of visible free \emph{simple value-name
+occurrences} and an opacity bit. Its free-name set is not a set of resolved
+declaration identities. For example, \code{accept(x)} contributes both
+\code{accept} and \code{x}; only intersection with the logical environment
+makes \code{x} a query input when \code{accept} is an external function.
+Conversely, a logical variable holding a callable value can make
+\code{accept} itself a query input. A field name in \code{x.field}, a method
+name in \code{x.method()}, and components of \code{module::function} are
+not simple value-variable occurrences.
+
+Binding-sensitive traversal matters even for a single leaf:
+\begin{lstlisting}
+{ let x = 1; (|witness: i32| witness + x)(*witness) }
+\end{lstlisting}
+The free-name set is $\{\mathit{witness}\}$. The block-local \code{x}
+shadows any logical \code{x}. The closure's parameter shadows
+\code{witness} only inside its body; the application argument
+\code{*witness} still refers to the outer binding. Collecting identifier
+tokens, or subtracting every pattern name from the whole expression, gives
+the wrong answer. The FV rules in Section~\ref{sec:languages} instead
+thread lexical scopes: an initializer and a let-else branch precede the
+new local binding; match-arm bindings scope their guard and body;
+\code{for} bindings scope only the loop body; let-chain bindings extend
+later conditions and the consequent, but not the else branch. These
+distinctions follow Rust's binding scopes~\cite{host-rustscope}.
+
+For a logical environment $B$ and all syntactically logical names $Q$, the
+two consumer operations are intentionally different:
+\[
+\begin{aligned}
+ \operatorname{Live}(e,B)&=
+   \begin{cases}B&o,\\F\cap B&\neg o,\end{cases}&
+ \operatorname{Known}(e,Q)&=
+   \begin{cases}\emptyset&o,\\F\cap Q&\neg o.\end{cases}
+\end{aligned}
+\]
+The first is the implementation's \code{dependencies}; the second is
+\code{known_uses}. An opaque macro conservatively keeps every \emph{already
+available} query variable. Empty Known means the early diagnostic has no
+sound syntactic claim to make, not that the macro is closed. Retaining $B$
+does not invent a missing future binder or prove that a macro's identifiers
+resolve as intended. Attributes, local items, and verbatim syntax also set
+opacity. Local items require this care because their scope and capture
+behavior differ from sequential local bindings.
+
+Even transparent syntax leaves a resolution obligation. Syntactic
+identifier patterns can denote constants in contexts decided by Rust, and
+an unqualified function spelling can be shadowed. The lexical upper-bound
+lemma therefore assumes the intended binding resolution. Treating that
+assumption as a theorem of Syn would be an unsound strengthening.
+
+\subsection{Logical matching and directional computation}
+The following source fragment exposes the boundary in a join plan. Assume
+the declared columns have type \code{i32}, \code{accept} is a host function,
+and its macro counterpart is intentionally opaque.
+\begin{lstlisting}
+answer(x, z) :- R(x, witness),
+    let y: i32 = { let x = 1; *witness + x },
+    S(y, z), if accept(z), if accept!(z);
+\end{lstlisting}
+The dependency analysis derives these exact facts. Provided means a
+positive atom's available logical columns, including equality keys; it
+does not mean that all those names are fresh.
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Clause & Required & Provided & Movable \\
+\midrule
+$R(x,\mathit{witness})$ & $\emptyset$ & $\{x,\mathit{witness}\}$ & yes \\
+$\mathsf{let}\ y=\cdots$ & $\{\mathit{witness}\}$ & $\{y\}$ & no \\
+$S(y,z)$ & $\{y\}$ & $\{y,z\}$ & yes \\
+$\mathsf{if}\ \mathit{accept}(z)$ & $\{z\}$ & $\emptyset$ & no \\
+$\mathsf{if}\ \mathit{accept}!(z)$ & $\{x,\mathit{witness},y,z\}$ & $\emptyset$ & no \\
+\bottomrule
+\end{tabular}
+\end{center}
+The required $y$ on $S$ is essential. A value produced by an earlier
+\code{let} must be computed before the atom matches it. In contrast,
+$R(x,y),S(y,z)$ has no distinguished producer of $y$: either atom can
+supply a partial valuation, and their common variable is an equality
+constraint. Converting every shared variable into a directed
+first-occurrence dependency would incorrectly forbid classical join
+reordering. Removing the let-origin dependency would allow an atom to
+replace a computation with an unconstrained value.
+
+These distinctions extend inside atoms. The syntactic convention
+\code{variable} recognizes an unparenthesized single-identifier path as a
+logical-variable position. A new bare name binds; an already-bound or
+repeated name constrains equality; \code{_} has no named binding. A general
+expression is a computed matching value, not an additional producer of its
+free variables. When $k$ is newly introduced by the atom,
+\code{S(k, next(k))} supplies $k$ locally and has no external requirement
+for it. If an earlier let binds $k$, that binding is required instead.
+For a logical $k$ already available in the prefix, \code{S(next(k), z)}
+requires that prefix binding; an ambient Rust name alone is not a logical
+dependency. A literal position has the existing fresh-binding normalization
+$R(7,x)\rightsquigarrow\mathsf{let}\ k{:}\tau=7, R(k,x)$.
+That equation cannot be generalized to arbitrary computations without an
+evaluation-placement premise.
+
+Formally the dependency summary is the existing
+$\Sigma;B;T\vdash c_i\triangleright(R_i,O_i,m_i,a_i,K_i)$ of
+Section~\ref{sec:planning}. Atom hyperedges remain sets of shared logical
+variables. Requirements add directional availability conditions, and
+barriers add ordering conditions. These are different relations on the
+same source occurrences; the code stores their summaries in
+\code{ClauseFacts}, not in a new graph language. Atom producers of a shared
+name are alternatives, so availability is more precise as the condition
+$R_i\subseteq B$ than as one arbitrarily chosen producer edge per name.
+
+\subsection{Availability does not establish movement or multiplicity}
+\label{sec:hostmovement}
+For pending clauses $U$, the current C-Ready test checks availability and
+preserves the order of every barrier:
+\[
+ R_i\subseteq B,
+ \qquad
+ \forall j\in U.\ j<i\Longrightarrow(m_i\land m_j).
+\]
+Consequently two clauses may exchange written positions only inside a
+region whose clauses all satisfy D-Move. This rule is implemented by
+\code{ClauseState::require_ready}; a strategy selects among its candidates.
+The finite D-Move recognizer admits simple atoms, literal bindings, and
+recognized comparisons whose operands are syntactically primitive
+\code{i32} at every occurrence. It is an explicitly delimited optimization
+domain, not inference of arbitrary Rust effects.
+
+There is a second dependence beyond the value names in $R_i$: the
+\emph{domain and multiplicity of evaluation}. Suppose $R$ contains
+$(1,10)$ and $(1,20)$, and the body is
+\begin{lstlisting}
+R(x, witness), let y: i32 = tick(x)
+\end{lstlisting}
+The Rust expression uses only $x$, but its prefix has two distinct
+valuations. Projecting away witness first collapses them under set semantics
+and changes two calls into one. Likewise a guard can suppress calls that
+would have occurred before it. Ordinary liveness protects the values needed
+by a computation; preservation of its evaluation domain additionally
+protects witnesses and control dependence. This explains the prefix
+algorithm's retained witness columns, including anonymous atom positions.
+It does not by itself establish equivalence of different materialization
+boundaries.
+
+To state the missing semantic premise precisely, let $\mathcal T_c$ be a
+clause's operational transformer on an enumerated valuation stream and
+store, with observations including demand, host events, and termination.
+An exchange requires
+\[
+ \mathcal T_d\circ\mathcal T_c
+ \ \approx_{\rm obs}\ 
+ \mathcal T_c\circ\mathcal T_d
+\]
+on the reachable states where both orders are well scoped. Availability is
+one premise of that equation. An effect analysis can provide sufficient
+conditions concerning store conflicts; classical effect systems use
+conservative effect information to constrain scheduling~\cite{host-effects}.
+But even nonconflicting store accesses do not automatically justify changing
+the number of calls, suppressing a possible panic, or moving work before
+the first cursor demand. Our equation is a semantic requirement for a
+proposed optimization, not a claim that the present compiler checks it.
+
+\paragraph{Syntactic argument order is not runtime argument order.}
+The A-* argument judgments walk syntax left to right to determine scope.
+Their generated operations have more than one evaluation placement:
+A-Prefix computes a matching key before the atom's join; A-Local installs
+a selection after that join. For
+\begin{lstlisting}
+answer(x) :- R(x, f(x), g());
+\end{lstlisting}
+$f(x)$ needs this atom's new $x$ and takes A-Local, while $g()$ takes
+A-Prefix. The generated plan therefore calls $g$ on the initial singleton
+prefix before it calls $f$ on matching candidates. With rows
+$(1,1,100),(2,2,100)$, $f(x)=x$, and $g()=100$, full evaluation calls $g$
+once and $f$ twice; the two $f$ events may occur in either input enumeration
+order. The executable \code{argument_placement} example in
+\code{doc/formal/example} confirms these facts for both backends, checking
+the partial order without requiring a particular order of the two $f$ calls.
+Preserving the order of A-Local selections does not make these
+placements into Rust's left-to-right function-argument evaluation. An atom
+is a DSL matching construct, not a Rust function application. A general
+source effect contract must specify its intended matching-event schedule
+before either placement can be judged a correct implementation of it.
+
+\subsection{Residual code, quotation, and binding preservation}
+MiniLinq inspects the relational structure while carrying most Rust leaves
+forward as residual code. At lower levels those leaves occur inside
+generated storage operations and iterator closures. This is a staging
+boundary: construction and analysis of code occur during macro expansion;
+execution of residual expressions occurs in the compiled program, at the
+build or polling boundary selected by the backend. An identifier's
+presence in emitted tokens does not make its value available during macro
+expansion.
+
+The language-integrated-query literature makes the host/quoted-language
+distinction explicit. Cheney, Lindley, and Wadler use quotation and
+normalization to give a compilability theorem for a specified query
+calculus~\cite{host-linq}; Cheney et al. relate effect-based and
+quotation-based query calculi by translations~\cite{host-effective}.
+Those results motivate explicit boundary judgments here. They do not
+imply that arbitrary native Rust normalizes to relational algebra, or that
+our token-based macros implement typed open quotation. Existing
+quotation and continuation mechanisms are specified separately in
+Section~\ref{sec:staging}.
+
+Finally, code movement must preserve \emph{binding}, not only spelling.
+Hygienic macro systems formalize binding with syntax contexts rather than
+bare strings; Flatt's scope-set account is one precise example
+~\cite{host-hygiene}. Rust procedural macros have their own, explicitly
+unhygienic interface~\cite{macros}. Our helper's normalized strings
+serve logical-name comparison, and fresh generated names avoid known
+collisions, but neither fact proves preservation under every Rust macro
+expansion, shadowing context, or closure capture. The required compiler
+lemma is that each residual occurrence resolves to its intended logical or
+host binding and retains its typing/ownership interpretation after every
+context change. This is an open host-elaboration obligation, separate from
+the proved lexical traversal lemma and the finite relational theorems.

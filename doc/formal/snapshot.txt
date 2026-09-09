@@ -1,0 +1,6 @@
+Git parent: ca78453871314b4aecdf659f4de338c09487ec90
+Branch: codex/all-answers
+Working tree: includes uncommitted rule refactor.
+Compiler source identity: sources.sha256 (not Git parent alone).
+Terminology notes: doc/notes at 3f971516f8784ead40e8635a85dbe319ba5e4729, main.
+Textbook references: AHV Chapters 3, 4 and 6; exact sections in TERMINOLOGY.md.

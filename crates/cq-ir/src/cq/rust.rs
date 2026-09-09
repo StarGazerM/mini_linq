@@ -227,8 +227,6 @@ impl<'ast> Visit<'ast> for FreeVariableVisitor {
     }
 }
 
-use proc_macro2::{TokenStream, TokenTree};
-
 pub fn unparen(mut expr: &Expr) -> &Expr {
     while let Expr::Paren(p) = expr {
         expr = &p.expr;
@@ -247,78 +245,24 @@ pub fn known_uses(expr: &Expr, logical_names: &BTreeSet<String>) -> BTreeSet<Str
     }
 }
 
-pub fn binding_types(binding: &super::Let) -> Vec<(Ident, syn::Type)> {
-    let mut vars: Vec<_> = bindings(&binding.pattern)
-        .into_iter()
-        .map(|id| (id, syn::parse_quote!(_)))
-        .collect();
-    if let Some(annotation) = &binding.annotation {
-        if vars.len() == 1 && matches!(binding.pattern, Pat::Ident(_)) {
-            vars[0].1 = annotation.ty.clone();
-        }
-    }
-    vars
-}
-
-pub fn basic(source: &super::Module) -> bool {
-    let bound: BTreeSet<_> = source
-        .program
-        .query
-        .body
-        .iter()
-        .filter_map(super::BodyItem::atom)
-        .flat_map(super::Atom::variables)
-        .map(symbol_name)
-        .collect();
-    source.program.query.head.is_normalized()
-        && source
-            .program
-            .query
-            .head
-            .variables()
-            .all(|id| bound.contains(&symbol_name(id)))
-        && source
-            .program
-            .query
-            .body
-            .iter()
-            .all(|item| matches!(item, super::BodyItem::Positive { atom } if atom.is_normalized()))
-}
-
-pub fn reserved(source: &super::Module) -> BTreeSet<String> {
-    use quote::ToTokens;
-    fn visit(tokens: TokenStream, names: &mut BTreeSet<String>) {
-        for token in tokens {
-            match token {
-                TokenTree::Ident(id) => {
-                    names.insert(symbol_name(&id));
-                }
-                TokenTree::Group(g) => visit(g.stream(), names),
-                _ => (),
-            }
-        }
-    }
-    let mut names = BTreeSet::new();
-    visit(source.to_token_stream(), &mut names);
-    names
-}
-
-pub fn fresh(names: &mut BTreeSet<String>, clause: usize, arg: usize) -> Ident {
-    let mut name = format!("__cq_{clause}_{arg}");
-    while !names.insert(name.clone()) {
-        name.push('_');
-    }
-    quote::format_ident!("{name}")
-}
-
-pub fn comparison(expr: &Expr) -> Option<super::Predicate> {
-    super::Predicate::from_expr(expr)
-}
-
 /// Syntactically known primitive type; aliases remain for Rust to resolve.
 pub fn primitive_i32(ty: &syn::Type) -> bool {
-    use quote::ToTokens;
-    matches!(ty, syn::Type::Path(p) if p.qself.is_none() && matches!(p.path.to_token_stream().to_string().replace(' ', "").as_str(), "i32" | "::core::primitive::i32" | "core::primitive::i32" | "::std::primitive::i32" | "std::primitive::i32"))
+    let syn::Type::Path(ty) = ty else {
+        return false;
+    };
+    if ty.qself.is_some() {
+        return false;
+    }
+    let path = &ty.path;
+    path.is_ident("i32")
+        || (path.segments.len() == 3
+            && path
+                .segments
+                .iter()
+                .all(|s| matches!(s.arguments, syn::PathArguments::None))
+            && (path.segments[0].ident == "core" || path.segments[0].ident == "std")
+            && path.segments[1].ident == "primitive"
+            && path.segments[2].ident == "i32")
 }
 
 /// Closed literal expressions have no logical inputs or user computation.
@@ -330,63 +274,4 @@ pub fn literal(expr: &Expr) -> bool {
         }
         _ => false,
     }
-}
-
-pub fn literal_binding(item: &super::BodyItem) -> bool {
-    let super::BodyItem::Let(binding) = item else {
-        return false;
-    };
-    let pat = &binding.pattern;
-    matches!(pat, Pat::Ident(p) if p.by_ref.is_none() && p.subpat.is_none())
-        && literal(&binding.expression)
-}
-
-/// Sufficient purity premises for scheduling inside a Rust evaluation boundary.
-/// Relational equality follows the ordinary Eq/Hash set contract.
-pub fn movable(source: &super::Module, item: &super::BodyItem) -> bool {
-    match item {
-        super::BodyItem::Positive { atom } => atom
-            .args
-            .iter()
-            .all(|arg| variable(arg).is_some() || matches!(arg, Expr::Infer(_)) || literal(arg)),
-        super::BodyItem::Filter(filter) => total_comparison(source, &filter.condition),
-        super::BodyItem::Let(_) => literal_binding(item),
-        super::BodyItem::Negation(_) | super::BodyItem::Aggregate(_) => false,
-    }
-}
-
-fn total_comparison(source: &super::Module, expression: &Expr) -> bool {
-    let Some(predicate) = comparison(expression) else {
-        return false;
-    };
-    let mut types = std::collections::BTreeMap::<String, bool>::new();
-    for item in &source.program.query.body {
-        match item {
-            super::BodyItem::Positive { atom } => {
-                let Some(declaration) = source
-                    .program
-                    .inputs()
-                    .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
-                else {
-                    return false;
-                };
-                for (arg, column) in atom.args.iter().zip(&declaration.columns) {
-                    if let Some(id) = variable(arg) {
-                        *types.entry(symbol_name(id)).or_insert(true) &= primitive_i32(&column.ty);
-                    }
-                }
-            }
-            super::BodyItem::Let(binding) => {
-                for (id, ty) in binding_types(binding) {
-                    types.insert(symbol_name(&id), primitive_i32(&ty));
-                }
-            }
-            super::BodyItem::Filter(_) => (),
-            super::BodyItem::Negation(_) | super::BodyItem::Aggregate(_) => return false,
-        }
-    }
-    predicate
-        .variables()
-        .iter()
-        .all(|v| types.get(v) == Some(&true))
 }

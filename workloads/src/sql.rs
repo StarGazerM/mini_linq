@@ -25,7 +25,7 @@ fn normalized_table_name(input_index: usize) -> String {
 /// Translate one well-formed positive CQ without consulting either compiler pass.
 pub fn translate(module: &cq::Module) -> Result<String, SqlError> {
     cq::contract::check(module).map_err(SqlError::InvalidQuery)?;
-    if !cq::rust::basic(module) {
+    if !module.program.query.is_basic() {
         return Err(SqlError::UnsupportedBodyItem);
     }
 

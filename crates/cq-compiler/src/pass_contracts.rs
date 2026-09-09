@@ -60,7 +60,7 @@ pub(crate) fn relational_plan_is_exact(
     source: &cq::Module,
     target: &relational_plan::Module,
 ) -> bool {
-    if !cq::rust::basic(source) {
+    if !source.program.query.is_basic() {
         return ordered::check(source, target).is_ok();
     }
     // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): extend this independent exact

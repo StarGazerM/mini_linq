@@ -1,0 +1,299 @@
+\section{Languages and local judgments}
+\label{sec:languages}
+Names in displayed syntax are mathematical identifiers, not a proposal to
+change the concrete parser. Every CQ and Access rule terminates with a
+semicolon. Delimiters are handled by derived parsing; Rust leaves are parsed
+by Syn. Negative atoms and aggregates occur in the CQ parser, but their
+semantic contracts currently reject them. They therefore have no successful
+lowering derivation in this specification.
+
+\subsection{Lexical dependency analysis}
+The helper computes $\fv_S(e)=(F,o)$: a finite set of visible value names and
+an opacity bit. For logical environment $B$, define
+\[
+ \uses(e,B)=\begin{cases}B&o=\mathsf{true},\\ F\cap B&o=\mathsf{false},\end{cases}
+ \qquad
+ \operatorname{known}(e,Q)=\begin{cases}\emptyset&o=\mathsf{true},\\F\cap Q&\text{otherwise}.\end{cases}
+\]
+The first is a liveness upper bound; the second is only a diagnostic test.
+They must not be interchanged. $Q$ is the set of all syntactically logical
+names in the source. We write $e\checkmark_B$ for
+$\operatorname{known}(e,Q)\subseteq B$.
+
+Let $A\vdash e\rightsquigarrow(F,o)$ visit an expression under lexically bound
+names $A$. Union of results unions names and disjoins opacity. Constructor
+attributes, macros, local items, and verbatim syntax set opacity. Qualified
+path components and field/method names are not simple value-variable uses;
+const-generic expression children are visited. The defining binder cases are:
+\begin{mathpar}
+
+\Rule{FV-Name}{x\notin A}{A\vdash x\rightsquigarrow(\{x\},\mathsf{false})}
+
+\Rule{FV-Bound}{x\in A}{A\vdash x\rightsquigarrow(\emptyset,\mathsf{false})}
+
+\Rule{FV-Children}{A\vdash e_j\rightsquigarrow(F_j,o_j)\quad(1\le j\le n)}
+ {A\vdash c(e_1,\ldots,e_n)\rightsquigarrow(\bigcup_jF_j,\bigvee_jo_j)}
+
+\Rule{FV-Closure}{A\cup\binds(\bar p)\vdash e\rightsquigarrow(F,o)}
+ {A\vdash |\bar p|e\rightsquigarrow(F,o)}
+
+\Rule{FV-For}{A\vdash e\rightsquigarrow u\quad A\cup\binds(p)\vdash b\rightsquigarrow v}
+ {A\vdash\mathsf{for}\ p\ \mathsf{in}\ e\ b\rightsquigarrow u\cup v}
+\end{mathpar}
+Here FV-Children applies only to nonbinding constructors; pattern/type
+expression children contribute their own visited results. A block folds
+statements left to right: a local's initializer and let-else branch use the
+old $A$; its pattern is visited and $\binds(p)$ is then added for subsequent
+statements. The block's final $A$ does not escape. A match visits its scrutinee
+in $A$ and each arm separately in $A\cup\binds(p)$; arm guards and bodies share
+that arm scope. An if/while condition uses the following condition judgment:
+\begin{mathpar}
+
+\Rule{FV-CondLet}{A\vdash e\rightsquigarrow u}
+ {A\vdash\mathsf{let}\ p=e\rightsquigarrow_c(u,A\cup\binds(p))}
+
+\Rule{FV-And}{A\vdash e_1\rightsquigarrow_c(u,A_1)\quad A_1\vdash e_2\rightsquigarrow_c(v,A_2)}
+ {A\vdash e_1\mathbin{\&\&}e_2\rightsquigarrow_c(u\cup v,A_2)}
+
+\Rule{FV-Cond}{A\vdash e\rightsquigarrow u\quad e\text{ is neither case above}}
+ {A\vdash e\rightsquigarrow_c(u,A)}
+\end{mathpar}
+The condition's extended scope applies to its then/loop body, but not the
+else branch or following outer statements. $\binds(p)$ is the ordered,
+raw-name-normalized list of syntactic identifier patterns, deduplicated by
+name; Rust still resolves constant-pattern ambiguity.
+
+\begin{lemma}[Lexical upper bound]
+For transparent syntax whose patterns have the intended binding resolution,
+every free simple value-name occurrence outside $A$ is in $F$. Consequently
+$\uses(e,B)$ contains its logical free names in $B$. For opaque syntax, the
+same containment follows from returning all of $B$.
+\end{lemma}
+\begin{proof}
+Induct on the expression traversal, with a simultaneous induction on the
+statement list and condition judgment. A name is either bound or recorded by
+the first two rules. A nonbinding constructor contributes the union of its
+children. A closure and for body add precisely their pattern bindings; for's
+source is visited before that addition. For a block, the induction hypothesis
+applies to each initializer/else expression in the old environment, and to
+the remaining list in the enlarged environment. Match arms and then/else
+branches use disjoint saved environments, so bindings do not leak. In an
+and-condition, the first condition's bindings are available to the second,
+exactly as specified by FV-And. These exhaust the binder overrides;
+nonbinding descendants use FV-Children. Opaque syntax returns a superset by
+definition. The lemma concerns lexical occurrences, not macro expansion or
+Rust name resolution, which are explicit hypotheses.
+\end{proof}
+
+\subsection{The compiler's CQ language and Rust extensions}
+The classical valuation semantics is fixed in Section~\ref{sec:valuations}.
+The compiler's language named CQ additionally admits native Rust expressions,
+guards and bindings. These are compiler extensions, not extra term forms in
+AHV Definition~4.2.1. Its implemented source syntax is
+\[
+\begin{aligned}
+q&=h(\bar e)\mathrel{:-}c_0,\ldots,c_{n-1};\\
+c&::=R(\bar a)\mid\mathsf{if}\ e\mid\mathsf{let}\ p[:\tau]=e,\\
+a&::=x\mid\_\mid e.
+\end{aligned}
+\]
+Bare single-segment paths are logical-variable positions; other expressions
+are computations. At least one positive occurrence is required. A bare
+head without an explicit output declaration must be supplied by the body;
+computed output types must be nameable through an output declaration or a
+known projected type. Result declarations are not input relations.
+
+The judgment $\Sigma;B\vdash c\Rightarrow B'$ checks a clause's written scope.
+Atom arguments are checked left to right; $\Sigma;B\vdash\bar a\Rightarrow B'$
+folds these argument rules and requires $|\bar a|=|\Sigma(R)|$:
+\begin{mathpar}
+
+\Rule{CQ-Var}{}{\Sigma;B\vdash x\Rightarrow B\cup\{x\}}
+
+\Rule{CQ-Expr}{e\checkmark_B}{\Sigma;B\vdash e\Rightarrow B}
+
+\Rule{CQ-Atom}{R\in\dom\Sigma\quad |\bar a|=|\Sigma(R)|\quad
+ \Sigma;B\vdash\bar a\Rightarrow B'}{\Sigma;B\vdash R(\bar a)\Rightarrow B'}
+
+\Rule{CQ-Guard}{e\checkmark_B}{\Sigma;B\vdash\mathsf{if}\ e\Rightarrow B}
+
+\Rule{CQ-Bind}{e\checkmark_B\quad N=\set(\binds(p))\quad N\cap B=\emptyset}
+ {\Sigma;B\vdash\mathsf{let}\ p[:\tau]=e\Rightarrow B\cup N}
+\end{mathpar}
+CQ-Expr includes wildcard with no uses, and excludes the bare-variable case.
+The program judgment starts with $B=\emptyset$ and composes these rules.
+These are structural checks, not a typing derivation for $e$.
+
+Under $\mathcal H_{\rm rel}$, a positive atom admits every input row agreeing
+with previously bound bare names, repeated positions, and computed argument
+values. New bare names are added to the environment; $\_$ contributes no
+logical name. A guard retains an environment iff $\bar e$ is true. A let
+extends it with the result of its pattern match. Starting at
+$\mathbf1$, compose these finite relations of valuations and apply the
+ordered head function, taking a set. This defines $\sem q_I$ for the
+admissible extended fragment. On classical CQ syntax it agrees with $q(I)$
+in Section~\ref{sec:valuations}; neither definition supplies an order-sensitive
+set semantics for arbitrary Rust effects.
+
+\subsection{Named relational algebra}
+The relational part uses AHV's named SPJR operators. Named immutable
+definitions, explicit Unit/Semijoin nodes, general Rust selections, and
+Extend are this IR's representation choices and extensions; the seven-node
+grammar is not asserted to be AHV's definition of SPJR.
+\[
+\begin{aligned}
+d&::=r=o;& D&::=d_1;\ldots;d_m;\mathsf{output}\ r\ \mathsf{as}\ h(\bar e),\\
+o&::=\mathbf1\mid\delta_m(R)\mid r\bowtie s\mid r\ltimes s
+ \mid\pi_Ur\mid\sigma_er\mid\operatorname{ext}_{N,e}r.
+\end{aligned}
+\]
+A definition environment $\Delta$ maps earlier result names to
+$(V,T,C)$: sort, symbolic Rust type map, and computed-attribute subset.
+The following display gives the sort component of
+$\Sigma;\Delta\vdash o:(V,T,C)$; the type and computed-attribute components
+are specified immediately below. $C$ records computed-field origin for host
+representation; it is not the dynamic execution provenance of
+Section~\ref{sec:provenance-model}.
+\begin{mathpar}
+
+\Rule{RA-Unit}{}{\Sigma;\Delta\vdash\mathbf1:\emptyset}
+
+\Rule{RA-Rename}{R\in\dom\Sigma\quad m:\operatorname{cols}(\Sigma(R))\cong V}
+ {\Sigma;\Delta\vdash\delta_m(R):V}
+
+\Rule{RA-Join}{\Delta(r).V=V\quad\Delta(s).V=W}
+ {\Sigma;\Delta\vdash r\bowtie s:V\cup W}
+
+\Rule{RA-Semi}{\Delta(r).V=V\quad s\in\dom\Delta}
+ {\Sigma;\Delta\vdash r\ltimes s:V}
+
+\Rule{RA-Project}{\Delta(r).V=V\quad U\subseteq V}
+ {\Sigma;\Delta\vdash\pi_Ur:U}
+
+\Rule{RA-Select}{\Delta(r).V=V\quad e\checkmark_V}
+ {\Sigma;\Delta\vdash\sigma_er:V}
+
+\Rule{RA-Extend}{\Delta(r).V=V\quad e\checkmark_V\quad N\cap V=\emptyset}
+ {\Sigma;\Delta\vdash\operatorname{ext}_{N,e}r:V\cup N}
+
+\Rule{RA-Def}{\Sigma;\Delta\vdash o:\delta\quad r\notin\dom\Delta}
+ {\Sigma\vdash(\Delta,r=o)\Rightarrow\Delta[r\mapsto\delta]}
+\end{mathpar}
+Rename's $T$ comes from its positional source columns and $C=\emptyset$;
+Unit's maps are empty. Other operators restrict and merge operand maps to
+the output sort, preferring the left type spelling on overlap. Extend
+adds its written types (possibly inference holes) and marks $N$ computed.
+The computed sets of operands are unioned and restricted. No structural
+rule proves equality of distinct Rust type spellings; concrete compatibility
+is a host typing obligation.
+
+Result names and listed attributes are unique. All operands must already
+be in $\Delta$. Every definition must be reachable backwards from output.
+Output expressions pass the visible-use check. For an entirely bare head its
+attribute set must equal the output sort; a computed head may use a subset
+of the retained sort. Nameable public output types are required by physical
+lowering. The CQ program annotation supplies schema and API metadata; it is
+not a license for a downstream pass to re-plan its body.
+
+Evaluation folds definitions in order into an environment $\mathcal E$ of
+finite relations, interpreting the seven operators as in Section~\ref{sec:scope}
+and Rename positionally. The output is
+$\{\bar e(t)\mid t\in\mathcal E(r)\}$. Result sharing means one definition
+has one value; a use does not recompute its definition.
+
+\subsection{Indexed RA}
+An index signature is $(\nu,z,\bar k)$ with namespace
+$\nu\in\{\mathsf{base},\mathsf{result}\}$, input/result name $z$, and a
+nonempty, strictly increasing list of valid column ordinals $\bar k$.
+Base layout is declaration order. Result layout is
+$\ord(V)$, the lexicographic order of raw-name-normalized sorts used by
+\code{BTreeSet<String>}. The namespaces do not alias.
+\begin{mathpar}
+
+\Rule{IX-WF}{\Sigma;\Delta\vdash D:\ok\quad
+ \forall\kappa\in K.\ \operatorname{valid}(\kappa,\Sigma,\Delta)\quad
+ |\set(K)|=|K|}
+ {\Sigma\vdash(D,K):\ok}
+\end{mathpar}
+Here $D:\ok$ abbreviates the RA definition/output judgment. Indexes annotate
+and preserve the complete $D$, and have the same abstract denotation as $D$.
+Well-formedness does not imply that required indexes are present.
+
+\subsection{Local access plans and pipelines}
+An access plan is $h(\bar x)\Rightarrow e_h\mathrel{:-}\bar a$ with
+$a=\ell\Rightarrow\mathsf{for}\ p\ \mathsf{in}\ e$ or
+$a=\ell\Rightarrow\mathsf{if}\ e$. Logical labels $\ell$ carry occurrence
+or guard/binding information; they do not define storage. Concrete sources,
+lookups, predicates and result expressions already occur in the Rust leaves.
+Let $\bar B$ be the ordered current binding and $\operatorname{new}(\ell,B)$
+be first occurrences of positive-label names outside $B$, in label order.
+\begin{mathpar}
+
+\Rule{AC-For}{\bar N=\operatorname{new}(\ell,B)\ne\emptyseq\quad
+ p=(\bar N)\text{ is a simple tuple pattern}}
+ {\bar B\vdash\ell\Rightarrow\mathsf{for}\ p\ \mathsf{in}\ e\Rightarrow\bar B\concat\bar N}
+
+\Rule{AC-If}{\operatorname{new}(\ell,B)=\emptyseq}
+ {\bar B\vdash\ell\Rightarrow\mathsf{if}\ e\Rightarrow\bar B}
+
+\Rule{AC-Guard}{\ell=\mathsf{if}\ e_0\quad e_0\checkmark_B}
+ {\bar B\vdash\ell\Rightarrow\mathsf{if}\ e\Rightarrow\bar B}
+
+\Rule{AC-Bind}{\ell=\mathsf{let}\ p_0=e_0\quad \bar N=\binds(p_0)\quad p=(\bar N)}
+ {\bar B\vdash\ell\Rightarrow\mathsf{for}\ p\ \mathsf{in}\ e\Rightarrow\bar B\concat\bar N}
+\end{mathpar}
+AC-For/If apply to positive labels; empty positive labels use If.
+The current access checker does not prove that $e$ implements $\ell$, or
+that AC-Bind's iterator is a singleton. Those are edge obligations for generated
+plans and explicit host assumptions for separately quoted plans. Likewise
+AC-Bind's local checker alone does not establish binder freshness or RHS scope;
+the generated subset supplies those premises. The head's bare label names must
+be bound; native Rust typing checks the actual head expression.
+
+A pipeline contains named operators $s_i$ in order and returns its final stream:
+\[
+\begin{split}
+o::={}&\mathsf{Unit}(())\mid\mathsf{Scan}(p,e,b)
+\mid\mathsf{Join}(s,p,q,e,b)\\
+ &\mid\mathsf{Filter}(s,p,e)\mid\mathsf{Project}(s,p,e)
+ \mid\mathsf{Distinct}(s).
+\end{split}
+\]
+Its well-formedness judgment carries $(i,\bar B,\phi)$, with phase
+$\phi\in\{\mathsf{binding},\mathsf{projected},\mathsf{distinct}\}$.
+The first operator is Unit with empty binding or Scan yielding exactly its
+fresh pattern names. In binding phase, Join consumes the immediately previous
+stream and its entire pattern $\bar B$, introduces disjoint $\bar N$, and yields
+$\bar B\concat\bar N$. Filter consumes the same complete pattern and leaves
+it unchanged. Project consumes that pattern and changes phase to projected.
+Only Distinct may follow; it changes phase to distinct and must be final.
+Names are exactly \code{iter0}, \code{iter1}, etc.; output is the final name.
+These conditions define an executable finite checker, not a Rust type system.
+
+For completeness, the defining phase/binding transitions of the pipeline
+checker are displayed below. Every premise includes a fresh next stream name
+$s_i$, and every nonsource input must be $s_{i-1}$. $\bar N$ contains distinct
+simple-pattern names, $\bar B\#\bar N$ means disjointness, and $b_{\bar B}$
+is the exact tuple of the binding in order:
+\begin{mathpar}
+\Rule{WF-IP-Unit}{}{(0,\emptyseq,\mathsf{start});\mathsf{Unit}(())\Rightarrow(1,\emptyseq,\mathsf{binding})}
+
+\Rule{WF-IP-Scan}{\binds(p)=\bar N\quad b=b_{\bar N}}
+ {(0,\emptyseq,\mathsf{start});\mathsf{Scan}(p,e,b)\Rightarrow(1,\bar N,\mathsf{binding})}
+
+\Rule{WF-IP-Join}{p=(\bar B)\quad\binds(q)=\bar N\quad\bar B\#\bar N\quad b=b_{\bar B\concat\bar N}}
+ {(i,\bar B,\mathsf{binding});\mathsf{Join}(s_{i-1},p,q,e,b)\Rightarrow(i+1,\bar B\concat\bar N,\mathsf{binding})}
+
+\Rule{WF-IP-Filter}{p=(\bar B)}
+ {(i,\bar B,\mathsf{binding});\mathsf{Filter}(s_{i-1},p,e)\Rightarrow(i+1,\bar B,\mathsf{binding})}
+
+\Rule{WF-IP-Project}{p=(\bar B)}
+ {(i,\bar B,\mathsf{binding});\mathsf{Project}(s_{i-1},p,e)\Rightarrow(i+1,\emptyseq,\mathsf{projected})}
+
+\Rule{WF-IP-Distinct}{} {(i,\bar B,\mathsf{projected});\mathsf{Distinct}(s_{i-1})\Rightarrow(i+1,\bar B,\mathsf{distinct})}
+
+\Rule{WF-IP-Return}{s=s_{i-1}}{(i,\bar B,\mathsf{distinct});\mathsf{return}\ s\Rightarrow\ok}
+\end{mathpar}
+After Project the logical binding is no longer consulted; the implementation
+retains its old list as dead checker state, whereas this judgment erases it.
+The conformance relation quotients precisely that unobserved component.

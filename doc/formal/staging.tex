@@ -1,0 +1,392 @@
+\section{Local cursor semantics and staged composition}
+\label{sec:cursor}
+\subsection{A demand-driven abstract machine}
+Let a host iterator handle $z$ support
+$\langle z,\sigma\rangle\Downarrow_{\rm next}(b,z',\sigma',\alpha)$, where
+$b$ is Some value or None. We count its first None as exhaustion; our client
+protocol does not demand subsequent values from an exhausted cursor.
+A generator poll is
+$\langle g,\sigma\rangle\Downarrow_G(b,g',\sigma',\alpha)$.
+The machine has Done, One($v$), Source($z$), Map($g,f$), Filter($g,p$),
+Distinct($g,S$), FlatSeek($g,f$), FlatRun($g,f,z$), and Delay($e$).
+Call-by-value host closures $f,p$ include their environments. The inductive
+rules below define finite successful polls, including exhaustion. Absence of
+such a derivation means neither a false guard nor successful exhaustion.
+In particular, it does not distinguish a panic from divergence.
+\begin{mathpar}
+
+\Rule{G-Done}{}{\langle\mathsf{Done},\sigma\rangle\Downarrow_G
+ (\mathsf{None},\mathsf{Done},\sigma,\emptyseq)}
+
+\Rule{G-One}{}{\langle\mathsf{One}(v),\sigma\rangle\Downarrow_G
+ (\mathsf{Some}(v),\mathsf{Done},\sigma,\emptyseq)}
+
+\Rule{G-Source}{\langle z,\sigma\rangle\Downarrow_{\rm next}(\mathsf{Some}(v),z',\sigma',\alpha)}
+ {\langle\mathsf{Source}(z),\sigma\rangle\Downarrow_G
+ (\mathsf{Some}(v),\mathsf{Source}(z'),\sigma',\alpha)}
+
+\Rule{G-Map}{\langle g,\sigma\rangle\Downarrow_G(\mathsf{Some}(v),g',\sigma_1,\alpha)\\
+ \langle f(v),\sigma_1\rangle\Downarrow_H(w,\sigma_2,\beta)}
+ {\langle\mathsf{Map}(g,f),\sigma\rangle\Downarrow_G
+ (\mathsf{Some}(w),\mathsf{Map}(g',f),\sigma_2,\alpha\concat\beta)}
+
+\Rule{G-Keep}{\langle g,\sigma\rangle\Downarrow_G(\mathsf{Some}(v),g',\sigma_1,\alpha)\\
+ \langle p(v),\sigma_1\rangle\Downarrow_H(\mathsf{true},\sigma_2,\beta)}
+ {\langle\mathsf{Filter}(g,p),\sigma\rangle\Downarrow_G
+ (\mathsf{Some}(v),\mathsf{Filter}(g',p),\sigma_2,\alpha\concat\beta)}
+
+\Rule{G-Skip}{\langle g,\sigma\rangle\Downarrow_G(\mathsf{Some}(v),g',\sigma_1,\alpha)\\
+ \langle p(v),\sigma_1\rangle\Downarrow_H(\mathsf{false},\sigma_2,\beta)\quad
+ \langle\mathsf{Filter}(g',p),\sigma_2\rangle\Downarrow_G(b,g'',\sigma_3,\gamma)}
+ {\langle\mathsf{Filter}(g,p),\sigma\rangle\Downarrow_G
+ (b,g'',\sigma_3,\alpha\concat\beta\concat\gamma)}
+\end{mathpar}
+Map and Filter return None when their upstream poll returns None, preserving
+that poll's store and trace and becoming Done. Source likewise becomes Done
+on its first None under the chosen observation protocol.
+\begin{mathpar}
+
+\Rule{G-Enter}{\langle g,\sigma\rangle\Downarrow_G(\mathsf{Some}(v),g',\sigma_1,\alpha)\\
+ \langle f(v),\sigma_1\rangle\Downarrow_H(z,\sigma_2,\beta)\quad
+ \langle\mathsf{FlatRun}(g',f,z),\sigma_2\rangle\Downarrow_G(b,h,\sigma_3,\gamma)}
+ {\langle\mathsf{FlatSeek}(g,f),\sigma\rangle\Downarrow_G
+ (b,h,\sigma_3,\alpha\concat\beta\concat\gamma)}
+
+\Rule{G-Inner}{\langle z,\sigma\rangle\Downarrow_{\rm next}(\mathsf{Some}(v),z',\sigma',\alpha)}
+ {\langle\mathsf{FlatRun}(g,f,z),\sigma\rangle\Downarrow_G
+ (\mathsf{Some}(v),\mathsf{FlatRun}(g,f,z'),\sigma',\alpha)}
+
+\Rule{G-NextOuter}{\langle z,\sigma\rangle\Downarrow_{\rm next}(\mathsf{None},z',\sigma_1,\alpha)\quad
+ \langle\mathsf{FlatSeek}(g,f),\sigma_1\rangle\Downarrow_G(b,h,\sigma_2,\beta)}
+ {\langle\mathsf{FlatRun}(g,f,z),\sigma\rangle\Downarrow_G(b,h,\sigma_2,\alpha\concat\beta)}
+
+\Rule{G-Fresh}{\langle g,\sigma\rangle\Downarrow_G(\mathsf{Some}(v),g',\sigma',\alpha)\quad v\notin S}
+ {\langle\mathsf{Distinct}(g,S),\sigma\rangle\Downarrow_G
+ (\mathsf{Some}(v),\mathsf{Distinct}(g',S\cup\{v\}),\sigma',\alpha)}
+
+\Rule{G-Seen}{\langle g,\sigma\rangle\Downarrow_G(\mathsf{Some}(v),g',\sigma_1,\alpha)\quad v\in S\\
+ \langle\mathsf{Distinct}(g',S),\sigma_1\rangle\Downarrow_G(b,h,\sigma_2,\beta)}
+ {\langle\mathsf{Distinct}(g,S),\sigma\rangle\Downarrow_G(b,h,\sigma_2,\alpha\concat\beta)}
+\end{mathpar}
+FlatSeek and Distinct become Done on upstream None, propagating its trace.
+For $C[-]$ restricted to Map, Filter, Distinct, or FlatSeek (not FlatRun),
+the terminal rules are explicitly
+\begin{mathpar}
+\Rule{G-Stop}{\langle g,\sigma\rangle\Downarrow_G(\mathsf{None},g',\sigma',\alpha)}
+ {\langle C[g],\sigma\rangle\Downarrow_G(\mathsf{None},\mathsf{Done},\sigma',\alpha)}
+
+\Rule{G-SourceStop}{\langle z,\sigma\rangle\Downarrow_{\rm next}(\mathsf{None},z',\sigma',\alpha)}
+ {\langle\mathsf{Source}(z),\sigma\rangle\Downarrow_G(\mathsf{None},\mathsf{Done},\sigma',\alpha)}
+
+\Rule{G-Delay}{\langle e,\sigma\rangle\Downarrow_H(g,\sigma_1,\alpha)\quad
+ \langle g,\sigma_1\rangle\Downarrow_G(b,g',\sigma_2,\beta)}
+ {\langle\mathsf{Delay}(e),\sigma\rangle\Downarrow_G(b,g',\sigma_2,\alpha\concat\beta)}
+\end{mathpar}
+These rules exhaust the finite successful cases. Distinct abstracts clone/hash/equality as
+unobservable value operations; interpreting it as a Rust HashSet therefore
+requires Definition~\ref{def:host}'s representation laws.
+
+A suspended generator $\mathsf{Delay}(e)$ evaluates $e$ only on its first poll,
+then polls the resulting generator in the resulting store and concatenates
+traces. Construction of Delay itself evaluates no $e$. This explicitly
+accounts for root-source effects and partial consumption. Dropping a cursor
+performs no further generator poll; Rust destructor behavior remains part of
+the host adequacy obligation.
+
+An Access plan denotes Delay of a nested-loop cursor: first For creates a
+source then maps its fresh binding; a first If uses One($()$) followed by
+Filter. Each later For uses FlatSeek on the full predecessor binding with a
+source closure, and each If uses Filter. The head uses Map; final Distinct
+starts with an empty seen set. This is an operational definition for concrete
+Rust leaves, independent of whether its logical labels are truthful.
+
+\subsection{Access-to-Pipeline inference rules}
+A lowering state $(\bar B,s,D,n)$ records ordered bindings, current stream,
+emitted definitions, and next stream number. The names $s_n$ are
+\code{iter}$n$. $\operatorname{tuple}(\bar B)$ denotes both the simple input
+pattern and the corresponding tuple expression, according to syntactic
+position. Rust leaf ASTs in the following rules are copied intact.
+\begin{mathpar}
+
+\Rule{IP-Root}{a_0=\ell\Rightarrow\mathsf{for}\ p\ \mathsf{in}\ e\quad\bar N=\binds(p)}
+ {a_0\Downarrow_{\rm IP}(\bar N,s_0,[s_0=\mathsf{Scan}(p,e,(\bar N))],1)}
+
+\Rule{IP-Seed}{\bar a=\emptyseq\ \lor\ a_0\text{ is If}}
+ {\operatorname{start}(\bar a)\Downarrow_{\rm IP}(\emptyseq,s_0,[s_0=\mathsf{Unit}(())],1)}
+
+\Rule{IP-Join}{a=\ell\Rightarrow\mathsf{for}\ q\ \mathsf{in}\ e\quad\bar N=\binds(q)}
+ {(\bar B,s,D,n;a)\Rightarrow_{\rm IP}
+ (\bar B\concat\bar N,s_n,D\concat[s_n=\mathsf{Join}(s,(\bar B),q,e,(\bar B\concat\bar N))],n+1)}
+
+\Rule{IP-Filter}{a=\ell\Rightarrow\mathsf{if}\ e}
+ {(\bar B,s,D,n;a)\Rightarrow_{\rm IP}
+ (\bar B,s_n,D\concat[s_n=\mathsf{Filter}(s,(\bar B),e)],n+1)}
+
+\Rule{IP-Output}{\text{all clauses consumed}}
+ {(\bar B,s,D,n;e_h)\Rightarrow_{\rm IP}
+ D\concat[s_n=\mathsf{Project}(s,(\bar B),e_h);
+ s_{n+1}=\mathsf{Distinct}(s_n);\mathsf{return}\ s_{n+1}]}
+\end{mathpar}
+Root consumes the first For. Seed consumes no clause; the ordinary fold then
+handles a first If. Empty typed Access values are handled by the same seed
+case even though the concrete parser requires a nonempty clause list.
+
+\begin{theorem}[Access lowering]
+On Access plans with fresh simple binding patterns, IP lowering preserves
+binding well-formedness and finite successful abstract poll derivations.
+\end{theorem}
+\begin{proof}
+Root/Seed establish exactly the source binding and stream 0. Induct on the
+remaining clauses. For introduces its fresh tuple names, so Join's input
+pattern equals the previous binding and its output is their ordered
+concatenation. If leaves that binding unchanged. Both consume the immediately
+previous stream and use the next fresh stream number. Output is the unique
+Project followed immediately by final Distinct, proving structural validity.
+For semantics, relate an Access prefix cursor to its current pipeline stream.
+Root relates the same source-expression closure and pattern map; Seed relates
+the same One($()$). IP-Join introduces exactly FlatSeek with the identical
+source closure and ordered binding union. IP-Filter introduces the identical
+predicate closure. Thus corresponding polls use the same upstream poll and
+host callback, leaving related residual cursors after Yield or exhaustion;
+the relation is preserved by each induction step. Output adds identical Map
+and Distinct. Delay postpones their construction on both sides. This is a
+bisimulation of the finite successful poll relation, including finite
+partial-demand traces with normal callback termination. It is not a theorem
+about failed or divergent executions or arbitrary native Rust representations.
+\end{proof}
+
+\subsection{Pipeline-to-Rust inference rules}
+The translation writes one Rust local per named definition. In this display,
+method notation abbreviates the implementation's fully qualified
+\code{core::iter} calls. No late emitter chooses join order.
+\begin{mathpar}
+
+\Rule{R-Unit}{}{s=\mathsf{Unit}(b)\Downarrow_R\code{let s = once(b);}}
+
+\Rule{R-Scan}{}{s=\mathsf{Scan}(p,e,b)\Downarrow_R\\
+ \code{let s = IntoIterator::into_iter(e).map(move |p| b);}}
+
+\Rule{R-Join}{}{s=\mathsf{Join}(l,p,q,e,b)\Downarrow_R\\
+ \mathsf{let}\ s=l.\mathsf{flatMap}(\mathsf{move}\ |p|\,
+ \mathsf{IntoIter}(e).\mathsf{map}(\mathsf{move}\ |q|\{\operatorname{copies}(p);b\}));}
+
+\Rule{R-Filter}{}{s=\mathsf{Filter}(l,p,e)\Downarrow_R\\
+ \mathsf{let}\ s=l.\mathsf{filterMap}(\mathsf{move}\ |p|\,
+ \mathsf{if}\ e\ \{\mathsf{Some}((\binds(p)))\}\ \mathsf{else}\ \{\mathsf{None}\});}
+
+\Rule{R-Project}{}{s=\mathsf{Project}(l,p,e)\Downarrow_R
+ \code{let s = l.map(move |p| e);}}
+
+\Rule{R-Distinct}{}{s=\mathsf{Distinct}(l)\Downarrow_R\\
+ \mathsf{let}\ s=\{\mathsf{let\ mut}\ seen=\mathsf{HashSet::new}();\\
+ l.\mathsf{filter}(\mathsf{move}\ |row|\,seen.\mathsf{insert}(\mathsf{Clone}(row)))\};}
+\end{mathpar}
+$\operatorname{copies}(p)$ is, for every bound $x$ in pattern order,
+\code{let x = Clone::clone(&x);}. Those copies occur once per inner item, inside
+Join's inner map. Filter is implemented using consuming filter-map, not by
+passing an extra borrowed tuple to the predicate. These details matter for
+owned computed fields and cannot be replaced by an informal monad analogy.
+
+\[
+\Rule{R-Block}{d_j\Downarrow_R t_j\quad(0\le j\le m)}
+ {\bar d;\mathsf{return}\ s_m\Downarrow_R
+ \mathsf{Iterator::flatten}(\mathsf{onceWith}(\mathsf{move}\ ||\{\bar t;s_m\}))}.
+\]
+The outer once-with/flatten implements Delay: it constructs the named local
+operators on the first poll. Standard adapter behavior is documented by
+Rust~\cite{iterator}; the abstract adequacy obligation includes source and
+closure ownership, pattern resolution, and Clone/HashSet laws.
+
+\begin{theorem}[Adapter adequacy, conditional]
+Assume the generated Rust type-checks; host callbacks and source iterators
+realize their specified host judgments; generated cloning/hashing/dropping
+are silent and representation-preserving; and clients stop after first None.
+Then R-lowering simulates every finite successful abstract pipeline poll,
+preserving its returned abstract values, callback trace, and exhaustion.
+\end{theorem}
+\begin{proof}
+Relate Source to its stored native iterator, Map/Filter to their adapters,
+FlatSeek/FlatRun to flat-map before/during an active inner iterator, and
+Distinct's abstract set to its native HashSet. One poll of map polls upstream
+once and applies its closure on Some, exactly G-Map. Consuming filter-map
+polls until the first Some result of its closure or exhaustion, implementing
+G-Keep/G-Skip. Flat-map's active inner
+iterator implements G-Inner; exhaustion transitions to the next outer value
+and constructs its source, implementing G-NextOuter/G-Enter. Prefix copies
+in the inner map are silent related values by hypothesis. HashSet insert is
+true exactly for unseen abstract rows, implementing G-Fresh/G-Seen; inserted
+clones preserve the representation invariant. Unit, scan, and stop cases
+match their source rules. The outer once-with creates the related state on
+first demand and never earlier. Induct on finite poll derivations and then
+on finite successful client requests to obtain the simulation.
+This is a conditional adapter proof,
+not a derivation of Rust's semantics or its trait laws from the proc macro.
+\end{proof}
+
+\begin{obligation}[C-Effects: complete effectful cursor semantics]
+To extend these results to the full observations in Section~\ref{sec:scope},
+give a small-step or coinductive semantics for divergent internal polling,
+host panic/unwinding, iterator destruction, and closure-capture destruction,
+and prove the corresponding simulations. Propagating a divergent host
+callback alone is insufficient: filtering an infinite source with an
+always-false terminating predicate diverges inside a poll without a single
+divergent callback. The finite rules above make no assertion about that case.
+\end{obligation}
+
+\section{Quotation, residual contexts, and substitution of passes}
+\label{sec:staging}
+Write $C[\square^L_\Gamma]$ for an ordinary Rust AST context with a local hole
+containing language $L$ and runtime environment $\Gamma$. This notation
+belongs to the specification, not the concrete MiniLinq syntax. The enclosing
+file already fixes store definitions, types, borrows, and call sites.
+An Access hole eventually occupies an expression position. Typing/resolution
+of the filled Rust context, not merely its isolated hole, is required.
+
+Let $\operatorname{quote}_L(s)$ be ToTokens on an $L$ AST and
+$\operatorname{parse}_L$ its exact parser. For native Rust leaves, spans and
+syntax contexts are part of the representation; plain string equality is
+insufficient. The applicable syntactic adequacy obligation is
+$\operatorname{parse}_L(\operatorname{quote}_L(s))\equiv s$ up to the stated
+normalization of delimiters/raw names while preserving resolution of leaves.
+Procedural macros are not automatically hygienic~\cite{macros}.
+
+\begin{mathpar}
+
+\Rule{ST-Entry}{\operatorname{parse}_L(T)=s\quad s\Downarrow_f t}
+ {\mathsf{entry}_{f,k}\{T\}\longrightarrow\operatorname{quote}(k(t))}
+
+\Rule{ST-Hole}{\Gamma\vdash s:L\quad\Gamma\vdash s\Downarrow_f t:M}
+ {C[\square^L_\Gamma(s)]\longrightarrow C[\square^M_\Gamma(t)]}
+
+\Rule{ST-Rust}{\Gamma\vdash p\Downarrow_R e:\mathsf{Expr}}
+ {C[\square^{\mathsf{Pipeline}}_\Gamma(p)]\longrightarrow C[e]}
+
+\Rule{ST-Emit}{e:\mathsf{Expr}}{e\longrightarrow\operatorname{ToTokens}(e)}
+\end{mathpar}
+Here $k$ is a metalanguage continuation describing where the target is routed.
+For current public macros it is \emph{fixed}, not a user-configurable CPS
+argument. The actual continuation pairs are:
+\begin{center}\small
+\begin{tabular}{lll}\toprule
+Entry & Typed edge & Continuation \\\midrule
+\code{mini_linq} & canonical/extended CQ & \code{relational_plan} \\
+\code{planned_query} & planned CQ & \code{planned_relational_plan} \\
+\code{relational_plan} & base/extended index & \code{index_requirements} \\
+\code{planned_relational_plan} & result indexes & \code{materialized} \\
+\code{index_requirements} & basic/lazy physical & staged Rust file \\
+\code{materialized} & materialized physical & staged Rust file \\
+\code{pull} & Access to Pipeline & \code{iterator_pipeline} \\
+\code{iterator_pipeline} & Pipeline to Expr & ToTokens \\\bottomrule
+\end{tabular}
+\end{center}
+A user can quote a lower IR directly through its existing entry without an
+upper pass. A physical pass can leave Access holes residual and lower them
+later. The materialized file has one Access hole per named RA result; the
+lazy/basic file has one query region. Rust leaves are escaped into those
+contexts using existing quote interpolation. There is no CQ escape keyword,
+new standalone wrapper, or claim that a whole shared RA DAG is one pipeline.
+
+\subsection{The contract of a replaceable edge}
+Local validity is a property of an IR term. Compilability is a property of a
+term and a selected pass. Preservation is a relation between executions under
+stated environment and observation contracts. These three properties must
+remain separate even when a macro entry invokes adjacent contract checks.
+
+Let $\mathsf{WF}_L$ denote locally well-formed terms of language $L$, and
+let a compiler implementation $f$ be a partial computation on such terms.
+Its successful result is written $f(s)=t$; an error or nontermination is not
+a successful result. An edge contract specifies:
+\begin{enumerate}
+\item an admitted source domain $A_f\subseteq\mathsf{WF}_L$ and a
+runtime precondition $\mathsf{Pre}_f$ on input instances, host stores, types,
+and representations;
+\item termination with a result in $\mathsf{WF}_M$ for every $s\in A_f$;
+\item a representation relation between the source runtime environment and
+the environment realized by the target's generated declarations;
+\item a common observation projection $O$ and client class $\mathcal D$,
+with $f(s)\preceq_{O,\mathcal D}s$ under that representation relation,
+including the response-totality premise for the finite observation model;
+\item for a residual hole, an admissible class of closing Rust contexts and
+an adequacy statement permitting that refinement to be used in those contexts.
+\end{enumerate}
+Here $\preceq_{O,\mathcal D}$ is the behavior-set inclusion of
+Section~\ref{sec:representation-observations}. Runtime preconditions can be
+semantic assumptions, such as $\mathcal H_{\rm rel}$; a syntactic checker
+need not decide them. The totality clause concerns compilation on the
+\emph{declared} domain. It cannot be obtained by defining that domain after
+the fact as whichever inputs happened to compile. A target's local IR check
+also does not prove that its eventual Rust context type-checks.
+
+Representation relations are established at the relevant runtime phase.
+For example, a physical pass emits a build method whose executions must
+construct stores representing the input or named relations. It does not
+compute those stores during macro expansion. If a later edge consumes a
+residual Access term, its assumed environment must be the same bindings,
+types, borrows, and stores that this generated context actually supplies.
+
+The contextual clause is substantive. Equality of exhausted answer sets is
+not in general a congruence for a context that requests one answer and then
+reads a host counter. Similarly, a lower-IR fragment that is valid with
+borrowed source fields may cease to type-check when substituted in a context
+that assumes owned computed fields. Composition at a language boundary thus
+requires compatible observations and runtime representations, in addition to
+matching AST types. This is the compiler-linking concern formalized more
+generally by Patterson and Ahmed~\cite{paper-ccc}.
+
+\begin{theorem}[Conditional composition and pass replacement]
+\label{thm:composition}
+Let $f:L\to M$ and $g:M\to N$ satisfy the edge contracts above for a common
+$O,\mathcal D$. Suppose $f(A_f)\subseteq A_g$; the first edge establishes the
+second's runtime precondition; their environment relations compose through
+the same intermediate realization; and their closing contexts satisfy the
+stated adequacy clauses. Then $g\circ f$ is total from $A_f$ to
+$\mathsf{WF}_N$ and refines its source at $O,\mathcal D$.
+If both edges establish behavior equality, the composite establishes equality.
+An alternative $f'$ may replace $f$ on $A_f$ when it satisfies these same
+conditions, including $f'(A_f)\subseteq A_g$.
+\end{theorem}
+\begin{proof}
+Fix $s\in A_f$. Totality of $f$ supplies $t=f(s)\in\mathsf{WF}_M$;
+domain inclusion supplies $t\in A_g$, so totality of $g$ supplies
+$u=g(t)\in\mathsf{WF}_N$. Fix an admitted input, host store, and client.
+The environment premise gives a single intermediate realization in which
+both edge theorems apply. After the appropriate abstraction of represented
+values, their observations inhabit the same space. Consequently
+\[
+ \{O(b):b\in\mathcal B_d(u,I,\sigma)\}
+ \subseteq\{O(b):b\in\mathcal B_d(t,I,\sigma)\}
+ \subseteq\{O(b):b\in\mathcal B_d(s,I,\sigma)\}.
+\]
+At a residual hole the contextual clauses lift these inclusions to the
+admitted enclosing Rust program. Inclusion is transitive; equality is also
+transitive when both inclusions are equalities. Applying the same argument
+inductively proves the statement for a finite chain. The hypotheses for
+$f'$ provide the same domain and observation steps.
+\end{proof}
+
+Two refinements of a source need not be equivalent to one another. A source
+permitting several enumerations may admit a sorted implementation and an
+implementation choosing another order. Both can satisfy a refinement
+contract while an order-observing client distinguishes them. Replacement
+therefore preserves the promised specification; it preserves the exact
+behavior set of the old implementation only when the contract requires that
+stronger equality. Conversely, a source promising sorted enumeration cannot
+be lowered to arbitrary enumeration under $O_{\rm seq}$ merely because
+$O_{\rm set}$ agrees.
+
+\paragraph{Instantiation and present limits.}
+For the relational route the common observation is the completed answer set
+under $\mathcal H_{\rm rel}$. The local cursor edges establish a stronger
+finite-poll property for their fixed operational structure. Combining these
+facts yields no stronger observation than the first edge establishes.
+Counterexample~\ref{cx:effects} rules out using the set theorem to justify
+unrestricted effect-preserving substitution. E2 in Section~\ref{sec:gaps}
+violates a different premise: a locally valid empty-binding Extend is
+outside the physical lowering's actual successful domain. An implementation
+contract that declares support for it has not established edge totality.
+
+The theorem supplies a composition principle with explicit interfaces. It
+does not discharge Rust contextual adequacy, synthesize an effect analysis,
+or expose a configurable macro continuation. In particular, direct lower-IR
+quotation makes a language boundary accessible; each quoted program must
+still satisfy that boundary's own environment and stage obligations.

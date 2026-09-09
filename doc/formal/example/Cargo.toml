@@ -1,0 +1,18 @@
+[package]
+name = "mini-linq-paper-overview"
+default-run = "mini-linq-paper-overview"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+# This documentation driver is outside the compiler workspace.
+[workspace]
+
+[dependencies]
+cq-compiler = { path = "../../../crates/cq-compiler" }
+cq-ir = { path = "../../../crates/cq-ir" }
+mini-linq = { path = "../../../crates/mini-linq" }
+quote = "1"
+syn = { version = "2", features = ["full", "visit-mut"] }
+prettyplease = "0.2"

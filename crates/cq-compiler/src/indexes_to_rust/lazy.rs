@@ -206,7 +206,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
         keys.insert(key, id);
     }
     let expression = |expr: &syn::Expr, relation: &ra::RelationInfo| {
-        if let Some(p) = cq::rust::comparison(expr)
+        if let Some(p) = cq::Predicate::from_expr(expr)
             .filter(|p| p.variables().iter().all(|v| relation.heading.contains(v)))
         {
             let term = |t: &cq::Term| match t {

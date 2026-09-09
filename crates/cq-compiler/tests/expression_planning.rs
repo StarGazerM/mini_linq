@@ -80,6 +80,130 @@ fn parsed_optional_clauses_cannot_be_silently_dropped_by_any_planner() {
     }
 }
 
+#[test]
+fn replay_and_independent_contract_reject_invalid_expression_rules() {
+    let source: cq::Module = syn::parse_quote! {
+        struct P; relation R(a:i32);
+        answer(x) :- R(x), let k:i32 = 7, if k > 0;
+    };
+    let (plan, mut report) = explain_cq_plan(
+        &source,
+        PlanningOptions {
+            strategy: JoinPolicy::Written,
+            max_arity: None,
+        },
+    )
+    .unwrap();
+    for replacement in [JoinRule::Guard { clause: 1 }, JoinRule::Bind { clause: 99 }] {
+        let mut wrong = report.clone();
+        wrong.derivation[1] = replacement;
+        assert!(compile_cq_derivation(&source, &wrong).is_err());
+        assert!(cq_compiler::check_cq_plan(&source, &plan, &wrong).is_err());
+    }
+    report.derivation.swap(1, 2);
+    let error = compile_cq_derivation(&source, &report).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("logical input before its producer")
+    );
+    let error = cq_compiler::check_cq_plan(&source, &plan, &report).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("logical input before its producer")
+    );
+}
+
+#[test]
+fn every_clause_permutation_agrees_with_written_dependency_constraints() {
+    let source: cq::Module = syn::parse_quote! {
+        struct P; relation R(a:i32); relation S(b:i32); relation T(c:i32);
+        answer(x) :- R(x), S(y), let z:i32 = *x + *y, T(k), if z > 0;
+    };
+    let (_, report) = explain_cq_plan(
+        &source,
+        PlanningOptions {
+            strategy: JoinPolicy::Written,
+            max_arity: None,
+        },
+    )
+    .unwrap();
+    // Authored from source semantics: R and S may swap, both precede the let;
+    // T and the primitive guard may swap, both remain after that computation.
+    let legal = [
+        [0, 1, 2, 3, 4],
+        [1, 0, 2, 3, 4],
+        [0, 1, 2, 4, 3],
+        [1, 0, 2, 4, 3],
+    ];
+    let rules = [
+        JoinRule::Match { clause: 0 },
+        JoinRule::Match { clause: 1 },
+        JoinRule::Bind { clause: 2 },
+        JoinRule::Match { clause: 3 },
+        JoinRule::Guard { clause: 4 },
+    ];
+    let mut permutations = vec![Vec::new()];
+    for _ in 0..5 {
+        permutations = permutations
+            .into_iter()
+            .flat_map(|prefix| {
+                (0..5)
+                    .filter(|i| !prefix.contains(i))
+                    .map(|i| {
+                        let mut order = prefix.clone();
+                        order.push(i);
+                        order
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+    }
+    assert_eq!(permutations.len(), 120);
+    for order in permutations {
+        let mut candidate = report.clone();
+        candidate.derivation = order
+            .iter()
+            .map(|&i| rules[i].clone())
+            .chain([JoinRule::Finish])
+            .collect();
+        let result = compile_cq_derivation(&source, &candidate);
+        assert_eq!(
+            result.is_ok(),
+            legal.iter().any(|expected| expected.as_slice() == order),
+            "{order:?}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn atom_matching_a_let_value_cannot_be_its_producer() {
+    let source: cq::Module = syn::parse_quote! {
+        struct P; relation R(a:i32); answer(k) :- let k:i32 = 7, R(k);
+    };
+    let (target, mut report) = explain_cq_plan(
+        &source,
+        PlanningOptions {
+            strategy: JoinPolicy::Written,
+            max_arity: None,
+        },
+    )
+    .unwrap();
+    report.derivation.swap(0, 1);
+    for error in [
+        compile_cq_derivation(&source, &report).unwrap_err(),
+        cq_compiler::check_cq_plan(&source, &target, &report).unwrap_err(),
+    ] {
+        assert!(
+            error
+                .to_string()
+                .contains("logical input before its producer"),
+            "{error}"
+        );
+    }
+}
+
 fn source(body: &str) -> cq::Module {
     syn::parse_str(&format!("pub struct P; relation R(a:i32,b:i32); relation S(a:i32,b:i32); relation T(a:i32,b:i32); relation answer(value:i32); answer(head(x)) :- {body};")).unwrap()
 }

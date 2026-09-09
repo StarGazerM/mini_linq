@@ -33,7 +33,7 @@ pub fn check_scenario(case: &QueryCase, scenario: Scenario) -> Result<(), Genera
 /// Check whether a parsed CQ admits a scenario without materializing rows.
 pub fn check_module_scenario(module: &cq::Module, scenario: Scenario) -> Result<(), GenerateError> {
     cq::contract::check(module).map_err(GenerateError::InvalidQuery)?;
-    if !cq::rust::basic(module) {
+    if !module.program.query.is_basic() {
         return Err(GenerateError::UnsupportedBodyItem);
     }
     let atoms = positive_atoms(&module.program.query)?;
@@ -59,7 +59,7 @@ pub fn generate_module(
     config: GenerationConfig,
 ) -> Result<Dataset, GenerateError> {
     cq::contract::check(module).map_err(GenerateError::InvalidQuery)?;
-    if !cq::rust::basic(module) {
+    if !module.program.query.is_basic() {
         return Err(GenerateError::UnsupportedBodyItem);
     }
     let atoms = positive_atoms(&module.program.query)?;

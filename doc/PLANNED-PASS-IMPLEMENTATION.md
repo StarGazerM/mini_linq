@@ -25,6 +25,23 @@ The compiler implementation is private and divided by transformation:
 their contracts remain in `passes.rs`. Local language contracts remain in
 `cq-ir`; cross-language relations remain under `pass_contracts`.
 
+Within CQ-to-RA, `dependencies.rs` derives D-* clause judgments and
+`hypergraph.rs` implements G-* reductions. `rules.rs` implements P-* and Y-*
+transitions on `JoinState`; `clause_rules.rs` implements C-* transitions on
+`ClauseState`, with A-* argument judgments composing C-MATCH. `strategy.rs`
+chooses among legal candidates. The [expression rule specification](RUST-EXPRESSIONS.md#dependency-judgments-and-their-code)
+pairs each judgment and transition with its code and states the restricted
+domain in which graph planning currently applies.
+
+The expression checker reads the actual RA separately from emission. It shares
+clause dependency analysis, which is tested against authored facts and legal
+orders; sharing that analysis is not an independent proof of its correctness.
+
+Rust lexical scope remains in `cq::rust::free_variables`. Clause type
+ascriptions belong to `Let::binding_types`; the basic language fragment is
+recognized by `Query::is_basic`. Whole-query planning and generated CQ names
+are owned by `cq_to_relational`.
+
 No `Standalone` RA wrapper, public `stage1` subsystem, new physical language,
 generic compiler engine, or direct RA-to-final-Rust shortcut is required.
 The existing RA module retains its program annotation. Lowering consumes the
@@ -35,10 +52,12 @@ written algebra, not a reconstructed plan from that annotation.
 1. RA `semijoin left with right` records an existence operation, including
    composite and empty separators. Its meaning is join then left projection;
    physical lowering must not enumerate matching pairs.
-2. CQ `if (predicate)` and RA `select input if (predicate)` share a bounded
-   logical comparison fragment: i32 variables/literals and six comparisons.
-   Arbitrary Rust calls and arithmetic are not declared movable. The physical
-   type check anchors operands to primitive i32, preventing overloaded effects.
+2. CQ arguments, `if`, and `let` retain native Rust expressions; RA uses
+   `select` and `extend` for their computations. A bounded comparison
+   recognizer admits i32 variables/literals and six comparisons for movement.
+   Every occurrence of a comparison variable must have a syntactically known
+   primitive type. Arbitrary Rust calls and arithmetic preserve evaluation
+   boundaries. Physical comparison lowering also anchors operands to i32.
 3. `IndexRequirement` gains an explicit result namespace: `@r[0, 2]` refers
    to attributes at those ordinals in the sorted heading of named result `r`.
    Existing `R[0]` continues to mean declared input-column positions. The `@`
@@ -101,23 +120,27 @@ The rule-to-code correspondence is explicit:
 
 | Formal operation | Administrative command and implementation |
 |---|---|
-| G-PRIVATE / G-ABSORB | `GyoRule::Private` / `Absorb`, `GyoState::apply` in [analysis.rs](../crates/cq-compiler/src/cq_to_relational/analysis.rs) |
-| P-START | `Introduce`, `Kernel::introduce`; one positional rename per occurrence |
-| P-SELECT | `Select`, `Kernel::select`; remove exactly one pending predicate |
-| Enter reduction or assembly | `Begin`; initialize reduction references or enter binary assembly |
-| Y-UP / Y-DOWN | `Up` / `Down`, `Kernel::reduce`; dependency checks and one current-reference update |
-| Y-FREEZE | `Freeze`; consume complete reduction state and transfer current references |
-| P-COMBINE / P-TRIM | `Combine` / `Trim`, corresponding kernel methods; exact coverage and retention |
-| P-OUTPUT | `Output`; complete coverage, no pending predicates, exact head |
+| G-PRIVATE / G-ABSORB | `GyoRule::Private` / `Absorb`; `GyoState::remove_private` / `absorb` in [hypergraph.rs](../crates/cq-compiler/src/cq_to_relational/hypergraph.rs) |
+| P-START | `Introduce`; `JoinState::introduce` |
+| P-SELECT | `Select`; `JoinState::select` |
+| P-BEGIN | `Begin`; `JoinState::begin` |
+| Y-UP / Y-DOWN | `Up` / `Down`; `JoinState::up` / `down`, each with its own premises |
+| Y-FREEZE | `Freeze`; `JoinState::freeze` |
+| P-COMBINE / P-TRIM | `Combine` / `Trim`; `JoinState::combine` / `trim`, using `retained_heading` for K(C,P) |
+| P-OUTPUT | `Output`; `JoinState::output` |
+| D-ATOM / D-GUARD / D-BIND / D-MOVE / D-GRAPH | `ClauseDependencies::analyze` and `ClauseFacts::atom` in [dependencies.rs](../crates/cq-compiler/src/cq_to_relational/dependencies.rs) |
+| C-READY | `ClauseState::require_ready` / `require_clause` |
+| C-CONSTANT | `Constant`; `ClauseState::normalize_constant` |
+| C-MATCH | `Match`; `ClauseState::match_clause`, composed from A-* in `AtomBindings::match_argument` |
+| C-GUARD / C-BIND | `Guard` / `Bind`; `ClauseState::guard_clause` / `bind_clause` |
+| C-FINISH | `Finish`; `ClauseState::finish` establishes the output |
 
-All non-graph commands are implemented in
-[rules.rs](../crates/cq-compiler/src/cq_to_relational/rules.rs).
-[strategy.rs](../crates/cq-compiler/src/cq_to_relational/strategy.rs) only selects
-frontier pairs; [cq_to_relational.rs](../crates/cq-compiler/src/cq_to_relational.rs)
-schedules rule applications. The independent
-[edge checker](../crates/cq-compiler/src/pass_contracts/planned_join.rs) consumes
-the emitted definitions and report. Downstream passes consume only the RA and
-index languages, with no dependency on graph state, policy, or reports.
+The graph transitions are in [rules.rs](../crates/cq-compiler/src/cq_to_relational/rules.rs);
+the prefix transitions are in [clause_rules.rs](../crates/cq-compiler/src/cq_to_relational/clause_rules.rs).
+[strategy.rs](../crates/cq-compiler/src/cq_to_relational/strategy.rs) selects
+frontier pairs or ready clauses. The [edge checker](../crates/cq-compiler/src/pass_contracts/planned_join.rs)
+consumes the actual emitted definitions and report. Downstream passes consume
+only their RA/index languages, with no dependency on graph state, policy, or reports.
 
 The [complete CQ artifact](planned-example/01-cq.rs) expands through
 [RA](planned-example/02-relational.rs), [indexes](planned-example/03-indexes.rs),

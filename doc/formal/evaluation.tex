@@ -1,0 +1,166 @@
+\section{Evaluation: which claims the artifact tests}
+\label{sec:evaluation}
+The evaluation asks four questions: does the selected derivation implement
+the intended relational algorithm; does its result agree with an independently
+specified query; does the complete Rust compilation route realize that result;
+and which broader preservation claims do counterexamples refute? It reports
+correctness evidence and diagnostic power. There is no performance experiment
+or claim of cardinality-optimal planning in this artifact.
+
+\subsection{Independent oracles and compilation paths}
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{.22\linewidth}>{\raggedright\arraybackslash}p{.24\linewidth}>{\raggedright\arraybackslash}p{.46\linewidth}}
+\toprule
+Experiment & Bounded domain & Observation checked \\
+\midrule
+Graph recognition & 4,680 ordered occurrence families over three variables,
+one to four occurrences & GYO agrees with independent labeled-tree
+enumeration; successful certificates replay and satisfy running intersection. \\
+Typed compiled shapes & 25 queries, four policies, 65 instances each;
+25 authored RA plans on the same instances & 6,500 planned and 1,625
+authored-plan executions agree with independently enumerated valuations. \\
+Public macro shapes & 25 literal CQ programs; 4,990 input presentations per
+profile & Actual Cargo expansion, build, two query traversals, materialize,
+and run agree with the oracle without hiding duplicate output tuples. \\
+Expression planning & 12 patterns, four policies, six instances & 288
+compiled executions check answers, expected atom orders and selected
+callback counts; a separate five-clause case checks all 120 schedules. \\
+Paper walkthrough & One extended query, both public routes and both fully
+lowered Rust artifacts & Exact output, intermediate result counts, index
+rows and candidate join pairs agree with the worked derivation. \\
+Semantic witnesses & Stateful extension/guard; empty-binding extension;
+mixed atom-expression placement & Refute unrestricted route equivalence,
+expose a physical domain mismatch, and record actual evaluation placement. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The graph test enumerates $\sum_{n=1}^{4}2^{3n}=4{,}680$ ordered families,
+including empty, equal and contained occurrence labels. Its oracle enumerates
+labeled trees via Pr\"ufer codes and checks running intersection directly;
+it does not execute GYO under a different function name. This bounded
+agreement probes both recognition and reconstruction. It does not establish
+recognition for unbounded hypergraphs; that is the mathematical theorem in
+Section~\ref{sec:planning} and the separate implementation-simulation obligation.
+
+The shape fixtures contain four authored objects: a CQ, a complete known RA
+plan, an input instance, and fixed expected rows. The valuation oracle
+enumerates assignments over the active domain and tests every whole atom
+tuple. A second oracle interprets RA with nested-loop joins and set projection,
+retaining intermediates. Neither obtains its expected plan from the compiler.
+Compiling the authored RA separately is essential: if only generated plans
+were compiled, an error in planning could be confused with an error in physical
+lowering. Shared integer and name representations remain a possible common
+source of mistakes; fixed answers and deliberately incorrect plans test part
+of that risk.
+
+The typed production driver invokes the real passes, lowers residual Access
+and Pipeline nodes, and invokes rustc. The public suite instead writes each CQ
+literally inside \code{planned_query!}; its test code performs no AST lowering.
+These are complementary paths, not two names for the same end-to-end test.
+The public macro fixes Auto. Written, Connected and GreedyWidth are exercised
+through the typed API. Each generated query implementation receives the authored
+database and 64 generated databases; the typed shape driver bundles its 125
+implementations into one rustc executable. Each public shape receives its authored database,
+64 binary-domain instances, 32 signed-domain instances, and an instance with
+each used relation emptied in turn; reversed duplicated host presentations
+double these scenarios to 4,990 across the 25 shapes. The comparisons retain
+output multiplicities while normalizing order, so an extra duplicate is a
+failure rather than silently disappearing in a test-side set.
+
+The typed harness invokes rustc with \code{--edition=2024 -Awarnings} and no
+optimization flag, even when the surrounding compiler test runs under
+Cargo \code{--release}. Such a run exercises the optimized compiler code,
+but does not establish optimized generated-runtime coverage. The public
+macro tests compiled by Cargo in release do exercise that runtime profile.
+
+\subsection{Coverage follows semantic distinctions}
+The 25 fixtures cover ten classic workload families and additional compiler
+boundary cases; they are not 25 different graph topologies. Twenty bodies
+are alpha-acyclic. Triangle, four-cycle, spade, barbell and the four-variable
+Loomis--Whitney body are alpha-cyclic and exercise binary fallback. The claw
+separates a cyclic pairwise atom-intersection graph from an acyclic query
+hypergraph. The positive ternary atom \code{Stock(d,i,t)} separates whole-tuple consistency from merely
+pairwise agreement, and makes an otherwise cyclic triangle alpha-acyclic.
+Removing that guard is used to test the classification, not as a valid query
+optimization.
+
+Other fixtures isolate positional self-joins, full and composite keys,
+disconnected Cartesian products, a head-free existential component, bushy
+assembly, and duplicate-eliminating projection. These cases matter because
+two occurrences of one base relation must retain their positional maps, an
+empty-key join still depends on right-side existence, and forgetting one
+component of a composite key can admit false witnesses. Deep, branched,
+composite-separator and disconnected reduction plans additionally test both
+directions of the semijoin program. For each frozen occurrence, the reference
+check compares its rows with the corresponding projection of the full
+valuation relation. Checking only final answers would miss incomplete
+reduction that happens to leave those answers unchanged.
+
+The contract tests separately enforce occurrence coverage, fresh and latest
+references, pending-predicate retention, safe projection, eager pruning when
+requested, and actual intermediate arity. Arity is a count of attributes;
+these checks do not estimate row counts, tuple byte sizes or fractional
+hypertree width. In particular, an unpruned plan can be denotationally correct
+and still violate an eager-pruning or maximum-arity contract. Mutations that
+omit administrative steps, discard keys or predicates, reuse stale reduced
+versions, or forge reported arities therefore have structural expectations
+independent of their final answer.
+
+The expression suite supplies a different family of cases: literals,
+destructuring bindings, calls and macros, repeated and wildcard arguments,
+computed arguments, guards and computed heads with known atom
+orders and selected evaluation counts. The separate five-clause experiment
+enumerates every permutation of two initially available atoms, a let using
+both bindings, an independent atom, and a guard using the let result. Its
+four authored legal schedules check that producer availability and barriers
+both constrain readiness. Correctness on these expressions does not establish
+an effect theorem for opaque functions. In particular, preserving a callback
+count in one pure-result fixture says nothing about the state interactions
+in Counterexample~\ref{cx:effects}.
+
+\subsection{New executable evidence and its interpretation}
+The driver in \code{doc/formal/example} produces the intermediate artifacts
+used in Section~\ref{sec:overview}, using existing typed passes and native
+Syn AST visitors. It executes the two public macros and compiles and runs
+the two final Rust files independently. All four executions return exactly
+\code{[(1, 11), (2, 11), (3, 5)]}. The materialized counts are
+$(3,3,3,5,3,3)$ for the six named results, with three indexed rows and five
+candidate join pairs. These are assertions on the worked instance, not
+asymptotic or timing measurements. Its second binary checks that
+\code{R(x, f(x), g())} invokes $g$ once before two $f$ calls, accepting
+either enumeration of their two candidate rows.
+
+E1 is checked by the \code{formal_counterexamples} tests. They assert both
+the answer-set difference and the different timing of effects during build
+and partial demand. They pass in debug and
+release precisely because the routes are distinguishable. E1 refutes an
+unrestricted equivalence claim; absent a chosen source effect contract it
+does not designate either route as the correct reference implementation.
+The \code{formal_domains} test has a different status: it identifies an actual
+support-contract error for a locally valid empty-binding extension. It
+checks the diagnostic from explicit materialized lowering and the debug
+postcondition panic versus release diagnostic from default physical lowering.
+Reporting these passing witnesses as successful preservation tests would
+invert their meaning.
+
+\subsection{Reproduction and limits of inference}
+The source manifest records 119 named rules, 14 executable administrative
+rule variants and 29 source fingerprints. Its checker detects documentation
+omissions and source drift. The executable artifact uses the ordinary Cargo
+lockfiles; the recorded environment has rustc and Cargo 1.97.1 and Python
+3.10.12. The artifact README gives build commands and source locations for
+all experiments. Existing workspace regression results and the newly added
+focused witnesses are distinguished there; a selected release run is not
+described as a full workspace release run.
+
+Four limits remain. First, the finite databases and host expressions are
+bounded samples. Second, the independently structured oracles still share
+basic representations and some interpretation assumptions. Third, the
+production edge checker shares dependency analysis with the planner, so
+agreement cannot independently establish the soundness of D-*. Fourth,
+ordinary Rust compilation of examples does not quantify over every host
+type, trait implementation, macro expansion, panic or destructor. The
+mathematical lemmas, empirical observations, and open C-* obligations answer
+different questions. None can be substituted for another by increasing a
+test count.

@@ -405,7 +405,7 @@ fn predicate(p: &cq::Predicate) -> TokenStream {
 /// Computed attributes re-enter expressions as owned values; scanned columns
 /// retain Ascent's borrowed binding convention.
 fn rust_expression(expr: &syn::Expr, input: &ra::RelationInfo, variables: &Names) -> TokenStream {
-    if let Some(mut p) = cq::rust::comparison(expr) {
+    if let Some(mut p) = cq::Predicate::from_expr(expr) {
         let primitive = p
             .variables()
             .iter()

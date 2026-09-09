@@ -1,5 +1,13 @@
 # MiniLinq IR formalization
 
+For the broader rule specification and its current proof status, see the
+[extended compiler research manuscript](formal/README.md).
+It distinguishes mathematical preservation claims from implementation
+conformance and records counterexamples to unrestricted backend equivalence.
+The [terminology correspondence](formal/TERMINOLOGY.md) follows AHV's
+distinction between sorts, named tuples, and valuations. The source spelling
+`heading` denotes a sort.
+
 This note states the invariants of the basic compiler as judgments over typed
 syntax. It complements the [six complete Triangle
 artifacts](DSL.md#complete-triangle-expansion): the artifacts show the whole
@@ -54,10 +62,11 @@ An atom is written
 A = R(v_0, \ldots, v_{n-1}).
 \]
 
-`vars(A)` is its ordered variable list. Its complete Rename maps each declared
+`vars(A)` is its variable set; the argument list retains positional order.
+Its complete Rename maps each declared
 source attribute `a_i` to positional query attribute `v_i`. A logical result
-has an inferred heading `heading(r)`, which is a set of attribute names.
-Natural-join equality is inferred from heading intersection; no logical key is
+has an inferred sort `heading(r)`, which is a set of attribute names.
+Natural-join equality is inferred from sort intersection; no logical key is
 serialized.
 
 All successful baseline inputs are syntactically valid Rust-backed IR values.
@@ -76,7 +85,7 @@ target has exactly the facts a particular source requires.
 A source program contains declarations and one positive conjunctive query:
 
 ```text
-H(h0) :- A0, A1, A2.
+H(h0) :- A0, A1, A2;
 ```
 
 The baseline CQ judgment requires:
@@ -87,13 +96,20 @@ The baseline CQ judgment requires:
 4. the head has a positive list of distinct variables; and
 5. every head variable occurs in the body.
 
-The CQ denotes a set:
+For source query `q = H(h̄) :- A₀, …, Aₖ;`, the CQ denotes a set:
 
 \[
 \llbracket H(\bar{h}) :- A_0, \ldots, A_k \rrbracket_I
 =
-\{\bar{h}\mid I\;\text{has a compatible valuation satisfying every }A_i\}.
+\{\nu(\bar{h})\mid
+\nu:\operatorname{var}(q)\to\mathsf{dom},\quad
+I\models A_i[\nu]\text{ for every }i\}.
 \]
+
+Here `ν` is a valuation over the query variables, extended to fix constants;
+the answer is its action on the head tuple. Named tuples in the RA have
+attribute sets as their domains. The course's valuation-relation construction
+connects the two by using query variables as attribute names.
 
 Source order is used by the baseline canonical plan, but `CQ` does not itself
 contain a NaturalJoin or index choice.
@@ -107,9 +123,10 @@ only a result ID and an operator:
 rN = operator;
 ```
 
-The result identifier is an explicit DAG edge. Its heading is inferred as an
-attribute set; it is not duplicated as an ordered left-hand schema. Ordered
-result tuple layout belongs only to the final output metadata:
+The result identifier is an explicit DAG edge. Its sort is inferred as an
+attribute set; it is not duplicated as an ordered left-hand schema. The
+preserved head fixes answer tuple order; the physical lowering chooses an
+ordered representation for each intermediate sort. The logical output is:
 
 ```text
 output rN as H(h0, ..., hk);
@@ -133,11 +150,11 @@ The baseline operators have these set semantics:
 A declared relation name is the atomic input to `Rename`; there is no logical
 `Scan` or `Base` operator. Each Rename maps every declared source attribute
 exactly once to a distinct query attribute. `NaturalJoin` infers equality from
-the intersection of operand headings and has no written key. `Project` keeps a
+the intersection of operand sorts and has no written key. `Project` keeps a
 set of attributes, so its written order is semantically irrelevant.
 
 `Unit` has no operand and denotes the singleton relation over the empty
-heading: one empty binding, not an empty relation. Its concrete syntax is
+sort: one empty binding, not an empty relation. Its concrete syntax is
 `rN = unit;`. This identity lets an extended logical pass apply a global
 operator before any source attribute has been bound.
 
@@ -146,13 +163,13 @@ The local judgment records more than denotation:
 - every result identifier is unique and every operand is an earlier result;
 - every Rename names a declared atomic input, maps every declared source
   attribute exactly once, and has distinct targets;
-- a Rename heading is its target-attribute set;
-- `Unit` has the empty heading;
-- a NaturalJoin heading is the union of its operand headings;
-- a Project lists distinct attributes drawn from its input and its heading is
+- a Rename sort is its target-attribute set;
+- `Unit` has the empty sort;
+- a NaturalJoin sort is the union of its operand sorts;
+- a Project lists distinct attributes drawn from its input and its sort is
   exactly that attribute set;
 - output metadata names a defined result, repeats the preserved source head
-  exactly, and its input heading is exactly the head's attribute set; and
+  exactly, and its input sort is exactly the head's attribute set; and
 - every definition is reachable from the output result.
 
 ### Canonical CQ edge
@@ -188,7 +205,7 @@ Projection order is not compared as syntax because its braces denote a set;
 the separate output head owns tuple order.
 
 There is no canonical logical Semijoin. A fully bound right occurrence remains
-a NaturalJoin whose union heading equals its left heading. The later physical
+a NaturalJoin whose union sort equals its left sort. The later physical
 lowering observes that the right Rename introduces no fresh attributes and
 selects membership rather than enumeration.
 
@@ -211,10 +228,10 @@ Rename
 r = \operatorname{rename}\;R\;\{a_i \mapsto v_i\}.
 \]
 
-Let the inferred shared heading be
+Let the inferred shared sort be
 
 \[
-S = \operatorname{heading}(left) \cap \operatorname{heading}(r).
+S = \operatorname{sort}(left) \cap \operatorname{sort}(r).
 \]
 
 Invert the Rename targets to declared source-column positions:
@@ -309,7 +326,7 @@ H(vars) => (result_expr) :-
     A2 => if (condition2);
 ```
 
-At each NaturalJoin, let `B` be the current left heading and `A` the heading
+At each NaturalJoin, let `B` be the current left sort and `A` the sort
 of its direct right Rename. `RustAccessPlan` requires:
 
 \[
@@ -528,12 +545,12 @@ resulting concrete Rust accesses.
 
 If a negation or aggregation occurs before any positive atom, the extended
 logical pass creates one `Unit` as the current left relation. Correlation is
-inferred from heading intersection just as for NaturalJoin. A global
+inferred from sort intersection just as for NaturalJoin. A global
 AntiSemijoin and global AggregateApply therefore have an empty intersection.
-The former may preserve the empty heading of its `Unit` input; the checker must
-allow that exact preservation, not make arbitrary empty Project headings
+The former may preserve the empty sort of its `Unit` input; the checker must
+allow that exact preservation, not make arbitrary empty Project sorts
 valid. AggregateApply appends its fresh output, so a global `sum` result has
-the one-attribute heading `{total}`.
+the one-attribute sort `{total}`.
 
 An empty inferred correlation produces no IndexRequirements entry. The
 extended Basic-HW2 pass accepts the `Unit`, walks the two global operators, and
