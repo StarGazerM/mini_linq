@@ -89,7 +89,7 @@ pub fn plan(
     let group = *state.frontier().first_key_value().unwrap().0;
     apply(&mut state, &mut derivation, Rule::Output { group })?;
     let ra = state.finish()?;
-    let peak_arity = ra::check_in(&source.program.inputs, &ra.plan)?
+    let peak_arity = ra::check_in(source.program.inputs(), &ra.plan)?
         .values()
         .map(|r| r.heading.len())
         .max()

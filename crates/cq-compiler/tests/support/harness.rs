@@ -275,7 +275,7 @@ fn assert_run_delegates_to_build(
     source: &index_requirements::Module,
     program_name: &str,
 ) {
-    let inputs = (0..source.relational_plan.program.inputs.len())
+    let inputs = (0..source.relational_plan.program.inputs().count())
         .map(|number| format_ident!("input{number}", span = Span::call_site()))
         .collect::<Vec<_>>();
     let expected: syn::Block = syn::parse2(quote!({
@@ -393,8 +393,7 @@ fn assert_indexes_derive_from_normalized_inputs(
         let relation_number = source
             .relational_plan
             .program
-            .inputs
-            .iter()
+            .inputs()
             .position(|input| {
                 cq_ir::symbol_name(&input.name) == cq_ir::symbol_name(&index.relation)
             })
@@ -422,7 +421,14 @@ fn assert_indexes_derive_from_normalized_inputs(
             fixture.program_name,
         );
 
-        if index.key_columns.len() == source.relational_plan.program.inputs[relation_number].arity()
+        if index.key_columns.len()
+            == source
+                .relational_plan
+                .program
+                .inputs()
+                .nth(relation_number)
+                .unwrap()
+                .arity()
         {
             let normalized_ident =
                 format_ident!("relation{relation_number}", span = Span::call_site());
@@ -453,11 +459,16 @@ fn assert_full_key_indexes_supply_scans_without_row_copies(
         let input_number = source
             .relational_plan
             .program
-            .inputs
-            .iter()
+            .inputs()
             .position(|input| cq_ir::symbol_name(&input.name) == relation_name)
             .expect("well-formed body relation must name a declared input");
-        let arity = source.relational_plan.program.inputs[input_number].arity();
+        let arity = source
+            .relational_plan
+            .program
+            .inputs()
+            .nth(input_number)
+            .unwrap()
+            .arity();
         let has_full_key_index = source.indexes.iter().any(|index| {
             cq_ir::symbol_name(&index.relation) == relation_name && index.key_columns.len() == arity
         });
@@ -496,7 +507,7 @@ fn assert_normalized_relations_move_into_their_final_consumer(
     source: &index_requirements::Module,
     program_name: &str,
 ) {
-    for relation_number in 0..source.relational_plan.program.inputs.len() {
+    for relation_number in 0..source.relational_plan.program.inputs().count() {
         let relation_name = format!("relation{relation_number}");
         if !input_has_physical_consumer(source, relation_number) {
             assert_eq!(
@@ -668,7 +679,7 @@ fn assert_normalized_inputs(
     source: &index_requirements::Module,
     fixture: &PhysicalFixture,
 ) {
-    for (input_index, input) in source.relational_plan.program.inputs.iter().enumerate() {
+    for (input_index, input) in source.relational_plan.program.inputs().enumerate() {
         let input_name = format_ident!("input{input_index}", span = Span::call_site());
         let relation_name = format_ident!("relation{input_index}", span = Span::call_site());
         let relation_spelling = relation_name.to_string();
@@ -751,7 +762,7 @@ fn assert_normalized_inputs(
     }
 
     for &input_index in fixture.reused_normalized_inputs {
-        assert!(input_index < source.relational_plan.program.inputs.len());
+        assert!(input_index < source.relational_plan.program.inputs().count());
         let relation_name = format!("relation{input_index}");
         assert!(
             identifier_occurrences(&build.block, &relation_name) >= 3,
@@ -778,8 +789,15 @@ fn assert_normalized_inputs(
 }
 
 fn input_has_physical_consumer(source: &index_requirements::Module, input_index: usize) -> bool {
-    let relation_name =
-        cq_ir::symbol_name(&source.relational_plan.program.inputs[input_index].name);
+    let relation_name = cq_ir::symbol_name(
+        &source
+            .relational_plan
+            .program
+            .inputs()
+            .nth(input_index)
+            .unwrap()
+            .name,
+    );
     source
         .relational_plan
         .program
@@ -820,8 +838,7 @@ fn is_set_row_type(ty: &syn::Type, collection: &str, input: &cq::RelationDecl) -
 fn result_row_type(source: &index_requirements::Module) -> syn::Type {
     let program = &source.relational_plan.program;
     let relations = program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| (cq_ir::symbol_name(&input.name), input))
         .collect::<BTreeMap<_, _>>();
     let mut variables = BTreeMap::<String, syn::Type>::new();

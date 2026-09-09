@@ -131,7 +131,7 @@ impl Relation {
 }
 
 pub fn validate_database(program: &cq::Program, database: &Database) {
-    for input in &program.inputs {
+    for input in program.inputs() {
         let name = symbol_name(&input.name);
         let rows = database
             .get(&name)
@@ -235,11 +235,11 @@ pub struct Evaluation {
 
 pub fn evaluate_ra(module: &relational_plan::Module, database: &Database) -> Evaluation {
     validate_database(&module.program, database);
-    evaluate_plan(&module.program.inputs, &module.plan, database)
+    evaluate_plan(module.program.inputs(), &module.plan, database)
 }
 
-pub fn evaluate_plan(
-    inputs: &[cq::RelationDecl],
+pub fn evaluate_plan<'a>(
+    inputs: impl Iterator<Item = &'a cq::RelationDecl> + Clone,
     plan: &relational_plan::Plan,
     database: &Database,
 ) -> Evaluation {
@@ -252,7 +252,7 @@ pub fn evaluate_plan(
             },
             relational_plan::Operator::Rename(rename) => {
                 let input = inputs
-                    .iter()
+                    .clone()
                     .find(|input| symbol_name(&input.name) == symbol_name(&rename.relation))
                     .unwrap();
                 let mapping = rename
@@ -325,13 +325,7 @@ pub fn evaluate_plan(
 }
 
 pub fn evaluate_predicate(expr: &syn::Expr, row: &Binding) -> bool {
-    use quote::ToTokens;
-    let mut expr = expr;
-    while let syn::Expr::Paren(p) = expr {
-        expr = &p.expr;
-    }
-    let predicate: cq::Predicate =
-        syn::parse2(expr.to_token_stream()).expect("integer comparison oracle domain");
+    let predicate = cq::Predicate::from_expr(expr).expect("integer comparison oracle domain");
     use cq::{Comparison, Term};
     let value = |term: &Term| match term {
         Term::Variable(v) => row[&symbol_name(v)],
@@ -340,12 +334,12 @@ pub fn evaluate_predicate(expr: &syn::Expr, row: &Binding) -> bool {
     let l = value(&predicate.left);
     let r = value(&predicate.right);
     match predicate.comparison {
-        Comparison::Eq => l == r,
-        Comparison::Ne => l != r,
-        Comparison::Lt => l < r,
-        Comparison::Le => l <= r,
-        Comparison::Gt => l > r,
-        Comparison::Ge => l >= r,
+        Comparison::Eq(_) => l == r,
+        Comparison::Ne(_) => l != r,
+        Comparison::Lt(_) => l < r,
+        Comparison::Le(_) => l <= r,
+        Comparison::Gt(_) => l > r,
+        Comparison::Ge(_) => l >= r,
     }
 }
 

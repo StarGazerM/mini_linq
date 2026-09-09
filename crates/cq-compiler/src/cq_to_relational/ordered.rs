@@ -20,8 +20,7 @@ pub(crate) fn required(source: &cq::Module) -> bool {
             cq::BodyItem::Positive { atom } if atom.is_normalized() => {
                 let Some(decl) = source
                     .program
-                    .inputs
-                    .iter()
+                    .inputs()
                     .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
                 else {
                     return true;
@@ -99,13 +98,14 @@ impl State {
     }
     fn binding(&mut self, binding: &cq::Let) {
         let vars = cq::rust::bindings(&binding.pattern);
-        let typed = cq::rust::binding_types(&binding.pattern);
+        let typed = cq::rust::binding_types(binding);
         let columns = typed.iter().map(|(v, ty)| quote!(#v: #ty));
         let pat = &binding.pattern;
+        let annotation = &binding.annotation;
         let expr = &binding.expression;
         self.extend(
             quote!(#(#columns),*),
-            quote!({ let #pat = #expr; (#(#vars,)*) }),
+            quote!({ let #pat #annotation = #expr; (#(#vars,)*) }),
         );
         self.bound.extend(vars.iter().map(symbol_name));
     }
@@ -167,8 +167,7 @@ fn constants(source: &cq::Module, state: &mut State) -> Vec<Rule> {
         if let cq::BodyItem::Positive { atom } = item {
             let declaration = source
                 .program
-                .inputs
-                .iter()
+                .inputs()
                 .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
                 .unwrap();
             for (argument, (expr, column)) in atom.args.iter().zip(&declaration.columns).enumerate()
@@ -321,8 +320,7 @@ fn emit(
             cq::BodyItem::Positive { atom } => {
                 let decl = source
                     .program
-                    .inputs
-                    .iter()
+                    .inputs()
                     .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
                     .ok_or_else(|| error("undeclared atom"))?;
                 state.atom(atom, decl, clause);
@@ -351,7 +349,7 @@ fn emit(
     let definitions = &state.definitions;
     let target: ra::Module =
         syn::parse2(quote!(#program relational { #(#definitions)* output #output as #head; }))?;
-    let peak_arity = ra::check_in(&program.inputs, &target.plan)?
+    let peak_arity = ra::check_in(program.inputs(), &target.plan)?
         .values()
         .map(|r| r.heading.len())
         .max()

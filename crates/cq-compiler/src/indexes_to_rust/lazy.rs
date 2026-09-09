@@ -82,7 +82,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
     }
     indexes::check_coverage(source)?;
     let module = &source.relational_plan;
-    let info = ra::check_in(&module.program.inputs, &module.plan)?;
+    let info = ra::check_in(module.program.inputs(), &module.plan)?;
     let mut statements = Vec::new();
     let mut fields = Vec::new();
     let mut field_names = Vec::new();
@@ -99,13 +99,12 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
         .collect();
     let tuple_vars =
         |heading: &BTreeSet<String>| heading.iter().map(|v| vars[v].clone()).collect::<Vec<_>>();
-    let input_names: Vec<_> = (0..module.program.inputs.len())
+    let input_names: Vec<_> = (0..module.program.inputs().count())
         .map(|i| local("input", i))
         .collect();
     let parameters: Vec<_> = module
         .program
-        .inputs
-        .iter()
+        .inputs()
         .zip(&input_names)
         .map(|(decl, id)| {
             let types = decl.columns.iter().map(|c| &c.ty);
@@ -121,7 +120,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
             _ => None,
         })
         .collect();
-    for (decl, id) in module.program.inputs.iter().zip(&input_names) {
+    for (decl, id) in module.program.inputs().zip(&input_names) {
         if used.contains(&symbol_name(&decl.name)) {
             let types = decl.columns.iter().map(|c| &c.ty);
             statements.push(quote!(let #id: ::std::collections::HashSet<(#(#types,)*)> = #id.into_iter().collect();));
@@ -136,8 +135,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
         let relation = &info[&name];
         let (input_i, decl) = module
             .program
-            .inputs
-            .iter()
+            .inputs()
             .enumerate()
             .find(|(_, d)| symbol_name(&d.name) == symbol_name(&rename.relation))
             .unwrap();

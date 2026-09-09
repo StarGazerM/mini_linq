@@ -34,8 +34,8 @@ fn arguments_are_expressions_and_result_declaration_is_not_an_input() {
         answer(format!("{x}")) :- R(x, f(x));
     };
     cq::contract::check(&source).unwrap();
-    assert_eq!(source.program.inputs.len(), 1);
-    assert!(source.program.output.is_some());
+    assert_eq!(source.program.inputs().count(), 1);
+    assert!(source.program.output().is_some());
     assert!(matches!(
         source.program.query.head.args[0],
         syn::Expr::Macro(_)
@@ -43,6 +43,80 @@ fn arguments_are_expressions_and_result_declaration_is_not_an_input() {
     let atom = source.program.query.body[0].atom().unwrap();
     assert_eq!(atom.variables().count(), 1);
     assert!(matches!(atom.args[1], syn::Expr::Call(_)));
+}
+
+#[test]
+fn declaration_classification_preserves_source_order_and_rejects_duplicates() {
+    let inputs = ["relation R(a:i32);", "relation S(a:i32);"];
+    for position in 0..=inputs.len() {
+        let mut declarations = inputs.to_vec();
+        declarations.insert(position, "relation answer(value:String);");
+        let source: cq::Module = syn::parse_str(&format!(
+            "struct P; {} answer(format!(\"{{x}}\")) :- R(x), S(x);",
+            declarations.join(" ")
+        ))
+        .unwrap();
+        cq::contract::check(&source).unwrap();
+        assert_eq!(source.program.declarations[position].name, "answer");
+        assert_eq!(
+            source
+                .program
+                .inputs()
+                .map(|d| d.name.to_string())
+                .collect::<Vec<_>>(),
+            ["R", "S"]
+        );
+        assert_eq!(
+            syn::parse2::<cq::Module>(source.to_token_stream()).unwrap(),
+            source
+        );
+        let mut duplicate = source;
+        duplicate
+            .program
+            .declarations
+            .push(duplicate.program.declarations[position].clone());
+        assert!(cq::contract::check(&duplicate).is_err());
+    }
+}
+
+#[test]
+fn final_rust_expressions_require_semicolons_and_malformed_annotations_fail() {
+    for body in [
+        "R(x), if x.field",
+        "R(x), if *x > 0",
+        "R(x), let y: i32 = x.method()",
+    ] {
+        let prefix = format!("struct P; relation R(a:i32); answer(x) :- {body}");
+        syn::parse_str::<cq::Module>(&format!("{prefix};")).unwrap();
+        assert!(syn::parse_str::<cq::Module>(&format!("{prefix}.")).is_err());
+    }
+    assert!(
+        syn::parse_str::<cq::Module>("struct P; relation R(a:i32); answer(x) :- R(x), let y: = 1;")
+            .is_err()
+    );
+}
+
+#[test]
+fn comparison_recognition_respects_the_total_i32_fragment() {
+    for (text, integer) in [
+        ("x >= -2147483648", i32::MIN),
+        ("(x) < 0x7fff_ffffi32", i32::MAX),
+    ] {
+        let expr: syn::Expr = syn::parse_str(text).unwrap();
+        let predicate = cq::Predicate::from_expr(&expr).unwrap();
+        assert_eq!(predicate.right, cq::Term::Integer(integer));
+    }
+    for text in [
+        "x < 2147483648",
+        "x == 1u32",
+        "x == 1.0",
+        "x + 1 == 2",
+        "f(x) == 0",
+        "#[cfg(any())] (x == 0)",
+    ] {
+        let expr: syn::Expr = syn::parse_str(text).unwrap();
+        assert!(cq::Predicate::from_expr(&expr).is_none(), "{text}");
+    }
 }
 
 #[test]
@@ -122,17 +196,13 @@ fn result_types_are_explicit_at_the_public_rust_boundary() {
     };
     cq::contract::check(&source).unwrap();
     let mut missing = source.clone();
-    missing.program.output = None;
+    missing.program.declarations.pop();
     assert!(cq::contract::check(&missing).is_err());
     let mut renamed = source.clone();
-    renamed.program.output.as_mut().unwrap().name = syn::parse_quote!(other);
+    renamed.program.declarations[1].name = syn::parse_quote!(other);
     assert!(cq::contract::check(&renamed).is_err());
     let mut wrong_arity = source;
-    wrong_arity
-        .program
-        .output
-        .as_mut()
-        .unwrap()
+    wrong_arity.program.declarations[1]
         .columns
         .push(syn::parse_quote!(other:i32));
     assert!(cq::contract::check(&wrong_arity).is_err());

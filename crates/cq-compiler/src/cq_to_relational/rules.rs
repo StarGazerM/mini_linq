@@ -232,8 +232,7 @@ impl<'a> Kernel<'a> {
         let input = self
             .source
             .program
-            .inputs
-            .iter()
+            .inputs()
             .find(|r| symbol_name(&r.name) == symbol_name(&atom.relation))
             .unwrap();
         let mapping = input

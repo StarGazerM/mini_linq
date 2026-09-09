@@ -49,8 +49,7 @@ pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
     }
     let declarations = source
         .program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| (cq_ir::symbol_name(&input.name), input))
         .collect::<BTreeMap<_, _>>();
     let mut definitions = Vec::<TokenStream>::new();
@@ -179,8 +178,7 @@ fn lowerable_access_sequence(
 ) -> syn::Result<LowerableLogicalPlan> {
     let declarations = source
         .program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| (cq_ir::symbol_name(&input.name), input))
         .collect::<BTreeMap<_, _>>();
     let mut earlier = BTreeMap::<String, (&relational_plan::Definition, Heading)>::new();
@@ -412,8 +410,7 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
     let storage_name = format_ident!("{}Storage", program_name, span = Span::mixed_site());
 
     let schema = program
-        .inputs
-        .iter()
+        .inputs()
         .enumerate()
         .map(|(number, input)| {
             (
@@ -449,14 +446,12 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
         .collect::<BTreeMap<_, _>>();
 
     let input_names = program
-        .inputs
-        .iter()
+        .inputs()
         .enumerate()
         .map(|(number, _)| local_ident("input", number))
         .collect::<Vec<_>>();
     let parameters = program
-        .inputs
-        .iter()
+        .inputs()
         .zip(&input_names)
         .map(|(input, name)| {
             let row_type = tuple_type(
@@ -601,8 +596,7 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
         )
         .collect::<BTreeMap<_, _>>();
     let input_setup = program
-        .inputs
-        .iter()
+        .inputs()
         .enumerate()
         .map(|(number, input)| {
             let input_name = &input_names[number];
@@ -633,7 +627,10 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
             let rows = local_ident("rows", row_number);
             let relation = local_ident("relation", input_number);
             let row_type = tuple_type(
-                &program.inputs[input_number]
+                &program
+                    .inputs()
+                    .nth(input_number)
+                    .unwrap()
                     .columns
                     .iter()
                     .map(|column| column.ty.clone())
@@ -655,7 +652,10 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
         .map(|(row_number, &input_number)| {
             let rows = local_ident("rows", row_number);
             let row_type = tuple_type(
-                &program.inputs[input_number]
+                &program
+                    .inputs()
+                    .nth(input_number)
+                    .unwrap()
                     .columns
                     .iter()
                     .map(|column| column.ty.clone())

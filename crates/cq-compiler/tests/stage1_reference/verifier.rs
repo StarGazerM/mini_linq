@@ -236,8 +236,7 @@ fn check_occurrences(
         let atom = item.positive_atom().expect("checked legacy fragment");
         let declaration = source
             .program
-            .inputs
-            .iter()
+            .inputs()
             .find(|r| symbol_name(&r.name) == symbol_name(&atom.relation))
             .expect("checked CQ declares each atom");
         let exact = symbol_name(&rename.relation) == symbol_name(&atom.relation)

@@ -61,7 +61,7 @@ pub(crate) fn check(
             })
             .collect::<syn::Result<Vec<_>>>()?;
         super::ordered::check_scheduled(source, target, &order)?;
-        let peak = ra::check_in(&target.program.inputs, &target.plan)?
+        let peak = ra::check_in(target.program.inputs(), &target.plan)?
             .values()
             .map(|r| r.heading.len())
             .max()
@@ -75,7 +75,7 @@ pub(crate) fn check(
         )?;
         return Ok(());
     }
-    let info = ra::check_in(&target.program.inputs, &target.plan)?;
+    let info = ra::check_in(target.program.inputs(), &target.plan)?;
     let atoms: Vec<_> = source
         .program
         .query
@@ -158,8 +158,7 @@ pub(crate) fn check(
                 let atom = atoms[occurrence];
                 let input = source
                     .program
-                    .inputs
-                    .iter()
+                    .inputs()
                     .find(|i| symbol_name(&i.name) == symbol_name(&atom.relation))
                     .unwrap();
                 require(

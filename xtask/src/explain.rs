@@ -415,19 +415,15 @@ fn format_cq_program(program: &cq::Program) -> String {
     } else {
         format!("{visibility} struct {};", program.name)
     };
-    let inputs = program
-        .inputs
-        .iter()
-        .chain(program.output.iter())
-        .map(|input| {
-            let columns = input
-                .columns
-                .iter()
-                .map(|column| format!("{}: {}", column.name, compact_tokens(&column.ty)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("relation {}({columns});", input.name)
-        });
+    let inputs = program.declarations.iter().map(|input| {
+        let columns = input
+            .columns
+            .iter()
+            .map(|column| format!("{}: {}", column.name, compact_tokens(&column.ty)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("relation {}({columns});", input.name)
+    });
     let clauses = program
         .query
         .body

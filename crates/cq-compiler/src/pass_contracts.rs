@@ -15,7 +15,7 @@ pub(crate) fn result_indexes_are_exact(
     {
         return false;
     }
-    let Ok(info) = cq_ir::relational_plan::check_in(&source.program.inputs, &source.plan) else {
+    let Ok(info) = cq_ir::relational_plan::check_in(source.program.inputs(), &source.plan) else {
         return false;
     };
     let mut expected = Vec::new();
@@ -144,8 +144,7 @@ fn rename_is_exact(
         return false;
     }
     let Some(declaration) = program
-        .inputs
-        .iter()
+        .inputs()
         .find(|input| symbol(&input.name) == symbol(&atom.relation))
     else {
         return false;
@@ -599,8 +598,7 @@ fn canonical_indexes(source: &relational_plan::Module) -> Option<Vec<IndexSignat
     // key walk as specified in doc/HW4-OPTIONAL.md.
     let declarations = source
         .program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| (symbol(&input.name), input))
         .collect::<BTreeMap<_, _>>();
     let mut earlier = BTreeMap::<String, (&relational_plan::Definition, BTreeSet<String>)>::new();

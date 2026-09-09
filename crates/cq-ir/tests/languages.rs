@@ -172,7 +172,7 @@ fn relation_declarations_preserve_full_rust_column_types() {
     })
     .unwrap();
 
-    let relation = &module.program.inputs[0];
+    let relation = module.program.inputs().next().unwrap();
     assert_eq!(relation.arity(), 2);
     assert_eq!(relation.columns.len(), 2);
 

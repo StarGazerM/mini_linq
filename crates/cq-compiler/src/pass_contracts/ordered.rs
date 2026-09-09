@@ -100,8 +100,7 @@ pub(crate) fn check_scheduled(
         if let cq::BodyItem::Positive { atom } = item {
             let declaration = source
                 .program
-                .inputs
-                .iter()
+                .inputs()
                 .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
                 .unwrap();
             for (argument, (expr, column)) in atom.args.iter().zip(&declaration.columns).enumerate()
@@ -127,18 +126,18 @@ pub(crate) fn check_scheduled(
             cq::BodyItem::Let(binding) => {
                 let input = cursor.input()?;
                 let variables = cq::rust::bindings(&binding.pattern);
-                let typed = cq::rust::binding_types(&binding.pattern);
+                let typed = cq::rust::binding_types(binding);
                 let columns = typed.iter().map(|(v, ty)| quote!(#v: #ty));
                 let pat = &binding.pattern;
+                let annotation = &binding.annotation;
                 let expr = &binding.expression;
-                cursor.current = Some(cursor.accept(syn::parse_quote!(extend #input with {#(#columns),*} value ({let #pat = #expr; (#(#variables,)*)})))?);
+                cursor.current = Some(cursor.accept(syn::parse_quote!(extend #input with {#(#columns),*} value ({let #pat #annotation = #expr; (#(#variables,)*)})))?);
                 bound.extend(variables.iter().map(symbol_name));
             }
             cq::BodyItem::Positive { atom } => {
                 let schema = source
                     .program
-                    .inputs
-                    .iter()
+                    .inputs()
                     .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
                     .ok_or_else(|| err("undeclared relation"))?;
                 let prefix = bound.clone();

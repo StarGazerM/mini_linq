@@ -5,7 +5,6 @@ use proc_macro2::{Ident, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 use syn::{
     Expr, Pat,
-    parse::{ParseStream, Parser},
     visit::{self, Visit},
 };
 
@@ -21,33 +20,6 @@ pub fn unparen(mut expr: &Expr) -> &Expr {
         expr = &p.expr;
     }
     expr
-}
-
-/// Let Syn parse the Rust grammar, including closure and turbofish commas.
-/// In the scratch stream only, shield the enclosing DSL's final period from
-/// Rust's field-access parser. The original expression tokens keep their spans.
-pub fn parse_expression(input: ParseStream<'_>) -> syn::Result<Expr> {
-    let mut tokens: Vec<_> = input.fork().parse::<TokenStream>()?.into_iter().collect();
-    let count = tokens.len();
-    for i in 0..count {
-        let end = i + 1 == count
-            || matches!(tokens.get(i + 1), Some(TokenTree::Ident(id)) if id == "relational" || id == "indexes");
-        if end && matches!(&tokens[i], TokenTree::Punct(p) if p.as_char() == '.') {
-            let mut semi = proc_macro2::Punct::new(';', proc_macro2::Spacing::Alone);
-            semi.set_span(tokens[i].span());
-            tokens[i] = TokenTree::Punct(semi);
-        }
-    }
-    let (expr, remaining) = (|stream: ParseStream<'_>| {
-        let expr: Expr = stream.parse()?;
-        let remaining: TokenStream = stream.parse()?;
-        Ok((expr, remaining.into_iter().count()))
-    })
-    .parse2(tokens.into_iter().collect())?;
-    for _ in 0..count - remaining {
-        input.parse::<TokenTree>()?;
-    }
-    Ok(expr)
 }
 
 pub fn bindings(pattern: &Pat) -> Vec<Ident> {
@@ -198,28 +170,14 @@ pub fn known_uses(expr: &Expr, logical_names: &BTreeSet<String>) -> BTreeSet<Str
     uses.free.intersection(logical_names).cloned().collect()
 }
 
-pub fn parse_binding_pattern(input: ParseStream<'_>) -> syn::Result<Pat> {
-    let pat = Pat::parse_single(input)?;
-    if input.peek(syn::Token![:]) {
-        Ok(Pat::Type(syn::PatType {
-            attrs: Vec::new(),
-            pat: Box::new(pat),
-            colon_token: input.parse()?,
-            ty: input.parse()?,
-        }))
-    } else {
-        Ok(pat)
-    }
-}
-
-pub fn binding_types(pattern: &Pat) -> Vec<(Ident, syn::Type)> {
-    let mut vars: Vec<_> = bindings(pattern)
+pub fn binding_types(binding: &super::Let) -> Vec<(Ident, syn::Type)> {
+    let mut vars: Vec<_> = bindings(&binding.pattern)
         .into_iter()
         .map(|id| (id, syn::parse_quote!(_)))
         .collect();
-    if let Pat::Type(p) = pattern {
-        if vars.len() == 1 && matches!(*p.pat, Pat::Ident(_)) {
-            vars[0].1 = (*p.ty).clone();
+    if let Some(annotation) = &binding.annotation {
+        if vars.len() == 1 && matches!(binding.pattern, Pat::Ident(_)) {
+            vars[0].1 = annotation.ty.clone();
         }
     }
     vars
@@ -277,8 +235,7 @@ pub fn fresh(names: &mut BTreeSet<String>, clause: usize, arg: usize) -> Ident {
 }
 
 pub fn comparison(expr: &Expr) -> Option<super::Predicate> {
-    use quote::ToTokens;
-    syn::parse2(unparen(expr).to_token_stream()).ok()
+    super::Predicate::from_expr(expr)
 }
 
 /// Syntactically known primitive type; aliases remain for Rust to resolve.
@@ -302,10 +259,7 @@ pub fn literal_binding(item: &super::BodyItem) -> bool {
     let super::BodyItem::Let(binding) = item else {
         return false;
     };
-    let pat = match &binding.pattern {
-        Pat::Type(p) => &*p.pat,
-        p => p,
-    };
+    let pat = &binding.pattern;
     matches!(pat, Pat::Ident(p) if p.by_ref.is_none() && p.subpat.is_none())
         && literal(&binding.expression)
 }
@@ -333,8 +287,7 @@ fn total_comparison(source: &super::Module, expression: &Expr) -> bool {
             super::BodyItem::Positive { atom } => {
                 let Some(declaration) = source
                     .program
-                    .inputs
-                    .iter()
+                    .inputs()
                     .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
                 else {
                     return false;
@@ -346,7 +299,7 @@ fn total_comparison(source: &super::Module, expression: &Expr) -> bool {
                 }
             }
             super::BodyItem::Let(binding) => {
-                for (id, ty) in binding_types(&binding.pattern) {
+                for (id, ty) in binding_types(binding) {
                     types.insert(symbol_name(&id), primitive_i32(&ty));
                 }
             }

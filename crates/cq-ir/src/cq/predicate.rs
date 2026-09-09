@@ -2,104 +2,94 @@
 //! This is an optimizer recognizer, not the CQ expression grammar. CQ and RA
 //! retain syn::Expr; only this proven total subset is eligible for movement.
 use crate::symbol_name;
-use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
 use std::collections::BTreeSet;
-use syn::{
-    Ident, Token,
-    parse::{Parse, ParseStream},
-};
+use syn::{Ident, Token};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub enum Term {
     Variable(Ident),
     Integer(i32),
 }
-impl Parse for Term {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if input.peek(Ident) {
-            return Ok(Self::Variable(input.parse()?));
+impl Term {
+    fn from_expr(expr: &syn::Expr) -> Option<Self> {
+        if let syn::Expr::Paren(paren) = expr {
+            if !paren.attrs.is_empty() {
+                return None;
+            }
+            return Self::from_expr(&paren.expr);
         }
-        let minus: Option<Token![-]> = input.parse()?;
-        let integer: syn::LitInt = input.parse()?;
-        if !integer.suffix().is_empty() && integer.suffix() != "i32" {
-            return Err(syn::Error::new_spanned(
-                integer,
-                "selection literals must be i32",
-            ));
+        if let syn::Expr::Path(path) = expr {
+            if !path.attrs.is_empty() {
+                return None;
+            }
+            return super::rust::variable(expr).cloned().map(Self::Variable);
         }
-        let magnitude = integer.base10_parse::<i64>()?;
-        let value = if minus.is_some() {
-            -magnitude
-        } else {
-            magnitude
+        let (sign, literal) = match expr {
+            syn::Expr::Unary(e) if e.attrs.is_empty() && matches!(e.op, syn::UnOp::Neg(_)) => {
+                (-1, e.expr.as_ref())
+            }
+            _ => (1, expr),
         };
-        let value = i32::try_from(value)
-            .map_err(|_| syn::Error::new_spanned(&integer, "selection literal exceeds i32"))?;
-        Ok(Self::Integer(value))
-    }
-}
-impl ToTokens for Term {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            Self::Variable(v) => v.to_tokens(tokens),
-            Self::Integer(value) => value.to_tokens(tokens),
+        let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(literal),
+            attrs,
+        }) = literal
+        else {
+            return None;
+        };
+        if !attrs.is_empty() || !matches!(literal.suffix(), "" | "i32") {
+            return None;
         }
+        let value = sign * literal.base10_parse::<i64>().ok()?;
+        Some(Self::Integer(i32::try_from(value).ok()?))
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub enum Comparison {
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
+    Eq(Token![==]),
+    Ne(Token![!=]),
+    Lt(Token![<]),
+    Le(Token![<=]),
+    Gt(Token![>]),
+    Ge(Token![>=]),
 }
-impl Parse for Comparison {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if input.peek(Token![==]) {
-            input.parse::<Token![==]>()?;
-            Ok(Self::Eq)
-        } else if input.peek(Token![!=]) {
-            input.parse::<Token![!=]>()?;
-            Ok(Self::Ne)
-        } else if input.peek(Token![<=]) {
-            input.parse::<Token![<=]>()?;
-            Ok(Self::Le)
-        } else if input.peek(Token![>=]) {
-            input.parse::<Token![>=]>()?;
-            Ok(Self::Ge)
-        } else if input.peek(Token![<]) {
-            input.parse::<Token![<]>()?;
-            Ok(Self::Lt)
-        } else if input.peek(Token![>]) {
-            input.parse::<Token![>]>()?;
-            Ok(Self::Gt)
-        } else {
-            Err(input.error("expected a comparison operator"))
-        }
-    }
-}
-impl ToTokens for Comparison {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.extend(match self {
-            Self::Eq => quote!(==),
-            Self::Ne => quote!(!=),
-            Self::Lt => quote!(<),
-            Self::Le => quote!(<=),
-            Self::Gt => quote!(>),
-            Self::Ge => quote!(>=),
-        });
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Predicate {
     pub left: Term,
     pub comparison: Comparison,
     pub right: Term,
 }
 impl Predicate {
+    /// Recognize the movable comparison fragment directly in Syn's Rust AST.
+    pub fn from_expr(expr: &syn::Expr) -> Option<Self> {
+        if let syn::Expr::Paren(paren) = expr {
+            if !paren.attrs.is_empty() {
+                return None;
+            }
+            return Self::from_expr(&paren.expr);
+        }
+        let syn::Expr::Binary(expr) = expr else {
+            return None;
+        };
+        if !expr.attrs.is_empty() {
+            return None;
+        }
+        let comparison = match &expr.op {
+            syn::BinOp::Eq(t) => Comparison::Eq(*t),
+            syn::BinOp::Ne(t) => Comparison::Ne(*t),
+            syn::BinOp::Lt(t) => Comparison::Lt(*t),
+            syn::BinOp::Le(t) => Comparison::Le(*t),
+            syn::BinOp::Gt(t) => Comparison::Gt(*t),
+            syn::BinOp::Ge(t) => Comparison::Ge(*t),
+            _ => return None,
+        };
+        Some(Self {
+            left: Term::from_expr(&expr.left)?,
+            comparison,
+            right: Term::from_expr(&expr.right)?,
+        })
+    }
+
     pub fn variables(&self) -> BTreeSet<String> {
         [&self.left, &self.right]
             .into_iter()

@@ -16,7 +16,7 @@ pub(crate) use lazy::{compile as compile_lazy, extended, linear, supported as la
 
 pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
     let ra = &source.relational_plan;
-    let info = ra::check_in(&ra.program.inputs, &ra.plan)?;
+    let info = ra::check_in(ra.program.inputs(), &ra.plan)?;
     if info.values().any(|r| r.heading.len() > 12) {
         return Err(syn::Error::new_spanned(
             ra,
@@ -32,8 +32,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
         .collect();
     let inputs: Names = ra
         .program
-        .inputs
-        .iter()
+        .inputs()
         .enumerate()
         .map(|(i, d)| (symbol_name(&d.name), local("input", i)))
         .collect();
@@ -71,7 +70,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
                 .map(|k| symbol_name(&k.relation)),
         )
         .collect();
-    for input in &ra.program.inputs {
+    for input in ra.program.inputs() {
         let name = symbol_name(&input.name);
         if used.contains(&name) {
             let id = &inputs[&name];
@@ -138,8 +137,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
         .collect();
     let parameters: Vec<_> = ra
         .program
-        .inputs
-        .iter()
+        .inputs()
         .map(|d| {
             let name = &inputs[&symbol_name(&d.name)];
             let types = d.columns.iter().map(|c| &c.ty);
@@ -148,8 +146,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
         .collect();
     let arguments: Vec<_> = ra
         .program
-        .inputs
-        .iter()
+        .inputs()
         .map(|d| &inputs[&symbol_name(&d.name)])
         .collect();
     let visibility = &ra.program.visibility;
@@ -267,8 +264,7 @@ fn local_plan(
         ra::Operator::Rename(r) => {
             let input = &inputs[&symbol_name(&r.relation)];
             let decl = program
-                .inputs
-                .iter()
+                .inputs()
                 .find(|d| symbol_name(&d.name) == symbol_name(&r.relation))
                 .unwrap();
             let ordered: Vec<_> = decl

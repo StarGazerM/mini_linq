@@ -147,7 +147,7 @@ fn a_different_policy_can_reorder_independent_reductions() {
     for seed in 0..64 {
         let db = binary_database(&source.program, seed);
         assert_eq!(
-            oracle::evaluate_plan(&source.program.inputs, &alternate.plan, &db).output,
+            oracle::evaluate_plan(source.program.inputs(), &alternate.plan, &db).output,
             oracle::evaluate_cq(&source.program, &db)
         );
     }
@@ -174,7 +174,7 @@ fn predicates_must_be_consumed_before_their_last_columns_are_pruned() {
             },
         )
         .unwrap();
-        let info = ra::check_in(&source.program.inputs, &ra.plan).unwrap();
+        let info = ra::check_in(source.program.inputs(), &ra.plan).unwrap();
         let select = ra
             .plan
             .definitions
@@ -193,7 +193,7 @@ fn predicates_must_be_consumed_before_their_last_columns_are_pruned() {
         for seed in 0..64 {
             let db = binary_database(&source.program, seed);
             assert_eq!(
-                oracle::evaluate_plan(&source.program.inputs, &ra.plan, &db).output,
+                oracle::evaluate_plan(source.program.inputs(), &ra.plan, &db).output,
                 oracle::evaluate_cq(&source.program, &db)
             );
         }

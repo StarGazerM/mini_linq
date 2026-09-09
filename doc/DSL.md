@@ -98,6 +98,12 @@ entries. A CQ-level embedding of arbitrary RA is not defined by these changes.
 ## Basic grammar summary
 
 `RustVisibility`, `RustType`, `RustPat`, and `RustExpr` are parsed by `syn`.
+DSL syntax derives parsing and token emission with `syn_derive`; `;` terminates
+each query, relational output, access plan, and iterator return. Declarations
+remain in source order in `Program.declarations`. `Program::inputs()` and
+`Program::output()` classify them without rewriting the syntax tree. A typed
+CQ `let` stores its optional `: Type` annotation as syntax beside its Rust
+pattern. Expressions are passed directly to Syn, without token rewriting.
 `Column` is an unsuffixed integer literal.
 
 ```ebnf
@@ -108,7 +114,7 @@ Program           ::= RustVisibility? "struct" Ident ";"
 RelationDecl      ::= Ident "(" ColumnDecl ("," ColumnDecl)* [","] ")" ";"
 ColumnDecl        ::= Ident ":" RustType
 Query             ::= Atom ":-" BodyItem ("," BodyItem)* ";"
-BodyItem          ::= Atom | "if" RustExpr | "let" RustPat "=" RustExpr
+BodyItem          ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
 Atom              ::= Ident "(" [RustExpr ("," RustExpr)* [","]] ")"
 
 RelationalModule  ::= Program "relational" "{" RelationalPlan "}"

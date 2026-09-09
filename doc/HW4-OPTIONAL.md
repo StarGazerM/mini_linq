@@ -110,7 +110,7 @@ The existing parser accepts:
 
 ```text
 Query          ::= Atom ":-" BodyItem ("," BodyItem)* ";"
-BodyItem       ::= Atom | "if" RustExpr | "let" RustPat "=" RustExpr
+BodyItem       ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
                  | Negation | Aggregate
 Negation       ::= "!" Atom
 Aggregate      ::= "agg" RustPat "=" RustPath "(" [RustExpr ("," RustExpr)*] ")"

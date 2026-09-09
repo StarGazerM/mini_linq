@@ -56,7 +56,7 @@ fn all_classic_patterns_use_the_production_planner_and_compiled_backend() {
             oracle::evaluate_cq(&source.program, &databases[0]),
             case.expected.iter().map(|row| row.to_vec()).collect()
         );
-        let parameters: Vec<_> = (0..source.program.inputs.len())
+        let parameters: Vec<_> = (0..source.program.inputs().count())
             .map(|i| format_ident!("input_{i}"))
             .collect();
         let datasets: Vec<_> = databases
@@ -64,8 +64,7 @@ fn all_classic_patterns_use_the_production_planner_and_compiled_backend() {
             .map(|database| {
                 let inputs = source
                     .program
-                    .inputs
-                    .iter()
+                    .inputs()
                     .map(|input| rows(&database[&cq_ir::symbol_name(&input.name)]));
                 let expected = rows(&oracle::evaluate_cq(&source.program, database));
                 quote! { (#(#inputs,)* #expected) }
@@ -94,7 +93,7 @@ fn all_classic_patterns_use_the_production_planner_and_compiled_backend() {
             // Check logical results, including the frozen family, separately
             // from the executable output and its actual tuple layout.
             for database in &databases {
-                let evaluation = oracle::evaluate_plan(&source.program.inputs, &ra.plan, database);
+                let evaluation = oracle::evaluate_plan(source.program.inputs(), &ra.plan, database);
                 assert_eq!(
                     evaluation.output,
                     oracle::evaluate_cq(&source.program, database)
@@ -107,7 +106,7 @@ fn all_classic_patterns_use_the_production_planner_and_compiled_backend() {
             let program = &source.program.name;
             let rust = compile_ra(&ra).unwrap();
             assert_physical_widths(&ra, &rust, &databases[0]);
-            let widths = ra::check_in(&source.program.inputs, &ra.plan)
+            let widths = ra::check_in(source.program.inputs(), &ra.plan)
                 .unwrap()
                 .into_iter()
                 .map(|(name, info)| {
@@ -337,7 +336,7 @@ fn assert_physical_widths(ra: &ra::Module, rust: &syn::File, database: &oracle::
     let mut storage = Storage(Default::default());
     storage.visit_file(rust);
     assert_eq!(storage.0.len(), ra.plan.definitions.len());
-    let interpreted = oracle::evaluate_plan(&ra.program.inputs, &ra.plan, database);
+    let interpreted = oracle::evaluate_plan(ra.program.inputs(), &ra.plan, database);
     for (i, d) in ra.plan.definitions.iter().enumerate() {
         assert_eq!(
             storage.0[&i],
@@ -358,8 +357,7 @@ fn rows(rows: &oracle::Rows) -> proc_macro2::TokenStream {
 fn binary_database(program: &cq::Program, seed: u64) -> oracle::Database {
     let mut random = seed;
     program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| {
             let rows = (0_usize..(1 << input.columns.len()))
                 .filter_map(|bits| {

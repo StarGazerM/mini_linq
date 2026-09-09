@@ -161,8 +161,7 @@ fn check_case(name: &str, text: &str, execute: impl Fn(&HostDatabase, &[Vec<i32>
 fn generated_database(program: &cq::Program, domain: &[i32], seed: u64) -> HostDatabase {
     let mut random = seed;
     program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| {
             let rows = (0..domain.len().pow(input.arity() as u32))
                 .filter_map(|mut ordinal| {

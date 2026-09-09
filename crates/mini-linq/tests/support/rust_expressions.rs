@@ -8,6 +8,32 @@ fn accepts(x: &i32) -> bool {
     *x > 0 && *x < 4
 }
 
+fn first<A, B>(a: A, _: B) -> A {
+    a
+}
+
+fn apply(f: impl FnOnce(i32, i32) -> i32, a: i32, b: i32) -> i32 {
+    f(a, b)
+}
+
+query! {
+    struct RustSyntax;
+    relation answer(value: i32);
+    relation R(value: i32);
+    relation S(key: i32);
+    answer(result) :-
+        R(x),
+        let (left, right): (i32, bool) = (*x, true),
+        S(first::<i32, i32>(apply(|a, b| (a + b).max(b), left, 1), 0)),
+        let result: i32 = first::<i32, bool>(left + 10, right),
+        if (left, right).1;
+}
+
+#[test]
+fn native_rust_syntax_executes_through_both_compilers() {
+    assert_eq!(RustSyntax::run([(-2,), (0,), (2,), (3,)], [(1,), (3,)]), vec![(8,), (10,), (12,)]);
+}
+
 query! {
     struct Calls;
     relation R(value: i32);

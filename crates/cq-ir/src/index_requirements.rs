@@ -72,13 +72,12 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
     let schema = module
         .relational_plan
         .program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| (symbol_name(&input.name), input.arity()))
         .collect::<BTreeMap<_, _>>();
     let mut seen = BTreeSet::new();
     let results = relational_plan::check_in(
-        &module.relational_plan.program.inputs,
+        module.relational_plan.program.inputs(),
         &module.relational_plan.plan,
     )?;
 

@@ -39,8 +39,7 @@ pub fn check_module_scenario(module: &cq::Module, scenario: Scenario) -> Result<
     let atoms = positive_atoms(&module.program.query)?;
     let input_positions = module
         .program
-        .inputs
-        .iter()
+        .inputs()
         .enumerate()
         .map(|(position, input)| (symbol_name(&input.name), position))
         .collect::<BTreeMap<_, _>>();
@@ -69,8 +68,7 @@ pub fn generate_module(
 
     let input_positions = module
         .program
-        .inputs
-        .iter()
+        .inputs()
         .enumerate()
         .map(|(position, input)| (symbol_name(&input.name), position))
         .collect::<BTreeMap<_, _>>();
@@ -89,8 +87,7 @@ pub fn generate_module(
     )?;
     let mut rows = module
         .program
-        .inputs
-        .iter()
+        .inputs()
         .map(|_| BTreeSet::<Vec<i32>>::new())
         .collect::<Vec<_>>();
 
@@ -104,7 +101,7 @@ pub fn generate_module(
         membership_occurrences.len(),
         edge_marker_count,
     )?;
-    let mut active_duplicates = vec![None; module.program.inputs.len()];
+    let mut active_duplicates = vec![None; module.program.inputs().count()];
 
     if config.scenario != Scenario::NoMatch {
         plant_coverage(
@@ -172,7 +169,7 @@ fn plant_coverage(
     let projected = project_assignment(
         atoms,
         input_positions,
-        module.program.inputs.len(),
+        module.program.inputs().count(),
         &primary,
         None,
     )?;
@@ -197,7 +194,7 @@ fn plant_coverage(
         let projected = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs.len(),
+            module.program.inputs().count(),
             &assignment,
             Some(omitted_occurrence),
         )?;
@@ -229,7 +226,7 @@ fn plant_coverage(
         let prefix = project_prefix(
             atoms,
             input_positions,
-            module.program.inputs.len(),
+            module.program.inputs().count(),
             &assignment,
             access.occurrence,
         )?;
@@ -252,7 +249,7 @@ fn plant_coverage(
             let mut projected = project_assignment(
                 atoms,
                 input_positions,
-                module.program.inputs.len(),
+                module.program.inputs().count(),
                 &assignment,
                 Some(access.occurrence),
             )?;
@@ -289,14 +286,14 @@ fn plant_coverage(
         let first_rows = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs.len(),
+            module.program.inputs().count(),
             &first,
             None,
         )?;
         let second_rows = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs.len(),
+            module.program.inputs().count(),
             &second,
             None,
         )?;
@@ -317,14 +314,14 @@ fn plant_coverage(
         let first_rows = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs.len(),
+            module.program.inputs().count(),
             &first,
             None,
         )?;
         let second_rows = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs.len(),
+            module.program.inputs().count(),
             &second,
             None,
         )?;
@@ -351,7 +348,7 @@ fn plant_coverage(
         let projected = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs.len(),
+            module.program.inputs().count(),
             &assignment,
             None,
         )?;
@@ -372,13 +369,12 @@ fn fill_noise(
 ) -> Result<(), GenerateError> {
     let total_columns = module
         .program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| input.columns.len())
         .sum::<usize>();
     ensure_noise_space(total_columns)?;
     let mut next_namespace = 0;
-    for (relation_index, input) in module.program.inputs.iter().enumerate() {
+    for (relation_index, input) in module.program.inputs().enumerate() {
         let arity = input.columns.len();
         let parameters = (0..arity)
             .map(|_| {
@@ -408,13 +404,9 @@ fn materialize_relations(
     active_duplicates: Vec<Option<Vec<i32>>>,
     rng: &mut SplitMix64,
 ) -> Result<Vec<RelationData>, GenerateError> {
-    let mut relations = Vec::with_capacity(module.program.inputs.len());
-    for ((input, distinct_rows), active_duplicate) in module
-        .program
-        .inputs
-        .iter()
-        .zip(rows)
-        .zip(active_duplicates)
+    let mut relations = Vec::with_capacity(module.program.inputs().count());
+    for ((input, distinct_rows), active_duplicate) in
+        module.program.inputs().zip(rows).zip(active_duplicates)
     {
         let mut relation_rows = distinct_rows.into_iter().collect::<Vec<_>>();
         let duplicate_count = relation_rows.len() / 20;
@@ -1493,8 +1485,7 @@ mod tests {
                     &atoms,
                     &module
                         .program
-                        .inputs
-                        .iter()
+                        .inputs()
                         .enumerate()
                         .map(|(position, input)| (symbol_name(&input.name), position))
                         .collect(),

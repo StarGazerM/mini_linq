@@ -4,12 +4,9 @@ pub mod rust;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use proc_macro2::TokenStream;
-use quote::{ToTokens, TokenStreamExt};
-use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token, Type, Visibility, token};
 
-use crate::{CommaList, InputList, kw, symbol_name};
+use crate::{CommaList, kw, symbol_name};
 
 /// A logical query paired with its program declaration and input schema.
 ///
@@ -18,59 +15,30 @@ use crate::{CommaList, InputList, kw, symbol_name};
 ///             RelationDecl+
 ///             Query
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Program {
     pub visibility: Visibility,
     pub struct_token: Token![struct],
     pub name: Ident,
     pub declaration_semi: Token![;],
-    pub inputs: InputList,
-    /// Optional declaration of the head relation's Rust column types.
-    pub output: Option<RelationDecl>,
+    #[syn(repeat, peek = kw::relation, nonempty)]
+    pub declarations: Vec<RelationDecl>,
     pub query: Query,
 }
 
-impl Parse for Program {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let visibility = input.parse()?;
-        let struct_token = input.parse()?;
-        let name = input.parse()?;
-        let declaration_semi = input.parse()?;
-
-        let mut inputs = Vec::new();
-        while input.peek(kw::relation) {
-            inputs.push(input.parse()?);
-        }
-        if inputs.is_empty() {
-            return Err(input.error("CQ program must declare at least one input relation"));
-        }
-
-        let query: Query = input.parse()?;
-        let output = inputs
-            .iter()
-            .position(|d: &RelationDecl| symbol_name(&d.name) == symbol_name(&query.head.relation))
-            .map(|i| inputs.remove(i));
-        Ok(Self {
-            visibility,
-            struct_token,
-            name,
-            declaration_semi,
-            inputs,
-            output,
-            query,
+impl Program {
+    /// Input schemas in declaration order. Classifying the head is analysis,
+    /// so parsing and token emission preserve every declaration where written.
+    pub fn inputs(&self) -> impl Iterator<Item = &RelationDecl> + Clone {
+        self.declarations.iter().filter(|declaration| {
+            symbol_name(&declaration.name) != symbol_name(&self.query.head.relation)
         })
     }
-}
 
-impl ToTokens for Program {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        self.visibility.to_tokens(tokens);
-        self.struct_token.to_tokens(tokens);
-        self.name.to_tokens(tokens);
-        self.declaration_semi.to_tokens(tokens);
-        tokens.append_all(&self.inputs);
-        self.output.to_tokens(tokens);
-        self.query.to_tokens(tokens);
+    pub fn output(&self) -> Option<&RelationDecl> {
+        self.declarations.iter().find(|declaration| {
+            symbol_name(&declaration.name) == symbol_name(&self.query.head.relation)
+        })
     }
 }
 
@@ -165,14 +133,14 @@ pub struct Query {
 /// premise, not a parser restriction.
 ///
 /// ```text
-/// BodyItem ::= Atom | "if" RustExpr | "let" RustPat "=" RustExpr
+/// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum BodyItem {
     #[parse(peek = Token![if])]
     Filter(Filter),
     #[parse(peek = Token![let])]
-    Let(Let),
+    Let(Box<Let>),
     // OPTIONAL HW4 — STUDENT 1/6 (IR): add the more-specific Ascent-style
     // Negation and Aggregate variants *before* this positive-atom fallback,
     // reusing Atom and its Rust expression arguments. `agg` is
@@ -187,18 +155,25 @@ pub enum BodyItem {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Filter {
     pub if_token: Token![if],
-    #[parse(rust::parse_expression)]
     pub condition: syn::Expr,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Let {
     pub let_token: Token![let],
-    #[parse(rust::parse_binding_pattern)]
+    #[parse(syn::Pat::parse_single)]
     pub pattern: syn::Pat,
+    #[syn(optional, peek = Token![:])]
+    pub annotation: Option<TypeAnnotation>,
     pub eq_token: Token![=],
-    #[parse(rust::parse_expression)]
     pub expression: syn::Expr,
+}
+
+/// The optional Rust type ascription on a CQ let binding.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct TypeAnnotation {
+    pub colon_token: Token![:],
+    pub ty: Type,
 }
 
 impl BodyItem {
@@ -247,15 +222,8 @@ pub mod contract {
 }
 
 pub(crate) fn check_program(program: &Program) -> syn::Result<()> {
-    let schema = check_input_declarations(&program.inputs)?;
-    if let Some(output) = &program.output {
-        check_input_declarations(std::slice::from_ref(output))?;
-        if symbol_name(&output.name) != symbol_name(&program.query.head.relation) {
-            return Err(syn::Error::new_spanned(
-                output,
-                "result declaration must name the query head relation",
-            ));
-        }
+    let mut schema = check_input_declarations(&program.declarations)?;
+    if let Some(output) = schema.remove(&symbol_name(&program.query.head.relation)) {
         if output.arity() != program.query.head.args.len() {
             return Err(syn::Error::new_spanned(
                 output,
@@ -263,8 +231,8 @@ pub(crate) fn check_program(program: &Program) -> syn::Result<()> {
             ));
         }
     }
-    check_query(&schema, &program.query, program.output.is_some())?;
-    if program.output.is_none() {
+    check_query(&schema, &program.query, program.output().is_some())?;
+    if program.output().is_none() {
         let mut types = BTreeMap::new();
         for item in &program.query.body {
             match item {
@@ -279,7 +247,7 @@ pub(crate) fn check_program(program: &Program) -> syn::Result<()> {
                     }
                 }
                 BodyItem::Let(binding) => types.extend(
-                    rust::binding_types(&binding.pattern)
+                    rust::binding_types(binding)
                         .into_iter()
                         .map(|(id, ty)| (symbol_name(&id), ty)),
                 ),
@@ -301,9 +269,9 @@ pub(crate) fn check_program(program: &Program) -> syn::Result<()> {
     Ok(())
 }
 
-pub(crate) fn check_input_declarations(
-    inputs: &[RelationDecl],
-) -> syn::Result<BTreeMap<String, &RelationDecl>> {
+pub(crate) fn check_input_declarations<'a>(
+    inputs: impl IntoIterator<Item = &'a RelationDecl>,
+) -> syn::Result<BTreeMap<String, &'a RelationDecl>> {
     let mut schema = BTreeMap::new();
     for input in inputs {
         if input.columns.is_empty() {

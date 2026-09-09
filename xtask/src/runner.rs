@@ -119,8 +119,7 @@ fn support_items(source: &cq::Module) -> syn::Result<Vec<syn::Item>> {
     let program = &source.program.name;
     let inputs = source
         .program
-        .inputs
-        .iter()
+        .inputs()
         .enumerate()
         .map(|(input_index, input)| -> syn::Result<_> {
             if !input.columns.iter().all(|column| is_plain_i32(&column.ty)) {

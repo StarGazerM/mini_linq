@@ -13,7 +13,7 @@ pub(crate) fn signature(index: &ir::IndexRequirement) -> Signature {
 }
 
 pub(crate) fn compile(source: &ra::Module) -> syn::Result<ir::Module> {
-    let info = ra::check_in(&source.program.inputs, &source.plan)?;
+    let info = ra::check_in(source.program.inputs(), &source.plan)?;
     let mut seen = BTreeSet::new();
     let mut indexes = Vec::new();
     for definition in &source.plan.definitions {
@@ -53,7 +53,7 @@ pub(crate) fn columns(
 /// A domain/coverage diagnostic, not a request to regenerate a preferred plan.
 pub(crate) fn check_coverage(source: &ir::Module) -> syn::Result<()> {
     let info = ra::check_in(
-        &source.relational_plan.program.inputs,
+        source.relational_plan.program.inputs(),
         &source.relational_plan.plan,
     )?;
     let available: BTreeSet<_> = source.indexes.iter().map(signature).collect();

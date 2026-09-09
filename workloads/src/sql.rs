@@ -33,12 +33,11 @@ pub fn translate(module: &cq::Module) -> Result<String, SqlError> {
     let mut output = String::from("WITH\n");
     let input_positions = module
         .program
-        .inputs
-        .iter()
+        .inputs()
         .enumerate()
         .map(|(input_index, input)| (symbol_name(&input.name), input_index))
         .collect::<BTreeMap<_, _>>();
-    for (input_index, input) in module.program.inputs.iter().enumerate() {
+    for (input_index, input) in module.program.inputs().enumerate() {
         if input_index != 0 {
             output.push_str(",\n");
         }

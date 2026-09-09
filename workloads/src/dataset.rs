@@ -142,24 +142,24 @@ impl Dataset {
             )));
         }
 
-        let declarations = &module.program.inputs;
-        if self.relations.len() != declarations.len() {
+        let declarations = module.program.inputs();
+        let declaration_count = declarations.clone().count();
+        if self.relations.len() != declaration_count {
             return Err(DatasetError::Schema(format!(
                 "dataset has {} relations; query declares {}",
                 self.relations.len(),
-                declarations.len(),
+                declaration_count,
             )));
         }
-        if self.manifest.relations.len() != declarations.len() {
+        if self.manifest.relations.len() != declaration_count {
             return Err(DatasetError::Schema(format!(
                 "manifest has {} relation entries; query declares {}",
                 self.manifest.relations.len(),
-                declarations.len(),
+                declaration_count,
             )));
         }
 
         for (position, ((declaration, relation), recorded)) in declarations
-            .iter()
             .zip(&self.relations)
             .zip(&self.manifest.relations)
             .enumerate()

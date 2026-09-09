@@ -251,7 +251,7 @@ pub mod contract {
     pub fn check(module: &super::Module) -> syn::Result<()> {
         super::cq::check_program(&module.program)?;
         super::check_output_head(&module.program.query.head, &module.plan.output.head)?;
-        super::check_in(&module.program.inputs, &module.plan).map(|_| ())
+        super::check_in(module.program.inputs(), &module.plan).map(|_| ())
     }
 
     /// Whether a parsed module satisfies the RelationalPlan contract.
@@ -274,7 +274,7 @@ pub struct RelationInfo {
 /// A proc macro cannot infer a Rust function's return type; A declared result
 /// schema supplies that public API boundary; simple projections inherit types.
 pub fn output_types(program: &cq::Program, input: &RelationInfo) -> syn::Result<Vec<syn::Type>> {
-    if let Some(output) = &program.output {
+    if let Some(output) = &program.output() {
         return Ok(output.columns.iter().map(|c| c.ty.clone()).collect());
     }
     program.query.head.args.iter().map(|arg| {
@@ -285,8 +285,8 @@ pub fn output_types(program: &cq::Program, input: &RelationInfo) -> syn::Result<
     }).collect()
 }
 
-pub fn check_in(
-    inputs: &[cq::RelationDecl],
+pub fn check_in<'a>(
+    inputs: impl IntoIterator<Item = &'a cq::RelationDecl>,
     plan: &Plan,
 ) -> syn::Result<BTreeMap<String, RelationInfo>> {
     let declarations = cq::check_input_declarations(inputs)?;

@@ -100,8 +100,7 @@ known_cases!(
 fn binary_database(program: &cq::Program, seed: u64) -> Database {
     let mut random = seed;
     program
-        .inputs
-        .iter()
+        .inputs()
         .map(|input| {
             let rows = (0_usize..(1 << input.columns.len()))
                 .filter_map(|bits| {

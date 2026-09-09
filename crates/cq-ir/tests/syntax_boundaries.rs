@@ -23,8 +23,7 @@ fn declarations_require_items_and_preserve_written_order() {
     assert_eq!(
         source
             .program
-            .inputs
-            .iter()
+            .inputs()
             .map(|d| d.name.to_string())
             .collect::<Vec<_>>(),
         ["Z", "A"]
