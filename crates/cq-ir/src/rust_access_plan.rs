@@ -134,7 +134,9 @@ fn check_plan(query: &Plan) -> syn::Result<()> {
         .flat_map(|clause| match &clause.item {
             cq::BodyItem::Positive { atom } => atom.variables().cloned().collect(),
             cq::BodyItem::Let(binding) => cq::rust::bindings(&binding.pattern),
-            cq::BodyItem::Filter(_) => Vec::new(),
+            cq::BodyItem::Filter(_) | cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
+                Vec::new()
+            }
         })
         .map(|id| symbol_name(&id))
         .collect();
@@ -145,6 +147,12 @@ fn check_plan(query: &Plan) -> syn::Result<()> {
         // and binds nothing; aggregation requires `For` with its simple result
         // identifier pattern and binds only that result.
         match &clause.item {
+            cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
+                return Err(syn::Error::new_spanned(
+                    &clause.item,
+                    "negation and aggregation require the extended access contract",
+                ));
+            }
             cq::BodyItem::Positive { atom } => {
                 check_positive_clause(position, atom, &clause.access, &mut bound)?
             }

@@ -40,11 +40,12 @@ answer(format!("{x}")) :-
         in S(key + offset, amount);
 ```
 
-The ordinary HW1 contract still accepts only positive atoms with distinct bare
-variables. It returns an explicit error for the extended forms until students
-implement their semantic contract. The three compiler-pass TODOs remain
-unimplemented. The `hw4` tests exercise the later negation/aggregation semantics;
-supplying the parser does not make those semantic tests pass.
+The public homework starter's HW1 contract accepts positive atoms with distinct
+bare variables, and its three assigned passes remain TODO. This private answer
+branch also implements Rust argument expressions, `if`, and `let` through its
+existing passes. Negation and aggregation parse here but return explicit errors
+from the unfinished semantic contracts. The opt-in `hw4` tests specify that
+later extension; supplying syntax does not make those semantic tests pass.
 
 ## Collecting free variables
 
@@ -144,4 +145,6 @@ cargo test -p cq-ir --test expression_syntax --test free_variables --test free_v
 The first tests compare known free-variable sets and structural syntax
 roundtrips. The execution test generates Rust functions with exactly the
 reported logical inputs, compiles them with `rustc`, and checks their results.
-It validates the supplied helper independently of the unfinished student passes.
+It validates the supplied helper independently of any compiler pass. This
+branch's expression and planner endpoint tests additionally exercise lowering
+and execution.

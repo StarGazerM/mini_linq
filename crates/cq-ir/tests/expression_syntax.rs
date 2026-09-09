@@ -93,11 +93,11 @@ fn malformed_present_syntax_is_rejected() {
 }
 
 #[test]
-fn parsing_extensions_does_not_bypass_the_unfinished_semantic_contracts() {
+fn parsing_extensions_does_not_bypass_the_semantic_contracts() {
     for body in [
-        "R(f(x))",
-        "R(x), if accept(x)",
-        "R(x), let y = x",
+        "R(f(x)), R(x)",
+        "if accept(x), R(x)",
+        "let y = x, R(x)",
         "!R(x)",
         "agg y = sum(x) in R(x)",
     ] {

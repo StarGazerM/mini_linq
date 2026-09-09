@@ -57,6 +57,29 @@ const CASES: &[(&str, &str, &[&str])] = &[
     ),
 ];
 
+#[test]
+fn parsed_optional_clauses_cannot_be_silently_dropped_by_any_planner() {
+    for body in ["R(x,_), !T(x,_)", "R(x,_), agg total = sum(y) in T(x,y)"] {
+        let source = source(body);
+        for strategy in [
+            JoinPolicy::Written,
+            JoinPolicy::Connected,
+            JoinPolicy::GreedyWidth,
+            JoinPolicy::Auto,
+        ] {
+            let error = explain_cq_plan(
+                &source,
+                PlanningOptions {
+                    strategy,
+                    max_arity: None,
+                },
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("extended CQ semantic contract"));
+        }
+    }
+}
+
 fn source(body: &str) -> cq::Module {
     syn::parse_str(&format!("pub struct P; relation R(a:i32,b:i32); relation S(a:i32,b:i32); relation T(a:i32,b:i32); relation answer(value:i32); answer(head(x)) :- {body};")).unwrap()
 }

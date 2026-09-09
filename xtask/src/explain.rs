@@ -1090,7 +1090,13 @@ mod tests {
 
     #[test]
     fn formatted_query_and_access_bodies_roundtrip_with_semicolons() {
-        for body in ["R(x)", "R(x), R(x)"] {
+        for body in [
+            "R(x)",
+            "R(x), R(x)",
+            r#"R("a , b :: c ( d )"), if accept(x, " ; ")"#,
+            "R(x), let y = (|a, b| a + b)(x, 1), !R(f(y))",
+            "R(x), agg y = (factory(config))(value) in R(f(x, value))",
+        ] {
             let program: cq::Program = syn::parse_str(&format!(
                 "struct P; relation R(a:i32); answer(x) :- {body};"
             ))

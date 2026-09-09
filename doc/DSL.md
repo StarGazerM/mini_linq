@@ -155,7 +155,7 @@ IterOperator      ::= "unit" "yield" RustExpr
 IterReturn        ::= "return" IterId ";"
 ```
 
-The table above describes the basic semantic checkpoint. The supplied CQ
+The table above describes the implemented semantic domain. The supplied CQ
 parser also accepts the following body forms, with Rust leaves parsed by Syn:
 
 ```ebnf
@@ -168,8 +168,9 @@ Aggregate         ::= "agg" RustPat "=" Aggregator
 Aggregator        ::= RustPath | "(" RustExpr ")"
 ```
 
-The basic CQ contract accepts positive atoms with distinct bare variables;
-parsing a larger surface does not implement its semantics. The
+Negation and aggregation parse but require the optional semantic extension.
+The public starter's basic contract remains restricted to positive atoms with
+distinct bare variables. The
 [Rust-expression helpers](RUST-EXPRESSION-HELPERS.md) provide lexical free names
 and pattern bindings for students extending those contracts and passes.
 Aggregate arguments are local binder names; Rust expressions occur in its

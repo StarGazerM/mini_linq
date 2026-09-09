@@ -119,6 +119,11 @@ pub(crate) fn check_scheduled(
     for &clause in order {
         let item = &source.program.query.body[clause];
         match item {
+            cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
+                return Err(err(
+                    "negation and aggregation have no implemented lowering contract",
+                ));
+            }
             cq::BodyItem::Filter(filter) => {
                 let expr = &filter.condition;
                 cursor.selection(quote!(#expr))?;
@@ -159,7 +164,10 @@ pub(crate) fn check_scheduled(
                         let fresh = cq::rust::fresh(&mut reserved, clause, position);
                         if !matches!(arg, syn::Expr::Infer(_)) {
                             let local = introduced.difference(&prefix).cloned().collect();
-                            if cq::rust::uses(arg, &local).is_empty() {
+                            if cq::rust::free_variables(arg)
+                                .dependencies(&local)
+                                .is_empty()
+                            {
                                 let input = cursor.input()?;
                                 let ty = &column.ty;
                                 cursor.current = Some(cursor.accept(syn::parse_quote!(extend #input with {#fresh: #ty} value ((#arg,))))?);
@@ -192,7 +200,7 @@ pub(crate) fn check_scheduled(
     } else {
         head.args
             .iter()
-            .flat_map(|e| cq::rust::uses(e, &bound))
+            .flat_map(|e| cq::rust::free_variables(e).dependencies(&bound))
             .collect()
     };
     let columns = needed.iter().map(|n| format_ident!("r#{n}"));

@@ -52,12 +52,18 @@ pub(crate) fn required(source: &cq::Module) -> bool {
     })
 }
 
-pub(crate) fn rule(clause: usize, item: &cq::BodyItem) -> Rule {
-    match item {
+pub(crate) fn rule(clause: usize, item: &cq::BodyItem) -> syn::Result<Rule> {
+    Ok(match item {
         cq::BodyItem::Positive { .. } => Rule::Match { clause },
         cq::BodyItem::Filter(_) => Rule::Guard { clause },
         cq::BodyItem::Let(_) => Rule::Bind { clause },
-    }
+        cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
+            return Err(syn::Error::new_spanned(
+                item,
+                "no administrative rule for negation or aggregation is implemented",
+            ));
+        }
+    })
 }
 
 struct State {
@@ -132,7 +138,8 @@ impl State {
                 if matches!(arg, syn::Expr::Infer(_)) {
                     // A distinct anonymous attribute preserves the source tuple
                     // until all observable prefix computations have executed.
-                } else if !cq::rust::uses(arg, &local.difference(&before).cloned().collect())
+                } else if !cq::rust::free_variables(arg)
+                    .dependencies(&local.difference(&before).cloned().collect())
                     .is_empty()
                 {
                     conditions.push(quote!(#temp.eq(&(#arg))));
@@ -185,7 +192,7 @@ fn constants(source: &cq::Module, state: &mut State) -> Vec<Rule> {
     rules
 }
 
-fn schedule(source: &cq::Module, state: &State, policy: JoinPolicy) -> Vec<usize> {
+fn schedule(source: &cq::Module, state: &State, policy: JoinPolicy) -> syn::Result<Vec<usize>> {
     let body = &source.program.query.body;
     let mut remaining: Vec<_> = (0..body.len()).collect();
     let mut bound = state.bound.clone();
@@ -251,10 +258,15 @@ fn schedule(source: &cq::Module, state: &State, policy: JoinPolicy) -> Vec<usize
                 bound.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
             cq::BodyItem::Filter(_) => (),
+            cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
+                return Err(error(
+                    "negation and aggregation scheduling is not implemented",
+                ));
+            }
         }
         order.push(clause);
     }
-    order
+    Ok(order)
 }
 
 pub(crate) fn plan(
@@ -298,12 +310,9 @@ fn emit(
             .iter()
             .map(|step| match step {
                 Rule::Match { clause } | Rule::Guard { clause } | Rule::Bind { clause }
-                    if source
-                        .program
-                        .query
-                        .body
-                        .get(*clause)
-                        .is_some_and(|item| *step == rule(*clause, item)) =>
+                    if source.program.query.body.get(*clause).is_some_and(|item| {
+                        rule(*clause, item).is_ok_and(|rule| *step == rule)
+                    }) =>
                 {
                     Ok(*clause)
                 }
@@ -311,7 +320,7 @@ fn emit(
             })
             .collect::<syn::Result<Vec<_>>>()?
     } else {
-        schedule(source, &state, options.strategy)
+        schedule(source, &state, options.strategy)?
     };
     crate::pass_contracts::ordered::check_order(source, &order)?;
     for clause in order {
@@ -330,8 +339,14 @@ fn emit(
                 state.select(quote!(#expr));
             }
             cq::BodyItem::Let(binding) => state.binding(binding),
+            cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
+                return Err(syn::Error::new_spanned(
+                    item,
+                    "negation and aggregation lowering is not implemented",
+                ));
+            }
         }
-        derivation.push(rule(clause, item));
+        derivation.push(rule(clause, item)?);
     }
     let input = state.input();
     let head = &source.program.query.head;
@@ -340,7 +355,7 @@ fn emit(
     } else {
         head.args
             .iter()
-            .flat_map(|e| cq::rust::uses(e, &state.bound))
+            .flat_map(|e| cq::rust::free_variables(e).dependencies(&state.bound))
             .collect()
     };
     let attributes: Vec<_> = needed.iter().map(|v| format_ident!("r#{v}")).collect();

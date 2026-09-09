@@ -473,7 +473,7 @@ fn expression_aliases(
             );
         }
     }
-    let used = cq::rust::uses(expr, &input.heading);
+    let used = cq::rust::free_variables(expr).dependencies(&input.heading);
     let mut refs = References {
         names: &used,
         ids: Vec::new(),

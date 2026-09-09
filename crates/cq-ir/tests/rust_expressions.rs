@@ -152,7 +152,7 @@ fn lexical_scope_excludes_local_bindings_and_retains_macro_environments() {
     ] {
         let expr: syn::Expr = syn::parse2(expr).unwrap();
         assert_eq!(
-            cq::rust::uses(&expr, &environment),
+            cq::rust::free_variables(&expr).dependencies(&environment),
             expected.into_iter().map(String::from).collect()
         );
     }

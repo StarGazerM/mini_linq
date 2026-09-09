@@ -455,7 +455,7 @@ pub fn check_in<'a>(
         .head
         .args
         .iter()
-        .flat_map(|e| cq::rust::uses(e, &output.heading))
+        .flat_map(|e| cq::rust::free_variables(e).dependencies(&output.heading))
         .collect::<BTreeSet<_>>();
     if !output_attributes.is_subset(&output.heading)
         || (plan.output.head.variables().count() == plan.output.head.args.len()

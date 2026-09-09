@@ -6,6 +6,10 @@ checkpoint has three student passes and two supplied physical lowerings.
 Queries, relational outputs, access plans, and iterator returns end with `;`.
 The earlier period terminator is rejected.
 
+The supplied [Rust-expression helper](doc/RUST-EXPRESSION-HELPERS.md)
+collects lexical free names from native Syn expressions. Try
+`cargo run --example free-variables`.
+
 ```text
 CQ
   -- Basic HW1 --> RelationalPlan

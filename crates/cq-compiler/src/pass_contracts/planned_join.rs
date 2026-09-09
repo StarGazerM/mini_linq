@@ -52,7 +52,8 @@ pub(crate) fn check(
             .map(|rule| match rule {
                 Rule::Match { clause } | Rule::Bind { clause } | Rule::Guard { clause }
                     if source.program.query.body.get(*clause).is_some_and(|item| {
-                        *rule == cq_to_relational::ordered::rule(*clause, item)
+                        cq_to_relational::ordered::rule(*clause, item)
+                            .is_ok_and(|expected| *rule == expected)
                     }) =>
                 {
                     Ok(*clause)

@@ -250,3 +250,20 @@ wrapped_query!(Wrapped, x, accepts(x), format!("wrapped-{x}"));
 fn nested_dsl_macros_preserve_rust_syntax_contexts() {
     assert_eq!(Wrapped::run([(0,), (1,)]), vec![("wrapped-1".into(),)]);
 }
+
+macro_rules! local_value {
+    ($name:ident) => { let $name = 3; };
+}
+query! {
+    struct MacroScope;
+    relation R(value: i32);
+    relation S(value: i32);
+    answer(x) :- R(x),
+        if { local_value!(later); later == 3 && *x > 0 },
+        S(later);
+}
+
+#[test]
+fn opaque_macros_can_bind_local_names_without_creating_cq_dependencies() {
+    assert_eq!(MacroScope::run([(-1,), (2,)], [(99,)]), vec![(2,)]);
+}

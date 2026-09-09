@@ -112,7 +112,7 @@ impl Atom {
     }
 }
 
-/// One positive conjunctive query, with a nonempty syntactic body.
+/// One query, with a nonempty syntactic body.
 ///
 /// ```text
 /// Query ::= Atom ":-" BodyItem ("," BodyItem)* ";"
@@ -134,6 +134,7 @@ pub struct Query {
 ///
 /// ```text
 /// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
+///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)*] ")" "in" Atom
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum BodyItem {
@@ -141,12 +142,10 @@ pub enum BodyItem {
     Filter(Filter),
     #[parse(peek = Token![let])]
     Let(Box<Let>),
-    // OPTIONAL HW4 — STUDENT 1/6 (IR): add the more-specific Ascent-style
-    // Negation and Aggregate variants *before* this positive-atom fallback,
-    // reusing Atom and its Rust expression arguments. `agg` is
-    // also an identifier token, so enum parse order matters. Update this
-    // file's BodyItem/Query/Module EBNF and examples with the grammar. Follow
-    // doc/HW4-OPTIONAL.md exactly.
+    #[parse(peek = Token![!])]
+    Negation(Negation),
+    #[parse(peek = kw::agg)]
+    Aggregate(Box<Aggregate>),
     #[parse(peek = Ident)]
     Positive { atom: Atom },
 }
@@ -176,11 +175,50 @@ pub struct TypeAnnotation {
     pub ty: Type,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Negation {
+    pub not_token: Token![!],
+    pub atom: Atom,
+}
+
+/// The names in `arguments` are aggregate-local binders, as in Ascent.
+/// Rust expressions occur in the aggregator and the input atom's arguments.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Aggregate {
+    pub agg_token: kw::agg,
+    #[parse(syn::Pat::parse_multi)]
+    pub pattern: syn::Pat,
+    pub eq_token: Token![=],
+    pub aggregator: Aggregator,
+    #[syn(parenthesized)]
+    pub arguments_paren: token::Paren,
+    #[syn(in = arguments_paren)]
+    #[parse(CommaList::parse_terminated)]
+    pub arguments: CommaList<Ident>,
+    pub in_token: Token![in],
+    pub atom: Atom,
+}
+
+/// `sum(value)` or `(make_aggregator(config))(value)`.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum Aggregator {
+    #[parse(peek = token::Paren)]
+    Expression {
+        #[syn(parenthesized)]
+        paren_token: token::Paren,
+        #[syn(in = paren_token)]
+        expression: syn::Expr,
+    },
+    Path {
+        path: syn::Path,
+    },
+}
+
 impl BodyItem {
     pub fn atom(&self) -> Option<&Atom> {
         match self {
             Self::Positive { atom } => Some(atom),
-            Self::Filter(_) | Self::Let(_) => None,
+            _ => None,
         }
     }
     pub fn positive_atom(&self) -> syn::Result<&Atom> {
@@ -251,7 +289,7 @@ pub(crate) fn check_program(program: &Program) -> syn::Result<()> {
                         .into_iter()
                         .map(|(id, ty)| (symbol_name(&id), ty)),
                 ),
-                BodyItem::Filter(_) => (),
+                BodyItem::Filter(_) | BodyItem::Negation(_) | BodyItem::Aggregate(_) => (),
             }
         }
         for arg in &program.query.head.args {
@@ -317,7 +355,7 @@ fn check_query(
         .flat_map(|item| match item {
             BodyItem::Positive { atom } => atom.variables().cloned().collect(),
             BodyItem::Let(binding) => rust::bindings(&binding.pattern),
-            BodyItem::Filter(_) => Vec::new(),
+            BodyItem::Filter(_) | BodyItem::Negation(_) | BodyItem::Aggregate(_) => Vec::new(),
         })
         .map(|id| symbol_name(&id))
         .collect();
@@ -346,6 +384,12 @@ fn check_query(
                         check_uses(arg, &body_variables)?;
                     }
                 }
+            }
+            BodyItem::Negation(_) | BodyItem::Aggregate(_) => {
+                return Err(syn::Error::new_spanned(
+                    item,
+                    "negation and aggregation require the extended CQ semantic contract",
+                ));
             }
             BodyItem::Filter(filter) => check_uses(&filter.condition, &body_variables)?,
             BodyItem::Let(binding) => {
