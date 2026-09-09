@@ -12,7 +12,7 @@ fn triangle_pipeline_tokens() -> proc_macro2::TokenStream {
         );
         iter3 = project iter2 as (x, y, z,) yield ((x.clone(), y.clone(), z.clone(),));
         iter4 = distinct iter3;
-        return iter4.
+        return iter4;
     }
 }
 
@@ -75,7 +75,7 @@ fn unit_is_an_explicit_named_one_row_source() {
         iter1 = filter iter0 as () if (ready());
         iter2 = project iter1 as () yield ((0,));
         iter3 = distinct iter2;
-        return iter3.
+        return iter3;
     })
     .unwrap();
 
@@ -94,13 +94,13 @@ fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
             iter0 = scan [x] in (rows.iter()) yield (x,);
             iter1 = project iter0 as (x,) yield ((x.clone(),));
             iter2 = distinct iter1;
-            return iter2.
+            return iter2;
         },
         quote! {
             iter0 = scan (x, y,) in (rows.iter()) yield (y, x,);
             iter1 = project iter0 as (y, x,) yield ((x.clone(), y.clone(),));
             iter2 = distinct iter1;
-            return iter2.
+            return iter2;
         },
         quote! {
             iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);
@@ -108,7 +108,7 @@ fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
                 yield (x, y, z,);
             iter2 = project iter1 as (x, y, z,) yield ((x.clone(), y.clone(), z.clone(),));
             iter3 = distinct iter2;
-            return iter3.
+            return iter3;
         },
         quote! {
             iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);
@@ -116,38 +116,38 @@ fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
                 yield (x, y, z,);
             iter2 = project iter1 as (x, y, z,) yield ((x.clone(), y.clone(), z.clone(),));
             iter3 = distinct iter2;
-            return iter3.
+            return iter3;
         },
         quote! {
             iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);
             iter1 = join iter0 as (x, y,) with (z,) in (lookup(y.clone())) yield (x, z,);
             iter2 = project iter1 as (x, z,) yield ((x.clone(), z.clone(),));
             iter3 = distinct iter2;
-            return iter3.
+            return iter3;
         },
         quote! {
             iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);
             iter1 = filter iter0 as (y, x,) if (keep(x.clone(), y.clone()));
             iter2 = project iter1 as (x, y,) yield ((x.clone(), y.clone(),));
             iter3 = distinct iter2;
-            return iter3.
+            return iter3;
         },
         quote! {
             iter0 = scan (x,) in (rows.iter()) yield (x,);
             iter1 = project iter0 as (x,) yield ((x.clone(),));
             iter2 = distinct iter1;
-            return iter0.
+            return iter0;
         },
         quote! {
             iter0 = scan (x,) in (rows.iter()) yield (x,);
             iter1 = project iter0 as (x,) yield ((x.clone(),));
-            return iter1.
+            return iter1;
         },
         quote! {
             scan0 = scan (x,) in (rows.iter()) yield (x,);
             iter1 = project scan0 as (x,) yield ((x.clone(),));
             iter2 = distinct iter1;
-            return iter2.
+            return iter2;
         },
     ];
 

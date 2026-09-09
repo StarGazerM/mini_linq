@@ -15,5 +15,5 @@
         ),
         RetailH21PositiveOrders(order_key, _customer_key),
         RetailH21PositiveNation(nation_key, _region_key),
-        RetailH21PositiveLineitem(order_key, _other_part, other_supplier, _other_line).
+        RetailH21PositiveLineitem(order_key, _other_part, other_supplier, _other_line);
 }

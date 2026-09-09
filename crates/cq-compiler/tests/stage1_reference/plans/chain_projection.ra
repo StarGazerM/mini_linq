@@ -2,7 +2,7 @@ struct ChainProjection;
 relation R(first: i32, second: i32);
 relation S(first: i32, second: i32);
 relation T(first: i32, second: i32);
-answer(a, d) :- R(a, b), S(b, c), T(c, d).
+answer(a, d) :- R(a, b), S(b, c), T(c, d);
 relational {
     r = rename R {first -> a, second -> b};
     s = rename S {first -> b, second -> c};
@@ -11,5 +11,5 @@ relational {
     live = project rs keep {a, c};
     rst = natural_join live with t;
     result = project rst keep {a, d};
-    output result as answer(a, d).
+    output result as answer(a, d);
 }

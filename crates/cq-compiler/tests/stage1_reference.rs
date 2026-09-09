@@ -325,7 +325,7 @@ fn duplicate_occurrences_retain_separate_nodes_and_tuple_tests() {
     let module = parse(
         &fixture
             .plan
-            .replace("S(x, y).", "R(x, y).")
+            .replace("S(x, y);", "R(x, y);")
             .replace("s = rename S", "s = rename R"),
     );
     assert_eq!(module.program.query.body.len(), 2);

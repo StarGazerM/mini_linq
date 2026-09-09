@@ -273,9 +273,9 @@ fn an_assembly_operand_cannot_be_consumed_twice() {
 #[test]
 fn duplicate_written_occurrences_have_distinct_identities() {
     let plan = parse(
-        "struct P; relation R(x: i32); answer(x) :- R(x), R(x).
+        "struct P; relation R(x: i32); answer(x) :- R(x), R(x);
         relational { a = rename R {x -> x}; b = rename R {x -> x};
-        both = natural_join a with b; output both as answer(x). }",
+        both = natural_join a with b; output both as answer(x); }",
     );
     let source = source(&plan);
     let mut witness = Witness {
@@ -516,7 +516,7 @@ fn singleton_tree_requires_no_reduction_steps() {
 #[test]
 fn leaf_columns_are_pruned_before_combination() {
     let query = "struct P; relation R(x: i32, unused: i32); relation S(x: i32);
-        answer(x) :- R(x, unused), S(x).";
+        answer(x) :- R(x, unused), S(x);";
     let source: cq::Module = syn::parse_str(query).unwrap();
     let witness = Witness {
         occurrences: vec!["r".into(), "s".into()],
@@ -526,7 +526,7 @@ fn leaf_columns_are_pruned_before_combination() {
         "{query} relational {{
         r = rename R {{x -> x, unused -> unused}}; s = rename S {{x -> x}};
         j = natural_join r with s; result = project j keep {{x}};
-        output result as answer(x). }}"
+        output result as answer(x); }}"
     ));
     let error =
         planned_ra::verify(&source, wrong, &witness, policy(ProjectionPolicy::Eager)).unwrap_err();
@@ -535,7 +535,7 @@ fn leaf_columns_are_pruned_before_combination() {
         "{query} relational {{
         r = rename R {{x -> x, unused -> unused}}; s = rename S {{x -> x}};
         live = project r keep {{x}}; result = natural_join live with s;
-        output result as answer(x). }}"
+        output result as answer(x); }}"
     ));
     planned_ra::verify(&source, pruned, &witness, policy(ProjectionPolicy::Eager)).unwrap();
 }

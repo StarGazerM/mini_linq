@@ -31,7 +31,7 @@ impl PlannedExample {
                     iter0 = scan(v0, v1,) in (__left.iter()) yield (v0, v1,); iter1 =
                     project iter0 as (v0, v1,) yield ((::core::clone::Clone::clone(v0),
                     ::core::clone::Clone::clone(v1),)); iter2 = distinct iter1; return
-                    iter2.
+                    iter2;
                 },
             )
         };
@@ -48,7 +48,7 @@ impl PlannedExample {
                     iter0 = scan(v1, v2,) in (__left.iter()) yield (v1, v2,); iter1 =
                     project iter0 as (v1, v2,) yield ((::core::clone::Clone::clone(v1),
                     ::core::clone::Clone::clone(v2),)); iter2 = distinct iter1; return
-                    iter2.
+                    iter2;
                 },
             )
         };
@@ -62,7 +62,7 @@ impl PlannedExample {
                     * v2; value } > 0i32); iter2 = project iter1 as (v1, v2,) yield
                     ((::core::clone::Clone::clone(v1),
                     ::core::clone::Clone::clone(v2),)); iter3 = distinct iter2; return
-                    iter3.
+                    iter3;
                 },
             )
         };
@@ -78,7 +78,7 @@ impl PlannedExample {
                     1); __index.contains(& (::core::clone::Clone::clone(v1),)) }); iter2
                     = project iter1 as (v1, v2,) yield ((::core::clone::Clone::clone(v1),
                     ::core::clone::Clone::clone(v2),)); iter3 = distinct iter2; return
-                    iter3.
+                    iter3;
                 },
             )
         };
@@ -99,7 +99,7 @@ impl PlannedExample {
                     1); __index.contains(& (::core::clone::Clone::clone(v1),)) }); iter2
                     = project iter1 as (v0, v1,) yield ((::core::clone::Clone::clone(v0),
                     ::core::clone::Clone::clone(v1),)); iter3 = distinct iter2; return
-                    iter3.
+                    iter3;
                 },
             )
         };
@@ -119,7 +119,7 @@ impl PlannedExample {
                     iter0 = scan(v1, v2,) in (__left.iter()) yield (v1, v2,); iter1 =
                     project iter0 as (v1, v2,) yield
                     ((::core::clone::Clone::clone(v1),)); iter2 = distinct iter1; return
-                    iter2.
+                    iter2;
                 },
             )
         };
@@ -136,7 +136,7 @@ impl PlannedExample {
                     v0,); iter2 = project iter1 as (v1, v0,) yield ({ __pairs_ref
                     .set(__pairs_ref.get() + 1); (::core::clone::Clone::clone(v0),
                     ::core::clone::Clone::clone(v1),) }); iter3 = distinct iter2; return
-                    iter3.
+                    iter3;
                 },
             )
         };
@@ -148,7 +148,7 @@ impl PlannedExample {
                     iter0 = scan(v0, v1,) in (__left.iter()) yield (v0, v1,); iter1 =
                     project iter0 as (v0, v1,) yield
                     ((::core::clone::Clone::clone(v0),)); iter2 = distinct iter1; return
-                    iter2.
+                    iter2;
                 },
             )
         };

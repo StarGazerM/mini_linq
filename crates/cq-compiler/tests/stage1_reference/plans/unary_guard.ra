@@ -1,11 +1,11 @@
 struct UnaryGuard;
 relation R(first: i32, second: i32);
 relation Approved(value: i32);
-answer(x) :- R(x, y), Approved(y).
+answer(x) :- R(x, y), Approved(y);
 relational {
     r = rename R {first -> x, second -> y};
     approved = rename Approved {value -> y};
     kept = natural_join r with approved;
     result = project kept keep {x};
-    output result as answer(x).
+    output result as answer(x);
 }

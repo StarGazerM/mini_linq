@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 
-use proc_macro2::{Ident, TokenStream};
-use quote::{ToTokens, TokenStreamExt};
-use syn::parse::{Parse, ParseStream};
+use proc_macro2::Ident;
+use quote::ToTokens;
 use syn::{Expr, Pat, Token};
 
 use crate::symbol_name;
@@ -29,7 +28,7 @@ pub mod kw {
 /// iter1 = join iter0 as (x, y,) with (z,) in (lookup(y.clone())) yield (x, y, z,);
 /// iter2 = project iter1 as (x, y, z,) yield ((x.clone(), y.clone(), z.clone(),));
 /// iter3 = distinct iter2;
-/// return iter3.
+/// return iter3;
 /// ```
 ///
 /// ```text
@@ -43,39 +42,13 @@ pub mod kw {
 /// Filter     ::= "filter" StreamId "as" BindingPat "if" "(" RustExpr ")"
 /// Project    ::= "project" StreamId "as" BindingPat "yield" "(" RustExpr ")"
 /// Distinct   ::= "distinct" StreamId
-/// Return     ::= "return" StreamId "."
+/// Return     ::= "return" StreamId ";"
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Pipeline {
+    #[syn(repeat, until = Token![return])]
     pub definitions: Vec<Definition>,
     pub return_stream: ReturnStream,
-}
-
-impl Parse for Pipeline {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut definitions = Vec::new();
-        while !input.peek(Token![return]) {
-            if input.is_empty() {
-                return Err(input.error("named iterator plan must end with `return stream.`"));
-            }
-            definitions.push(input.parse()?);
-        }
-        let return_stream = input.parse()?;
-        if !input.is_empty() {
-            return Err(input.error("unexpected tokens after named iterator plan"));
-        }
-        Ok(Self {
-            definitions,
-            return_stream,
-        })
-    }
-}
-
-impl ToTokens for Pipeline {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.append_all(&self.definitions);
-        self.return_stream.to_tokens(tokens);
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -86,47 +59,20 @@ pub struct Definition {
     pub semi_token: Token![;],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Operator {
+    #[parse(peek = kw::unit)]
     Unit(Box<Unit>),
+    #[parse(peek = kw::scan)]
     Scan(Box<Scan>),
+    #[parse(peek = kw::join)]
     Join(Box<Join>),
+    #[parse(peek = kw::filter)]
     Filter(Box<Filter>),
+    #[parse(peek = kw::project)]
     Project(Box<Project>),
+    #[parse(peek = kw::distinct)]
     Distinct(Box<Distinct>),
-}
-
-impl Parse for Operator {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if input.peek(kw::unit) {
-            input.parse().map(Box::new).map(Self::Unit)
-        } else if input.peek(kw::scan) {
-            input.parse().map(Box::new).map(Self::Scan)
-        } else if input.peek(kw::join) {
-            input.parse().map(Box::new).map(Self::Join)
-        } else if input.peek(kw::filter) {
-            input.parse().map(Box::new).map(Self::Filter)
-        } else if input.peek(kw::project) {
-            input.parse().map(Box::new).map(Self::Project)
-        } else if input.peek(kw::distinct) {
-            input.parse().map(Box::new).map(Self::Distinct)
-        } else {
-            Err(input.error("expected `unit`, `scan`, `join`, `filter`, `project`, or `distinct`"))
-        }
-    }
-}
-
-impl ToTokens for Operator {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            Self::Unit(operator) => operator.to_tokens(tokens),
-            Self::Scan(operator) => operator.to_tokens(tokens),
-            Self::Join(operator) => operator.to_tokens(tokens),
-            Self::Filter(operator) => operator.to_tokens(tokens),
-            Self::Project(operator) => operator.to_tokens(tokens),
-            Self::Distinct(operator) => operator.to_tokens(tokens),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -207,7 +153,7 @@ pub struct Distinct {
 pub struct ReturnStream {
     pub return_token: Token![return],
     pub stream: Ident,
-    pub dot_token: Token![.],
+    pub semi_token: Token![;],
 }
 
 pub mod contract {

@@ -12,7 +12,7 @@ fn annotated_query() -> rust_access_plan::Plan {
             Left(x) => for (x,) in (left.iter()),
             Right(x, y) => for (y,) in
                 (right.get(&(::core::clone::Clone::clone(x),)).into_iter().flatten()),
-            Different(x, y) => if (*x != *y).
+            Different(x, y) => if (*x != *y);
     })
     .unwrap();
     rust_access_plan::contract::check(&source).unwrap();
@@ -35,7 +35,7 @@ fn pull_exposes_every_binary_operator_and_intermediate_binding() {
             ::core::clone::Clone::clone(y),
         ));
         iter4 = distinct iter3;
-        return iter4.
+        return iter4;
     })
     .unwrap();
 
@@ -139,7 +139,7 @@ fn aggregate_style_identifier_items_remain_an_explicit_join_boundary() {
             total,
         ));
         iter3 = distinct iter2;
-        return iter3.
+        return iter3;
     })
     .unwrap();
     iterator_pipeline::contract::check(&plan).unwrap();

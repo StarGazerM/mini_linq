@@ -15,7 +15,7 @@ fn ascent_body_items_derive_only_the_correlated_index_columns() {
         spend(person, total) :-
             Person(person),
             !Blocked(person, _),
-            agg total = sum(amount) in Purchase(person, _, amount).
+            agg total = sum(amount) in Purchase(person, _, amount);
         },
         &[("Blocked", &[0]), ("Purchase", &[0])],
     );
@@ -28,7 +28,7 @@ fn empty_and_full_keys_keep_their_existing_index_requirement_meaning() {
             struct FullKeyNegation;
             relation Person(c0: i32);
             relation Blocked(c0: i32);
-            allowed(person) :- Person(person), !Blocked(person).
+            allowed(person) :- Person(person), !Blocked(person);
         },
         &[("Blocked", &[0])],
     );
@@ -40,7 +40,7 @@ fn empty_and_full_keys_keep_their_existing_index_requirement_meaning() {
             relation Values(c0: i32, c1: i32);
             global(total) :-
                 !Blocker(_),
-                agg total = sum(value) in Values(_, value).
+                agg total = sum(value) in Values(_, value);
         },
         &[],
     );
@@ -52,7 +52,7 @@ fn leading_global_negation_uses_unit_before_filter_and_join() {
         global(total) => ((total,)) :-
             !Blocker(_) => if (!index0.iter().next().is_some()),
             agg total = sum(value) in Values(_, value) =>
-                for total in (aggregate_total()).
+                for total in (aggregate_total());
     })
     .expect("OPTIONAL HW4: parse negation and aggregation in RustAccessPlan");
     rust_access_plan::contract::check(&source)
@@ -65,7 +65,7 @@ fn leading_global_negation_uses_unit_before_filter_and_join() {
         iter2 = join iter1 as () with total in (aggregate_total()) yield (total,);
         iter3 = project iter2 as (total,) yield ((total,));
         iter4 = distinct iter3;
-        return iter4.
+        return iter4;
     })
     .unwrap();
 

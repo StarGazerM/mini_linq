@@ -4,7 +4,7 @@ use cq_ir::{index_requirements as ir, symbol_name};
 fn query() -> cq::Module {
     syn::parse_str(
         "pub struct Indexed; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-        answer(a,c) :- R(a,b), S(b,c).",
+        answer(a,c) :- R(a,b), S(b,c);",
     )
     .unwrap()
 }
@@ -120,11 +120,11 @@ fn base_and_result_namespaces_are_distinct_and_r1_rejects_result_indexes() {
     let collision: ir::Module = syn::parse_quote! {
         pub struct Collision;
         relation r(a:i32,b:i32);
-        answer(a) :- r(a,b).
+        answer(a) :- r(a,b);
         relational {
             r=rename r {a->b,b->a};
             out=project r keep {a};
-            output out as answer(a).
+            output out as answer(a);
         }
         indexes {r[0]; @r[0];}
     };

@@ -64,7 +64,7 @@ relation Purchase(c0: i32, c1: i32, c2: i32);
 spend(person, total) :-
     Person(person),
     !Blocked(person, _),
-    agg total = sum(amount) in Purchase(person, _, amount).
+    agg total = sum(amount) in Purchase(person, _, amount);
 ```
 
 For set-valued inputs
@@ -95,7 +95,7 @@ relation Blocked(c0: i32);
 relation Purchase(c0: i32, c1: i32);
 summary(total) :-
     !Blocked(_),
-    agg total = sum(amount) in Purchase(_, amount).
+    agg total = sum(amount) in Purchase(_, amount);
 ```
 
 Both clauses have an empty correlation environment. If `Blocked` is empty and
@@ -109,7 +109,7 @@ below; students do not invent a dummy positive relation.
 The existing parser accepts:
 
 ```text
-Query          ::= Atom ":-" BodyItem ("," BodyItem)* ("." | ";")
+Query          ::= Atom ":-" BodyItem ("," BodyItem)* ";"
 BodyItem       ::= Atom | "if" RustExpr | "let" RustPat "=" RustExpr
                  | Negation | Aggregate
 Negation       ::= "!" Atom
@@ -209,7 +209,7 @@ r2 = antisemijoin r0 with r1;
 r3 = rename Purchase {c0 -> person, c1 -> purchase_anon0, c2 -> amount};
 r4 = aggregate_apply r2 with r3 value amount using sum into total;
 r5 = project r4 keep {person, total};
-output r5 as spend(person, total).
+output r5 as spend(person, total);
 ```
 
 The complete logical residual for the global-clause example is exactly:
@@ -220,7 +220,7 @@ relation Blocked(c0: i32);
 relation Purchase(c0: i32, c1: i32);
 summary(total) :-
     !Blocked(_),
-    agg total = sum(amount) in Purchase(_, amount).
+    agg total = sum(amount) in Purchase(_, amount);
 relational {
     r0 = unit;
     r1 = rename Blocked {c0 -> blocked_anon0};
@@ -228,7 +228,7 @@ relational {
     r3 = rename Purchase {c0 -> purchase_anon0, c1 -> amount};
     r4 = aggregate_apply r2 with r3 value amount using sum into total;
     r5 = project r4 keep {total};
-    output r5 as summary(total).
+    output r5 as summary(total);
 }
 ```
 
@@ -307,7 +307,7 @@ relation Purchase(c0: i32, c1: i32, c2: i32);
 spend(person, total) :-
     Person(person),
     !Blocked(person, _),
-    agg total = sum(amount) in Purchase(person, _, amount).
+    agg total = sum(amount) in Purchase(person, _, amount);
 relational {
     r0 = rename Person {c0 -> person};
     r1 = rename Blocked {c0 -> person, c1 -> blocked_anon0};
@@ -315,7 +315,7 @@ relational {
     r3 = rename Purchase {c0 -> person, c1 -> purchase_anon0, c2 -> amount};
     r4 = aggregate_apply r2 with r3 value amount using sum into total;
     r5 = project r4 keep {person, total};
-    output r5 as spend(person, total).
+    output r5 as spend(person, total);
 }
 indexes {
     Blocked[0];
@@ -332,7 +332,7 @@ relation Blocked(c0: i32);
 relation Purchase(c0: i32, c1: i32);
 summary(total) :-
     !Blocked(_),
-    agg total = sum(amount) in Purchase(_, amount).
+    agg total = sum(amount) in Purchase(_, amount);
 relational {
     r0 = unit;
     r1 = rename Blocked {c0 -> blocked_anon0};
@@ -340,7 +340,7 @@ relational {
     r3 = rename Purchase {c0 -> purchase_anon0, c1 -> amount};
     r4 = aggregate_apply r2 with r3 value amount using sum into total;
     r5 = project r4 keep {total};
-    output r5 as summary(total).
+    output r5 as summary(total);
 }
 indexes {}
 ```
@@ -413,7 +413,7 @@ focuses on the new occurrence-to-access relation:
                     .expect("MiniLinq sum overflow");
                 ::std::primitive::i32::try_from(wide_total)
                     .expect("MiniLinq sum overflow")
-            })).
+            }));
 }
 ```
 
@@ -476,7 +476,7 @@ above becomes:
         total,
     ));
     iter4 = distinct iter3;
-    return iter4.
+    return iter4;
 }
 ```
 

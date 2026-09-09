@@ -30,7 +30,7 @@ impl PlannedExample {
                 ::mini_linq::pull! {
                     output(v0, v1) => ((::core::clone::Clone::clone(v0),
                     ::core::clone::Clone::clone(v1),)) : - rows(v0, v1) => for (v0, v1,)
-                    in (__left.iter()).
+                    in (__left.iter());
                 },
             )
         };
@@ -46,7 +46,7 @@ impl PlannedExample {
                 ::mini_linq::pull! {
                     output(v1, v2) => ((::core::clone::Clone::clone(v1),
                     ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,)
-                    in (__left.iter()).
+                    in (__left.iter());
                 },
             )
         };
@@ -59,7 +59,7 @@ impl PlannedExample {
                     ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,)
                     in (__left.iter()), if ({ let value : ::core::primitive::i32 = * v2;
                     value } > 0i32) => if ({ let value : ::core::primitive::i32 = * v2;
-                    value } > 0i32).
+                    value } > 0i32);
                 },
             )
         };
@@ -74,7 +74,7 @@ impl PlannedExample {
                     ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,)
                     in (__left.iter()), key(v1) => if ({ __probes_ref.set(__probes_ref
                     .get() + 1); __index.contains(& (::core::clone::Clone::clone(v1),))
-                    }).
+                    });
                 },
             )
         };
@@ -94,7 +94,7 @@ impl PlannedExample {
                     ::core::clone::Clone::clone(v1),)) : - rows(v0, v1) => for (v0, v1,)
                     in (__left.iter()), key(v1) => if ({ __probes_ref.set(__probes_ref
                     .get() + 1); __index.contains(& (::core::clone::Clone::clone(v1),))
-                    }).
+                    });
                 },
             )
         };
@@ -112,7 +112,7 @@ impl PlannedExample {
             ::core::iter::Iterator::collect(
                 ::mini_linq::pull! {
                     output(v1) => ((::core::clone::Clone::clone(v1),)) : - rows(v1, v2)
-                    => for (v1, v2,) in (__left.iter()).
+                    => for (v1, v2,) in (__left.iter());
                 },
             )
         };
@@ -127,7 +127,7 @@ impl PlannedExample {
                     (::core::clone::Clone::clone(v0), ::core::clone::Clone::clone(v1),)
                     }) : - rows(v1) => for (v1,) in (__left.iter()), rows(v0, v1) => for
                     (v0,) in (__index.get(& (::core::clone::Clone::clone(v1),))
-                    .into_iter().flatten()).
+                    .into_iter().flatten());
                 },
             )
         };
@@ -137,7 +137,7 @@ impl PlannedExample {
             ::core::iter::Iterator::collect(
                 ::mini_linq::pull! {
                     output(v0) => ((::core::clone::Clone::clone(v0),)) : - rows(v0, v1)
-                    => for (v0, v1,) in (__left.iter()).
+                    => for (v0, v1,) in (__left.iter());
                 },
             )
         };

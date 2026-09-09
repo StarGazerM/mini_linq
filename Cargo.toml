@@ -32,7 +32,7 @@ proc-macro2 = "1"
 prettyplease = "0.2"
 quote = "1"
 syn = { version = "2", features = ["extra-traits", "full", "visit"] }
-syn_derive = { git = "https://github.com/StarGazerM/syn_derive", rev = "4782eed9cef0a79c5d0e6be2fa945b2fc5f30ede" }
+syn_derive = { git = "https://github.com/StarGazerM/syn_derive", rev = "0bca09575ae6d7f27a2b3e6b8a6068d4c8d73219" }
 
 [features]
 duckdb-example = ["dep:duckdb"]

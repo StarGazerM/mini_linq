@@ -6,27 +6,27 @@ use mini_linq::mini_linq;
 mini_linq! {
     pub struct HygieneCollisionProgram;
     relation R(c0: ::std::primitive::i32, c1: ::std::primitive::i32);
-    answer(result, relation0) :- R(result, relation0).
+    answer(result, relation0) :- R(result, relation0);
 }
 
 mini_linq! {
     pub struct Vec;
     relation Seed(c0: ::std::primitive::i32);
     relation Edge(c0: ::std::primitive::i32, c1: ::std::primitive::i32);
-    answer(x, z) :- Seed(x), Edge(x, z).
+    answer(x, z) :- Seed(x), Edge(x, z);
 }
 
 mini_linq! {
     pub struct r#i32;
     relation R(c0: ::std::primitive::i32);
-    answer(x) :- R(x).
+    answer(x) :- R(x);
 }
 
 mini_linq! {
     pub struct UnusedInputProgram;
     relation Used(c0: ::std::primitive::i32);
     relation Unused(c0: ::std::primitive::i32);
-    answer(x) :- Used(x).
+    answer(x) :- Used(x);
 }
 
 #[test]

@@ -13,5 +13,5 @@
         RetailH05Lineitem(order_key, _part_key, supplier_key, _line_number),
         RetailH05Supplier(supplier_key, nation_key),
         RetailH05Nation(nation_key, region_key),
-        RetailH05Region(region_key).
+        RetailH05Region(region_key);
 }

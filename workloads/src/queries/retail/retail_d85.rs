@@ -23,5 +23,5 @@
         RetailD85CustomerDemo(returning_demo),
         RetailD85CustomerAddress(address_key),
         RetailD85DateDim(sold_date),
-        RetailD85Reason(reason_key).
+        RetailD85Reason(reason_key);
 }

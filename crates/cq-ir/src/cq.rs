@@ -147,7 +147,7 @@ impl Atom {
 /// One positive conjunctive query, with a nonempty syntactic body.
 ///
 /// ```text
-/// Query ::= Atom ":-" BodyItem ("," BodyItem)* ("." | ";")
+/// Query ::= Atom ":-" BodyItem ("," BodyItem)* ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Query {
@@ -156,17 +156,7 @@ pub struct Query {
     pub minus_token: Token![-],
     #[parse(CommaList::parse_separated_nonempty)]
     pub body: CommaList<BodyItem>,
-    pub end: RuleEnd,
-}
-
-/// Semicolon permits an unparenthesized Rust expression at the end of a rule
-/// without confusing `1.` (a Rust float literal) with the DSL's legacy period.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub enum RuleEnd {
-    #[parse(peek = Token![.])]
-    Dot(Token![.]),
-    #[parse(peek = Token![;])]
-    Semi(Token![;]),
+    pub semi_token: Token![;],
 }
 
 /// One source-ordered logical body clause.
@@ -236,7 +226,7 @@ impl BodyItem {
 /// relation R(src: i32, dst: i32);
 /// relation S(src: i32, dst: i32);
 /// relation T(src: i32, dst: i32);
-/// triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).
+/// triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Module {

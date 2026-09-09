@@ -3,5 +3,5 @@
     relation Left(c0: i32);
     relation Right(c0: i32);
 
-    intersection(x) :- Left(x), Right(x).
+    intersection(x) :- Left(x), Right(x);
 }

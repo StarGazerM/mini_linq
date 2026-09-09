@@ -1626,7 +1626,7 @@ mod tests {
             r#"
 struct ReverseEdgeProgram;
 relation Edge(c0: i32, c1: i32);
-reverse_edge(x, y) :- Edge(x, y), Edge(y, x).
+reverse_edge(x, y) :- Edge(x, y), Edge(y, x);
 "#,
         )
         .unwrap();
@@ -1651,7 +1651,7 @@ reverse_edge(x, y) :- Edge(x, y), Edge(y, x).
             r#"
 struct DuplicateMembershipProgram;
 relation R(c0: i32);
-duplicate(x) :- R(x), R(x).
+duplicate(x) :- R(x), R(x);
 "#,
         )
         .unwrap();

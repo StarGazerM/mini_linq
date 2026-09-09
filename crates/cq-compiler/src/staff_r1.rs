@@ -103,7 +103,7 @@ pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
         #program
         relational {
             #(#definitions)*
-            output #project as #head.
+            output #project as #head;
         }
     })
 }
@@ -718,7 +718,7 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
         .collect::<Vec<_>>();
     let access_plan = quote! {
         #output_atom => ((#(#output_variables,)*)) :-
-            #(#accesses),*.
+            #(#accesses),*;
     };
 
     syn::parse2(quote! {
@@ -946,7 +946,7 @@ mod tests {
             relation R(src: i32, dst: i32);
             relation S(src: i32, dst: i32);
             relation T(src: i32, dst: i32);
-            triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).
+            triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
         })
         .unwrap();
         cq::contract::check(&source).unwrap();
@@ -964,7 +964,7 @@ mod tests {
             relation R(src: i32, dst: i32);
             relation S(src: i32, dst: i32);
             relation T(src: i32, dst: i32);
-            answer(x, w) :- R(x, y), S(y, z), T(z, w).
+            answer(x, w) :- R(x, y), S(y, z), T(z, w);
             relational {
                 r0 = rename T {src -> z, dst -> w};
                 r1 = rename S {src -> y, dst -> z};
@@ -972,7 +972,7 @@ mod tests {
                 r3 = rename R {src -> x, dst -> y};
                 r4 = natural_join r2 with r3;
                 r5 = project r4 keep {x, w};
-                output r5 as answer(x, w).
+                output r5 as answer(x, w);
             }
         })
         .unwrap();
@@ -1028,21 +1028,21 @@ mod tests {
             quote! {
                 struct MissingProject;
                 relation R(src: i32, dst: i32);
-                answer(x, y) :- R(x, y).
+                answer(x, y) :- R(x, y);
                 relational {
                     r0 = rename R {src -> x, dst -> y};
-                    output r0 as answer(x, y).
+                    output r0 as answer(x, y);
                 }
             },
             quote! {
                 struct NonfinalProject;
                 relation R(src: i32, dst: i32);
-                answer(x) :- R(x, y).
+                answer(x) :- R(x, y);
                 relational {
                     r0 = rename R {src -> x, dst -> y};
                     r1 = project r0 keep {x, y};
                     r2 = project r1 keep {x};
-                    output r2 as answer(x).
+                    output r2 as answer(x);
                 }
             },
         ];

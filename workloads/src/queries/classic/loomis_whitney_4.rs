@@ -9,5 +9,5 @@
         ABC(a, b, c),
         BCD(b, c, d),
         ACD(a, c, d),
-        ABD(a, b, d).
+        ABD(a, b, d);
 }

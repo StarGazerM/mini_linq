@@ -24,5 +24,5 @@
         RetailD72InnerItem(item_key),
         RetailD72InnerCustomerDemo(customer_demo),
         RetailD72InnerHouseholdDemo(household_demo),
-        RetailD72InnerDateDim(ship_date, _ship_week_sequence).
+        RetailD72InnerDateDim(ship_date, _ship_week_sequence);
 }

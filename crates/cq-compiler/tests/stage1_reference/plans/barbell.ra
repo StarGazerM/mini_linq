@@ -7,7 +7,7 @@ relation U(first: i32, second: i32);
 relation V(first: i32, second: i32);
 relation W(first: i32, second: i32);
 answer(x, y, z, u, v, w) :-
-    R(x, y), S(y, z), T(x, z), Bridge(x, u), U(u, v), V(v, w), W(u, w).
+    R(x, y), S(y, z), T(x, z), Bridge(x, u), U(u, v), V(v, w), W(u, w);
 relational {
     r = rename R {first -> x, second -> y};
     s = rename S {first -> y, second -> z};
@@ -22,5 +22,5 @@ relational {
     right_triangle = natural_join uv with w0;
     reached = natural_join left_triangle with bridge;
     result = natural_join reached with right_triangle;
-    output result as answer(x, y, z, u, v, w).
+    output result as answer(x, y, z, u, v, w);
 }

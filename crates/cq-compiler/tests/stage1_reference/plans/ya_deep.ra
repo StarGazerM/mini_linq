@@ -1,10 +1,10 @@
-// A depth-three join tree rooted at R. Semijoins use their RA definition.
+// A depth-three join tree rooted at R; Semijoins use their RA definition;
 struct YaDeep;
 relation R(first: i32, second: i32);
 relation S(first: i32, second: i32);
 relation T(first: i32, second: i32);
 relation U(first: i32, second: i32);
-answer(a, e) :- R(a, b), S(b, c), T(c, d), U(d, e).
+answer(a, e) :- R(a, b), S(b, c), T(c, d), U(d, e);
 relational {
     r0 = rename R {first -> a, second -> b};
     s0 = rename S {first -> b, second -> c};
@@ -28,5 +28,5 @@ relational {
     live_d = project rst keep {a, d};
     joined = natural_join live_d with u1;
     result = project joined keep {a, e};
-    output result as answer(a, e).
+    output result as answer(a, e);
 }

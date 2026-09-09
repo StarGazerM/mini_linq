@@ -10,14 +10,14 @@ mini_linq! {
     spend(person, total) :-
         Person(person),
         !Blocked(person, _),
-        agg total = sum(amount) in Purchase(person, _, amount).
+        agg total = sum(amount) in Purchase(person, _, amount);
 }
 
 mini_linq! {
     struct FullKeyNegationProgram;
     relation Person(c0: i32);
     relation Blocked(c0: i32);
-    allowed(person) :- Person(person), !Blocked(person).
+    allowed(person) :- Person(person), !Blocked(person);
 }
 
 mini_linq! {
@@ -26,7 +26,7 @@ mini_linq! {
     relation Values(c0: i32, c1: i32);
     global(total) :-
         !Blocker(_),
-        agg total = sum(value) in Values(_, value).
+        agg total = sum(value) in Values(_, value);
 }
 
 #[test]

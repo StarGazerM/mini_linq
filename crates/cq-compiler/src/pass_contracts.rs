@@ -688,20 +688,20 @@ mod tests {
             struct P;
             relation R(c0: i32, c1: i32);
             relation S(c0: i32, c1: i32);
-            answer(x, z) :- R(x, y), S(y, z).
+            answer(x, z) :- R(x, y), S(y, z);
         })
         .unwrap();
         let exact: relational_plan::Module = syn::parse2(quote! {
             struct P;
             relation R(c0: i32, c1: i32);
             relation S(c0: i32, c1: i32);
-            answer(x, z) :- R(x, y), S(y, z).
+            answer(x, z) :- R(x, y), S(y, z);
             relational {
                 r0 = rename R {c0 -> x, c1 -> y};
                 r1 = rename S {c0 -> y, c1 -> z};
                 r2 = natural_join r0 with r1;
                 r3 = project r2 keep {z, x};
-                output r3 as answer(x, z).
+                output r3 as answer(x, z);
             }
         })
         .unwrap();
@@ -711,13 +711,13 @@ mod tests {
             struct P;
             relation R(c0: i32, c1: i32);
             relation S(c0: i32, c1: i32);
-            answer(x, z) :- R(x, y), S(y, z).
+            answer(x, z) :- R(x, y), S(y, z);
             relational {
                 left = rename R {c0 -> x, c1 -> y};
                 right = rename S {c0 -> y, c1 -> z};
                 joined = natural_join left with right;
                 answer_rows = project joined keep {x, z};
-                output answer_rows as answer(x, z).
+                output answer_rows as answer(x, z);
             }
         })
         .unwrap();
@@ -734,13 +734,13 @@ mod tests {
             struct RawIndexedRelation;
             relation Seed(c0: i32);
             relation r#Edge(c0: i32, c1: i32);
-            answer(x, z) :- Seed(x), Edge(z, x).
+            answer(x, z) :- Seed(x), Edge(z, x);
             relational {
                 r0 = rename Seed {c0 -> x};
                 r1 = rename r#Edge {c0 -> z, c1 -> x};
                 r2 = natural_join r0 with r1;
                 r3 = project r2 keep {x, z};
-                output r3 as answer(x, z).
+                output r3 as answer(x, z);
             }
         })
         .unwrap();
@@ -774,13 +774,13 @@ mod tests {
             struct MissingRequiredIndex;
             relation Seed(c0: i32);
             relation Edge(c0: i32, c1: i32);
-            answer(x, z) :- Seed(x), Edge(z, x).
+            answer(x, z) :- Seed(x), Edge(z, x);
             relational {
                 r0 = rename Seed {c0 -> x};
                 r1 = rename Edge {c0 -> z, c1 -> x};
                 r2 = natural_join r0 with r1;
                 r3 = project r2 keep {x, z};
-                output r3 as answer(x, z).
+                output r3 as answer(x, z);
             }
             indexes {}
         })
@@ -792,13 +792,13 @@ mod tests {
             struct ExtraIndex;
             relation Seed(c0: i32);
             relation Edge(c0: i32, c1: i32);
-            answer(x, z) :- Seed(x), Edge(z, x).
+            answer(x, z) :- Seed(x), Edge(z, x);
             relational {
                 r0 = rename Seed {c0 -> x};
                 r1 = rename Edge {c0 -> z, c1 -> x};
                 r2 = natural_join r0 with r1;
                 r3 = project r2 keep {x, z};
-                output r3 as answer(x, z).
+                output r3 as answer(x, z);
             }
             indexes { Edge[0]; Edge[1]; }
         })
@@ -809,11 +809,11 @@ mod tests {
         let row_only: index_requirements::Module = syn::parse2(quote! {
             struct RowOnly;
             relation R(c0: i32, c1: i32);
-            answer(x) :- R(x, y).
+            answer(x) :- R(x, y);
             relational {
                 r0 = rename R {c0 -> x, c1 -> y};
                 r1 = project r0 keep {x};
-                output r1 as answer(x).
+                output r1 as answer(x);
             }
             indexes {}
         })
@@ -829,7 +829,7 @@ mod tests {
             relation R(c0: i32, c1: i32);
             relation S(c0: i32, c1: i32);
             relation T(c0: i32, c1: i32);
-            answer(x, w) :- R(x, y), S(y, z), T(z, w).
+            answer(x, w) :- R(x, y), S(y, z), T(z, w);
             relational {
                 r0 = rename R {c0 -> x, c1 -> y};
                 r1 = rename S {c0 -> y, c1 -> z};
@@ -837,7 +837,7 @@ mod tests {
                 r3 = natural_join r1 with r2;
                 r4 = natural_join r0 with r3;
                 r5 = project r4 keep {x, w};
-                output r5 as answer(x, w).
+                output r5 as answer(x, w);
             }
         })
         .unwrap();
@@ -855,7 +855,7 @@ mod tests {
             relation R(c0: i32, c1: i32);
             relation S(c0: i32, c1: i32);
             relation T(c0: i32, c1: i32);
-            answer(x, w) :- R(x, y), S(y, z), T(z, w).
+            answer(x, w) :- R(x, y), S(y, z), T(z, w);
             relational {
                 r0 = rename R {c0 -> x, c1 -> y};
                 r1 = rename S {c0 -> y, c1 -> z};
@@ -863,7 +863,7 @@ mod tests {
                 r3 = natural_join r0 with r1;
                 r4 = natural_join r3 with r2;
                 r5 = project r4 keep {x, w};
-                output r5 as answer(x, w).
+                output r5 as answer(x, w);
             }
         })
         .unwrap();
@@ -887,13 +887,13 @@ mod tests {
         let source: relational_plan::Module = syn::parse2(quote! {
             struct GlobalSeed;
             relation R(c0: i32);
-            answer(x) :- R(x).
+            answer(x) :- R(x);
             relational {
                 r0 = unit;
                 r1 = rename R {c0 -> x};
                 r2 = natural_join r0 with r1;
                 r3 = project r2 keep {x};
-                output r3 as answer(x).
+                output r3 as answer(x);
             }
         })
         .unwrap();
@@ -921,7 +921,7 @@ mod tests {
                 Left(x) => for (x,) in (left.iter()),
                 Right(x, y) => for (y,) in
                     (right.get(&(x.clone(),)).into_iter().flatten()),
-                Keep(x, y) => if (keep(*x, *y)).
+                Keep(x, y) => if (keep(*x, *y));
         })
         .unwrap();
         rust_access_plan::contract::check(&source).unwrap();
@@ -933,7 +933,7 @@ mod tests {
             iter2 = filter iter1 as (x, y,) if (keep(*x, *y));
             iter3 = project iter2 as (x, y,) yield ((x.clone(), y.clone(),));
             iter4 = distinct iter3;
-            return iter4.
+            return iter4;
         })
         .unwrap();
         iterator_pipeline::contract::check(&exact).unwrap();
@@ -969,7 +969,7 @@ mod tests {
                 (right.get(&(x.clone(),)).into_iter().flatten()) yield (x, y,);
             iter3 = project iter2 as (x, y,) yield ((x.clone(), y.clone(),));
             iter4 = distinct iter3;
-            return iter4.
+            return iter4;
         })
         .unwrap();
 

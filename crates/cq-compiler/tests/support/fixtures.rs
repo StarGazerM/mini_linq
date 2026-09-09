@@ -30,7 +30,7 @@ pub fn cq_to_relational_plan_and_indexes() -> Vec<LoweringFixture> {
                 relation R(c0: i32, c1: i32);
                 relation S(c0: i32, c1: i32);
                 relation T(c0: i32, c1: i32);
-                triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).
+                triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
             },
             expected: triangle_index_requirements(),
         },
@@ -39,19 +39,19 @@ pub fn cq_to_relational_plan_and_indexes() -> Vec<LoweringFixture> {
                 struct NonLeadingKey;
                 relation Seed(c0: i32);
                 relation Edge(c0: i32, c1: i32);
-                answer(x, z) :- Seed(x), Edge(z, x).
+                answer(x, z) :- Seed(x), Edge(z, x);
             },
             expected: quote! {
                 struct NonLeadingKey;
                 relation Seed(c0: i32);
                 relation Edge(c0: i32, c1: i32);
-                answer(x, z) :- Seed(x), Edge(z, x).
+                answer(x, z) :- Seed(x), Edge(z, x);
                 relational {
                     r0 = rename Seed {c0 -> x};
                     r1 = rename Edge {c0 -> z, c1 -> x};
                     r2 = natural_join r0 with r1;
                     r3 = project r2 keep {x, z};
-                    output r3 as answer(x, z).
+                    output r3 as answer(x, z);
                 }
                 indexes { Edge[1]; }
             },
@@ -61,19 +61,19 @@ pub fn cq_to_relational_plan_and_indexes() -> Vec<LoweringFixture> {
                 struct RawNames;
                 relation r#type(c0: i32);
                 relation Edge(c0: i32, c1: i32);
-                answer(x, z) :- r#type(r#x), Edge(z, x).
+                answer(x, z) :- r#type(r#x), Edge(z, x);
             },
             expected: quote! {
                 struct RawNames;
                 relation r#type(c0: i32);
                 relation Edge(c0: i32, c1: i32);
-                answer(x, z) :- r#type(r#x), Edge(z, x).
+                answer(x, z) :- r#type(r#x), Edge(z, x);
                 relational {
                     r0 = rename r#type {c0 -> r#x};
                     r1 = rename Edge {c0 -> z, c1 -> x};
                     r2 = natural_join r0 with r1;
                     r3 = project r2 keep {x, z};
-                    output r3 as answer(x, z).
+                    output r3 as answer(x, z);
                 }
                 indexes { Edge[1]; }
             },
@@ -82,7 +82,7 @@ pub fn cq_to_relational_plan_and_indexes() -> Vec<LoweringFixture> {
             source: quote! {
                 struct SelfJoinProgram;
                 relation R(c0: i32, c1: i32);
-                path2(x, y, z) :- R(x, y), R(y, z).
+                path2(x, y, z) :- R(x, y), R(y, z);
             },
             expected: self_join_index_requirements(),
         },
@@ -91,7 +91,7 @@ pub fn cq_to_relational_plan_and_indexes() -> Vec<LoweringFixture> {
                 pub struct ReusedIndexProgram;
                 relation Seeds(c0: i32, c1: i32);
                 relation Edge(c0: i32, c1: i32);
-                answer(a, b, x, y) :- Seeds(a, b), Edge(a, x), Edge(b, y).
+                answer(a, b, x, y) :- Seeds(a, b), Edge(a, x), Edge(b, y);
             },
             expected: reused_index_requirements(),
         },
@@ -100,7 +100,7 @@ pub fn cq_to_relational_plan_and_indexes() -> Vec<LoweringFixture> {
                 struct MultiColumnProgram;
                 relation Pair(c0: i32, c1: i32);
                 relation Fact(c0: i32, c1: i32, c2: i32, c3: i32);
-                answer(a, b, c, d) :- Pair(a, b), Fact(c, b, a, d).
+                answer(a, b, c, d) :- Pair(a, b), Fact(c, b, a, d);
             },
             expected: multi_column_index_requirements(),
         },
@@ -268,7 +268,7 @@ pub fn triangle_rust_access_plan() -> TokenStream {
             T(z, x) => if (self.index1.contains(&(
                 ::core::clone::Clone::clone(z),
                 ::core::clone::Clone::clone(x),
-            ))).
+            )));
     }
 }
 
@@ -279,21 +279,21 @@ fn row_only_rust_access_plan() -> TokenStream {
             ::core::clone::Clone::clone(x),
             ::core::clone::Clone::clone(y),
         )) :-
-            Rows(x, y, z) => for (x, y, z,) in (self.rows0.iter()).
+            Rows(x, y, z) => for (x, y, z,) in (self.rows0.iter());
     }
 }
 
 fn unused_input_rust_access_plan() -> TokenStream {
     quote! {
         answer(x) => ((::core::clone::Clone::clone(x),)) :-
-            Rows(x) => for (x,) in (self.rows0.iter()).
+            Rows(x) => for (x,) in (self.rows0.iter());
     }
 }
 
 fn extra_index_rust_access_plan() -> TokenStream {
     quote! {
         answer(x) => ((::core::clone::Clone::clone(x),)) :-
-            Rows(x) => for (x,) in (self.rows0.iter()).
+            Rows(x) => for (x,) in (self.rows0.iter());
     }
 }
 
@@ -314,14 +314,14 @@ fn scan_proper_full_rust_access_plan() -> TokenStream {
             R(x, y) => if (self.index0.contains(&(
                 ::core::clone::Clone::clone(x),
                 ::core::clone::Clone::clone(y),
-            ))).
+            )));
     }
 }
 
 fn multiple_proper_indexes_rust_access_plan() -> TokenStream {
     quote! {
         answer(x) => ((::core::clone::Clone::clone(x),)) :-
-            Seed(x) => for (x,) in (self.rows0.iter()).
+            Seed(x) => for (x,) in (self.rows0.iter());
     }
 }
 
@@ -341,7 +341,7 @@ fn non_leading_membership_rust_access_plan() -> TokenStream {
             Keep(z, x) => if (self.index1.contains(&(
                 ::core::clone::Clone::clone(z),
                 ::core::clone::Clone::clone(x),
-            ))).
+            )));
     }
 }
 
@@ -365,7 +365,7 @@ fn reused_index_rust_access_plan() -> TokenStream {
                     .get(&(::core::clone::Clone::clone(b),))
                     .into_iter()
                     .flatten()
-            ).
+            );
     }
 }
 
@@ -382,7 +382,7 @@ fn self_join_rust_access_plan() -> TokenStream {
                     .get(&(::core::clone::Clone::clone(y),))
                     .into_iter()
                     .flatten()
-            ).
+            );
     }
 }
 
@@ -403,14 +403,14 @@ fn multi_column_rust_access_plan() -> TokenStream {
                     ))
                     .into_iter()
                     .flatten()
-            ).
+            );
     }
 }
 
 fn projected_set_rust_access_plan() -> TokenStream {
     quote! {
         answer(x) => ((::core::clone::Clone::clone(x),)) :-
-            Rows(x, y) => for (x, y,) in (self.rows0.iter()).
+            Rows(x, y) => for (x, y,) in (self.rows0.iter());
     }
 }
 
@@ -426,7 +426,7 @@ fn heterogeneous_rust_access_plan() -> TokenStream {
                     .get(&(::core::clone::Clone::clone(person),))
                     .into_iter()
                     .flatten()
-            ).
+            );
     }
 }
 
@@ -451,7 +451,7 @@ fn triangle_iterator_pipeline() -> TokenStream {
             ::core::clone::Clone::clone(z),
         ));
         iter4 = distinct iter3;
-        return iter4.
+        return iter4;
     }
 }
 
@@ -464,7 +464,7 @@ fn row_only_iterator_pipeline() -> TokenStream {
             ::core::clone::Clone::clone(y),
         ));
         iter2 = distinct iter1;
-        return iter2.
+        return iter2;
     }
 }
 
@@ -473,7 +473,7 @@ fn unused_input_iterator_pipeline() -> TokenStream {
         iter0 = scan (x,) in (self.rows0.iter()) yield (x,);
         iter1 = project iter0 as (x,) yield ((::core::clone::Clone::clone(x),));
         iter2 = distinct iter1;
-        return iter2.
+        return iter2;
     }
 }
 
@@ -482,7 +482,7 @@ fn extra_index_iterator_pipeline() -> TokenStream {
         iter0 = scan (x,) in (self.rows0.iter()) yield (x,);
         iter1 = project iter0 as (x,) yield ((::core::clone::Clone::clone(x),));
         iter2 = distinct iter1;
-        return iter2.
+        return iter2;
     }
 }
 
@@ -507,7 +507,7 @@ fn scan_proper_full_iterator_pipeline() -> TokenStream {
             ::core::clone::Clone::clone(z),
         ));
         iter4 = distinct iter3;
-        return iter4.
+        return iter4;
     }
 }
 
@@ -516,7 +516,7 @@ fn multiple_proper_indexes_iterator_pipeline() -> TokenStream {
         iter0 = scan (x,) in (self.rows0.iter()) yield (x,);
         iter1 = project iter0 as (x,) yield ((::core::clone::Clone::clone(x),));
         iter2 = distinct iter1;
-        return iter2.
+        return iter2;
     }
 }
 
@@ -540,7 +540,7 @@ fn non_leading_membership_iterator_pipeline() -> TokenStream {
             ::core::clone::Clone::clone(z),
         ));
         iter4 = distinct iter3;
-        return iter4.
+        return iter4;
     }
 }
 
@@ -566,7 +566,7 @@ fn reused_index_iterator_pipeline() -> TokenStream {
             ::core::clone::Clone::clone(y),
         ));
         iter4 = distinct iter3;
-        return iter4.
+        return iter4;
     }
 }
 
@@ -585,7 +585,7 @@ fn self_join_iterator_pipeline() -> TokenStream {
             ::core::clone::Clone::clone(z),
         ));
         iter3 = distinct iter2;
-        return iter3.
+        return iter3;
     }
 }
 
@@ -608,7 +608,7 @@ fn multi_column_iterator_pipeline() -> TokenStream {
             ::core::clone::Clone::clone(d),
         ));
         iter3 = distinct iter2;
-        return iter3.
+        return iter3;
     }
 }
 
@@ -617,7 +617,7 @@ fn projected_set_iterator_pipeline() -> TokenStream {
         iter0 = scan (x, y,) in (self.rows0.iter()) yield (x, y,);
         iter1 = project iter0 as (x, y,) yield ((::core::clone::Clone::clone(x),));
         iter2 = distinct iter1;
-        return iter2.
+        return iter2;
     }
 }
 
@@ -635,7 +635,7 @@ fn heterogeneous_iterator_pipeline() -> TokenStream {
             ::core::clone::Clone::clone(label),
         ));
         iter3 = distinct iter2;
-        return iter3.
+        return iter3;
     }
 }
 
@@ -890,22 +890,22 @@ pub fn invalid_sources() -> InvalidSources {
         cq: quote! {
             struct BadCq;
             relation R(c0: i32);
-            answer(x) :- R(y).
+            answer(x) :- R(y);
         },
         index_requirements: quote! {
             struct BadIndexes;
             relation R(c0: i32);
-            answer(x) :- R(x).
+            answer(x) :- R(x);
             relational {
                 r0 = rename R {c0 -> x};
                 r1 = project r0 keep {x};
-                output r1 as answer(x).
+                output r1 as answer(x);
             }
             indexes { R[0]; R[0]; }
         },
         rust_access_plan: quote! {
             answer(x) => ([x]) :-
-                R(x) => if (rows.contains(&[x])).
+                R(x) => if (rows.contains(&[x]));
         },
     }
 }
@@ -915,13 +915,13 @@ pub fn missing_required_index() -> TokenStream {
         pub struct MissingRequiredIndex;
         relation Seed(c0: i32);
         relation Edge(c0: i32, c1: i32);
-        answer(x, z) :- Seed(x), Edge(x, z).
+        answer(x, z) :- Seed(x), Edge(x, z);
         relational {
             r0 = rename Seed {c0 -> x};
             r1 = rename Edge {c0 -> x, c1 -> z};
             r2 = natural_join r0 with r1;
             r3 = project r2 keep {x, z};
-            output r3 as answer(x, z).
+            output r3 as answer(x, z);
         }
         indexes {}
     }
@@ -933,7 +933,7 @@ fn triangle_index_requirements() -> TokenStream {
         relation R(c0: i32, c1: i32);
         relation S(c0: i32, c1: i32);
         relation T(c0: i32, c1: i32);
-        triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).
+        triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
         relational {
             r0 = rename R {c0 -> x, c1 -> y};
             r1 = rename S {c0 -> y, c1 -> z};
@@ -941,7 +941,7 @@ fn triangle_index_requirements() -> TokenStream {
             r3 = rename T {c0 -> z, c1 -> x};
             r4 = natural_join r2 with r3;
             r5 = project r4 keep {x, y, z};
-            output r5 as triangle(x, y, z).
+            output r5 as triangle(x, y, z);
         }
         indexes { S[0]; T[0, 1]; }
     }
@@ -951,11 +951,11 @@ fn row_only_index_requirements() -> TokenStream {
     quote! {
         pub struct RowOnlyProgram;
         relation Rows(c0: i32, c1: i32, c2: i32);
-        answer(z, x, y) :- Rows(x, y, z).
+        answer(z, x, y) :- Rows(x, y, z);
         relational {
             r0 = rename Rows {c0 -> x, c1 -> y, c2 -> z};
             r1 = project r0 keep {z, x, y};
-            output r1 as answer(z, x, y).
+            output r1 as answer(z, x, y);
         }
         indexes {}
     }
@@ -966,11 +966,11 @@ fn unused_input_index_requirements() -> TokenStream {
         pub struct UnusedInputProgram;
         relation Rows(c0: i32);
         relation Unused(c0: i32, c1: i32);
-        answer(x) :- Rows(x).
+        answer(x) :- Rows(x);
         relational {
             r0 = rename Rows {c0 -> x};
             r1 = project r0 keep {x};
-            output r1 as answer(x).
+            output r1 as answer(x);
         }
         indexes {}
     }
@@ -981,11 +981,11 @@ fn extra_index_requirements() -> TokenStream {
         pub struct ExtraIndexProgram;
         relation Rows(c0: i32);
         relation Edge(c0: i32, c1: i32);
-        answer(x) :- Rows(x).
+        answer(x) :- Rows(x);
         relational {
             r0 = rename Rows {c0 -> x};
             r1 = project r0 keep {x};
-            output r1 as answer(x).
+            output r1 as answer(x);
         }
         // Written full-key first on purpose: proper-key builders still have to
         // borrow relation1 before index0 takes ownership of that HashSet.
@@ -997,7 +997,7 @@ fn scan_proper_full_index_requirements() -> TokenStream {
     quote! {
         pub struct ScanProperFullProgram;
         relation R(c0: i32, c1: i32);
-        answer(x, y, z) :- R(x, y), R(y, z), R(x, y).
+        answer(x, y, z) :- R(x, y), R(y, z), R(x, y);
         relational {
             r0 = rename R {c0 -> x, c1 -> y};
             r1 = rename R {c0 -> y, c1 -> z};
@@ -1005,7 +1005,7 @@ fn scan_proper_full_index_requirements() -> TokenStream {
             r3 = rename R {c0 -> x, c1 -> y};
             r4 = natural_join r2 with r3;
             r5 = project r4 keep {x, y, z};
-            output r5 as answer(x, y, z).
+            output r5 as answer(x, y, z);
         }
         // Full-key is written first on purpose. The proper-key map must borrow
         // relation0 before index0 takes ownership, and index0 also supplies the scan.
@@ -1018,11 +1018,11 @@ fn multiple_proper_indexes_index_requirements() -> TokenStream {
         pub struct MultipleProperIndexesProgram;
         relation Seed(c0: i32);
         relation Edge(c0: i32, c1: i32);
-        answer(x) :- Seed(x).
+        answer(x) :- Seed(x);
         relational {
             r0 = rename Seed {c0 -> x};
             r1 = project r0 keep {x};
-            output r1 as answer(x).
+            output r1 as answer(x);
         }
         indexes { Edge[0]; Edge[1]; }
     }
@@ -1034,7 +1034,7 @@ fn non_leading_membership_index_requirements() -> TokenStream {
         relation Seed(c0: i32);
         relation Edge(c0: i32, c1: i32);
         relation Keep(c0: i32, c1: i32);
-        answer(x, z) :- Seed(x), Edge(z, x), Keep(z, x).
+        answer(x, z) :- Seed(x), Edge(z, x), Keep(z, x);
         relational {
             r0 = rename Seed {c0 -> x};
             r1 = rename Edge {c0 -> z, c1 -> x};
@@ -1042,7 +1042,7 @@ fn non_leading_membership_index_requirements() -> TokenStream {
             r3 = rename Keep {c0 -> z, c1 -> x};
             r4 = natural_join r2 with r3;
             r5 = project r4 keep {x, z};
-            output r5 as answer(x, z).
+            output r5 as answer(x, z);
         }
         indexes { Edge[1]; Keep[0, 1]; }
     }
@@ -1053,7 +1053,7 @@ fn reused_index_requirements() -> TokenStream {
         pub struct ReusedIndexProgram;
         relation Seeds(c0: i32, c1: i32);
         relation Edge(c0: i32, c1: i32);
-        answer(a, b, x, y) :- Seeds(a, b), Edge(a, x), Edge(b, y).
+        answer(a, b, x, y) :- Seeds(a, b), Edge(a, x), Edge(b, y);
         relational {
             r0 = rename Seeds {c0 -> a, c1 -> b};
             r1 = rename Edge {c0 -> a, c1 -> x};
@@ -1061,7 +1061,7 @@ fn reused_index_requirements() -> TokenStream {
             r3 = rename Edge {c0 -> b, c1 -> y};
             r4 = natural_join r2 with r3;
             r5 = project r4 keep {a, b, x, y};
-            output r5 as answer(a, b, x, y).
+            output r5 as answer(a, b, x, y);
         }
         indexes { Edge[0]; }
     }
@@ -1071,13 +1071,13 @@ fn self_join_index_requirements() -> TokenStream {
     quote! {
         struct SelfJoinProgram;
         relation R(c0: i32, c1: i32);
-        path2(x, y, z) :- R(x, y), R(y, z).
+        path2(x, y, z) :- R(x, y), R(y, z);
         relational {
             r0 = rename R {c0 -> x, c1 -> y};
             r1 = rename R {c0 -> y, c1 -> z};
             r2 = natural_join r0 with r1;
             r3 = project r2 keep {x, y, z};
-            output r3 as path2(x, y, z).
+            output r3 as path2(x, y, z);
         }
         indexes { R[0]; }
     }
@@ -1088,13 +1088,13 @@ fn multi_column_index_requirements() -> TokenStream {
         struct MultiColumnProgram;
         relation Pair(c0: i32, c1: i32);
         relation Fact(c0: i32, c1: i32, c2: i32, c3: i32);
-        answer(a, b, c, d) :- Pair(a, b), Fact(c, b, a, d).
+        answer(a, b, c, d) :- Pair(a, b), Fact(c, b, a, d);
         relational {
             r0 = rename Pair {c0 -> a, c1 -> b};
             r1 = rename Fact {c0 -> c, c1 -> b, c2 -> a, c3 -> d};
             r2 = natural_join r0 with r1;
             r3 = project r2 keep {a, b, c, d};
-            output r3 as answer(a, b, c, d).
+            output r3 as answer(a, b, c, d);
         }
         indexes { Fact[1, 2]; }
     }
@@ -1105,13 +1105,13 @@ fn heterogeneous_index_requirements() -> TokenStream {
         pub struct HeterogeneousProgram;
         relation Person(c0: ::std::string::String, c1: u32);
         relation Label(c0: ::std::string::String, c1: ::std::string::String);
-        answer(person, label) :- Person(person, age), Label(person, label).
+        answer(person, label) :- Person(person, age), Label(person, label);
         relational {
             r0 = rename Person {c0 -> person, c1 -> age};
             r1 = rename Label {c0 -> person, c1 -> label};
             r2 = natural_join r0 with r1;
             r3 = project r2 keep {person, label};
-            output r3 as answer(person, label).
+            output r3 as answer(person, label);
         }
         indexes { Label[0]; Label[1]; }
     }
@@ -1121,11 +1121,11 @@ fn projected_set_index_requirements() -> TokenStream {
     quote! {
         pub struct ProjectedSetProgram;
         relation Rows(c0: i32, c1: i32);
-        answer(x) :- Rows(x, y).
+        answer(x) :- Rows(x, y);
         relational {
             r0 = rename Rows {c0 -> x, c1 -> y};
             r1 = project r0 keep {x};
-            output r1 as answer(x).
+            output r1 as answer(x);
         }
         indexes {}
     }

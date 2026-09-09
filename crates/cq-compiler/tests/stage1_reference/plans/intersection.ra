@@ -1,10 +1,10 @@
 struct Intersection;
 relation R(first: i32, second: i32);
 relation S(first: i32, second: i32);
-answer(x, y) :- R(x, y), S(x, y).
+answer(x, y) :- R(x, y), S(x, y);
 relational {
     r = rename R {first -> x, second -> y};
     s = rename S {first -> x, second -> y};
     result = natural_join r with s;
-    output result as answer(x, y).
+    output result as answer(x, y);
 }

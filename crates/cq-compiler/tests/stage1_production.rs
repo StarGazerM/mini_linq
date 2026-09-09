@@ -194,7 +194,7 @@ fn selections_are_pushed_down_and_predicate_only_columns_are_pruned() {
     let source: cq::Module = syn::parse_str(
         "pub struct Filtered;
         relation R(x: i32, y: i32); relation S(y: i32, z: i32);
-        answer(x) :- R(x,y), S(y,z), if (x > 0), if (x < z).",
+        answer(x) :- R(x,y), S(y,z), if (x > 0), if (x < z);",
     )
     .unwrap();
     let (ra, planned) = explain_cq_plan(
@@ -235,7 +235,7 @@ fn all_comparisons_and_extreme_literals_match_independent_valuations() {
     .enumerate()
     {
         let source: cq::Module = syn::parse_str(&format!(
-            "pub struct Compare; relation R(v:i32); answer(x) :- R(x), if ({predicate})."
+            "pub struct Compare; relation R(v:i32); answer(x) :- R(x), if ({predicate});"
         ))
         .unwrap();
         let database = std::collections::BTreeMap::from([(
@@ -259,7 +259,7 @@ fn all_comparisons_and_extreme_literals_match_independent_valuations() {
 #[test]
 fn rust_rejects_non_i32_predicates_without_a_second_logical_type_system() {
     let source: cq::Module =
-        syn::parse_str("pub struct Invalid; relation R(x:String); answer(x) :- R(x), if (x > 0).")
+        syn::parse_str("pub struct Invalid; relation R(x:String); answer(x) :- R(x), if (x > 0);")
             .unwrap();
     cq::contract::check(&source).unwrap();
     let ra = cq_compiler::compile_cq_planned(&source).unwrap();
@@ -271,11 +271,11 @@ fn rust_rejects_non_i32_predicates_without_a_second_logical_type_system() {
 fn directly_quoted_ra_preserves_shared_operands_without_replanning() {
     let direct: ra::Module = syn::parse_str("pub struct Direct;
         relation R(a: i32, b: i32); relation S(b: i32, c: i32); relation T(b: i32, d: i32);
-        answer(a,c,d) :- R(a,b), S(c,b), T(d,b).
+        answer(a,c,d) :- R(a,b), S(c,b), T(d,b);
         relational {
             r = rename R {a -> a, b -> b}; s = rename S {b -> b, c -> c}; t = rename T {b -> b, d -> d};
             rs = natural_join r with s; rt = natural_join r with t;
-            result = natural_join rs with rt; output result as answer(a,c,d).
+            result = natural_join rs with rt; output result as answer(a,c,d);
         }").unwrap();
     // Require explicit output projection: local checking must not invent one.
     assert!(ra::contract::check(&direct).is_err());

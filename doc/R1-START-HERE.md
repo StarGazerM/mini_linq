@@ -79,7 +79,7 @@ r2 = natural_join r0 with r1;
 r3 = rename T {c0 -> z, c1 -> x};
 r4 = natural_join r2 with r3;
 r5 = project r4 keep {x, y, z};
-output r5 as triangle(x, y, z).
+output r5 as triangle(x, y, z);
 ```
 
 `rN` is a serialized DAG reference to a logical set relation, not an algebra

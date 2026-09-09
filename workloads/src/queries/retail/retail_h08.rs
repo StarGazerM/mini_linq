@@ -16,5 +16,5 @@
         RetailH08Customer(customer_key, customer_nation),
         RetailH08Nation(customer_nation, customer_region),
         RetailH08Region(customer_region),
-        RetailH08Nation(supplier_nation, _supplier_region).
+        RetailH08Nation(supplier_nation, _supplier_region);
 }

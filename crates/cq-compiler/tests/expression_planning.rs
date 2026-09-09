@@ -207,7 +207,7 @@ fn literal_normalization_and_connected_joins_match_handwritten_ra() {
         r6=rename T {a->y,b->__cq_1_1};
         r7=natural_join r5 with r6;
         r8=project r7 keep {r#__cq_0_0,r#__cq_1_1,r#x,r#y};
-        output r8 as answer(head(x)).
+        output r8 as answer(head(x));
     }};
     let (actual, report) = explain_cq_plan(
         &source,

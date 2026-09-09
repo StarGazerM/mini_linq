@@ -350,7 +350,7 @@ fn emit(
     let program = &source.program;
     let definitions = &state.definitions;
     let target: ra::Module =
-        syn::parse2(quote!(#program relational { #(#definitions)* output #output as #head. }))?;
+        syn::parse2(quote!(#program relational { #(#definitions)* output #output as #head; }))?;
     let peak_arity = ra::check_in(&program.inputs, &target.plan)?
         .values()
         .map(|r| r.heading.len())

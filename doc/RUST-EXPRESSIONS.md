@@ -25,7 +25,7 @@ mini_linq! {
 
 Use `;` after a rule containing an unparenthesized final expression. The legacy
 `.` remains supported, but Rust lexes `4.` as a floating-point literal; write
-`if x < 4;` or `if (x < 4).`.
+`if x < 4;` or `if (x < 4);`.
 
 Bare arguments of a positive atom introduce variables; already-bound variables
 are equality constraints. Repeated arguments such as `R(x, x)` constrain two

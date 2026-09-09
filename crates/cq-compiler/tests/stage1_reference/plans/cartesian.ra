@@ -1,10 +1,10 @@
 struct Cartesian;
 relation R(value: i32);
 relation S(value: i32);
-answer(y, x) :- R(x), S(y).
+answer(y, x) :- R(x), S(y);
 relational {
     r = rename R {value -> x};
     s = rename S {value -> y};
     result = natural_join r with s;
-    output result as answer(y, x).
+    output result as answer(y, x);
 }

@@ -1,6 +1,6 @@
 struct OrientedChain;
 relation Edge(src: i32, dst: i32);
-answer(a, d) :- Edge(a, b), Edge(b, c), Edge(d, c).
+answer(a, d) :- Edge(a, b), Edge(b, c), Edge(d, c);
 relational {
     first = rename Edge {src -> a, dst -> b};
     second = rename Edge {src -> b, dst -> c};
@@ -9,5 +9,5 @@ relational {
     live = project prefix keep {a, c};
     joined = natural_join live with third;
     result = project joined keep {a, d};
-    output result as answer(a, d).
+    output result as answer(a, d);
 }

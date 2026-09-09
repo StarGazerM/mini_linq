@@ -1,10 +1,10 @@
 // Reference expansion: each semijoin is expressed as join followed by
-// projection. This is a semantic oracle, not an efficient YA backend.
+// projection; This is a semantic oracle, not an efficient YA backend;
 struct YaDelivery;
 relation D(driver_id: i32, depot_id: i32);
 relation S(depot_id: i32, item_id: i32);
 relation N(job_id: i32, item_id: i32);
-answer(driver, job) :- D(driver, depot), S(depot, item), N(job, item).
+answer(driver, job) :- D(driver, depot), S(depot, item), N(job, item);
 relational {
     d0 = rename D {driver_id -> driver, depot_id -> depot};
     s0 = rename S {depot_id -> depot, item_id -> item};
@@ -21,5 +21,5 @@ relational {
     live = project sn keep {depot, job};
     all_rows = natural_join live with d1;
     result = project all_rows keep {driver, job};
-    output result as answer(driver, job).
+    output result as answer(driver, job);
 }

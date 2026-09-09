@@ -13,5 +13,5 @@
         RetailH09Part(part_key),
         RetailH09Supplier(supplier_key, nation_key),
         RetailH09Orders(order_key, _customer_key),
-        RetailH09Nation(nation_key, _region_key).
+        RetailH09Nation(nation_key, _region_key);
 }

@@ -61,7 +61,7 @@ impl TriangleStorage {
                     .into_iter()
                     .flatten()
             ),
-            T(z, x) => if (self.index1.contains(&((*z).clone(), (*x).clone()))).
+            T(z, x) => if (self.index1.contains(&((*z).clone(), (*x).clone())));
         }
     }
 

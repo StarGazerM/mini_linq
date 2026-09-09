@@ -8,7 +8,7 @@ fn program_tokens() -> TokenStream {
         relation R(c0: i32, c1: i32);
         relation S(c0: i32, c1: i32);
         relation T(c0: i32, c1: i32);
-        triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).
+        triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
     }
 }
 
@@ -34,7 +34,7 @@ fn relational_tokens() -> TokenStream {
             r3 = rename T {c0 -> z, c1 -> x};
             r4 = natural_join r2 with r3;
             r5 = project r4 keep {x, y, z};
-            output r5 as triangle(x, y, z).
+            output r5 as triangle(x, y, z);
         }
     }
 }
@@ -45,7 +45,7 @@ fn annotated_access_tokens() -> TokenStream {
             R(x, y) => for (x, y,) in (rows0.iter()),
             S(y, z) => for (z,) in
                 (index0.get(&(y.clone(),)).into_iter().flatten()),
-            T(z, x) => if (index1.contains(&(z.clone(), x.clone(),))).
+            T(z, x) => if (index1.contains(&(z.clone(), x.clone(),)));
     }
 }
 
@@ -60,7 +60,7 @@ fn pipeline_tokens() -> TokenStream {
         );
         iter3 = project iter2 as (x, y, z,) yield ((x.clone(), y.clone(), z.clone(),));
         iter4 = distinct iter3;
-        return iter4.
+        return iter4;
     }
 }
 
@@ -119,7 +119,7 @@ fn cq_language_contract_checks_relations_arities_and_bindings() {
     let escaped_keyword: cq::Module = syn::parse2(quote! {
         struct P;
         relation R(c0: i32);
-        r#relation(x) :- R(x).
+        r#relation(x) :- R(x);
     })
     .unwrap();
     cq::contract::check(&escaped_keyword).unwrap();
@@ -128,33 +128,33 @@ fn cq_language_contract_checks_relations_arities_and_bindings() {
         quote! {
             struct P;
             relation R();
-            answer(x) :- R(x).
+            answer(x) :- R(x);
         },
         quote! {
             struct P;
             relation R(c0: i32);
-            answer(x) :- Missing(x).
+            answer(x) :- Missing(x);
         },
         quote! {
             struct P;
             relation R(c0: i32, c1: i32);
-            answer(x) :- R(x).
+            answer(x) :- R(x);
         },
         quote! {
             struct P;
             relation R(c0: i32);
-            answer(x) :- R(y).
+            answer(x) :- R(y);
         },
         quote! {
             struct P;
             relation R(c0: i32);
             relation r#R(c0: i32);
-            answer(x) :- R(x).
+            answer(x) :- R(x);
         },
         quote! {
             struct P;
             relation R(c0: i32);
-            r#R(x) :- R(x).
+            r#R(x) :- R(x);
         },
     ] {
         let module: cq::Module = syn::parse2(invalid).unwrap();
@@ -168,7 +168,7 @@ fn relation_declarations_preserve_full_rust_column_types() {
     let module: cq::Module = syn::parse2(quote! {
         struct Typed;
         relation R(c0: &'static str, c1: Option<Vec<i32>>);
-        answer(name) :- R(name, values).
+        answer(name) :- R(name, values);
     })
     .unwrap();
 

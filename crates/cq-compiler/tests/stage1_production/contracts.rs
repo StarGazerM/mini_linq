@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 fn star() -> cq::Module {
     syn::parse_str("pub struct Star; relation R(a:i32,k:i32); relation S(k:i32,b:i32); relation T(k:i32,c:i32);
-        answer(a) :- R(a,k), S(k,b), T(k,c), if (b > 0).").unwrap()
+        answer(a) :- R(a,k), S(k,b), T(k,c), if (b > 0);").unwrap()
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn reduction_requires_phase_dependencies_and_latest_versions() {
 #[test]
 fn a_different_policy_can_reorder_independent_reductions() {
     let source: cq::Module=syn::parse_str("struct Branch; relation R(a:i32,b:i32,c:i32); relation S(a:i32,x:i32); relation T(b:i32,y:i32); relation U(c:i32,z:i32);
-        answer(a) :- R(a,b,c), S(a,x), T(b,y), U(c,z).").unwrap();
+        answer(a) :- R(a,b,c), S(a,x), T(b,y), U(c,z);").unwrap();
     let (_ra, planned) = explain_cq_plan(
         &source,
         Options {
@@ -157,7 +157,7 @@ fn a_different_policy_can_reorder_independent_reductions() {
 fn predicates_must_be_consumed_before_their_last_columns_are_pruned() {
     let source: cq::Module = syn::parse_str(
         "struct Predicate; relation R(a:i32,b:i32); relation S(c:i32,d:i32);
-        answer(a) :- R(a,b), S(c,d), if (b < c).",
+        answer(a) :- R(a,b), S(c,d), if (b < c);",
     )
     .unwrap();
     for strategy in [
@@ -213,7 +213,7 @@ fn arity_bound_applies_to_every_emitted_result_and_greedy_reduces_width() {
     // Written joins the disconnected ends before the connecting occurrence.
     let source: cq::Module = syn::parse_str(
         "struct Width; relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
-        answer(a,d) :- R(a,b), T(c,d), S(b,c).",
+        answer(a,d) :- R(a,b), T(c,d), S(b,c);",
     )
     .unwrap();
     let (ra, written) = explain_cq_plan(
@@ -274,9 +274,9 @@ fn semijoin_backend_uses_composite_existence_keys_without_pair_enumeration() {
     let direct: ra::Module = syn::parse_str(
         "pub struct Semi;
         relation R(a:i32,b:i32,p:i32); relation S(a:i32,b:i32,q:i32);
-        answer(p) :- R(a,b,p), S(a,b,q).
+        answer(p) :- R(a,b,p), S(a,b,q);
         relational { r=rename R {a->a,b->b,p->p}; s=rename S {a->a,b->b,q->q};
-        f=semijoin r with s; p=project f keep {p}; output p as answer(p). }",
+        f=semijoin r with s; p=project f keep {p}; output p as answer(p); }",
     )
     .unwrap();
     let rust = compile_ra(&direct).unwrap();
@@ -299,7 +299,7 @@ fn rust_expression_syntax_reaches_both_logical_routes() {
         "x > 2147483648",
         "x > 0u32",
     ] {
-        let text = format!("struct P; relation R(x:i32); answer(x) :- R(x), if ({predicate}).");
+        let text = format!("struct P; relation R(x:i32); answer(x) :- R(x), if ({predicate});");
         let source = syn::parse_str::<cq::Module>(&text).unwrap();
         cq_compiler::compile_cq_planned(&source).unwrap();
         cq_compiler::compile_cq(&source).unwrap();

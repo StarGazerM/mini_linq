@@ -438,7 +438,7 @@ the following local IR:
 ```text
 Plan ::= "accumulator" Ident "=" "(" RustExpr ")" ";"
          "merge" "=" "(" RustExpr ")" ";"
-         Sink ":-" Driver ("," Clause)* "."
+         Sink ":-" Driver ("," Clause)* ";"
 
 Driver ::= BodyItem "=>" "fold" RustPat "in" "(" RustExpr ")"
 Clause ::= BodyItem "=>" "for" RustPat "in" "(" RustExpr ")"
@@ -474,7 +474,7 @@ The triangle residual makes the parallel ownership decision visible:
         T(z, x) => if (index1.contains(&(
             ::core::clone::Clone::clone(z),
             ::core::clone::Clone::clone(x),
-        ))).
+        )));
 }
 ```
 
@@ -535,9 +535,9 @@ pub struct SharedGraph;
 relation Seed(c0: i32);
 relation Edge(c0: i32, c1: i32);
 
-query outgoing(x, z) :- Seed(x), Edge(x, z).
-query incoming(x, z) :- Seed(x), Edge(z, x).
-query two_hop(x, y, z) :- Edge(x, y), Edge(y, z).
+query outgoing(x, z) :- Seed(x), Edge(x, z);
+query incoming(x, z) :- Seed(x), Edge(z, x);
+query two_hop(x, y, z) :- Edge(x, y), Edge(y, z);
 ```
 
 The explicit `query` keyword makes the repeated grammar unambiguous. Query
@@ -638,7 +638,7 @@ relation Person(c0: UserId, c1: String);
 relation Purchase(c0: UserId, c1: u64);
 
 purchase_name(person, name, amount) :-
-    Person(person, name), Purchase(person, amount).
+    Person(person, name), Purchase(person, amount);
 ```
 
 The syntax object keeps a parenthesized `CommaList<ColumnDecl>` whose entries

@@ -778,7 +778,7 @@ mod tests {
 
     fn module() -> cq::Module {
         syn::parse_str(
-            "struct Data; relation r#type(c0: i32); relation Edge(c0: i32, c1: i32); answer(x, z) :- r#type(x), Edge(x, z).",
+            "struct Data; relation r#type(c0: i32); relation Edge(c0: i32, c1: i32); answer(x, z) :- r#type(x), Edge(x, z);",
         )
         .unwrap()
     }
@@ -826,7 +826,7 @@ mod tests {
     #[test]
     fn positional_files_preserve_case_distinct_relation_names() {
         let module: cq::Module = syn::parse_str(
-            "struct CaseNames; relation R(c0: i32); relation r(c0: i32); q(x) :- R(x), r(x).",
+            "struct CaseNames; relation R(c0: i32); relation r(c0: i32); q(x) :- R(x), r(x);",
         )
         .unwrap();
         let expected = Dataset::new(

@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn branched_reduction_visits_descendants_before_upward_and_after_downward_edges() {
         let context: cq::Module =
-            syn::parse_str("struct P; relation R(x: i32); answer(x) :- R(x).").unwrap();
+            syn::parse_str("struct P; relation R(x: i32); answer(x) :- R(x);").unwrap();
         let schedule = reduction_schedule(
             &[None, Some(0), Some(0), Some(0), Some(1), Some(2)],
             &vec![heading(&["x"]); 6],
@@ -609,7 +609,7 @@ mod tests {
     #[test]
     fn connected_is_insufficient_without_running_intersection() {
         let context: cq::Module =
-            syn::parse_str("struct P; relation R(x: i32); answer(x) :- R(x).").unwrap();
+            syn::parse_str("struct P; relation R(x: i32); answer(x) :- R(x);").unwrap();
         let error = reduction_schedule(
             &[None, Some(0), Some(1)],
             &[

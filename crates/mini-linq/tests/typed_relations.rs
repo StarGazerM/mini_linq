@@ -10,7 +10,7 @@ type Road = (City, City);
 mini_linq! {
     struct TwoHopRoads;
     relation road(c0: City, c1: City);
-    two_hop(from, to) :- road(from, via), road(via, to).
+    two_hop(from, to) :- road(from, via), road(via, to);
 }
 
 type PersonId = u64;
@@ -19,7 +19,7 @@ mini_linq! {
     struct PurchaseNames;
     relation Person(c0: PersonId, c1: String);
     relation Purchase(c0: u64, c1: u64);
-    purchase_name(name, amount) :- Person(person, name), Purchase(person, amount).
+    purchase_name(name, amount) :- Person(person, name), Purchase(person, amount);
 }
 
 #[test]

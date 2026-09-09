@@ -3,7 +3,7 @@ relation R(first: i32, second: i32);
 relation S(first: i32, second: i32);
 relation T(first: i32, second: i32);
 relation H(first: i32, second: i32);
-answer(x, y, z, w) :- R(x, y), S(y, z), T(x, z), H(x, w).
+answer(x, y, z, w) :- R(x, y), S(y, z), T(x, z), H(x, w);
 relational {
     r = rename R {first -> x, second -> y};
     s = rename S {first -> y, second -> z};
@@ -12,5 +12,5 @@ relational {
     rs = natural_join r with s;
     triangle = natural_join rs with t;
     result = natural_join triangle with h;
-    output result as answer(x, y, z, w).
+    output result as answer(x, y, z, w);
 }

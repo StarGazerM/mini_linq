@@ -57,7 +57,7 @@ impl AnnotatedTriangleStorage {
                     .into_iter()
                     .flatten()
             ),
-            T(z, x) => if (self.index1.contains(&((*z).clone(), (*x).clone()))).
+            T(z, x) => if (self.index1.contains(&((*z).clone(), (*x).clone())));
         }
     }
 
@@ -76,7 +76,7 @@ impl ProjectionSet {
     fn query(&self) -> impl Iterator<Item = (i32,)> + '_ {
         pull! {
             project(x) => (((*x).clone(),)) :-
-            R(x, _y) => for (x, _y) in (self.rows0.iter()).
+            R(x, _y) => for (x, _y) in (self.rows0.iter());
         }
     }
 }
@@ -94,7 +94,7 @@ impl LazyResultSet {
                 self.rows0.iter().inspect(|_| {
                     self.rows_requested.set(self.rows_requested.get() + 1);
                 })
-            ).
+            );
         }
     }
 }
@@ -147,7 +147,7 @@ fn pull_defers_the_root_source_expression_until_first_next() {
         R(x) => for (x,) in ({
             counter.set(counter.get() + 1);
             [(1,), (2,)].into_iter()
-        }).
+        });
     };
 
     assert_eq!(evaluations.get(), 0);
@@ -170,7 +170,7 @@ fn generated_iter0_does_not_capture_a_user_leaf_named_iter0() {
         Seed(x) => for (x,) in (rows.into_iter()),
         Edge(x, y) => for (y,) in (
             iter0.get(&(x,)).cloned().unwrap_or_default().into_iter()
-        ).
+        );
     }
     .collect::<Vec<_>>();
 
@@ -190,7 +190,7 @@ fn iterator_pipeline_is_an_independently_invocable_lazy_stage() {
         iter1 = filter iter0 as (x,) if (x != 2);
         iter2 = project iter1 as (x,) yield ((x,));
         iter3 = distinct iter2;
-        return iter3.
+        return iter3;
     };
 
     assert_eq!(evaluations.get(), 0);

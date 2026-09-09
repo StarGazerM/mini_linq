@@ -1,9 +1,9 @@
-// Root S has separators {a,b} with R and {b,c} with T.
+// Root S has separators {a,b} with R and {b,c} with T;
 struct YaComposite;
 relation R(first: i32, second: i32, value: i32);
 relation S(first: i32, second: i32, third: i32);
 relation T(first: i32, second: i32, value: i32);
-answer(u, v) :- R(a, b, u), S(a, b, c), T(b, c, v).
+answer(u, v) :- R(a, b, u), S(a, b, c), T(b, c, v);
 relational {
     r0 = rename R {first -> a, second -> b, value -> u};
     s0 = rename S {first -> a, second -> b, third -> c};
@@ -20,5 +20,5 @@ relational {
     live = project sr keep {b, c, u};
     joined = natural_join live with t1;
     result = project joined keep {u, v};
-    output result as answer(u, v).
+    output result as answer(u, v);
 }

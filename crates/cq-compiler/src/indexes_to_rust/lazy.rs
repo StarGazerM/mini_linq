@@ -344,7 +344,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
         })
         .collect();
     let plan: access::Plan =
-        syn::parse2(quote!(output(#(#head_vars),*) => ((#(#output_fields,)*)) :- #(#clauses),*.))?;
+        syn::parse2(quote!(output(#(#head_vars),*) => ((#(#output_fields,)*)) :- #(#clauses),*;))?;
     access::contract::check(&plan)?;
     let output_types = ra::output_types(&module.program, final_info)?;
     let row = quote!((#(#output_types,)*));

@@ -449,7 +449,7 @@ relation based_at(driver_id: i32, depot_id: i32);
 relation stocks(depot_id: i32, item_id: i32);
 relation needs(job_id: i32, item_id: i32);
 eligible(driver, job) :-
-    based_at(driver, depot), stocks(depot, item), needs(job, item).
+    based_at(driver, depot), stocks(depot, item), needs(job, item);
 relational {
     d0 = rename based_at {driver_id -> driver, depot_id -> depot};
     s0 = rename stocks {depot_id -> depot, item_id -> item};
@@ -462,7 +462,7 @@ relational {
     live = project sn keep {depot, job};
     all_rows = natural_join live with d1;
     result = project all_rows keep {driver, job};
-    output result as eligible(driver, job).
+    output result as eligible(driver, job);
 }
 ```
 

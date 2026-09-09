@@ -15,5 +15,5 @@
         Bridge(x, u),
         U(u, v),
         V(v, w),
-        W(u, w).
+        W(u, w);
 }

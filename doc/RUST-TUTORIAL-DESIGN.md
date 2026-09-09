@@ -371,7 +371,7 @@ iter0 = scan (x,) in (left.iter()) yield (x,);
 iter1 = join iter0 as (x,) with (y,) in (right_source) yield (x, y,);
 iter2 = project iter1 as (x, y,) yield ((x.clone(), y.clone(),));
 iter3 = distinct iter2;
-return iter3.
+return iter3;
 ```
 
 That plan states the physical operator and dataflow structure, but not the

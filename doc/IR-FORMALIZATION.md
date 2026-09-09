@@ -112,7 +112,7 @@ attribute set; it is not duplicated as an ordered left-hand schema. Ordered
 result tuple layout belongs only to the final output metadata:
 
 ```text
-output rN as H(h0, ..., hk).
+output rN as H(h0, ..., hk);
 ```
 
 The baseline operators have these set semantics:
@@ -306,7 +306,7 @@ comes from separate output metadata and is paired with its exact value:
 H(vars) => (result_expr) :-
     A0 => for pattern0 in (source0),
     A1 => for pattern1 in (source1),
-    A2 => if (condition2).
+    A2 => if (condition2);
 ```
 
 At each NaturalJoin, let `B` be the current left heading and `A` the heading

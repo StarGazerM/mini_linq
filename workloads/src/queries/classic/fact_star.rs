@@ -9,5 +9,5 @@
         Fact(k1, k2, k3),
         DimA(k1, a),
         DimB(k2, b),
-        DimC(k3, c).
+        DimC(k3, c);
 }

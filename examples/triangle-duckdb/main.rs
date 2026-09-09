@@ -9,7 +9,7 @@ mini_linq! {
     relation R(c0: i32, c1: i32);
     relation S(c0: i32, c1: i32);
     relation T(c0: i32, c1: i32);
-    triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).
+    triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
 }
 
 const R: &[(i32, i32)] = &[(1, 2), (1, 2), (2, 3), (8, 9)];
@@ -39,7 +39,7 @@ fn main() -> duckdb::Result<()> {
     let duckdb_rows = run_duckdb()?;
 
     println!("\nMiniLinq CQ:");
-    println!("  triangle(x, y, z) :- R(x, y), S(y, z), T(z, x).");
+    println!("  triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);");
     println!("MiniLinq result: {mini_linq_rows:?}");
     println!("\nDuckDB SQL:{TRIANGLE_SQL}");
     println!("DuckDB result:  {duckdb_rows:?}");

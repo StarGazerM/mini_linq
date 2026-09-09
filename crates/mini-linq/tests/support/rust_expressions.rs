@@ -11,7 +11,7 @@ fn accepts(x: &i32) -> bool {
 query! {
     struct Calls;
     relation R(value: i32);
-    answer(x) :- R(x), if accepts(x).
+    answer(x) :- R(x), if accepts(x);
 }
 query! {
     struct Compound;
@@ -21,34 +21,34 @@ query! {
 query! {
     struct SameAtom;
     relation R(a: i32, b: i32);
-    answer(x) :- R(x, successor(x)).
+    answer(x) :- R(x, successor(x));
 }
 query! {
     struct PrefixArgument;
     relation R(value: i32);
     relation S(key: i32, value: i32);
-    answer(x, y) :- R(x), S(successor(x), y).
+    answer(x, y) :- R(x), S(successor(x), y);
 }
 query! {
     struct Repeated;
     relation R(a: String, b: String);
-    answer(x, x) :- R(x, x).
+    answer(x, x) :- R(x, x);
 }
 query! {
     struct Literal;
     relation R(a: i32, b: String);
-    answer(y) :- R(7, y).
+    answer(y) :- R(7, y);
 }
 query! {
     struct Wildcard;
     relation R(a: i32, b: i32);
-    answer(x) :- R(_, x).
+    answer(x) :- R(_, x);
 }
 query! {
     struct ComputedHead;
     relation R(value: i32);
     relation answer(value: String);
-    answer(format!("item-{x}")) :- R(x).
+    answer(format!("item-{x}")) :- R(x);
 }
 query! {
     struct Destructure;
@@ -59,12 +59,12 @@ query! {
 query! {
     struct Block;
     relation R(value: i32);
-    answer(x) :- R(x), if { let x = *x + 1; let f = |x| x > 1; f(x) }.
+    answer(x) :- R(x), if { let x = *x + 1; let f = |x| x > 1; f(x) };
 }
 query! {
     struct Matching;
     relation R(value: i32);
-    answer(x) :- R(x), if match Some(x) { Some(x) => *x > 0, _ => false }.
+    answer(x) :- R(x), if match Some(x) { Some(x) => *x > 0, _ => false };
 }
 macro_rules! positive {
     ($x:expr) => {
@@ -74,13 +74,13 @@ macro_rules! positive {
 query! {
     struct NestedMacro;
     relation R(value: i32);
-    answer(x) :- R(x), if positive!(x).
+    answer(x) :- R(x), if positive!(x);
 }
 mini_linq! {
     struct BasicExpressions;
     relation R(a: i32, b: i32);
     relation answer(value: String);
-    answer(format!("{x}")) :- R(x, successor(x)), if accepts(x).
+    answer(format!("{x}")) :- R(x, successor(x)), if accepts(x);
 }
 
 query! {
@@ -166,7 +166,7 @@ query! {
     relation R(x: i32, witness: i32);
     relation S(x: i32, witness: i32);
     relation answer(x: i32);
-    answer(counted_head(x)) :- R(x, witness), S(counted_arg(x), _).
+    answer(counted_head(x)) :- R(x, witness), S(counted_arg(x), _);
 }
 #[test]
 fn computation_precedes_matching_and_head_precedes_deduplication() {

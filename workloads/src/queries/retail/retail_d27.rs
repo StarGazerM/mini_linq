@@ -11,5 +11,5 @@
         RetailD27DateDim(sold_date),
         RetailD27Item(item_key),
         RetailD27Store(store_key),
-        RetailD27CustomerDemo(customer_demo).
+        RetailD27CustomerDemo(customer_demo);
 }

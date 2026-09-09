@@ -4,7 +4,7 @@ type Amount = i32;
 planned_query! {
     struct AliasedSelection;
     relation R(value: Amount);
-    answer(x) :- R(x), if (x >= -2147483648), if (x != 0).
+    answer(x) :- R(x), if (x >= -2147483648), if (x != 0);
 }
 
 #[allow(dead_code, clippy::all)]
@@ -38,7 +38,7 @@ planned_query! {
     struct NonOrderedKeys;
     relation R(key:Key,payload:String);
     relation S(key:Key,rank:u8);
-    answer(p,n) :- R(k,p), S(k,n).
+    answer(p,n) :- R(k,p), S(k,n);
 }
 
 struct NotClone;
@@ -46,7 +46,7 @@ planned_query! {
     struct UnusedInput;
     relation Used(value:i32);
     relation Unused(value:NotClone);
-    answer(x) :- Used(x).
+    answer(x) :- Used(x);
 }
 
 #[test]
@@ -65,20 +65,20 @@ planned_query! {
     struct Selected;
     relation R(a: i32, b: i32);
     relation S(b: i32, c: i32);
-    answer(c,a) :- R(a,b), S(b,c), if (c > 0), if (a < c).
+    answer(c,a) :- R(a,b), S(b,c), if (c > 0), if (a < c);
 }
 
 planned_relational_plan! {
     struct Direct;
     relation Input(key: String, payload: String);
     relation Guard(key: String);
-    answer(v) :- Input(k,v), Guard(k).
+    answer(v) :- Input(k,v), Guard(k);
     relational {
         r = rename Input {key -> k, payload -> v};
         s = rename Guard {key -> k};
         filtered = semijoin r with s;
         p = project filtered keep {v};
-        output p as answer(v).
+        output p as answer(v);
     }
 }
 
@@ -99,7 +99,7 @@ fn quotation_can_enter_at_each_existing_language_boundary() {
         vec![("p".into(),)]
     );
     // A lower local IR needs no source program wrapper.
-    let unit = mini_linq::pull! { answer() => (()) :- unit() => if (true). };
+    let unit = mini_linq::pull! { answer() => (()) :- unit() => if (true); };
     assert_eq!(unit.collect::<Vec<_>>(), vec![()]);
 }
 

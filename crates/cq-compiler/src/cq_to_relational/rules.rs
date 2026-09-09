@@ -183,7 +183,7 @@ impl<'a> Kernel<'a> {
                 }
                 let result = &g.result;
                 let head = &self.source.program.query.head;
-                self.output = Some(syn::parse2(quote!(output #result as #head.))?);
+                self.output = Some(syn::parse2(quote!(output #result as #head;))?);
                 self.phase = Phase::Finished;
                 Ok(())
             }
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn rejected_rule_keeps_state_and_definitions_unchanged() {
         let source: cq::Module = syn::parse_quote! {
-            struct Atomic; relation R(a:i32,b:i32); answer(a) :- R(a,b).
+            struct Atomic; relation R(a:i32,b:i32); answer(a) :- R(a,b);
         };
         let mut state = Kernel::new(&source, None, Some(1));
         assert!(state.apply(&Rule::Introduce { occurrence: 0 }).is_err());

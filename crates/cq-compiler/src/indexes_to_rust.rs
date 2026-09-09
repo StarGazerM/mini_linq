@@ -381,7 +381,7 @@ fn local_plan(
             }
         }
     }
-    let plan: access::Plan = syn::parse2(quote!(output(#(#head),*) => (#value) :- #(#clauses),*.))?;
+    let plan: access::Plan = syn::parse2(quote!(output(#(#head),*) => (#value) :- #(#clauses),*;))?;
     access::contract::check(&plan)?;
     Ok((bindings, plan))
 }

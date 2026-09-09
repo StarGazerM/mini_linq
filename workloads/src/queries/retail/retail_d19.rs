@@ -13,5 +13,5 @@
         RetailD19Item(item_key),
         RetailD19Customer(customer_key, address_key),
         RetailD19CustomerAddress(address_key),
-        RetailD19Store(store_key).
+        RetailD19Store(store_key);
 }

@@ -3,7 +3,7 @@ relation R(first: i32, second: i32);
 relation S(first: i32, second: i32);
 relation T(first: i32, second: i32);
 relation U(first: i32, second: i32);
-answer(a, c) :- R(a, b), S(b, c), T(c, d), U(d, a).
+answer(a, c) :- R(a, b), S(b, c), T(c, d), U(d, a);
 relational {
     r = rename R {first -> a, second -> b};
     s = rename S {first -> b, second -> c};
@@ -14,5 +14,5 @@ relational {
     tu = natural_join t with u;
     right_side = project tu keep {a, c};
     result = natural_join left_side with right_side;
-    output result as answer(a, c).
+    output result as answer(a, c);
 }

@@ -1,7 +1,7 @@
 struct Scan;
 relation R(value: i32);
-answer(x) :- R(x).
+answer(x) :- R(x);
 relational {
     r = rename R {value -> x};
-    output r as answer(x).
+    output r as answer(x);
 }

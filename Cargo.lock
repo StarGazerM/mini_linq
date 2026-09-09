@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "syn_derive"
 version = "0.2.0"
-source = "git+https://github.com/StarGazerM/syn_derive?rev=4782eed9cef0a79c5d0e6be2fa945b2fc5f30ede#4782eed9cef0a79c5d0e6be2fa945b2fc5f30ede"
+source = "git+https://github.com/StarGazerM/syn_derive?rev=0bca09575ae6d7f27a2b3e6b8a6068d4c8d73219#0bca09575ae6d7f27a2b3e6b8a6068d4c8d73219"
 dependencies = [
  "proc-macro2",
  "quote",

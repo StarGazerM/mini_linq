@@ -299,7 +299,7 @@ mod tests {
             fn query(left: &::std::vec::Vec<(i32,)>) {
                 ::mini_linq::pull! {
                     answer(x) => ((::core::clone::Clone::clone(x),)) :-
-                        Left(x) => for (x,) in (left.iter()).
+                        Left(x) => for (x,) in (left.iter());
                 }
             }
         })

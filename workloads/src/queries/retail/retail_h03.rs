@@ -7,5 +7,5 @@
     retail_h03_result(order_key, customer_key) :-
         RetailH03Customer(customer_key, _customer_nation),
         RetailH03Orders(order_key, customer_key),
-        RetailH03Lineitem(order_key, _part_key, _supplier_key, _line_number).
+        RetailH03Lineitem(order_key, _part_key, _supplier_key, _line_number);
 }

@@ -1,7 +1,10 @@
 # MiniLinq query-compilation course project
 
 MiniLinq is a Rust/procedural-macro teaching scaffold for Modern Query Processing. The basic
-checkpoint has three student passes and two supplied physical lowerings:
+checkpoint has three student passes and two supplied physical lowerings.
+
+Queries, relational outputs, access plans, and iterator returns end with `;`.
+The earlier period terminator is rejected.
 
 ```text
 CQ
@@ -53,7 +56,7 @@ r2 = natural_join r0 with r1;
 r3 = rename T {c0 -> z, c1 -> x};
 r4 = natural_join r2 with r3;
 r5 = project r4 keep {x, y, z};
-output r5 as triangle(x, y, z).
+output r5 as triangle(x, y, z);
 ```
 
 Basic HW2 derives exact first-use equality-index keys by intersecting the left heading with each

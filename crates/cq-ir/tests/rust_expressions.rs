@@ -108,7 +108,7 @@ fn relational_contract_rejects_pruned_expression_dependencies() {
             r0 = rename R {a -> x, b -> y};
             r1 = project r0 keep {x};
             r2 = select r1 if (accept(y));
-            output r2 as answer(x).
+            output r2 as answer(x);
         }
     };
     assert!(ra::contract::check(&source).is_err());

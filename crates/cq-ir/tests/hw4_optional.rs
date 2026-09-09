@@ -12,7 +12,7 @@ fn spend_query() -> proc_macro2::TokenStream {
         spend(person, total) :-
             Person(person),
             !Blocked(person, _),
-            agg total = sum(amount) in Purchase(person, _, amount).
+            agg total = sum(amount) in Purchase(person, _, amount);
     }
 }
 
@@ -33,7 +33,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
         struct UnsafeNegation;
         relation Person(c0: i32);
         relation Blocked(c0: i32, c1: i32);
-        answer(person) :- !Blocked(person, _), Person(person).
+        answer(person) :- !Blocked(person, _), Person(person);
     })
     .expect("OPTIONAL HW4: negation syntax should parse before its contract is checked");
     assert!(cq::contract::check(&unsafe_negation).is_err());
@@ -44,7 +44,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
         relation Purchase(c0: i32, c1: i32, c2: i32);
         answer(person, total) :-
             Person(person),
-            agg total = sum(amount) in Purchase(other, _, amount).
+            agg total = sum(amount) in Purchase(other, _, amount);
     })
     .expect("OPTIONAL HW4: aggregate syntax should parse before its contract is checked");
     assert!(cq::contract::check(&unsafe_correlation).is_err());
@@ -55,7 +55,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
         relation Purchase(c0: i32, c1: i32, c2: i32);
         answer(person) :-
             Person(person),
-            agg person = sum(amount) in Purchase(person, _, amount).
+            agg person = sum(amount) in Purchase(person, _, amount);
     })
     .expect("OPTIONAL HW4: aggregate syntax should parse before its contract is checked");
     assert!(cq::contract::check(&shadowed_result).is_err());
@@ -67,7 +67,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
             relation Purchase(c0: i32, c1: i32, c2: i32);
             answer(person, total) :-
                 Person(person),
-                agg total = sum() in Purchase(person, _, amount).
+                agg total = sum() in Purchase(person, _, amount);
         },
         quote! {
             struct UnsupportedAggregator;
@@ -75,7 +75,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
             relation Purchase(c0: i32, c1: i32, c2: i32);
             answer(person, total) :-
                 Person(person),
-                agg total = count(amount) in Purchase(person, _, amount).
+                agg total = count(amount) in Purchase(person, _, amount);
         },
         quote! {
             struct QualifiedSumPath;
@@ -83,7 +83,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
             relation Purchase(c0: i32, c1: i32, c2: i32);
             answer(person, total) :-
                 Person(person),
-                agg total = some::sum(amount) in Purchase(person, _, amount).
+                agg total = some::sum(amount) in Purchase(person, _, amount);
         },
         quote! {
             struct MissingValueTerm;
@@ -91,7 +91,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
             relation Purchase(c0: i32, c1: i32, c2: i32);
             answer(person, total) :-
                 Person(person),
-                agg total = sum(amount) in Purchase(person, _, _).
+                agg total = sum(amount) in Purchase(person, _, _);
         },
         quote! {
             struct RepeatedValueTerm;
@@ -99,7 +99,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
             relation Purchase(c0: i32, c1: i32, c2: i32);
             answer(person, total) :-
                 Person(person),
-                agg total = sum(amount) in Purchase(person, amount, amount).
+                agg total = sum(amount) in Purchase(person, amount, amount);
         },
         quote! {
             struct AlreadyBoundValue;
@@ -109,7 +109,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
             answer(person, total) :-
                 Person(person),
                 Amount(amount),
-                agg total = sum(amount) in Purchase(person, _, amount).
+                agg total = sum(amount) in Purchase(person, _, amount);
         },
         quote! {
             struct SameResultAndValue;
@@ -117,7 +117,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
             relation Purchase(c0: i32, c1: i32, c2: i32);
             answer(person, amount) :-
                 Person(person),
-                agg amount = sum(amount) in Purchase(person, _, amount).
+                agg amount = sum(amount) in Purchase(person, _, amount);
         },
         quote! {
             struct EscapingLocalValue;
@@ -125,7 +125,7 @@ fn unsafe_negation_and_aggregation_are_rejected() {
             relation Purchase(c0: i32, c1: i32, c2: i32);
             answer(person, amount) :-
                 Person(person),
-                agg total = sum(amount) in Purchase(person, _, amount).
+                agg total = sum(amount) in Purchase(person, _, amount);
         },
     ];
 
@@ -147,7 +147,7 @@ fn extended_relational_plans_use_renames_inferred_correlation_and_one_global_uni
             spend(person, total) :-
                 Person(person),
                 !Blocked(person, _),
-                agg total = sum(amount) in Purchase(person, _, amount).
+                agg total = sum(amount) in Purchase(person, _, amount);
             relational {
                 r0 = rename Person {c0 -> person};
                 r1 = rename Blocked {c0 -> person, c1 -> blocked_anon0};
@@ -159,7 +159,7 @@ fn extended_relational_plans_use_renames_inferred_correlation_and_one_global_uni
                 };
                 r4 = aggregate_apply r2 with r3 value amount using sum into total;
                 r5 = project r4 keep {person, total};
-                output r5 as spend(person, total).
+                output r5 as spend(person, total);
             }
         },
         quote! {
@@ -168,7 +168,7 @@ fn extended_relational_plans_use_renames_inferred_correlation_and_one_global_uni
             relation Purchase(c0: i32, c1: i32);
             summary(total) :-
                 !Blocked(_),
-                agg total = sum(amount) in Purchase(_, amount).
+                agg total = sum(amount) in Purchase(_, amount);
             relational {
                 r0 = unit;
                 r1 = rename Blocked {c0 -> blocked_anon0};
@@ -176,7 +176,7 @@ fn extended_relational_plans_use_renames_inferred_correlation_and_one_global_uni
                 r3 = rename Purchase {c0 -> purchase_anon0, c1 -> amount};
                 r4 = aggregate_apply r2 with r3 value amount using sum into total;
                 r5 = project r4 keep {total};
-                output r5 as summary(total).
+                output r5 as summary(total);
             }
         },
     ];
@@ -198,7 +198,7 @@ fn extended_body_items_keep_their_occurrence_labels_until_pull_lowering() {
             Person(person) => for (person,) in (rows0.iter()),
             !Blocked(person, _) => if (!index0.contains_key(&(person.clone(),))),
             agg total = sum(amount) in Purchase(person, _, amount) =>
-                for total in (aggregate_totals(*person)).
+                for total in (aggregate_totals(*person));
     })
     .expect("OPTIONAL HW4: RustAccessPlan must parse the extended BodyItem variants");
 

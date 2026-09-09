@@ -2,7 +2,7 @@ struct Claw;
 relation A(origin: i32, endpoint: i32);
 relation B(origin: i32, endpoint: i32);
 relation C(origin: i32, endpoint: i32);
-answer(a, b, c) :- A(h, a), B(h, b), C(h, c).
+answer(a, b, c) :- A(h, a), B(h, b), C(h, c);
 relational {
     a0 = rename A {origin -> h, endpoint -> a};
     b0 = rename B {origin -> h, endpoint -> b};
@@ -10,5 +10,5 @@ relational {
     ab = natural_join a0 with b0;
     abc = natural_join ab with c0;
     result = project abc keep {a, b, c};
-    output result as answer(a, b, c).
+    output result as answer(a, b, c);
 }
