@@ -6,6 +6,7 @@ pub use analysis::{GyoRule, JoinTree};
 use analysis::{GyoState, Heading};
 use cq_ir::{cq, relational_plan as ra, symbol_name};
 pub use rules::Rule;
+pub(crate) mod ordered;
 mod strategy;
 use rules::Kernel;
 
@@ -43,6 +44,9 @@ pub fn plan(
     options: PlanningOptions,
 ) -> syn::Result<(ra::Module, JoinPlanReport)> {
     cq::contract::check(source)?;
+    if ordered::required(source) {
+        return ordered::plan(source, options);
+    }
     let edges = incidence(source);
     let (analysis, join_tree) = if options.strategy == JoinPolicy::Auto {
         analysis::analyze(&edges)
@@ -120,13 +124,16 @@ pub fn incidence(source: &cq::Module) -> Vec<Heading> {
         .body
         .iter()
         .filter_map(cq::BodyItem::atom)
-        .map(|atom| atom.variables.iter().map(symbol_name).collect())
+        .map(|atom| atom.variables().map(symbol_name).collect())
         .collect()
 }
 
 /// Entry for a separately implemented scheduling policy. The caller supplies
 /// administrative commands; the checked kernel constructs the residual RA.
 pub fn from_derivation(source: &cq::Module, report: &JoinPlanReport) -> syn::Result<ra::Module> {
+    if ordered::required(source) {
+        return ordered::replay(source, report);
+    }
     check_analysis(
         &incidence(source),
         report.options,

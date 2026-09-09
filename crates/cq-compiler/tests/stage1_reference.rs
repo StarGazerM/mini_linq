@@ -430,15 +430,14 @@ fn body_acyclicity_and_free_connexity_are_different_checks() {
             .iter()
             .map(|item| {
                 let atom = item.positive_atom().expect("positive R1/reference fixture");
-                atom.variables.iter().map(cq_ir::symbol_name).collect()
+                atom.variables().map(cq_ir::symbol_name).collect()
             })
             .collect::<Vec<_>>();
         headings.push(
             program
                 .query
                 .head
-                .variables
-                .iter()
+                .variables()
                 .map(cq_ir::symbol_name)
                 .collect(),
         );

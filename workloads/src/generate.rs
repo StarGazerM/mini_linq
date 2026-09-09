@@ -33,6 +33,9 @@ pub fn check_scenario(case: &QueryCase, scenario: Scenario) -> Result<(), Genera
 /// Check whether a parsed CQ admits a scenario without materializing rows.
 pub fn check_module_scenario(module: &cq::Module, scenario: Scenario) -> Result<(), GenerateError> {
     cq::contract::check(module).map_err(GenerateError::InvalidQuery)?;
+    if !cq::rust::basic(module) {
+        return Err(GenerateError::UnsupportedBodyItem);
+    }
     let atoms = positive_atoms(&module.program.query)?;
     let input_positions = module
         .program
@@ -57,6 +60,9 @@ pub fn generate_module(
     config: GenerationConfig,
 ) -> Result<Dataset, GenerateError> {
     cq::contract::check(module).map_err(GenerateError::InvalidQuery)?;
+    if !cq::rust::basic(module) {
+        return Err(GenerateError::UnsupportedBodyItem);
+    }
     let atoms = positive_atoms(&module.program.query)?;
     let components = connected_components(&atoms);
     let limits = Limits::for_shape(config.scale, components);
@@ -703,7 +709,11 @@ fn prefix_guarantees_key(
     let key = access
         .key_columns
         .iter()
-        .map(|&column| assignment[&symbol_name(target.variables().nth(column).unwrap())])
+        .map(|&column| {
+            assignment[&symbol_name(
+                cq::rust::variable(&target.args[column]).expect("variable-only workload"),
+            )]
+        })
         .collect::<Vec<_>>();
     Ok(prefix[relation]
         .iter()

@@ -99,15 +99,14 @@ pub fn verify(
         .iter()
         .map(|item| {
             let atom = item.positive_atom().expect("checked legacy fragment");
-            atom.variables.iter().map(symbol_name).collect()
+            atom.variables().map(symbol_name).collect()
         })
         .collect();
     let head = source
         .program
         .query
         .head
-        .variables
-        .iter()
+        .variables()
         .map(symbol_name)
         .collect();
     let mut checker = Checker {
@@ -245,7 +244,7 @@ fn check_occurrences(
             && declaration
                 .columns
                 .iter()
-                .zip(&atom.variables)
+                .zip(atom.variables())
                 .all(|(column, variable)| {
                     rename.mapping.iter().any(|mapping| {
                         symbol_name(&mapping.source) == symbol_name(&column.name)
@@ -392,7 +391,10 @@ impl Checker {
                 input.heading = heading;
                 input
             }
-            ra::Operator::Unit(_) | ra::Operator::Semijoin(_) | ra::Operator::Select(_) => {
+            ra::Operator::Extend(_)
+            | ra::Operator::Unit(_)
+            | ra::Operator::Semijoin(_)
+            | ra::Operator::Select(_) => {
                 return Err(syn::Error::new_spanned(
                     definition,
                     "Unit has no administrative rule in the nonempty positive CQ fragment",

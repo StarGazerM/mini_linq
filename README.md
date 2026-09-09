@@ -32,6 +32,12 @@ Its `build` materializes the DAG; `query` iterates the stored answer.
 See the [verification matrix](doc/STAGE-I-VERIFICATION.md) and
 [complete boundary artifacts](doc/planned-example/01-cq.rs).
 
+CQ arguments, `if` conditions, and `let` values preserve Rust expressions.
+The [expression contract](doc/RUST-EXPRESSIONS.md) explains scope, computed
+result types, and conservative scheduling through the existing IRs.
+The [runnable expression gallery](examples/rust-expressions/README.md) includes
+input rows, asserted outputs, join schedules, and evaluation-count checks.
+
 ## Compiler boundaries
 
 ### Logical plan

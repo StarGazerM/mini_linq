@@ -29,6 +29,52 @@ pub(crate) fn check(
         target.program == source.program,
         "planning changed the source annotation",
     )?;
+    if cq_to_relational::ordered::required(source) {
+        let mut prefix = Vec::new();
+        for (clause, item) in source.program.query.body.iter().enumerate() {
+            if let cq::BodyItem::Positive { atom } = item {
+                for (argument, _) in atom
+                    .args
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, arg)| cq::rust::literal(arg))
+                {
+                    prefix.push(Rule::Constant { clause, argument });
+                }
+            }
+        }
+        require(
+            proof.derivation.starts_with(&prefix) && proof.derivation.last() == Some(&Rule::Finish),
+            "missing constant normalization or Finish",
+        )?;
+        let order = proof.derivation[prefix.len()..proof.derivation.len() - 1]
+            .iter()
+            .map(|rule| match rule {
+                Rule::Match { clause } | Rule::Bind { clause } | Rule::Guard { clause }
+                    if source.program.query.body.get(*clause).is_some_and(|item| {
+                        *rule == cq_to_relational::ordered::rule(*clause, item)
+                    }) =>
+                {
+                    Ok(*clause)
+                }
+                _ => Err(syn::Error::new_spanned(source, "invalid clause derivation")),
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        super::ordered::check_scheduled(source, target, &order)?;
+        let peak = ra::check_in(&target.program.inputs, &target.plan)?
+            .values()
+            .map(|r| r.heading.len())
+            .max()
+            .unwrap_or(0);
+        require(
+            proof.analysis.is_empty()
+                && proof.join_tree.is_none()
+                && proof.peak_arity == peak
+                && proof.options.max_arity.is_none_or(|limit| peak <= limit),
+            "Rust clauses require a legal complete derivation and exact width",
+        )?;
+        return Ok(());
+    }
     let info = ra::check_in(&target.program.inputs, &target.plan)?;
     let atoms: Vec<_> = source
         .program
@@ -45,7 +91,7 @@ pub(crate) fn check(
         .body
         .iter()
         .filter_map(|item| match item {
-            cq::BodyItem::Filter(f) => Some(&f.condition),
+            cq::BodyItem::Filter(f) => cq::rust::comparison(&f.condition),
             _ => None,
         })
         .collect();
@@ -53,8 +99,7 @@ pub(crate) fn check(
         .program
         .query
         .head
-        .variables
-        .iter()
+        .variables()
         .map(symbol_name)
         .collect();
     let mut pending: BTreeSet<_> = (0..predicates.len()).collect();
@@ -94,6 +139,13 @@ pub(crate) fn check(
     };
     for rule in &proof.derivation {
         match *rule {
+            Rule::Match { .. }
+            | Rule::Guard { .. }
+            | Rule::Bind { .. }
+            | Rule::Constant { .. }
+            | Rule::Finish => {
+                return Err(error("ordered rule in graph derivation"));
+            }
             Rule::Introduce { occurrence } => {
                 require(
                     phase == Phase::Start && occurrence == introduced && occurrence < atoms.len(),
@@ -112,7 +164,7 @@ pub(crate) fn check(
                     .unwrap();
                 require(
                     symbol_name(&r.relation) == symbol_name(&atom.relation)
-                        && input.columns.iter().zip(&atom.variables).all(|(c, v)| {
+                        && input.columns.iter().zip(atom.variables()).all(|(c, v)| {
                             r.mapping.iter().any(|m| {
                                 symbol_name(&m.source) == symbol_name(&c.name)
                                     && symbol_name(&m.target) == symbol_name(v)
@@ -146,7 +198,7 @@ pub(crate) fn check(
                 )?;
                 let d = next(&mut definitions)?;
                 require(
-                    matches!(&d.operator, ra::Operator::Select(s) if symbol_name(&s.input) == g.result && s.condition == *predicates[predicate]),
+                    matches!(&d.operator, ra::Operator::Select(s) if symbol_name(&s.input) == g.result && cq::rust::comparison(&s.condition).as_ref() == Some(&predicates[predicate])),
                     "selection changed its predicate or consumed an obsolete input",
                 )?;
                 groups.get_mut(&group).unwrap().result = symbol_name(&d.result);

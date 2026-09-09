@@ -96,14 +96,19 @@ impl PlannedExample {
                             ::core::iter::IntoIterator::into_iter(__left.iter()),
                             move |(v1, v2)| (v1, v2),
                         );
-                        let iter1 = ::core::iter::Iterator::filter(
+                        let iter1 = ::core::iter::Iterator::filter_map(
                             iter0,
-                            move |#[allow(unused_variables)] &(v1, v2)| (
-                                {
+                            move |#[allow(unused_variables)] (v1, v2)| {
+                                if {
                                     let value: ::core::primitive::i32 = *v2;
                                     value
                                 } > 0i32
-                            ),
+                                {
+                                    ::core::option::Option::Some((v1, v2))
+                                } else {
+                                    ::core::option::Option::None
+                                }
+                            },
                         );
                         let iter2 = ::core::iter::Iterator::map(
                             iter1,
@@ -136,11 +141,17 @@ impl PlannedExample {
                             ::core::iter::IntoIterator::into_iter(__left.iter()),
                             move |(v1, v2)| (v1, v2),
                         );
-                        let iter1 = ::core::iter::Iterator::filter(
+                        let iter1 = ::core::iter::Iterator::filter_map(
                             iter0,
-                            move |#[allow(unused_variables)] &(v1, v2)| {
-                                __probes_ref.set(__probes_ref.get() + 1);
-                                __index.contains(&(::core::clone::Clone::clone(v1),))
+                            move |#[allow(unused_variables)] (v1, v2)| {
+                                if {
+                                    __probes_ref.set(__probes_ref.get() + 1);
+                                    __index.contains(&(::core::clone::Clone::clone(v1),))
+                                } {
+                                    ::core::option::Option::Some((v1, v2))
+                                } else {
+                                    ::core::option::Option::None
+                                }
                             },
                         );
                         let iter2 = ::core::iter::Iterator::map(
@@ -179,11 +190,17 @@ impl PlannedExample {
                             ::core::iter::IntoIterator::into_iter(__left.iter()),
                             move |(v0, v1)| (v0, v1),
                         );
-                        let iter1 = ::core::iter::Iterator::filter(
+                        let iter1 = ::core::iter::Iterator::filter_map(
                             iter0,
-                            move |#[allow(unused_variables)] &(v0, v1)| {
-                                __probes_ref.set(__probes_ref.get() + 1);
-                                __index.contains(&(::core::clone::Clone::clone(v1),))
+                            move |#[allow(unused_variables)] (v0, v1)| {
+                                if {
+                                    __probes_ref.set(__probes_ref.get() + 1);
+                                    __index.contains(&(::core::clone::Clone::clone(v1),))
+                                } {
+                                    ::core::option::Option::Some((v0, v1))
+                                } else {
+                                    ::core::option::Option::None
+                                }
                             },
                         );
                         let iter2 = ::core::iter::Iterator::map(
@@ -263,7 +280,10 @@ impl PlannedExample {
                                             .into_iter()
                                             .flatten(),
                                     ),
-                                    move |(v0,)| (v1, v0),
+                                    move |(v0,)| {
+                                        let v1 = ::core::clone::Clone::clone(&v1);
+                                        (v1, v0)
+                                    },
                                 )
                             },
                         );
@@ -322,7 +342,7 @@ impl PlannedExample {
         __stats.semijoin_probes = __probes.get();
         let answer = relation7
             .iter()
-            .map(|__row| (::core::clone::Clone::clone(&__row.0),))
+            .map(|__row| { (::core::clone::Clone::clone(&__row.0),) })
             .collect();
         PlannedExampleStorage {
             answer,

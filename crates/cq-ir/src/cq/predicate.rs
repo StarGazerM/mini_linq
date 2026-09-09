@@ -1,6 +1,6 @@
 //! A deliberately total selection fragment: comparisons of i32 variables/literals.
-//! Arbitrary Rust expressions remain in physical IR, where their evaluation order
-//! is explicit. They are not silently treated as movable logical predicates.
+//! This is an optimizer recognizer, not the CQ expression grammar. CQ and RA
+//! retain syn::Expr; only this proven total subset is eligible for movement.
 use crate::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};

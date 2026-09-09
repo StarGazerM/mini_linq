@@ -18,6 +18,11 @@ pub enum Rule {
     Combine { left: usize, right: usize },
     Trim { group: usize },
     Output { group: usize },
+    Match { clause: usize },
+    Guard { clause: usize },
+    Bind { clause: usize },
+    Constant { clause: usize, argument: usize },
+    Finish,
 }
 
 #[derive(Clone)]
@@ -52,7 +57,7 @@ pub(super) struct Kernel<'a> {
     source: &'a cq::Module,
     occurrences: Vec<&'a cq::Atom>,
     edges: Vec<Heading>,
-    predicates: Vec<&'a Predicate>,
+    predicates: Vec<Predicate>,
     head: Heading,
     assembly: AssemblyState,
     reduction: Option<ReductionState>,
@@ -74,7 +79,7 @@ impl<'a> Kernel<'a> {
             .collect();
         let edges = occurrences
             .iter()
-            .map(|item| item.variables.iter().map(symbol_name).collect())
+            .map(|item| item.variables().map(symbol_name).collect())
             .collect();
         let predicates: Vec<_> = source
             .program
@@ -82,7 +87,9 @@ impl<'a> Kernel<'a> {
             .body
             .iter()
             .filter_map(|item| match item {
-                cq::BodyItem::Filter(filter) => Some(&filter.condition),
+                cq::BodyItem::Filter(filter) => {
+                    Some(cq::rust::comparison(&filter.condition).expect("graph domain checked"))
+                }
                 _ => None,
             })
             .collect();
@@ -94,8 +101,7 @@ impl<'a> Kernel<'a> {
                 .program
                 .query
                 .head
-                .variables
-                .iter()
+                .variables()
                 .map(symbol_name)
                 .collect(),
             assembly: AssemblyState {
@@ -122,6 +128,11 @@ impl<'a> Kernel<'a> {
         // Each rule checks all fallible premises before its single emission
         // and infallible state update. No whole-program rollback copy is needed.
         match *rule {
+            Rule::Match { .. }
+            | Rule::Guard { .. }
+            | Rule::Bind { .. }
+            | Rule::Constant { .. }
+            | Rule::Finish => Err(error("ordered clause requires its dependency schedule")),
             Rule::Introduce { occurrence } => self.introduce(occurrence),
             Rule::Select { group, predicate } => self.select(group, predicate),
             Rule::Begin => {
@@ -228,7 +239,7 @@ impl<'a> Kernel<'a> {
         let mapping = input
             .columns
             .iter()
-            .zip(&atom.variables)
+            .zip(atom.variables())
             .map(|(column, variable)| {
                 let column = &column.name;
                 quote!(#column -> #variable)
@@ -272,7 +283,7 @@ impl<'a> Kernel<'a> {
         if !self.assembly.pending.contains(&predicate) {
             return Err(error("predicate must be pending"));
         }
-        let condition = self.predicates[predicate];
+        let condition = &self.predicates[predicate];
         if !condition.variables().is_subset(&g.heading) {
             return Err(error("selection variables are not available"));
         }

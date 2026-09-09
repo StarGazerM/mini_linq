@@ -157,7 +157,7 @@ impl PlannedExample {
         __stats.semijoin_probes = __probes.get();
         let answer = relation7
             .iter()
-            .map(|__row| (::core::clone::Clone::clone(&__row.0),))
+            .map(|__row| { (::core::clone::Clone::clone(&__row.0),) })
             .collect();
         PlannedExampleStorage {
             answer,

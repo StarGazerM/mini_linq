@@ -1,5 +1,6 @@
 mod predicate;
 pub use predicate::{Comparison, Predicate, Term};
+pub mod rust;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,6 +25,8 @@ pub struct Program {
     pub name: Ident,
     pub declaration_semi: Token![;],
     pub inputs: InputList,
+    /// Optional declaration of the head relation's Rust column types.
+    pub output: Option<RelationDecl>,
     pub query: Query,
 }
 
@@ -42,13 +45,19 @@ impl Parse for Program {
             return Err(input.error("CQ program must declare at least one input relation"));
         }
 
+        let query: Query = input.parse()?;
+        let output = inputs
+            .iter()
+            .position(|d: &RelationDecl| symbol_name(&d.name) == symbol_name(&query.head.relation))
+            .map(|i| inputs.remove(i));
         Ok(Self {
             visibility,
             struct_token,
             name,
             declaration_semi,
             inputs,
-            query: input.parse()?,
+            output,
+            query,
         })
     }
 }
@@ -60,6 +69,7 @@ impl ToTokens for Program {
         self.name.to_tokens(tokens);
         self.declaration_semi.to_tokens(tokens);
         tokens.append_all(&self.inputs);
+        self.output.to_tokens(tokens);
         self.query.to_tokens(tokens);
     }
 }
@@ -105,7 +115,7 @@ impl RelationDecl {
 /// A relation name applied to a possibly empty, optionally trailing-comma list.
 ///
 /// ```text
-/// Atom ::= Ident "(" [Ident ("," Ident)* [","]] ")"
+/// Atom ::= Ident "(" [RustExpr ("," RustExpr)* [","]] ")"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Atom {
@@ -114,13 +124,30 @@ pub struct Atom {
     pub paren_token: token::Paren,
     #[syn(in = paren_token)]
     #[parse(CommaList::parse_terminated)]
-    pub variables: CommaList<Ident>,
+    pub args: CommaList<syn::Expr>,
+}
+
+impl Atom {
+    /// Bare variable arguments only. Expression dependencies are a separate
+    /// question; callers must never use this iterator as an expression analysis.
+    pub fn variables(&self) -> impl Iterator<Item = &Ident> {
+        self.args.iter().filter_map(rust::variable)
+    }
+    pub fn is_normalized(&self) -> bool {
+        self.variables().count() == self.args.len()
+            && self
+                .variables()
+                .map(symbol_name)
+                .collect::<BTreeSet<_>>()
+                .len()
+                == self.args.len()
+    }
 }
 
 /// One positive conjunctive query, with a nonempty syntactic body.
 ///
 /// ```text
-/// Query ::= Atom ":-" BodyItem ("," BodyItem)* "."
+/// Query ::= Atom ":-" BodyItem ("," BodyItem)* ("." | ";")
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Query {
@@ -129,24 +156,36 @@ pub struct Query {
     pub minus_token: Token![-],
     #[parse(CommaList::parse_separated_nonempty)]
     pub body: CommaList<BodyItem>,
-    pub dot_token: Token![.],
+    pub end: RuleEnd,
+}
+
+/// Semicolon permits an unparenthesized Rust expression at the end of a rule
+/// without confusing `1.` (a Rust float literal) with the DSL's legacy period.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum RuleEnd {
+    #[parse(peek = Token![.])]
+    Dot(Token![.]),
+    #[parse(peek = Token![;])]
+    Semi(Token![;]),
 }
 
 /// One source-ordered logical body clause.
 ///
-/// Positive atoms and pure comparisons share the same query language. The R1
-/// passes accept its positive-only subset; the planned route also moves filters.
+/// Expressions retain Rust syntax. Whether a condition can move is a planner
+/// premise, not a parser restriction.
 ///
 /// ```text
-/// BodyItem ::= Atom | "if" "(" Predicate ")"
+/// BodyItem ::= Atom | "if" RustExpr | "let" RustPat "=" RustExpr
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum BodyItem {
     #[parse(peek = Token![if])]
     Filter(Filter),
+    #[parse(peek = Token![let])]
+    Let(Let),
     // OPTIONAL HW4 — STUDENT 1/6 (IR): add the more-specific Ascent-style
     // Negation and Aggregate variants *before* this positive-atom fallback,
-    // plus their nominal PatternAtom and PatternTerm syntax objects. `agg` is
+    // reusing Atom and its Rust expression arguments. `agg` is
     // also an identifier token, so enum parse order matters. Update this
     // file's BodyItem/Query/Module EBNF and examples with the grammar. Follow
     // doc/HW4-OPTIONAL.md exactly.
@@ -154,21 +193,29 @@ pub enum BodyItem {
     Positive { atom: Atom },
 }
 
-/// A pure i32 condition; source order does not prescribe evaluation order.
+/// An embedded Rust condition. Parsing does not establish reorderability.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Filter {
     pub if_token: Token![if],
-    #[syn(parenthesized)]
-    pub paren: syn::token::Paren,
-    #[syn(in = paren)]
-    pub condition: Predicate,
+    #[parse(rust::parse_expression)]
+    pub condition: syn::Expr,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Let {
+    pub let_token: Token![let],
+    #[parse(rust::parse_binding_pattern)]
+    pub pattern: syn::Pat,
+    pub eq_token: Token![=],
+    #[parse(rust::parse_expression)]
+    pub expression: syn::Expr,
 }
 
 impl BodyItem {
     pub fn atom(&self) -> Option<&Atom> {
         match self {
             Self::Positive { atom } => Some(atom),
-            Self::Filter(_) => None,
+            Self::Filter(_) | Self::Let(_) => None,
         }
     }
     pub fn positive_atom(&self) -> syn::Result<&Atom> {
@@ -211,7 +258,57 @@ pub mod contract {
 
 pub(crate) fn check_program(program: &Program) -> syn::Result<()> {
     let schema = check_input_declarations(&program.inputs)?;
-    check_query(&schema, &program.query)
+    if let Some(output) = &program.output {
+        check_input_declarations(std::slice::from_ref(output))?;
+        if symbol_name(&output.name) != symbol_name(&program.query.head.relation) {
+            return Err(syn::Error::new_spanned(
+                output,
+                "result declaration must name the query head relation",
+            ));
+        }
+        if output.arity() != program.query.head.args.len() {
+            return Err(syn::Error::new_spanned(
+                output,
+                "result declaration and head have different arities",
+            ));
+        }
+    }
+    check_query(&schema, &program.query, program.output.is_some())?;
+    if program.output.is_none() {
+        let mut types = BTreeMap::new();
+        for item in &program.query.body {
+            match item {
+                BodyItem::Positive { atom } => {
+                    let declaration = schema[&symbol_name(&atom.relation)];
+                    for (arg, col) in atom.args.iter().zip(&declaration.columns) {
+                        if let Some(id) = rust::variable(arg) {
+                            types
+                                .entry(symbol_name(id))
+                                .or_insert_with(|| col.ty.clone());
+                        }
+                    }
+                }
+                BodyItem::Let(binding) => types.extend(
+                    rust::binding_types(&binding.pattern)
+                        .into_iter()
+                        .map(|(id, ty)| (symbol_name(&id), ty)),
+                ),
+                BodyItem::Filter(_) => (),
+            }
+        }
+        for arg in &program.query.head.args {
+            if !rust::variable(arg)
+                .and_then(|id| types.get(&symbol_name(id)))
+                .is_some_and(|ty| !matches!(ty, syn::Type::Infer(_)))
+            {
+                return Err(syn::Error::new_spanned(
+                    arg,
+                    "declare the result relation's Rust column types for a computed head (or annotate the let binding's type)",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn check_input_declarations(
@@ -250,9 +347,31 @@ pub(crate) fn check_input_declarations(
     Ok(schema)
 }
 
-fn check_query(schema: &BTreeMap<String, &RelationDecl>, query: &Query) -> syn::Result<()> {
+fn check_query(
+    schema: &BTreeMap<String, &RelationDecl>,
+    query: &Query,
+    declared_output: bool,
+) -> syn::Result<()> {
     check_result_atom(schema, &query.head)?;
-
+    let logical: BTreeSet<_> = query
+        .body
+        .iter()
+        .flat_map(|item| match item {
+            BodyItem::Positive { atom } => atom.variables().cloned().collect(),
+            BodyItem::Let(binding) => rust::bindings(&binding.pattern),
+            BodyItem::Filter(_) => Vec::new(),
+        })
+        .map(|id| symbol_name(&id))
+        .collect();
+    let check_uses = |expr: &syn::Expr, bound: &BTreeSet<String>| -> syn::Result<()> {
+        if let Some(name) = rust::known_uses(expr, &logical).difference(bound).next() {
+            return Err(syn::Error::new_spanned(
+                expr,
+                format!("logical variable `{name}` is used before it is bound"),
+            ));
+        }
+        Ok(())
+    };
     let mut body_variables = BTreeSet::new();
     for item in &query.body {
         // OPTIONAL HW4 — STUDENT 2/6 (WF): add Negation and Aggregate cases.
@@ -262,20 +381,31 @@ fn check_query(schema: &BTreeMap<String, &RelationDecl>, query: &Query) -> syn::
         match item {
             BodyItem::Positive { atom } => {
                 check_input_atom(schema, atom)?;
-                body_variables.extend(atom.variables().map(symbol_name));
+                for arg in &atom.args {
+                    if let Some(id) = rust::variable(arg) {
+                        body_variables.insert(symbol_name(id));
+                    } else {
+                        check_uses(arg, &body_variables)?;
+                    }
+                }
             }
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    item,
-                    "this clause requires the extended CQ semantic contract",
-                ));
+            BodyItem::Filter(filter) => check_uses(&filter.condition, &body_variables)?,
+            BodyItem::Let(binding) => {
+                check_uses(&binding.expression, &body_variables)?;
+                for variable in rust::bindings(&binding.pattern) {
+                    if !body_variables.insert(symbol_name(&variable)) {
+                        return Err(syn::Error::new_spanned(
+                            variable,
+                            "let binding shadows an existing logical variable",
+                        ));
+                    }
+                }
             }
-            BodyItem::Filter(_) => {}
         }
     }
 
     for variable in query.head.variables() {
-        if !body_variables.contains(&symbol_name(variable)) {
+        if !declared_output && !body_variables.contains(&symbol_name(variable)) {
             return Err(syn::Error::new_spanned(
                 variable,
                 format!("result variable `{variable}` is not bound by the CQ body"),
@@ -287,11 +417,6 @@ fn check_query(schema: &BTreeMap<String, &RelationDecl>, query: &Query) -> syn::
             query,
             "CQ requires a relational occurrence",
         ));
-    }
-    for item in &query.body {
-        if let BodyItem::Filter(filter) = item {
-            filter.condition.check_scope(&body_variables)?;
-        }
     }
     Ok(())
 }
@@ -312,7 +437,7 @@ fn check_result_atom(schema: &BTreeMap<String, &RelationDecl>, head: &Atom) -> s
             "result atom must have positive arity",
         ));
     }
-    check_distinct_variables("result atom", &head.args)
+    Ok(())
 }
 
 fn check_input_atom<'a>(
@@ -339,27 +464,5 @@ fn check_input_atom<'a>(
             ),
         ));
     }
-    check_distinct_variables(&format!("body atom `{}`", atom.relation), &atom.args)?;
     Ok(input)
-}
-
-fn check_distinct_variables(context: &str, variables: &CommaList<syn::Expr>) -> syn::Result<()> {
-    let mut seen = BTreeSet::new();
-    for argument in variables {
-        let variable = rust::variable(argument).ok_or_else(|| {
-            syn::Error::new_spanned(
-                argument,
-                "computed arguments require the extended CQ semantic contract",
-            )
-        })?;
-        if !seen.insert(symbol_name(variable)) {
-            return Err(syn::Error::new_spanned(
-                variable,
-                format!(
-                    "{context} repeats variable `{variable}`; repeated terms are a stretch extension"
-                ),
-            ));
-        }
-    }
-    Ok(())
 }

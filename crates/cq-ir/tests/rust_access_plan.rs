@@ -22,7 +22,8 @@ fn selection_annotations_require_bound_variables_and_an_if_access() {
     rust_access_plan::contract::check(&valid).unwrap();
     let unbound: rust_access_plan::Plan = syn::parse_quote! {
         answer(x) => ((x.clone(),)) :- R(x) => for (x,) in (rows.iter()),
-            if (y > 0) => if (*x > 0).
+            if (y > 0) => if (*x > 0),
+            S(y) => for (y,) in (other.iter()).
     };
     assert!(rust_access_plan::contract::check(&unbound).is_err());
 }

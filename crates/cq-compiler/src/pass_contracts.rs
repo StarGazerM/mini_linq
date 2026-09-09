@@ -1,5 +1,6 @@
 //! Small semantic relations used by the typed compiler-pass contracts.
 
+pub(crate) mod ordered;
 pub(crate) mod planned_join;
 
 /// Result-index selection preserves the entire algebra and adds exactly the
@@ -59,6 +60,9 @@ pub(crate) fn relational_plan_is_exact(
     source: &cq::Module,
     target: &relational_plan::Module,
 ) -> bool {
+    if !cq::rust::basic(source) {
+        return ordered::check(source, target).is_ok();
+    }
     // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): extend this independent exact
     // relation as specified in doc/HW4-OPTIONAL.md.
     if !relational_plan::contract::well_formed(target) || target.program != source.program {
@@ -122,7 +126,7 @@ pub(crate) fn relational_plan_is_exact(
             relational_plan::Operator::Project(project)
                 if symbol(&project.input) == input
                     && symbols(&project.attributes).into_iter().collect::<BTreeSet<_>>()
-                        == symbols(source.program.query.head.variables())
+                        == source.program.query.head.variables().map(symbol).collect::<Vec<_>>()
                             .into_iter()
                             .collect::<BTreeSet<_>>()
         )
@@ -166,6 +170,9 @@ fn rename_is_exact(
 /// by earlier right-hand Renames consumed one-by-one by left-deep
 /// NaturalJoins, then a final Project.
 pub(crate) fn basic_left_deep_plan(source: &relational_plan::Module) -> bool {
+    if crate::indexes_to_rust::extended(source) {
+        return crate::indexes_to_rust::linear(source);
+    }
     if !relational_plan::contract::well_formed(source) {
         return false;
     }
@@ -182,6 +189,7 @@ pub(crate) fn basic_left_deep_plan(source: &relational_plan::Module) -> bool {
             // only when the extended global-clause lowering consumes it.
             relational_plan::Operator::Unit(_)
             | relational_plan::Operator::Semijoin(_)
+            | relational_plan::Operator::Extend(_)
             | relational_plan::Operator::Select(_) => return false,
             relational_plan::Operator::Rename(rename) => {
                 if projected {
@@ -247,6 +255,9 @@ pub(crate) fn indexes_are_exact(
     source: &relational_plan::Module,
     target: &index_requirements::Module,
 ) -> bool {
+    if crate::indexes_to_rust::extended(source) {
+        return result_indexes_are_exact(source, target);
+    }
     index_requirements::contract::well_formed(target)
         && target.relational_plan == *source
         && canonical_indexes(source)
@@ -275,6 +286,11 @@ pub(crate) fn covers_required_indexes(source: &index_requirements::Module) -> bo
 
 /// Whether the basic physical pass is defined and has all required indexes.
 pub(crate) fn physical_input_is_supported(source: &index_requirements::Module) -> bool {
+    if crate::indexes_to_rust::extended(&source.relational_plan) {
+        return basic_left_deep_plan(&source.relational_plan)
+            && crate::relational_to_indexes::check_coverage(source).is_ok()
+            && crate::indexes_to_rust::lazy_supported(source);
+    }
     source.indexes.iter().all(|i| i.result_token.is_none())
         && basic_left_deep_plan(&source.relational_plan)
         && covers_required_indexes(source)
@@ -479,13 +495,17 @@ fn expected_rust_local(definition: &iterator_pipeline::Definition) -> proc_macro
             let item_pattern = &operator.item_pattern;
             let source = &operator.source;
             let binding = &operator.binding;
+            let captures = cq::rust::bindings(input_pattern);
+            let copies = captures
+                .iter()
+                .map(|v| quote!(let #v = ::core::clone::Clone::clone(&#v);));
             quote! {
                 let #stream = ::core::iter::Iterator::flat_map(
                     #input_stream,
                     move |#input_pattern| {
                         ::core::iter::Iterator::map(
                             ::core::iter::IntoIterator::into_iter(#source),
-                            move |#item_pattern| #binding,
+                            move |#item_pattern| { #(#copies)* #binding },
                         )
                     },
                 );
@@ -494,12 +514,15 @@ fn expected_rust_local(definition: &iterator_pipeline::Definition) -> proc_macro
         iterator_pipeline::Operator::Filter(operator) => {
             let input_stream = &operator.input_stream;
             let input_pattern = &operator.input_pattern;
-            let borrowed_pattern: syn::Pat = syn::parse_quote!(&#input_pattern);
+            let variables = cq::rust::bindings(input_pattern);
             let condition = &operator.condition;
             quote! {
-                let #stream = ::core::iter::Iterator::filter(
+                let #stream = ::core::iter::Iterator::filter_map(
                     #input_stream,
-                    move |#[allow(unused_variables)] #borrowed_pattern| #condition,
+                    move |#[allow(unused_variables)] #input_pattern| {
+                        if #condition { ::core::option::Option::Some((#(#variables,)*)) }
+                        else { ::core::option::Option::None }
+                    },
                 );
             }
         }
@@ -588,6 +611,7 @@ fn canonical_indexes(source: &relational_plan::Module) -> Option<Vec<IndexSignat
         let heading = match &definition.operator {
             relational_plan::Operator::Unit(_)
             | relational_plan::Operator::Semijoin(_)
+            | relational_plan::Operator::Extend(_)
             | relational_plan::Operator::Select(_) => return None,
             relational_plan::Operator::Rename(rename) => rename
                 .mapping
@@ -649,18 +673,7 @@ fn symbols<'a>(identifiers: impl IntoIterator<Item = &'a syn::Ident>) -> Vec<Str
 }
 
 fn same_atom(left: &cq::Atom, right: &cq::Atom) -> bool {
-    symbol(&left.relation) == symbol(&right.relation)
-        && symbols(left.variables()) == symbols(right.variables())
-}
-
-/// Domain of the unchanged R1 lowering.
-pub(crate) fn r1_cq(source: &cq::Module) -> bool {
-    source
-        .program
-        .query
-        .body
-        .iter()
-        .all(|item| matches!(item, cq::BodyItem::Positive { .. }))
+    symbol(&left.relation) == symbol(&right.relation) && left.args == right.args
 }
 
 #[cfg(test)]
@@ -870,7 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn supplied_unit_is_locally_valid_but_reserved_for_hw4_lowering() {
+    fn unit_seed_is_supported_by_linear_lowering() {
         let source: relational_plan::Module = syn::parse2(quote! {
             struct GlobalSeed;
             relation R(c0: i32);
@@ -886,10 +899,10 @@ mod tests {
         .unwrap();
         relational_plan::contract::check(&source).unwrap();
 
-        assert!(!basic_left_deep_plan(&source));
+        assert!(basic_left_deep_plan(&source));
         assert!(canonical_indexes(&source).is_none());
-        let logical_error = crate::compile_relational_plan(&source).unwrap_err();
-        assert!(logical_error.to_string().contains("OPTIONAL HW4"));
+        let requirements = crate::compile_relational_plan(&source).unwrap();
+        assert!(indexes_are_exact(&source, &requirements));
 
         let indexed: index_requirements::Module = syn::parse2(quote! {
             #source
@@ -897,9 +910,8 @@ mod tests {
         })
         .unwrap();
         index_requirements::contract::check(&indexed).unwrap();
-        assert!(!physical_input_is_supported(&indexed));
-        let physical_error = crate::compile_index_requirements(&indexed).unwrap_err();
-        assert!(physical_error.to_string().contains("OPTIONAL HW4"));
+        assert!(physical_input_is_supported(&indexed));
+        crate::compile_index_requirements(&indexed).unwrap();
     }
 
     #[test]
@@ -985,13 +997,13 @@ mod tests {
                                 ::core::iter::IntoIterator::into_iter(
                                     right.get(&(x.clone(),)).into_iter().flatten()
                                 ),
-                                move |(y,)| (x, y,),
+                                move |(y,)| { let x = ::core::clone::Clone::clone(&x); (x, y,) },
                             )
                         },
                     );
-                    let iter2 = ::core::iter::Iterator::filter(
+                    let iter2 = ::core::iter::Iterator::filter_map(
                         iter1,
-                        move |#[allow(unused_variables)] &(x, y,)| keep(*x, *y),
+                        move |#[allow(unused_variables)] (x, y,)| { if keep(*x, *y) { ::core::option::Option::Some((x, y,)) } else { ::core::option::Option::None } },
                     );
                     let iter3 = ::core::iter::Iterator::map(
                         iter2,

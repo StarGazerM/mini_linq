@@ -27,6 +27,8 @@ pub mod kw {
     syn::custom_keyword!(semijoin);
     syn::custom_keyword!(select);
     syn::custom_keyword!(with);
+    syn::custom_keyword!(extend);
+    syn::custom_keyword!(value);
 }
 
 /// A complete CQ program followed by its named relational-algebra residual.
@@ -117,7 +119,7 @@ pub struct Definition {
 /// One logical set operator.
 ///
 /// ```text
-/// Operator ::= Unit | Rename | NaturalJoin | Project | Semijoin | Select
+/// Operator ::= Unit | Rename | NaturalJoin | Project | Semijoin | Select | Extend
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Operator {
@@ -130,6 +132,7 @@ pub enum Operator {
     Project(Box<Project>),
     Semijoin(Box<Semijoin>),
     Select(Box<Select>),
+    Extend(Box<Extend>),
 }
 
 impl Parse for Operator {
@@ -146,9 +149,11 @@ impl Parse for Operator {
             input.parse().map(Box::new).map(Self::Semijoin)
         } else if input.peek(kw::select) {
             input.parse().map(Box::new).map(Self::Select)
+        } else if input.peek(kw::extend) {
+            input.parse().map(Box::new).map(Self::Extend)
         } else {
             Err(input.error(
-                "expected `unit`, `rename`, `natural_join`, `project`, `semijoin`, or `select`",
+                "expected `unit`, `rename`, `natural_join`, `project`, `semijoin`, `select`, or `extend`",
             ))
         }
     }
@@ -163,6 +168,7 @@ impl ToTokens for Operator {
             Self::Project(operator) => operator.to_tokens(tokens),
             Self::Semijoin(operator) => operator.to_tokens(tokens),
             Self::Select(operator) => operator.to_tokens(tokens),
+            Self::Extend(operator) => operator.to_tokens(tokens),
         }
     }
 }
@@ -239,7 +245,26 @@ pub struct Select {
     #[syn(parenthesized)]
     pub condition_paren: token::Paren,
     #[syn(in = condition_paren)]
-    pub condition: cq::Predicate,
+    pub condition: syn::Expr,
+}
+
+/// Compute one tuple of fresh attributes for each input tuple. Rust owns the
+/// expression and its types; `_` permits local Rust inference for a binding.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Extend {
+    pub extend_token: kw::extend,
+    pub input: Ident,
+    pub with_token: kw::with,
+    #[syn(braced)]
+    pub columns_brace: token::Brace,
+    #[syn(in = columns_brace)]
+    #[parse(CommaList::parse_terminated)]
+    pub columns: CommaList<cq::ColumnDecl>,
+    pub value_token: kw::value,
+    #[syn(parenthesized)]
+    pub value_paren: token::Paren,
+    #[syn(in = value_paren)]
+    pub value: syn::Expr,
 }
 
 /// Set projection of an earlier result to a distinct subset of attributes.
@@ -301,7 +326,23 @@ type Heading = BTreeSet<String>;
 pub struct RelationInfo {
     pub heading: Heading,
     pub types: BTreeMap<String, syn::Type>,
+    /// Computed bindings are owned Rust values in subsequent expressions.
+    pub computed: BTreeSet<String>,
     operands: Vec<String>,
+}
+
+/// A proc macro cannot infer a Rust function's return type. A declared result
+/// schema supplies that public API boundary; simple projections inherit types.
+pub fn output_types(program: &cq::Program, input: &RelationInfo) -> syn::Result<Vec<syn::Type>> {
+    if let Some(output) = &program.output {
+        return Ok(output.columns.iter().map(|c| c.ty.clone()).collect());
+    }
+    program.query.head.args.iter().map(|arg| {
+        cq::rust::variable(arg).and_then(|v| input.types.get(&symbol_name(v)))
+            .filter(|ty| !matches!(ty, syn::Type::Infer(_))).cloned()
+            .ok_or_else(|| syn::Error::new_spanned(arg,
+                "declare the result relation's column types for a computed head, e.g. relation answer(value: String);"))
+    }).collect()
 }
 
 pub fn check_in(
@@ -310,6 +351,27 @@ pub fn check_in(
 ) -> syn::Result<BTreeMap<String, RelationInfo>> {
     let declarations = cq::check_input_declarations(inputs)?;
     let mut relations = BTreeMap::<String, RelationInfo>::new();
+    let logical: BTreeSet<_> = plan
+        .definitions
+        .iter()
+        .flat_map(|d| match &d.operator {
+            Operator::Rename(r) => r.mapping.iter().map(|m| symbol_name(&m.target)).collect(),
+            Operator::Extend(e) => e.columns.iter().map(|c| symbol_name(&c.name)).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let check_uses = |expr: &syn::Expr, heading: &Heading| -> syn::Result<()> {
+        if let Some(name) = cq::rust::known_uses(expr, &logical)
+            .difference(heading)
+            .next()
+        {
+            return Err(syn::Error::new_spanned(
+                expr,
+                format!("Rust expression uses unavailable attribute `{name}`"),
+            ));
+        }
+        Ok(())
+    };
 
     for definition in &plan.definitions {
         let result_name = symbol_name(&definition.result);
@@ -371,8 +433,22 @@ pub fn check_in(
             }
             Operator::Select(select) => {
                 let (name, input) = earlier_relation(&select.input, &relations)?;
-                select.condition.check_scope(&input.heading)?;
+                check_uses(&select.condition, &input.heading)?;
                 (input.heading.clone(), vec![name])
+            }
+            Operator::Extend(extend) => {
+                let (name, input) = earlier_relation(&extend.input, &relations)?;
+                check_uses(&extend.value, &input.heading)?;
+                let mut heading = input.heading.clone();
+                for column in &extend.columns {
+                    if !heading.insert(symbol_name(&column.name)) {
+                        return Err(syn::Error::new_spanned(
+                            column,
+                            "extend requires fresh, distinct attributes",
+                        ));
+                    }
+                }
+                (heading, vec![name])
             }
         };
 
@@ -396,11 +472,28 @@ pub fn check_in(
                 }
             }
         }
+        let mut computed: BTreeSet<_> = operands
+            .iter()
+            .flat_map(|r| {
+                relations[r]
+                    .computed
+                    .iter()
+                    .filter(|v| heading.contains(*v))
+                    .cloned()
+            })
+            .collect();
+        if let Operator::Extend(extend) = &definition.operator {
+            for column in &extend.columns {
+                types.insert(symbol_name(&column.name), column.ty.clone());
+                computed.insert(symbol_name(&column.name));
+            }
+        }
         relations.insert(
             result_name,
             RelationInfo {
                 heading,
                 types,
+                computed,
                 operands,
             },
         );
@@ -414,25 +507,26 @@ pub fn check_in(
         ));
     };
 
+    for expr in &plan.output.head.args {
+        check_uses(expr, &output.heading)?;
+    }
     let output_attributes = plan
         .output
         .head
-        .variables()
-        .map(symbol_name)
+        .args
+        .iter()
+        .flat_map(|e| cq::rust::uses(e, &output.heading))
         .collect::<BTreeSet<_>>();
-    if output_attributes != output.heading {
+    if !output_attributes.is_subset(&output.heading)
+        || (plan.output.head.variables().count() == plan.output.head.args.len()
+            && output_attributes != output.heading)
+    {
         return Err(syn::Error::new_spanned(
             &plan.output,
             "output tuple attributes must exactly match its input heading",
         ));
     }
 
-    if output_attributes.len() != plan.output.head.variables.len() {
-        return Err(syn::Error::new_spanned(
-            &plan.output.head,
-            "output repeats a variable",
-        ));
-    }
     check_all_reachable(plan, &relations, &output_name)?;
     Ok(relations)
 }
@@ -516,8 +610,7 @@ fn earlier_relation<'a>(
 fn check_output_head(expected: &cq::Atom, actual: &cq::Atom) -> syn::Result<()> {
     let same_relation = symbol_name(&expected.relation) == symbol_name(&actual.relation);
     let expected_variables = expected.variables().map(symbol_name).collect::<Vec<_>>();
-    let actual_variables = actual.variables().map(symbol_name).collect::<Vec<_>>();
-    if same_relation && expected_variables == actual_variables {
+    if same_relation && expected.args == actual.args {
         return Ok(());
     }
     Err(syn::Error::new_spanned(

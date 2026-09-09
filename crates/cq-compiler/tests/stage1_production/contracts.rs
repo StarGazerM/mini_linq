@@ -289,9 +289,9 @@ fn semijoin_backend_uses_composite_existence_keys_without_pair_enumeration() {
 }
 
 #[test]
-fn source_extensions_do_not_bypass_or_panic_in_r1_contracts() {
+fn rust_expression_syntax_reaches_both_logical_routes() {
     let source = star();
-    assert!(cq_compiler::compile_cq(&source).is_err());
+    assert!(cq_compiler::compile_cq(&source).is_ok());
     for predicate in [
         "f(x) > 0",
         "x + 1 > 0",
@@ -299,12 +299,12 @@ fn source_extensions_do_not_bypass_or_panic_in_r1_contracts() {
         "x > 2147483648",
         "x > 0u32",
     ] {
-        let text =
-            format!("struct Invalid; relation R(x:i32); answer(x) :- R(x), if ({predicate}).");
-        if let Ok(source) = syn::parse_str::<cq::Module>(&text) {
-            assert!(cq_compiler::compile_cq_planned(&source).is_err());
-        }
+        let text = format!("struct P; relation R(x:i32); answer(x) :- R(x), if ({predicate}).");
+        let source = syn::parse_str::<cq::Module>(&text).unwrap();
+        cq_compiler::compile_cq_planned(&source).unwrap();
+        cq_compiler::compile_cq(&source).unwrap();
     }
-    // Host types are checked by Rust at the physical boundary, not by
-    // comparing Type syntax in logical IR contracts (aliases remain valid).
+    // Name resolution, literal typing and trait selection belong to Rust.
+    // This checks parser/lowering preservation, not that these host fragments
+    // typecheck without declarations in their enclosing Rust module.
 }

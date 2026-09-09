@@ -415,30 +415,45 @@ fn format_cq_program(program: &cq::Program) -> String {
     } else {
         format!("{visibility} struct {};", program.name)
     };
-    let inputs = program.inputs.iter().map(|input| {
-        let columns = input
-            .columns
-            .iter()
-            .map(|column| format!("{}: {}", column.name, compact_tokens(&column.ty)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("relation {}({columns});", input.name)
-    });
+    let inputs = program
+        .inputs
+        .iter()
+        .chain(program.output.iter())
+        .map(|input| {
+            let columns = input
+                .columns
+                .iter()
+                .map(|column| format!("{}: {}", column.name, compact_tokens(&column.ty)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("relation {}({columns});", input.name)
+        });
     let clauses = program
         .query
         .body
         .iter()
-        .map(compact_tokens)
+        .map(|item| match item {
+            cq::BodyItem::Positive { atom } => format_atom(atom),
+            _ => compact_tokens(item),
+        })
         .collect::<Vec<_>>();
+    let end = match program.query.end {
+        cq::RuleEnd::Dot(_) => ".",
+        cq::RuleEnd::Semi(_) => ";",
+    };
     let query = if clauses.len() == 1 {
-        format!("{} :- {}.", format_atom(&program.query.head), clauses[0],)
+        format!(
+            "{} :- {}{end}",
+            format_atom(&program.query.head),
+            clauses[0],
+        )
     } else {
         let mut lines = clauses
             .iter()
             .enumerate()
             .map(|(position, clause)| {
                 let terminator = if position + 1 == clauses.len() {
-                    "."
+                    end
                 } else {
                     ","
                 };
@@ -486,6 +501,12 @@ fn format_relational_operator(operator: &relational_plan::Operator) -> String {
             "select {} if ({})",
             operator.input,
             quote::ToTokens::to_token_stream(&operator.condition)
+        ),
+        relational_plan::Operator::Extend(operator) => format!(
+            "extend {} with {{{}}} value ({})",
+            operator.input,
+            quote::ToTokens::to_token_stream(&operator.columns),
+            quote::ToTokens::to_token_stream(&operator.value)
         ),
         relational_plan::Operator::Rename(operator) => {
             let mapping = operator
@@ -542,13 +563,15 @@ fn format_atom(atom: &cq::Atom) -> String {
     let variables = atom
         .args
         .iter()
-        .map(|arg| arg.to_token_stream().to_string())
+        .map(compact_tokens)
         .collect::<Vec<_>>()
         .join(", ");
     format!("{}({variables})", atom.relation)
 }
 
 fn compact_tokens(value: &impl ToTokens) -> String {
+    // Token serialization preserves literal contents and punctuation jointness.
+    // Textual whitespace replacement can change arbitrary embedded Rust.
     value.to_token_stream().to_string()
 }
 
@@ -679,7 +702,10 @@ fn format_rust_access_plan(plan: &rust_access_plan::Plan) -> String {
         } else {
             ","
         };
-        let item = compact_tokens(&clause.item);
+        let item = match &clause.item {
+            cq::BodyItem::Positive { atom } => format_atom(atom),
+            item => compact_tokens(item),
+        };
         match &clause.access {
             rust_access_plan::RustAccess::For {
                 pattern, source, ..
@@ -1051,6 +1077,27 @@ mod tests {
 
     fn triangle() -> &'static QueryCase {
         cq_workloads::case("triangle").unwrap()
+    }
+
+    #[test]
+    fn expression_artifacts_preserve_literals_arguments_and_result_schema() {
+        let source: cq::Module = syn::parse_quote! {
+            struct Expressions;
+            relation R(value: i32);
+            relation answer(value: String);
+            answer(format!(" :: ( & * ! > {x}")) :-
+                R(x), let label = " :: ( & * ! >".to_owned(),
+                if *x > 0 && !label.is_empty();
+        };
+        let rendered = format_cq_program(&source.program);
+        let restored: cq::Module = syn::parse_str(&rendered).unwrap();
+        assert_eq!(restored, source);
+        let extended: relational_plan::Operator = syn::parse_quote! {
+            extend r0 with {label: String} value ((" :: ( & * ! >".to_owned(),))
+        };
+        let restored: relational_plan::Operator =
+            syn::parse_str(&format_relational_operator(&extended)).unwrap();
+        assert_eq!(restored, extended);
     }
 
     #[test]

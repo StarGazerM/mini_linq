@@ -25,6 +25,9 @@ fn normalized_table_name(input_index: usize) -> String {
 /// Translate one well-formed positive CQ without consulting either compiler pass.
 pub fn translate(module: &cq::Module) -> Result<String, SqlError> {
     cq::contract::check(module).map_err(SqlError::InvalidQuery)?;
+    if !cq::rust::basic(module) {
+        return Err(SqlError::UnsupportedBodyItem);
+    }
 
     let atoms = positive_atoms(&module.program.query)?;
     let mut output = String::from("WITH\n");

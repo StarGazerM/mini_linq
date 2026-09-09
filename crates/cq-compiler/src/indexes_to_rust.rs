@@ -7,9 +7,12 @@ use cq_ir::{
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
+use syn::spanned::Spanned;
 
 type Information = BTreeMap<String, ra::RelationInfo>;
 type Names = BTreeMap<String, syn::Ident>;
+mod lazy;
+pub(crate) use lazy::{compile as compile_lazy, extended, linear, supported as lazy_supported};
 
 pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
     let ra = &source.relational_plan;
@@ -103,24 +106,36 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
     let output_name = symbol_name(&ra.plan.output.input);
     let output = &results[&output_name];
     let output_info = &info[&output_name];
-    let output_types: Vec<_> = ra
+    let output_types = cq_ir::relational_plan::output_types(&ra.program, output_info)?;
+    let fields: Vec<_> = ra
         .plan
         .output
         .head
-        .variables
+        .args
         .iter()
-        .map(|v| &output_info.types[&symbol_name(v)])
+        .map(|expr| {
+            if let Some(v) =
+                cq::rust::variable(expr).filter(|v| output_info.heading.contains(&symbol_name(v)))
+            {
+                let index = syn::Index::from(
+                    output_info
+                        .heading
+                        .iter()
+                        .position(|x| *x == symbol_name(v))
+                        .unwrap(),
+                );
+                quote!(::core::clone::Clone::clone(&__row.#index))
+            } else {
+                let aliases = expression_aliases(expr, output_info, |name| {
+                    let index = syn::Index::from(
+                        output_info.heading.iter().position(|x| x == name).unwrap(),
+                    );
+                    quote!(&__row.#index)
+                });
+                quote!({ #aliases #expr })
+            }
+        })
         .collect();
-    let fields = ra.plan.output.head.variables.iter().map(|v| {
-        let i = syn::Index::from(
-            output_info
-                .heading
-                .iter()
-                .position(|x| *x == symbol_name(v))
-                .unwrap(),
-        );
-        quote!(::core::clone::Clone::clone(&__row.#i))
-    });
     let parameters: Vec<_> = ra
         .program
         .inputs
@@ -160,7 +175,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
                 #(#statements)*
                 __stats.join_pairs = __pairs.get();
                 __stats.semijoin_probes = __probes.get();
-                let answer = #output.iter().map(|__row| (#(#fields,)*)).collect();
+                let answer = #output.iter().map(|__row| { (#(#fields,)*) }).collect();
                 #storage { answer, stats: __stats }
             }
             pub fn run(#(#parameters),*) -> ::std::vec::Vec<#row> {
@@ -286,15 +301,33 @@ fn local_plan(
                 &vars(&info[&symbol_name(&s.input)].heading),
                 quote!(__left),
             ));
-            let mut condition = s.condition.clone();
-            for term in [&mut condition.left, &mut condition.right] {
-                if let cq::Term::Variable(v) = term {
-                    *v = variables[&symbol_name(v)].clone();
-                }
-            }
-            let expression = predicate(&condition);
-            clauses.push(syn::parse_quote!(if (#condition) => if (#expression)));
+            let condition = &s.condition;
+            let expression = rust_expression(condition, &info[&symbol_name(&s.input)], &variables);
+            clauses.push(syn::parse_quote!(if (#expression) => if (#expression)));
         }
+        ra::Operator::Extend(e) => {
+            let input = &results[&symbol_name(&e.input)];
+            bindings.extend(quote!(let __left = &#input;));
+            let input_info = &info[&symbol_name(&e.input)];
+            clauses.push(scan(&vars(&input_info.heading), quote!(__left)));
+            let fresh: Vec<_> = e
+                .columns
+                .iter()
+                .map(|c| &variables[&symbol_name(&c.name)])
+                .collect();
+            let expression = rust_expression(&e.value, input_info, &variables);
+            clauses.push(syn::parse_quote!(computed(#(#fresh),*) => for (#(#fresh,)*) in (::core::iter::once(#expression))));
+            let added: BTreeSet<_> = fresh.iter().map(|v| symbol_name(v)).collect();
+            let fields = head.iter().map(|v| {
+                if added.contains(&symbol_name(v)) {
+                    quote!(#v)
+                } else {
+                    quote!(::core::clone::Clone::clone(#v))
+                }
+            });
+            value = quote!((#(#fields,)*));
+        }
+
         ra::Operator::NaturalJoin(_) | ra::Operator::Semijoin(_) => {
             let (left, right) = indexes::operands(&definition.operator).unwrap();
             let ln = symbol_name(left);
@@ -370,4 +403,94 @@ fn predicate(p: &cq::Predicate) -> TokenStream {
     let right = term(&p.right);
     let cmp = &p.comparison;
     quote!(#left #cmp #right)
+}
+
+/// Leave opaque Rust tokens untouched, including nested macro invocations.
+/// Computed attributes re-enter expressions as owned values; scanned columns
+/// retain Ascent's borrowed binding convention.
+fn rust_expression(expr: &syn::Expr, input: &ra::RelationInfo, variables: &Names) -> TokenStream {
+    if let Some(mut p) = cq::rust::comparison(expr) {
+        let primitive = p
+            .variables()
+            .iter()
+            .all(|v| input.types.get(v).is_some_and(cq::rust::primitive_i32));
+        for term in [&mut p.left, &mut p.right] {
+            if let cq::Term::Variable(v) = term {
+                let Some(binding) = variables.get(&symbol_name(v)) else {
+                    let aliases = expression_aliases(expr, input, |name| {
+                        let v = &variables[name];
+                        quote!(#v)
+                    });
+                    return quote!({ #aliases #expr });
+                };
+                *v = binding.clone();
+            }
+        }
+        if primitive {
+            return predicate(&p);
+        }
+        // Legacy variable/literal comparisons also work through type aliases.
+        // They remain source-ordered and use Rust's own comparison traits.
+        let term = |t: &cq::Term| match t {
+            cq::Term::Variable(v) => quote!(#v),
+            cq::Term::Integer(n) => quote!(&#n),
+        };
+        let left = term(&p.left);
+        let right = term(&p.right);
+        let op = &p.comparison;
+        return quote!(#left #op #right);
+    }
+    let aliases = expression_aliases(expr, input, |name| {
+        let v = &variables[name];
+        quote!(#v)
+    });
+    quote!({ #aliases #expr })
+}
+
+/// Bind the logical environment at the original Rust syntax contexts instead
+/// of rewriting paths or macro tokens. This also supports implicit format!
+/// captures and callers that wrap the query in macro_rules!.
+fn expression_aliases(
+    expr: &syn::Expr,
+    input: &ra::RelationInfo,
+    value: impl Fn(&str) -> TokenStream,
+) -> TokenStream {
+    struct References<'a> {
+        names: &'a BTreeSet<String>,
+        ids: Vec<syn::Ident>,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for References<'_> {
+        fn visit_expr_path(&mut self, e: &'ast syn::ExprPath) {
+            if e.qself.is_none() {
+                if let Some(id) = e.path.get_ident() {
+                    if self.names.contains(&symbol_name(id)) {
+                        self.ids.push(id.clone());
+                    }
+                }
+            }
+        }
+        fn visit_macro(&mut self, m: &'ast syn::Macro) {
+            self.ids.extend(
+                self.names
+                    .iter()
+                    .map(|name| format_ident!("r#{name}", span = m.path.span())),
+            );
+        }
+    }
+    let used = cq::rust::uses(expr, &input.heading);
+    let mut refs = References {
+        names: &used,
+        ids: Vec::new(),
+    };
+    syn::visit::Visit::visit_expr(&mut refs, expr);
+    let bindings = refs.ids.iter().map(|id| {
+        let name = symbol_name(id);
+        let value = value(&name);
+        if input.computed.contains(&name) {
+            quote!(#[allow(unused_variables)] let #id = ::core::clone::Clone::clone(#value);)
+        } else {
+            quote!(#[allow(unused_variables)] let #id = #value;)
+        }
+    });
+    quote!(#(#bindings)*)
 }

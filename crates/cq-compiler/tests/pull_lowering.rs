@@ -61,13 +61,13 @@ fn pipeline_emits_the_exact_lazy_rust_adapter_pipeline() {
                             ::core::iter::IntoIterator::into_iter(
                                 right.get(&(::core::clone::Clone::clone(x),)).into_iter().flatten()
                             ),
-                            move |(y,)| (x, y,),
+                            move |(y,)| { let x = ::core::clone::Clone::clone(&x); (x, y,) },
                         )
                     },
                 );
-                let iter2 = ::core::iter::Iterator::filter(
+                let iter2 = ::core::iter::Iterator::filter_map(
                     iter1,
-                    move |#[allow(unused_variables)] &(x, y,)| *x != *y,
+                    move |#[allow(unused_variables)] (x, y,)| { if *x != *y { ::core::option::Option::Some((x, y,)) } else { ::core::option::Option::None } },
                 );
                 let iter3 = ::core::iter::Iterator::map(
                     iter2,
@@ -157,7 +157,7 @@ fn aggregate_style_identifier_items_remain_an_explicit_join_boundary() {
                     move |(person,)| {
                         ::core::iter::Iterator::map(
                             ::core::iter::IntoIterator::into_iter(totals(*person)),
-                            move |total| (person, total,),
+                            move |total| { let person = ::core::clone::Clone::clone(&person); (person, total,) },
                         )
                     },
                 );
@@ -211,7 +211,7 @@ impl<'ast> Visit<'ast> for IteratorShape {
             self.maps += 1;
         } else if name == "flat_map" {
             self.flat_maps += 1;
-        } else if name == "filter" {
+        } else if name == "filter" || name == "filter_map" {
             self.filters += 1;
         } else if name == "flatten" {
             self.flattens += 1;

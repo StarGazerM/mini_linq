@@ -37,6 +37,16 @@ type Schema = BTreeMap<String, RelationSchema>;
 
 /// Lower one positive CQ to the canonical named left-deep relational plan.
 pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
+    if !cq::rust::basic(source) {
+        return crate::cq_to_relational::ordered::plan(
+            source,
+            crate::PlanningOptions {
+                strategy: crate::JoinPolicy::Written,
+                max_arity: None,
+            },
+        )
+        .map(|(plan, _)| plan);
+    }
     let declarations = source
         .program
         .inputs
@@ -57,7 +67,7 @@ pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
         let mapping = declaration
             .columns
             .iter()
-            .zip(&atom.variables)
+            .zip(atom.variables())
             .map(|(column, variable)| {
                 let source = &column.name;
                 quote!(#source -> #variable)
@@ -83,7 +93,7 @@ pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
     let input = current.expect("a CQ contract requires a nonempty body");
     let project = local_ident("r", next_result);
     let head = &source.program.query.head;
-    let attributes = head.variables.iter();
+    let attributes = head.variables();
     definitions.push(quote! {
         #project = project #input keep { #(#attributes),* };
     });
@@ -102,6 +112,15 @@ pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
 pub fn compile_relational_plan(
     source: &relational_plan::Module,
 ) -> syn::Result<index_requirements::Module> {
+    if crate::indexes_to_rust::extended(source) {
+        if !crate::indexes_to_rust::linear(source) {
+            return Err(syn::Error::new_spanned(
+                source,
+                "the lazy backend requires a linear relational prefix",
+            ));
+        }
+        return crate::relational_to_indexes::compile(source);
+    }
     let logical = lowerable_access_sequence(source)?;
     let mut seen = BTreeSet::<IndexSignature>::new();
     let requirements = logical
@@ -175,7 +194,9 @@ fn lowerable_access_sequence(
         let heading = match &definition.operator {
             // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): lower the supplied Unit
             // only as specified in doc/HW4-OPTIONAL.md.
-            relational_plan::Operator::Semijoin(_) | relational_plan::Operator::Select(_) => {
+            relational_plan::Operator::Extend(_)
+            | relational_plan::Operator::Semijoin(_)
+            | relational_plan::Operator::Select(_) => {
                 return Err(syn::Error::new_spanned(
                     definition,
                     "use the Stage I backend for semijoin and selection",
@@ -370,6 +391,10 @@ fn relational_key_columns(
 
 /// Lower IndexRequirements to ordinary staged Rust with one local `pull!`.
 pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::Result<syn::File> {
+    if crate::indexes_to_rust::extended(&source.relational_plan) {
+        crate::relational_to_indexes::check_coverage(source)?;
+        return crate::indexes_to_rust::compile_lazy(source);
+    }
     if source
         .indexes
         .iter()
@@ -407,8 +432,7 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
     let variable_types = variable_types(&logical, &schema);
     let output_types = logical
         .head
-        .variables
-        .iter()
+        .variables()
         .map(|variable| {
             variable_types
                 .get(&cq_ir::symbol_name(variable))
@@ -491,7 +515,7 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
 
         let access =
             if matches!(occurrence.kind, LogicalAccessKind::Enumerate) && key_columns.is_empty() {
-                let variables = atom.variables.iter();
+                let variables = atom.variables();
                 if let Some(&index_number) = full_indexes.get(&input_number) {
                     let index = local_ident("index", index_number);
                     quote! {
@@ -517,7 +541,8 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
                 let key = key_columns
                     .iter()
                     .map(|&column| {
-                        let variable = &atom.variables[column];
+                        let variable =
+                            cq::rust::variable(&atom.args[column]).expect("normalized access");
                         quote!(::core::clone::Clone::clone(#variable))
                     })
                     .collect::<Vec<_>>();
@@ -530,8 +555,7 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
                 } else {
                     let key_set = key_columns.iter().copied().collect::<BTreeSet<_>>();
                     let payload = atom
-                        .variables
-                        .iter()
+                        .variables()
                         .enumerate()
                         .filter_map(|(column, variable)| {
                             (!key_set.contains(&column)).then_some(variable)
@@ -689,8 +713,7 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
     let output_atom = &logical.head;
     let output_variables = logical
         .head
-        .variables
-        .iter()
+        .variables()
         .map(|variable| quote!(::core::clone::Clone::clone(#variable)))
         .collect::<Vec<_>>();
     let access_plan = quote! {
@@ -859,7 +882,7 @@ fn variable_types(logical: &LowerableLogicalPlan, schema: &Schema) -> BTreeMap<S
         let relation = schema
             .get(&cq_ir::symbol_name(&access.atom.relation))
             .expect("the logical-plan contract requires every body relation to be declared");
-        for (variable, column_type) in access.atom.variables.iter().zip(&relation.column_types) {
+        for (variable, column_type) in access.atom.variables().zip(&relation.column_types) {
             types
                 .entry(cq_ir::symbol_name(variable))
                 .or_insert_with(|| column_type.clone());

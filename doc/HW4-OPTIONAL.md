@@ -109,13 +109,13 @@ below; students do not invent a dummy positive relation.
 The existing parser accepts:
 
 ```text
-Query          ::= Atom ":-" BodyItem ("," BodyItem)* "."
-BodyItem       ::= Atom | Negation | Aggregate
-Negation       ::= "!" PatternAtom
-Aggregate      ::= "agg" Ident "=" RustPath "(" [Ident] ")"
-                   "in" PatternAtom
-PatternAtom    ::= Ident "(" [PatternTerm ("," PatternTerm)* [","]] ")"
-PatternTerm    ::= Ident | "_"
+Query          ::= Atom ":-" BodyItem ("," BodyItem)* ("." | ";")
+BodyItem       ::= Atom | "if" RustExpr | "let" RustPat "=" RustExpr
+                 | Negation | Aggregate
+Negation       ::= "!" Atom
+Aggregate      ::= "agg" RustPat "=" RustPath "(" [RustExpr ("," RustExpr)*] ")"
+                   "in" Atom
+Atom           ::= Ident "(" [RustExpr ("," RustExpr)* [","]] ")"
 ```
 
 This homework's required semantic subset uses the simple path `sum` with
@@ -128,13 +128,13 @@ values. Supporting that broader syntax in execution is a separate extension.
 literally `agg` must therefore use the raw spelling `r#agg`, consistent with
 the existing raw-identifier policy.
 
-`Negation` and `Aggregate` are nominal payloads in the existing `BodyItem`.
-All syntax objects derive `Parse` and `ToTokens`; native Syn parses Rust
-leaves. Reuse `Atom`, `cq::rust::variable`, and `cq::rust::bindings` when
-checking the required subset. For expression extensions, use
-`free_variables(expr).dependencies(environment)` to retain logical inputs,
-including conservative dependencies of opaque macros. The caller must still
-establish the correct CQ environment and aggregate-local scope.
+Add `Negation` and `Aggregate` variants to the existing `BodyItem` enum, with
+nominal payload objects for `Negation` and `Aggregate`. Reuse `Atom`,
+`syn::Expr`, and `syn::Pat`; do not introduce an identifier-only argument
+parser or a second pattern-atom language. The
+exact Rust field layout is your design decision. Every new syntax object must
+derive `Parse` and `ToTokens`, and the complete module must still round-trip
+structurally.
 
 ## Local language contract
 
@@ -142,21 +142,27 @@ Let `B` be the set of variables bound before a body item.
 
 ### Positive atom
 
-The existing rule remains: check the declared relation and arity, then extend
-`B` with the atom's variables. Existing variables are equality-join inputs;
-new variables are outputs.
+Use the existing [expression contract](RUST-EXPRESSIONS.md): check the
+declared relation and arity, normalize expression arguments and repeated
+variables, then extend `B` with fresh binders. Guard and let dependencies
+remain ordered. General Rust syntax must survive parsing even when the
+required aggregate exercise supports only a narrower semantic subset.
 
 ### Negation
 
 For `!R(t0, ..., tn)`:
 
 - `R` must be a declared input with the written arity;
-- every named term must already belong to `B`;
+- every bare variable and known logical expression dependency must already
+  belong to `B`;
 - `_` is an anonymous wildcard;
 - the clause binds no variable, so the outgoing environment is still `B`.
 
 This is safe, correlated negation. A later positive clause cannot retroactively
-bind a variable used by an earlier negation.
+bind a variable used by an earlier negation. Computed arguments are inputs,
+not binders: evaluate them from the prefix using the existing Extend
+normalization before the anti-join. Preserve opaque-expression dependencies
+and do not reorder them across other Rust clauses.
 
 ### Aggregation
 

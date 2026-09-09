@@ -115,7 +115,7 @@ fn the_grammars_are_distinct() {
 }
 
 #[test]
-fn cq_language_contract_enforces_the_narrow_relational_core() {
+fn cq_language_contract_checks_relations_arities_and_bindings() {
     let escaped_keyword: cq::Module = syn::parse2(quote! {
         struct P;
         relation R(c0: i32);
@@ -155,11 +155,6 @@ fn cq_language_contract_enforces_the_narrow_relational_core() {
             struct P;
             relation R(c0: i32);
             r#R(x) :- R(x).
-        },
-        quote! {
-            struct P;
-            relation R(c0: i32, c1: i32);
-            answer(x) :- R(x, r#x).
         },
     ] {
         let module: cq::Module = syn::parse2(invalid).unwrap();

@@ -20,3 +20,22 @@ cq-compiler.workspace = true
 cq-ir.workspace = true
 quote.workspace = true
 syn.workspace = true
+
+[[example]]
+name = "rust-expressions"
+path = "../../examples/rust-expressions/main.rs"
+required-features = ["compiled-workloads"]
+test = true
+harness = false
+
+[[example]]
+name = "rust-expressions-planned"
+path = "../../examples/rust-expressions/planned.rs"
+required-features = ["compiled-workloads"]
+test = true
+harness = false
+
+[[example]]
+name = "negation-aggregation"
+path = "../../examples/negation-aggregation/main.rs"
+required-features = ["hw4"]

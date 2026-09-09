@@ -18,12 +18,7 @@ pub fn has_join_tree(program: &cq::Program) -> bool {
         .body
         .iter()
         .filter_map(cq::BodyItem::atom)
-        .map(|atom| {
-            atom.variables
-                .iter()
-                .map(symbol_name)
-                .collect::<BTreeSet<_>>()
-        })
+        .map(|atom| atom.variables().map(symbol_name).collect::<BTreeSet<_>>())
         .collect::<Vec<_>>();
     has_join_tree_for(&headings)
 }
@@ -157,9 +152,12 @@ pub fn valuations(program: &cq::Program, database: &Database) -> Relation {
         .filter_map(|item| match item {
             cq::BodyItem::Positive { atom } => Some((
                 symbol_name(&atom.relation),
-                atom.variables.iter().map(symbol_name).collect::<Vec<_>>(),
+                atom.variables().map(symbol_name).collect::<Vec<_>>(),
             )),
             cq::BodyItem::Filter(_) => None,
+            cq::BodyItem::Let(_) => {
+                panic!("integer valuation oracle domain excludes Rust let clauses")
+            }
         })
         .collect::<Vec<_>>();
     let predicates = program
@@ -224,8 +222,7 @@ pub fn evaluate_cq(program: &cq::Program, database: &Database) -> Rows {
         &program
             .query
             .head
-            .variables
-            .iter()
+            .variables()
             .map(symbol_name)
             .collect::<Vec<_>>(),
     )
@@ -300,6 +297,9 @@ pub fn evaluate_plan(
                     .retain(|row| evaluate_predicate(&select.condition, row));
                 input
             }
+            relational_plan::Operator::Extend(_) => {
+                panic!("Rust computations are tested by compiled end-to-end tests")
+            }
             relational_plan::Operator::Project(project) => definitions
                 [&symbol_name(&project.input)]
                 .project(project.attributes.iter().map(symbol_name).collect()),
@@ -314,8 +314,7 @@ pub fn evaluate_plan(
         &plan
             .output
             .head
-            .variables
-            .iter()
+            .variables()
             .map(symbol_name)
             .collect::<Vec<_>>(),
     );
@@ -325,7 +324,14 @@ pub fn evaluate_plan(
     }
 }
 
-pub fn evaluate_predicate(predicate: &cq::Predicate, row: &Binding) -> bool {
+pub fn evaluate_predicate(expr: &syn::Expr, row: &Binding) -> bool {
+    use quote::ToTokens;
+    let mut expr = expr;
+    while let syn::Expr::Paren(p) = expr {
+        expr = &p.expr;
+    }
+    let predicate: cq::Predicate =
+        syn::parse2(expr.to_token_stream()).expect("integer comparison oracle domain");
     use cq::{Comparison, Term};
     let value = |term: &Term| match term {
         Term::Variable(v) => row[&symbol_name(v)],

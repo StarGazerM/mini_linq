@@ -1,4 +1,6 @@
 [package]
+# Crate-owned examples below examples/ have their own completion gates.
+autoexamples = false
 name = "mini-linq-course"
 version.workspace = true
 edition.workspace = true
@@ -29,7 +31,7 @@ mini-linq = { path = "crates/mini-linq" }
 proc-macro2 = "1"
 prettyplease = "0.2"
 quote = "1"
-syn = { version = "2", features = ["extra-traits", "full"] }
+syn = { version = "2", features = ["extra-traits", "full", "visit"] }
 syn_derive = { git = "https://github.com/StarGazerM/syn_derive", rev = "4782eed9cef0a79c5d0e6be2fa945b2fc5f30ede" }
 
 [features]

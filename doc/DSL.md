@@ -107,8 +107,9 @@ Program           ::= RustVisibility? "struct" Ident ";"
                       Query
 RelationDecl      ::= Ident "(" ColumnDecl ("," ColumnDecl)* [","] ")" ";"
 ColumnDecl        ::= Ident ":" RustType
-Query             ::= Atom ":-" Atom ("," Atom)* "."
-Atom              ::= Ident "(" Ident ("," Ident)* [","] ")"
+Query             ::= Atom ":-" BodyItem ("," BodyItem)* ("." | ";")
+BodyItem          ::= Atom | "if" RustExpr | "let" RustPat "=" RustExpr
+Atom              ::= Ident "(" [RustExpr ("," RustExpr)* [","]] ")"
 
 RelationalModule  ::= Program "relational" "{" RelationalPlan "}"
 RelationalPlan    ::= RelDefinition* RelOutput
@@ -116,7 +117,11 @@ RelDefinition     ::= RelId "=" RelOperator ";"
 RelOperator       ::= "unit"
                     | "rename" Ident "{" RenameMap ("," RenameMap)* [","] "}"
                     | "natural_join" RelId "with" RelId
-                    | "project" RelId "keep" "{" Ident ("," Ident)* [","] "}"
+                    | "project" RelId "keep" "{" [Ident ("," Ident)* [","]] "}"
+                    | "semijoin" RelId "with" RelId
+                    | "select" RelId "if" "(" RustExpr ")"
+                    | "extend" RelId "with" "{" [ColumnDecl ("," ColumnDecl)*] "}"
+                      "value" "(" RustExpr ")"
 RenameMap         ::= Ident "->" Ident
 RelOutput         ::= "output" RelId "as" Atom "."
 
@@ -166,12 +171,13 @@ parenthesized aggregator and input atom arguments.
 
 MiniLinq deliberately uses [Ascent's typed relation-declaration
 shape](https://docs.rs/crate/ascent/latest). In this one-rule query language,
-every declared relation is an extensional input: the declaration supplies its
-symbol and named Rust columns in positional order, while `build` or `run`
-receives the current finite relation instance from host Rust. CQ atom arguments
-remain positional against that declaration order. The DSL has no fact-insertion
-form. The query head is the one derived output relation, so it needs no
-separate declaration.
+a declaration supplies a symbol and named Rust columns in positional order.
+Input instances are passed to `build` or `run`. An optional declaration with
+the head relation name specifies the result types and is not an input.
+Variable-only heads infer their types from inputs or explicitly typed `let`
+bindings; computed heads require the result declaration. The DSL has no
+fact-insertion form. See [Rust expressions](RUST-EXPRESSIONS.md) for expression
+arguments, bindings, scope, and evaluation order.
 
 The number of named columns is the relation's arity. Their types are
 operational, not comments: generated rows, keys, index payloads, and results
@@ -569,14 +575,18 @@ impl TriangleProgramStorage {
                                     .into_iter()
                                     .flatten(),
                             ),
-                            move |(z,)| (x, y, z),
+                            move |(z,)| {
+                                let x = ::core::clone::Clone::clone(&x);
+                                let y = ::core::clone::Clone::clone(&y);
+                                (x, y, z)
+                            },
                         )
                     },
                 );
-                let iter2 = ::core::iter::Iterator::filter(
+                let iter2 = ::core::iter::Iterator::filter_map(
                     iter1,
-                    move |#[allow(unused_variables)] &(x, y, z)| {
-                        self
+                    move |#[allow(unused_variables)] (x, y, z)| {
+                        if self
                             .index1
                             .contains(
                                 &(
@@ -584,6 +594,11 @@ impl TriangleProgramStorage {
                                     ::core::clone::Clone::clone(x),
                                 ),
                             )
+                        {
+                            ::core::option::Option::Some((x, y, z))
+                        } else {
+                            ::core::option::Option::None
+                        }
                     },
                 );
                 let iter3 = ::core::iter::Iterator::map(
@@ -614,7 +629,7 @@ impl TriangleProgramStorage {
 ```
 
 This last transformation is semantic lowering, not pretty-printing. It maps
-the named operators to ordinary Rust `map`, `flat_map`, and `filter` values,
+the named operators to ordinary Rust `map`, `flat_map`, `filter_map`, and `filter` values,
 one `let iterN` per plan definition. `once_with(...).flatten()` defers source
 evaluation and distinct-state construction until the first `next()`. Every
 later `next()` resumes the saved iterator state and does only enough work to
@@ -640,8 +655,11 @@ the next item can actually wait on I/O or a channel.
 
 - Input relation and per-relation column names are unique; arities are positive.
 - Every body atom names a declared input with matching positional arity.
-- Baseline atoms contain distinct variables.
-- Every head variable is bound by the body.
+- Bare atom arguments bind variables; repeated arguments constrain equality.
+- Computed arguments and guards use the preceding lexical environment; `_`
+  matches an anonymous column. `let` adds fresh pattern bindings.
+- Known logical dependencies are bound before use. Host Rust names and types
+  are resolved by rustc. Computed heads have declared result types.
 
 ### RelationalPlan
 
@@ -651,8 +669,9 @@ the next item can actually wait on I/O or a channel.
   and has distinct targets.
 - NaturalJoin infers the heading union.
 - Project keeps a distinct subset of its input heading.
-- Output exactly matches the source head and its input heading. It is metadata,
-  not an operator.
+- Select retains its complete Rust condition; Extend adds fresh computed columns.
+- Output exactly preserves the source head. Its input retains every expression
+  dependency and, for computed heads, the witnesses needed before evaluation.
 - These are local rules; the separate exact pass contract enforces source
   occurrence order and the canonical left-deep shape.
 

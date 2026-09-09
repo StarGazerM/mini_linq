@@ -57,8 +57,9 @@ impl PlannedExample {
                 ::mini_linq::pull! {
                     output(v1, v2) => ((::core::clone::Clone::clone(v1),
                     ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,)
-                    in (__left.iter()), if (v2 > 0i32) => if ({ let value :
-                    ::core::primitive::i32 = * v2; value } > 0i32).
+                    in (__left.iter()), if ({ let value : ::core::primitive::i32 = * v2;
+                    value } > 0i32) => if ({ let value : ::core::primitive::i32 = * v2;
+                    value } > 0i32).
                 },
             )
         };
@@ -145,7 +146,7 @@ impl PlannedExample {
         __stats.semijoin_probes = __probes.get();
         let answer = relation7
             .iter()
-            .map(|__row| (::core::clone::Clone::clone(&__row.0),))
+            .map(|__row| { (::core::clone::Clone::clone(&__row.0),) })
             .collect();
         PlannedExampleStorage {
             answer,

@@ -128,6 +128,16 @@ pub mod contract {
 
 fn check_plan(query: &Plan) -> syn::Result<()> {
     let mut bound = BTreeSet::new();
+    let logical = query
+        .body
+        .iter()
+        .flat_map(|clause| match &clause.item {
+            cq::BodyItem::Positive { atom } => atom.variables().cloned().collect(),
+            cq::BodyItem::Let(binding) => cq::rust::bindings(&binding.pattern),
+            cq::BodyItem::Filter(_) => Vec::new(),
+        })
+        .map(|id| symbol_name(&id))
+        .collect();
 
     for (position, clause) in query.body.iter().enumerate() {
         // OPTIONAL HW4 — STUDENT 5/6 (ANNOTATION): extend this relation when
@@ -140,7 +150,7 @@ fn check_plan(query: &Plan) -> syn::Result<()> {
             }
             cq::BodyItem::Filter(filter) => {
                 if !matches!(&clause.access, RustAccess::If { .. })
-                    || !filter.condition.variables().is_subset(&bound)
+                    || !cq::rust::known_uses(&filter.condition, &logical).is_subset(&bound)
                 {
                     return Err(syn::Error::new_spanned(
                         clause,
@@ -148,16 +158,20 @@ fn check_plan(query: &Plan) -> syn::Result<()> {
                     ));
                 }
             }
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    &clause.item,
-                    "this clause requires the extended access contract",
-                ));
+            cq::BodyItem::Let(binding) => {
+                let variables = cq::rust::bindings(&binding.pattern);
+                let RustAccess::For { pattern, .. } = &clause.access else {
+                    return Err(syn::Error::new_spanned(
+                        clause,
+                        "let requires a singleton Rust for access",
+                    ));
+                };
+                check_fresh_pattern(position, pattern, &variables.iter().collect::<Vec<_>>())?;
+                bound.extend(variables.iter().map(symbol_name));
             }
         }
     }
 
-    check_distinct_variables("result atom", &query.head.atom.args)?;
     for variable in query.head.atom.variables() {
         if !bound.contains(&symbol_name(variable)) {
             return Err(syn::Error::new_spanned(
@@ -176,11 +190,10 @@ fn check_positive_clause(
     access: &RustAccess,
     bound: &mut BTreeSet<String>,
 ) -> syn::Result<()> {
-    check_distinct_variables(&format!("body atom `{}`", atom.relation), &atom.args)?;
-
+    let mut seen = bound.clone();
     let fresh = atom
         .variables()
-        .filter(|variable| !bound.contains(&symbol_name(variable)))
+        .filter(|variable| seen.insert(symbol_name(variable)))
         .collect::<Vec<_>>();
 
     match (fresh.is_empty(), access) {
@@ -254,27 +267,4 @@ fn simple_pattern_ident(pattern: &Pat) -> Option<&Ident> {
         && pattern.mutability.is_none()
         && pattern.subpat.is_none())
     .then_some(&pattern.ident)
-}
-
-fn check_distinct_variables(context: &str, variables: &CommaList<Ident>) -> syn::Result<()> {
-    // A local materialized projection may have heading {}. Its occurrence is
-    // an existence guard, never an enumerating access with fictitious values.
-    let mut seen = BTreeSet::new();
-    for argument in variables {
-        let variable = cq::rust::variable(argument).ok_or_else(|| {
-            syn::Error::new_spanned(
-                argument,
-                "computed arguments require the extended access contract",
-            )
-        })?;
-        if !seen.insert(symbol_name(variable)) {
-            return Err(syn::Error::new_spanned(
-                variable,
-                format!(
-                    "{context} repeats variable `{variable}`; repeated terms are a stretch extension"
-                ),
-            ));
-        }
-    }
-    Ok(())
 }

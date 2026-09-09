@@ -98,18 +98,17 @@ mod staff_r1;
         "source must satisfy the CQ local contract"
     ),
     debug_ensures(
-        pass_contracts::r1_cq(source) -> ret.as_ref()
+        ret.as_ref()
             .is_ok_and(relational_plan::contract::well_formed)
     ),
     debug_ensures(
-        pass_contracts::r1_cq(source) -> ret.as_ref()
+        ret.as_ref()
             .is_ok_and(|target| target.program == source.program)
     ),
     debug_ensures(
-        pass_contracts::r1_cq(source) -> ret.as_ref()
+        ret.as_ref()
             .is_ok_and(|target| pass_contracts::relational_plan_is_exact(source, target))
     ),
-    debug_ensures(!pass_contracts::r1_cq(source) -> ret.is_err()),
 )]
 pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
     // BASIC HOMEWORK 1: construct the complete canonical RelationalPlan.
@@ -385,13 +384,17 @@ fn lower_operator_to_rust(definition: &iterator_pipeline::Definition) -> TokenSt
             let item_pattern = &operator.item_pattern;
             let source = &operator.source;
             let binding = &operator.binding;
+            let captures = cq::rust::bindings(input_pattern);
+            let copies = captures
+                .iter()
+                .map(|v| quote!(let #v = ::core::clone::Clone::clone(&#v);));
             quote! {
                 let #stream = ::core::iter::Iterator::flat_map(
                     #input_stream,
                     move |#input_pattern| {
                         ::core::iter::Iterator::map(
                             ::core::iter::IntoIterator::into_iter(#source),
-                            move |#item_pattern| #binding,
+                            move |#item_pattern| { #(#copies)* #binding },
                         )
                     },
                 );
@@ -400,12 +403,15 @@ fn lower_operator_to_rust(definition: &iterator_pipeline::Definition) -> TokenSt
         iterator_pipeline::Operator::Filter(operator) => {
             let input_stream = &operator.input_stream;
             let input_pattern = &operator.input_pattern;
-            let borrowed_pattern: syn::Pat = syn::parse_quote!(&#input_pattern);
+            let variables = cq::rust::bindings(input_pattern);
             let condition = &operator.condition;
             quote! {
-                let #stream = ::core::iter::Iterator::filter(
+                let #stream = ::core::iter::Iterator::filter_map(
                     #input_stream,
-                    move |#[allow(unused_variables)] #borrowed_pattern| #condition,
+                    move |#[allow(unused_variables)] #input_pattern| {
+                        if #condition { ::core::option::Option::Some((#(#variables,)*)) }
+                        else { ::core::option::Option::None }
+                    },
                 );
             }
         }
