@@ -161,6 +161,20 @@ versions, remain available without recomputation. Final head mapping and set
 collection give the RA output.
 \end{proof}
 
+\paragraph{A further physical realization.}
+The design supplement, \href{physical_design.pdf}{\emph{YA-Aware
+Physical Administration}}, specifies one backend family with versioned resources
+and immutable row-ID selections. Each YA edge becomes Build, Attach,
+Reduce: construct source-key providers, bind conservative filters to this
+consumer's scan, then probe exact membership before keeping left IDs.
+Bloom filters reject rows; dynamic key bounds and block zone maps can reject
+whole blocks. Projection still deduplicates into a new arena.
+A separate Transfer mode omits sweep probes and preserves
+$\pi_{X_i}(\bowtie_j L_j)\subseteq C_i\subseteq L_i$, requiring exact final
+assembly. It cannot claim Y-Freeze's full reduction. The supplement gives
+named rules, matching algorithms, provider/evidence contracts and Rust
+compilation records; production implementation remains future work.
+
 \subsection{Lazy linear lowering and the basic storage algorithm}
 The lazy domain follows RA dataflow: Unit/Rename starts current $p$; other
 Renames become pending. Join consumes $p$ and a pending direct Rename;

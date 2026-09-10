@@ -4,6 +4,14 @@ This inventory covers notes 1.3 and 2.1–2.5 at the revision recorded in
 [TERMINOLOGY.md](TERMINOLOGY.md). “Implemented” identifies a corresponding
 algorithm; it does not discharge the Rust conformance or host-semantics
 obligations. The complete rule-location inventory is [rules.tsv](rules.tsv).
+One separately specified physical backend family is in
+[PHYSICAL-DESIGN.md](PHYSICAL-DESIGN.md) and [ya_physical.tex](ya_physical.tex).
+The research-to-architecture mapping in [architecture_placement.tex](architecture_placement.tex)
+places alternatives at existing macro boundaries; no universal physical IR is required.
+Its 20 administrative/runtime rules and two algorithms cover provider choice,
+consumer-local Bloom/bounds filtering, block pruning, immutable selections,
+exact reduction, conservative transfer, and exact assembly. These are proposed
+backend rules, with a bounded semantic model, not production implementation.
 
 | Concept and note | Formalization and translation to RA | Implementation and boundary |
 | --- | --- | --- |

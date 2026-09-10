@@ -1,7 +1,7 @@
 Initial audit Git parent: ca78453871314b4aecdf659f4de338c09487ec90
 Manuscript revision Git base: b3ce412ecd412cacff9e6281337a71f432e6af13
 Branch: codex/all-answers
-Current revision: condensed implementation-focused manuscript, with four numbered planning algorithms and a 32-page budget; no new IR or compiler pass.
+Current revision: 32-page implementation manuscript plus YA physical-design supplement; four existing planning algorithms and two proposed physical algorithms. Physical choices are mapped to existing macro granularities; the private arena overlay is one proposed backend family. Production compiler unchanged; a native Access witness checks runtime representation choice.
 Compiler source identity: sources.sha256 (not Git parent alone).
 Terminology notes: doc/notes at 3f971516f8784ead40e8635a85dbe319ba5e4729, main.
 Textbook references: AHV Chapters 3, 4 and 6; exact sections in TERMINOLOGY.md.

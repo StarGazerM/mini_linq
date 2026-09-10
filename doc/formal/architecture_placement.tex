@@ -1,0 +1,167 @@
+\section{Locating physical choices in the existing macro architecture}
+\label{sec:architecture-placement}
+MiniLinq already exposes different units of replacement: a CQ planning pass,
+a named RA program, an indexed physical lowering, a local Access quotation,
+and a Pipeline realization. The concrete hash backend is one implementation
+of those boundaries. Its data structures do not define the extensibility
+limit of the architecture. The design in the following section is one
+additional backend family, organized around immutable row arenas; its private
+overlay is not a mandatory new language through which every backend must pass.
+
+\subsection{What the implementation actually exposes}
+\code{crates/mini-linq/src/lib.rs} provides these direct entries;
+\code{crates/cq-compiler/src/passes.rs} exports their typed pass functions.
+The ordinary Rust AST returned by a physical pass owns allocation, construction,
+execution order and residual macro calls. Access contains native Rust sources,
+predicates and output expressions rather than a fixed collection vocabulary.
+Its label states logical binding information; it does not secretly implement
+an index. The same source-level Access pattern can consequently be instantiated
+with distinct lawful Rust expressions without a shared data-structure trait.
+
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{.28\linewidth}>{\raggedright\arraybackslash}p{.31\linewidth}>{\raggedright\arraybackslash}p{.31\linewidth}}
+\toprule
+Existing entry / boundary & Unit the author controls & Appropriate physical variation\\
+\midrule
+\code{mini_linq!}, \code{planned_query!} / CQ passes & Planning a whole query before committing to named RA & Choose a legal logical schedule or derive a checked YA region.\\
+\code{relational_plan!}, \code{planned_relational_plan!} / RA passes & Independently authored named algebra & Choose exact joins, reductions, projections and shared definitions.\\
+\code{index_requirements!}, \code{materialized!} / physical passes & Rust file containing storage and local Access holes & Change build/probe sequencing, view storage, runtime specialization, or realize an entire certified region.\\
+\code{pull!} / Access & Explicit Rust sources and predicates with logical binding labels & Substitute exact membership expressions; consume a filtered or block-aware source whose construction occurs outside the hole.\\
+\code{iterator_pipeline!} / Pipeline & Graph of Scan, Join, Filter, Project and Distinct & Specify an existing flat pipeline directly, or replace its realization pass for an admitted domain.\\
+\bottomrule
+\end{tabular}
+\end{center}
+The public entry macros have fixed continuations today. They expose direct
+lower-language entry, not an installed callback mechanism for arbitrary new
+backends. An alternative physical compiler can already use the exported typed
+APIs and emit existing lower quotations; automatic CQ-to-that-backend routing
+would require wiring an alternative entry or continuation. A new private IR
+can help such a compiler, but is not required merely to construct a different
+Rust context.
+
+\subsection{Reading the papers at the right granularity}
+The literature separates representation, scheduling and intermediate semantics.
+The right column below is our architectural placement judgment, not a claim
+that those systems use MiniLinq's macros.
+\begin{center}\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{.24\linewidth}>{\raggedright\arraybackslash}p{.35\linewidth}>{\raggedright\arraybackslash}p{.31\linewidth}}
+\toprule
+Primary source & Mechanism reported & Placement in MiniLinq\\
+\midrule
+SQL Server, CIDR 2026, \S\S3.1,4.1~\cite{ya-sqlserver} & Optimizer decides whether filtering is worthwhile; hash-build execution chooses Bloom/exact bit vector and size from observed keys. & Keep static eligibility in the pass; emit runtime construction and branch selection in its Rust context.\\
+Predicate Transfer, CIDR 2024, \S3.2~\cite{ya-pt} & Prototype fixes Bloom representation and propagates filters between relations, rebuilding them when key columns change. & A complete transfer region needs its own schedule and candidate invariant; reuse local Access for legal row operations.\\
+Diamond Hardened Joins, PVLDB 2024, \S3.2~\cite{ya-dhj} & Separates exact Lookup from Expand, retaining handles to matching tuples so their enumeration can occur later. & Change operator sequencing and handle lifetime in the physical region; a membership-expression replacement alone does not implement it.\\
+YA in Column Stores, PVLDB 2025, \S\S3--4~\cite{ya-shredded} & Gives nested operators and a shredded realization with grouped references, while reusing applicable flat operators. & A backend-specific nested language may be useful; preserve compatible lower holes without forcing nested results into the current flat row-set contract.\\
+\bottomrule
+\end{tabular}
+\end{center}
+SQL Server's instance-optimality discussion assumes exact bitmap filtering;
+its practical Bloom choice does not automatically carry that bound. Likewise,
+nested/bag results do not inherit MiniLinq's set-projection laws. These are
+boundaries of the associated proofs, even when implementations share a method
+name or all return the same final query answer.
+
+\subsection{Replacing an expression, a context, or a compiler segment}
+For a represented exact key set $S$, a hash set and an injectively encoded
+bit vector can both provide an expression $e(k)$ satisfying
+$e(k)\iff k\in S$. This licenses substitution at a membership leaf when
+borrows, binding types, effects and termination match its surrounding context.
+A Bloom expression satisfies only $k\in S\Rightarrow e(k)$, so it cannot
+replace that exact leaf. It can precede an exact test, or participate in a
+whole-region conservative transfer whose final assembly is exact.
+
+The manuscript's ST-Hole rule keeps the surrounding Rust context fixed.
+Changing storage ownership, scheduling, publication barriers or access granularity
+therefore requires replacing the owning context as well. For example, a
+zone-map source must decide block rejection before reading the skipped payload.
+Installing a clever \code{for} source after the existing eager input
+\code{HashSet} normalization cannot save that earlier input read. A block-aware
+physical pass must emit the appropriate input/scan context; it may still reuse
+\code{pull!} for the local output loop.
+
+For a strategy $a$, write its compiler edge as
+\[
+ f_a:L\longrightarrow\mathsf{Rust}[L_1,\ldots,L_m],\qquad
+ f_a(s)=C_a[h_1,\ldots,h_m].
+\]
+Here $L$ is an existing input language, each $h_j$ an independently checked
+lower-language hole, and $C_a$ the generated runtime context. The strategy
+declares its representation relation $\gamma_a$ and admitted domain; it must
+preserve the observation $O$ and client class required by the replaced boundary.
+The manuscript's conditional composition theorem applies with all its premises:
+total compilation on the declared domain, valid targets admitted by subsequent
+passes, established runtime preconditions, compatible environment relations,
+and adequate closing contexts. There need be
+neither one common physical intermediate representation for all $a$ nor one
+trait shared by their storage objects. When two strategies need different
+intermediate meanings, their final observations can still agree through their
+separate representation relations and whole-region proofs.
+
+This yields a concrete implementation discipline: choose the smallest existing
+boundary that owns all changed semantics. Use a native expression for a lawful
+local replacement; replace the Rust context when construction or lifetime
+changes; replace a larger pure RA region when reduction or intermediate-result
+semantics changes. Introduce a private language only when its operator structure
+needs explicit manipulation or checking. This is the existing staging model,
+not an additional mandatory compiler stage above it.
+
+\subsection{Static expansion can emit a runtime representation choice}
+Consider an exact semijoin whose build keys may occupy a compact integer range.
+A physical pass can emit two ordinary Rust branches, each containing an Access
+quotation with the same logical bindings but different concrete expressions:
+\begin{lstlisting}
+let answer = if observed_range_fits_bitmap(&build_keys) {
+    let bits = build_exact_bitmap(&build_keys);
+    mini_linq::pull! {
+        out(k) => ((k,)) :-
+        Probe(k) => for (k,) in probe_rows.iter().copied(),
+        Build(k) => if bitmap_contains(bits, k);
+    }.collect::<HashSet<_>>()
+} else {
+    let keys = build_exact_hash_set(&build_keys);
+    mini_linq::pull! {
+        out(k) => ((k,)) :-
+        Probe(k) => for (k,) in probe_rows.iter().copied(),
+        Build(k) => if keys.contains(&k);
+    }.collect::<HashSet<_>>()
+};
+\end{lstlisting}
+The compiled witness is \path{example/src/bin/access_representations.rs};
+this listing abbreviates its helpers. Both macro invocations expand
+at compile time. The generated Rust chooses one branch from input data during
+execution. Branch-local storage types need not unify: each branch returns the
+same declared answer type. A trait, enum or shared helper remains an optional
+implementation choice when it would reduce code or provide another useful
+interface. The witness's range cutoff is illustrative, not a measured optimizer.
+
+For correctness, let $E_b,E_h$ be the completed bitmap and hash branches,
+and $\chi(I)$ the runtime selector. Require
+\[
+\begin{aligned}
+ \chi(I)&\Rightarrow \sem{E_b}_I=\sem{l\ltimes r}_I,\\
+ \neg\chi(I)&\Rightarrow \sem{E_h}_I=\sem{l\ltimes r}_I.
+\end{aligned}
+\]
+The conditional then has that denotation regardless of the selector's
+profitability. The selector must be total and meet the host assumptions;
+its successful branch test must establish representation-specific conditions
+such as bounded arithmetic and injective bitmap addressing. This is ordinary
+conditional refinement and contextual adequacy, not a new meaning for RA.
+At the weaker filter interface, exact-bit-vector and Bloom branches can instead
+both establish Cover, provided the caller still performs the exact operation
+required by its own contract.
+
+\paragraph{What the following physical design promises.}
+PA-Choose selects compatible resources within the stated arena backend family.
+Its static \code{Provider} enumeration is private planning data, not a required
+runtime trait or a universal catalog for every compiler entry. The explicit
+Exact/Transfer modes specify two different observation contracts. Factorized
+YA, a storage-native block source and additional execution strategies may
+replace an appropriate compiler segment and reuse compatible existing holes;
+none must first be coerced into the arena representation.
+The current default physical checker deliberately recognizes the default
+emitter's templates. An alternative edge needs its own source-to-target
+contract and checker. Macro checks cover local structure and bindings; Rust
+checks the completed expansion's types. Neither proves arbitrary provider laws.
+The executable witness checks selected
+branch laws and existing macro composition, not arbitrary contextual adequacy.

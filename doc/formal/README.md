@@ -4,6 +4,16 @@
 [build/compiler.pdf](build/compiler.pdf). The page budget is **32 pages including
 references**, using the existing 11-point, one-inch-margin layout.
 
+The separately built
+[YA physical-administration supplement](build/physical_design.pdf), with its
+[design guide](PHYSICAL-DESIGN.md), maps physical techniques onto the
+[existing macro boundaries](architecture_placement.tex). Its [formal rules](ya_physical.tex)
+and [executable semantic model](physical_model.py) specify one arena backend family,
+including exact YA refinement
+and conservative predicate transfer down to provider records, access operations,
+algorithm dispatches and compiler extension points. The production backend
+remains unchanged. The supplement is outside the main paper's page budget.
+
 The paper follows the implemented compiler: valuations and native Rust leaves,
 occurrence graphs, GYO, Yannakakis reduction, dependency scheduling, named RA,
 indexes, local cursors, and quotation across independently usable languages.
@@ -23,13 +33,17 @@ adequacy obligations are stated together in [foundations.tex](foundations.tex).
 | Each IR's grammar and local judgment | [languages.tex](languages.tex) |
 | Graph extraction, GYO, YA, policies, pruning and arity | [planning.tex](planning.tex), [notes coverage](PLANNING-COVERAGE.md) |
 | Index selection and physical realization | [physical.tex](physical.tex) |
+| Research, macro granularity, and runtime representation choice | [architecture_placement.tex](architecture_placement.tex), [native Access witness](example/src/bin/access_representations.rs) |
+| Proposed YA providers, filters, views, rules and compilation | [ya_physical.tex](ya_physical.tex), [rule/algorithm map](physical_rules.tsv) |
 | Cursor semantics, quotation and pass composition | [staging.tex](staging.tex) |
 | Replacing compiler components | [extensibility.tex](extensibility.tex) |
 | Bounded evidence and prior work | [evaluation.tex](evaluation.tex), [related_work.tex](related_work.tex) |
 
 [TERMINOLOGY.md](TERMINOLOGY.md) records AHV terminology and course adaptations.
-[rules.tsv](rules.tsv) maps all 139 named rules to implementation symbols or
-explicitly abstract cases. [check.py](check.py) checks that inventory, the 14
+[rules.tsv](rules.tsv) maps 139 baseline rules and 20 proposed physical rules
+to implementation symbols or explicitly abstract cases. [check.py](check.py)
+also checks every proposed rule's algorithm and available model-function links,
+the 14
 executable administrative commands, and 32 source fingerprints. It detects
 coverage gaps and source drift; it does not check proofs or semantic preservation.
 
@@ -59,6 +73,8 @@ imported by `compiler.tex`, including `mathpartir`, `stmaryrd`, `algorithm` and
 ```sh
 make -C doc/formal
 pdfinfo doc/formal/build/compiler.pdf
+pdfinfo doc/formal/build/physical_design.pdf
+make -C doc/formal model
 make -C doc/formal example
 cargo test -p cq-compiler --test stage1_production --locked
 cargo test -p cq-compiler --test expression_planning --locked
@@ -74,6 +90,7 @@ cargo test -p mini-linq --test formal_counterexamples --release --locked
 | Literal public-macro expansion and execution | [shape tests](../../crates/mini-linq/tests/stage1_shapes.rs) |
 | Rust-expression orders and 120 schedules | [expression tests](../../crates/cq-compiler/tests/expression_planning.rs) |
 | YA and authored-expression walkthroughs | [example README](example/README.md) |
+| Native hash/bitmap access and conservative prefiltering | [access_representations.rs](example/src/bin/access_representations.rs) |
 | Effect counterexamples | [formal_counterexamples.rs](../../crates/mini-linq/tests/formal_counterexamples.rs) |
 | Empty bindings and local contract agreement | [formal_domains.rs](../../crates/cq-compiler/tests/formal_domains.rs), [empty_bindings.rs](../../crates/mini-linq/tests/empty_bindings.rs) |
 
@@ -85,5 +102,6 @@ expected answers and generated programs remain in the executable artifacts.
 
 The source snapshot and compiler-cleanup validation history are recorded in
 [snapshot.txt](snapshot.txt) and [DIVERGENCE-RECONCILIATION.md](DIVERGENCE-RECONCILIATION.md).
-The manuscript condensation changes documentation only; it does not represent
-another compiler implementation or a newly repeated full-workspace test gate.
+The YA physical revision changes the paper, its inventories/build checks,
+a bounded semantic model, and a native macro-composition example. It does not implement another production backend or
+represent a newly repeated full-workspace test gate.

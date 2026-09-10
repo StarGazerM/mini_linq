@@ -1,0 +1,67 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,mathpartir,stmaryrd}
+\usepackage{booktabs,longtable,array,enumitem,listings,xcolor}
+\usepackage{algorithm,algpseudocode}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue]{hyperref}
+\usepackage{microtype}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{obligation}[theorem]{Proof obligation}
+\newtheorem{counterexample}[theorem]{Counterexample}
+\newcommand{\Rule}[3]{\inferrule*[right={\scriptsize\textsc{#1}}]{#2}{#3}}
+\newcommand{\dom}{\operatorname{dom}}
+\newcommand{\data}{\mathsf{dom}}
+\newcommand{\att}{\mathsf{att}}
+\newcommand{\var}{\mathsf{var}}
+\newcommand{\Val}{\operatorname{Val}}
+\newcommand{\vars}{\operatorname{vars}}
+\newcommand{\fv}{\operatorname{FV}}
+\newcommand{\uses}{\operatorname{uses}}
+\newcommand{\binds}{\operatorname{binds}}
+\newcommand{\sort}{\operatorname{sort}}
+\newcommand{\set}{\operatorname{set}}
+\newcommand{\ord}{\operatorname{ord}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\sem}[1]{\llbracket #1\rrbracket}
+\newcommand{\ok}{\mathsf{ok}}
+\newcommand{\step}[1]{\mathrel{\xrightarrow{\textsc{#1}}}}
+\newcommand{\emit}{\operatorname{emit}}
+\newcommand{\fresh}{\operatorname{fresh}}
+\newcommand{\emptyseq}{\epsilon}
+\newcommand{\concat}{\mathbin{+\!+}}
+\newcommand{\restrict}{\mathbin{\upharpoonright}}
+\lstset{basicstyle=\ttfamily\small,columns=fullflexible,keepspaces=true,
+  breaklines=true,frame=single,showstringspaces=false}
+\setlist{nosep}
+\title{MiniLinq: YA-Aware Physical Administration\\Design Supplement}
+\author{Administrative rules, algorithms, and compiler correspondence}
+\date{10 September 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+This supplement locates physical choices at MiniLinq's existing macro boundaries
+and specifies one arena-based backend family. Its checked private overlay
+refines named Yannakakis semijoins into versioned providers,
+consumer-local filters, immutable survivor views, and exact group accesses.
+Exact reduction and conservative predicate transfer have separate evidence
+and preservation contracts. Administrative rules map to algorithm dispatches,
+runtime scan steps, Rust records, and existing compiler extension points.
+The production compiler remains the exact hash-based baseline; a bounded
+executable semantic model and a native macro-composition witness accompany the design.
+\end{abstract}
+\noindent Companion to \href{compiler.pdf}{\emph{Administrative Query Compilation
+Across Embedded Languages}}. Source entry: \code{physical_design.tex};
+rules: \code{ya_physical.tex}; executable model: \code{physical_model.py}.
+\input{architecture_placement}
+\input{ya_physical}
+\begin{thebibliography}{99}
+\raggedright
+\input{ya_references}
+\end{thebibliography}
+\end{document}

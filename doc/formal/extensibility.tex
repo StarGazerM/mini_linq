@@ -36,13 +36,12 @@ Neither replacing a hash table alone nor treating a host function as an
 enumerable relation establishes that algorithm.
 
 \paragraph{Staging and quotation.}
-Compilation specializes known query structure while leaving input rows and
-host computations residual. A known let expression need not have a known
-value. Applications can enter RA, IndexRequirements, Access or Pipeline
-directly, or quote a lower language within Rust leaves under its binding
-and typing contract. A pass may emit ordinary Rust containing Access holes;
-compiling a hole does not reconstruct the enclosing CQ. Thus a replacement
-may cover one edge or a connected segment, without adding operators to every
-upper language. The authored RA in Section~\ref{sec:constraint-planning}
-is executable evidence; general push/WCOJ backends and user-configurable
-public continuations remain future implementations.
+Compilation specializes query structure while input rows and host values
+remain residual. Direct RA/Index/Access/Pipeline entries and local quotations
+retain their binding, typing and contextual contracts; compiling a hole does
+not reconstruct CQ. The authored plan in Section~\ref{sec:constraint-planning}
+exercises these boundaries. The YA supplement maps physical choices to native
+expressions, owning Rust contexts or whole compiler segments, then specifies
+one arena backend's rules and algorithms. Its private overlay is not mandatory
+for other backends. Runtime representation choice can remain ordinary Rust;
+public macro continuations remain fixed.

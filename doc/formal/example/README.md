@@ -118,3 +118,26 @@ arithmetic and integer comparison.
 All three results agree in debug and release. The current planner does not
 discover the authored plan: this is evidence that an application can supply
 such a plan through an existing lower language and reuse the backend.
+
+## Runtime representation choice through existing Access macros
+
+```sh
+cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin access_representations
+```
+
+[access_representations.rs](src/bin/access_representations.rs) uses the same
+`pull!` control shape over a native `HashSet` and an exact bounded `u64` bitmap.
+Ordinary Rust selects a branch from the observed build-key range. Both macros
+expand at compile time; storage construction and selection execute at runtime.
+The representations need no common trait, and the compiler is unchanged.
+
+A separate example applies an intentionally collision-prone eight-bucket filter
+before exact membership. All 264 cases agree with an independent input-membership
+reference, including empty inputs, duplicates, signed-key extremes, the 64/65-key
+range boundary, and all 256 subsets of eight signed keys. The run selects bitmap
+262 times and hash twice, and removes 1,672 false-positive probes.
+
+The cutoff is illustrative. This checks local access and macro composition;
+it does not implement a YA schedule, production Bloom filter, zone-map source,
+factorized join, or optimizer cost model. The architectural placement and
+proof obligations are in [architecture_placement.tex](../architecture_placement.tex).

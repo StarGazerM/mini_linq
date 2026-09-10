@@ -65,7 +65,9 @@ The physical pass builds membership sets for semijoins and payload maps
 for joins. Thus the same $r_6$ supplies both a set of $(k,\mathit{tag})$
 keys and a map from $z$ to $(k,\mathit{tag})$ payloads. It emits an ordinary
 Rust file with one materialized set per named result and local Access
-quotations. Surrounding Rust owns storage and index construction.
+quotations. Surrounding Rust owns storage and index construction. The physical
+design supplement revisits these same $r_0,\ldots,r_{12}$ with provider
+construction and survivor views, preserving the exact version/key mapping.
 
 For $r_{11}$, the local Access quotation has the following shape. Names
 are explanatory aliases; \code{clone} abbreviates qualified clone calls,

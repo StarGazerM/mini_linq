@@ -1,0 +1,735 @@
+\section{YA-aware physical administration: a completed design}
+\label{sec:ya-physical}
+\paragraph{Status and scope.}
+This section specifies one proposed physical backend family, not behavior
+already implemented by MiniLinq. Section~\ref{sec:architecture-placement}
+places it among the existing macro/typed-pass boundaries; its arena model and
+private overlay do not constrain other backend implementations. The existing IX/ST/M/L rules remain the executable
+baseline. In particular, today's materialized backend represents each named
+result by a \code{HashSet}, builds exact key sets or payload buckets, and
+immediately collects each local Access quotation. The new backend retains
+named RA and the existing Y-Up/Y-Down schedule, but makes provider construction,
+scan filtering, survivor storage, and lookup versus expansion explicit.
+The definitions, transition rules, algorithms, and compilation table below
+constitute its implementation contract. The accompanying finite model checks
+selected semantic obligations; it does not implement the production pass.
+
+\subsection{What practical implementations change}
+Classical exact semijoins can be expensive even when they discard no rows.
+Predicate Transfer replaces their filtering work with compact Bloom filters
+and propagates filtering information through multiple relations~\cite{ya-pt}.
+This motivates a separate conservative mode, rather than assigning approximate
+membership the exact semantics of RA Semijoin. Robust Predicate Transfer adds
+its own transfer and subjoin algorithms; their robustness claims do not follow
+from merely installing Bloom filters~\cite{ya-rpt}.
+A dynamic min/max predicate and a zone map serve different purposes: the
+predicate summarizes possible build keys, whereas the zone map summarizes a
+probe-side storage block. Disjoint ranges permit skipping that block before
+reading its rows~\cite{ya-duckdb,ya-zonemap}.
+Finally, engineering YA in column stores separates lookup from expansion and
+uses nested representations to delay tuple multiplication~\cite{ya-shredded}.
+Their bag projection does not supply a nonshrinking law for our set
+projection. We adopt explicit lookup handles below; whole-subtree factorization is a
+separate backend extension, not a consequence of filtering.
+
+\begin{center}\small
+\begin{tabular}{p{.19\linewidth}p{.35\linewidth}p{.37\linewidth}}
+\toprule
+Provider & Guaranteed observation & Use in this design\\
+\midrule
+Hash members & Exact membership in a tuple-key set & Exact semijoin probe\\
+Dense bitmap & Exact membership under an injective bounded key encoding & Optional exact probe\\
+Hash groups & Exact membership plus matching row IDs & Shared membership/enumeration provider\\
+Bloom filter & Negative means absent; positive may be false & Row prefilter or conservative transfer\\
+Key bounds & Every build key lies in coordinate intervals & Row prefilter and block-range rejection\\
+Zone map & Every block row lies in coordinate intervals & Reject disjoint blocks, then check rows\\
+\bottomrule
+\end{tabular}
+\end{center}
+These are capabilities, not interchangeable spellings of \code{contains}.
+No filter returns matching payloads. No probabilistic filter alone proves
+that a surviving tuple has a witness.
+
+\subsection{Physical objects and their denotations}
+\label{sec:ya-objects}
+Fix a checked named program $D$, type/layout environment $\Delta$, and an
+admissible relational host $\mathcal H_{\rm rel}$. Its value environment is
+$\mathcal E_D$. A physical program is an overlay $(D,\mu,P)$, where
+$\mu\in\{\mathsf{Exact},\mathsf{Transfer}\}$ and $P$ is an ordered list of
+provider and access commands. The overlay does not add syntax to CQ or change
+the meaning of an authored RA semijoin.
+
+\paragraph{Versions and paired keys.}
+A version $v$ identifies one immutable result or one transfer candidate.
+It is never just a base-relation name: self-join occurrences, both YA sweeps,
+and layout-changing projections have distinct identities.
+For $d=(s=l\ltimes r)$ or $d=(s=l\bowtie r)$ define
+\[
+ \begin{aligned}
+ K&=\Delta(l).V\cap\Delta(r).V,\qquad \bar x=\ord(K),\\
+ k_l&=\operatorname{positions}(\bar x,\ord(\Delta(l).V)),\\
+ k_r&=\operatorname{positions}(\bar x,\ord(\Delta(r).V)).
+ \end{aligned}
+\]
+A key descriptor $\kappa=(\bar x,k_l,k_r,\eta)$ includes a common equality
+and encoding domain $\eta$. Thus $\operatorname{key}_{k_l}(t)$ and
+$\operatorname{key}_{k_r}(u)$ agree exactly when $t,u$ agree on $K$.
+The encoding, tuple field order, and Bloom hash seed must agree at build and
+probe. Rust's lawful \code{Eq}/\code{Hash} premises still apply; this design
+introduces no SQL NULL equivalence or implicit cross-type casts. Bounds
+require a compatible total order; unsupported values disable that filter.
+A whole composite tuple is the Bloom key. Independent component filters are
+safe coarse filters, but cannot establish composite membership: keys
+$\{(1,2),(2,1)\}$ support neither $(1,1)$ nor $(2,2)$.
+
+\paragraph{Arenas, selections, and evidence.}
+An arena $A$ contains unique complete rows in a fixed layout and is immutable
+for the execution. A view $H_v=(A_v,M_v,\lambda_v)$ contains a selection
+$M_v\subseteq\{0,\ldots,|A_v|-1\}$ and a layout map $\lambda_v$; it denotes
+\[
+ \operatorname{rows}(H_v)=
+ \{\lambda_v(A_v[j])\mid j\in M_v\}.
+\]
+Selections may be bitsets or increasing row-ID vectors; each ID occurs once.
+Rename may change $\lambda$ without moving rows. Select and Reduce create
+fresh selections over the same arena, never mutate an older version.
+Project can identify distinct rows and therefore collects a deduplicated
+new arena; Extend and Join also use new arenas in the baseline design.
+A reused base arena is immutable across self-join occurrences, but their
+selections and column maps remain separate. No full-key HashSet alias is
+assumed for a vector arena.
+
+The overlay checker records either $H_v:\mathsf{Exact}(r)$, meaning
+$\operatorname{rows}(H_v)=\mathcal E_D(r)$, or
+$H_v:\mathsf{Candidate}(i)$ for a certified transfer region. Candidate is
+not a subtype of Exact. An exact index on a Candidate view is exact only
+relative to that view, not relative to the logical RA result.
+
+\paragraph{Resources.}
+A resource signature is
+\[
+ \rho=(v,k,\lambda,\eta,\mathit{kind},\mathit{parameters}),\qquad
+ \mathit{kind}\in\{\mathsf{Members},\mathsf{Groups},\mathsf{Dense},
+                    \mathsf{Bloom},\mathsf{Bounds}\}.
+\]
+Parameters include the dense-domain encoding or Bloom bit count, hash count,
+and seed. Immutable source versions and layouts are part of cache identity.
+For $L=\operatorname{rows}(H_v)$ and $S=\pi_k L$, the provider contracts are
+\[
+ \operatorname{member}_{v,k}(u)\iff u\in S,\qquad
+ \operatorname{group}_{v,k}(u)
+   =\langle j\in M_v\mid\operatorname{key}_k(\lambda_v(A_v[j]))=u\rangle.
+\]
+Group iteration visits each matching ID once. Members and Dense implement
+only the first contract; Groups implements both, so a same-source Groups
+resource may satisfy a membership demand. Dense requires a checked injective
+encoding into $[0,d)$, a bounded allocation, and an out-of-domain negative
+probe. It is not a hashed bitmap with collisions.
+
+For a filter $F$ built from $S$, write $S\preceq F$ when
+\[
+ \forall u\in S.\ \operatorname{may}_F(u)=\mathsf{true}.
+\]
+The conjunction of filters covering $S$ also covers $S$. A Bloom filter must
+insert all keys before publication. Unknown/unavailable metadata behaves as
+$\mathsf{true}$; an explicitly empty build can use the always-false filter.
+A bounds filter stores a separate emptiness bit and, otherwise, coordinate
+minima/maxima. Empty intervals are not represented by fake sentinel keys.
+For $K=\emptyset$, the only possible key is $()$: membership is precisely
+source nonemptiness, no hash table or Bloom allocation is needed, and a group
+lookup enumerates all selected source IDs.
+
+\paragraph{Block access.}
+A block $b$ covers a known row-ID interval in an arena. Its zone metadata $Z_b$
+contains bounds for every row in the interval; it may safely include rows
+excluded by the current selection. Given nonempty source-key bounds $B$,
+\[
+ \operatorname{skip}(b,B)\iff
+ \exists a\in K.\ \bigl(\max Z_b(a)<\min B(a)\ \lor\
+                         \max B(a)<\min Z_b(a)\bigr).
+\]
+Here $Z_b(a)$ is obtained by composing the left key positions $k_l$ with
+$\lambda_l$ to find the arena column for logical $a$; if that map is not a
+column projection/permutation, no zone test is available. Define
+$\operatorname{skip}(b,F)$ as the disjunction of these sound rejection tests
+for attached Bounds resources, plus explicit source-emptiness tests.
+An empty source skips all blocks, including for $K=\emptyset$.
+Missing/incompatible metadata never proves skip. Zone maps on separate
+coordinates need not preserve correlation: they are only rejection tests.
+Bloom filters are applied to row keys after the block test; testing a Bloom
+filter on just a block's minimum and maximum is unsound. Building zone maps
+from an already loaded arena costs a full read and cannot save that initial
+read; storage-I/O savings require a block provider with preexisting metadata.
+
+\subsection{Administrative state and rules}
+\label{sec:ya-admin}
+Administrative transitions construct code; they do not read query data during
+macro expansion. Let
+\[
+ \Psi=(\phi,\Gamma,N,R,B,U,F,T,P)
+\]
+contain region phase $\phi$, view descriptors $\Gamma$, role demands $N$,
+chosen resource descriptors $R$, ready handles $B$, demand-to-handle map $U$,
+attached filters $F$, typed temporaries $T$, and emitted commands $P$.
+$H_r$ abbreviates $\Gamma(r)$; $v(H_r)$ is its physical version identity.
+Thus logical result names resolve to physical descriptors before building.
+``Ready'' means the producer precedes the consumer in $P$, not that data is
+available at compile time. $\Psi\oplus c$ appends command $c$ with its displayed
+updates. Terminal rules require the logical output name to be undefined;
+all temporaries are fresh and one-use. Keys and host types must check.
+
+A first pass computes $N(r,k)$ for the whole DAG, with role
+$q\in\{0,\mathsf{member},\mathsf{enumerate}\}$ and order
+$0<\mathsf{member}<\mathsf{enumerate}$. A natural join requests enumerate if
+it adds right columns, member otherwise. An Exact semijoin requests member;
+a certified Transfer semijoin requests $0$. Optional filters are selected
+separately by policy and never satisfy an exact demand accidentally.
+For a consumer $d$ and resolved key $k$, define
+$\operatorname{role}_{\mu}(d)$ by these exhaustive cases.
+
+\begin{mathpar}
+\Rule{PA-Need}{d\text{ consumes }(r,k)\quad q=\operatorname{role}_{\mu}(d)}
+ {\Psi;d\Rightarrow\Psi[N(r,k)\gets N(r,k)\sqcup q]}
+
+\Rule{PA-Choose}{H_r\in\Gamma\quad
+ C=\operatorname{choose}(N(r,k),\mathit{policy}(r,k),H_r)\\
+ C\text{ supplies the demanded capabilities with compatible domains}}
+ {\Psi;(r,k)\Rightarrow\Psi[R(r,k)\gets C]}
+
+\Rule{PA-Build}{\rho\in R(r,k)\quad H_r\in\Gamma\quad
+ \operatorname{source}(\rho)=v(H_r)\quad\rho\notin\dom B}
+ {\Psi\Rightarrow\Psi\oplus(f=\mathsf{Build}(\rho,H_r))[B(\rho)\gets f]}
+
+\Rule{PA-Reuse}{B(\rho)=f\quad\operatorname{matches}(\rho,H_r,k,q)}
+ {\Psi;\mathsf{need}(r,k,q)\Rightarrow\Psi[U(r,k,q)\gets f]}
+
+\Rule{PA-Attach}{d=(s=l\ltimes r)\quad
+ B\vdash f:\mathsf{Cover}(v(H_r),k_r,\lambda_r,\eta)}
+ {\Psi;d\Rightarrow\Psi[F(s)\gets F(s)\concat(f,k_l,k_r)]}
+\end{mathpar}
+PA-Choose runs after the role prepass, when its source descriptor exists.
+$\operatorname{choose}$ selects HashGroups for enumerate, HashMembers for
+member, and no exact resource for $0$, unless explicit policy chooses another
+provider satisfying that capability. Policy independently requests Bloom or
+Bounds with supported domains; invalid optional choices fall back to none.
+It produces signatures with the resolved physical source version, layout,
+key domain and configuration. This defines $R$, separately from $N$.
+$\operatorname{matches}$ tests those same fields and sufficient capability;
+Groups may satisfy member, never the reverse. For $k=\emptyset$, Choose and
+Reuse bind intrinsic nonemptiness/all-ID handles (also exact covering filters)
+without allocating a resource. Bounds/Bloom construction contracts introduce
+$\mathsf{Cover}$ evidence; an exact membership provider introduces it through
+$\operatorname{may}_e=\operatorname{member}_e$. PA-Attach matches this static
+evidence, not a runtime set-inclusion test during compilation.
+
+PA-Attach targets the scan of $l$ at this \emph{consumer site} $s$.
+It does not destructively filter a shared store or all reads of the base
+relation. Its producer must dominate this scan. The baseline attaches only
+to the existing left view; moving below an upstream computation would need
+another dependency/effect proof. A view can still exploit its arena's block
+metadata. This avoids cyclic build dependencies and accidental filtering of
+another consumer. The first implementation reuses only identical versions;
+source-superset reuse is a separately justified extension discussed below.
+
+Let $\operatorname{covers}(F(s),H_r,\kappa)$ mean every attached filter carries
+the matching Cover evidence, and $e=U(r,k_r,\mathsf{member})$.
+\begin{mathpar}
+\Rule{PA-Reduce}{d=(s=l\ltimes r)\quad H_l:\mathsf{Exact}(l)\quad
+ H_r:\mathsf{Exact}(r)\\
+ e\text{ has exact membership on }H_r\quad\operatorname{covers}(F(s),H_r,\kappa)}
+ {\Psi;d\Rightarrow\Psi\oplus(H_s=\mathsf{Reduce}(H_l,F(s),e,\kappa))
+ [\Gamma(s)\gets\mathsf{Exact}(s)]}
+
+\Rule{PA-Transfer}{d=(s=l\ltimes r)\text{ is the next certified edge in }\mathcal C\\
+ H_l:\mathsf{Candidate}(i)\quad H_r:\mathsf{Candidate}(j)\quad
+ \operatorname{covers}(F(s),H_r,\kappa)}
+ {\Psi;d\Rightarrow\Psi\oplus(H_s=\mathsf{Filter}(H_l,F(s),\kappa))
+ [\Gamma(s)\gets\mathsf{Candidate}(i)]}
+\end{mathpar}
+Updates displaying only evidence also install the command's fresh view
+descriptor. Reduce keeps IDs passing every coarse filter and exact membership;
+Transfer omits that probe. Both retain the full left layout and make a fresh
+selection. A missing filter list denotes true. An exact filter in Transfer
+still yields Candidate evidence if its source is Candidate. Phase $\phi$
+tracks the next certified edge and latest occurrence versions; PA-Transfer
+advances it and changes only its target reference, exactly as the Y schedule.
+
+The transfer certificate $\mathcal C$ has explicit seed, freeze and output
+boundaries. Admission and completion are administrative rules, not casts:
+\begin{mathpar}
+\Rule{PA-Seed}{\phi=\mathsf{Seeds}\quad
+ H_{r_i^0}:\mathsf{Exact}(r_i^0)\ (i<n)\quad\mathcal C\text{ checks}}
+ {\Psi\Rightarrow\Psi\oplus\mathsf{AliasCandidates}(\bar H)
+ [\phi\gets\mathsf{Sweeps}(0),\ \Gamma(r_i^0)\gets\mathsf{Candidate}(i)]}
+
+\Rule{PA-Freeze}{\phi=\mathsf{Sweeps}(2(n-1))\quad
+ H_{r_i}:\mathsf{Candidate}(i)\text{ are the latest views}}
+ {\Psi\Rightarrow\Psi\oplus\mathsf{AliasAssembly}(\bar H)
+ [\phi\gets\mathsf{Assembly},\ \Gamma(r_i)\gets\mathsf{Assembly}(\mathcal C,\{i\})]}
+
+\Rule{PA-Output}{\phi=\mathsf{Assembly}\quad
+ H_s:\mathsf{Assembly}(\mathcal C,O)\quad s\text{ is the certified output}\\
+ O=\{0,\ldots,n-1\}\quad\text{all certified predicates/projections accounted for}}
+ {\Psi\Rightarrow\Psi\oplus\mathsf{Output}(H_s)
+ [\phi\gets\mathsf{Done},\ \mathsf{answer}:\mathsf{ExactAnswer}(D)]}
+\end{mathpar}
+Seed and Freeze produce fresh descriptor aliases with the same arena,
+selection and layout, and update the logical-to-physical map $\Gamma$ only
+for the region's subsequent consumers. Already emitted views remain immutable.
+Each such update also deletes $R(r,k)$ and $U(r,k,q)$ for every remapped
+logical name $r$: its next Ensure must choose against the new physical version.
+The demand map $N$ and old immutable handles $B$ remain available; already
+emitted commands retain their resolved handles. These cache invalidations are
+part of both alias-rule updates, not an optional optimization.
+Their fresh version identities prevent accidental provider reuse across the
+boundary. This conservative baseline may rebuild an equivalent resource;
+equality-certified alias reuse can be added later. Exact mode needs neither
+candidate aliases nor these three rules. Transfer output applies the existing
+pure head mapping and final set collection; ExactAnswer certifies that answer,
+not every Assembly intermediate. The one-node case seeds and freezes at the
+same boundary with zero sweep edges.
+
+For joins, put $V=\Delta(l).V$, $W=\Delta(r).V$, $K=V\cap W$,
+$N'=W\setminus V$. Define $\operatorname{joinEvidence}(l,r,s)$ as Exact$(s)$
+for two Exact operands, or Assembly$(\mathcal C,C_l\cup C_r)$ for two Assembly
+operands of the same certificate with $C_l\cap C_r=\emptyset$. In the latter
+case the operator must be the next certified assembly definition. Unary
+operators preserve Assembly coverage and follow that same derivation;
+otherwise exact unary inputs produce Exact$(s)$. There is no default
+Candidate-to-Exact evidence rule. These cases define $\operatorname{evidence}(d)$.
+Its base cases are Exact$(s)$ for $s=\mathbf1$ and $s=\delta_m R$ over a
+normalized exact base input. These make the operator dispatcher total on its
+stated domain.
+
+\begin{mathpar}
+\Rule{PA-Lookup}{d=(s=l\bowtie r)\quad\epsilon=\operatorname{joinEvidence}(l,r,s)\\
+ g\text{ enumerates exactly the selected IDs of }(H_r,k_r)\quad N'\ne\emptyset}
+ {\Psi;d\Rightarrow\Psi\oplus(\ell_s=\mathsf{Lookup}(H_l,g,\kappa))
+ [T(s)\gets\mathsf{Groups}(\ell_s,l,r,\epsilon)]}
+
+\Rule{PA-Expand}{T(s)=\mathsf{Groups}(\ell_s,l,r,\epsilon)\quad d=(s=l\bowtie r)}
+ {\Psi;d\Rightarrow\Psi\oplus(t_s=\mathsf{Expand}(\ell_s,H_l,H_r))
+ [T(s)\gets\mathsf{Rows}(t_s,V\cup W,\epsilon)]}
+
+\Rule{PA-Exists}{d=(s=l\bowtie r)\quad N'=\emptyset\\
+ \epsilon=\operatorname{joinEvidence}(l,r,s)\quad e\text{ is exact on }(H_r,k_r)}
+ {\Psi;d\Rightarrow\Psi\oplus(t_s=\mathsf{Exists}(H_l,e,\kappa))
+ [T(s)\gets\mathsf{Rows}(t_s,V,\epsilon)]}
+
+\Rule{PA-Stream}{d=(s=o)\quad o\in\{\mathsf{Unit},\mathsf{Project},\mathsf{Extend}\}\\
+ o\Downarrow_M t_s\quad\epsilon=\operatorname{evidence}(d)}
+ {\Psi;d\Rightarrow\Psi\oplus(t_s=\mathsf{Stream}(o))
+ [T(s)\gets\mathsf{Rows}(t_s,\Delta(s).V,\epsilon)]}
+
+\Rule{PA-Collect}{d=(s=o)\quad T(s)=\mathsf{Rows}(t_s,\Delta(s).V,\epsilon)}
+ {\Psi;d\Rightarrow\Psi\oplus(H_s=\mathsf{CollectDistinct}(t_s))
+ [\Gamma(s)\gets\epsilon,\ T\gets T\setminus\{s\}]}
+
+\Rule{PA-View}{d=(s=\delta_m R)\ \lor\ d=(s=\sigma_e l)\quad
+ \epsilon=\operatorname{evidence}(d)}
+ {\Psi;d\Rightarrow\Psi\oplus(H_s=\mathsf{View}(d))[\Gamma(s)\gets\epsilon]}
+\end{mathpar}
+Lookup produces $(j_l,\gamma)$ only for nonempty matching groups $\gamma$;
+it streams a group reference, not copies of every payload. Expand consumes
+that Groups temporary once, visits each $j_r\in\gamma$ and forms the compatible
+tuple union in result layout. Empty separators use the all-ID group. Exists
+preserves each supported left row once. PA-Stream uses the existing M-Unit,
+M-Project or M-Extend recipe over view scans. Collect consumes its Rows
+temporary once and constructs a normalized new arena. PA-View emits a Rename
+layout map or a Select selection using the existing host elaboration.
+Consumed temporary identities cannot be revived. The checker rejects duplicate
+outputs, mismatched stream sorts/evidence, and candidate escape through an
+unaccounted consumer. A caller requesting every exact intermediate must use
+Exact mode.
+
+\subsection{Algorithms that dispatch the rules}
+\label{sec:ya-algorithms}
+The scheduler below contains no new relational rewrite. Each \textsc{Apply}
+invokes one named rule above and either appends exactly its command or rejects
+its missing premise. \textsc{Ensure} resolves empty keys directly, otherwise
+uses PA-Choose for unresolved demands, PA-Build once per signature, and
+PA-Reuse to bind each demanded handle.
+Provider choice is an explicit policy input with a deterministic hash fallback;
+it cannot relax the checker. Operator cases consume the same logical $d$ until
+its view has been defined, then advance to the next definition.
+
+\begin{algorithm}[tbp]
+\caption{Physical overlay construction (compile time)}
+\label{alg:physical}
+\begin{algorithmic}[1]
+\Procedure{Physical}{$D,\Delta,\mu,\mathit{policy}$}
+ \State Check $D$; if $\mu=\mathsf{Transfer}$, check certificate $\mathcal C$
+ \State $\Psi\gets$ empty state with normalized inputs; $\phi\gets\mathsf{Seeds}$
+ \For{each binary consumer $d$ in $D$}
+  \State \Call{Apply}{PA-Need, $d$} \Comment{mode determines exact demand}
+ \EndFor
+ \For{each $d=(s=o)$ in definition order}
+  \State \Call{Ensure}{all chosen resources consumed by $d$} \Comment{PA-Choose/Build/Reuse}
+  \If{$o=l\ltimes r$}
+   \State \Call{Apply}{PA-Attach, $d,f$} for each chosen coarse filter $f$
+   \If{$\mu=\mathsf{Exact}$} \State \Call{Apply}{PA-Reduce, $d$}
+   \Else \State \Call{Apply}{PA-Transfer, $d$} \EndIf
+  \ElsIf{$o=l\bowtie r$}
+   \If{$\Delta(r).V\setminus\Delta(l).V=\emptyset$}
+    \State \Call{Apply}{PA-Exists, $d$}
+   \Else
+    \State \Call{Apply}{PA-Lookup, $d$}; \Call{Apply}{PA-Expand, $d$}
+   \EndIf
+   \State \Call{Apply}{PA-Collect, $d$}
+  \ElsIf{$o$ is Rename or Select} \State \Call{Apply}{PA-View, $d$}
+  \Else \State \Call{Apply}{PA-Stream, $d$}; \Call{Apply}{PA-Collect, $d$}
+  \EndIf
+  \If{$\mu=\mathsf{Transfer}$ and $d$ ends the certified seed definitions}
+   \State \Call{Apply}{PA-Seed}
+  \EndIf
+  \If{$\mu=\mathsf{Transfer}$ and $d$ is the certified freeze boundary}
+   \State \Call{Apply}{PA-Freeze}
+  \EndIf
+ \EndFor
+ \If{$\mu=\mathsf{Transfer}$} \State \Call{Apply}{PA-Output}
+ \Else \State Emit checked head map and answer-set collection \EndIf
+ \State Check resource dominance and empty $T$; return $(D,\mu,P)$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+Demands distinguish required exact membership from optional filters: Transfer
+reduction requests only its selected filters, while final joins always request
+exact membership or enumeration. Definitions outside the certified reduction
+region cannot use PA-Transfer. The notation in the semijoin branch assumes
+that all semijoins are in that region; otherwise choose Exact for the program.
+Input normalization and host typing follow the existing materialized boundary.
+Data-dependent policies can use the existing macro composition demonstrated
+in Section~\ref{sec:architecture-placement}; integrating them into this overlay
+requires checking both branches against its resource contracts. They cannot
+inspect runtime keys during macro expansion. Bloom sizing may use the source
+view's runtime length as a safe upper bound on its distinct-key count.
+
+\paragraph{Runtime small steps.}
+To remove ambiguity about what Reduce emits, use runtime scan state
+$\chi=(b,j,M')$: current block, next selected row ID, and output selection.
+$u=\operatorname{key}_{k_l}(\lambda_l(A_l[j]))$ and $F=F(s)$.
+Advance functions visit every selected ID exactly once unless its whole block
+is skipped. Source selection $M_l$ is never changed.
+\begin{mathpar}
+\Rule{RX-Block}{\operatorname{skip}(b,F)}
+ {(b,j,M')\Rightarrow(\operatorname{nextBlock}(b),\operatorname{firstID},M')}
+
+\Rule{RX-Row}{\neg\operatorname{skip}(b,F)\quad\neg\bigwedge_{f\in F}\operatorname{may}_f(u)}
+ {(b,j,M')\Rightarrow(b,\operatorname{nextID}(j),M')}
+
+\Rule{RX-Probe}{\neg\operatorname{skip}(b,F)\quad\bigwedge_{f\in F}\operatorname{may}_f(u)
+ \quad\mu=\mathsf{Exact}\quad\neg\operatorname{member}_e(u)}
+ {(b,j,M')\Rightarrow(b,\operatorname{nextID}(j),M')}
+
+\Rule{RX-Keep}{\neg\operatorname{skip}(b,F)\quad\bigwedge_{f\in F}\operatorname{may}_f(u)
+ \quad(\mu=\mathsf{Transfer}\lor\operatorname{member}_e(u))}
+ {(b,j,M')\Rightarrow(b,\operatorname{nextID}(j),M'\cup\{j\})}
+\end{mathpar}
+Only Bounds/explicit emptiness can discharge RX-Block. End-of-block/end-of-scan
+administration advances or returns the immutable view $(A_l,M',\lambda_l)$.
+
+\begin{algorithm}[tbp]
+\caption{Executing Reduce/Filter over a selected block view}
+\label{alg:physical-scan}
+\begin{algorithmic}[1]
+\Procedure{ReduceView}{$H_l,F,e,\kappa,\mu$}
+ \State $M'\gets\emptyset$
+ \For{each block $b$ intersecting $M_l$}
+  \If{bounds or source emptiness prove $\operatorname{skip}(b,F)$}
+   \State Continue to next block \Comment{RX-Block}
+  \EndIf
+  \For{each selected $j$ in $b$}
+   \State Read paired key $u$ from $A_l[j]$
+   \If{some $f\in F$ rejects $u$} \State Continue \Comment{RX-Row} \EndIf
+   \If{$\mu=\mathsf{Exact}$ and exact membership rejects $u$}
+    \State Continue \Comment{RX-Probe}
+   \EndIf
+   \State Append/set $j$ in $M'$ \Comment{RX-Keep}
+  \EndFor
+ \EndFor
+ \State Return a fresh view $(A_l,M',\lambda_l)$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+The source build finishes before this scan begins. The initial implementation
+is sequential; parallel builds would need private filter construction and a
+publication barrier, and parallel mask writes would need disjoint ownership
+or merging. A partially built Bloom filter cannot be exposed to probes.
+
+\subsection{Exact and conservative correctness boundaries}
+\label{sec:ya-correctness}
+\begin{lemma}[Exact reduction with coarse filters]
+If $H_l,H_r$ represent $l,r$ exactly, the filter family covers all projected
+right keys, block bounds cover every scanned row, and $e$ has exact membership,
+then ReduceView in Exact mode represents $l\ltimes r$ exactly.
+\end{lemma}
+\begin{proof}
+A tuple with a right witness cannot be rejected by a covering filter or a
+sound block-disjointness test. It passes exact membership and is kept.
+A kept tuple passes exact membership and therefore has a witness. Selection
+retains each original left row at most once, establishing set equality.
+\end{proof}
+\begin{theorem}[Exact physical refinement]
+Under the host and provider contracts, successful Physical in Exact mode
+represents every named result of $D$ and its answer exactly. If $D$ contains
+the checked Y schedule, its frozen views satisfy the full-reducer theorem.
+\end{theorem}
+\begin{proof}
+Induct on definition order. PA-View and PA-Collect implement the existing
+unary/materialization cases; the lemma handles PA-Reduce. Lookup yields exactly
+compatible row IDs, Expand forms their tuple unions, and Collect implements
+set semantics. PA-Exists is the no-new-column join case. Build/Re-use preserve
+resource denotations and earlier versions remain immutable. Thus the earlier
+logical Y proof applies without change.
+\end{proof}
+
+\paragraph{Certificate for Transfer mode.}
+$\mathcal C=(J,(r_i^0)_i,\mathit{sweeps},\mathit{assembly})$ records the checked
+join tree, exact locally selected seed occurrences $L_i=\mathcal E_D(r_i^0)$,
+the Y edge schedule with latest source/target versions, and the downstream
+assembly derivation. The checker verifies that (1) only occurrence-preserving
+reductions occur between seed and freeze; (2) the assembly contains every
+occurrence once, uses full separator/equality keys, and retains every pending
+predicate and live column under the existing P rules; (3) every assembly join
+is exact on its physical inputs; and (4) candidates have no other escaping
+consumer. The assembly's pure denotation is $G(\bowtie_i C_i)$, where $G$
+accounts for the already justified selections, projections, and head.
+Cyclic or independently authored semijoin programs without this certificate
+use Exact mode. The certificate records exact definition indices for the last seed and last
+reduction, with no assembly definition preceding freeze; a one-node region
+uses the seed boundary for both. Its assembly definitions carry occurrence
+coverage and the remaining predicates, so PA-Output checks more than merely
+coverage. The certificate does not require source filters to be selective.
+
+For $Q_0=\bowtie_i L_i$, Transfer tracks current candidates by occurrence:
+\begin{equation}\label{eq:transfer-invariant}
+ \pi_{X_i}Q_0\subseteq C_i\subseteq L_i\qquad\text{for every }i.
+\end{equation}
+\begin{theorem}[Conservative transfer preserves the final answer]
+Starting with $C_i=L_i$, each PA-Transfer preserves
+Eq.~\eqref{eq:transfer-invariant}. Therefore
+$\bowtie_i C_i=Q_0$ and the certified exact assembly returns $G(Q_0)$.
+This does not establish $C_i=\pi_{X_i}Q_0$.
+\end{theorem}
+\begin{proof}
+A full witness's target tuple has a compatible source tuple in the source
+candidate by induction. Covering filters and block tests cannot reject its
+separator key. The target remains a subset of its previous candidate and
+hence of its seed. This proves both inclusions. Each full witness survives in
+all candidates, while their join is contained in the seed join; apply $G$.
+\end{proof}
+Even an always-positive saturated Bloom filter satisfies this theorem.
+Conversely, omitting the final exact equality joins makes it false. An exact
+probe into a conservative source cannot retroactively establish the exact
+logical intermediate. Transfer reports candidate counts, never the current
+YA full-support certificate or its exact intermediate counts.
+
+\paragraph{Staleness, sharing, and barriers.}
+If a filter built from $S_{old}$ is used for $S_{new}\subseteq S_{old}$, it
+is still a safe prefilter; it may lose pruning power. Exact membership in
+$S_{old}$ is generally wrong for $S_{new}$. Reversing the inclusion can lose
+answers. The baseline therefore uses identity-based reuse and rebuilds from
+latest versions; a future inclusion analysis must prove the stated direction.
+Filters on different separators cannot be relabeled: to transfer from
+$(k,tag)$ to $z$, scan the surviving rows carrying all three attributes and
+build a new $z$ filter. Across projection, row IDs/layouts and correlations
+must be reestablished. Across effectful host evaluation, even answer-set
+preservation is not granted by these rules; $\mathcal H_{\rm rel}$ remains
+an explicit premise.
+
+\subsection{One logical definition to physical commands}
+\label{sec:ya-trace}
+Use the manuscript's overview query and its exact $r_0,\ldots,r_{12}$.
+With optional Bloom+Bounds and exact membership enabled, the four reductions
+compile as follows; all keys use the full ordered separator.
+\begin{center}\small
+\begin{tabular}{p{.15\linewidth}p{.27\linewidth}p{.47\linewidth}}
+\toprule
+Logical definition & Build source/key & Consumer and rules\\
+\midrule
+$r_4=r_1\ltimes r_0$ & $r_0:(k,tag)$ & Attach to scan of $r_1$; exact probe; selection $M_4\subseteq M_1$\\
+$r_5=r_3\ltimes r_4$ & $r_4:z$ & Attach to scan of $r_3$; exact probe; selection $M_5\subseteq M_3$\\
+$r_6=r_4\ltimes r_5$ & $r_5:z$ & Attach to scan of $r_4$; exact probe; selection $M_6\subseteq M_4$\\
+$r_7=r_0\ltimes r_6$ & $r_6:(k,tag)$ & Attach to scan of $r_0$; exact probe; selection $M_7\subseteq M_0$\\
+\bottomrule
+\end{tabular}
+\end{center}
+Each row executes PA-Need, PA-Build/Reuse, PA-Attach, PA-Reduce;
+Algorithm~\ref{alg:physical-scan} implements its scan. $r_3=\sigma_{y>0}r_2$
+is a PA-View selection. In particular, $r_5$ builds from reduced $r_4$, not
+$r_1$, and $r_7$ builds from $r_6$, not its ancestor $r_4$.
+The masks over $S$ for $r_1,r_4,r_6$ share rows while keeping distinct versions.
+The masks over $T$ for $r_2,r_3,r_5$ behave similarly.
+
+After freeze, $r_8=\pi_{k,tag,x}r_7$ uses PA-Collect: the overview's two
+witnesses differing only in $\mathit{unused}$ collapse, so $r_8$ has a new arena
+and new IDs. $r_9=r_5\bowtie r_6$ demands Groups on $r_6:z$ and executes
+PA-Lookup/Expand/Collect. Its $z$ lookup uses field 1 on $r_5$ and field 2
+on $r_6$; name equality alone is not a positional access map.
+$r_{10}$ is a collecting projection; $r_{11}=r_{10}\bowtie r_8$ uses Groups
+on the new $r_8:(k,tag)$; $r_{12}$ collects the final projection.
+Thus membership on $r_6:(k,tag)$ and enumeration on $r_6:z$ are different
+resources. Neither is a reusable index on projected $r_8$.
+
+\begin{lstlisting}[caption={Pseudocode for the first exact reduction; each operation has a named rule.}]
+// Compile-time descriptor construction; values below execute at runtime.
+keys0 = build_members(view_r0, [0, 1]);          // PA-Build
+bloom0 = build_bloom(view_r0, [0, 1], config);   // PA-Build
+bounds0 = build_bounds(view_r0, [0, 1]);         // PA-Build
+// PA-Attach binds these filters only to the r4 consumer of r1.
+view_r4 = reduce_view(view_r1, [bloom0, bounds0], keys0,
+                      left_key=[0, 1], right_key=[0, 1]); // PA-Reduce
+// reduce_view: block skip, row filter, exact probe, keep ID.
+keys4_z = build_members(view_r4, [2]);           // next PA-Build
+\end{lstlisting}
+Builds sharing a source may be fused into one source scan if each resulting
+resource still satisfies its own signature and publication contract. Fusing
+output-mask construction with future index builds is also legal when the
+index receives only accepted rows and becomes visible after the whole view
+is complete. These are implementation optimizations of the same commands;
+the baseline algorithm performs separate builds and counts their cost.
+
+\subsection{Compilation plan and exact rule correspondence}
+\label{sec:ya-compilation}
+The proposed Rust representation is private compiler data, not a new public
+query DSL. The essential fields can be transcribed directly:
+\begin{lstlisting}
+struct KeyMap { vars: Vec<Var>, left: Vec<usize>, right: Vec<usize>,
+                domain: KeyDomainId }
+struct ViewDesc { version: VersionId, arena: ArenaId, layout: LayoutId,
+                  selection: SelectionId, evidence: Evidence }
+enum Evidence { Exact(ResultId), Candidate(OccurrenceId),
+                Assembly(RegionId, OccurrenceSet) }
+enum Capability { Membership, Groups }
+enum Provider { HashMembers, HashGroups, Dense(Domain),
+                Bloom(BloomConfig), Bounds(OrderDomain) }
+struct ResourceKey { source: VersionId, columns: Vec<usize>,
+                     layout: LayoutId, domain: KeyDomainId, provider: Provider }
+enum PhysicalStep {
+    Build(ResourceId, ResourceKey),
+    View(VersionId, ViewOp), Alias(VersionId, VersionId, Evidence),
+    Reduce(VersionId, ReduceSpec),   // exact membership handle required
+    Transfer(VersionId, TransferSpec), // region certificate required
+    Lookup(TempId, LookupSpec), Expand(TempId, ExpandSpec),
+    Exists(TempId, ExistsSpec), Stream(TempId, StreamSpec),
+    Collect(VersionId, CollectSpec), Output(OutputSpec),
+}
+\end{lstlisting}
+\code{ReduceSpec} stores left/right versions, paired keys, filter handles,
+exact membership handle and destination selection; \code{TransferSpec}
+stores the same fields except exact membership and adds its region identity.
+\code{LookupSpec} stores the paired keys and a Groups handle;
+\code{ExpandSpec} consumes that lookup's group reference with its two arenas.
+\code{CollectSpec} stores the stream, output layout/types, and evidence.
+\code{ViewOp} is Rename or Select with the existing host-expression recipe.
+All IDs are resolved by the overlay checker; none are arbitrary raw pointers.
+
+\begin{center}\small
+\begin{tabular}{p{.22\linewidth}p{.28\linewidth}p{.40\linewidth}}
+\toprule
+Rule(s) & Algorithm operation & Compiler implementation boundary\\
+\midrule
+PA-Need & Demand prepass & Extend \code{relational_to_indexes} function \code{compile}; retain paired maps, roles, and exact versions.\\
+PA-Choose / PA-Build / PA-Reuse & Ensure resources & New provider planner; replace the fixed choice in \code{indexes_to_rust::build_index}.\\
+PA-Attach & Bind filter to consumer & New overlay edge metadata; checker verifies source, key maps and dominance.\\
+PA-Reduce / PA-Transfer & Emit view reduction & New distinct commands; split \code{local_plan}'s exact Semijoin case, preserving it as baseline.\\
+RX-Block / RX-Row / RX-Probe / RX-Keep & ReduceView loop & New block/view runtime templates; semantic model checks rejection and survivor behavior.\\
+PA-Lookup / PA-Expand & Join stream & Split current \code{get(...).flatten()} access into group handle and payload iteration.\\
+PA-Exists & Membership-only join & Existing M-JoinIf shape, using an exact provider handle.\\
+PA-View / PA-Stream / PA-Collect & Define next result & Replace eager set copies where a view suffices; preserve set collection at projection and assembly.\\
+PA-Seed / PA-Freeze / PA-Output & Region boundaries & New evidence checker; replay certified coverage and preserve candidate isolation.\\
+\bottomrule
+\end{tabular}
+\end{center}
+For this backend, one possible internal factoring is
+\[
+\begin{gathered}
+ (D,\text{requirements})\ \longrightarrow\ (D,\mu,P)\\
+ \longrightarrow\ \text{Rust with local Access quotations}
+ \longrightarrow\ \text{Pipeline/Rust}.
+ \end{gathered}
+\]
+Keep \code{passes::compile_materialized} as the baseline. The arena implementation may add a separately
+checked private overlay and Rust emitter; do not repurpose the
+existing index parser to pretend Bloom filters satisfy IX coverage.
+The independent checker should validate typed command/evidence transitions
+first, then validate emission templates. Its current counterpart is
+\code{pass_contracts::physical::materialized}; that checker recognizes fixed
+Rust structures and must not be weakened to accept arbitrary \code{contains}
+expressions. Directly authored lower plans carry the same provider premises.
+The current lazy path excludes semijoins and shared DAGs and cannot execute
+this overlay without a separate extension.
+
+Reduction can be emitted as ordinary Rust producing a row-ID selection;
+a later Access scan enumerates projected rows through that view. This keeps
+its scalar \code{for}/\code{if} grammar intact. Lookup's group iteration is
+another concrete Rust source in an Access clause. Bounds/Bloom logic stays
+in the surrounding generated Rust or checked scan source, not in CQ labels.
+No implicit interpretation of the label supplies runtime filter semantics.
+
+\paragraph{Ownership and resource lifetime.}
+Normalize inputs once, freeze arena contents, then allocate independent
+selection values. Generated statements bind arenas before views and resources;
+views/providers borrow arenas or store stable arena IDs plus row IDs. Avoid
+self-referential Rust structs by keeping references local to the build function
+or using owned arrays addressed by IDs. The materialized answer remains owned
+at the existing API boundary. A simple correct implementation retains arenas,
+masks and resources until build returns. Optional early release uses ordinary
+last-use analysis over $P$, counting group handles and every view sharing an
+arena; releasing an old mask never invalidates a still-live arena or group.
+No mutation of previously published masks or resources is permitted.
+
+\subsection{Policy, cost, and validation}
+\label{sec:ya-cost}
+The design's required choices are complete without an estimator: use
+HashGroups when any consumer enumerates, HashMembers otherwise, and optional
+filters disabled. Select Dense only with a valid bounded domain. An explicit
+policy may enable Bloom and/or Bounds at a reduction site; lack of ordering
+or block metadata falls back to row Bloom/exact probes. This baseline yields
+a valid overlay for every program in the existing materialized domain and
+does not claim that a filter is always profitable.
+
+For a right build with $n$ rows, $d$ distinct keys, and a left scan with $m$
+selected rows, a Bloom allocation of $b$ bits and $h$ probes has the usual
+idealized estimate $f\approx(1-e^{-hd/b})^h$ for an absent key~\cite{ya-bloom}.
+This is a sizing estimate, not a correctness premise or a guarantee for a
+particular hash distribution. Zero keys use the explicit empty filter;
+nonzero builds require $b,h>0$. Allocation caps can increase false positives;
+allocation failure may disable the filter, never omit inserted keys silently.
+With true match fraction $s$, ignoring correlation and block pruning,
+\[
+ C_{\rm filtered}\approx C_{\rm exactBuild}+C_{\rm filterBuild}
+       +m c_f+m\bigl(s+(1-s)f\bigr)c_e+C_{\rm survivor},
+\]
+versus $C_{\rm exactBuild}+mc_e+C_{\rm survivor}$ without a coarse filter.
+The extra build and probe cost is justified only by avoided exact probes or
+other downstream work. In Transfer mode the sweep omits exact-build/probe
+cost unless a chosen exact filter or another consumer needs that resource;
+final exact assembly still pays its own build, probe and output costs.
+Zone-map metadata tests, bytes read, key decoding, selection writes, duplicate
+elimination, repeated source scans, and retained resources must also be counted.
+
+Validation must compare final sets \emph{and} the correct mode-specific
+intermediates. Exact mode checks every RA version and each frozen projection;
+Transfer mode checks Eq.~\eqref{eq:transfer-invariant} and final answers,
+including forced false positives. The executable model uses an independent
+nested-loop join oracle and covers composite keys, empty separators,
+individually empty inputs, immutable selections, version misuse and projection
+deduplication. It checks semantics on finite inputs, not Rust elaboration or
+performance. Production completion additionally requires compiled overlay
+versus baseline comparisons and checker mutations: wrong paired positions,
+wrong seed/layout, missing exact probe, a candidate labeled Exact, omitted
+occurrence, build-after-scan, stale exact provider, or shared-mask mutation.
+
+Measure no-reduction inputs, strongly selective leaves, skew, composite-key
+correlation, dense/sparse domains, and clustered versus shuffled blocks.
+Report build time, scan time, rows read, blocks skipped, coarse positives,
+exact probes, survivor counts, bytes retained, and exact final enumeration.
+Use identical input normalization and answer-materialization boundaries.
+Two sweeps do not imply projected-output-linear cost: even an exact full
+reducer can feed a bad assembly order. For example, $R(a)$, $S(a,b)$ and
+$T(b)$ with $S=\{(i,i)\mid1\le i\le n\}$ are fully reduced, but first
+forming $R\times T$ creates $n^2$ pairs for an $n$-tuple full answer.
+Nor does a row-ID group handle implement the nested algebra needed for
+factorized YA's stronger bound~\cite{ya-shredded}. Those claims require their
+own scheduling and representation proofs.

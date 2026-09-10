@@ -1,0 +1,21 @@
+rule	algorithm	planned_symbol	model_marker	scope
+PA-Need	alg:physical	need	need	Mode-specific role prepass over the full DAG
+PA-Choose	alg:physical	choose	-	Policy chooses capability-correct descriptors; no production implementation
+PA-Build	alg:physical	build	build_exact	Build also maps to build_filter; constructors supply Cover evidence
+PA-Reuse	alg:physical	reuse	reuse	Same-source Groups may answer membership
+PA-Attach	alg:physical	attach	attach	Model additionally exercises explicitly proved source-superset reuse
+PA-Reduce	alg:physical	reduce	reduce	Exact semijoin with optional conservative prefilters
+PA-Transfer	alg:physical	transfer	transfer	Candidate preservation only; exact final assembly required
+PA-Seed	alg:physical	seed	-	Explicit candidate alias evidence; not modeled as a trace command
+PA-Freeze	alg:physical	freeze	-	Latest candidates become assembly aliases; not full reduction evidence
+PA-Output	alg:physical	output	-	Checks complete occurrence and predicate coverage before answer certification
+PA-Lookup	alg:physical	lookup	lookup	Exact group handles with version identity
+PA-Expand	alg:physical	expand	expand	Consumes group temporary once; model fuses subsequent collection
+PA-Exists	alg:physical	exists	-	Membership-only natural join
+PA-Stream	alg:physical	stream	-	Existing M-Unit/Project/Extend recipe with typed Rows temporary
+PA-Collect	alg:physical	collect	collect	Set collection creates new arena and IDs
+PA-View	alg:physical	view	-	Rename layout view or host Select selection
+RX-Block	alg:physical-scan	skip_block	block_may_match	Only bounds and explicit emptiness reject entire blocks
+RX-Row	alg:physical-scan	reject_row	row_may_match	Coarse row filtering
+RX-Probe	alg:physical-scan	probe	probe	Exact witness rejection
+RX-Keep	alg:physical-scan	keep	keep	Persistent survivor selection
