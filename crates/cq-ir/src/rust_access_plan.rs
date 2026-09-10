@@ -112,10 +112,11 @@ pub enum RustAccess {
 
 /// The occurrence-to-access contract in diagnostic and predicate form.
 pub mod contract {
-    /// Check the occurrence-to-access relation without scanning Rust expressions.
+    /// Check logical binding availability and the selected Rust control shape.
     ///
     /// The checker owns source-order binding and the required Rust control shape.
-    /// Rust itself checks the types and names inside the already-concrete leaves.
+    /// Logical label expressions use the supplied lexical dependency analysis.
+    /// Rust itself checks types and names inside the concrete access leaves.
     pub fn check(plan: &super::Plan) -> syn::Result<()> {
         super::check_plan(plan)
     }
@@ -168,6 +169,21 @@ fn check_plan(query: &Plan) -> syn::Result<()> {
             }
             cq::BodyItem::Let(binding) => {
                 let variables = cq::rust::bindings(&binding.pattern);
+                if let Some(variable) = variables
+                    .iter()
+                    .find(|variable| bound.contains(&symbol_name(variable)))
+                {
+                    return Err(syn::Error::new_spanned(
+                        variable,
+                        "let binding shadows an existing logical variable",
+                    ));
+                }
+                if !cq::rust::known_uses(&binding.expression, &logical).is_subset(&bound) {
+                    return Err(syn::Error::new_spanned(
+                        &binding.expression,
+                        "let expression requires bound logical variables",
+                    ));
+                }
                 let RustAccess::For { pattern, .. } = &clause.access else {
                     return Err(syn::Error::new_spanned(
                         clause,

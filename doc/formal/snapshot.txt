@@ -1,6 +1,8 @@
-Git parent: ca78453871314b4aecdf659f4de338c09487ec90
+Initial audit Git parent: ca78453871314b4aecdf659f4de338c09487ec90
+Manuscript revision Git base: b3ce412ecd412cacff9e6281337a71f432e6af13
 Branch: codex/all-answers
-Working tree: includes uncommitted rule refactor.
+Current revision: condensed implementation-focused manuscript, with four numbered planning algorithms and a 32-page budget; no new IR or compiler pass.
 Compiler source identity: sources.sha256 (not Git parent alone).
 Terminology notes: doc/notes at 3f971516f8784ead40e8635a85dbe319ba5e4729, main.
 Textbook references: AHV Chapters 3, 4 and 6; exact sections in TERMINOLOGY.md.
+BYODS comparison: Ascent commit f7b4fa437417e729d5d96e748498d1f0aff9aeb5, read with git show to exclude local compiler edits.

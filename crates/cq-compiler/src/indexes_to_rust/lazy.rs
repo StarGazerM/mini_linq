@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn supported(source: &ir::Module) -> bool {
     let definitions = &source.relational_plan.plan.definitions;
-    linear(&source.relational_plan)
+    indexes::is_linear_prefix(&source.relational_plan)
         && source.indexes.iter().all(|key| {
             key.result_token.is_some()
                 && definitions.iter().any(|d| {
@@ -18,59 +18,6 @@ pub(crate) fn supported(source: &ir::Module) -> bool {
                         && matches!(d.operator, ra::Operator::Rename(_))
                 })
         })
-}
-
-pub(crate) fn extended(source: &ra::Module) -> bool {
-    !source.plan.output.head.is_normalized()
-        || source.plan.definitions.iter().any(|d| {
-            matches!(
-                d.operator,
-                ra::Operator::Select(_) | ra::Operator::Extend(_) | ra::Operator::Unit(_)
-            )
-        })
-}
-
-/// Physical domain: inspect only this RA's dataflow, never rerun CQ planning.
-pub(crate) fn linear(source: &ra::Module) -> bool {
-    if !ra::contract::well_formed(source) {
-        return false;
-    }
-    let mut current = None::<String>;
-    let mut pending = BTreeSet::new();
-    let mut projected = false;
-    for d in &source.plan.definitions {
-        if projected {
-            return false;
-        }
-        let name = symbol_name(&d.result);
-        match &d.operator {
-            ra::Operator::Unit(_) if current.is_none() => current = Some(name),
-            ra::Operator::Rename(_) if current.is_none() => current = Some(name),
-            ra::Operator::Rename(_) => {
-                pending.insert(name);
-            }
-            ra::Operator::NaturalJoin(j)
-                if current.as_deref() == Some(&symbol_name(&j.left))
-                    && pending.remove(&symbol_name(&j.right)) =>
-            {
-                current = Some(name)
-            }
-            ra::Operator::Select(s) if current.as_deref() == Some(&symbol_name(&s.input)) => {
-                current = Some(name)
-            }
-            ra::Operator::Extend(e) if current.as_deref() == Some(&symbol_name(&e.input)) => {
-                current = Some(name)
-            }
-            ra::Operator::Project(p)
-                if current.as_deref() == Some(&symbol_name(&p.input)) && pending.is_empty() =>
-            {
-                projected = true;
-                current = Some(name);
-            }
-            _ => return false,
-        }
-    }
-    projected && current.as_deref() == Some(&symbol_name(&source.plan.output.input))
 }
 
 pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
@@ -305,7 +252,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
                     .iter()
                     .map(|c| &vars[&symbol_name(&c.name)])
                     .collect();
-                clauses.push(syn::parse_quote!(computed(#(#fresh),*) => for (#(#fresh,)*) in (::core::iter::once(#expr))));
+                clauses.push(syn::parse_quote!(let (#(#fresh,)*) = (#expr) => for (#(#fresh,)*) in (::core::iter::once(#expr))));
                 current = Some(name);
             }
             ra::Operator::Project(p)

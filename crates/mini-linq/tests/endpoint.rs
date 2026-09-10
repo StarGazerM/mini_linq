@@ -199,3 +199,31 @@ fn iterator_pipeline_is_an_independently_invocable_lazy_stage() {
     assert_eq!(rows.collect::<Vec<_>>(), vec![(3,)]);
     assert_eq!(evaluations.get(), 1);
 }
+
+#[test]
+fn quoted_let_accesses_preserve_bindings_and_empty_binding_effects_on_demand() {
+    let evaluations = Cell::new((0, 0));
+    let counter = &evaluations;
+    let compute = |x| {
+        let (bindings, effects) = counter.get();
+        counter.set((bindings + 1, effects));
+        x + 10
+    };
+    let record = || {
+        let (bindings, effects) = counter.get();
+        counter.set((bindings, effects + 1));
+    };
+    let mut rows = pull! {
+        answer(x, y) => ((x, y)) :-
+            R(x) => for (x,) in ([(1,), (2,), (1,)]),
+            let y = compute(x) => for (y,) in (::std::iter::once((compute(x),))),
+            let () = record() => for () in ({ record(); ::std::iter::once(()) }),
+            if y > 11 => if (y > 11);
+    };
+
+    assert_eq!(evaluations.get(), (0, 0));
+    assert_eq!(rows.next(), Some((2, 12)));
+    assert_eq!(evaluations.get(), (2, 2));
+    assert_eq!(rows.next(), None);
+    assert_eq!(evaluations.get(), (3, 3));
+}

@@ -70,3 +70,56 @@ pub(crate) fn check_coverage(source: &ir::Module) -> syn::Result<()> {
     }
     Ok(())
 }
+
+pub(crate) fn uses_result_index_route(source: &ra::Module) -> bool {
+    !source.plan.output.head.is_normalized()
+        || source.plan.definitions.iter().any(|d| {
+            matches!(
+                d.operator,
+                ra::Operator::Select(_) | ra::Operator::Extend(_) | ra::Operator::Unit(_)
+            )
+        })
+}
+
+/// Logical dataflow domain of the default index edge; independent of storage.
+pub(crate) fn is_linear_prefix(source: &ra::Module) -> bool {
+    if !ra::contract::well_formed(source) {
+        return false;
+    }
+    let mut current = None::<String>;
+    let mut pending = BTreeSet::new();
+    let mut projected = false;
+    for d in &source.plan.definitions {
+        if projected {
+            return false;
+        }
+        let name = symbol_name(&d.result);
+        match &d.operator {
+            ra::Operator::Unit(_) if current.is_none() => current = Some(name),
+            ra::Operator::Rename(_) if current.is_none() => current = Some(name),
+            ra::Operator::Rename(_) => {
+                pending.insert(name);
+            }
+            ra::Operator::NaturalJoin(j)
+                if current.as_deref() == Some(&symbol_name(&j.left))
+                    && pending.remove(&symbol_name(&j.right)) =>
+            {
+                current = Some(name)
+            }
+            ra::Operator::Select(s) if current.as_deref() == Some(&symbol_name(&s.input)) => {
+                current = Some(name)
+            }
+            ra::Operator::Extend(e) if current.as_deref() == Some(&symbol_name(&e.input)) => {
+                current = Some(name)
+            }
+            ra::Operator::Project(p)
+                if current.as_deref() == Some(&symbol_name(&p.input)) && pending.is_empty() =>
+            {
+                projected = true;
+                current = Some(name);
+            }
+            _ => return false,
+        }
+    }
+    projected && current.as_deref() == Some(&symbol_name(&source.plan.output.input))
+}

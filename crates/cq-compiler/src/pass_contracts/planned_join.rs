@@ -51,18 +51,18 @@ pub(crate) fn check(
         let order = proof.derivation[prefix.len()..proof.derivation.len() - 1]
             .iter()
             .map(|rule| match rule {
-                Rule::Match { clause } | Rule::Bind { clause } | Rule::Guard { clause }
-                    if clauses
-                        .clauses
-                        .get(*clause)
-                        .is_some_and(|info| *rule == info.rule) =>
-                {
-                    Ok(*clause)
+                Rule::Match { clause } | Rule::Bind { clause } | Rule::Guard { clause } => {
+                    match (rule, source.program.query.body.get(*clause)) {
+                        (Rule::Match { .. }, Some(cq::BodyItem::Positive { .. }))
+                        | (Rule::Guard { .. }, Some(cq::BodyItem::Filter(_)))
+                        | (Rule::Bind { .. }, Some(cq::BodyItem::Let(_))) => Ok(*clause),
+                        _ => Err(syn::Error::new_spanned(source, "invalid clause derivation")),
+                    }
                 }
                 _ => Err(syn::Error::new_spanned(source, "invalid clause derivation")),
             })
             .collect::<syn::Result<Vec<_>>>()?;
-        super::ordered::check_scheduled(source, target, &order)?;
+        super::ordered::check_scheduled_in(source, target, &order, &clauses)?;
         let peak = ra::check_in(target.program.inputs(), &target.plan)?
             .values()
             .map(|r| r.heading.len())

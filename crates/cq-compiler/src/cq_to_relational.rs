@@ -49,7 +49,6 @@ pub fn plan(
     source: &cq::Module,
     options: PlanningOptions,
 ) -> syn::Result<(ra::Module, JoinPlanReport)> {
-    cq::contract::check(source)?;
     let clauses = ClauseDependencies::analyze(source)?;
     if !clauses.supports_graph_rules {
         return clause_rules::plan(source, &clauses, options);
@@ -73,16 +72,16 @@ pub fn plan(
     }
     apply(&mut state, &mut derivation, Rule::Begin)?;
     if let Some(tree) = &join_tree {
-        let mut preorder = vec![tree.root()];
+        let mut breadth_first = vec![tree.root()];
         let mut i = 0;
-        while i < preorder.len() {
-            preorder.extend(tree.children(preorder[i]));
+        while i < breadth_first.len() {
+            breadth_first.extend(tree.children(breadth_first[i]));
             i += 1;
         }
-        for &child in preorder.iter().skip(1).rev() {
+        for &child in breadth_first.iter().skip(1).rev() {
             apply(&mut state, &mut derivation, Rule::Up { child })?;
         }
-        for &child in preorder.iter().skip(1) {
+        for &child in breadth_first.iter().skip(1) {
             apply(&mut state, &mut derivation, Rule::Down { child })?;
         }
         apply(&mut state, &mut derivation, Rule::Freeze)?;

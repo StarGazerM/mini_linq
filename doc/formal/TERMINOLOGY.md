@@ -75,4 +75,4 @@ was already current; its source was not edited.
 
 These correspondences establish which definitions and adaptations are being
 used. They do not discharge the implementation and host-language proof
-obligations listed in [conformance.tex](conformance.tex).
+obligations listed in [foundations.tex](foundations.tex).

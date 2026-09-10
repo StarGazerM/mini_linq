@@ -8,10 +8,8 @@ For sorts $V=\Delta(l).V$ and $W=\Delta(r).V$, define
 \operatorname{basekey}(l,R,m)&=\langle j\mid m(\Sigma(R)_j.a)\in V\rangle.
 \end{aligned}
 \]
-The order is increasing ordinal order. Given a list $K$,
-$K\oplus\kappa$ appends $\kappa$ iff its key is nonempty and it is not already
-present. This is stable first-use insertion, not unordered set conversion.
-The fold $\Sigma;\Delta\vdash(D,K)\Rightarrow_{\rm ix}K'$ uses:
+Keys follow increasing ordinals. $K\oplus\kappa$ appends a nonempty unseen
+signature, preserving first-use order. Fold definitions using:
 \begin{mathpar}
 
 \Rule{IX-Result}{o=l\bowtie r\ \lor\ o=l\ltimes r\quad
@@ -28,31 +26,21 @@ The fold $\Sigma;\Delta\vdash(D,K)\Rightarrow_{\rm ix}K'$ uses:
 \Rule{IX-Module}{\Sigma;\Delta\vdash(D,\emptyseq)\Rightarrow_{\rm ix}K}
  {\Sigma\vdash D\Downarrow_{\rm result}(D,K)}
 \end{mathpar}
-The base algorithm applies to a root Rename, left-deep natural joins with
-direct right Renames, and a final Project; it folds IX-Base in actual join
-order. All definitions are retained in both algorithms. The default index
-entry dispatches extended linear RA to the result algorithm, whereas the
-explicit planned entry uses it for general supported DAGs.
-
-Define required coverage as presence of every nonempty signature calculated
-for a binary operand. The result physical backend accepts valid extra
-requirements; the index-selection edge itself returns exactly the stable
-first-use list. Coverage is on the exact right-hand version $r$, including a
-reduced or projected result, not on any equivalent-looking base relation.
-
+IX-Base folds actual join order on a root Rename, left-deep joins with direct
+right Renames, and final Project. Both algorithms preserve every definition.
+The default entry selects result indexes for extended linear RA; the planned
+entry supports general DAGs. Selection returns exactly the stable required
+list; physical backends also accept valid extras. Coverage requires the exact
+right result version, including reduced/projected versions.
 \begin{theorem}[Index selection]
 Both selection algorithms preserve the entire RA and hence its denotation.
 Their output satisfies IX-WF and contains exactly one signature for each
 nonempty key required in their respective domains, ordered by first use.
 \end{theorem}
 \begin{proof}
-Induct on definition order. Every derived ordinal is in range by its
-enumeration over a checked sort or schema and is strictly increasing.
-The binary case appends precisely its required signature unless empty or
-previously seen; the other case changes nothing. Stable insertion preserves
-uniqueness and the earliest occurrence of every signature. Every required
-binary occurrence is visited, so coverage holds at the end. The rule copies
-$D$ literally; indexes have no denotational action.
+Induct on definitions. Checked layouts give increasing in-range ordinals;
+each binary step appends its nonempty unseen signature, preserving uniqueness
+and first use. Every consumer is visited and $D$ is copied unchanged.
 \end{proof}
 
 \subsection{Storage representation relation}
@@ -66,13 +54,10 @@ For key positions $k$ and complementary positions $p$, an index is either
  \operatorname{Buckets}_k(L)[u]
  =\langle\operatorname{row}(t)|_p\mid t\in L,\operatorname{row}(t)|_k=u\rangle.
 \]
-Buckets contain each represented input tuple's payload exactly once; order
-is any fixed enumeration chosen during construction. A missing key gives an
-empty bucket. KeySet is a HashSet of key tuples. Buckets is a HashMap from
-key tuples to vectors of payload tuples. Complement positions retain their
-layout order. All generated tuples, including singleton tuples, retain their
-trailing comma; the empty tuple is $()$.
-
+Each represented row contributes its complementary payload once, in fixed
+construction order; missing keys give empty buckets. KeySet is a HashSet;
+Buckets a HashMap to payload vectors. Complements retain layout order;
+singleton Rust tuples retain commas and the empty tuple is $()$.
 \begin{mathpar}
 
 \Rule{ST-Key}{S\simeq_V L}
@@ -82,182 +67,108 @@ trailing comma; the empty tuple is $()$.
 \Rule{ST-Bucket}{S\simeq_V L}
  {\mathsf{foldPush}(S,k,p)\simeq\operatorname{Buckets}_k(L)}
 \end{mathpar}
-foldPush starts with an empty HashMap, visits each stored row once, and appends
-its complementary tuple to the vector at its key. Under the clone/equality
-laws, induction on visited rows proves both representation rules; no hashing
-complexity bound is needed.
-
-An index needs payload precisely when some natural join consumes its key and
-adds a fresh right attribute. Otherwise the materialized backend uses a key
-set, even for a proper key used only by semijoin. If any consumer needs payload,
-the shared representation is Buckets and membership uses contains-key.
-The lazy extended backend always gives proper keys a bucket representation.
-Full keys have empty complements and use KeySet.
-
+foldPush visits stored rows once, appending each complement at its key.
+Induction on those visits proves ST-* under lawful cloning/equality.
+Materialized indexes need payload iff a natural-join consumer adds a fresh
+right attribute; other consumers use membership, sharing Buckets if necessary.
+Lazy proper keys always use Buckets; full keys use KeySet.
 \subsection{Access constructors, defined independently of the emitters}
-For a represented relation $S:V$, define the following local Access fragments:
-\[
-\begin{aligned}
-\operatorname{scan}(S,V)&=
-\begin{cases}
- \mathsf{rows}(\ord(V))\Rightarrow\mathsf{for}\ (\ord(V))\ \mathsf{in}\ S.\mathsf{iter}()
- &V\ne\emptyset,\\
- \mathsf{rows}()\Rightarrow\mathsf{if}\ \neg S.\mathsf{isEmpty}()&V=\emptyset;
-\end{cases}\\
-\operatorname{exists}(S,k,u)&=
-\begin{cases}
- \neg S.\mathsf{isEmpty}()&k=\emptyseq,\\
- \mathsf{KeySet}_k(S).\mathsf{contains}(u)&\text{key-set representation},\\
- \mathsf{Buckets}_k(S).\mathsf{containsKey}(u)&\text{bucket representation};
-\end{cases}\\
-\operatorname{lookup}(S,k,u)&=
-\begin{cases}S.\mathsf{iter}()&k=\emptyseq,\\
- \mathsf{Buckets}_k(S).\mathsf{get}(u).\mathsf{intoIter}().\mathsf{flatten}()
- &\text{otherwise}.
-\end{cases}
-\end{aligned}
-\]
-The empty-sort scan is an existence guard, since a finite set over that
-sort contains at most one tuple. A lookup binds only the complementary
-right columns; its key is assembled from current left bindings in right-key
-order. The resulting full tuple is laid out in result-sort order.
-
+Abbreviate Access fragments by $\mathsf{for}_N(e)$ and $\mathsf{if}(e)$,
+retaining their positive/binding and guard labels. For represented $S:V$,
+$\operatorname{scan}(S,V)$ is $\mathsf{for}_{\ord V}(S.\mathsf{iter}())$
+when $V\ne\emptyset$, otherwise $\mathsf{if}(\neg S.\mathsf{isEmpty}())$.
+Lookup uses $S.\mathsf{iter}()$ for empty keys, otherwise
+$\mathsf{Buckets}_k(S).\mathsf{get}(u).\mathsf{intoIter}().\mathsf{flatten}()$.
+Existence is nonemptiness for empty keys, KeySet contains for key sets, and
+Buckets contains-key otherwise. Lookup binds complement columns; left bindings
+form keys in right-key order. Output uses result-sort order.
 \begin{lemma}[Lookup and membership adequacy]
 For $t:V$, $L:W$, and $K=V\cap W$, exists returns true iff $t$ has a compatible
 witness in $L$. If $W\setminus V\ne\emptyset$, lookup enumerates exactly the
 complementary tuples of those witnesses, each once.
 \end{lemma}
 \begin{proof}
-For an empty key every row is compatible and existence is nonemptiness.
-Otherwise equality of the encoded key is exactly agreement on $K$, by the
-bijective layout and lawful component equality. ST-Key therefore answers the
-existential query; ST-Bucket has exactly one payload per such row. Key plus
-complement uniquely reconstructs the full right tuple, so no two distinct
-compatible right tuples are lost by complement encoding. This also proves the
-fully-bound case, in which at most one compatible set tuple exists.
+Empty keys admit all rows. Otherwise key equality is agreement on $V\cap W$.
+ST-Key decides existence; ST-Bucket enumerates exactly its witnesses' payloads.
+Key and complement reconstruct each row uniquely, including the fully-bound
+case with at most one compatible tuple.
 \end{proof}
 
 \subsection{Materialized IndexedRA to staged Rust}
-Write $\Sigma;\Delta;\mathcal S\vdash o\Downarrow_M A$ for a local access plan
-whose leaves refer to earlier concrete stores $\mathcal S$. $\mathsf{out}_V$
-clones/binds the current logical values in $\ord(V)$ order. $\operatorname{host}_V(e)$
-denotes expression elaboration at the scanned/computed binding convention,
-spelled out in Section~\ref{sec:host-elab}. The rules are:
+Write $s_r=\operatorname{scan}(\mathcal S(r),\Delta(r).V)$,
+$h_V=\mathsf{out}_V$, and $e_V=\operatorname{host}_V(e)$
+(Section~\ref{sec:host-elab}); these abbreviate existing Access syntax.
+Outputs clone/bind values in $\ord(V)$. With implicit checked environments
+$\Sigma;\Delta;\mathcal S$, the operator rules are:
 \begin{mathpar}
-
-\Rule{M-Unit}{}{\mathbf1\Downarrow_M[\mathsf{unit}()\Rightarrow\mathsf{if}\ \mathsf{true};\mathsf{out}_\emptyset]}
+\Rule{M-Unit}{}{\mathbf1\Downarrow_M[\mathsf{unit}()\Rightarrow\mathsf{if}\ \mathsf{true};h_\emptyset]}
 
 \Rule{M-Rename}{\Sigma(R)=\bar a:\bar\tau\quad m(\bar a)=\bar x}
- {\delta_m(R)\Downarrow_M[\operatorname{scan}(\mathcal S(R),\bar x);\mathsf{out}_{\set(\bar x)}]}
+ {\delta_m(R)\Downarrow_M[\operatorname{scan}(\mathcal S(R),\bar x);h_{\set(\bar x)}]}
 
-\Rule{M-Project}{\Delta(r).V=V\quad U\subseteq V}
- {\pi_Ur\Downarrow_M[\operatorname{scan}(\mathcal S(r),V);\mathsf{out}_U]}
+\Rule{M-Project}{V=\Delta(r).V\quad U\subseteq V}
+ {\pi_Ur\Downarrow_M[s_r;h_U]}
 
-\Rule{M-Select}{\Delta(r).V=V}
- {\sigma_er\Downarrow_M[\operatorname{scan}(\mathcal S(r),V);\mathsf{if}\operatorname{host}_V(e);\mathsf{out}_V]}
+\Rule{M-Select}{V=\Delta(r).V}
+ {\sigma_er\Downarrow_M[s_r;\mathsf{if}(e_V);h_V]}
 
-\Rule{M-Extend}{\Delta(r).V=V\quad N\cap V=\emptyset\quad N\ne\emptyset}
- {\operatorname{ext}_{N,e}r\Downarrow_M
- [\operatorname{scan}(\mathcal S(r),V);\mathsf{for}\ N\ \mathsf{in}\ \mathsf{once}(\operatorname{host}_V(e));\mathsf{out}_{V\cup N}]}
+\Rule{M-Extend}{V=\Delta(r).V\quad N\cap V=\emptyset}
+ {\operatorname{ext}_{N,e}r\Downarrow_M[s_r;\mathsf{for}_N(\mathsf{once}(e_V));h_{V\cup N}]}
 \end{mathpar}
-For Rename the displayed tuple uses schema attribute order $\bar x$;
-output reorders to the result layout. In Extend the new fields are yielded
-owned; old fields are cloned as required. Guards and generated computed
-occurrences carry their corresponding logical labels; bracket notation is a
-metanotation for the existing Access syntax, not a new IR.
-
-For $V=\Delta(l).V$, $W=\Delta(r).V$, $K=V\cap W$, $N=W\setminus V$, and
-$u=\operatorname{row}_K(t)$ in the left binding, use:
+Rename scans schema order and outputs result order. Extend owns new fields,
+cloning old ones as needed; its Let label uses AC-Bind even for empty $N$,
+evaluating $e$ once per input tuple. For binary operators let
+$V=\Delta(l).V$, $W=\Delta(r).V$, $K=V\cap W$, $N=W\setminus V$,
+$u=\operatorname{row}_K(t)$, $J=\operatorname{lookup}(\mathcal S(r),K,u)$,
+and $E=\operatorname{exists}(\mathcal S(r),K,u)$:
 \begin{mathpar}
-
 \Rule{M-JoinFor}{N\ne\emptyset}
- {l\bowtie r\Downarrow_M
- [\operatorname{scan}(\mathcal S(l),V);
- \mathsf{for}\ N\ \mathsf{in}\operatorname{lookup}(\mathcal S(r),K,u);\mathsf{out}_{V\cup W}]}
+ {l\bowtie r\Downarrow_M[s_l;\mathsf{for}_N(J);h_{V\cup W}]}
 
 \Rule{M-JoinIf}{N=\emptyset}
- {l\bowtie r\Downarrow_M
- [\operatorname{scan}(\mathcal S(l),V);
- \mathsf{if}\operatorname{exists}(\mathcal S(r),K,u);\mathsf{out}_V]}
+ {l\bowtie r\Downarrow_M[s_l;\mathsf{if}(E);h_V]}
 
-\Rule{M-Semi}{} {l\ltimes r\Downarrow_M
- [\operatorname{scan}(\mathcal S(l),V);
- \mathsf{if}\operatorname{exists}(\mathcal S(r),K,u);\mathsf{out}_V]}
+\Rule{M-Semi}{}{l\ltimes r\Downarrow_M[s_l;\mathsf{if}(E);h_V]}
 \end{mathpar}
-Every bracketed region has one Project and Distinct introduced by the supplied
-pull lowering. Region sources, tuple patterns, and field cloning are already
-literal Rust in the Access plan. Generated statistic updates count local join
-outputs and semijoin probes; their values are operational diagnostics, excluded
-from the set-result equivalence theorem.
-
-A file-construction state $(S,\mathcal S)$ contains emitted Rust statements
-and their store-name environment. It normalizes used inputs into HashSets;
-valid extra base indexes are built from those sets. Then it traverses RA
-definitions in order. Write the emitted statement sequence explicitly as
-\[
-\begin{aligned}
-t_r(A)={}&[\mathsf{let}\ S_r:
- \mathsf{HashSet}(\operatorname{Row}_{\Delta(r).V})
- =\mathsf{collect}(\mathsf{pull}\{A\});\\
- &\operatorname{buildIndexes}(r)].
-\end{aligned}
-\]
-Then the file-construction transition is
+Pull adds Project/Distinct to each region; its sources, patterns, and clones
+are already Rust. Join-output/semijoin-probe statistics are excluded from set
+observations. File state $(S,\mathcal S)$ contains statements and store names.
+Normalize inputs and build extra base indexes first. Let $t_r(A)$ be
+$\mathsf{let}\ S_r:\mathsf{HashSet}(\operatorname{Row}_{\Delta(r).V})
+=\mathsf{collect}(\mathsf{pull}\{A\})$, followed by buildIndexes($r$).
 \[
 \Rule{M-Def}{\Sigma;\Delta;\mathcal S\vdash o\Downarrow_M A\quad r\text{ fresh in }\mathcal S}
- {(S,\mathcal S,r=o)\Rightarrow_M
- (S\concat t_r(A),\mathcal S[r\mapsto S_r])}.
+ {(S,\mathcal S,r=o)\Rightarrow_M(S\concat t_r(A),\mathcal S[r\mapsto S_r])}.
 \]
-buildIndexes uses ST-Key/Bucket for the written requirements targeting $r$;
-each appears after $S_r$ exists. A result is defined once even when shared.
-The final head map is applied to the output store and collected into an answer
-HashSet. The generated build method performs these statements; query iterates
-and clones stored answers; materialize collects query and sorts; run composes
-build and materialize. It does not rerun CQ analysis.
-
-The structural domain requires IndexedRA well-formedness, exact required-key
-coverage, at most twelve attributes per named result, nonempty Extend output
-lists, and nameable public output types. Successful Rust elaboration is a
-separate obligation. In particular, the broader RA local language permits
-empty Extend lists, while M-Extend's generated positive computed label cannot
-use a For with no fresh names. This is a real partial-lowering boundary,
-not grounds for asserting that all well-formed RA compiles.
-
+buildIndexes applies ST-* to requirements targeting $r$ after $S_r$ exists.
+Shared results are defined once. Build finally maps the head into an answer
+HashSet; query clones its rows, materialize collects/sorts, and run composes
+build/materialize. None re-plans CQ.
+The domain requires IX-WF, required-key coverage, at most twelve attributes
+per result, and nameable outputs; successful Rust elaboration is additional.
 \begin{theorem}[Materialized representation preservation]
 Under $\mathcal H_{\rm rel}$ and adequate host expression elaboration, the
 abstract M-rules produce a store representing every named RA result and an
 answer representing the RA output.
 \end{theorem}
 \begin{proof}
-Induct on the definition list. Normalized inputs represent $I$ by lawful set
-collection. Unit and Rename follow their definitions; Project's local output
-map and Distinct implement set restriction, including empty sorts. Select
-uses the same abstract predicate. Extend adds exactly the specified fresh
-values for each input tuple; retained old fields and output set collection
-implement its relation. JoinFor and JoinIf implement compatible tuple union
-by lookup adequacy; Semi implements its existential projection. The supplied
-local cursor rules preserve these enumerations as proved in
-Section~\ref{sec:cursor}. Collection yields exactly the relation. The newly
-built indexes satisfy their representation invariant by ST-Key/Bucket.
-All operands were established earlier, including shared versions, so the
-induction applies without recomputation. Finally the head map and set
-collection give exactly the RA output definition.
+Induct on definitions. Normalized inputs represent $I$. Unit yields the empty
+tuple singleton; Rename relabels; Project/Distinct implements restriction; Select/Extend applies the
+specified host function. Lookup adequacy proves both join cases and Semi.
+Cursor preservation (Section~\ref{sec:cursor}) and collection establish each
+result set; ST-* establishes its indexes. Earlier operands, including shared
+versions, remain available without recomputation. Final head mapping and set
+collection give the RA output.
 \end{proof}
 
 \subsection{Lazy linear lowering and the basic storage algorithm}
-The extended lazy structural domain is defined by a dataflow walk, not by
-looking at the source CQ: one initial Unit or Rename establishes current $p$;
-other Renames enter a pending set; each Join must have left $p$ and consume a
-pending direct Rename on the right; Select/Extend must consume $p$; one final
-Project consumes $p$ after all pending Renames have been consumed. No Semijoin,
-bushy operand, internal Project, or operation after final projection is admitted.
-All index requirements target those direct Rename results. Extend must add at
-least one name for the generated Access contract.
-
-The build phase stores each renamed input with attributes in lexical name
-order (this is tuple layout, not row enumeration order) and
-builds its proper/full indexes; it evaluates no query Select/Extend/head leaf.
-The query-phase fold uses:
+The lazy domain follows RA dataflow: Unit/Rename starts current $p$; other
+Renames become pending. Join consumes $p$ and a pending direct Rename;
+Select/Extend consumes $p$; final Project consumes $p$ after all pending
+Renames. Semijoin, bushy operands, internal Project, and later operations are
+excluded. Requirements target direct Renames; empty Extend uses AC-Bind.
+Build stores renamed rows in lexical attribute order and builds indexes,
+without evaluating Select/Extend/head leaves. Query folds:
 \begin{mathpar}
 
 \Rule{L-Root}{p=\bot\quad o=\delta_m(R)}{(p,A,o)\Rightarrow_L(r,[\operatorname{scan}(S_r,V_r)])}
@@ -267,64 +178,43 @@ The query-phase fold uses:
 \Rule{L-Join}{o=p\bowtie r\quad r\text{ pending direct Rename}}
  {(p,A,o)\Rightarrow_L(r_0,A\concat\operatorname{joinAccess}(p,r))}
 
-\Rule{L-Select}{o=\sigma_ep}{(p,A,o)\Rightarrow_L(r_0,A\concat[\mathsf{if}\operatorname{host}(e)])}
+\Rule{L-Select}{o=\sigma_ep}{(p,A,o)\Rightarrow_L(r_0,A\concat[\mathsf{if}(\operatorname{host}(e))])}
 
-\Rule{L-Extend}{o=\operatorname{ext}_{N,e}p\quad N\ne\emptyset}
- {(p,A,o)\Rightarrow_L(r_0,A\concat[\mathsf{for}\ N\ \mathsf{in}\mathsf{once}(\operatorname{host}(e))])}
+\Rule{L-Extend}{o=\operatorname{ext}_{N,e}p}
+ {(p,A,o)\Rightarrow_L(r_0,A\concat[\mathsf{for}_N(\mathsf{once}(\operatorname{host}(e)))])}
 
 \Rule{L-Output}{o=\pi_Up\text{ is final}\quad\text{all pending Renames consumed}}
  {(p,A,o)\Rightarrow_L[\mathsf{head}_U\Rightarrow\operatorname{host}(\bar e);A]}
 \end{mathpar}
-In these rules $r_0$ is the name of the definition being folded; a nonroot
-Rename only updates the pending set and emits no cursor clause.
-joinAccess uses JoinFor/JoinIf's cases against the stored direct input, with
-no extra materialization. Output emits one final head map and Distinct,
-not a per-definition collection.
-
+$r_0$ names the current definition. Nonroot Renames only update pending.
+joinAccess uses M-JoinFor/If against stored inputs without materialization;
+Output adds one head map and Distinct.
 \begin{lemma}[Pure fusion]
 On this linear domain under $\mathcal H_{\rm rel}$, the lazy rule result set
 equals the materialized RA result set.
 \end{lemma}
 \begin{proof}
-A relation's scan enumerates each tuple once. A Join with a direct set-valued
-Rename preserves unique complete bindings: two compatible input pairs giving
-the same union agree on both restrictions, hence are the same pair.
-Select removes tuples without duplication. Extend retains the complete input,
-so deterministic extension cannot identify different input tuples. Unit is a
-singleton. Thus before final Project the fused cursor enumerates the same
-complete relation without duplicates, even though it does not materialize
-each intermediate. At final output, pure head values depend only on the kept
-sort. Removing duplicate projected bindings before that head map or
-removing duplicate results after it gives the same set. This establishes the
-fusion equation; it does not establish evaluation-trace equivalence, as
-Counterexample~\ref{cx:effects} shows.
+Scans and Unit have unique tuples. Equal Join unions have equal left/right
+restrictions, hence arise from the same pair. Select cannot duplicate; Extend
+retains the input, so cannot identify distinct bindings. Induction gives the
+same complete relation before final Project. Since pure heads depend only on
+kept attributes, deduplication before or after head mapping yields the same
+set. Stateful interleavings need not agree (Counterexample~\ref{cx:effects}).
 \end{proof}
 
-R1's basic physical algorithm has the same scan/lookup/membership cursor
-cases but stores base rows in schema order and accepts only base signatures.
-It normalizes each used input to a HashSet. An empty-key enumeration reuses an
-existing full-key set if available, otherwise a first-use-numbered row vector.
-Proper indexes contain keyed complementary vectors; full indexes use the
-normalized set itself. Exactly one final storage consumer takes ownership of
-each normalized input: a full index if present, otherwise a needed row vector,
-otherwise the last required proper index. Other consumers borrow and clone
-fields while constructing their own objects. Borrowing builders run before
-moving builders. The map/vector representation equations prove this variation
-of the same access rules; the ownership schedule additionally requires Rust's
-borrow/type validation. It is not derived from a new runtime planner.
-
+R1 uses the same access cases over schema-ordered base rows and base indexes.
+Inputs are normalized to HashSets. Empty-key scans reuse a full-key set or a
+first-use-numbered row vector; proper indexes store complementary vectors.
+One final consumer owns each normalized input: a full index, else a needed
+row vector, else the last proper index. Other builders borrow/clone first.
+ST-* proves the representations; Rust must validate this ownership schedule.
 \subsection{Host expression elaboration}
 \label{sec:host-elab}
-The physical lowering's $\operatorname{host}_V(e)$ is not assumed to be textual
-identity. For known primitive comparison operands it constructs explicit
-primitive-value comparisons (or reference comparisons in the lazy route);
-otherwise its general expression case introduces aliases using original
-syntax contexts. Scanned logical values alias borrowed tuple fields. Computed
-values are cloned from stored fields into owned aliases. Explicit simple-path
-occurrences are collected with their original identifiers; an opaque macro
-adds aliases at the macro path's span for every retained logical name.
-Rust expression and macro token subtrees are otherwise preserved.
-
+$\operatorname{host}_V(e)$ makes primitive comparisons explicit (reference
+comparisons for lazy execution). General expressions alias scanned values to
+borrowed fields and computed values to owned clones. Simple paths retain their
+identifiers/contexts; opaque macros get aliases for retained names at their
+path span. Other Rust expression and macro subtrees are preserved.
 \begin{obligation}[Host adequacy, not proved by FV]
 For every claimed admissible expression and related stored binding, the
 elaborated expression resolves to the intended logical environment, has the

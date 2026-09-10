@@ -1,6 +1,7 @@
 //! Small semantic relations used by the typed compiler-pass contracts.
 
 pub(crate) mod ordered;
+pub(crate) mod physical;
 pub(crate) mod planned_join;
 
 /// Result-index selection preserves the entire algebra and adds exactly the
@@ -169,8 +170,8 @@ fn rename_is_exact(
 /// by earlier right-hand Renames consumed one-by-one by left-deep
 /// NaturalJoins, then a final Project.
 pub(crate) fn basic_left_deep_plan(source: &relational_plan::Module) -> bool {
-    if crate::indexes_to_rust::extended(source) {
-        return crate::indexes_to_rust::linear(source);
+    if crate::relational_to_indexes::uses_result_index_route(source) {
+        return crate::relational_to_indexes::is_linear_prefix(source);
     }
     if !relational_plan::contract::well_formed(source) {
         return false;
@@ -254,7 +255,7 @@ pub(crate) fn indexes_are_exact(
     source: &relational_plan::Module,
     target: &index_requirements::Module,
 ) -> bool {
-    if crate::indexes_to_rust::extended(source) {
+    if crate::relational_to_indexes::uses_result_index_route(source) {
         return result_indexes_are_exact(source, target);
     }
     index_requirements::contract::well_formed(target)
@@ -285,7 +286,7 @@ pub(crate) fn covers_required_indexes(source: &index_requirements::Module) -> bo
 
 /// Whether the basic physical pass is defined and has all required indexes.
 pub(crate) fn physical_input_is_supported(source: &index_requirements::Module) -> bool {
-    if crate::indexes_to_rust::extended(&source.relational_plan) {
+    if crate::relational_to_indexes::uses_result_index_route(&source.relational_plan) {
         return basic_left_deep_plan(&source.relational_plan)
             && crate::relational_to_indexes::check_coverage(source).is_ok()
             && crate::indexes_to_rust::lazy_supported(source);

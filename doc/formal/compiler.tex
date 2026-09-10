@@ -4,6 +4,7 @@
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools,mathpartir,stmaryrd}
 \usepackage{booktabs,longtable,array,enumitem,listings,xcolor}
+\usepackage{algorithm,algpseudocode}
 \usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue]{hyperref}
 \usepackage{microtype}
 \newtheorem{theorem}{Theorem}[section]
@@ -40,45 +41,34 @@
 \setlist{nosep}
 \title{MiniLinq: Administrative Query Compilation\\Across Embedded Languages}
 \author{Extended research manuscript}
-\date{9 September 2026}
+\date{10 September 2026}
 \begin{document}
 \maketitle
 \begin{abstract}
-Query compilation combines declarative relational meaning with operational
-choices about storage, traversal and host computation. MiniLinq exposes this
-combination as independently usable languages embedded in Rust: conjunctive
-queries with host expressions, named relational plans, index requirements,
-local access plans and iterator pipelines. We ask what each compilation edge
-must preserve for its implementation to be replaceable. An executable
-walkthrough follows a computed join key, guard and result through every
-existing boundary. Administrative rules specify graph reduction, semijoin
-planning, dependency-constrained clauses, retention, indexing and staged
-lowering, with conditional relational and finite-cursor proofs.
-We distinguish relation abstraction from enumeration and client observations:
-equal answer sets do not imply equal partial-demand or effect behavior.
-Executable witnesses show that lazy and materialized evaluation can produce
-different answer sets with stateful Rust clauses, even without changing their
-written order. A finite state-and-trace model explains this distinction and
-isolates an interchange condition; a dynamic provenance model distinguishes
-value, control and state dependencies from recorded execution order.
-The artifact pairs rules with implementation symbols and combines independent
-valuation and graph oracles with compiled end-to-end tests. The account
-explicitly separates proved mathematical properties, bounded implementation
-evidence, and unresolved source-effect, Rust-adequacy and conformance
-obligations. It does not assert a compiler-correctness theorem for arbitrary
-accepted Rust expressions.
+MiniLinq compiles conjunctive queries with native Rust expressions through
+independently usable relational, index, access and iterator languages.
+We specify each boundary by administrative rules and give explicit algorithms
+for GYO recognition, Yannakakis reduction and dependency-constrained planning.
+A worked query follows composite keys, filter pushdown and column pruning
+through every IR. Computed arguments and let clauses expose additional
+directional requirements; an authored lower plan demonstrates a legal
+optimization beyond the current planner's search.
+The specification relates these algorithms to the Rust implementation and
+states the contracts needed to replace a pass or quote a lower language.
+Preservation arguments assume an admissible relational host; a compiled
+effect counterexample rules out unrestricted equivalence of lazy and
+materialized execution. Independent valuation and graph oracles, mutation
+checks and compiled tests provide bounded implementation evidence.
 \end{abstract}
-\tableofcontents
 \input{introduction}
 \input{overview}
 \input{foundations}
-\input{effects_provenance}
-\input{host_embedding}
+\input{constraint_planning}
 \input{languages}
 \input{planning}
 \input{physical}
 \input{staging}
-\input{conformance}
+\input{extensibility}
 \input{evaluation}
 \input{related_work}
 \begin{thebibliography}{99}
@@ -97,12 +87,9 @@ Exact source files and textbook page references are recorded in
 \code{TERMINOLOGY.md}.
 \bibitem{iterator} The Rust Project. \emph{Iterator API documentation}.
 \url{https://doc.rust-lang.org/std/iter/trait.Iterator.html}.
-\bibitem{hashset} The Rust Project. \emph{HashSet API documentation}.
-\url{https://doc.rust-lang.org/std/collections/struct.HashSet.html}.
 \bibitem{macros} The Rust Project. \emph{The Rust Reference: Procedural macros}.
 \url{https://doc.rust-lang.org/reference/procedural-macros.html}.
 \input{host_references}
-\input{effects_references}
 \input{paper_references}
 \end{thebibliography}
 \end{document}

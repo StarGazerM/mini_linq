@@ -1,0 +1,48 @@
+\section{Replacing compiler components}
+\label{sec:extensibility}
+A replacement supplies the source judgment, accepted domain, target contract
+and preservation property required by Theorem~\ref{thm:composition}.
+Typed passes compose through their existing endpoints; public macros select
+fixed continuations. Canonical/planned CQ lowering, lazy/materialized
+realization and direct RA quotation already exercise this separation.
+
+\paragraph{Representations and algorithms.}
+Ascent BYODS formalizes custom representations through DLDS and
+concretization into facts~\cite{paper-byods}. Here a represented relation
+$\gamma(s)$ must also satisfy the operations required by its chosen pass.
+For key sort $K\subseteq U$ and key tuple $u$, exact lookup requires
+\[
+ \set(\operatorname{lookup}_K(s,u))
+ =\{t\restrict(U\setminus K):t\in\gamma(s),\ t\restrict K=u\}.
+\]
+Membership agrees with nonemptiness; scans enumerate $\gamma(s)$.
+Induction over the finite plan then preserves its completed pure answer
+when providers satisfy these laws and the host assumptions. Sorted access
+additionally needs order and seek laws. Rust trait signatures alone do not
+establish these premises, and changing input meaning, such as adding an
+equivalence closure, changes the source contract.
+
+\paragraph{Push and multiway execution.}
+A physical pass could replace local pull quotations with loops inserting
+into the same materialized result sets. A public lazy Iterator instead
+requires a replacement that preserves its demand and stopping contract
+(Section~\ref{sec:scope})~\cite{paper-pushpull}.
+A WCOJ pass must retain a complete positive join region before committing
+to binary intermediates, then supply variable-prefix restriction and
+intersection operations. Current index requirements describe equality keys,
+not trie order or seek; using Leapfrog Triejoin would require those
+additional laws and its own complexity argument~\cite{paper-lftj}.
+Neither replacing a hash table alone nor treating a host function as an
+enumerable relation establishes that algorithm.
+
+\paragraph{Staging and quotation.}
+Compilation specializes known query structure while leaving input rows and
+host computations residual. A known let expression need not have a known
+value. Applications can enter RA, IndexRequirements, Access or Pipeline
+directly, or quote a lower language within Rust leaves under its binding
+and typing contract. A pass may emit ordinary Rust containing Access holes;
+compiling a hole does not reconstruct the enclosing CQ. Thus a replacement
+may cover one edge or a connected segment, without adding operators to every
+upper language. The authored RA in Section~\ref{sec:constraint-planning}
+is executable evidence; general push/WCOJ backends and user-configurable
+public continuations remain future implementations.

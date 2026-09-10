@@ -1,378 +1,105 @@
-\section{A worked compilation across the existing languages}
+\section{A Yannakakis compilation across the languages}
 \label{sec:overview}
-A compiler overview should expose where a decision is made, what that
-choice commits subsequent passes to, and which syntax remains residual.
-We therefore follow one executable program through every existing boundary.
-The example uses a computed join key and a computed answer component, so its
-compilation cannot be explained by a permutation of ordinary CQ atoms alone.
-All displayed generated names come from the recorded implementation. Listings
-normalize whitespace, and the RA listing omits raw-identifier sigils that denote
-the same attribute names; explicitly marked abbreviations are explanatory
-notation. Complete generated artifacts and their executable checks are
-reproducible with the driver in \code{doc/formal/example}.
-
-\subsection{Source program and observation}
+The \code{planned_query!} route compiles the following query, with all
+columns declared \code{i32}. Complete inputs, generated artifacts and
+assertions are in \code{doc/formal/example/src/main.rs}.
 \begin{lstlisting}
-pub struct Overview;
-relation R(a: i32, b: i32);
-relation S(a: i32, b: i32);
-relation answer(a: i32, b: i32);
-answer(x, *y + 1) :- R(x, k), let next: i32 = *k + 1,
-                    S(next, y), if y > 0;
+answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
 \end{lstlisting}
-The declaration of \code{answer} supplies the Rust types of the computed
-answer. The first atom binds logical variables \code{x} and \code{k} to
-input values. The host expression in \code{let} computes \code{next}; its
-later bare occurrence in \code{S(next,y)} is a required equality key, not a
-new independent producer of that value. The guard tests \code{y}; the head
-computes its second positional component. These occurrences of \code{*k}
-and \code{*y} are ordinary Rust dereferences in native expression ASTs, not
-new arithmetic forms in the CQ grammar. They reflect the host interface's
-borrowed aliases for input-derived fields.
-
-Use the concrete input instance
+Its occurrence hyperedges and certified join tree are
 \[
- I(R)=\{(1,6),(2,6),(3,8)\},\qquad
- I(S)=\{(7,10),(7,-2),(9,4)\}.
+ \{x,k,\mathit{tag},\mathit{unused}\}
+ \xleftrightarrow{\{k,\mathit{tag}\}}
+ \{k,\mathit{tag},z\}
+ \xleftrightarrow{\{z\}}\{z,y\}.
 \]
-For this non-overflowing instance, ordinary integer evaluation gives the
-answer relation
+The implementation roots the tree at $T$. The separator of $R,S$ is the
+complete composite key $(k,\mathit{tag})$; $k,\mathit{tag},z$ remain necessary
+join witnesses despite being absent from the head. Only $\mathit{unused}$
+has no remaining use. The guard is admitted by the primitive-\code{i32}
+movement judgment.
+
+\paragraph{CQ to named RA.}
+GYO deletes private attributes and absorbs $R$ into $S$, then $S$ into $T$;
+its parent vector is $[1,2,\bot]$. Deletion here changes the analysis
+hypergraph, not the executable columns. After checking running intersection
+on the original edges, the planner pushes the guard into $T$, runs both
+semijoin sweeps, then assembles from the root:
+\begin{lstlisting}
+r0 = rename R { a -> x, b -> k, c -> tag, d -> unused };
+r1 = rename S { a -> k, b -> tag, c -> z };
+r2 = rename T { a -> z, b -> y };
+r3 = select r2 if (y > 0i32);
+r4 = semijoin r1 with r0;       // upward: S supported by R
+r5 = semijoin r3 with r4;       // upward: T supported by S
+r6 = semijoin r4 with r5;       // downward: S supported by T
+r7 = semijoin r0 with r6;       // downward: R supported by S
+r8 = project r7 keep { k, tag, x };
+r9 = natural_join r5 with r6;
+r10 = project r9 keep { k, tag, y };
+r11 = natural_join r10 with r8;
+r12 = project r11 keep { x, y };
+output r12 as answer(x, y);
+\end{lstlisting}
+Up reduces each parent using its child; Down uses the latest reduced parent
+to reduce its child. Both sweeps remove rows on the example instance.
+The frozen family $(r_7,r_6,r_5)$ has cardinalities $(3,2,3)$, and every
+remaining tuple has a complete witness for the guarded body.
+
+Projection $r_8$ removes $\mathit{unused}$ and merges two input witnesses.
+Projection $r_{10}$ removes $z$, whose equality is now internal, but retains
+$(k,\mathit{tag})$ for the final join. The answer is
+$\{(1,7),(1,8),(2,9)\}$. Weakening that composite join to $k$ admits
+$(1,9),(2,7),(2,8)$; omitting the guard admits $(3,-1)$.
+The peak intermediate arity is four, counting joins before pruning.
+
+\paragraph{RA to index requirements and staged Rust.}
+Physical tuple fields follow lexical attribute order. The index pass
+preserves the algebra and requests exact result versions:
+\begin{lstlisting}
+indexes { @r0[0,1]; @r4[2]; @r5[1];
+          @r6[0,1]; @r6[2]; @r8[0,1]; }
+\end{lstlisting}
+For example, $z$ is field 2 of $r_4$ but field 1 of $r_5$.
+The physical pass builds membership sets for semijoins and payload maps
+for joins. Thus the same $r_6$ supplies both a set of $(k,\mathit{tag})$
+keys and a map from $z$ to $(k,\mathit{tag})$ payloads. It emits an ordinary
+Rust file with one materialized set per named result and local Access
+quotations. Surrounding Rust owns storage and index construction.
+
+For $r_{11}$, the local Access quotation has the following shape. Names
+are explanatory aliases; \code{clone} abbreviates qualified clone calls,
+and instrumentation is omitted.
+\begin{lstlisting}
+output(k,tag,x,y) => ((clone(k),clone(tag),clone(x),clone(y))) :-
+rows(k,tag,y) => for (k,tag,y) in left.iter(),
+rows(k,tag,x) => for (x,) in
+  index.get(&(clone(k),clone(tag))).into_iter().flatten();
+\end{lstlisting}
+The second clause binds only $x$: the composite key is already available.
+By contrast, a semijoin quotation uses \code{if index.contains(key)} and
+binds no new field, retaining each supported left tuple once.
+
+\paragraph{Access to Pipeline to Rust.}
+Access lowers the payload join to
 \[
- \{(x,y+1)\mid (x,k)\in I(R),\ n=k+1,\ (n,y)\in I(S),\ y>0\}
- =\{(1,11),(2,11),(3,5)\}.
+ \mathsf{Scan}(k,\mathit{tag},y)
+ \longrightarrow\mathsf{Join}(x)
+ \longrightarrow\mathsf{Project}(k,\mathit{tag},x,y)
+ \longrightarrow\mathsf{Distinct}.
 \]
-This equation states the intended finite result for the example; it does not
-assert that every accepted Rust expression denotes a total mathematical
-function. In particular, unrestricted \code{i32} addition would require an
-account of overflow before such a universal statement.
+The prefix order is $(k,\mathit{tag},y,x)$; Project permutes it into the
+result layout. This local permutation is separate from RA's column pruning.
+Pipeline lowering implements Scan and Project with \code{map}, Join with
+\code{flat_map}, and Distinct with a seen-set filter. A suspended
+\code{once_with(...).flatten()} initializes the local computation at first
+poll; the enclosing Rust immediately collects it into $r_{11}$.
+\code{query()} later reads the answer materialized during \code{build()}.
 
-There are two public compositions. \code{mini_linq!} selects the default
-logical, index, and lazy physical passes. \code{planned_query!} selects the
-planned logical pass, exact result-index selection, and materialized physical
-pass. On this input both return the sorted vector
-\code{[(1,11),(2,11),(3,5)]} through \code{run}. The driver also compiles and
-executes each route's fully lowered ordinary Rust file. This is evidence for
-this one program and observation, not equivalence for arbitrary host effects.
-
-\subsection{The boundaries and the decisions they own}
-\begin{center}
-\small
-\begin{tabular}{>{\raggedright\arraybackslash}p{.23\linewidth}>{\raggedright\arraybackslash}p{.34\linewidth}>{\raggedright\arraybackslash}p{.35\linewidth}}
-\toprule
-Existing target & Decision made on this edge & Structure left explicit \\
-\midrule
-\code{cq::Module} & Parse the DSL shell and native Rust leaves; check source binding premises. & Atoms, expression arguments, host patterns, guards, and head ASTs. \\
-\code{relational_plan::}\newline\code{Module} & Choose a legal clause/join schedule; assign named algebra results and their sorts. & Algebra operators and unevaluated host expressions. \\
-\code{index_requirements::}\newline\code{Module} & Add required equality keys to the unchanged algebra. & Exact indexed operand names and column positions. \\
-\code{syn::File} containing \code{pull!} & Choose storage, row layout, aliases, access expressions, and materialization boundaries. & Existing Access plans quoted inside ordinary Rust. \\
-\code{iterator_pipeline::}\newline\code{Pipeline} & Expose the local scan/join/filter/project/distinct sequence and binding order. & Native Rust leaves inside named iterator operators. \\
-\code{syn::Expr} & Implement each local operator with concrete Rust adapters and suspension. & Ordinary Rust for the host compiler to resolve and type-check. \\
-\bottomrule
-\end{tabular}
-\end{center}
-The exact typed entry points for the two file-level routes are:
-\begin{center}
-\footnotesize
-\begin{tabular}{lll}
-\toprule
-Edge & Default route & Planned route \\
-\midrule
-CQ $\to$ RA & \code{compile_cq} & \code{compile_cq_planned} \\
-RA $\to$ indexes & \code{compile_relational_plan} & \code{compile_result_indexes} \\
-Indexes $\to$ Rust file & \code{compile_index_requirements} & \code{compile_materialized} \\
-\bottomrule
-\end{tabular}
-\end{center}
-Both reuse \code{compile_pull} and \code{compile_iterator_pipeline} for
-the final two local edges.
-
-The fourth row is not a new file-wide IR: it is the ordinary Rust AST with
-existing lower-language macro holes. Its embedded \code{rust_access_plan::Plan}
-is the source of \code{compile_pull}. Thus the physical pass returns a
-\code{syn::File}, while the last local pass returns a \code{syn::Expr} that
-fills one hole in that file. The distinction between the surrounding Rust
-context and the embedded language is essential to composition.
-
-\subsection{CQ to named relational algebra: a value dependency}
-The dependency judgment records required logical names, provided logical
-names, and the current movement classification. For the source above its
-facts are:
-\begin{center}
-\begin{tabular}{cllll}
-\toprule
-Clause & Form & Required & Provided & Movable \\
-\midrule
-0 & \code{R(x,k)} & $\emptyset$ & $\{x,k\}$ & yes \\
-1 & \code{let next = *k+1} & $\{k\}$ & $\{\mathit{next}\}$ & no \\
-2 & \code{S(next,y)} & $\{\mathit{next}\}$ & $\{\mathit{next},y\}$ & yes \\
-3 & \code{if y>0} & $\{y\}$ & $\emptyset$ & yes \\
-\bottomrule
-\end{tabular}
-\end{center}
-``Provided'' includes a bare atom's equality columns, including an already
-bound name; it does not mean every listed name is fresh. In clause 2,
-\code{next} is both offered as a relation column and required from its
-preceding \code{let}. The computed binding is a movement barrier under the
-current conservative classification. Its lack of external state in this
-particular expression does not cause the compiler to infer a general
-purity theorem.
-
-The recorded \code{Auto} derivation is exactly
-\[
- \mathsf{Match}(0);\ \mathsf{Bind}(1);\ \mathsf{Match}(2);\
- \mathsf{Guard}(3);\ \mathsf{Finish}.
-\]
-There is no GYO analysis or join-tree certificate on this route. The let and
-computed head put the complete query outside the present graph-planning
-domain, so \code{compile_cq_planned} selects dependency-constrained prefix
-rules. \code{compile_cq} selects the written policy for the same extended
-source. They happen to produce the same algebra here:
-\begin{lstlisting}
-relational {
-  r0 = rename R { a -> x, b -> k };
-  r1 = extend r0 with { next: i32 }
-       value({ let next: i32 = *k + 1; (next,) });
-  r2 = rename S { a -> next, b -> y };
-  r3 = natural_join r1 with r2;
-  r4 = select r3 if (y > 0);
-  r5 = project r4 keep { k, next, x, y };
-  output r5 as answer(x, *y + 1);
-}
-\end{lstlisting}
-The complete target additionally retains the source program and declarations;
-they are omitted from this listing. The native Rust expression remains in
-\code{Extend}; logical planning does not execute it. Its explicit result
-column makes the equality key available to \code{NaturalJoin}. The final
-\code{Project} retains all witness columns because the head is computed.
-That is the current prefix rule's conservative policy: this example does
-not demonstrate unused-column pruning, nor does its guard demonstrate
-selection pushdown into the right input. On the restricted graph domain,
-separate P-* rules perform eager selection and retention.
-
-A particular valuation satisfying the extended query on this instance is
-\[
- \nu(x)=1,\quad\nu(k)=6,\quad\nu(\mathit{next})=7,\quad\nu(y)=10.
-\]
-After occurrence renaming, its corresponding named tuple in \code{r3} has
-sort $\{k,\mathit{next},x,y\}$ and those four attribute values. The named
-output tuple of \code{r5} remains that four-attribute object; the head's
-ordered answer is $(1,11)$. These are three related but different objects:
-a valuation of logical variables, a named tuple over a sort, and a positional
-answer tuple. The textbook correspondence is established in the foundations.
-
-The concrete sorts, physical field order, and measured materialized counts
-are as follows. All listed field types are \code{i32}; the displayed field
-order is the implementation's lexical attribute-name order, not a property
-of a mathematical sort.
-\begin{center}
-\begin{tabular}{clrc}
-\toprule
-Result & Ordered physical fields & Arity & Number of tuples \\
-\midrule
-\code{r0} & $(k,x)$ & 2 & 3 \\
-\code{r1} & $(k,\mathit{next},x)$ & 3 & 3 \\
-\code{r2} & $(\mathit{next},y)$ & 2 & 3 \\
-\code{r3} & $(k,\mathit{next},x,y)$ & 4 & 5 \\
-\code{r4} & $(k,\mathit{next},x,y)$ & 4 & 3 \\
-\code{r5} & $(k,\mathit{next},x,y)$ & 4 & 3 \\
-\bottomrule
-\end{tabular}
-\end{center}
-The reported peak arity is 4. This is a column count, not a cardinality
-estimate, treewidth, or fractional hypertree width.
-
-\subsection{Algebra to index requirements: name the exact operand}
-The intersection of \code{r1}'s and \code{r2}'s sorts is
-$\{\mathit{next}\}$. The right operand's ordered fields are
-$(\mathit{next},y)$, so its key occupies position 0. Result-index selection
-preserves the entire algebra and appends exactly
-\begin{lstlisting}
-indexes { @r2[0]; }
-\end{lstlisting}
-The \code{@} identifies a named RA result. The requirement is not a guessed
-index on whichever base relation might eventually supply a similar column.
-For this extended linear plan the default index entry also takes the
-result-index route, so both compositions have the same overlay. No index
-is requested for the let alone or for the guard. The index pass neither
-chooses a different join order nor decides whether the named results will
-be materialized.
-
-The representation chosen by the physical pass is a
-\code{HashMap<(i32,), Vec<(i32,)>>}: key fields contain \code{next}; bucket
-payload fields contain \code{y}. It represents
-\[
- 7\mapsto\{(10),(-2)\},\qquad 9\mapsto\{(4)\},
-\]
-where braces abstract the bucket order inherited from an unspecified
-HashSet enumeration. A fixed vector retains that insertion order across
-lookups. The tuple syntax in generated Rust is \code{(10,)} and so forth.
-All source and renamed rows are deduplicated into \code{HashSet}s before
-bucket construction, and every renamed row contributes exactly one payload.
-A lookup of key 7 therefore yields two candidates, not one representative.
-
-\subsection{Index requirements to staged Rust: storage and residual Access}
-The lazy physical pass fuses this accepted linear algebra into one local
-Access plan. \code{OverviewStorage} owns
-\begin{lstlisting}
-rows0: HashSet<(i32, i32)>, // fields (k,x)
-rows2: HashSet<(i32, i32)>, // fields (next,y)
-index0: HashMap<(i32,), Vec<(i32,)>>,
-\end{lstlisting}
-Qualification of standard type paths is abbreviated here. \code{build}
-constructs these values. The retained \code{rows2} field is actual current
-output, even though \code{query} uses its index for this example. The
-physical pass has already chosen Rust identifiers
-\[
- v0\leftrightarrow k,\quad v1\leftrightarrow\mathit{next},\quad
- v2\leftrightarrow x,\quad v3\leftrightarrow y.
-\]
-During lazy traversal, \code{v0}, \code{v2}, and \code{v3} have type
-\code{&i32}; computed \code{v1} has type \code{i32}. These choices are
-physical elaboration facts, not CQ variable types silently changed by the
-logical planner.
-
-The body of the generated \code{query} contains the following Access hole.
-This excerpt removes \code{#[allow(unused_variables)]} attributes and
-normalizes redundant parentheses; its aliases and expressions are otherwise
-those of the generated target.
-\begin{lstlisting}
-::mini_linq::pull! {
-  output(v0,v1,v2,v3) =>
-    ((v2.clone(), { let y = v3; *y + 1 },)) :-
-  rows(v0,v2) => for (v0,v2,) in (rows0.iter()),
-  computed(v1) => for (v1,) in
-    (::core::iter::once({
-      let k = v0;
-      { let next: i32 = *k + 1; (next,) }
-    })),
-  rows(v1,v3) => for (v3,) in
-    (index0.get(&(v1.clone(),)).into_iter().flatten()),
-  if (v3 > &0i32) => if (v3 > &0i32);
-}
-\end{lstlisting}
-The left sides are logical occurrence labels. The right sides are concrete
-Rust iteration and testing expressions. The dependent let is implemented
-by a singleton iterator that contributes one owned computed field per
-prefix tuple; the later lookup contributes only its fresh payload field.
-The key's value is already available. Access lowering therefore need not
-rediscover the join key, choose an index, or rewrite the user's arithmetic.
-The \code{pull!} body is quotation of an existing lower language; \code{build},
-field ownership, aliases, and the surrounding Rust method are already fixed.
-
-The materialized physical pass makes a different commitment on the same
-indexed algebra. It emits \code{relation0} through \code{relation5} as
-\code{HashSet}s with the ordered fields in the preceding table, and one
-local \code{pull!} hole per named result. A typical boundary has the form
-\begin{lstlisting}
-let relation1: HashSet<(i32,i32,i32)> = {
-  let __left = &relation0;
-  Iterator::collect(::mini_linq::pull! { /* r1 Access plan */ })
-};
-\end{lstlisting}
-This is an explicitly abbreviated structural excerpt. The complete artifact
-contains the actual hole, which scans \code{__left}, evaluates the singleton
-computed source, and emits owned $(k,\mathit{next},x)$ tuples. After building
-\code{relation2}, this route constructs the same key/payload index shape;
-its join hole scans \code{relation1} and probes that index. Its answer field
-is a \code{HashSet<(i32,i32)>}; the final output mapping uses
-\code{__row.2} for \code{x} and the alias \code{let y = &__row.3} for the
-computed head. All relational work occurs during \code{build}, and its
-\code{query} method iterates the stored answer. In contrast, the lazy route
-runs the let, lookup, guard, and head as the cursor is polled. Agreement on
-this pure example does not erase that operational distinction.
-
-\subsection{Access to Pipeline to ordinary Rust}
-For the one-hole lazy route, \code{compile_pull} returns six named operators:
-\begin{lstlisting}
-iter0 = scan (v0,v2,) in (rows0.iter()) yield (v0,v2,);
-iter1 = join iter0 as (v0,v2,) with (v1,) in
-  (once({ let k = v0; { let next: i32 = *k+1; (next,) } }))
-  yield (v0,v2,v1,);
-iter2 = join iter1 as (v0,v2,v1,) with (v3,) in
-  (index0.get(&(v1.clone(),)).into_iter().flatten())
-  yield (v0,v2,v1,v3,);
-iter3 = filter iter2 as (v0,v2,v1,v3,) if (v3 > &0i32);
-iter4 = project iter3 as (v0,v2,v1,v3,)
-  yield ((v2.clone(), { let y = v3; *y+1 },));
-iter5 = distinct iter4;
-return iter5;
-\end{lstlisting}
-The preceding \code{once} abbreviates \code{::core::iter::once}; the same
-allow attributes are omitted as above. The payload order is now binding
-introduction order $(k,x,\mathit{next},y)$, whereas named RA storage used
-$(k,\mathit{next},x,y)$. This change is visible in the operator patterns and
-yields. It does not change either the mathematical sort or the meaning of
-\code{v1}. Explicit patterns are the correspondence witness for the new
-layout.
-
-Each local operator is lowered separately by
-\code{compile_iterator_pipeline}: Scan becomes \code{map}; both Join
-operators become \code{flat_map} with an inner \code{map}; Filter becomes
-consuming \code{filter_map}; Project becomes \code{map}; and Distinct
-becomes a \code{filter} with an owned seen \code{HashSet}. In the lookup
-operator, the exact generated structure is:
-\begin{lstlisting}
-let iter2 = ::core::iter::Iterator::flat_map(
-  iter1,
-  move |(v0,v2,v1)| {
-    ::core::iter::Iterator::map(
-      ::core::iter::IntoIterator::into_iter(
-        index0.get(&(v1.clone(),)).into_iter().flatten()),
-      move |(v3,)| {
-        let v0 = ::core::clone::Clone::clone(&v0);
-        let v2 = ::core::clone::Clone::clone(&v2);
-        let v1 = ::core::clone::Clone::clone(&v1);
-        (v0,v2,v1,v3)
-      })
-  });
-\end{lstlisting}
-Cloning the retained prefix fields occurs inside the inner map, once per
-matching payload. This placement is part of the operational lowering, even
-when cloning \code{i32} or its references is observationally silent. The
-final \code{syn::Expr} wraps the six locals in
-\begin{lstlisting}
-Iterator::flatten(iter::once_with(move || {
-  /* iter0 ... iter5 definitions */
-  iter5
-}))
-\end{lstlisting}
-Here standard path qualification and the body are explicitly abbreviated.
-The wrapper delays construction until the first poll. No CQ atom or global
-join-order decision remains at this edge. The host compiler still performs
-name resolution, type checking, borrowing checks, and code generation for
-the resulting ordinary Rust.
-
-\subsection{What this example establishes about composition}
-The driver invokes \code{compile_cq} or \code{compile_cq_planned}, their
-respective index and physical functions, then traverses the returned Rust
-AST to expose and lower existing macro holes with \code{compile_pull} and
-\code{compile_iterator_pipeline}. It also invokes the two public CQ macros
-as actual proc macros. Its twelve generated source files preserve all six
-boundaries of both compositions; \code{report.txt} records the derivation,
-and \code{validation.txt} records independently asserted result tuples,
-intermediate arities/counts, and physical counters. The intermediate counts
-are $(3,3,3,5,3,3)$, index rows are 3, and join pairs are 5. These checks make
-the walkthrough inspectable without treating a hand-written sketch as
-compiler output.
-
-The two logical policies inhabit the same CQ-to-RA edge. The physical
-functions also share an indexed-RA source and ordinary staged-Rust target,
-but have different supported shapes and operational commitments. A caller
-of the typed functions can compose only when the next pass's domain and
-required observation relation hold. Shared Rust function types alone do
-not establish substitutability. The public macros currently select fixed
-continuations; they do not expose a user-configurable CPS parameter.
-Invoking \code{pull!} or \code{iterator_pipeline!} directly is an existing
-lower-language entry, and quotation embeds that entry in ordinary Rust.
-It is not evidence that arbitrary changes of materialization strategy
-preserve effect traces.
-
-For comparison, a query consisting of distinct bare-variable atoms, a
-normalized head, and admitted primitive guards enters the graph rules.
-There, \code{Auto} attempts GYO, performs the two semijoin sweeps if a join
-tree is available, and assembles named joins with selection and retention.
-This is a distinct algorithm inside the same pass. The present example's
-let forces the prefix route for the entire query: graph planning of
-separate regions around host-expression barriers is not yet implemented.
-Neither route currently supplies negation, aggregation, WCOJ, or cardinality
-estimation merely because the parser can represent richer clauses.
+The driver checks the tree, reduction commands, exact RA and indexes, and
+all intermediate arities and counts. Both public routes and their fully
+lowered Rust run on five input presentations each, including duplicates and
+individually empty relations. The default \code{mini_linq!} route instead
+uses written-order joins without YA; both routes share the lower languages
+and agree on these pure answers. Their continuations are fixed in the public
+macros, while typed pass APIs and direct quotations expose each boundary.

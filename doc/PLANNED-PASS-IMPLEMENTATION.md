@@ -129,7 +129,7 @@ The rule-to-code correspondence is explicit:
 | P-COMBINE / P-TRIM | `Combine` / `Trim`; `JoinState::combine` / `trim`, using `retained_heading` for K(C,P) |
 | P-OUTPUT | `Output`; `JoinState::output` |
 | D-ATOM / D-GUARD / D-BIND / D-MOVE / D-GRAPH | `ClauseDependencies::analyze` and `ClauseFacts::atom` in [dependencies.rs](../crates/cq-compiler/src/cq_to_relational/dependencies.rs) |
-| C-READY | `ClauseState::require_ready` / `require_clause` |
+| C-READY | `ClauseState::require_ready`; `apply` checks normalization and matches the source clause |
 | C-CONSTANT | `Constant`; `ClauseState::normalize_constant` |
 | C-MATCH | `Match`; `ClauseState::match_clause`, composed from A-* in `AtomBindings::match_argument` |
 | C-GUARD / C-BIND | `Guard` / `Bind`; `ClauseState::guard_clause` / `bind_clause` |

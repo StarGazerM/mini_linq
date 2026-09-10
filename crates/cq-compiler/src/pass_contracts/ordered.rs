@@ -4,6 +4,8 @@ use cq_ir::{cq, relational_plan as ra, symbol_name};
 use quote::{format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::cq_to_relational::dependencies::ClauseDependencies;
+
 struct Cursor<'a> {
     definitions: std::slice::Iter<'a, ra::Definition>,
     current: Option<syn::Ident>,
@@ -42,8 +44,7 @@ fn err(message: &str) -> syn::Error {
 
 /// A legal schedule preserves each effect boundary and covers every clause once.
 /// Availability is additionally checked against each actual RA heading.
-pub(crate) fn check_order(source: &cq::Module, order: &[usize]) -> syn::Result<()> {
-    let analysis = crate::cq_to_relational::dependencies::ClauseDependencies::analyze(source)?;
+fn check_order(analysis: &ClauseDependencies, order: &[usize]) -> syn::Result<()> {
     let body = &analysis.clauses;
     if order.len() != body.len()
         || order.iter().copied().collect::<BTreeSet<_>>() != (0..body.len()).collect()
@@ -91,11 +92,24 @@ pub(crate) fn check_scheduled(
     order: &[usize],
 ) -> syn::Result<()> {
     cq::contract::check(source)?;
-    check_order(source, order)?;
     ra::contract::check(target)?;
     if source.program != target.program {
         return Err(err("source program changed"));
     }
+    let analysis = ClauseDependencies::analyze(source)?;
+    check_scheduled_in(source, target, order, &analysis)
+}
+
+/// Check a schedule and its emitted operations after the caller has checked
+/// both local contracts and source preservation. The analysis comes from the
+/// checker, independently of the lowering that produced the target.
+pub(super) fn check_scheduled_in(
+    source: &cq::Module,
+    target: &ra::Module,
+    order: &[usize],
+    analysis: &ClauseDependencies,
+) -> syn::Result<()> {
+    check_order(analysis, order)?;
     let mut cursor = Cursor {
         definitions: target.plan.definitions.iter(),
         current: None,
@@ -144,7 +158,8 @@ pub(crate) fn check_scheduled(
                 let pat = &binding.pattern;
                 let annotation = &binding.annotation;
                 let expr = &binding.expression;
-                cursor.current = Some(cursor.accept(syn::parse_quote!(extend #input with {#(#columns),*} value ({let #pat #annotation = #expr; (#(#variables,)*)})))?);
+                let result = (!variables.is_empty()).then(|| quote!((#(#variables,)*)));
+                cursor.current = Some(cursor.accept(syn::parse_quote!(extend #input with {#(#columns),*} value ({let #pat #annotation = #expr; #result})))?);
                 bound.extend(variables.iter().map(symbol_name));
             }
             cq::BodyItem::Positive { atom } => {

@@ -65,7 +65,7 @@ Lexical locals inside Rust expressions follow Rust scope. Define
 all of `B`. This is an availability judgment, not a purity judgment.
 
 [dependencies.rs](../crates/cq-compiler/src/cq_to_relational/dependencies.rs)
-derives `ClauseFacts = (rule, required, provided, reorderable, atom_arity,
+derives `ClauseFacts = (required, provided, reorderable, atom_arity,
 literal_arguments)`. `provided` includes every bare atom name, even an equality
 key already supplied by another atom; it does not mean every name is fresh.
 `ClauseDependencies::analyze` processes the written prefix `B` and records
@@ -109,7 +109,7 @@ absent, `i ∈ U`, and `required_i ⊆ B`. A Bind also requires `provided_i ∩ 
 For every earlier pending `j < i`, both `i` and `j` must be reorderable. Thus
 clauses can exchange positions inside a movable region, while neither side
 can cross a pending barrier. `require_ready` checks the clause premises;
-`require_clause` also checks normalization and the source rule tag;
+`apply` also checks normalization and matches the command against its source clause;
 `apply` rejects every transition after output. Rejection leaves state unchanged.
 
 | Transition | State change and relational operation | Code |

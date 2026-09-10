@@ -1,73 +1,29 @@
-\section{Relation to prior work and the remaining semantic problem}
+\section{Related work}
 \label{sec:related-work}
-\paragraph{Classical query theory.}
-Abiteboul, Hull and Vianu supply the database vocabulary and classical results
-on valuations, named relational algebra, join trees and acyclic
-queries~\cite{ahv}. The course notes connect those objects with executable
-join planning~\cite{notes}. Our occurrence-indexed states retain distinctions
-needed by compilation, such as two uses of one relation and their different
-argument maps. This is an implementation adaptation of classical theory,
-not a new notion of alpha-acyclicity. Likewise, the width policy in this
-snapshot ranks intermediate arity; it is not a new join-complexity bound.
+AHV supplies the standard semantics of valuations, named algebra, join trees
+and acyclic queries~\cite{ahv}; the course notes connect them to executable
+join planning~\cite{notes}. MiniLinq's occurrence labels preserve repeated
+uses and positional maps without changing the classical graph notions.
+Its greedy arity policy makes no new join-complexity claim.
 
-\paragraph{Language-integrated query and host boundaries.}
-Cheney, Lindley and Wadler give a typed account of language-integrated query
-and conditions under which normalization produces a query in the target
-fragment~\cite{host-linq}. Effective Quotation relates explicit quotation
-with an effect-based approach to query construction~\cite{host-effective}.
-MiniLinq's boundary differs: an accepted Rust expression can remain opaque
-and residual through several relational transformations. The relevant
-compilability question includes its eventual captures, types, and execution
-site. Native expression parsing supplies syntax, not the normalization or
-semantic guarantees of those calculi. Multi-language operational semantics
-makes the interpretation of values crossing language boundaries explicit
-~\cite{host-multilanguage}; the host-elaboration relation here identifies
-where such an adequacy argument is needed, rather than claiming to supply
-a complete Rust multi-language semantics.
+Language-integrated-query calculi justify normalization into specified target
+fragments~\cite{host-linq,host-effective}. Here native Rust can remain residual
+through relational transformations, so its eventual binding and execution
+context must also be justified. Multi-language semantics provides the relevant
+boundary discipline~\cite{host-multilanguage}. Syn parsing itself establishes
+neither that semantic adequacy nor hygienic binding preservation~\cite{host-hygiene}.
 
-\paragraph{Small compiler languages and compositional correctness.}
-The Nanopass framework organizes compilers around specified intermediate
-languages and focused transformations~\cite{paper-nanopass}. This supports
-the same architectural discipline that matters here: a pass's purpose is
-determined by its language boundary, and intermediate validity can be checked
-locally. MiniLinq additionally exposes lower-language macro entries and
-emits ordinary Rust contexts containing residual local quotations. Its
-replacement obligation therefore includes those enclosing contexts. Work
-on compiler correctness under linking separates whole-program preservation
-from the stronger conditions needed when separately compiled fragments
-interact~\cite{paper-ccc}. Theorem~\ref{thm:composition} states the required
-interfaces for this prototype; it assumes the contextual adequacy that a
-complete theorem would have to prove.
+Nanopass organizes compilation around small languages and focused
+transformations~\cite{paper-nanopass}. MiniLinq additionally exposes lower
+macro entries and emits Rust with local quotations. Its replacement theorem
+therefore assumes contextual adequacy, following the distinction between
+whole-program and compositional compiler correctness~\cite{paper-ccc}.
 
-\paragraph{Effects and provenance.}
-Computational semantics separates a value from the computation producing
-it~\cite{prov-moggi}; effect systems provide conservative information for
-reasoning about permitted program transformations~\cite{host-effects}.
-Effectful comprehension fusion has also been studied with explicit models
-and correctness conditions~\cite{prov-fusion}. These results rule out a
-presentation in which effects are merely another free-variable edge. The
-finite interchange proposition here isolates one necessary kind of law,
-while evaluation suppression, sharing and demand require their own laws.
-
-Relational provenance semirings, dependency provenance, and provenance traces
-provide distinct established accounts of explanations and
-dependencies~\cite{prov-semiring,prov-dependency,prov-traces}. The dynamic
-record in Section~\ref{sec:provenance-model} combines information relevant to
-this compiler's concrete witnesses: input occurrences, per-prefix calls,
-enabling decisions, state versions and client requests. The record-consistency
-proposition is deliberately weaker than changed-input fidelity or a theory
-of actual causes~\cite{prov-causality}. A defensible further contribution
-would need to define the observation abstractions associated with each IR
-and prove that lowering relates the resulting provenance views. Adding
-several kinds of graph edge is not that theorem.
-
-\paragraph{What a reviewer can now assess.}
-For any proposed change, the reviewer can ask which existing language is its
-source, which administrative rule permits it, which invariant it establishes,
-and which observations its correctness statement preserves. The positive
-relational fragment admits the classical answer under explicit host
-assumptions. Arbitrary embedded Rust requires a source operational contract
-before a planner can be judged against it. Choosing and implementing that
-contract, proving host and context adequacy, and relating the concrete
-transitions to the administrative specification remain the principal work
-toward an end-to-end compiler theorem.
+Ascent BYODS formalizes custom representations and their interaction with
+evaluation~\cite{paper-byods}. We expose the intervening algorithm, access and
+observation contracts needed for substitution. User-defined predicate
+optimization already shows why placement depends on both dependencies and
+costs~\cite{paper-udp}. Push/pull fusion and multiway joins supply alternative
+execution techniques~\cite{paper-pushpull,paper-lftj}; they require the
+appropriate compiler segment to change. The present artifact demonstrates
+existing pass and quotation reuse, leaving those additional backends unimplemented.

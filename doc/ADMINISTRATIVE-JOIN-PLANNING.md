@@ -389,15 +389,17 @@ other occurrences, so RA dependency sets are not disjoint assembly ownership.
 
 ### Y-UP
 
-Visit nodes in postorder. After all descendants of child `c` have been
-processed, apply Y-FILTER `p ← c` on its edge to parent `p`. A parent with
-several children uses its latest result for each successive filter.
+Visit non-root nodes in reverse breadth-first order. After all descendants
+of child `c` have been processed, apply Y-FILTER `p ← c` on its edge to
+parent `p`. A parent with several children uses its latest result for each
+successive filter. Any children-before-parent schedule satisfies this rule.
 
 ### Y-DOWN
 
-After Y-UP completes, visit nodes in preorder. For each parent-child edge,
-apply Y-FILTER `c ← p` before visiting that child's descendants. The parent
-reference must include its own top-down reduction, when it has a parent.
+After Y-UP completes, visit non-root nodes in breadth-first order. For each
+parent-child edge, apply Y-FILTER `c ← p` before visiting that child's
+descendants. The parent reference must include its own top-down reduction,
+when it has a parent. Any parent-before-child schedule satisfies this rule.
 
 There are `m-1` filters in each pass. The empty-separator edges used for
 disconnected components propagate emptiness by the same rules.

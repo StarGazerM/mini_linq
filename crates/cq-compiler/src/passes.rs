@@ -84,7 +84,9 @@ pub fn compile_result_indexes(
 pub fn compile_materialized(source: &index_requirements::Module) -> syn::Result<syn::File> {
     index_requirements::contract::check(source)?;
     crate::relational_to_indexes::check_coverage(source)?;
-    crate::indexes_to_rust::compile(source)
+    let target = crate::indexes_to_rust::compile(source)?;
+    pass_contracts::physical::materialized(source, &target)?;
+    Ok(target)
 }
 
 #[path = "staff_r1.rs"]
@@ -167,7 +169,13 @@ pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::R
     // BASIC HOMEWORK 3: lower the indexed logical plan to staged Rust.
     // OPTIONAL HW4 — STUDENT 6/6 (PHYSICAL): emit the extended accesses as
     // specified in doc/HW4-OPTIONAL.md.
-    staff_r1::compile_index_requirements(source)
+    let target = staff_r1::compile_index_requirements(source)?;
+    if crate::relational_to_indexes::uses_result_index_route(&source.relational_plan) {
+        pass_contracts::physical::lazy(source, &target)?;
+    } else {
+        pass_contracts::physical::basic(source, &target)?;
+    }
+    Ok(target)
 }
 
 /// Supplied pull strategy: expose a conventional named iterator plan.

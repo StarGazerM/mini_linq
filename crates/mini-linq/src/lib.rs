@@ -135,12 +135,24 @@ pub fn index_requirements(input: TokenStream) -> TokenStream {
 /// This stage produces an independently invocable [`iterator_pipeline!`]
 /// macro rather than emitting Rust directly, so each binary join and its
 /// intermediate binding remain visible in macro expansion.
+/// Let accesses introduce fresh logical names, including in direct quotations:
+///
+/// ```compile_fail
+/// let _rows = mini_linq::pull! {
+///     out(x) => ((x,)) :-
+///     R(x) => for (x,) in ([(1,)]),
+///     let x = 2 => for (x,) in ([(2,)]);
+/// };
+/// ```
 #[proc_macro]
 pub fn pull(input: TokenStream) -> TokenStream {
     let source: rust_access_plan::Plan = match syn::parse(input) {
         Ok(source) => source,
         Err(error) => return error.into_compile_error().into(),
     };
+    if let Err(error) = rust_access_plan::contract::check(&source) {
+        return error.into_compile_error().into();
+    }
     let target = cq_compiler::compile_pull(&source);
 
     quote!(::mini_linq::iterator_pipeline! { #target }).into()
@@ -157,6 +169,9 @@ pub fn iterator_pipeline(input: TokenStream) -> TokenStream {
         Ok(source) => source,
         Err(error) => return error.into_compile_error().into(),
     };
+    if let Err(error) = iterator_pipeline::contract::check(&source) {
+        return error.into_compile_error().into();
+    }
     let target = cq_compiler::compile_iterator_pipeline(&source);
 
     quote!(#target).into()

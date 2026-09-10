@@ -20,6 +20,7 @@
 - [Project skeleton](PROJECT-SKELETON.md)
 - [IR formalization](IR-FORMALIZATION.md)
 - [Extended compiler research manuscript](formal/README.md):
+  interacting host-expression dependencies, replaceable compilation paths,
   language judgments, administrative rules, conditional proofs, source
   correspondence, and executable counterexamples. This is an incomplete
   correctness argument with explicitly recorded obligations.

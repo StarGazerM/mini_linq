@@ -1,149 +1,89 @@
 # Administrative query compilation across embedded languages
 
-This is an **extended research manuscript with open proof obligations**.
-[compiler.tex](compiler.tex) is the LaTeX entry point; `make` produces
-[build/compiler.pdf](build/compiler.pdf). The central question is which
-language, environment and observation contracts make a compiler pass
-replaceable. The manuscript includes an executable overview, administrative
-algorithms, conditional proofs, research context, and a conformance evaluation.
+[compiler.tex](compiler.tex) is the manuscript entry point; `make` produces
+[build/compiler.pdf](build/compiler.pdf). The page budget is **32 pages including
+references**, using the existing 11-point, one-inch-margin layout.
 
-The specification distinguishes language well-formedness, algorithmic
-transitions, semantic preservation, and correspondence with the Rust
-implementation. A successful local check or test does not imply the other
-properties. Conditional statements name their assumptions; known failures
-remain failures of the claimed property.
+The paper follows the implemented compiler: valuations and native Rust leaves,
+occurrence graphs, GYO, Yannakakis reduction, dependency scheduling, named RA,
+indexes, local cursors, and quotation across independently usable languages.
+Four numbered algorithms specify scheduling; the inference rules specify legal
+transitions. The earlier speculative provenance chapter and standalone
+conformance chapter have been removed. Host assumptions and outstanding
+adequacy obligations are stated together in [foundations.tex](foundations.tex).
 
-[Terminology and source correspondence](TERMINOLOGY.md) records the AHV
-definitions and the course adaptations used here. The foundations distinguish
-sorts, named tuples, valuations, and the notes' valuation relations before
-introducing compiler states. Mathematical renaming uses AHV's `δ` notation.
-The assembly invariant explicitly converts a named result to head tuple order.
+## Reading map
 
-## Coverage
-
-| Existing boundary or algorithm | Specification |
+| Topic | Source |
 | --- | --- |
-| Problem, architectural contribution and claim scope | [introduction.tex](introduction.tex) |
-| Computed key, guard and head through every existing IR and both routes | [overview.tex](overview.tex), [executable artifact](example/README.md) |
-| Sorts, tuples, valuations, CQ denotation, host effects and observations | [foundations.tex](foundations.tex) |
-| Representation abstraction, hash versus sorted enumeration, demand, finite effect laws and provenance | [effects_provenance.tex](effects_provenance.tex) |
-| Native Rust syntax, binding, logical dependencies, movement, evaluation population and staging | [host_embedding.tex](host_embedding.tex) |
-| Lexical dependencies and the local judgments of every IR | [languages.tex](languages.tex) |
-| CQ → RA: canonical lowering, GYO, assembly, selection, retention, two-pass tree reduction, dependency-constrained prefix lowering | [planning.tex](planning.tex) |
-| RA → IndexedRA: base/result index selection and exact required-key coverage | [physical.tex](physical.tex) |
-| IndexedRA → staged Rust: storage representations, basic/lazy/materialized realization, host expression elaboration | [physical.tex](physical.tex) |
-| Access → Pipeline → Rust expression: finite successful cursor semantics and lowering rules | [staging.tex](staging.tex) |
-| Quotation, residual holes, continuation composition and replacement of a pass | [staging.tex](staging.tex) |
-| Implementation correspondence, proof obligations and refuted claims | [conformance.tex](conformance.tex) |
-| Oracles, shape coverage, actual compilation paths and counterexamples | [evaluation.tex](evaluation.tex) |
-| Prior query, compiler, effect and provenance theory; remaining research problem | [related_work.tex](related_work.tex) |
+| Compiler problem and contribution | [introduction.tex](introduction.tex) |
+| YA example through every IR | [overview.tex](overview.tex), [executable artifacts](example/README.md) |
+| Valuations, relations and host assumptions | [foundations.tex](foundations.tex), [host_embedding.tex](host_embedding.tex) |
+| Computed arguments, directional requirements and authored RA | [constraint_planning.tex](constraint_planning.tex) |
+| Each IR's grammar and local judgment | [languages.tex](languages.tex) |
+| Graph extraction, GYO, YA, policies, pruning and arity | [planning.tex](planning.tex), [notes coverage](PLANNING-COVERAGE.md) |
+| Index selection and physical realization | [physical.tex](physical.tex) |
+| Cursor semantics, quotation and pass composition | [staging.tex](staging.tex) |
+| Replacing compiler components | [extensibility.tex](extensibility.tex) |
+| Bounded evidence and prior work | [evaluation.tex](evaluation.tex), [related_work.tex](related_work.tex) |
 
-The mathematical states and contexts in the manuscript are specification
-notation. They do not introduce a new compiler IR, runtime stage, or public
-macro parameter. Public macro continuations are currently fixed. Negation,
-aggregation, WCOJ, cardinality estimation and planning separate dependency
-regions are not implemented algorithms in this snapshot.
-Sorted storage and dynamic provenance instrumentation are also semantic
-comparisons and research constructions, not new implemented IR features.
+[TERMINOLOGY.md](TERMINOLOGY.md) records AHV terminology and course adaptations.
+[rules.tsv](rules.tsv) maps all 139 named rules to implementation symbols or
+explicitly abstract cases. [check.py](check.py) checks that inventory, the 14
+executable administrative commands, and 32 source fingerprints. It detects
+coverage gaps and source drift; it does not check proofs or semantic preservation.
 
-## What remains open
+## Implemented scope
 
-The relational proofs require a stated host domain: total deterministic
-expressions that do not observe representation or evaluation order, lawful
-and silent value operations, and adequate typed Rust elaboration. Accepting
-an arbitrary Syn expression does not establish any of those properties.
+Relational proofs assume total, deterministic, representation-independent host
+expressions, lawful silent value operations, and adequate Rust elaboration.
+Parsing arbitrary Syn expressions does not establish these assumptions.
+The compiled effect counterexample shows that lazy and materialized execution
+can return different sets despite retaining clause order. Complete Rust typing,
+resolution, transition simulation and effectful cursor adequacy remain obligations.
 
-The manuscript leaves these obligations explicit:
+The graph path implements YA, eager selection/pruning and a logical arity cap.
+A let, literal/computed/repeated/wildcard atom argument, computed head or general
+host guard selects prefix planning for the whole query. General subtree placement
+is illustrated by an independently authored plan, not discovered by the current
+planner. Negation and aggregation parse but do not lower. Cardinality estimation,
+WCOJ, sorted providers and configurable public macro continuations are not
+implemented. Lower-language quotation and typed pass composition are available.
 
-- **C-Rust:** generated types, ownership, captures, layouts and representation.
-- **C-Resolution:** aliases, quotation, macro captures and intended name resolution.
-- **C-Conformance:** simulation of each concrete implementation transition,
-  including rejection and preservation of state on a rejected command.
-- **C-Effects:** semantics and simulations for divergence, panic/unwinding and
-  destruction. The current cursor proofs cover finite successful polling.
+## Reproduction
 
-In particular, a theorem conditional on successful Rust elaboration does not
-prove type preservation or total compilation of every locally well-formed
-input. A correspondence manifest does not prove that a function implements
-its associated rule.
-
-Two counterexample families and a placement witness accompany the manuscript:
-
-1. [formal_counterexamples.rs](../../crates/mini-linq/tests/formal_counterexamples.rs)
-   shows that a stateful `let` followed by `if` returns both input rows through
-   the lazy route and only one through the materialized route. A second test
-   records different build and partial-consumption effect traces.
-2. [formal_domains.rs](../../crates/cq-compiler/tests/formal_domains.rs) shows
-   that `let () = ()` passes CQ/RA checks but fails both physical routes. The
-   default route's support postcondition incorrectly predicts success: it
-   panics in debug and returns a diagnostic in release. The materialized
-   entry returns a diagnostic in both profiles.
-3. [argument_placement.rs](example/src/bin/argument_placement.rs) confirms that
-   `R(x, f(x), g())` evaluates `g()` once before two candidate-local `f` calls
-   in both public routes. Its assertion permits either order of the two
-   candidates. An atom is a matching construct; its effect schedule cannot
-   be inferred from Rust function-call argument order.
-
-The first family refutes unrestricted cross-route equivalence. Until the
-source effect contract is chosen, it does not designate either route as the
-reference semantics. The second exposes an actual lowering/support-contract
-defect. The third records currently implemented placement. Passing these
-checks must be interpreted according to those different claims.
-
-## Build and validation
-
-Requirements: Python 3, `latexmk`, pdfLaTeX, and the packages imported by
-`compiler.tex` (including `mathpartir` and `stmaryrd`). From the repository root:
+Requirements: Python 3, Rust/Cargo, `latexmk`, pdfLaTeX, `pdfinfo`, and the packages
+imported by `compiler.tex`, including `mathpartir`, `stmaryrd`, `algorithm` and
+`algpseudocode`.
 
 ```sh
 make -C doc/formal
+pdfinfo doc/formal/build/compiler.pdf
 make -C doc/formal example
-cargo clippy --manifest-path doc/formal/example/Cargo.toml --locked --all-targets -- -D warnings
+cargo test -p cq-compiler --test stage1_production --locked
+cargo test -p cq-compiler --test expression_planning --locked
 cargo test -p mini-linq --test formal_counterexamples --locked
-cargo test -p cq-compiler --test formal_domains --locked
 cargo test -p mini-linq --test formal_counterexamples --release --locked
-cargo test -p cq-compiler --test formal_domains --release --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-The three witness tests pass in debug and release on the recorded source
-snapshot; workspace Clippy with warnings denied also passes. These are
-focused audit checks, not a new whole-workspace test result.
-
-The new overview driver passes through both public macros and both standalone
-fully lowered Rust programs, asserting the exact output and intermediate
-counts. The argument-placement binary passes in debug and release; the
-example package passes Clippy on all targets with warnings denied. Generated
-intermediate artifacts and assertions are in `build/example/`. The example
-README describes their exact boundaries and reproduction commands.
-
-The earlier regression logs record 269 passing workspace tests plus 18 xtask
-tests before adding the three counterexample tests; the selected release gate
-covered 109 tests, not the whole workspace. These counts describe those runs,
-not a newly repeated broad test gate. The production fingerprints remain
-unchanged during the manuscript extension. The detailed, reproducible
-semantic experiment inventory is:
-
-| Experiment | Source and instructions |
+| Experiment | Source and detailed instructions |
 | --- | --- |
-| GYO/tree enumeration | [hypergraph.rs](../../crates/cq-compiler/src/cq_to_relational/hypergraph.rs) |
-| 25 authored queries, RA plans, independent valuations and contracts | [stage1_reference.rs](../../crates/cq-compiler/tests/stage1_reference.rs), [Stage I verification](../STAGE-I-VERIFICATION.md) |
-| Four-policy typed compilation | [stage1_production.rs](../../crates/cq-compiler/tests/stage1_production.rs) |
-| Literal public macros | [stage1_shapes.rs](../../crates/mini-linq/tests/stage1_shapes.rs) |
-| 12 expression patterns and 120 schedules | [expression_planning.rs](../../crates/cq-compiler/tests/expression_planning.rs) |
+| GYO versus independent tree enumeration | [hypergraph.rs](../../crates/cq-compiler/src/cq_to_relational/hypergraph.rs) |
+| 25 queries and independently authored RA plans | [Stage I verification](../STAGE-I-VERIFICATION.md), [reference tests](../../crates/cq-compiler/tests/stage1_reference.rs) |
+| Four-policy compiled plans | [production tests](../../crates/cq-compiler/tests/stage1_production.rs) |
+| Literal public-macro expansion and execution | [shape tests](../../crates/mini-linq/tests/stage1_shapes.rs) |
+| Rust-expression orders and 120 schedules | [expression tests](../../crates/cq-compiler/tests/expression_planning.rs) |
+| YA and authored-expression walkthroughs | [example README](example/README.md) |
+| Effect counterexamples | [formal_counterexamples.rs](../../crates/mini-linq/tests/formal_counterexamples.rs) |
+| Empty bindings and local contract agreement | [formal_domains.rs](../../crates/cq-compiler/tests/formal_domains.rs), [empty_bindings.rs](../../crates/mini-linq/tests/empty_bindings.rs) |
 
-The Stage I verification document gives the test commands, fixture-by-fixture
-RA expectations, data generation domains and independent-oracle boundaries.
+The overview asserts exact RA, indexes, both sweeps, all thirteen intermediate
+arities/counts, and compiled answers on five input presentations across four
+routes. The expression example compares three routes on 14 presentations;
+`argument_placement` checks candidate-local versus prefix evaluation. Full data,
+expected answers and generated programs remain in the executable artifacts.
 
-[rules.tsv](rules.tsv) locates all 119 named inference rules in source or marks
-them as abstract specification rules. [check.py](check.py) checks rule inventory,
-the 14 executable administrative rule variants, marker existence, and the
-29 fingerprints in [sources.sha256](sources.sha256). It checks documentation
-coverage and source identity, **not mathematical proofs or semantic conformance**.
-Run `make -C doc/formal check` to perform those checks without building the PDF.
-
-The snapshot includes the uncommitted rule refactor on `codex/all-answers`;
-[snapshot.txt](snapshot.txt) records its Git parent. A fingerprint failure
-requires reviewing the changed source and affected rules before refreshing
-the snapshot. Generated PDF/build files are ignored by Git. This material
-belongs to the answer repository and has not been copied to the starter.
+The source snapshot and compiler-cleanup validation history are recorded in
+[snapshot.txt](snapshot.txt) and [DIVERGENCE-RECONCILIATION.md](DIVERGENCE-RECONCILIATION.md).
+The manuscript condensation changes documentation only; it does not represent
+another compiler implementation or a newly repeated full-workspace test gate.

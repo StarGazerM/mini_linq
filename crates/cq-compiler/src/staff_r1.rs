@@ -113,8 +113,8 @@ pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
 pub fn compile_relational_plan(
     source: &relational_plan::Module,
 ) -> syn::Result<index_requirements::Module> {
-    if crate::indexes_to_rust::extended(source) {
-        if !crate::indexes_to_rust::linear(source) {
+    if crate::relational_to_indexes::uses_result_index_route(source) {
+        if !crate::relational_to_indexes::is_linear_prefix(source) {
             return Err(syn::Error::new_spanned(
                 source,
                 "the lazy backend requires a linear relational prefix",
@@ -391,7 +391,7 @@ fn relational_key_columns(
 
 /// Lower IndexRequirements to ordinary staged Rust with one local `pull!`.
 pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::Result<syn::File> {
-    if crate::indexes_to_rust::extended(&source.relational_plan) {
+    if crate::relational_to_indexes::uses_result_index_route(&source.relational_plan) {
         crate::relational_to_indexes::check_coverage(source)?;
         return crate::indexes_to_rust::compile_lazy(source);
     }

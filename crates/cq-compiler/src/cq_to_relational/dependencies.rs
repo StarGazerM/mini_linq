@@ -6,7 +6,6 @@ use cq_ir::{cq, symbol_name};
 use std::collections::BTreeMap;
 
 pub(crate) struct ClauseFacts {
-    pub rule: Rule,
     pub required: Heading,
     // All bare atom variables can provide a join column, regardless of which
     // occurrence introduced the name in the written order.
@@ -43,8 +42,7 @@ impl ClauseDependencies {
                     let declaration = schema
                         .get(&symbol_name(&atom.relation))
                         .ok_or_else(|| syn::Error::new_spanned(atom, "undeclared atom"))?;
-                    let mut facts =
-                        ClauseFacts::atom(clause, atom, declaration, &bound, &mut primitive);
+                    let mut facts = ClauseFacts::atom(atom, declaration, &bound, &mut primitive);
                     // A preceding let supplies a value, not an interchangeable
                     // atom occurrence: matching its name must wait for that let.
                     facts
@@ -59,7 +57,6 @@ impl ClauseDependencies {
                         comparisons.push((clause, predicate.variables()));
                     }
                     ClauseFacts {
-                        rule: Rule::Guard { clause },
                         required: cq::rust::free_variables(&filter.condition).dependencies(&bound),
                         provided: Heading::new(),
                         reorderable: false,
@@ -81,7 +78,6 @@ impl ClauseDependencies {
                         if p.by_ref.is_none() && p.subpat.is_none())
                         && cq::rust::literal(&binding.expression);
                     ClauseFacts {
-                        rule: Rule::Bind { clause },
                         required: cq::rust::free_variables(&binding.expression)
                             .dependencies(&bound),
                         provided,
@@ -130,14 +126,12 @@ impl ClauseDependencies {
 impl ClauseFacts {
     /// D-ATOM: earlier arguments extend L; expression inputs are uses(B ∪ L) \ L.
     fn atom(
-        clause: usize,
         atom: &cq::Atom,
         declaration: &cq::RelationDecl,
         prefix: &Heading,
         primitive: &mut BTreeMap<String, bool>,
     ) -> Self {
         let mut facts = Self {
-            rule: Rule::Match { clause },
             required: Heading::new(),
             provided: Heading::new(),
             reorderable: true,

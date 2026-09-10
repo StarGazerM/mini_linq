@@ -47,9 +47,23 @@ impl<'a> ClauseState<'a> {
         }
         match *rule {
             Rule::Constant { clause, argument } => self.normalize_constant(clause, argument),
-            Rule::Match { clause } => self.match_clause(clause),
-            Rule::Guard { clause } => self.guard_clause(clause),
-            Rule::Bind { clause } => self.bind_clause(clause),
+            Rule::Match { clause } | Rule::Guard { clause } | Rule::Bind { clause } => {
+                self.require_normalized()?;
+                self.require_ready(clause)?;
+                match (rule, &self.source.program.query.body[clause]) {
+                    (Rule::Match { .. }, cq::BodyItem::Positive { atom }) => {
+                        self.match_clause(clause, atom)?;
+                    }
+                    (Rule::Guard { .. }, cq::BodyItem::Filter(filter)) => {
+                        self.guard_clause(clause, filter);
+                    }
+                    (Rule::Bind { .. }, cq::BodyItem::Let(binding)) => {
+                        self.bind_clause(clause, binding);
+                    }
+                    _ => return Err(error("rule does not match the source clause")),
+                }
+                Ok(())
+            }
             Rule::Finish => self.finish(),
             _ => Err(error("graph rule cannot apply to a clause state")),
         }
@@ -69,7 +83,9 @@ impl<'a> ClauseState<'a> {
         if !facts.required.is_subset(&self.heading) {
             return Err(error("schedule uses a logical input before its producer"));
         }
-        if matches!(facts.rule, Rule::Bind { .. }) && !facts.provided.is_disjoint(&self.heading) {
+        if matches!(self.source.program.query.body[clause], cq::BodyItem::Let(_))
+            && !facts.provided.is_disjoint(&self.heading)
+        {
             return Err(error("Bind requires fresh logical names"));
         }
         if self
@@ -78,15 +94,6 @@ impl<'a> ClauseState<'a> {
             .any(|&earlier| !facts.reorderable || !self.dependencies.clauses[earlier].reorderable)
         {
             return Err(error("schedule crossed a Rust evaluation boundary"));
-        }
-        Ok(())
-    }
-
-    fn require_clause(&self, clause: usize, rule: Rule) -> syn::Result<()> {
-        self.require_normalized()?;
-        self.require_ready(clause)?;
-        if self.dependencies.clauses[clause].rule != rule {
-            return Err(error("rule does not match the source clause"));
         }
         Ok(())
     }
@@ -138,33 +145,21 @@ impl<'a> ClauseState<'a> {
     }
 
     /// C-GUARD: P := select P if e; consume the ready guard exactly once.
-    fn guard_clause(&mut self, clause: usize) -> syn::Result<()> {
-        self.require_clause(clause, Rule::Guard { clause })?;
-        let cq::BodyItem::Filter(filter) = &self.source.program.query.body[clause] else {
-            return Err(error("Guard requires a filter clause"));
-        };
+    fn guard_clause(&mut self, clause: usize, filter: &cq::Filter) {
         let expression = &filter.condition;
         self.select_prefix(quote!(#expression));
         self.pending.remove(&clause);
-        Ok(())
     }
 
     /// C-BIND: P := extend P with the fresh pattern bindings evaluated per row.
-    fn bind_clause(&mut self, clause: usize) -> syn::Result<()> {
-        self.require_clause(clause, Rule::Bind { clause })?;
-        let cq::BodyItem::Let(binding) = &self.source.program.query.body[clause] else {
-            return Err(error("Bind requires a let clause"));
-        };
+    fn bind_clause(&mut self, clause: usize, binding: &cq::Let) {
         self.extend_binding(binding);
         self.pending.remove(&clause);
-        Ok(())
     }
 
     /// C-MATCH: A-* prepares each positional attribute, then Rename, Join,
     /// and the accumulated same-occurrence equalities consume this atom.
-    fn match_clause(&mut self, clause: usize) -> syn::Result<()> {
-        self.require_clause(clause, Rule::Match { clause })?;
-        let atom = self.source.program.query.body[clause].positive_atom()?;
+    fn match_clause(&mut self, clause: usize, atom: &cq::Atom) -> syn::Result<()> {
         let declaration = self.declaration(atom)?;
         let mut arguments = AtomBindings {
             prefix_heading: self.heading.clone(),
@@ -265,9 +260,10 @@ impl<'a> ClauseState<'a> {
         let pattern = &binding.pattern;
         let annotation = &binding.annotation;
         let expression = &binding.expression;
+        let result = (!variables.is_empty()).then(|| quote!((#(#variables,)*)));
         self.extend_prefix(
             quote!(#(#columns),*),
-            quote!({ let #pattern #annotation = #expression; (#(#variables,)*) }),
+            quote!({ let #pattern #annotation = #expression; #result }),
         );
         self.heading.extend(variables.iter().map(symbol_name));
     }
@@ -356,7 +352,14 @@ pub(crate) fn plan(
     }
     while !state.pending.is_empty() {
         let clause = strategy::choose_clause(&state, options.strategy)?;
-        let rule = dependencies.clauses[clause].rule.clone();
+        let rule = match &source.program.query.body[clause] {
+            cq::BodyItem::Positive { .. } => Rule::Match { clause },
+            cq::BodyItem::Filter(_) => Rule::Guard { clause },
+            cq::BodyItem::Let(_) => Rule::Bind { clause },
+            cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
+                return Err(error("clause has no implemented administrative rule"));
+            }
+        };
         state.apply(&rule)?;
         derivation.push(rule);
     }

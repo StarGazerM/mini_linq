@@ -1,92 +1,44 @@
 \section{Introduction}
 \label{sec:introduction}
-A conjunctive query specifies which valuations satisfy a conjunction of
-relational atoms. It does not specify an atom order, an index, or a tuple
-enumeration. This separation licenses familiar compiler transformations:
-reassociate natural joins, apply selections once their variables are available,
-and project away attributes after their last use. The mathematical argument
-is about named relations, while the resulting program executes loops,
-allocates storage, invokes host functions, and produces observable values.
-The compiler must connect these accounts without silently identifying them.
+A conjunctive query specifies satisfying valuations while leaving join order,
+indexes and tuple enumeration to a compiler. MiniLinq exposes those choices
+through independently usable languages embedded in Rust: CQ, named relational
+algebra, index requirements, local access plans and iterator pipelines.
+A pass transforms one language into another; lower-language quotations can
+also enter the compiler directly. Physical compilation emits ordinary Rust
+containing local quotations for later macro expansion.
 
-MiniLinq makes that connection explicit through a sequence of small languages
-embedded in Rust. Users can write a CQ, quote a relational plan directly,
-provide an index requirement artifact, or enter the local access and iterator
-languages independently. Each language has its own syntax and local
-well-formedness judgment. A physical compiler produces ordinary Rust with
-residual access-plan quotations; later macros lower those local regions.
-The result is a language-oriented compiler architecture in which an
-alternative algorithm should replace a pass at an existing boundary.
+This architecture extends the representation independence illustrated by
+Ascent and BYODS~\cite{paper-byods} to compilation decisions. Replacing
+storage, a join algorithm, or an execution discipline should require changing
+the passes that own those decisions. Each IR must retain its own local
+contract, so independently authored lower programs remain valid inputs.
+Section~\ref{sec:staging} states the corresponding composition requirement.
 
-The source language also admits native Rust expressions. This feature is
-substantial: an atom argument can compute a lookup value, a \code{let}
-clause can bind a Rust pattern, an \code{if} clause can call an arbitrary
-function, and a head can construct a Rust result. Blocks, closures, qualified
-paths, and nested macros retain their host syntax. This expressiveness makes
-the compiler's boundary with Rust part of its semantics, rather than a
-matter of accepting a longer list of predicate forms.
+Native Rust expressions make the planning problem richer than classical CQ.
+An atom such as \code{U(f(k,y),g(x,z),w)} has three physical columns but
+mentions five logical variables. Its first two arguments require values
+from other clauses; its third can supply a new value. A let introduces a
+directional dependency, and a guard may become applicable inside an earlier
+join subtree. Lexical dependencies determine availability, while movement
+and projection additionally need semantic assumptions about the host code.
 
-Consider a clause that assigns a counter value to each current binding and a
-following guard that compares that value with the counter's current state.
-A lazy traversal can execute assignment and guard together for one binding.
-A materialized traversal can complete all assignments before any guard.
-Both retain the same clause order in their logical plans, yet they can return
-different sets. Sorting the input fixes an enumeration but leaves this
-interleaving difference. Sorting the final answer does not repair it either.
-Likewise, a lexical free-variable set can explain that a guard needs a bound
-variable, but cannot establish that two calls commute or that a discarded
-binding's effects are unobservable.
-
-These examples motivate our central question: \emph{under which language,
-environment, and observation contracts may an administrative transformation
-or an entire compiler pass be replaced?} A set-valued relational theorem
-answers one instance of this question. An ordered-cursor contract answers
-another. Neither entails preservation of arbitrary host effects or of
-interactions with a partially consumed iterator. A useful specification must
-state the connection among these contracts and identify which one a pass
-actually establishes.
-
-This manuscript develops the following account:
+We specify the implemented compiler through:
 \begin{enumerate}
-\item An end-to-end compilation example exposes all existing boundaries and
-their decisions, including a computed join key, a guard and a computed head.
-The accompanying artifact obtains the intermediate syntax from the actual
-typed passes and executes the public macro routes.
-\item An administrative specification connects occurrence-preserving graph
-analysis, GYO-style reduction, semijoin programs, retention, dependency-aware
-clause lowering, index selection, and local iterator construction. Rules
-state their input domains and state transitions; policies choose among legal
-steps. Classical relational results are used with their textbook meanings.
-\item An observation-indexed semantic account separates relation abstraction,
-representation invariants, enumeration, demand and host effects. It explains
-why binding availability is insufficient for movement, and develops a finite
-execution-provenance model with explicitly delimited research obligations.
-\item A conformance study distinguishes local syntax validity, source-target
-contracts, independent semantic oracles, compiled behavior and universal
-proofs. Executable counterexamples expose both an unsupported physical case
-and the limits of unrestricted pass replacement.
+\item A worked acyclic query through every IR, including composite keys,
+both Yannakakis sweeps, filter pushdown and projection.
+\item Administrative rules and deterministic algorithms for graph analysis,
+dependency scheduling, RA construction, indexing and local lowering, with
+their invariants and conditional preservation arguments.
+\item Independent query/RA oracles, compiled execution tests, and mutation
+checks that distinguish answer correctness from the intended planning steps.
 \end{enumerate}
 
-The graph algorithms and relational equivalences are established database
-theory. Language-integrated query and staged query construction also have
-substantial prior foundations~\cite{host-linq}. Our purpose is to make their
-interaction with residual host computations and independently usable IRs
-precise in this compiler. A provenance record is developed as a semantic
-object for investigation; the implementation does not yet record it, and
-we do not claim that it defines a new provenance theory merely by containing
-more events. Section~\ref{sec:related-work} states the comparisons.
-
-The implementation is a prototype with explicit limits. Relational proofs
-apply under the stated host assumptions; complete Rust typing, name-resolution
-and implementation-simulation arguments remain obligations. Negation and
-aggregation parse but do not yet lower successfully. No sorted backend,
-cardinality estimator, WCOJ algorithm, or configurable public continuation
-interface is claimed. These limits constrain the results; they do not justify
-changing the meaning of a theorem to make the current code pass.
-
-Section~\ref{sec:overview} first follows a program through the compiler.
-Sections~\ref{sec:scope}, \ref{sec:effects-provenance} and
-\ref{sec:host-embedding} establish semantic observations and the host boundary.
-The language judgments and administrative algorithms then support the
-pass-level proofs. The final sections report conformance evidence, remaining
-obligations, and the relationship to prior work.
+The focus is correspondence between the compiler and these rules. Classical
+join theory supplies the graph results~\cite{ahv,notes}; Rust parsing supplies
+host syntax. Neither proves correctness for arbitrary effectful Rust.
+The relational claims assume total, deterministic, representation-independent
+host computations. An implemented lazy/materialized counterexample shows why
+this restriction matters. Negation, aggregation and broader optimizer search
+remain outside successful lowering; push execution and WCOJ are possible
+replacements, not implemented backends.

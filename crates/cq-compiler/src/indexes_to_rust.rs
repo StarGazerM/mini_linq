@@ -12,7 +12,7 @@ use syn::spanned::Spanned;
 type Information = BTreeMap<String, ra::RelationInfo>;
 type Names = BTreeMap<String, syn::Ident>;
 mod lazy;
-pub(crate) use lazy::{compile as compile_lazy, extended, linear, supported as lazy_supported};
+pub(crate) use lazy::{compile as compile_lazy, supported as lazy_supported};
 
 pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
     let ra = &source.relational_plan;
@@ -312,7 +312,7 @@ fn local_plan(
                 .map(|c| &variables[&symbol_name(&c.name)])
                 .collect();
             let expression = rust_expression(&e.value, input_info, &variables);
-            clauses.push(syn::parse_quote!(computed(#(#fresh),*) => for (#(#fresh,)*) in (::core::iter::once(#expression))));
+            clauses.push(syn::parse_quote!(let (#(#fresh,)*) = (#expression) => for (#(#fresh,)*) in (::core::iter::once(#expression))));
             let added: BTreeSet<_> = fresh.iter().map(|v| symbol_name(v)).collect();
             let fields = head.iter().map(|v| {
                 if added.contains(&symbol_name(v)) {

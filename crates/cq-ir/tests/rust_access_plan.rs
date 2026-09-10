@@ -114,3 +114,57 @@ fn raw_identifiers_compare_as_logical_symbols_in_binding_patterns() {
 
     rust_access_plan::contract::check(&plan).unwrap();
 }
+
+#[test]
+fn let_accesses_require_fresh_names_including_raw_and_tuple_bindings() {
+    let invalid = [
+        quote! {
+            answer(x) => ((x,)) :-
+                R(x) => for (x,) in ([(1,)]),
+                let x = 2 => for (x,) in ([(2,)]);
+        },
+        quote! {
+            answer(x) => ((x,)) :-
+                let x = 1 => for (x,) in ([(1,)]),
+                let r#x = 2 => for (r#x,) in ([(2,)]);
+        },
+        quote! {
+            answer(x, y) => ((x, y)) :-
+                R(x) => for (x,) in ([(1,)]),
+                let (y, x) = (2, 3) => for (y, x) in ([(2, 3)]);
+        },
+    ];
+    for tokens in invalid {
+        let plan: rust_access_plan::Plan = syn::parse2(tokens).unwrap();
+        let error = rust_access_plan::contract::check(&plan).unwrap_err();
+        assert!(error.to_string().contains("shadows"), "{error}");
+        assert!(!rust_access_plan::contract::well_formed(&plan));
+    }
+}
+
+#[test]
+fn let_rhs_uses_the_preceding_logical_environment() {
+    let invalid: rust_access_plan::Plan = syn::parse_quote! {
+        answer(y) => ((y,)) :-
+            let y = x + 1 => for (y,) in ([(2,)]),
+            R(x) => for (x,) in ([(1,)]);
+    };
+    let error = rust_access_plan::contract::check(&invalid).unwrap_err();
+    assert!(
+        error.to_string().contains("bound logical variables"),
+        "{error}"
+    );
+
+    let valid: rust_access_plan::Plan = syn::parse_quote! {
+        answer(x, y) => ((x, y)) :-
+            let () = () => for () in ([()]),
+            let y = { let x = 1; x + 1 } => for (y,) in ([(2,)]),
+            R(x) => for (x,) in ([(1,)]),
+            let () = record!(x, y) => for () in ([record!(x, y)]);
+    };
+    rust_access_plan::contract::check(&valid).unwrap();
+    assert_eq!(
+        syn::parse2::<rust_access_plan::Plan>(valid.to_token_stream()).unwrap(),
+        valid,
+    );
+}
