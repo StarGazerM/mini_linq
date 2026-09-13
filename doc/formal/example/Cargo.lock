@@ -40,8 +40,10 @@ version = "0.1.0"
 dependencies = [
  "cq-compiler",
  "cq-ir",
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
+ "syn_derive",
 ]
 
 [[package]]

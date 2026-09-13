@@ -5,12 +5,14 @@ a named RA program, an indexed physical lowering, a local Access quotation,
 and a Pipeline realization. The concrete hash backend is one implementation
 of those boundaries. Its data structures do not define the extensibility
 limit of the architecture. The design in the following section is one
-additional backend family, organized around immutable row arenas; its private
-overlay is not a mandatory new language through which every backend must pass.
+additional backend family, organized around immutable row arenas. Its proposed
+overlay is not an approved IR addition; necessity and stage placement remain obligations.
 
 \subsection{What the implementation actually exposes}
 \code{crates/mini-linq/src/lib.rs} provides these direct entries;
-\code{crates/cq-compiler/src/passes.rs} exports their typed pass functions.
+\code{cq-compiler} retains flat typed pass exports. Its \code{physical} module
+contains sibling materialized, lazy and composed implementations; \code{pull.rs}
+and \code{pipeline.rs} own the lower stages.
 The ordinary Rust AST returned by a physical pass owns allocation, construction,
 execution order and residual macro calls. Access contains native Rust sources,
 predicates and output expressions rather than a fixed collection vocabulary.
@@ -31,13 +33,50 @@ Existing entry / boundary & Unit the author controls & Appropriate physical vari
 \bottomrule
 \end{tabular}
 \end{center}
-The public entry macros have fixed continuations today. They expose direct
-lower-language entry, not an installed callback mechanism for arbitrary new
-backends. An alternative physical compiler can already use the exported typed
-APIs and emit existing lower quotations; automatic CQ-to-that-backend routing
-would require wiring an alternative entry or continuation. A new private IR
-can help such a compiler, but is not required merely to construct a different
-Rust context.
+Entries parse their source directly and call the next macro through a relative
+\code{mini_linq} path. A caller-owned module facade aliased as
+\code{mini_linq} can bind these continuations through ordinary re-exports;
+without that alias, the crate supplies the defaults.
+\code{materialized!} defaults its local Access holes to relative
+\code{mini_linq::collect_access} and accepts an explicit \code{access path;} override;
+its checker validates the configured path with the storage and clause contracts.
+The composed RA entry now preserves the source in an empty IndexRequirements
+overlay, forwarding it to relative \code{mini_linq::composed!}. That typed edge
+rejects written requirements and leaves auxiliary construction to recipes.
+Compact contextual inputs refine realization; public typed boundaries return
+diagnostics for invalid source IR in both debug and release builds.
+
+\paragraph{Ordinary aliases bind compatible implementations.}
+The facade must be in the macro invocation's scope; importing just the entry
+macro under a new name does not rebind the generated continuation. Nested modules
+import the facade explicitly. Absolute \code{::mini_linq} paths in the facade
+and recipes reach concrete implementations without recursing through overrides.
+The caller may also supply a stable imported name, for example
+\code{use ::mini_linq::collect_access as access;}, as the Access path. An alternative macro
+can occupy that alias when it accepts the same source language and establishes
+the boundary's result, evaluation and ownership contract. Generated paths must
+actually reference the alias; an unrelated local import cannot redirect a
+literal \code{::mini_linq::pull!} call, as retained in the legacy basic/lazy
+physical emitters. The materialized default instead uses the set endpoint.
+Configurable physical entries can instead supply
+\code{access mini_linq::collect_access;}. An alias at an established language
+boundary requires no additional syntax. Whole-operator replacement instead needs
+the retained RA definition and its physical binding assumptions: the next section
+declares the retained definition with only its free bindings and local laws.
+Key construction uses existing Project; reduction uses Semijoin on that projected
+resource. Configured lexical macros bind storage, continuation and optional work
+once, outside the semantic inputs. Operator control precedes Access
+lowering, while provider calls in native leaves can expand later. The set endpoint
+folds terminal Distinct into its collection sink; maps select providers and recipes.
+Compatibility still depends on the stated semantic and ownership contracts.
+Within composed compilation, layout facts, resource planning, query API construction
+and invocation auditing occupy separate modules. Provider macros own each binding's
+type and access; operator macros own construction and traversal. Hash and nested-loop
+joins are selectable without changing semijoin or API lowering. Native sets coexist
+with block storage. The data structures are in \code{cq_storage}; generated code
+associates storage and masks without a universal runtime relation interface.
+Unobserved execution omits statistics operations; the observed entry shares the
+same lowering with counters enabled.
 
 \subsection{Reading the papers at the right granularity}
 The literature separates representation, scheduling and intermediate semantics.
@@ -101,9 +140,10 @@ This yields a concrete implementation discipline: choose the smallest existing
 boundary that owns all changed semantics. Use a native expression for a lawful
 local replacement; replace the Rust context when construction or lifetime
 changes; replace a larger pure RA region when reduction or intermediate-result
-semantics changes. Introduce a private language only when its operator structure
-needs explicit manipulation or checking. This is the existing staging model,
-not an additional mandatory compiler stage above it.
+semantics changes. A new language needs a demonstrated missing distinction,
+formal semantics, local contracts and pass rules before IR implementation.
+Its position must respect CQ, RA, IndexRequirements, the Rust context with Access,
+and Pipeline in that order; private token protocols do not satisfy this discipline.
 
 \subsection{Static expansion can emit a runtime representation choice}
 Consider an exact semijoin whose build keys may occupy a compact integer range.
@@ -156,7 +196,7 @@ PA-Choose selects compatible resources within the stated arena backend family.
 Its static \code{Provider} enumeration is private planning data, not a required
 runtime trait or a universal catalog for every compiler entry. The explicit
 Exact/Transfer modes specify two different observation contracts. Factorized
-YA, a storage-native block source and additional execution strategies may
+YA, persistent block storage and additional execution strategies may
 replace an appropriate compiler segment and reuse compatible existing holes;
 none must first be coerced into the arena representation.
 The current default physical checker deliberately recognizes the default

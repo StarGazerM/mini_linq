@@ -50,9 +50,9 @@ For each `lazy` and `materialized` prefix, inspect:
 | `01-cq.rs` | Source wrapped in the selected public CQ macro |
 | `02-relational.rs` | Typed CQ pass output wrapped in the corresponding RA macro |
 | `03-indexes.rs` | Typed index pass output wrapped in the physical macro |
-| `04-access.rs` | The physical pass's ordinary `syn::File` containing `pull!` holes |
+| `04-access.rs` | The physical pass's ordinary `syn::File` containing iterator-valued `pull!` or set-valued `collect_access!` holes |
 | `05-pipeline.rs` | Each existing Access hole replaced using `compile_pull` |
-| `06-rust.rs` | Each Pipeline hole replaced using `compile_iterator_pipeline`, plus an executable assertion harness |
+| `06-rust.rs` | Each Pipeline hole replaced by its iterator/set Rust endpoint, plus an executable assertion harness |
 
 `report.txt` is the actual planned derivation. `validation.txt` records the
 asserted results and counters. Pipeline expansion visits both expression macros

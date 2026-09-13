@@ -31,15 +31,24 @@ struct RuleContext<'a> {
     results: &'a Names,
 }
 
-pub(crate) fn materialized(source: &ir::Module, target: &syn::File) -> syn::Result<()> {
-    check(source, target, false)
+pub(crate) fn materialized_with(
+    source: &ir::Module,
+    target: &syn::File,
+    access: &syn::Path,
+) -> syn::Result<()> {
+    check(source, target, false, access)
 }
 
 pub(crate) fn lazy(source: &ir::Module, target: &syn::File) -> syn::Result<()> {
-    check(source, target, true)
+    check(source, target, true, &syn::parse_quote!(::mini_linq::pull))
 }
 
-fn check(source: &ir::Module, target: &syn::File, lazy: bool) -> syn::Result<()> {
+fn check(
+    source: &ir::Module,
+    target: &syn::File,
+    lazy: bool,
+    access: &syn::Path,
+) -> syn::Result<()> {
     let mut phase = "storage";
     let result = (|| -> Option<()> {
         let module = &source.relational_plan;
@@ -194,17 +203,10 @@ fn check(source: &ir::Module, target: &syn::File, lazy: bool) -> syn::Result<()>
                 let Expr::Block(block) = initializer(local)? else {
                     return None;
                 };
-                let Expr::Call(call) = last_expression(&block.block.stmts)? else {
+                let Expr::Macro(mac) = last_expression(&block.block.stmts)? else {
                     return None;
                 };
-                equal(
-                    &call.func,
-                    &syn::parse_quote!(::core::iter::Iterator::collect),
-                )?;
-                if call.args.len() != 1 {
-                    return None;
-                }
-                let plan = pull(&call.args[0])?;
+                let plan = access_macro(&mac.mac, access)?;
                 check_materialized_clause(&context, d, &block.block.stmts, &plan)?;
                 let arity = row_info.heading.len();
                 expect_statement(
@@ -1098,7 +1100,11 @@ fn pull(expr: &Expr) -> Option<ac::Plan> {
 }
 
 fn pull_macro(mac: &syn::Macro) -> Option<ac::Plan> {
-    (mac.path == syn::parse_quote!(::mini_linq::pull)).then_some(())?;
+    access_macro(mac, &syn::parse_quote!(::mini_linq::pull))
+}
+
+fn access_macro(mac: &syn::Macro, path: &syn::Path) -> Option<ac::Plan> {
+    (mac.path == *path).then_some(())?;
     syn::parse2(mac.tokens.clone()).ok()
 }
 

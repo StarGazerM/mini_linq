@@ -32,12 +32,35 @@ local IR holes: one in the basic route, several in the materialized route.
 The implemented [Stage I planner](doc/PLANNED-PASS-IMPLEMENTATION.md) supplies
 alternative typed passes through these same languages. `planned_query!`
 selects graph-based CQ-to-RA planning; `planned_relational_plan!` selects
-indexes for the written RA; `materialized!` emits one existing `pull!` region
+indexes for the written RA; `materialized!` emits one set-valued `collect_access!` region
 per named result. It supports bushy joins, alpha-acyclic semijoin reduction,
 cyclic binary fallback, bounded comparisons, and intermediate projection.
 Its `build` materializes the DAG; `query` iterates the stored answer.
 See the [verification matrix](doc/STAGE-I-VERIFICATION.md) and
 [complete boundary artifacts](doc/planned-example/01-cq.rs).
+
+Language-entry macros emit relative `mini_linq::next_stage!` calls. An ordinary
+module facade aliased as `mini_linq` can re-export a different next-stage macro.
+The [block-access implementation](doc/BLOCK-ACCESS-IMPLEMENTATION.md)
+uses this wiring to compile exact integer RA with independently selected input
+providers, result materializations, semijoin recipes and join recipes. One query
+can borrow a block store, a native hash set and a native sorted set; zone pruning
+affects only its selected operand. The existing
+materialized backend accepts `access macro_path;` as well. Run the concrete
+example with `cargo run -p mini-linq --example blocked-ya --locked`.
+The [module and crate design](doc/COMPILER-STRUCTURE.md) separates physical
+implementations, local compilation decisions, and data structures. `cq-storage`
+contains immutable `BlockStore` storage, independent `BlockMask` bitmaps, summaries
+and passive counters. Operational traits specify borrowed block access, selection,
+exact membership and conservative ranges; implementations can change layout
+without changing recipes that use the same semantics. Query access is exposed
+through traits; layout helpers remain private. Generated code owns their
+association and query execution;
+there is no universal runtime relation API. `physical_plan!` composes provider and
+algorithm macros through the existing RA, Access and Pipeline languages. The
+compiler checks the composition's bindings; macro expansion and Rust check the
+selected operations and types. [The design discussion](doc/CONSTRAINED-STAGING-DESIGN.md)
+separates this explicit composition from proposed automatic planning.
 
 CQ arguments, `if` conditions, and `let` values preserve Rust expressions.
 The [expression contract](doc/RUST-EXPRESSIONS.md) explains scope, computed

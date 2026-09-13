@@ -136,13 +136,20 @@ notation abbreviates fully qualified \code{core::iter} calls:
 $\operatorname{copies}(p)$ emits \code{let x = Clone::clone(&x);} in pattern
 order once per inner item. Consuming filter-map supplies owned bindings without
 adding a borrowed tuple layer.
-\[
+\begin{mathpar}
 \Rule{R-Block}{d_j\Downarrow_R t_j\quad(0\le j\le m)}
  {\bar d;\mathsf{return}\ s_m\Downarrow_R
- \mathsf{Iterator::flatten}(\mathsf{onceWith}(\mathsf{move}\ ||\{\bar t;s_m\}))}.
-\]
-Once-with/flatten implements first-poll construction. Rust documents the
-adapters~\cite{iterator}; ownership, resolution, and trait laws remain premises.
+ \mathsf{Iterator::flatten}(\mathsf{onceWith}(\mathsf{move}\ ||\{\bar t;s_m\}))}
+
+\Rule{R-Set}{\bar d\Downarrow_R\bar t}
+ {\bar d;s=\mathsf{Distinct}(l);\mathsf{return}\ s\Downarrow_{\rm set}
+ \{\bar t;\mathsf{let}\ s:\mathsf{HashSet}(\_) = l.\mathsf{collect}();s\}}
+\end{mathpar}
+R-Block (\code{iterator_pipeline!}) delays construction until polling;
+R-Set (\code{collect_pipeline!}) eagerly collects the completed set, absorbing
+terminal Distinct. It requires the finite set-observation contract,
+not an online cursor contract. Native adapter laws~\cite{iterator}, ownership and
+resolution remain premises.
 \begin{theorem}[Adapter adequacy, conditional]
 Assume the generated Rust type-checks; host callbacks and source iterators
 realize their specified host judgments; generated cloning/hashing/dropping
@@ -189,7 +196,8 @@ hygienic~\cite{macros}.
 
 \Rule{ST-Emit}{e:\mathsf{Expr}}{e\longrightarrow\operatorname{ToTokens}(e)}
 \end{mathpar}
-The routing continuation $k$ is fixed in current public macros:
+The entry fixes a relative \code{mini_linq::}$k$ path; a module alias binds it.
+With the ordinary crate binding, the continuations are:
 \begin{center}\small
 \begin{tabular}{lll}\toprule
 Entry & Typed edge & Continuation \\\midrule
@@ -199,16 +207,17 @@ Entry & Typed edge & Continuation \\\midrule
 \code{planned_relational_plan} & result indexes & \code{materialized} \\
 \code{index_requirements} & basic/lazy physical & staged Rust file \\
 \code{materialized} & materialized physical & staged Rust file \\
-\code{pull} & Access to Pipeline & \code{iterator_pipeline} \\
-\code{iterator_pipeline} & Pipeline to Expr & ToTokens \\\bottomrule
+\code{pull} / \code{collect_access} & Access to Pipeline & iterator / set endpoint \\
+iterator / set endpoint & Pipeline to Expr & ToTokens \\\bottomrule
 \end{tabular}
 \end{center}
-Each language has a direct entry; lower-IR quotation bypasses upper passes. \code{workload_query}
-emits catalog metadata; \code{compiled-workloads} additionally routes its CQ
-through existing default passes. Physical code retains one Access hole per
-materialized RA result, or one lazy/basic query region. Quote interpolation
-escapes Rust leaves into these contexts; no new wrapper or CQ escape syntax
-is needed, and a shared RA DAG need not become one pipeline.
+\code{materialized!} defaults to set-valued \code{mini_linq::collect_access};
+\code{access path;} overrides it. Basic/lazy holes retain absolute paths.
+Direct entries bypass upper passes. \code{workload_query} emits catalog metadata;
+\code{compiled-workloads} also compiles its CQ through defaults.
+Physical code has one Access hole per materialized result or lazy/basic region.
+Interpolation embeds native Rust without added wrapper or CQ syntax;
+shared RA need not form one pipeline.
 \subsection{The contract of a replaceable edge}
 Local validity belongs to an IR; compilability to a term/pass pair; preservation
 to their observations. A partial compiler $f:L\to M$ has an edge contract:

@@ -17,16 +17,9 @@ fn malformed_sources_fail_direct_syn_parsing() {
     harness::assert_malformed_sources_fail_direct_syn_parsing();
 }
 
-#[cfg(debug_assertions)]
 #[test]
-fn supplied_pull_pass_enforces_its_debug_precondition() {
-    harness::assert_pull_debug_precondition_rejects_invalid_typed_source();
-}
-
-#[cfg(not(debug_assertions))]
-#[test]
-fn supplied_pull_pass_skips_its_debug_precondition_when_disabled() {
-    harness::assert_pull_debug_precondition_is_disabled();
+fn supplied_pull_pass_returns_a_diagnostic_for_invalid_typed_source() {
+    harness::assert_pull_rejects_invalid_typed_source();
 }
 
 #[test]

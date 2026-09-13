@@ -1,0 +1,208 @@
+\section{Contextual physical compilation}
+\label{sec:block-implementation}
+The composed backend supports \code{i64} rows, Unit, Rename, Project, Semijoin
+and NaturalJoin with per-binding providers and per-operator recipes. Its declared
+contextual syntax refines physical realization in the existing order:
+\[
+ \mathsf{RA}\longrightarrow\mathsf{IndexRequirements}
+ \longrightarrow\mathsf{Rust}[\mathsf{Context}]
+ \longrightarrow\mathsf{Rust}[\mathsf{Access}]
+ \longrightarrow\mathsf{Rust}[\mathsf{Pipeline}]\longrightarrow\mathsf{Rust}.
+\]
+Operator control is fixed before Access lowering; provider calls in native
+leaves may expand later.
+
+\paragraph{Necessity and admitted edge.}
+Independent macros need serialized inputs. RA supplies the operator but lacks
+physical Rust bindings; Access already commits to an algorithm. Contextual inputs
+retain RA under these assumptions, without duplicating join syntax or output maps.
+IndexRequirements lists promised resources. $\operatorname{Defer}(D)=(D,\varnothing)$
+preserves every definition; composed realization accepts only this empty-overlay
+domain and rejects written requirements. Recipes own auxiliary construction and
+sharing; an empty overlay does not imply no buckets. Canonical indexed backends
+retain their coverage contracts. \code{physical_plan!} forwards the configured
+overlay to relative \code{mini_linq::composed!}, preserving that stage's alias.
+
+\paragraph{Declared syntax and local contract.}
+\code{Definition} and \code{Atom} reuse existing RA and CQ syntax. Paths and
+expressions are Rust syntax. Both contextual and provider inputs derive
+\code{Parse}/\code{ToTokens} in \code{cq-ir}; macro entries parse them and compiler
+functions receive typed values.
+\begin{lstlisting}
+Context ::= Definition { Binding* }
+Binding ::= Atom [ => Path ] { Expr } ;
+\end{lstlisting}
+Braces permit caller macros to capture provider paths. Bindings cover exactly
+the distinct operands, layouts contain distinct variables, and results cannot
+capture operands. A self-join needs one binding. A provider path binds rows;
+its absence binds exact projected keys under the selected recipe's representation
+law. Configured lexical macros bind storage, continuation and optional work once;
+these are administrative arguments, not fields of Context or provider operations.
+Derive $s=\operatorname{sort}(V_l\cap V_r)$ and paired positions
+$k_l=\ell_l^{-1}(s),k_r=\ell_r^{-1}(s)$; join output follows
+$\operatorname{sort}(V_l\cup V_r)$, while semijoin retains $\ell_l$.
+Construction receives $q=\pi_s r$ and one binding for $r$; reduction receives
+$t=l\ltimes q$ and bindings for $l,q$. The fresh name $q$ avoids normalized
+source names. No phase suffix or repeated origin assertion remains.
+Each used value expression is evaluated once per operand use.
+
+\paragraph{Contextual meaning.}
+Let $D^+$ interpret the fresh projections and rewritten semijoin uses; it is
+the semantics of the emitted contexts, not another serialized program IR.
+The producer checks $D^+(q)=\pi_sD(r)$ and
+$D(l)\ltimes D(r)=D(l)\ltimes D^+(q)$ for each original reduction.
+Let $\Gamma(v)=(P,e,\ell)$ assert that provider $P$ decodes Rust value $e$ in
+layout $\ell$ to exactly $D^+(v)$. Let $\Xi(q)=(e_q,s)$ assert exact keys
+$\operatorname{Keys}(e_q)=D^+(q)$ and the selected recipe's representation laws.
+The producer establishes these assumptions from source, scope and construction;
+the local realization judgment is
+\[
+ \Gamma;\Xi\vdash (t=\mathit{op})\Longrightarrow
+       E:\operatorname{Rep}(D^+(t)),\qquad E\in\mathsf{Rust}[\mathsf{Access}].
+\]
+For a block's current selected rows $B$, the zone premise is
+$\exists x\in B:k_l(x)\in\operatorname{Keys}(e_q)\Rightarrow
+\operatorname{may}(e_q,B)$. Exact and zone reduction consequently compute the same
+$\{x\in D(l):k_l(x)\in\pi_sD(r)\}$. Overlapping coordinate ranges admit
+candidates; the exact whole-key residual is mandatory, including for composite
+and zero-column keys. Sound rejection also requires metadata access without
+payload opening. The trace obligation is guard-before-open at each zone consumer;
+another consumer may legitimately open that storage.
+
+\paragraph{Rules, algorithms and source correspondence.}
+Write $J_d(E)$ for the judgment above; $d_\pi,d_{\ltimes},d_{\bowtie}$ denote
+$q=\pi_s r,t=l\ltimes q,t=l\bowtie r$. Write $\widehat d$ for the emitted
+definition corresponding to original $d$. Each contextual rule assumes its local
+well-formedness contract and lawful provider, host and lower-stage operations.
+$A(D,C)$ independently audits source-to-context correspondence. $\mathcal M$
+maps reuse classes $c=(r,s,\rho,\kappa)$ to resources; $\mathcal M(c)\uparrow$
+means unassigned. $U(c,q)$ requires uniform consumability, lawful repeated reads
+and sufficient lifetime. Existing M rules supply Unit, Rename and Project in
+source order. The CP rules are separate from the proposed PA overlay.
+{\small\begin{mathpar}
+\Rule{CP-Defer}{\operatorname{RAWF}(D)}
+ {D\Downarrow_{\rm defer}(D,\varnothing)}
+
+\Rule{CP-Realize}{\operatorname{IXWF}(D,\varnothing)\quad
+ C=\operatorname{Assemble}(E_d)\\
+ \forall d\in D.\ J_{\widehat d}(E_d)\quad A(D,C)}
+ {(D,\varnothing)\Downarrow_{\rm comp}C:\operatorname{Rep}(D)}
+
+\Rule{CP-Bind}{\gamma_P(e,\ell)=D^+(v)\quad e\text{ dominates use}}
+ {\Gamma\Longrightarrow\Gamma[v\mapsto(P,e,\ell)]}
+
+\Rule{CP-Build}{d=d_\pi\quad\Gamma(r)=(P,e,\ell_r)\quad\operatorname{Fresh}(q)\\
+ \mathcal M(c)\uparrow\quad e_q=\operatorname{Build}_{\rho,\kappa}(e,\ell_r^{-1}(s))}
+ {(\Xi,\mathcal M)\Longrightarrow(\Xi[q\mapsto(e_q,s)],\mathcal M[c\mapsto q])}
+
+\Rule{CP-Reuse}{\mathcal M(c)=q\quad q\in\dom\Xi\quad U(c,q)}
+ {\operatorname{need}(c)\Longrightarrow q}
+
+\Rule{CP-Exact}{d=d_{\ltimes}\quad\Xi(q)=(e_q,s)}
+ {J_d(\operatorname{Exact}(l,e_q,k_l))}
+
+\Rule{CP-Zone}{d=d_{\ltimes}\quad\Xi(q)=(e_q,s)\\
+ \operatorname{SoundReject}(e_q)\quad\operatorname{MetadataOnly}(l)}
+ {J_d(\operatorname{Zone}(l,e_q,k_l))}
+
+\Rule{CP-Hash}{d=d_{\bowtie}\\
+ H(k)=\{y\in D(r):k_r(y)=k\}}
+ {J_d(\operatorname{Hash}(l,H,k_l))}
+
+\Rule{CP-Nested}{d=d_{\bowtie}\quad\Gamma(l),\Gamma(r)\text{ established}}
+ {J_d(\operatorname{Nested}(l,r,k_l,k_r))}
+
+\Rule{CP-Store}{\sem{R}=D^+(t)\quad e=\operatorname{Pack}_P(R)}
+ {\Gamma\Longrightarrow\Gamma[t\mapsto(P,e,\ell_t)]}
+\end{mathpar}}
+$\operatorname{Build}$ obtains exact keys and any lawful summary; Exact enumerates
+current handles, tests keys and selects survivors. Zone guards descriptors before
+opening selected rows and applying the same residual. Hash builds exact witness
+buckets and probes them; Nested enumerates and tests pairs. Both emit the canonical
+joined layout. Pack consumes a distinct set and preserves it in the chosen provider.
+The implementations are \code{compile_deferred_indexes} (Defer),
+\code{compile_composed} (Realize), \code{lower::context} (Bind),
+\code{semijoin::build_keys} (Build), \code{resources::analyze} (Reuse),
+\code{compile_exact_semijoin}/\code{compile_zone_semijoin} (Exact/Zone),
+\code{compile_hash_join}/\code{compile_nested_loop_join} (Hash/Nested), and
+\code{lower::materialize} with \code{providers} (Store).
+Here $\rho$ and $\kappa$ are recipe and exact-collection paths. Every consumer
+in a reuse class requires compatible resource meaning and shape, including summaries.
+Exact keys alone are insufficient; dependence on another consumer property needs
+distinct selections. Different RHS versions or paths do not share automatically.
+Builders may borrow keys; the zone builder constructs keys and a summary together,
+draining its scan after collection. Join witnesses remain separate.
+
+\begin{algorithm}[!t]
+\caption{Contextual composition in the existing stage order}
+\label{alg:block-ra}
+\begin{algorithmic}[1]
+\Procedure{CompilePhysical}{$D,\mathit{options}$}
+ \State $I\gets\operatorname{Defer}(D)$; check unchanged source and empty overlay
+ \State Check realization domain, row layouts and option scopes
+ \State Bind configured macro services once; group demands by $(r,s,\rho,\kappa)$
+ \For{each definition $d$ in source order}
+  \State Establish the actual free bindings required at $d$ (CP-Bind)
+  \For{each resource first required at $d$}
+   \State Emit fresh $q=\pi_s r$ with its one row binding (CP-Build)
+  \EndFor
+  \State Reuse only matching established resources (CP-Reuse)
+  \If{$d=l\ltimes r$}
+   \State Emit $t=l\ltimes q$ with row binding $l$ and resource binding $q$
+   \State Recipe derives positions and emits CP-Exact or CP-Zone control
+  \ElsIf{$d=l\bowtie r$}
+   \State Emit retained definition and context to CP-Hash or CP-Nested
+   \State Materialize canonical joined rows with selected provider (CP-Store)
+  \Else
+   \State Inherit Rename binding or construct Unit/Project via CP-Store
+  \EndIf
+  \State Record represented result; emit size and work only in observed execution
+ \EndFor
+ \State Emit API and existing Access continuations (CP-Realize)
+ \State Audit projection identity, source equivalence, paths and dominance
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Provider fragments and storage laws.}
+Provider syntax contains only operations:
+\code{type Column}; unary \code{input}, \code{len}, \code{row}, \code{bounds},
+\code{scan}, \code{rows}, \code{blocks}; binary \code{select},
+\code{block_rows}, with each expression argument parenthesized; and
+\code{materialize Ident Ident (Expr) (Expr)}. Type produces a Rust type;
+materialize produces statements; the others produce expressions.
+Scan and rows enumerate the exact current selection; row decodes a valid handle;
+select preserves earlier values and retains exactly its current handles.
+Blocks and bounds inspect metadata without opening payload; block rows opens only
+that descriptor. Unsupported operations are diagnosed by the selected provider.
+
+\code{BlockRead}, \code{BlockDescriptor} and optional \code{CoordinateBounds}
+separate directory traversal, payload access and enclosing metadata.
+\code{BlockSelection}/\code{MakeSelection} provide exact coordinate selections;
+\code{ExactMembership} and \code{RangeSummary} distinguish exact lookup from
+conservative rejection. Their laws require stable identities, coordinates and
+borrowed rows. For store $A$ and mask $M$, $\gamma(A,M)=\{B_b[j]:(b,j)\in M\}$.
+Providers check owner identity and current membership; recipes preserve handle
+fields together. Trait operations hide layout; ingestion and private packing
+establish bounds and uniqueness. \code{cq-storage} has no relational executor.
+
+\paragraph{Composition and validation scope.}
+\code{physical_context::contract} checks the local environments;
+\code{pass_contracts::composed} checks the two stage edges;
+\code{composed::check} reconstructs definitions, layouts, resource origins and
+paths independently. \code{physical_provider} declares provider syntax.
+The selected recipes build checked Access regions; \code{collect_pipeline!}
+folds terminal Distinct into the owned HashSet sink required by result providers.
+\code{pull!} remains iterator-valued. Induction over definitions gives conditional
+answer preservation when contextual, storage, host and lower-pass laws hold.
+Rust type checking does not prove those semantic premises.
+
+The acceptance gate covers mixed storage, exact/zone and alternate joins against
+an independent oracle, malformed contexts, stale projections and nonempty-overlay
+rejection. Separate storage substitution cases observe descriptor opens with sparse
+IDs and masks. These are bounded tests, not a proof of arbitrary replacement macros.
+The gate includes workspace and release cases, lint, formatting and the
+five formal examples. Public typed boundaries reject malformed source IR in both
+profiles; debug postconditions add correspondence checks. Counters exclude ingestion and do not
+measure I/O or speedup. Bloom filters, persistent storage, Transfer mode, cross-recipe
+sharing and cost search remain outside this implementation.

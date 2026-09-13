@@ -16,10 +16,21 @@ hw4 = []
 compiled-workloads = []
 
 [dependencies]
+syn_derive.workspace = true
+proc-macro2.workspace = true
 cq-compiler.workspace = true
 cq-ir.workspace = true
 quote.workspace = true
 syn.workspace = true
+
+[dev-dependencies]
+cq-storage.workspace = true
+
+[[example]]
+name = "blocked-ya"
+path = "../../examples/blocked-ya/main.rs"
+test = true
+harness = false
 
 [[example]]
 name = "rust-expressions"

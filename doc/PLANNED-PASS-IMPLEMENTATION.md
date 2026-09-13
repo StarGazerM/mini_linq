@@ -10,9 +10,9 @@ compiler module or another IR. R1 remains a separately callable reference route.
 |---|---|---|---|
 | `cq::Module` | `compile_cq_planned` | `relational_plan::Module` | Occurrence analysis, legal join order, semijoin reduction, selection and projection placement |
 | `relational_plan::Module` | `compile_result_indexes` | `index_requirements::Module` | Exact first-use keys on named right operands; preserve the entire RA |
-| `index_requirements::Module` | `compile_materialized` | staged `syn::File` with local `pull!` holes | Tuple representation, hash storage, existence access, materialization and DAG sharing |
+| `index_requirements::Module` | `compile_materialized` | staged `syn::File` with set-valued `collect_access!` holes | Tuple representation, hash storage, existence access, materialization and DAG sharing |
 | `rust_access_plan::Plan` | existing `compile_pull` | `iterator_pipeline::Pipeline` | Explicit local physical streams and binding flow |
-| `iterator_pipeline::Pipeline` | existing `compile_iterator_pipeline` | `syn::Expr` | Rust iterator realization |
+| `iterator_pipeline::Pipeline` | `compile_iterator_pipeline` / `compile_collect_pipeline` | `syn::Expr` | Iterator / owned-set realization |
 
 Macro entries parse exactly the source language and call its typed pass.
 `planned_query!` routes to `planned_relational_plan!`, which routes to
@@ -21,9 +21,12 @@ unchanged. Any intermediate artifact can be quoted directly at its entry.
 
 The compiler implementation is private and divided by transformation:
 `cq_to_relational` (with analysis, rules, and strategy helpers),
-`relational_to_indexes`, and `indexes_to_rust`. Public compiler functions and
-their contracts remain in `passes.rs`. Local language contracts remain in
-`cq-ir`; cross-language relations remain under `pass_contracts`.
+`relational_to_indexes`, and sibling `physical::{materialized,lazy,blocked}`
+implementations. `pull.rs` and `pipeline.rs` own the two supplied lowerings;
+`passes.rs` retains composition and the student wrappers. Public `compile_*`
+exports retain the existing entries and add explicit set and block variants. Local language contracts remain in `cq-ir`;
+cross-language relations remain under `pass_contracts`. The
+[module design](COMPILER-STRUCTURE.md) records decision ownership.
 
 Within CQ-to-RA, `dependencies.rs` derives D-* clause judgments and
 `hypergraph.rs` implements G-* reductions. `rules.rs` implements P-* and Y-*

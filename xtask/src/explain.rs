@@ -863,8 +863,7 @@ struct PullLowerer {
 impl PullLowerer {
     fn lower(&mut self, invocation: &syn::Macro) -> syn::Result<iterator_pipeline::Pipeline> {
         let source: rust_access_plan::Plan = syn::parse2(invocation.tokens.clone())?;
-        rust_access_plan::contract::check(&source)?;
-        let target = compile_pull(&source);
+        let target = compile_pull(&source)?;
         iterator_pipeline::contract::check(&target)?;
         Ok(target)
     }
@@ -947,8 +946,7 @@ struct IteratorPipelineLowerer {
 impl IteratorPipelineLowerer {
     fn lower(&mut self, invocation: &syn::Macro) -> syn::Result<syn::Expr> {
         let source: iterator_pipeline::Pipeline = syn::parse2(invocation.tokens.clone())?;
-        iterator_pipeline::contract::check(&source)?;
-        Ok(compile_iterator_pipeline(&source))
+        compile_iterator_pipeline(&source)
     }
 
     fn finish(self) -> syn::Result<()> {

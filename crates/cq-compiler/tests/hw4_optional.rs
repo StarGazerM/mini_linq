@@ -58,7 +58,7 @@ fn leading_global_negation_uses_unit_before_filter_and_join() {
     rust_access_plan::contract::check(&source)
         .expect("OPTIONAL HW4: accept a safe global negation followed by aggregation");
 
-    let actual = compile_pull(&source);
+    let actual = compile_pull(&source).unwrap();
     let expected: iterator_pipeline::Pipeline = syn::parse2(quote! {
         iter0 = unit yield ();
         iter1 = filter iter0 as () if (!index0.iter().next().is_some());

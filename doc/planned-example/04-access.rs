@@ -26,12 +26,10 @@ impl PlannedExample {
             .collect();
         let relation0: ::std::collections::HashSet<(i32, i32)> = {
             let __left = &input0;
-            ::core::iter::Iterator::collect(
-                ::mini_linq::pull! {
-                    output(v0, v1) => ((::core::clone::Clone::clone(v0),
-                    ::core::clone::Clone::clone(v1),)) : - rows(v0, v1) => for (v0, v1,)
-                    in (__left.iter());
-                },
+            ::mini_linq::collect_access!(
+                output(v0, v1) => ((::core::clone::Clone::clone(v0),
+                ::core::clone::Clone::clone(v1),)) : - rows(v0, v1) => for (v0, v1,) in
+                (__left.iter());
             )
         };
         __stats.results.push(("r0", 2usize, relation0.len()));
@@ -42,25 +40,21 @@ impl PlannedExample {
         __stats.index_rows += relation0.len();
         let relation1: ::std::collections::HashSet<(i32, i32)> = {
             let __left = &input1;
-            ::core::iter::Iterator::collect(
-                ::mini_linq::pull! {
-                    output(v1, v2) => ((::core::clone::Clone::clone(v1),
-                    ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,)
-                    in (__left.iter());
-                },
+            ::mini_linq::collect_access!(
+                output(v1, v2) => ((::core::clone::Clone::clone(v1),
+                ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,) in
+                (__left.iter());
             )
         };
         __stats.results.push(("r1", 2usize, relation1.len()));
         let relation2: ::std::collections::HashSet<(i32, i32)> = {
             let __left = &relation1;
-            ::core::iter::Iterator::collect(
-                ::mini_linq::pull! {
-                    output(v1, v2) => ((::core::clone::Clone::clone(v1),
-                    ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,)
-                    in (__left.iter()), if ({ let value : ::core::primitive::i32 = * v2;
-                    value } > 0i32) => if ({ let value : ::core::primitive::i32 = * v2;
-                    value } > 0i32);
-                },
+            ::mini_linq::collect_access!(
+                output(v1, v2) => ((::core::clone::Clone::clone(v1),
+                ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,) in
+                (__left.iter()), if ({ let value : ::core::primitive::i32 = * v2; value }
+                > 0i32) => if ({ let value : ::core::primitive::i32 = * v2; value } >
+                0i32);
             )
         };
         __stats.results.push(("r2", 2usize, relation2.len()));
@@ -68,14 +62,11 @@ impl PlannedExample {
             let __left = &relation2;
             let __index = &index0;
             let __probes_ref = &__probes;
-            ::core::iter::Iterator::collect(
-                ::mini_linq::pull! {
-                    output(v1, v2) => ((::core::clone::Clone::clone(v1),
-                    ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,)
-                    in (__left.iter()), key(v1) => if ({ __probes_ref.set(__probes_ref
-                    .get() + 1); __index.contains(& (::core::clone::Clone::clone(v1),))
-                    });
-                },
+            ::mini_linq::collect_access!(
+                output(v1, v2) => ((::core::clone::Clone::clone(v1),
+                ::core::clone::Clone::clone(v2),)) : - rows(v1, v2) => for (v1, v2,) in
+                (__left.iter()), key(v1) => if ({ __probes_ref.set(__probes_ref.get() +
+                1); __index.contains(& (::core::clone::Clone::clone(v1),)) });
             )
         };
         __stats.results.push(("r3", 2usize, relation3.len()));
@@ -88,14 +79,11 @@ impl PlannedExample {
             let __left = &relation0;
             let __index = &index1;
             let __probes_ref = &__probes;
-            ::core::iter::Iterator::collect(
-                ::mini_linq::pull! {
-                    output(v0, v1) => ((::core::clone::Clone::clone(v0),
-                    ::core::clone::Clone::clone(v1),)) : - rows(v0, v1) => for (v0, v1,)
-                    in (__left.iter()), key(v1) => if ({ __probes_ref.set(__probes_ref
-                    .get() + 1); __index.contains(& (::core::clone::Clone::clone(v1),))
-                    });
-                },
+            ::mini_linq::collect_access!(
+                output(v0, v1) => ((::core::clone::Clone::clone(v0),
+                ::core::clone::Clone::clone(v1),)) : - rows(v0, v1) => for (v0, v1,) in
+                (__left.iter()), key(v1) => if ({ __probes_ref.set(__probes_ref.get() +
+                1); __index.contains(& (::core::clone::Clone::clone(v1),)) });
             )
         };
         __stats.results.push(("r4", 2usize, relation4.len()));
@@ -109,11 +97,9 @@ impl PlannedExample {
         __stats.index_rows += relation4.len();
         let relation5: ::std::collections::HashSet<(i32,)> = {
             let __left = &relation3;
-            ::core::iter::Iterator::collect(
-                ::mini_linq::pull! {
-                    output(v1) => ((::core::clone::Clone::clone(v1),)) : - rows(v1, v2)
-                    => for (v1, v2,) in (__left.iter());
-                },
+            ::mini_linq::collect_access!(
+                output(v1) => ((::core::clone::Clone::clone(v1),)) : - rows(v1, v2) =>
+                for (v1, v2,) in (__left.iter());
             )
         };
         __stats.results.push(("r5", 1usize, relation5.len()));
@@ -121,24 +107,20 @@ impl PlannedExample {
             let __left = &relation5;
             let __index = &index2;
             let __pairs_ref = &__pairs;
-            ::core::iter::Iterator::collect(
-                ::mini_linq::pull! {
-                    output(v0, v1) => ({ __pairs_ref.set(__pairs_ref.get() + 1);
-                    (::core::clone::Clone::clone(v0), ::core::clone::Clone::clone(v1),)
-                    }) : - rows(v1) => for (v1,) in (__left.iter()), rows(v0, v1) => for
-                    (v0,) in (__index.get(& (::core::clone::Clone::clone(v1),))
-                    .into_iter().flatten());
-                },
+            ::mini_linq::collect_access!(
+                output(v0, v1) => ({ __pairs_ref.set(__pairs_ref.get() + 1);
+                (::core::clone::Clone::clone(v0), ::core::clone::Clone::clone(v1),) }) :
+                - rows(v1) => for (v1,) in (__left.iter()), rows(v0, v1) => for (v0,) in
+                (__index.get(& (::core::clone::Clone::clone(v1),)).into_iter()
+                .flatten());
             )
         };
         __stats.results.push(("r6", 2usize, relation6.len()));
         let relation7: ::std::collections::HashSet<(i32,)> = {
             let __left = &relation6;
-            ::core::iter::Iterator::collect(
-                ::mini_linq::pull! {
-                    output(v0) => ((::core::clone::Clone::clone(v0),)) : - rows(v0, v1)
-                    => for (v0, v1,) in (__left.iter());
-                },
+            ::mini_linq::collect_access!(
+                output(v0) => ((::core::clone::Clone::clone(v0),)) : - rows(v0, v1) =>
+                for (v0, v1,) in (__left.iter());
             )
         };
         __stats.results.push(("r7", 1usize, relation7.len()));

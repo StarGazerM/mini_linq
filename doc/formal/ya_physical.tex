@@ -1,8 +1,9 @@
 \section{YA-aware physical administration: a completed design}
 \label{sec:ya-physical}
 \paragraph{Status and scope.}
-This section specifies one proposed physical backend family, not behavior
-already implemented by MiniLinq. Section~\ref{sec:architecture-placement}
+This section specifies the full proposed physical overlay. The smaller
+implemented block backend in Section~\ref{sec:block-implementation} does not
+implement all its administrative states. Section~\ref{sec:architecture-placement}
 places it among the existing macro/typed-pass boundaries; its arena model and
 private overlay do not constrain other backend implementations. The existing IX/ST/M/L rules remain the executable
 baseline. In particular, today's materialized backend represents each named
@@ -630,7 +631,7 @@ All IDs are resolved by the overlay checker; none are arbitrary raw pointers.
 Rule(s) & Algorithm operation & Compiler implementation boundary\\
 \midrule
 PA-Need & Demand prepass & Extend \code{relational_to_indexes} function \code{compile}; retain paired maps, roles, and exact versions.\\
-PA-Choose / PA-Build / PA-Reuse & Ensure resources & New provider planner; replace the fixed choice in \code{indexes_to_rust::build_index}.\\
+PA-Choose / PA-Build / PA-Reuse & Ensure resources & New provider planner; replace the fixed choice in \code{materialized::build_index}.\\
 PA-Attach & Bind filter to consumer & New overlay edge metadata; checker verifies source, key maps and dominance.\\
 PA-Reduce / PA-Transfer & Emit view reduction & New distinct commands; split \code{local_plan}'s exact Semijoin case, preserving it as baseline.\\
 RX-Block / RX-Row / RX-Probe / RX-Keep & ReduceView loop & New block/view runtime templates; semantic model checks rejection and survivor behavior.\\
@@ -654,7 +655,7 @@ checked private overlay and Rust emitter; do not repurpose the
 existing index parser to pretend Bloom filters satisfy IX coverage.
 The independent checker should validate typed command/evidence transitions
 first, then validate emission templates. Its current counterpart is
-\code{pass_contracts::physical::materialized}; that checker recognizes fixed
+\code{pass_contracts::physical::materialized_with}; that checker recognizes fixed
 Rust structures and must not be weakened to accept arbitrary \code{contains}
 expressions. Directly authored lower plans carry the same provider premises.
 The current lazy path excludes semijoins and shared DAGs and cannot execute

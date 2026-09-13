@@ -98,10 +98,9 @@ Pipeline lowering implements Scan and Project with \code{map}, Join with
 poll; the enclosing Rust immediately collects it into $r_{11}$.
 \code{query()} later reads the answer materialized during \code{build()}.
 
-The driver checks the tree, reduction commands, exact RA and indexes, and
-all intermediate arities and counts. Both public routes and their fully
-lowered Rust run on five input presentations each, including duplicates and
-individually empty relations. The default \code{mini_linq!} route instead
-uses written-order joins without YA; both routes share the lower languages
-and agree on these pure answers. Their continuations are fixed in the public
-macros, while typed pass APIs and direct quotations expose each boundary.
+The driver checks the tree, reductions, exact RA/indexes and all intermediate
+arities/counts. Both public routes and their lowered Rust run on five input
+presentations, including duplicates and individually empty relations.
+Default \code{mini_linq!} uses written-order joins without YA; both routes
+share lower languages and agree on these pure answers. Module aliases,
+typed passes and direct quotations expose each boundary while preserving defaults.

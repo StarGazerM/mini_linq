@@ -21,7 +21,7 @@ fn annotated_query() -> rust_access_plan::Plan {
 
 #[test]
 fn pull_exposes_every_binary_operator_and_intermediate_binding() {
-    let actual = compile_pull(&annotated_query());
+    let actual = compile_pull(&annotated_query()).unwrap();
     iterator_pipeline::contract::check(&actual).unwrap();
 
     let expected: iterator_pipeline::Pipeline = syn::parse2(quote! {
@@ -44,8 +44,8 @@ fn pull_exposes_every_binary_operator_and_intermediate_binding() {
 
 #[test]
 fn pipeline_emits_the_exact_lazy_rust_adapter_pipeline() {
-    let plan = compile_pull(&annotated_query());
-    let actual = compile_iterator_pipeline(&plan);
+    let plan = compile_pull(&annotated_query()).unwrap();
+    let actual = compile_iterator_pipeline(&plan).unwrap();
 
     let expected: syn::Expr = syn::parse2(quote! {
         ::core::iter::Iterator::flatten(
@@ -94,7 +94,7 @@ fn pipeline_emits_the_exact_lazy_rust_adapter_pipeline() {
 
 #[test]
 fn emitted_operators_stream_intermediates_without_materializing_them() {
-    let iterator = compile_iterator_pipeline(&compile_pull(&annotated_query()));
+    let iterator = compile_iterator_pipeline(&compile_pull(&annotated_query()).unwrap()).unwrap();
 
     let mut shape = IteratorShape::default();
     shape.visit_expr(&iterator);
@@ -144,7 +144,7 @@ fn aggregate_style_identifier_items_remain_an_explicit_join_boundary() {
     .unwrap();
     iterator_pipeline::contract::check(&plan).unwrap();
 
-    let actual = compile_iterator_pipeline(&plan);
+    let actual = compile_iterator_pipeline(&plan).unwrap();
     let expected: syn::Expr = syn::parse2(quote! {
         ::core::iter::Iterator::flatten(
             ::core::iter::once_with(move || {

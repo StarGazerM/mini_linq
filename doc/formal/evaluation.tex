@@ -59,14 +59,10 @@ In the authored expression example, a dependent guard's placement is checked
 by intermediate counts; this database's final answer alone would not expose
 its omission.
 
-The typed production harness invokes rustc without optimization even when
-its compiler test runs under Cargo release. Public Cargo release tests also
-exercise optimized generated code. Source locations, exact commands and run
-history are in the artifact README. The manifest pairs 139 baseline rules and
-14 executable commands with 32 source fingerprints; 20 proposed physical rules
-are separately linked to their algorithms and bounded semantic model.
-\code{check.py} checks
-coverage and drift, not semantics. The pass gates share dependency analysis,
-and all experiments have bounded inputs. They support implementation
-correspondence without discharging the obligations in Section~\ref{sec:scope}
-or establishing a performance bound.
+The typed harness invokes unoptimized rustc even under Cargo release;
+public release tests exercise optimized generated code. The artifact README
+records commands. The manifest links 140 baseline rules and 14 commands to
+source fingerprints, and 20 proposed physical rules to algorithms/model functions.
+\code{check.py} checks coverage and drift, not semantics. The pass gates share
+dependency analysis; bounded experiments do not discharge Section~\ref{sec:scope}'s
+obligations or establish performance bounds.

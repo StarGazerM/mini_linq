@@ -451,7 +451,7 @@ The result is a `syn::Expr`. The target representation already specifies Rust
 closures, combinators, and local statements. The proc-macro entry is only:
 
 ```rust
-let target: syn::Expr = cq_compiler::compile_iterator_pipeline(&source);
+let target: syn::Expr = cq_compiler::compile_iterator_pipeline(&source)?;
 quote::quote!(#target).into()
 ```
 
@@ -498,10 +498,13 @@ contract::check(input)       -> span-aware syn::Result<()>
 contract::well_formed(input) -> bool
 ```
 
-The Boolean form is suitable for pass preconditions and postconditions. The
-diagnostic form is suitable for tests and tooling. Macro entries parse but do
-not eagerly call `check`; typed-pass debug contracts are the switchable
-semantic gates.
+The Boolean form is suitable for pass postconditions and tests. Public typed
+compiler entries run the diagnostic source check before lowering and return
+`syn::Result`, including the Access and Pipeline entries. Invalid parsed IR
+therefore produces the same span-aware error in debug and release builds.
+Macro entries parse and route through those checked functions; they need no
+duplicate source traversal. Debug postconditions additionally check selected
+source-to-target relations on successful compilation.
 
 The exact edge predicates are intentionally different from local checks:
 
@@ -513,9 +516,12 @@ The exact edge predicates are intentionally different from local checks:
 | RustAccessPlan -> IteratorPipeline | exact ordered operator, Rust source, predicate, binding, output, and explicit distinct correspondence |
 | IteratorPipeline -> `syn::Expr` | direct one-local-per-definition structural correspondence; rustc and runtime tests establish behavior |
 
-A local checker should not be overloaded into a whole-compiler proof. In
-particular, checking a generated `syn::File` by recursively reverse-parsing it
-would duplicate the compiler and obscure where an invariant belongs.
+A local checker is not a whole-compiler proof. Physical edge checkers inspect
+generated Rust and parse declared nested macro inputs to establish specific
+source-to-target obligations. The composed checker audits provider selection,
+current bindings, projections and resource uses; it does not validate arbitrary
+provider expansion or the complete generated API. Rust typing, provider laws
+and execution tests supply separate evidence for those remaining obligations.
 
 ## Proc-macro routing
 

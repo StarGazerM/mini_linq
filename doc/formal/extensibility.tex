@@ -1,10 +1,9 @@
 \section{Replacing compiler components}
 \label{sec:extensibility}
-A replacement supplies the source judgment, accepted domain, target contract
-and preservation property required by Theorem~\ref{thm:composition}.
-Typed passes compose through their existing endpoints; public macros select
-fixed continuations. Canonical/planned CQ lowering, lazy/materialized
-realization and direct RA quotation already exercise this separation.
+Replacements satisfy the source judgment, domain, target and preservation
+contracts of Theorem~\ref{thm:composition}. Typed endpoints and module-bound
+continuations select logical and physical paths. Materialized, lazy and block
+implementations are sibling modules; direct RA quotation bypasses planning.
 
 \paragraph{Representations and algorithms.}
 Ascent BYODS formalizes custom representations through DLDS and
@@ -36,12 +35,10 @@ Neither replacing a hash table alone nor treating a host function as an
 enumerable relation establishes that algorithm.
 
 \paragraph{Staging and quotation.}
-Compilation specializes query structure while input rows and host values
-remain residual. Direct RA/Index/Access/Pipeline entries and local quotations
-retain their binding, typing and contextual contracts; compiling a hole does
-not reconstruct CQ. The authored plan in Section~\ref{sec:constraint-planning}
-exercises these boundaries. The YA supplement maps physical choices to native
-expressions, owning Rust contexts or whole compiler segments, then specifies
-one arena backend's rules and algorithms. Its private overlay is not mandatory
-for other backends. Runtime representation choice can remain ordinary Rust;
-public macro continuations remain fixed.
+Compilation specializes query structure; rows and host values remain residual.
+Direct RA/Index/Access/Pipeline entries and local quotations retain binding,
+typing and context contracts without reconstructing CQ
+(Section~\ref{sec:constraint-planning}). The YA supplement maps choices to native
+expressions, owning Rust contexts or compiler segments, with rules and algorithms
+for one optional arena backend. Runtime representation choice remains ordinary
+Rust; the block backend uses module-bound macro continuations.

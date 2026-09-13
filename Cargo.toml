@@ -12,6 +12,7 @@ publish = false
 members = [
     "crates/cq-ir",
     "crates/cq-compiler",
+    "crates/cq-storage",
     "crates/mini-linq",
     "workloads",
 ]
@@ -27,6 +28,7 @@ version = "0.1.0"
 contracts = "=0.6.10"
 cq-compiler = { path = "crates/cq-compiler" }
 cq-ir = { path = "crates/cq-ir" }
+cq-storage = { path = "crates/cq-storage" }
 mini-linq = { path = "crates/mini-linq" }
 proc-macro2 = "1"
 prettyplease = "0.2"

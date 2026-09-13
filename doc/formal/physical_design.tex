@@ -52,13 +52,16 @@ consumer-local filters, immutable survivor views, and exact group accesses.
 Exact reduction and conservative predicate transfer have separate evidence
 and preservation contracts. Administrative rules map to algorithm dispatches,
 runtime scan steps, Rust records, and existing compiler extension points.
-The production compiler remains the exact hash-based baseline; a bounded
-executable semantic model and a native macro-composition witness accompany the design.
+An implemented integer block backend exercises exact reduction, independently
+compiled access choices, reusable exact keys, and caller-owned macro aliases
+through declared contextual syntax within the existing physical stage order.
+A bounded semantic model accompanies the fuller proposed overlay.
 \end{abstract}
 \noindent Companion to \href{compiler.pdf}{\emph{Administrative Query Compilation
 Across Embedded Languages}}. Source entry: \code{physical_design.tex};
 rules: \code{ya_physical.tex}; executable model: \code{physical_model.py}.
 \input{architecture_placement}
+\input{block_implementation}
 \input{ya_physical}
 \begin{thebibliography}{99}
 \raggedright

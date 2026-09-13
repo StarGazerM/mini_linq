@@ -44,10 +44,10 @@ struct ExposePipelines;
 impl VisitMut for ExposePipelines {
     fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
         if let syn::Expr::Macro(m) = expr {
-            if m.mac.path.segments.last().unwrap().ident == "pull" {
+            if m.mac.path.segments.last().unwrap().ident == "collect_access" {
                 let source: rust_access_plan::Plan = syn::parse2(m.mac.tokens.clone()).unwrap();
-                let target = cq_compiler::compile_pull(&source);
-                *expr = syn::parse_quote!(::mini_linq::iterator_pipeline! { #target });
+                let target = cq_compiler::compile_pull(&source).unwrap();
+                *expr = syn::parse_quote!(::mini_linq::collect_pipeline! { #target });
                 return;
             }
         }
@@ -59,10 +59,10 @@ struct LowerPipelines;
 impl VisitMut for LowerPipelines {
     fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
         if let syn::Expr::Macro(m) = expr {
-            if m.mac.path.segments.last().unwrap().ident == "iterator_pipeline" {
+            if m.mac.path.segments.last().unwrap().ident == "collect_pipeline" {
                 let source: iterator_pipeline::Pipeline =
                     syn::parse2(m.mac.tokens.clone()).unwrap();
-                *expr = cq_compiler::compile_iterator_pipeline(&source);
+                *expr = cq_compiler::compile_collect_pipeline(&source).unwrap();
                 return;
             }
         }

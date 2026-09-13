@@ -192,7 +192,7 @@ impl VisitMut for PullExpander {
         self.expansions += 1;
         let plan: cq_ir::rust_access_plan::Plan = syn::parse2(source.mac.tokens.clone()).unwrap();
         cq_ir::rust_access_plan::contract::check(&plan).unwrap();
-        let lowered = compile_pull(&plan);
+        let lowered = compile_pull(&plan).unwrap();
         cq_ir::iterator_pipeline::contract::check(&lowered).unwrap();
         *statement = syn::parse2(quote::quote! {
             ::mini_linq::iterator_pipeline! { #lowered }
@@ -221,6 +221,6 @@ impl VisitMut for IteratorPipelineExpander {
         let plan: cq_ir::iterator_pipeline::Pipeline =
             syn::parse2(source.mac.tokens.clone()).unwrap();
         cq_ir::iterator_pipeline::contract::check(&plan).unwrap();
-        *statement = syn::Stmt::Expr(compile_iterator_pipeline(&plan), None);
+        *statement = syn::Stmt::Expr(compile_iterator_pipeline(&plan).unwrap(), None);
     }
 }

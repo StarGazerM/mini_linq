@@ -393,7 +393,7 @@ fn relational_key_columns(
 pub fn compile_index_requirements(source: &index_requirements::Module) -> syn::Result<syn::File> {
     if crate::relational_to_indexes::uses_result_index_route(&source.relational_plan) {
         crate::relational_to_indexes::check_coverage(source)?;
-        return crate::indexes_to_rust::compile_lazy(source);
+        return crate::physical::lazy::compile(source);
     }
     if source
         .indexes

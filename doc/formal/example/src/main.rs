@@ -26,27 +26,37 @@ mini_linq::planned_query! {
 struct ExposePipelines;
 impl VisitMut for ExposePipelines {
     fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
-        if mac.path.segments.last().unwrap().ident == "pull" {
-            let access: rust_access_plan::Plan = syn::parse2(mac.tokens.clone()).unwrap();
-            rust_access_plan::contract::check(&access).unwrap();
-            let target = cq_compiler::compile_pull(&access);
-            iterator_pipeline::contract::check(&target).unwrap();
-            mac.path = syn::parse_quote!(::mini_linq::iterator_pipeline);
-            mac.tokens = quote!(#target);
-        }
+        let next = match mac.path.segments.last().unwrap().ident.to_string().as_str() {
+            "pull" => syn::parse_quote!(::mini_linq::iterator_pipeline),
+            "collect_access" => syn::parse_quote!(::mini_linq::collect_pipeline),
+            _ => return,
+        };
+        let access: rust_access_plan::Plan = syn::parse2(mac.tokens.clone()).unwrap();
+        rust_access_plan::contract::check(&access).unwrap();
+        let target = cq_compiler::compile_pull(&access).unwrap();
+        iterator_pipeline::contract::check(&target).unwrap();
+        mac.path = next;
+        mac.tokens = quote!(#target);
     }
 }
+
+fn lower_pipeline(mac: &syn::Macro) -> Option<syn::Expr> {
+    let lower = match mac.path.segments.last().unwrap().ident.to_string().as_str() {
+        "iterator_pipeline" => cq_compiler::compile_iterator_pipeline,
+        "collect_pipeline" => cq_compiler::compile_collect_pipeline,
+        _ => return None,
+    };
+    let pipeline: iterator_pipeline::Pipeline = syn::parse2(mac.tokens.clone()).unwrap();
+    iterator_pipeline::contract::check(&pipeline).unwrap();
+    Some(lower(&pipeline).unwrap())
+}
+
 struct LowerPipelines;
 impl VisitMut for LowerPipelines {
     fn visit_stmt_mut(&mut self, stmt: &mut syn::Stmt) {
         if let syn::Stmt::Macro(m) = stmt {
-            if m.mac.path.segments.last().unwrap().ident == "iterator_pipeline" {
-                let pipeline: iterator_pipeline::Pipeline =
-                    syn::parse2(m.mac.tokens.clone()).unwrap();
-                *stmt = syn::Stmt::Expr(
-                    cq_compiler::compile_iterator_pipeline(&pipeline),
-                    m.semi_token,
-                );
+            if let Some(expr) = lower_pipeline(&m.mac) {
+                *stmt = syn::Stmt::Expr(expr, m.semi_token);
                 return;
             }
         }
@@ -54,10 +64,8 @@ impl VisitMut for LowerPipelines {
     }
     fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
         if let syn::Expr::Macro(m) = expr {
-            if m.mac.path.segments.last().unwrap().ident == "iterator_pipeline" {
-                let pipeline: iterator_pipeline::Pipeline =
-                    syn::parse2(m.mac.tokens.clone()).unwrap();
-                *expr = cq_compiler::compile_iterator_pipeline(&pipeline);
+            if let Some(target) = lower_pipeline(&m.mac) {
+                *expr = target;
                 return;
             }
         }

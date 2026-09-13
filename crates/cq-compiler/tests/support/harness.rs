@@ -92,7 +92,7 @@ fn assert_unique_pull_plan(file: &syn::File, fixture: &PhysicalFixture) {
         fixture.program_name,
     );
 
-    let actual_pipeline = compile_pull(&actual);
+    let actual_pipeline = compile_pull(&actual).unwrap();
     iterator_pipeline::contract::check(&actual_pipeline).unwrap();
     let expected_pipeline: iterator_pipeline::Pipeline =
         syn::parse2(fixture.iterator_pipeline.clone()).unwrap();
@@ -103,7 +103,7 @@ fn assert_unique_pull_plan(file: &syn::File, fixture: &PhysicalFixture) {
         fixture.program_name,
     );
 
-    let _: syn::Expr = compile_iterator_pipeline(&actual_pipeline);
+    let _: syn::Expr = compile_iterator_pipeline(&actual_pipeline).unwrap();
 }
 
 fn assert_query_plan_borrows_stored_tuples(plan: &rust_access_plan::Plan, program_name: &str) {
@@ -139,9 +139,9 @@ impl<'ast> Visit<'ast> for QueryTupleCopyAdapters {
 pub fn assert_pull_pipeline_lowers_to_iterator_expression(source: proc_macro2::TokenStream) {
     let source: rust_access_plan::Plan = syn::parse2(source).unwrap();
     rust_access_plan::contract::check(&source).unwrap();
-    let pipeline = compile_pull(&source);
+    let pipeline = compile_pull(&source).unwrap();
     iterator_pipeline::contract::check(&pipeline).unwrap();
-    let _: syn::Expr = compile_iterator_pipeline(&pipeline);
+    let _: syn::Expr = compile_iterator_pipeline(&pipeline).unwrap();
 }
 
 fn assert_staged_api(
@@ -1120,8 +1120,7 @@ impl VisitMut for IteratorPipelineExpander {
             self.pull_expansions += 1;
             let lowered =
                 syn::parse2::<rust_access_plan::Plan>(macro_invocation.tokens).and_then(|plan| {
-                    rust_access_plan::contract::check(&plan)?;
-                    let target = compile_pull(&plan);
+                    let target = compile_pull(&plan)?;
                     iterator_pipeline::contract::check(&target)?;
                     syn::parse2(quote! {
                         ::mini_linq::iterator_pipeline! { #target }
@@ -1137,10 +1136,7 @@ impl VisitMut for IteratorPipelineExpander {
         } else if is_absolute_mini_linq_iterator_pipeline(&macro_invocation.path) {
             self.pipeline_expansions += 1;
             let lowered = syn::parse2::<iterator_pipeline::Pipeline>(macro_invocation.tokens)
-                .and_then(|plan| {
-                    iterator_pipeline::contract::check(&plan)?;
-                    Ok(compile_iterator_pipeline(&plan))
-                });
+                .and_then(|plan| compile_iterator_pipeline(&plan));
             match lowered {
                 Ok(lowered) => *statement = syn::Stmt::Expr(lowered, None),
                 Err(error) => self.error = Some(error),
@@ -1229,28 +1225,16 @@ pub fn assert_malformed_sources_fail_direct_syn_parsing() {
     );
 }
 
-#[cfg(debug_assertions)]
-pub fn assert_pull_debug_precondition_rejects_invalid_typed_source() {
+pub fn assert_pull_rejects_invalid_typed_source() {
     let source: rust_access_plan::Plan =
         syn::parse2(fixtures::invalid_sources().rust_access_plan).unwrap();
     assert!(rust_access_plan::contract::check(&source).is_err());
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = compile_pull(&source);
-    }));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compile_pull(&source)));
     assert!(
-        result.is_err(),
-        "compile_pull must enforce its semantic precondition when debug contracts are enabled",
+        result.is_ok_and(|result| result.is_err()),
+        "compile_pull must return a diagnostic without panicking in every build profile",
     );
-}
-
-#[cfg(not(debug_assertions))]
-pub fn assert_pull_debug_precondition_is_disabled() {
-    let source: rust_access_plan::Plan =
-        syn::parse2(fixtures::invalid_sources().rust_access_plan).unwrap();
-    assert!(rust_access_plan::contract::check(&source).is_err());
-
-    let _: iterator_pipeline::Pipeline = compile_pull(&source);
 }
 
 pub fn assert_fixtures_well_formed() {
@@ -1270,8 +1254,8 @@ pub fn assert_fixtures_well_formed() {
         let pipeline: iterator_pipeline::Pipeline =
             syn::parse2(fixture.iterator_pipeline.clone()).unwrap();
         iterator_pipeline::contract::check(&pipeline).unwrap();
-        assert_eq!(compile_pull(&access_plan), pipeline);
-        let _: syn::Expr = compile_iterator_pipeline(&pipeline);
+        assert_eq!(compile_pull(&access_plan).unwrap(), pipeline);
+        let _: syn::Expr = compile_iterator_pipeline(&pipeline).unwrap();
         assert_pull_pipeline_lowers_to_iterator_expression(fixture.rust_access_plan);
         let runtime_assertions = fixture.runtime_assertions;
         let _: syn::Block = syn::parse2(quote!({ #runtime_assertions })).unwrap();

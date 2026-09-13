@@ -17,13 +17,13 @@ pub(crate) fn compile_indexed(
     impl VisitMut for Lower {
         fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
             if let syn::Expr::Macro(m) = expr {
-                if m.mac.path.segments.last().unwrap().ident == "pull" {
+                if m.mac.path.segments.last().unwrap().ident == "collect_access" {
                     let access =
                         syn::parse2::<cq_ir::rust_access_plan::Plan>(m.mac.tokens.clone()).unwrap();
                     cq_ir::rust_access_plan::contract::check(&access).unwrap();
-                    let pipeline = cq_compiler::compile_pull(&access);
+                    let pipeline = cq_compiler::compile_pull(&access).unwrap();
                     cq_ir::iterator_pipeline::contract::check(&pipeline).unwrap();
-                    *expr = cq_compiler::compile_iterator_pipeline(&pipeline);
+                    *expr = cq_compiler::compile_collect_pipeline(&pipeline).unwrap();
                     self.count += 1;
                     return;
                 }

@@ -42,23 +42,23 @@ IX-Result	implementation	crates/cq-compiler/src/relational_to_indexes.rs	fn comp
 IX-Other	implementation	crates/cq-compiler/src/relational_to_indexes.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
 IX-Base	implementation	crates/cq-compiler/src/staff_r1.rs	fn compile_relational_plan	Correspondence location; proof obligation C-Conformance remains.
 IX-Module	implementation	crates/cq-compiler/src/relational_to_indexes.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
-ST-Key	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn build_index	Correspondence location; proof obligation C-Conformance remains.
-ST-Bucket	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn build_index	Correspondence location; proof obligation C-Conformance remains.
-M-Unit	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
-M-Rename	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
-M-Project	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
-M-Select	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
-M-Extend	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
-M-JoinFor	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
-M-JoinIf	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
-M-Semi	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
-M-Def	implementation	crates/cq-compiler/src/indexes_to_rust.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
-L-Root	implementation	crates/cq-compiler/src/indexes_to_rust/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
-L-Unit	implementation	crates/cq-compiler/src/indexes_to_rust/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
-L-Join	implementation	crates/cq-compiler/src/indexes_to_rust/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
-L-Select	implementation	crates/cq-compiler/src/indexes_to_rust/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
-L-Extend	implementation	crates/cq-compiler/src/indexes_to_rust/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
-L-Output	implementation	crates/cq-compiler/src/indexes_to_rust/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
+ST-Key	implementation	crates/cq-compiler/src/physical/materialized.rs	fn build_index	Correspondence location; proof obligation C-Conformance remains.
+ST-Bucket	implementation	crates/cq-compiler/src/physical/materialized.rs	fn build_index	Correspondence location; proof obligation C-Conformance remains.
+M-Unit	implementation	crates/cq-compiler/src/physical/materialized.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
+M-Rename	implementation	crates/cq-compiler/src/physical/materialized.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
+M-Project	implementation	crates/cq-compiler/src/physical/materialized.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
+M-Select	implementation	crates/cq-compiler/src/physical/materialized.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
+M-Extend	implementation	crates/cq-compiler/src/physical/materialized.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
+M-JoinFor	implementation	crates/cq-compiler/src/physical/materialized.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
+M-JoinIf	implementation	crates/cq-compiler/src/physical/materialized.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
+M-Semi	implementation	crates/cq-compiler/src/physical/materialized.rs	fn local_plan	Correspondence location; proof obligation C-Conformance remains.
+M-Def	implementation	crates/cq-compiler/src/physical/materialized.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
+L-Root	implementation	crates/cq-compiler/src/physical/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
+L-Unit	implementation	crates/cq-compiler/src/physical/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
+L-Join	implementation	crates/cq-compiler/src/physical/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
+L-Select	implementation	crates/cq-compiler/src/physical/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
+L-Extend	implementation	crates/cq-compiler/src/physical/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
+L-Output	implementation	crates/cq-compiler/src/physical/lazy.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
 D-Guard	implementation	crates/cq-compiler/src/cq_to_relational/dependencies.rs	pub fn analyze	Correspondence location; proof obligation C-Conformance remains.
 D-Bind	implementation	crates/cq-compiler/src/cq_to_relational/dependencies.rs	pub fn analyze	Correspondence location; proof obligation C-Conformance remains.
 D-Atom	implementation	crates/cq-compiler/src/cq_to_relational/dependencies.rs	pub fn analyze	Correspondence location; proof obligation C-Conformance remains.
@@ -122,18 +122,19 @@ G-Seen	abstract	-	-	Demand-machine rule; Rust adapter adequacy is conditional, n
 G-Stop	abstract	-	-	Demand-machine rule; Rust adapter adequacy is conditional, not an implemented IR.
 G-SourceStop	abstract	-	-	Demand-machine rule; Rust adapter adequacy is conditional, not an implemented IR.
 G-Delay	abstract	-	-	Demand-machine rule; Rust adapter adequacy is conditional, not an implemented IR.
-IP-Root	implementation	crates/cq-compiler/src/passes.rs	fn lower_root_scan	Correspondence location; proof obligation C-Conformance remains.
-IP-Seed	implementation	crates/cq-compiler/src/passes.rs	pub fn compile_pull	Correspondence location; proof obligation C-Conformance remains.
-IP-Join	implementation	crates/cq-compiler/src/passes.rs	fn lower_operator(	Correspondence location; proof obligation C-Conformance remains.
-IP-Filter	implementation	crates/cq-compiler/src/passes.rs	fn lower_operator(	Correspondence location; proof obligation C-Conformance remains.
-IP-Output	implementation	crates/cq-compiler/src/passes.rs	pub fn compile_pull	Correspondence location; proof obligation C-Conformance remains.
-R-Unit	implementation	crates/cq-compiler/src/passes.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
-R-Scan	implementation	crates/cq-compiler/src/passes.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
-R-Join	implementation	crates/cq-compiler/src/passes.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
-R-Filter	implementation	crates/cq-compiler/src/passes.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
-R-Project	implementation	crates/cq-compiler/src/passes.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
-R-Distinct	implementation	crates/cq-compiler/src/passes.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
-R-Block	implementation	crates/cq-compiler/src/passes.rs	pub fn compile_iterator_pipeline	Correspondence location; proof obligation C-Conformance remains.
+IP-Root	implementation	crates/cq-compiler/src/pull.rs	fn lower_root_scan	Correspondence location; proof obligation C-Conformance remains.
+IP-Seed	implementation	crates/cq-compiler/src/pull.rs	pub fn compile_pull	Correspondence location; proof obligation C-Conformance remains.
+IP-Join	implementation	crates/cq-compiler/src/pull.rs	fn lower_operator(	Correspondence location; proof obligation C-Conformance remains.
+IP-Filter	implementation	crates/cq-compiler/src/pull.rs	fn lower_operator(	Correspondence location; proof obligation C-Conformance remains.
+IP-Output	implementation	crates/cq-compiler/src/pull.rs	pub fn compile_pull	Correspondence location; proof obligation C-Conformance remains.
+R-Unit	implementation	crates/cq-compiler/src/pipeline.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
+R-Scan	implementation	crates/cq-compiler/src/pipeline.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
+R-Join	implementation	crates/cq-compiler/src/pipeline.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
+R-Filter	implementation	crates/cq-compiler/src/pipeline.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
+R-Project	implementation	crates/cq-compiler/src/pipeline.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
+R-Distinct	implementation	crates/cq-compiler/src/pipeline.rs	fn lower_operator_to_rust	Correspondence location; proof obligation C-Conformance remains.
+R-Block	implementation	crates/cq-compiler/src/pipeline.rs	pub fn compile_iterator_pipeline	Correspondence location; proof obligation C-Conformance remains.
+R-Set	implementation	crates/cq-compiler/src/pipeline.rs	pub fn compile_collect_pipeline	Eager completed-set endpoint absorbs terminal Distinct; separate from cursor adequacy.
 ST-Entry	implementation	crates/mini-linq/src/lib.rs	pub fn planned_query	Representative entry; the full fixed-continuation table is in staging.tex.
 ST-Hole	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy is an explicit obligation.
 ST-Rust	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy is an explicit obligation.
@@ -158,3 +159,13 @@ RX-Block	abstract	-	-	Proposed physical design only; alg:physical-scan; planned 
 RX-Row	abstract	-	-	Proposed physical design only; alg:physical-scan; planned reject_row; Coarse row filtering.
 RX-Probe	abstract	-	-	Proposed physical design only; alg:physical-scan; planned probe; Exact witness rejection.
 RX-Keep	abstract	-	-	Proposed physical design only; alg:physical-scan; planned keep; Persistent survivor selection.
+CP-Defer	implementation	crates/cq-compiler/src/passes.rs	pub fn compile_deferred_indexes	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Realize	implementation	crates/cq-compiler/src/passes.rs	pub fn compile_composed	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Bind	implementation	crates/cq-compiler/src/physical/composed/lower.rs	pub(super) fn context(	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Build	implementation	crates/cq-compiler/src/physical/semijoin.rs	fn build_keys(	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Reuse	implementation	crates/cq-compiler/src/physical/composed/resources.rs	pub(super) fn analyze(	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Exact	implementation	crates/cq-compiler/src/physical/semijoin.rs	pub fn compile_exact_semijoin	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Zone	implementation	crates/cq-compiler/src/physical/semijoin.rs	pub fn compile_zone_semijoin	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Hash	implementation	crates/cq-compiler/src/physical/joins.rs	pub fn compile_hash_join	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Nested	implementation	crates/cq-compiler/src/physical/joins.rs	pub fn compile_nested_loop_join	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+CP-Store	implementation	crates/cq-compiler/src/physical/composed/lower.rs	fn materialize(	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.

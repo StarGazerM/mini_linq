@@ -23,7 +23,12 @@ fn accepts(source: &ir::Module, file: &syn::File, is_lazy: bool) -> bool {
     if is_lazy {
         lazy(source, file).is_ok()
     } else {
-        materialized(source, file).is_ok()
+        materialized_with(
+            source,
+            file,
+            &syn::parse_quote!(::mini_linq::collect_access),
+        )
+        .is_ok()
     }
 }
 
@@ -40,6 +45,26 @@ fn build(file: &mut syn::File) -> &mut syn::Block {
             _ => None,
         })
         .unwrap()
+}
+
+#[test]
+fn configured_access_path_does_not_weaken_storage_or_clause_checks() {
+    let (source, _) = fixture(false);
+    let path = syn::parse_quote!(custom::access);
+    let mut file = crate::compile_materialized_with(&source, &path).unwrap();
+    assert!(materialized_with(&source, &file, &path).is_ok());
+    assert!(
+        materialized_with(
+            &source,
+            &file,
+            &syn::parse_quote!(::mini_linq::collect_access)
+        )
+        .is_err()
+    );
+    build(&mut file)
+        .stmts
+        .insert(3, syn::parse_quote!(input0.clear();));
+    assert!(materialized_with(&source, &file, &path).is_err());
 }
 
 #[test]
@@ -136,7 +161,9 @@ fn deleting_a_zero_binding_computation_is_detected_even_when_access_is_well_form
             if self.0 {
                 return;
             }
-            let Some(mut plan) = pull_macro(mac) else {
+            let Some(mut plan) = pull_macro(mac)
+                .or_else(|| access_macro(mac, &syn::parse_quote!(::mini_linq::collect_access)))
+            else {
                 return;
             };
             if !plan
@@ -251,7 +278,12 @@ fn base_and_result_indexes_with_the_same_name_have_separate_representations() {
     };
     ir::contract::check(&indexed).unwrap();
     let target = crate::compile_materialized(&indexed).unwrap();
-    materialized(&indexed, &target).unwrap();
+    materialized_with(
+        &indexed,
+        &target,
+        &syn::parse_quote!(::mini_linq::collect_access),
+    )
+    .unwrap();
 }
 
 #[test]

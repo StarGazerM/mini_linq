@@ -248,7 +248,7 @@ impl VisitMut for IteratorPipelineExpander {
             self.pull_expansions += 1;
             let lowered =
                 syn::parse2::<rust_access_plan::Plan>(macro_invocation.tokens).and_then(|plan| {
-                    let target = compile_pull(&plan);
+                    let target = compile_pull(&plan)?;
                     syn::parse2(quote! {
                         ::mini_linq::iterator_pipeline! { #target }
                     })
@@ -263,7 +263,7 @@ impl VisitMut for IteratorPipelineExpander {
         } else if is_iterator_pipeline(&macro_invocation.path) {
             self.pipeline_expansions += 1;
             let lowered = syn::parse2::<iterator_pipeline::Pipeline>(macro_invocation.tokens)
-                .map(|plan| compile_iterator_pipeline(&plan));
+                .and_then(|plan| compile_iterator_pipeline(&plan));
             match lowered {
                 Ok(expression) => *statement = syn::Stmt::Expr(expression, None),
                 Err(error) => self.error = Some(error),

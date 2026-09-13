@@ -16,15 +16,74 @@ same Access language with distinct native expressions. Build-time representation
 selection can be an ordinary runtime Rust branch. Conservative transfer owns a
 whole region; delayed expansion owns its group handles and intermediate semantics.
 Zone-map I/O savings require control of the input/scan context before payload reads.
-The default macros have fixed continuations; alternative routing requires wiring
-an entry or composing the exported typed passes.
+Language entries emit relative `mini_linq::next_stage!` calls, bound by ordinary
+module re-exports in a facade aliased as `mini_linq` at the invocation site.
+The established entries parse their declared languages at the macro boundary.
+The composed route now declares contextual operator and provider inputs in
+`cq-ir`; frontend macros parse those types and compiler functions consume them.
+The [contextual lowering design](../CONTEXTUAL-PHYSICAL-LOWERING.md) specifies
+their necessity and laws, resolving the earlier
+[boundary audit](../PHYSICAL-BOUNDARY-AUDIT.md). Public typed compiler entries
+return diagnostic errors for invalid parsed IR in debug and release builds. The
+materialized backend accepts `access path;`. Both materialized and block physical
+entries now require an owned-set Access continuation, defaulting to
+`collect_access!`. It uses the existing Pipeline and folds terminal Distinct into
+one HashSet sink. Existing `pull!` and `iterator_pipeline!` remain iterator-valued.
+
+The [physical implementation](block_implementation.tex) emits distinct exact-row
+and zone-descriptor semijoin paths. `physical_plan!` and `PhysicalOptions` select
+providers per input, construction per materialized result, and recipes per
+semijoin or join. `keys` and `key_sets` select ordinary exact collection families.
+Resource analysis shares constructions by current right version, ordered
+separator, recipe path and collection path. A zone recipe builds exact keys and
+a summary together; a different exact recipe does not implicitly share that build.
+`BlockChoices`, `blocked_plan!` and `zonemap_plan!` remain uniform-block conveniences.
+
+The [module design](../COMPILER-STRUCTURE.md) makes materialized, lazy, and
+composed compilation siblings under `physical`. Layout, resource planning,
+invocation emission, query API and auditing have separate modules. Open provider
+and recipe macros own concrete operations; hash and nested-loop join recipes are
+independently selectable. `cq-storage` holds `BlockStore`, independent `BlockMask`,
+summaries and passive counters. `compile_deferred_indexes` preserves the entire
+RA source with an empty IndexRequirements overlay; `compile_composed` realizes
+that domain and rejects every written requirement. Contextual syntax retains an
+existing RA definition under only its free physical binding assumptions:
+`Context ::= Definition { Binding* }` and
+`Binding ::= Atom [=> Path] { Expr };`. A provider path supplies row access;
+an omitted path binds exact projected keys under the selected recipe's
+representation law. Key construction is `q = project r keep { K };` with one
+source binding; reduction is `t = semijoin l with q;` with row and resource
+bindings. The producer checks the actual projection identity, freshness against
+normalized source identifiers, and `l semijoin r = l semijoin project_K(r)`.
+It does not trust a repeated origin assertion. This is declared syntax within
+realization, not another whole-program relational algebra.
+Local contracts derive paired key fields and output layout. Configured lexical
+macros bind storage, continuation, exact collection and optional instrumentation
+once; these are absent from semantic Context and provider Operation syntax.
+`run` omits statistics operations; `run_with_stats` enables them through the same
+lowering. Operator control precedes Access; provider
+calls in native expressions may expand later within the Rust context.
+`physical_plan!` forwards configured IndexRequirements to relative
+`mini_linq::composed!`, preserving the independently replaceable physical edge.
+Resources shared across contexts must be uniformly consumable, including summary
+meaning and representation; exact keys and immutable reads alone are insufficient.
 
 Named RA and its exact semijoin meaning stay intact. Within one arena backend
 family, a proposed private overlay selects providers and access operations.
-It is not a universal trait or a mandatory IR for other implementations.
+It is not an approved IR addition or a mandatory stage for other implementations.
+Any IR proposal first needs a necessity argument, formal language and pass
+contracts, and an explicit position respecting the existing stage order.
 Exact mode preserves every RA version;
 Transfer mode is limited to a checked YA region and certifies final answers.
-The production compiler has not acquired either overlay entry in this change.
+The contextual block backend implements exact reduction and selected access, but
+does not implement the entire administrative overlay or its Transfer mode.
+Its inputs can mix native hash sets, native sorted sets and block stores. The
+block provider emits store/mask association and selected access; the storage
+crate has no relational operators or version-aware view wrapper. The compiler
+audit reconstructs versioned demands, paired key maps and selected invocation
+paths. Provider expansion can reject unsupported operations; Rust checks expanded
+types and borrowing. Exact membership, sound rejection and payload-access order
+remain algorithm and provider laws, rather than facts certified by macro names.
 
 - Exact membership: hash members, hash groups, or an injectively encoded dense bitmap.
 - Conservative filtering: whole-tuple Bloom filters and coordinate bounds, with explicit source emptiness.
@@ -40,14 +99,21 @@ The production compiler has not acquired either overlay entry in this change.
 its numbered algorithm, proposed handler name, and any semantic-model function.
 A dash means the model does not implement that rule. All 20 new rules are
 explicitly **abstract/proposed** in the combined [rules.tsv](rules.tsv).
-The paper's compilation table identifies existing Rust extension points:
+The contextual section separately states CP-Defer, CP-Realize, CP-Bind, CP-Build,
+CP-Reuse, CP-Exact, CP-Zone, CP-Hash, CP-Nested and CP-Store, with grammar, judgments,
+algorithm and source correspondence. CP-Build consumes an existing Project
+definition; CP-Exact and CP-Zone consume a Semijoin with its projected resource.
+CP-Realize checks correspondence to the original RA including that decomposition.
+Their source correspondence is recorded in `rules.tsv`;
+they are distinct from the proposed PA overlay. The table below identifies that
+larger overlay's existing Rust extension points:
 
 | Boundary | Current code | Proposed responsibility |
 | --- | --- | --- |
 | Index demand | [relational_to_indexes.rs](../../crates/cq-compiler/src/relational_to_indexes.rs) `compile`, `columns` | Aggregate roles and retain both key-position maps before provider selection. |
-| Data construction | [indexes_to_rust.rs](../../crates/cq-compiler/src/indexes_to_rust.rs) `compile`, `build_index` | Create arenas, selections, versioned provider handles and construction-derived coverage evidence. |
-| Actual access | [indexes_to_rust.rs](../../crates/cq-compiler/src/indexes_to_rust.rs) `local_plan` | Emit exact Reduce or certified Transfer, and exact Lookup/Expand/Exists operations. |
-| Independent check | [physical.rs](../../crates/cq-compiler/src/pass_contracts/physical.rs) `materialized`, `check_indexes`, `check_materialized_clause` | Validate overlay transitions, source versions, evidence, temporary consumption and emission templates. |
+| Data construction | [materialized.rs](../../crates/cq-compiler/src/physical/materialized.rs) `compile`, `build_index` | Create arenas, selections, versioned provider handles and construction-derived coverage evidence. |
+| Actual access | [materialized.rs](../../crates/cq-compiler/src/physical/materialized.rs) `local_plan` | Emit exact Reduce or certified Transfer, and exact Lookup/Expand/Exists operations. |
+| Independent check | [physical.rs](../../crates/cq-compiler/src/pass_contracts/physical.rs) `materialized_with`, `check_indexes`, `check_materialized_clause` | Validate overlay transitions, source versions, evidence, temporary consumption and emission templates. |
 | Pass entry | [passes.rs](../../crates/cq-compiler/src/passes.rs) `compile_materialized` | Keep the current entry as baseline; the arena implementation can use a separately checked private overlay feeding existing local Access/Pipeline quotation. |
 
 The supplement spells out the state fields, provider records, missing Rust
@@ -76,9 +142,9 @@ make -C doc/formal model
 make -C doc/formal example
 ```
 
-[check.py](check.py) checks the 159-rule combined inventory, all 20 physical
-rule-to-algorithm mappings, available model function names, and the existing
-32 production source fingerprints. It detects inventory drift, not semantic
+[check.py](check.py) checks the 170-rule combined inventory, all 20 physical
+rule-to-algorithm mappings, available model function names, and the recorded
+source fingerprints. It detects inventory drift, not semantic
 proofs or complete compiler correspondence.
 
 [physical_model.py](physical_model.py) checks 4,096 exhaustive binary-domain
@@ -101,5 +167,11 @@ This model is a bounded runtime-semantics prototype. It does not implement the
 entire administrative command/evidence checker, Rust provider code, dense
 bitmap backend, persistent block storage, or performance measurements. Those
 are implementation/validation obligations of the completed design, not claims
-about the current production compiler. Existing source fingerprints remain
-unchanged; no full-workspace validation is implied by the focused examples.
+about the entire current compiler. Source fingerprints now include the block
+composition, data structures and acceptance tests; see the
+[implementation guide](../BLOCK-ACCESS-IMPLEMENTATION.md) for its separate gate.
+The heterogeneous acceptance cases compare exact, zone and alternate-join routes
+against an independent oracle on 4,096 databases. Other cases exercise caller-owned
+provider macros, native-only execution, explicit intermediate block construction,
+current RHS versions and selected-row non-resurrection. These cases and compiler
+mutation checks supply separate evidence; arbitrary replacements still owe their laws.

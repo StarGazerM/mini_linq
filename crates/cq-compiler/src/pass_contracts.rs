@@ -1,5 +1,7 @@
 //! Small semantic relations used by the typed compiler-pass contracts.
 
+pub(crate) mod composed;
+
 pub(crate) mod ordered;
 pub(crate) mod physical;
 pub(crate) mod planned_join;
@@ -289,7 +291,7 @@ pub(crate) fn physical_input_is_supported(source: &index_requirements::Module) -
     if crate::relational_to_indexes::uses_result_index_route(&source.relational_plan) {
         return basic_left_deep_plan(&source.relational_plan)
             && crate::relational_to_indexes::check_coverage(source).is_ok()
-            && crate::indexes_to_rust::lazy_supported(source);
+            && crate::physical::lazy::supported(source);
     }
     source.indexes.iter().all(|i| i.result_token.is_none())
         && basic_left_deep_plan(&source.relational_plan)
@@ -468,6 +470,33 @@ pub(crate) fn iterator_pipeline_rust_is_exact(
     }) else {
         return false;
     };
+    target == &expected
+}
+
+/// Independently check the eager set endpoint. Only the returned terminal
+/// distinct operator is implemented by collection; preceding operators retain
+/// their exact adapter expressions and source order.
+pub(crate) fn collect_pipeline_rust_is_exact(
+    source: &iterator_pipeline::Pipeline,
+    target: &syn::Expr,
+) -> bool {
+    if !iterator_pipeline::contract::well_formed(source) {
+        return false;
+    }
+    let Some((last, prefix)) = source.definitions.split_last() else {
+        return false;
+    };
+    let iterator_pipeline::Operator::Distinct(distinct) = &last.operator else {
+        return false;
+    };
+    let locals = prefix.iter().map(expected_rust_local);
+    let input = &distinct.input_stream;
+    let result = &source.return_stream.stream;
+    let expected: syn::Expr = syn::parse_quote! {{
+        #(#locals)*
+        let #result: ::std::collections::HashSet<_> = ::core::iter::Iterator::collect(#input);
+        #result
+    }};
     target == &expected
 }
 

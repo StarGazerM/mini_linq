@@ -130,12 +130,12 @@ and $E=\operatorname{exists}(\mathcal S(r),K,u)$:
 
 \Rule{M-Semi}{}{l\ltimes r\Downarrow_M[s_l;\mathsf{if}(E);h_V]}
 \end{mathpar}
-Pull adds Project/Distinct to each region; its sources, patterns, and clones
+Pull adds Project/Distinct; the set endpoint fuses Distinct into collection. Sources and clones
 are already Rust. Join-output/semijoin-probe statistics are excluded from set
 observations. File state $(S,\mathcal S)$ contains statements and store names.
 Normalize inputs and build extra base indexes first. Let $t_r(A)$ be
 $\mathsf{let}\ S_r:\mathsf{HashSet}(\operatorname{Row}_{\Delta(r).V})
-=\mathsf{collect}(\mathsf{pull}\{A\})$, followed by buildIndexes($r$).
+=\mathsf{collectAccess}\{A\}$, followed by buildIndexes($r$).
 \[
 \Rule{M-Def}{\Sigma;\Delta;\mathcal S\vdash o\Downarrow_M A\quad r\text{ fresh in }\mathcal S}
  {(S,\mathcal S,r=o)\Rightarrow_M(S\concat t_r(A),\mathcal S[r\mapsto S_r])}.
@@ -172,8 +172,9 @@ whole blocks. Projection still deduplicates into a new arena.
 A separate Transfer mode omits sweep probes and preserves
 $\pi_{X_i}(\bowtie_j L_j)\subseteq C_i\subseteq L_i$, requiring exact final
 assembly. It cannot claim Y-Freeze's full reduction. The supplement gives
-named rules, matching algorithms, provider/evidence contracts and Rust
-compilation records; production implementation remains future work.
+named rules, matching algorithms and provider/evidence contracts. A smaller
+implemented integer block backend exercises exact reduction and survivor access;
+the complete administrative overlay remains proposed.
 
 \subsection{Lazy linear lowering and the basic storage algorithm}
 The lazy domain follows RA dataflow: Unit/Rename starts current $p$; other

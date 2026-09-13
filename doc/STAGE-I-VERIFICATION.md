@@ -16,7 +16,7 @@ and implementation sequence are in [PLANNED-PASS-IMPLEMENTATION.md](PLANNED-PASS
 | Pruning and arity | Exact live headings at consumption boundaries; bounds on all named results; independently inspected actual Rust tuple storage |
 | YA reduction | Explicit semijoins, two passes, latest references, freeze; independent sibling order accepted; each frozen positive occurrence equals its full-join projection |
 | Result indexes | Exact first-use composite keys on named RA versions; missing/wrong/duplicate/out-of-range keys rejected; separate base/result namespaces |
-| Physical lowering | RA -> IndexRequirements -> staged Rust with one local pull region per set result -> existing IteratorPipeline -> Rust |
+| Physical lowering | RA -> IndexRequirements -> staged Rust with one local set-valued Access region per result -> existing IteratorPipeline -> Rust |
 | Quotation | Complete artifacts at all six existing boundaries compile and execute independently |
 | Ownership | Non-Copy String values, non-Ord hash keys, aliases, duplicate input normalization, shared RA operands, and unused non-Clone inputs |
 
@@ -28,7 +28,7 @@ come from independent valuation, with the authored database also checked
 against fixed expected rows. The logical interpreter inspects intermediates.
 
 That suite exercises the **typed compiler API**: a test visitor invokes the
-existing pull and IteratorPipeline passes before standalone rustc compilation.
+existing pull pass and set-valued Pipeline endpoint before standalone rustc compilation.
 It does not exercise procedural-macro routing for all 25 shapes.
 
 The separate [public-macro end-to-end suite](../crates/mini-linq/tests/stage1_shapes.rs)

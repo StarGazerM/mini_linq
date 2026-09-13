@@ -1,6 +1,6 @@
 //! Fuse the canonical left-deep RA into the existing local pull language.
 //! Build owns only relation rows and indexes; Rust clauses run on cursor demand.
-use super::{expression_aliases, local};
+use super::rust::{expression_aliases, local};
 use crate::relational_to_indexes::{self as indexes, signature};
 use cq_ir::{
     cq, index_requirements as ir, relational_plan as ra, rust_access_plan as access, symbol_name,
