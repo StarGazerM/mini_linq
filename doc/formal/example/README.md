@@ -71,13 +71,13 @@ starter and belongs only in the answer repository.
 cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin computed_key
 ```
 
-[computed_key.rs](src/bin/computed_key.rs) preserves the previous overview:
+[computed_key.rs](src/bin/computed_key.rs) compiles the computed-key query:
 `answer(x,*y+1) :- R(x,k), let next:i32 = *k+1, S(next,y), if y > 0;`.
 It records all six boundaries of both compositions under `build/computed-key/`
 relative to `doc/formal/`, and compiles and runs both final Rust files. The
 computed key and head select dependency-constrained prefix rules; this example
-has no GYO certificate or Yannakakis sweeps. Its answer remains
-`[(1,11),(2,11),(3,5)]`, with the original intermediate counts asserted.
+has no GYO certificate or Yannakakis sweeps. Its answer is
+`[(1,11),(2,11),(3,5)]`, with intermediate counts asserted.
 
 ## Atom-expression placement witness
 

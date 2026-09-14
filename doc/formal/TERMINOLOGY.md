@@ -3,8 +3,7 @@
 The specification follows Abiteboul, Hull and Vianu, *Foundations of Databases*
 (AHV), and the course notes at revision
 `3f971516f8784ead40e8635a85dbe319ba5e4729`. Page numbers below are the book's
-printed pages. The notes checkout was refreshed with `git pull --ff-only` and
-was already current; its source was not edited.
+printed pages.
 
 ## Textbook definitions
 
@@ -53,7 +52,6 @@ was already current; its source was not edited.
 
 - Source names such as `heading` and `retained_heading` remain implementation
   identifiers. Their mathematical objects are a sort and a retained sort.
-  No implementation API was renamed during this terminology revision.
 - `GreedyWidth` measures logical arity. Its name supplies no cardinality,
   physical-byte-width, or hypergraph-decomposition-width guarantee.
 - The `G-Private`/`G-Absorb` system is a **variant** of AHV Algorithm 6.4.4.

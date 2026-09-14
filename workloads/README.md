@@ -235,11 +235,11 @@ operation:
 cargo xtask golden all tiny --scenario all --write
 ```
 
-The default feature set still invokes the direct `workload_query!` procedural
-macro, but only its catalog path: it emits typed CQ factories without running
-the unfinished student passes. After all three basic student TODOs are complete,
+The default feature set invokes the catalog path of `workload_query!`: it
+emits typed CQ factories without running the compilation passes.
 `compiled-queries` forwards `mini-linq/compiled-workloads`, so the same 20
-invocations additionally emit their completed programs:
+invocations additionally emit their programs. The passes are complete on the
+staff answer branch; a student starter must implement them first:
 
 ```text
 cargo check -p cq-workloads --features compiled-queries --locked

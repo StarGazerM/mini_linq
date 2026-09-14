@@ -166,11 +166,10 @@ the typed-CQ factory; it does not use a `macro_rules!` transport wrapper, nested
 `include_str!` copy. Workload feature `compiled-queries` forwards `mini-linq/compiled-workloads`,
 which also runs the completed passes and emits `Program`.
 
-Semantic contracts are switchable:
+Typed compilation entries validate semantic inputs in every build:
 
 - macro entries do not separately call source `contract::check`;
-- `debug_requires` is the typed function's source precondition, enabled by debug assertions;
-- optimized builds may skip it, making invalid unchecked input outside the function contract;
+- typed entries call source `contract::check` and return span-aware errors in debug and release;
 - nominal pass targets own debug postconditions; `syn::File`/`syn::Expr` carry Rust grammar.
 
 For each nominal IR, `contract::check` remains the explicit span-aware diagnostic API and

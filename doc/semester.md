@@ -223,8 +223,9 @@ parsing and token emission. Staff also supplies the direct `mini_linq`,
 proc-macro entries. Each
 entry parses one `TokenStream` into its typed source and calls the corresponding
 typed compiler function directly. Grammar failures become span-aware `syn::Error`
-diagnostics emitted as `compile_error!`; the entry does not invoke semantic
-`contract::check`. Students implement only three typed functions.
+diagnostics emitted as `compile_error!`. The typed compiler function checks
+source semantics and returns the same diagnostic type; the macro entry does
+not duplicate that check. Students implement only three typed functions.
 `compile_cq(&cq::Module)` returns
 `syn::Result<relational_plan::Module>` for CQ to the exact named logical plan.
 `compile_relational_plan(&relational_plan::Module)` returns
@@ -238,7 +239,7 @@ the borrowed source and construct the complete target with `quote!` and
 `syn::parse2`.
 
 The open-source `contracts` crate, pinned at 0.6.10, attaches debug
-preconditions and postconditions where an edge has a compact query-domain
+postconditions where an edge has a compact query-domain
 relation. The exact CQ-to-RelationalPlan and
 RelationalPlan-to-IndexRequirements relations and the physical edge's
 covered-input/`Ok` definedness predicate compile out in release builds. The
@@ -246,23 +247,23 @@ generated physical Rust is inspected structurally by staged fixtures.
 The Basic-HW3 harness checks the Plan annotations, applies the supplied pull
 operator lowering, checks the explicit IteratorPipeline, emits Rust, compiles
 the resulting standalone file with rustc, executes it, and checks fixed fixture-specific
-results; no contract scans the generated file. This is
+results. The physical compiler also checks the generated storage and Access
+wiring against its source; this structural audit does not prove arbitrary
+embedded Rust or provider implementations correct. The fixture harness is
 not a dynamic CQ/DuckDB oracle and not a generic `Pass` or `WellFormedIr` trait
 system.
 For each IR, diagnostic `contract::check` and Boolean
 `contract::well_formed` are two interfaces to the same local language
-judgment. The diagnostic API remains available for tests, tools, and explicit
-manual validation. Typed pass `debug_requires` preconditions are the sole
-local semantic well-formedness gates when debug contracts are enabled. They
-compile out in optimized release builds, so semantically invalid typed or
-parsed macro input is outside the contract and may fail later. This keeps the
-semantic check switchable and avoids a duplicate source traversal.
+judgment. Every public typed compilation entry calls its source's diagnostic
+`contract::check` before lowering, so invalid input returns a span-aware error
+in debug and release builds. Macro entries do not repeat this check. Tests and
+tools may also call it directly. Debug postconditions check the transformation
+separately; they are not the source-validation gate.
 `compile_cq`, `compile_relational_plan`, and `compile_pull` own nominal target
 well-formedness in postconditions. The physical endpoints return typed Rust AST nodes, while each
 local proc-macro entry parses its embedded Plan before calling the matching
-typed function. No contract
-rescans the generated `syn::File`. Grammar-malformed macro input remains a
-`syn::Error` from parsing; a debug edge-contract failure means a lowering
+typed function. Malformed grammar and invalid source semantics both produce
+`syn::Error` diagnostics; a debug edge-contract failure means a lowering
 violated its specified transformation.
 Students do not write a parser, printer, procedural-macro entry point, or
 parallel Rust builder API. The third pass emits actual Rust collection

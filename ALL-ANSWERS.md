@@ -17,10 +17,11 @@ compile_index_requirements  IndexRequirements -> staged syn::File
 The supplied route then lowers the embedded RustAccessPlan to a named
 IteratorPipeline and that pipeline to an ordinary Rust `syn::Expr`.
 
-The general RelationalPlan parser/checker also contains the staff-supplied
-empty-heading `Unit` source for future global Optional-HW4 clauses. These basic
-answers intentionally never emit or physically accept it; HW4 extends those
-edges cumulatively.
+The bare-variable homework route begins with Rename and does not emit `Unit`.
+The implemented Rust-expression route can seed a prefix with the empty-heading
+`Unit` relation; the materialized and direct physical routes also support it.
+These extensions do not implement Optional HW4. See the
+[current IR boundaries](doc/IR-STAGE-REVIEW.md) for each route's domain.
 
 ## Inspect every layer in VS Code
 

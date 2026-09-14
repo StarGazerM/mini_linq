@@ -1,9 +1,10 @@
 # Stage I verification: known RA, independent semantics, and compiled execution
 
-This is the verification contract for
-[R2 Stage I](ADMINISTRATIVE-JOIN-PLANNING.md). The graph planner and compiled
-route now use the existing languages and typed passes. The detailed ownership
-and implementation sequence are in [PLANNED-PASS-IMPLEMENTATION.md](PLANNED-PASS-IMPLEMENTATION.md).
+This guide specifies verification for the planned CQ-to-RA route and its
+indexed materialized backend. [PLANNED-PASS-IMPLEMENTATION.md](PLANNED-PASS-IMPLEMENTATION.md)
+maps the current implementation; [planning.tex](formal/planning.tex) gives the
+rules and algorithms. The direct configurable physical edge has separate
+[Access-refinement coverage](ACCESS-REFINEMENT.md).
 
 ## Implemented production checks
 
@@ -45,8 +46,10 @@ presentations per profile**. Each presentation checks `build`/`materialize`,
 two independent traversals of `query`, and `run`. Expected rows come from CQ
 valuation and fixed authored answers. Actual outputs retain multiplicities
 during comparison, so duplicate answers cannot disappear in the assertion.
-The public macro currently selects Auto; all four policies remain covered
-through the typed API. CPS configuration is separate work.
+The default public macro selects Auto; all four policies are covered through
+the typed API. Continuations are configurable through ordinary Rust macro
+aliases and the materialized Access option. The [endpoint tests](../crates/mini-linq/tests/collect_endpoints.rs)
+check alias selection separately from these query-shape tests.
 
 A separate edge checker reads actual RA definitions; it never calls the
 planner's emission code to reconstruct expected output. Mutation tests omit
@@ -162,8 +165,7 @@ An additional test repeats an identical occurrence and retains both nodes.
 The small graph oracle cannot replace broader production GYO testing.
 
 All ten families in the [classic workload catalog](../workloads/src/catalog/classic.rs)
-now have counterparts in this reference suite, including the previously
-missing spade, barbell, Loomis–Whitney-4, and exact oriented-chain body.
+have counterparts in this reference suite.
 This is family coverage, not 25 distinct topologies or exhaustive coverage of
 all possible join graphs. Intersection uses a binary full-key variant here;
 some fixtures also choose a different head projection from the catalog.
@@ -183,7 +185,7 @@ See [Fagin, Sections 4–6](https://s3.us.cloud-object-storage.appdomain.cloud/r
 Occurrence IDs and argument maps remain distinct in executable plans regardless
 of equal sets in the underlying hypergraph.
 
-A regression now checks that `ternary_guard` is alpha-acyclic but removing
+A regression checks that `ternary_guard` is alpha-acyclic but removing
 `Stock(d,i,t)` leaves the cyclic triangle of pair constraints. Thus it is not
 beta-acyclic. This is why a cyclic-looking partial body is insufficient to
 classify the complete query. Removing an atom in this test investigates the
@@ -197,62 +199,35 @@ distinction matters when specifying enumeration guarantees for projected
 answers; body acyclicity alone does not justify those stronger performance
 claims. See [Bagan, Durand, and Grandjean, Section 4](https://webusers.imj-prg.fr/~arnaud.durand/papers/BDGcsl07.pdf).
 
-## What runs now
+## Regression coverage
 
-Run the new suite with:
+The [reference suite](../crates/cq-compiler/tests/stage1_reference.rs) covers:
 
-```sh
-cargo test -p cq-compiler --test stage1_reference
-```
+- all 25 named patterns, checking local RA validity, parse/print round trips,
+  CQ valuation, RA interpretation, and independently written answers;
+- 64 deterministic binary-domain databases per pattern, including all-empty
+  and all-full inputs, plus each used relation emptied individually;
+- each frozen occurrence in the four Yannakakis schedules against its
+  full-query projection, on authored and generated databases;
+- whole composite keys, empty headings, duplicate-eliminating projection,
+  occurrence identity, cyclic support counterexamples, and tree recognition;
+- safety and eager-pruning contracts, arity limits, source/occurrence mappings,
+  complete assembly, current reduction versions, schema preservation,
+  upward/downward completion, and acceptance of noncanonical legal schedules;
+- independent acyclicity classifications, alpha-versus-beta and
+  body-versus-free-connex counterexamples, and the Cartesian-first comparison.
 
-The reference suite has **70 tests**:
+The test-only verifier also checks exact remaining-use sets across bushy cuts,
+a branched tree's complete two-pass schedule, and rejection of a connected tree
+that violates running intersection. Production graph and rule-kernel tests run
+under `--lib`.
 
-- 25 named pattern tests: local RA checks, parse/print round trip, CQ oracle,
-  RA interpreter, and independently written expected answers;
-- generated-data comparison on 64 deterministic two-value-domain input
-  families per pattern, including all-empty and all-full inputs: **1,600
-  pattern/input cases**; the current R1 logical lowering is checked alongside
-  the known RA, explicitly as a baseline;
-- one test emptying every used relation individually in all 25 fixtures;
-- one test checking every final reduced occurrence in all four Yannakakis
-  schedules against the corresponding projection of the full CQ valuation
-  relation, on authored inputs and 64 generated inputs per schedule;
-- seven tests detecting eight deliberately wrong plans;
-- one test checking all 25 known alpha-acyclicity classifications;
-- one identical-occurrence test and one cyclic pairwise-support counterexample;
-- four unit tests for whole-composite-key agreement, empty-heading existence,
-  duplicate-eliminating projection with ordered output, and tree recognition
-  on single/duplicate/disconnected headings and seven-node paths/cycles;
-- one connected-query Cartesian-first row-volume comparison;
-- one alpha-versus-beta counterexample and one body-versus-free-connex check.
-- 22 administrative-contract tests: safety versus eager pruning, safety with
-  eager pruning disabled, singleton trees, missing
-  intermediate and leaf pruning, lost future/head uses, original source and
-  occurrence mappings, empty and duplicate occurrences, discarded existence,
-  repeated assembly consumption, whole and empty keys, raw reduction-join
-  widths, stale reduction versions, schema preservation, omitted downward
-  reduction, malformed/missing tree witnesses, frozen assembly references,
-  and acceptance of noncanonical names/operand orders.
-
-The remaining three test-only verifier unit tests check exact remaining-use sets across bushy cuts
-and a branched tree's complete upward/downward schedule, plus rejection of a
-connected tree that violates running intersection. Production graph and rule
-kernel tests run separately under `--lib`. The focused regression gate is:
-
-```sh
-cargo test -p cq-compiler --lib --test stage1_reference --test pass_contracts
-cargo test -p cq-compiler --release --lib --test stage1_reference --test pass_contracts
-```
-
-The contract checks use ordinary `Result` validation, not debug-only asserts.
-The eager-pruning rejection of the current R1 chain must pass in both profiles:
-the chain has correct answers but retains a dead variable and reaches arity
-four; the known pruned plan has peak arity three. Disabling the verifier's
-eager requirement must make that rejection test fail.
-
-A mutation check temporarily disabled each of eager pruning, safe projection,
-and arity-limit enforcement separately. The corresponding rejection test failed
-in all three cases; the original verifier was restored before the final gates.
+The contract checks use ordinary `Result` validation in debug and release.
+The basic R1 chain has correct answers but retains a dead variable and reaches
+arity four; the authored pruned plan has peak arity three. Its eager-pruning
+rejection distinguishes policy compliance from result correctness. Safety,
+eager pruning, and arity limits have separate rejection cases, so relaxing one
+obligation does not silently establish the others.
 
 The eight incorrect plans cover reversed self-join arguments, a dropped key
 component, premature projection, erased disconnected existence, replacement
@@ -272,38 +247,23 @@ tests additionally exercise Rust ownership and duplicate host inputs.
 
 ## Verification commands
 
-The additional public-macro gate introduced on 2026-09-08 is:
+Run the semantic, contract, compiled-backend and macro gates in both profiles:
 
 ```sh
-cargo test -p mini-linq --test stage1_shapes
-cargo test -p mini-linq --test stage1_shapes --release
-cargo clippy -p mini-linq --test stage1_shapes -- -D warnings
+cargo test -p cq-compiler --lib --test stage1_reference --test stage1_production --test pass_contracts
+cargo test -p cq-compiler --release --lib --test stage1_reference --test stage1_production --test pass_contracts
+cargo test -p mini-linq --test stage1_shapes --test collect_endpoints
+cargo test -p mini-linq --release --test stage1_shapes --test collect_endpoints
 ```
 
-These are ordinary Cargo integration tests. In release, the generated query
-programs themselves are optimized by Cargo, alongside the test binary. The
-target contains 25 shape tests, one completeness check, and four shared oracle
-unit tests. It is also included automatically in the workspace commands below.
-On 2026-09-08 all **30 tests passed in both debug and release**; the focused
-clippy gate with warnings denied, workspace formatting, and diff checks passed.
+The public-macro tests are ordinary Cargo integration tests; release builds
+optimize the generated query programs alongside the test binary. The typed
+production suite also checks predicate lowering, DAG sharing, semijoin work,
+extra requested indexes, and input/result names with distinct index namespaces.
+These coverage descriptions specify what the suites exercise, not a stored
+record of the latest run or a workspace-wide test count.
 
-Validated on 2026-09-07 after the combined reimplementation:
-
-| Gate | Result |
-|---|---|
-| Workspace debug, including `mini-linq/compiled-workloads` | 192 passed, 0 failed |
-| Same workspace gate in release | 192 passed, 0 failed |
-| Separate `xtask` suite | 16 passed, 0 failed |
-| Workspace/all-target clippy with warnings denied | Passed |
-| Workspace formatting, changed xtask formatting, and `git diff --check` | Passed |
-
-That workspace snapshot includes 21 production-suite tests and 70 reference
-tests. The production suite executes the 8,125 shape/policy/database cases
-described above, checks the six complete boundary artifacts, and separately
-executes predicate, DAG-sharing, semijoin-work, and extra-index cases. An
-input and result with identical names retain distinct index namespaces and
-both requested builders execute. The graph unit gate checks all 4,680 small
-ordered hypergraphs independently of the GYO algorithm.
+The wider integration gates are:
 
 ```sh
 cargo test --workspace --features mini-linq/compiled-workloads
@@ -314,9 +274,11 @@ cargo fmt --all --check
 git diff --check
 ```
 
-The unreleased optional HW4 tests are not enabled by these commands. R1
-regressions retain their exact canonical plan, index, and lazy pull contracts.
-The generated boundary artifacts can be reproduced with:
+The optional HW4 tests are not enabled by these commands. R1 regressions check
+the basic canonical plan, index and lazy-pull contracts independently of the
+planned route.
+
+Reproduce the generated boundary artifacts with:
 
 ```sh
 cargo run -p cq-compiler --example planned_boundaries -- doc/planned-example

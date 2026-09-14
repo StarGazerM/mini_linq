@@ -15,26 +15,28 @@
 - [Optional project tracks](OPTIONAL-PROJECT-TRACKS.md): later backend and
   multi-query directions.
 
-## Staff design references
+## Current compiler design
 
-- [Project skeleton](PROJECT-SKELETON.md)
-- [IR formalization](IR-FORMALIZATION.md)
+- [Compiler structure](COMPILER-STRUCTURE.md): module and crate ownership.
+- [IR boundary review](IR-STAGE-REVIEW.md): languages, stages, and supported routes.
 - [Access refinement](ACCESS-REFINEMENT.md): physical choices, current views and exact pruning.
-- [Compiler structure](COMPILER-STRUCTURE.md) and [complete boundary review](IR-STAGE-REVIEW.md).
+- [Block-access implementation](BLOCK-ACCESS-IMPLEMENTATION.md): concrete storage traits and macro wiring.
+- [Rust expressions](RUST-EXPRESSIONS.md): binding, evaluation, and scheduling rules.
 - [Extended compiler research manuscript](formal/README.md):
   interacting host-expression dependencies, replaceable compilation paths,
   language judgments, administrative rules, conditional proofs, source
   correspondence, and executable counterexamples. This is an incomplete
   correctness argument with explicitly recorded obligations.
-- [Administrative join planning](ADMINISTRATIVE-JOIN-PLANNING.md): implemented
-  CQ-to-RA planner rules, join-tree analysis, Yannakakis lowering, and R2 scope.
+- [Planner implementation](PLANNED-PASS-IMPLEMENTATION.md): transformation
+  ownership, administrative rules, and the indexed materialized route.
 - [Stage I verification](STAGE-I-VERIFICATION.md): 25 authored RA fixtures,
   executable reference tests, and the planner/backend acceptance gates.
-- [Planned-pass implementation](PLANNED-PASS-IMPLEMENTATION.md): transformation
-  ownership, code composition, and the complete materialized route.
+
+## Staff course planning
+
 - [Rust tutorial design](RUST-TUTORIAL-DESIGN.md)
 - [Semester plan](semester.md)
 
-The staff design references explain why the project is shaped this way. They
+The compiler and course-planning references explain why the project is shaped this way. They
 are not required reading or submission specifications. The assignment
 handout, typed contracts, and tests define student work.

@@ -2,8 +2,8 @@
 \label{sec:extensibility}
 Replacements satisfy the source judgment, domain, target and preservation
 contracts of Theorem~\ref{thm:composition}. Typed endpoints and module-bound
-continuations select logical and physical paths. Materialized, lazy and block
-implementations are sibling modules; direct RA quotation bypasses planning.
+continuations select logical and physical paths. Materialized, lazy and direct
+realizations own their admitted domains; direct RA quotation bypasses planning.
 
 \paragraph{Representations and algorithms.}
 Ascent BYODS formalizes custom representations through DLDS and
@@ -38,7 +38,7 @@ enumerable relation establishes that algorithm.
 Compilation specializes query structure; rows and host values remain residual.
 Direct RA/Index/Access/Pipeline entries and local quotations retain binding,
 typing and context contracts without reconstructing CQ
-(Section~\ref{sec:constraint-planning}). The YA supplement maps choices to native
-expressions, owning Rust contexts or compiler segments, with rules and algorithms
-for one optional arena backend. Runtime representation choice remains ordinary
-Rust; the block backend uses module-bound macro continuations.
+(Section~\ref{sec:constraint-planning}). The physical supplement gives rules and
+algorithms for direct RA-to-Access lowering, with independent key, candidate-scan
+and witness operations. Row providers own storage access; lexical macros select
+local refinements. Runtime representation choice remains ordinary Rust.

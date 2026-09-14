@@ -4,12 +4,9 @@ This inventory covers notes 1.3 and 2.1–2.5 at the revision recorded in
 [TERMINOLOGY.md](TERMINOLOGY.md). “Implemented” identifies a corresponding
 algorithm; it does not discharge the Rust conformance or host-semantics
 obligations. The complete rule-location inventory is [rules.tsv](rules.tsv).
-The implemented physical alternative is documented in
-[PHYSICAL-DESIGN.md](PHYSICAL-DESIGN.md) and [access_refinement.tex](access_refinement.tex).
-Its 14 rules and two algorithms cover direct RA lowering, compiler-local resource
-sharing and native Access operations. Exact reduction retains its residual after
-optional block rejection. The [architecture discussion](architecture_placement.tex)
-places choices at existing boundaries without a universal physical IR.
+For physical choices after planning, see the
+[Access refinement specification](access_refinement.tex) and
+[compiler-boundary discussion](architecture_placement.tex).
 
 | Concept and note | Formalization and translation to RA | Implementation and boundary |
 | --- | --- | --- |

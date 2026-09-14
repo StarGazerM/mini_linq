@@ -1,5 +1,5 @@
 //! P-* assembly and Y-* semijoin transitions over an occurrence frontier.
-//! Rule premises and state updates follow doc/ADMINISTRATIVE-JOIN-PLANNING.md.
+//! Rule premises and state updates follow doc/formal/planning.tex.
 //! The C-* prefix transitions are in clause_rules.rs.
 use super::{Heading, JoinTree, error};
 use cq_ir::{cq, cq::Predicate, relational_plan as ra, symbol_name};

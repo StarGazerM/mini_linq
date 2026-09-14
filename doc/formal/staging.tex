@@ -207,17 +207,19 @@ Entry & Typed edge & Continuation \\\midrule
 \code{planned_relational_plan} & result indexes & \code{materialized} \\
 \code{index_requirements} & basic/lazy physical & staged Rust file \\
 \code{materialized} & materialized physical & staged Rust file \\
+\code{physical_plan} & configured RA to Access & staged Rust file \\
 \code{pull} / \code{collect_access} & Access to Pipeline & iterator / set endpoint \\
-iterator / set endpoint & Pipeline to Expr & ToTokens \\\bottomrule
+\code{stream_access} & Access to Pipeline & stream endpoint \\
+iterator / set / stream endpoint & Pipeline to Expr & ToTokens \\\bottomrule
 \end{tabular}
 \end{center}
 \code{materialized!} defaults to set-valued \code{mini_linq::collect_access};
 \code{access path;} overrides it. Basic/lazy holes retain absolute paths.
 Direct entries bypass upper passes. \code{workload_query} emits catalog metadata;
 \code{compiled-workloads} also compiles its CQ through defaults.
-Physical code has one Access hole per materialized result or lazy/basic region.
-Interpolation embeds native Rust without added wrapper or CQ syntax;
-shared RA need not form one pipeline.
+Canonical physical code has one Access hole per materialized result or lazy/basic
+region. The direct edge also uses local Access for key construction, candidates
+and witnesses. Interpolation embeds native Rust; shared RA need not form one pipeline.
 \subsection{The contract of a replaceable edge}
 Local validity belongs to an IR; compilability to a term/pass pair; preservation
 to their observations. A partial compiler $f:L\to M$ has an edge contract:

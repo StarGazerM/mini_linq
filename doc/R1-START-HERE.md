@@ -16,6 +16,9 @@ expansion](DSL.md#complete-triangle-expansion). It shows the entire program
 after every pass. Those artifacts, the typed contracts, and the tests are the
 assignment specification.
 
+This handout describes the student checkpoint. The staff implementation also
+provides the broader routes listed in the [IR boundary review](IR-STAGE-REVIEW.md).
+
 ## What students write
 
 The three executable homework bodies are in
@@ -41,11 +44,10 @@ compiler:   &TypedSource -> Result<TypedTarget>
 ```
 
 The proc-macro entry owns grammar parsing. The typed function owns one
-transformation. Its debug precondition is the semantic source contract, and
-its postconditions describe the edge to the target. A public macro entry does
-not repeat `contract::check`, because that would traverse the same typed input
-twice. The diagnostic `contract::check` functions remain available to tests
-and tools that explicitly want span-aware semantic errors.
+transformation and calls the source `contract::check`, returning span-aware
+semantic errors in debug and release. Its debug postconditions describe the
+edge to the target. A public macro entry does not repeat the source check.
+Tests and tools can also call `contract::check` directly.
 
 ## Basic HW1: CQ to RelationalPlan
 
@@ -69,7 +71,7 @@ For each body occurrence:
 5. make the NaturalJoin result current.
 
 Finally emit one `project` keeping the source-head attributes, then separate
-`output result as head.` metadata. For Triangle this creates six logical
+`output result as head;` metadata. For Triangle this creates six logical
 results:
 
 ```text
@@ -89,9 +91,10 @@ result with `quote!` and `syn::parse2`; do not format a string and parse it
 back.
 
 RelationalPlan also contains the staff-supplied `rN = unit;`, which denotes
-the singleton zero-attribute relation. It exists for global clauses in the
-negation-and-aggregation extension. A positive baseline CQ always begins with
-a Rename, so Basic HW1 must not emit `Unit`.
+the singleton zero-attribute relation. The implemented expression route uses
+it to seed a prefix before any atom; it can also seed optional global clauses.
+A positive baseline CQ always begins with a Rename, so Basic HW1 must not
+emit `Unit`.
 
 The local contract accepts arbitrary unique result identifiers and checks only
 local heading rules, earlier operands, output, and reachability. It does
@@ -130,10 +133,10 @@ third artifact in `DSL.md`.
 
 If a locally well-formed relational plan is not in the basic backend's
 supported left-deep form—for example, a NaturalJoin's right operand is not a
-direct Rename, or the plan contains `Unit`—return a span-aware `syn::Error`. The
-negation-and-aggregation extension consumes `Unit`; a future bushy or materializing
-backend may consume the same logical language through a different physical
-lowering.
+direct Rename, or the plan contains `Unit`—return a span-aware `syn::Error`.
+The implemented expression-prefix route accepts `Unit`, and the materialized
+backend accepts bushy plans through a separate physical lowering. Neither
+extends the basic homework's required domain.
 
 ## Basic HW3: IndexRequirements to staged Rust
 

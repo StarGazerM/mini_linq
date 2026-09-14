@@ -317,10 +317,12 @@ contract::check(&value)       -> syn::Result<()>
 contract::well_formed(&value) -> bool
 ```
 
-The typed pass uses a debug precondition and the appropriate postcondition.
-The proc-macro entry does not also call `check`, because the pass contract is
-the configurable semantic gate. Optimized release builds can eliminate those
-checks; tests and tools can still call the diagnostic form explicitly.
+The public typed pass calls its source's `contract::check` before lowering and
+returns a span-aware `syn::Error` for invalid input in both debug and release
+builds. The proc-macro entry forwards that error as `compile_error!` without
+repeating the semantic check. Debug postconditions separately check the
+specified source-to-target relation; disabling them does not disable source
+validation. Tests and tools can also call the diagnostic form directly.
 
 An edge contract is stronger than target well-formedness. For example, any
 locally valid compiler-produced RelationalPlan is not enough: Basic HW1 must

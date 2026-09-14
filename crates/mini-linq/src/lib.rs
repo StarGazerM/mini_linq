@@ -2,7 +2,7 @@
 //!
 //! Each macro parses its exact source IR and routes that typed value to the
 //! corresponding compiler pass. Syntax errors become Rust compile errors;
-//! semantic well-formedness belongs to the configurable pass contracts.
+//! typed compilation entries check semantic well-formedness in every build.
 //!
 //! Language entries parse their own source language. Generated continuations use
 //! `mini_linq::stage!`, resolved in the invocation scope. By default that names

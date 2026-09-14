@@ -120,12 +120,13 @@ Any added public macro follows the basic typed boundary directly: its `#[proc_ma
 entry parses the invocation into the typed source and calls the corresponding
 typed compiler function. Grammar failures become span-aware `syn::Error`
 diagnostics emitted as `compile_error!`. There is no separate public expansion
-wrapper, and the entry does not invoke the semantic `contract::check` API.
-Local semantic well-formedness is the typed function's switchable
-`debug_requires` precondition; optimized release builds skip it, so invalid
-typed or parsed macro input is outside the contract and may fail later.
-`contract::check` remains available for tests, tools, and explicit diagnostic
-validation.
+wrapper. The public typed compiler function calls its source's
+`contract::check` before lowering; semantically invalid input returns a
+span-aware `syn::Error` in both debug and release builds. The macro entry
+forwards this error as `compile_error!` without duplicating the check. Debug
+postconditions separately check the specified transformation and may be
+disabled without removing source validation. Tests and tools can also call
+`contract::check` directly.
 
 The terminology is precise:
 

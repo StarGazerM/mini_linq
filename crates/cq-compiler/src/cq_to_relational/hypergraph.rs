@@ -1,5 +1,5 @@
 //! G-PRIVATE / G-ABSORB reduce occurrence-labeled hypergraphs.
-//! Analysis never deletes executable atoms. See doc/ADMINISTRATIVE-JOIN-PLANNING.md.
+//! Analysis never deletes executable atoms. See doc/formal/planning.tex.
 use super::Heading;
 use std::collections::{BTreeMap, BTreeSet};
 

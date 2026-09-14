@@ -61,8 +61,9 @@ its omission.
 
 The typed harness invokes unoptimized rustc even under Cargo release;
 public release tests exercise optimized generated code. The artifact README
-records commands. The manifest links 140 baseline rules and 14 commands to
-source fingerprints, and 20 proposed physical rules to algorithms/model functions.
+records commands. The manifest links 140 main-manuscript rules and 14 implemented
+Access-refinement rules to source locations, including the 14 planner commands.
+The physical rule map additionally links its rules to algorithms/model functions.
 \code{check.py} checks coverage and drift, not semantics. The pass gates share
 dependency analysis; bounded experiments do not discharge Section~\ref{sec:scope}'s
 obligations or establish performance bounds.

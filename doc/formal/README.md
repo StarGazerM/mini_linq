@@ -3,15 +3,14 @@
 [compiler.tex](compiler.tex) builds the main manuscript. The separate
 [physical supplement](physical_design.tex) develops the implemented direct
 RA-to-Access edge and native Access refinements, with a
-[design guide](PHYSICAL-DESIGN.md). Both use the existing 11-point, one-inch-margin
-layout. The supplement is independent of the main manuscript's page budget.
+[design guide](../ACCESS-REFINEMENT.md). Both use an 11-point, one-inch-margin
+layout.
 
 The main paper follows valuations and native Rust leaves, occurrence graphs, GYO,
 Yannakakis reduction, dependency scheduling, named RA, index requirements, local
 cursors and quotation across independently usable languages. The supplement
 adds compiler-local physical bindings, exact/zone key resources, candidate scans,
-join witnesses and conditional preservation. No whole-program physical Context
-or speculative administrative overlay remains.
+join witnesses and conditional preservation.
 
 ## Reading map
 
@@ -32,10 +31,19 @@ or speculative administrative overlay remains.
 | Bounded evidence and prior work | [evaluation.tex](evaluation.tex), [related_work.tex](related_work.tex) |
 
 [TERMINOLOGY.md](TERMINOLOGY.md) records AHV terminology and course adaptations.
-[rules.tsv](rules.tsv) maps 140 baseline rules and 14 Access-refinement rules to
+[rules.tsv](rules.tsv) maps 140 main-manuscript rules and 14 Access-refinement rules to
 implementation symbols or explicitly abstract cases. [check.py](check.py) checks
 those links, algorithm/model correspondence, the 14 executable planner commands
 and recorded source fingerprints. It does not check mathematical proofs.
+
+[physical_rules.tsv](physical_rules.tsv) connects each physical rule to its source
+function, one of the two algorithms and the finite model where applicable.
+[physical_model.py](physical_model.py) checks 98,415 current-view candidate cases
+and 1,280 witness cases against a pairwise oracle. Operand masks, block sizes and
+paired key layouts vary, including empty and permuted separators. Targeted cases
+cover correlated keys, signed `i64` boundaries, empty resources, stream support
+and stale-version exact resources. This is bounded semantic evidence, not a proof
+of generated Rust or arbitrary provider laws.
 
 ## Semantic and implementation limits
 
@@ -49,7 +57,8 @@ Computed or nonvariable atom arguments, lets, computed heads and general guards
 select prefix planning. General subtree placement is demonstrated by authored RA,
 not discovered by the planner. Negation and aggregation parse but do not lower.
 Cost-based physical search, WCOJ, bags and factorized execution are not implemented.
-The direct array route has its own narrower domain documented in the supplement.
+The direct array route accepts `i64` Unit/Rename/Project/Semijoin/NaturalJoin plans
+and variable-only output of at most twelve fields, as specified in the supplement.
 
 The canonical physical route consumes real index requirements. The alternative
 configured edge consumes RA and emits Rust with Access holes; Γ is ordinary

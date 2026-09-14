@@ -1,6 +1,6 @@
-//! Stage I's reference gate, available before its planner/backend exists.
+//! Stage I's independent semantic reference gate.
 //! Hand-authored RA is compared with valuations and fixed expected answers.
-//! This does not claim to compile the Stage I RA to executable Rust yet.
+//! The companion stage1_production suite checks compiled Rust execution.
 
 #[path = "stage1_reference/cases.rs"]
 mod cases;

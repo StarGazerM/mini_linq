@@ -4,6 +4,11 @@ The basic checkpoint exposes every important query-compilation boundary. A
 student implements three typed passes; staff supplies the parsers, contracts,
 macro routing, pull lowering, final Rust lowering, and test harness.
 
+This guide specifies the basic assignment and its complete Triangle expansion.
+The [IR boundary review](IR-STAGE-REVIEW.md) records the full implemented
+language domains; [Rust expressions](RUST-EXPRESSIONS.md) and
+[Access refinement](ACCESS-REFINEMENT.md) specify the additional routes.
+
 ```text
 CQ
   -- Basic HW1 --> RelationalPlan
@@ -42,15 +47,15 @@ additional planning or lowering.
 | student, Basic HW1 | `compile_cq(&cq::Module)` | `syn::Result<relational_plan::Module>` |
 | student, Basic HW2 | `compile_relational_plan(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` preserving the complete input plan |
 | student, Basic HW3 | `compile_index_requirements(&index_requirements::Module)` | `syn::Result<syn::File>` containing the complete API and one `pull!` expression |
-| staff | `compile_pull(&rust_access_plan::Plan)` | `iterator_pipeline::Pipeline` with explicit `iterN` edges |
-| staff | `compile_iterator_pipeline(&iterator_pipeline::Pipeline)` | one lazy whole-result-set `syn::Expr` |
+| staff | `compile_pull(&rust_access_plan::Plan)` | `syn::Result<iterator_pipeline::Pipeline>` with explicit `iterN` edges |
+| staff | `compile_iterator_pipeline(&iterator_pipeline::Pipeline)` | `syn::Result<syn::Expr>` containing one lazy whole-result-set expression |
 
 These functions accept typed syntax values, not token streams. The
 `mini-linq` proc-macro crate owns token transport: each direct macro parses its
 exact input type, calls the corresponding typed function, and emits the result.
 Syntax failures therefore remain span-aware `syn::Error` values. Semantic
-well-formedness is the typed pass contract; the macro entry does not duplicate
-that check.
+well-formedness is checked by the typed compilation entry in debug and release;
+the macro entry does not duplicate that check.
 
 ## Planned alternatives through the same boundaries
 
@@ -63,13 +68,14 @@ edges without replacing the basic homework contracts:
 | `planned_relational_plan!` | `compile_result_indexes`: RelationalPlan -> IndexRequirements |
 | `materialized!` | `compile_materialized`: IndexRequirements -> staged Rust |
 
-The target Rust file has one existing local `pull!` expression per named RA
-result. Materialized sets outside these expressions preserve shared DAG
-references. Each expression can be lowered independently by the existing
-pull and IteratorPipeline passes. `build` performs the materialization;
-`query` traverses the stored answer.
+The target Rust file has one local `collect_access!` expression per named RA
+result. That continuation uses the existing pull and IteratorPipeline passes
+and collects a set. Materialized sets outside these expressions preserve
+shared DAG references. `build` performs the materialization; `query` traverses
+the stored answer.
 
-The nominal languages additionally support the following forms:
+The graph-planning fragment adds the following forms to the basic assignment;
+the [expression contract](RUST-EXPRESSIONS.md) describes the wider CQ grammar:
 
 ```ebnf
 BodyItem         ::= Atom | "if" "(" Predicate ")"
@@ -218,9 +224,9 @@ Rename per body occurrence, source-order left-deep NaturalJoin folding, one
 final Project, and output metadata. The Basic-HW2 lowering is deliberately
 narrower: every NaturalJoin must consume a direct right-hand Rename in a
 left-deep chain, and the plan may not contain `Unit`. It returns a span-aware
-error for another locally valid shape. The negation-and-aggregation extension extends this
-edge to consume `Unit`; a future bushy backend can consume other logical
-shapes separately.
+error for another locally valid shape. The implemented expression-prefix
+route can consume `Unit`; the materialized backend also accepts bushy plans.
+These are separate domains from the basic homework contract.
 
 `IndexRequirements` is an overlay, not a replacement plan. It repeats the
 complete RelationalPlan and adds only the equality keys required by its

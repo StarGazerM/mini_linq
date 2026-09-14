@@ -152,6 +152,6 @@ profitability. The selector must be total and meet the host assumptions;
 its successful branch test must establish representation-specific conditions
 such as bounded arithmetic and injective bitmap addressing. This is ordinary
 conditional refinement and contextual adequacy, not a new meaning for RA.
-At the weaker filter interface, exact-bit-vector and Bloom branches can instead
-both establish Cover, provided the caller still performs the exact operation
-required by its own contract.
+For a represented key set $S$ and Boolean filter $e$, exact-bit-vector and Bloom
+branches can both satisfy $k\in S\Rightarrow e(k)$, provided the caller performs
+the exact operation required by its own contract.
