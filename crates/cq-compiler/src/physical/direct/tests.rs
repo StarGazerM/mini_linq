@@ -1,4 +1,5 @@
 use super::*;
+use crate::compile_physical;
 use quote::ToTokens;
 
 fn source() -> ra::Module {
@@ -27,6 +28,7 @@ fn options() -> PhysicalOptions {
     PhysicalOptions {
         storage: syn::parse_quote!(cq_storage),
         access: syn::parse_quote!(collect_access),
+        iterator: syn::parse_quote!(stream_access),
         inputs: BTreeMap::from([
             ("R".into(), syn::parse_quote!(block_rows)),
             ("S".into(), syn::parse_quote!(sorted_rows)),
@@ -34,11 +36,13 @@ fn options() -> PhysicalOptions {
         ]),
         materialize: syn::parse_quote!(hash_rows),
         results: BTreeMap::new(),
-        semijoin: syn::parse_quote!(exact_semijoin),
-        semijoins: BTreeMap::new(),
+        scan: syn::parse_quote!(scan_rows),
+        scans: BTreeMap::new(),
+        key_provider: syn::parse_quote!(exact_keys),
+        key_providers: BTreeMap::new(),
         keys: syn::parse_quote!(::std::collections::HashSet),
         key_sets: BTreeMap::new(),
-        join: syn::parse_quote!(hash_join),
+        join: syn::parse_quote!(hash_witnesses),
         joins: BTreeMap::new(),
     }
 }
@@ -122,10 +126,16 @@ fn resources_share_only_current_version_and_identical_selected_implementations()
     // separate resources over distinct current logical versions.
     assert_eq!(count(&selected), 3);
     selected
-        .semijoins
-        .insert("right".into(), syn::parse_quote!(zone_semijoin));
+        .scans
+        .insert("right".into(), syn::parse_quote!(prune_rows));
+    // Candidate traversal consumes the resource; it does not determine its
+    // identity. A different scan strategy therefore preserves sharing.
+    assert_eq!(count(&selected), 3);
+    selected
+        .key_providers
+        .insert("right".into(), syn::parse_quote!(zone_keys));
     assert_eq!(count(&selected), 4);
-    selected.semijoins.clear();
+    selected.key_providers.clear();
     selected.key_sets.insert(
         "right".into(),
         syn::parse_quote!(::std::collections::BTreeSet),
@@ -143,9 +153,9 @@ fn checker_rejects_stale_versions_wrong_resources_providers_and_key_columns() {
         ("__ml_view6", "__ml_resource2", "__ml_resource0"),
         ("__ml_resource0", "__ml_provider3", "__ml_provider1"),
         ("__ml_view3", "__ml_provider0", "__ml_provider3"),
-        ("__ml_view3", "r (x , k , j)", "r (x , j , k)"),
-        ("__ml_resource0", "t (k , j)", "t (j , k)"),
-        ("__ml_resource0", "keep { j , k }", "keep { j }"),
+        ("__ml_view3", "__cq_row [2usize]", "__cq_row [1usize]"),
+        ("__ml_view3", "& [2usize , 1usize]", "& [1usize , 2usize]"),
+        ("__ml_resource0", "__row [1usize]", "__row [0usize]"),
     ] {
         let mut target = original.clone();
         replace(initializer(&mut target, binding), old, new);
@@ -245,7 +255,7 @@ fn choice_maps_reject_unbound_inputs_and_overrides_of_inherited_storage() {
     let source = source();
     let valid = options();
     let target = compile_physical(&source, &valid).unwrap();
-    for choice in 0..6 {
+    for choice in 0..8 {
         let mut invalid = options();
         match choice {
             0 => {
@@ -263,8 +273,8 @@ fn choice_maps_reject_unbound_inputs_and_overrides_of_inherited_storage() {
             }
             3 => {
                 invalid
-                    .semijoins
-                    .insert("joined".into(), syn::parse_quote!(exact_semijoin));
+                    .scans
+                    .insert("joined".into(), syn::parse_quote!(scan_rows));
             }
             4 => {
                 invalid.key_sets.insert(
@@ -272,10 +282,20 @@ fn choice_maps_reject_unbound_inputs_and_overrides_of_inherited_storage() {
                     syn::parse_quote!(::std::collections::HashSet),
                 );
             }
-            _ => {
+            5 => {
                 invalid
                     .joins
-                    .insert("left".into(), syn::parse_quote!(hash_join));
+                    .insert("left".into(), syn::parse_quote!(hash_witnesses));
+            }
+            6 => {
+                invalid
+                    .key_providers
+                    .insert("joined".into(), syn::parse_quote!(zone_keys));
+            }
+            _ => {
+                invalid
+                    .scans
+                    .insert("Missing".into(), syn::parse_quote!(prune_rows));
             }
         }
         assert!(compile_physical(&source, &invalid).is_err());
@@ -330,9 +350,10 @@ fn checker_checks_lexically_bound_configuration_in_both_execution_methods() {
     for method_name in ["run", "run_with_stats"] {
         for (old, new) in [
             ("HashSet", "BTreeSet"),
-            ("exact_semijoin", "zone_semijoin"),
+            ("exact_keys", "zone_keys"),
             ("cq_storage", "wrong_storage"),
-            ("collect_access", "wrong_access"),
+            ("stream_access", "wrong_iterator"),
+            ("scan_rows", "prune_rows"),
         ] {
             let mut target = original.clone();
             let method = target
@@ -382,7 +403,7 @@ fn checker_checks_lexically_bound_configuration_in_both_execution_methods() {
     }
 }
 #[test]
-fn projected_names_are_fresh_even_when_source_uses_reserved_looking_raw_names() {
+fn physical_output_contains_access_without_serialized_ra_or_fresh_logical_relations() {
     let mut source = source();
     let tokens = source
         .to_token_stream()
@@ -391,8 +412,18 @@ fn projected_names_are_fresh_even_when_source_uses_reserved_looking_raw_names() 
     source = syn::parse_str(&tokens).unwrap();
     let target = compile_physical(&source, &options()).unwrap();
     let text = target.to_token_stream().to_string();
-    assert!(text.contains("__ml_keys1 = project"));
-    assert!(!text.contains("__ml_keys0 = project"));
+    for absent in [
+        "= project",
+        "= semijoin",
+        "= natural_join",
+        "keep {",
+        "bindings {",
+        "__ml_keys1",
+    ] {
+        assert!(!text.contains(absent), "unexpected RA syntax: {absent}");
+    }
+    assert!(text.contains("build { out"));
+    assert!(text.contains("Candidates (__cq_handle) => for"));
 }
 #[test]
 fn plain_execution_contains_no_stats_or_counter_operations() {
@@ -442,10 +473,12 @@ fn checker_rejects_instrumentation_shadowing_through_destructuring() {
 #[test]
 fn checker_rejects_a_configured_alias_shadowing_its_selected_macro() {
     let source = source();
-    for access_collision in [false, true] {
+    for collision in 0..3 {
         let mut options = options();
-        if access_collision {
+        if collision == 1 {
             options.access = syn::parse_quote!(__ml_provider0);
+        } else if collision == 2 {
+            options.iterator = syn::parse_quote!(__ml_provider0);
         } else {
             options
                 .inputs

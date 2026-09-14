@@ -16,10 +16,10 @@ pub type BlockStore<const N: usize> = FlatBlocks<N>;
 pub type BlockMask = SparseSelection;
 pub type ZoneSummary<const K: usize> = KeyEnvelope<K>;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct SegmentId(u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct RecordId(u32);
 
 struct Segment<const N: usize> {
@@ -152,22 +152,24 @@ impl<const N: usize> CoordinateBounds for DirectoryEntry<'_, N> {
     }
 }
 
-pub struct SparseSelection(HashSet<(SegmentId, RecordId)>);
+// Coordinate types intentionally implement neither equality nor hashing. Only
+// this private selection implementation knows their numerical encoding.
+pub struct SparseSelection(HashSet<(u32, u32)>);
 
 impl BlockSelection for SparseSelection {
     type BlockId = SegmentId;
     type RowId = RecordId;
 
     fn contains(&self, block: SegmentId, row: RecordId) -> bool {
-        self.0.contains(&(block, row))
+        self.0.contains(&(block.0, row.0))
     }
 
     fn insert(&mut self, block: SegmentId, row: RecordId) -> bool {
-        self.0.insert((block, row))
+        self.0.insert((block.0, row.0))
     }
 
     fn block_nonempty(&self, block: SegmentId) -> bool {
-        self.0.iter().any(|&(candidate, _)| candidate == block)
+        self.0.iter().any(|&(candidate, _)| candidate == block.0)
     }
 
     fn len(&self) -> usize {
@@ -185,7 +187,9 @@ impl<const N: usize> MakeSelection<FlatBlocks<N>> for SparseSelection {
             store
                 .directory
                 .iter()
-                .flat_map(|entry| (0..entry.count).map(move |offset| (entry.id, row_id(offset))))
+                .flat_map(|entry| {
+                    (0..entry.count).map(move |offset| (entry.id.0, row_id(offset).0))
+                })
                 .collect(),
         )
     }

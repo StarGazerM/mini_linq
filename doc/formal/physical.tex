@@ -161,20 +161,18 @@ versions, remain available without recomputation. Final head mapping and set
 collection give the RA output.
 \end{proof}
 
-\paragraph{A further physical realization.}
-The design supplement, \href{physical_design.pdf}{\emph{YA-Aware
-Physical Administration}}, specifies one backend family with versioned resources
-and immutable row-ID selections. Each YA edge becomes Build, Attach,
-Reduce: construct source-key providers, bind conservative filters to this
-consumer's scan, then probe exact membership before keeping left IDs.
-Bloom filters reject rows; dynamic key bounds and block zone maps can reject
-whole blocks. Projection still deduplicates into a new arena.
-A separate Transfer mode omits sweep probes and preserves
-$\pi_{X_i}(\bowtie_j L_j)\subseteq C_i\subseteq L_i$, requiring exact final
-assembly. It cannot claim Y-Freeze's full reduction. The supplement gives
-named rules, matching algorithms and provider/evidence contracts. A smaller
-implemented integer block backend exercises exact reduction and survivor access;
-the complete administrative overlay remains proposed.
+\paragraph{A direct physical realization.}
+The supplement, \href{physical_design.pdf}{\emph{Physical Choices Through Access
+Refinement}}, specifies an implemented alternative edge from RA to Rust with
+Access plans. A compiler-local environment records layouts, current relation
+versions and selected providers. Semijoin lowers to candidate traversal followed
+by exact membership; local Access refinement can reject blocks by conservative
+metadata before opening current selected payload. Exact key construction and
+candidate scanning are independent choices. Join witnesses select hash buckets
+or deferred nested traversal. Resource reuse requires the same current RHS,
+separator, key provider and collection family. The supplement gives corresponding
+rules, algorithms and conditional preservation for the admitted integer-array
+domain; it adds no whole-program IR or runtime relational interpreter.
 
 \subsection{Lazy linear lowering and the basic storage algorithm}
 The lazy domain follows RA dataflow: Unit/Rename starts current $p$; other

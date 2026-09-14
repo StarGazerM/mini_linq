@@ -4,16 +4,12 @@ This inventory covers notes 1.3 and 2.1–2.5 at the revision recorded in
 [TERMINOLOGY.md](TERMINOLOGY.md). “Implemented” identifies a corresponding
 algorithm; it does not discharge the Rust conformance or host-semantics
 obligations. The complete rule-location inventory is [rules.tsv](rules.tsv).
-One separately specified physical backend family is in
-[PHYSICAL-DESIGN.md](PHYSICAL-DESIGN.md) and [ya_physical.tex](ya_physical.tex).
-The research-to-architecture mapping in [architecture_placement.tex](architecture_placement.tex)
-places alternatives at existing macro boundaries; no universal physical IR is required.
-Its 20 administrative/runtime rules and two algorithms cover provider choice,
-consumer-local Bloom/bounds filtering, block pruning, immutable selections,
-exact reduction, conservative transfer, and exact assembly. These are proposed
-backend rules, with a bounded semantic model, not production implementation.
-The smaller [block backend](block_implementation.tex) now implements exact
-integer reduction and survivor access; it does not implement that whole overlay.
+The implemented physical alternative is documented in
+[PHYSICAL-DESIGN.md](PHYSICAL-DESIGN.md) and [access_refinement.tex](access_refinement.tex).
+Its 14 rules and two algorithms cover direct RA lowering, compiler-local resource
+sharing and native Access operations. Exact reduction retains its residual after
+optional block rejection. The [architecture discussion](architecture_placement.tex)
+places choices at existing boundaries without a universal physical IR.
 
 | Concept and note | Formalization and translation to RA | Implementation and boundary |
 | --- | --- | --- |

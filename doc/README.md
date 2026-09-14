@@ -19,6 +19,8 @@
 
 - [Project skeleton](PROJECT-SKELETON.md)
 - [IR formalization](IR-FORMALIZATION.md)
+- [Access refinement](ACCESS-REFINEMENT.md): physical choices, current views and exact pruning.
+- [Compiler structure](COMPILER-STRUCTURE.md) and [complete boundary review](IR-STAGE-REVIEW.md).
 - [Extended compiler research manuscript](formal/README.md):
   interacting host-expression dependencies, replaceable compilation paths,
   language judgments, administrative rules, conditional proofs, source

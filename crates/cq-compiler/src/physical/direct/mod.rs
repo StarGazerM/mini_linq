@@ -17,19 +17,22 @@ pub use check::check_physical;
 pub struct PhysicalOptions {
     pub storage: syn::Path,
     pub access: syn::Path,
+    pub iterator: syn::Path,
     pub inputs: BTreeMap<String, syn::Path>,
     pub materialize: syn::Path,
     pub results: BTreeMap<String, syn::Path>,
-    pub semijoin: syn::Path,
-    pub semijoins: BTreeMap<String, syn::Path>,
+    pub scan: syn::Path,
+    pub scans: BTreeMap<String, syn::Path>,
+    pub key_provider: syn::Path,
+    pub key_providers: BTreeMap<String, syn::Path>,
     pub keys: syn::Path,
     pub key_sets: BTreeMap<String, syn::Path>,
     pub join: syn::Path,
     pub joins: BTreeMap<String, syn::Path>,
 }
 impl PhysicalOptions {
-    fn recipe(&self, result: &str) -> &syn::Path {
-        self.semijoins.get(result).unwrap_or(&self.semijoin)
+    fn key_provider(&self, result: &str) -> &syn::Path {
+        self.key_providers.get(result).unwrap_or(&self.key_provider)
     }
     fn keys(&self, result: &str) -> &syn::Path {
         self.key_sets.get(result).unwrap_or(&self.keys)
@@ -53,9 +56,14 @@ impl PhysicalOptions {
                 "result providers may name only Unit, Project or NaturalJoin results; Rename and Semijoin inherit their source provider",
             ),
             (
-                &self.semijoins,
+                &self.scans,
                 1,
-                "semijoin recipes may name only Semijoin results",
+                "candidate scans may name only Semijoin results",
+            ),
+            (
+                &self.key_providers,
+                1,
+                "key providers may name only Semijoin results",
             ),
             (
                 &self.key_sets,
@@ -90,13 +98,7 @@ impl PhysicalOptions {
         Ok(())
     }
 }
-/// Compatibility entry composing CP-Defer and CP-Realize in their declared order.
-pub fn compile_physical(source: &ra::Module, options: &PhysicalOptions) -> syn::Result<syn::File> {
-    let indexed = crate::passes::compile_deferred_indexes(source)?;
-    crate::passes::compile_composed(&indexed, options)
-}
-
-/// Physical implementation body; checked stage orchestration lives in passes.rs.
+/// RA realization using compiler-local layouts and native Access operations.
 pub(crate) fn compile(source: &ra::Module, options: &PhysicalOptions) -> syn::Result<syn::File> {
     options.validate(source)?;
     let layout = layout::analyze(source, options)?;
@@ -125,18 +127,19 @@ pub(crate) fn compile(source: &ra::Module, options: &PhysicalOptions) -> syn::Re
                 lower::project(layout.view(&p.input), &target, options, &wiring)?
             }
             ra::Operator::Semijoin(op) => lower::semijoin(
-                definition,
                 layout.view(&op.left),
                 view,
                 &resources.entries[resources.uses[&result]],
+                options.scans.get(&result).unwrap_or(&options.scan),
+                options,
                 &wiring,
             )?,
             ra::Operator::NaturalJoin(op) => lower::join(
-                definition,
                 layout.view(&op.left),
                 layout.view(&op.right),
                 &target,
                 options.joins.get(&result).unwrap_or(&options.join),
+                options,
                 &wiring,
             )?,
             _ => unreachable!("layout checks the admitted source domain"),
@@ -149,121 +152,4 @@ pub(crate) fn compile(source: &ra::Module, options: &PhysicalOptions) -> syn::Re
         ));
     }
     api::emit(source, &layout, &statements, options, &wiring)
-}
-
-/// Convenience facade selecting block storage for every binding. General
-/// PhysicalOptions composition does not inherit these convenience defaults.
-pub struct BlockOptions {
-    pub storage: syn::Path,
-    pub access: syn::Path,
-    pub keys: syn::Path,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BlockSemijoin {
-    Exact,
-    ZoneMap,
-}
-pub type BlockChoices = BTreeMap<String, BlockSemijoin>;
-fn uniform(source: &ra::Module, choice: BlockSemijoin) -> BlockChoices {
-    source
-        .plan
-        .definitions
-        .iter()
-        .filter(|d| matches!(d.operator, ra::Operator::Semijoin(_)))
-        .map(|d| (symbol_name(&d.result), choice))
-        .collect()
-}
-fn block_options(
-    source: &ra::Module,
-    options: &BlockOptions,
-    choices: &BlockChoices,
-) -> syn::Result<PhysicalOptions> {
-    if uniform(source, BlockSemijoin::Exact)
-        .keys()
-        .collect::<Vec<_>>()
-        != choices.keys().collect::<Vec<_>>()
-    {
-        return Err(syn::Error::new_spanned(
-            source,
-            "block choices must name exactly the semijoin results",
-        ));
-    }
-    Ok(PhysicalOptions {
-        storage: options.storage.clone(),
-        access: options.access.clone(),
-        inputs: source
-            .program
-            .inputs()
-            .map(|r| {
-                (
-                    symbol_name(&r.name),
-                    syn::parse_quote!(::mini_linq::block_rows),
-                )
-            })
-            .collect(),
-        materialize: syn::parse_quote!(::mini_linq::block_rows),
-        results: BTreeMap::new(),
-        semijoin: syn::parse_quote!(::mini_linq::exact_semijoin),
-        semijoins: choices
-            .iter()
-            .map(|(name, choice)| {
-                (
-                    name.clone(),
-                    match choice {
-                        BlockSemijoin::Exact => syn::parse_quote!(::mini_linq::exact_semijoin),
-                        BlockSemijoin::ZoneMap => syn::parse_quote!(::mini_linq::zone_semijoin),
-                    },
-                )
-            })
-            .collect(),
-        keys: options.keys.clone(),
-        key_sets: BTreeMap::new(),
-        join: syn::parse_quote!(::mini_linq::hash_join),
-        joins: BTreeMap::new(),
-    })
-}
-pub fn compile_blocked(source: &ra::Module, options: &BlockOptions) -> syn::Result<syn::File> {
-    compile_blocked_with(source, options, &uniform(source, BlockSemijoin::Exact))
-}
-pub fn compile_zonemap(source: &ra::Module, options: &BlockOptions) -> syn::Result<syn::File> {
-    compile_blocked_with(source, options, &uniform(source, BlockSemijoin::ZoneMap))
-}
-pub fn compile_blocked_with(
-    source: &ra::Module,
-    options: &BlockOptions,
-    choices: &BlockChoices,
-) -> syn::Result<syn::File> {
-    compile_physical(source, &block_options(source, options, choices)?)
-}
-pub fn check_blocked_with(
-    source: &ra::Module,
-    target: &syn::File,
-    options: &BlockOptions,
-    choices: &BlockChoices,
-) -> syn::Result<()> {
-    check_physical(source, target, &block_options(source, options, choices)?)
-}
-pub fn check_blocked_resources(
-    source: &ra::Module,
-    target: &syn::File,
-    options: &BlockOptions,
-) -> syn::Result<()> {
-    check_blocked_with(
-        source,
-        target,
-        options,
-        &uniform(source, BlockSemijoin::Exact),
-    )
-}
-pub fn check_zonemap_resources(
-    source: &ra::Module,
-    target: &syn::File,
-    options: &BlockOptions,
-) -> syn::Result<()> {
-    check_blocked_with(
-        source,
-        target,
-        options,
-        &uniform(source, BlockSemijoin::ZoneMap),
-    )
 }

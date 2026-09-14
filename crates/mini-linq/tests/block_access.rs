@@ -34,43 +34,51 @@ mod observed_summary {
     }
 }
 
-// Each facade selects a concrete physical compilation and its collection type.
+// Caller-owned wiring expands the declared inputs into per-relation choices.
+// It selects only providers and access implementations; RA stays unchanged.
+macro_rules! uniform_physical {
+    ($storage:path, $scan:path, $key_provider:path, $keys:path;
+     $vis:vis struct $name:ident;
+     $(relation $relation:ident($($column:tt)*);)*
+     answer $($rest:tt)*) => {
+        ::mini_linq::physical_plan! {
+            storage $storage;
+            access mini_linq::collect_access;
+            iterator mini_linq::stream_access;
+            materialize ::mini_linq::block_rows;
+            inputs { $($relation => ::mini_linq::block_rows;)* }
+            scan $scan;
+            key_provider $key_provider;
+            keys $keys;
+            join ::mini_linq::hash_witnesses;
+            $vis struct $name;
+            $(relation $relation($($column)*);)*
+            answer $($rest)*
+        }
+    };
+}
 macro_rules! block_backend {
     ($($plan:tt)*) => {
-        ::mini_linq::blocked_plan! {
-            storage crate::storage;
-            access mini_linq::collect_access;
-            $($plan)*
-        }
+        uniform_physical! { crate::storage, ::mini_linq::scan_rows,
+            ::mini_linq::exact_keys, ::std::collections::HashSet; $($plan)* }
     };
 }
 macro_rules! zone_backend {
     ($($plan:tt)*) => {
-        ::mini_linq::zonemap_plan! {
-            storage crate::storage;
-            access mini_linq::collect_access;
-            $($plan)*
-        }
+        uniform_physical! { crate::storage, ::mini_linq::prune_rows,
+            ::mini_linq::zone_keys, ::std::collections::HashSet; $($plan)* }
     };
 }
 macro_rules! sorted_backend {
     ($($plan:tt)*) => {
-        ::mini_linq::blocked_plan! {
-            storage crate::sorted_storage;
-            access mini_linq::collect_access;
-            keys crate::sorted_keys::SortedKeys;
-            $($plan)*
-        }
+        uniform_physical! { crate::sorted_storage, ::mini_linq::scan_rows,
+            ::mini_linq::exact_keys, crate::sorted_keys::SortedKeys; $($plan)* }
     };
 }
 macro_rules! sorted_zone_backend {
     ($($plan:tt)*) => {
-        ::mini_linq::zonemap_plan! {
-            storage crate::sorted_storage;
-            access mini_linq::collect_access;
-            keys crate::sorted_keys::SortedKeys;
-            $($plan)*
-        }
+        uniform_physical! { crate::sorted_storage, ::mini_linq::prune_rows,
+            ::mini_linq::zone_keys, crate::sorted_keys::SortedKeys; $($plan)* }
     };
 }
 pub(crate) use {block_backend, sorted_backend, sorted_zone_backend, zone_backend};
@@ -494,24 +502,46 @@ fn alternate_raw_spellings_resolve_to_the_same_source_and_column() {
     assert_eq!(RawSource::run(&rows, size(2)), vec![(1,), (3,)]);
 }
 
-// Query identifiers must not capture generated primitive output types.
+// Query identifiers must not capture generated data, statistics or helper types.
+macro_rules! primitive_query {
+    ($name:ident) => {
+        mini_linq::planned_query! {
+            pub struct $name;
+            relation R(a: i64);
+            relation S(a: i64);
+            answer(x) :- R(x), S(x);
+        }
+    };
+}
 mod primitive_query_name {
     #![allow(non_camel_case_types)]
     use crate::zone_wiring as mini_linq;
-    mini_linq::planned_query! {
-        pub struct r#i64;
-        relation R(a: i64);
-        answer(x) :- R(x);
-    }
+    primitive_query!(r#i64);
+    primitive_query!(r#usize);
+    primitive_query!(r#str);
+    primitive_query!(r#bool);
 }
 
 #[test]
 fn query_name_cannot_shadow_generated_primitive_types() {
     let rows = BlockStore::from_rows([[3], [1], [3]], size(1));
-    assert_eq!(
-        primitive_query_name::r#i64::run(&rows, size(2)),
-        vec![(1,), (3,)]
-    );
+    let expected = vec![(1,), (3,)];
+    macro_rules! check {
+        ($name:ident) => {
+            assert_eq!(
+                primitive_query_name::$name::run(&rows, &rows, size(2)),
+                expected
+            );
+            let (answer, stats) =
+                primitive_query_name::$name::run_with_stats(&rows, &rows, size(2));
+            assert_eq!(answer, expected);
+            assert!(stats.steps.iter().any(|(_, _, work)| work.exact_probes > 0));
+        };
+    }
+    check!(r#i64);
+    check!(r#usize);
+    check!(r#str);
+    check!(r#bool);
 }
 
 sorted_zone_backend! {

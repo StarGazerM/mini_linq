@@ -1,16 +1,32 @@
-//! Source-domain failures and checking of explicitly composed physical routes.
-use cq_compiler::{
-    BlockOptions, PhysicalOptions, compile_blocked, compile_cq_planned, compile_physical,
-    compile_zonemap,
-};
-use cq_ir::cq;
-use quote::ToTokens;
+//! The direct RA edge and unsupported native access compositions.
+use cq_compiler::{PhysicalOptions, compile_cq_planned, compile_physical};
+use cq_ir::{cq, relational_plan as ra};
 
-fn options() -> BlockOptions {
-    BlockOptions {
+fn options(source: &ra::Module) -> PhysicalOptions {
+    PhysicalOptions {
         storage: syn::parse_quote!(storage_alias),
         access: syn::parse_quote!(user::access),
+        iterator: syn::parse_quote!(user::iterator),
+        inputs: source
+            .program
+            .inputs()
+            .map(|r| {
+                (
+                    cq_ir::symbol_name(&r.name),
+                    syn::parse_quote!(providers::rows),
+                )
+            })
+            .collect(),
+        materialize: syn::parse_quote!(providers::rows),
+        results: Default::default(),
+        scan: syn::parse_quote!(accesses::scan),
+        scans: Default::default(),
+        key_provider: syn::parse_quote!(accesses::keys),
+        key_providers: Default::default(),
         keys: syn::parse_quote!(::std::collections::HashSet),
+        key_sets: Default::default(),
+        join: syn::parse_quote!(accesses::witnesses),
+        joins: Default::default(),
     }
 }
 
@@ -41,198 +57,130 @@ fn unsupported_sources_are_diagnostics_not_alternative_routes() {
     for (text, expected) in sources {
         let source: cq::Module = syn::parse_str(text).unwrap();
         let ra = compile_cq_planned(&source).unwrap();
-        let error = compile_blocked(&ra, &options()).unwrap_err();
+        let error = compile_physical(&ra, &options(&ra)).unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
 }
 
 #[test]
-fn declared_continuations_and_distinct_access_shapes_remain_expansion_boundaries() {
+fn direct_lowering_emits_existing_access_regions_and_native_operations() {
     use syn::visit::{self, Visit};
     let source: cq::Module = syn::parse_quote! {
         struct P; relation R(a:i64,b:i64); relation S(a:i64,b:i64);
         answer(x,z) :- R(x,y), S(y,z);
     };
     let source = compile_cq_planned(&source).unwrap();
-    for zone in [false, true] {
-        let target = if zone {
-            compile_zonemap(&source, &options())
-        } else {
-            compile_blocked(&source, &options())
-        }
-        .unwrap();
-        let rust = prettyplease::unparse(&target);
-        assert!(rust.contains("mini_linq::block_rows!"));
-        assert!(rust.contains("access user::access;"));
-        assert!(!rust.contains("mini_linq::pull"));
-        for removed in [
-            "::Relation",
-            "::View",
-            "Index::build",
-            "Execution<",
-            "semijoin(",
-        ] {
-            assert!(
-                !rust.contains(removed),
-                "unexpected runtime algorithm: {removed}"
-            );
-        }
-        struct Calls {
-            options: cq_compiler::RecipeOptions,
-            zone: bool,
-            semijoins: Vec<cq_ir::rust_access_plan::Plan>,
-            builds: usize,
-        }
-        impl<'ast> Visit<'ast> for Calls {
-            fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
-                // The unobserved method has the same relational calls with all
-                // instrumentation erased; inspect one generated execution body.
-                if method.sig.ident == "run_with_stats" {
-                    visit::visit_impl_item_fn(self, method);
-                }
+    let options = options(&source);
+    let target = compile_physical(&source, &options).unwrap();
+    cq_compiler::check_physical(&source, &target, &options).unwrap();
+    let rust = prettyplease::unparse(&target);
+    for selected in [
+        "user::access!",
+        "iterator user::iterator;",
+        "accesses::scan!",
+        "accesses::keys!",
+        "accesses::witnesses!",
+    ] {
+        assert!(rust.contains(selected), "missing {selected}: {rust}");
+    }
+    for removed in [
+        "indexes {",
+        "= semijoin",
+        "= natural_join",
+        "bindings {",
+        "::Relation",
+        "::View",
+        "Execution<",
+    ] {
+        assert!(!rust.contains(removed), "unexpected {removed}");
+    }
+    #[derive(Default)]
+    struct Regions(Vec<cq_ir::rust_access_plan::Plan>);
+    impl<'ast> Visit<'ast> for Regions {
+        fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
+            if method.sig.ident == "run" {
+                visit::visit_impl_item_fn(self, method);
             }
-            fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-                if let Ok(source) =
-                    syn::parse2::<cq_ir::physical_context::Context>(mac.tokens.clone())
-                {
-                    if matches!(
-                        source.source.operator,
-                        cq_ir::relational_plan::Operator::Project(_)
-                            | cq_ir::relational_plan::Operator::Semijoin(_)
-                    ) {
-                        let compile = if self.zone {
-                            cq_compiler::compile_zone_semijoin
-                        } else {
-                            cq_compiler::compile_exact_semijoin
-                        };
-                        let expression = compile(&source, &self.options).unwrap();
-                        // Test the typed consumer directly. Its configured
-                        // wrapper is administrative Rust, not another query IR.
-                        let mut nested = CollectAccess::default();
-                        nested.visit_expr(&expression);
-                        if nested.0.is_empty() {
-                            self.builds += 1;
-                        }
-                        self.semijoins.extend(nested.0);
-                        return;
+        }
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            fn collect(
+                tokens: proc_macro2::TokenStream,
+                plans: &mut Vec<cq_ir::rust_access_plan::Plan>,
+            ) {
+                if let Ok(plan) = syn::parse2::<cq_ir::rust_access_plan::Plan>(tokens.clone()) {
+                    cq_ir::rust_access_plan::contract::check(&plan).unwrap();
+                    plans.push(plan);
+                    return;
+                }
+                for token in tokens {
+                    if let proc_macro2::TokenTree::Group(group) = token {
+                        collect(group.stream(), plans);
                     }
                 }
-                visit::visit_macro(self, mac);
             }
-        }
-        #[derive(Default)]
-        struct CollectAccess(Vec<cq_ir::rust_access_plan::Plan>);
-        impl<'ast> Visit<'ast> for CollectAccess {
-            fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-                fn collect(
-                    tokens: proc_macro2::TokenStream,
-                    plans: &mut Vec<cq_ir::rust_access_plan::Plan>,
-                ) {
-                    if let Ok(plan) = syn::parse2::<cq_ir::rust_access_plan::Plan>(tokens.clone()) {
-                        plans.push(plan);
-                        return;
-                    }
-                    for token in tokens {
-                        if let proc_macro2::TokenTree::Group(group) = token {
-                            collect(group.stream(), plans);
-                        }
-                    }
-                }
-                collect(mac.tokens.clone(), &mut self.0);
-            }
-        }
-        let mut calls = Calls {
-            options: cq_compiler::RecipeOptions {
-                storage: options().storage,
-                access: options().access,
-                keys: Some(options().keys),
-                work: Some(syn::parse_quote!(&__ml_work)),
-            },
-            zone,
-            semijoins: Vec::new(),
-            builds: 0,
-        };
-        calls.visit_file(&target);
-        assert_eq!(calls.builds, 2);
-        assert_eq!(calls.semijoins.len(), 2);
-        for plan in calls.semijoins {
-            cq_ir::rust_access_plan::contract::check(&plan).unwrap();
-            let clauses: Vec<_> = plan
-                .body
-                .iter()
-                .map(ToTokens::to_token_stream)
-                .map(|t| t.to_string())
-                .collect();
-            assert_eq!(clauses.len(), if zone { 4 } else { 2 });
-            assert!(clauses.last().unwrap().contains("contains"));
-            if zone {
-                assert!(clauses[0].contains("blocks"));
-                assert!(clauses[1].contains("may_match"));
-                assert!(clauses[2].contains("block_rows"));
-            } else {
-                assert!(clauses[0].contains("rows"));
-            }
+            collect(mac.tokens.clone(), &mut self.0);
         }
     }
+    let mut regions = Regions::default();
+    regions.visit_file(&target);
+    assert!(
+        regions.0.len() >= 4,
+        "all relational work should already be Access regions"
+    );
+    assert!(
+        !rust
+            .split("pub fn run_with_stats")
+            .next()
+            .unwrap()
+            .contains("Counters::default")
+    );
 }
 
 #[test]
-fn each_input_and_materialized_result_keeps_its_own_provider_path() {
-    let options = PhysicalOptions {
-        storage: syn::parse_quote!(cq_storage),
-        access: syn::parse_quote!(mini_linq::collect_access),
-        inputs: std::collections::BTreeMap::from([
-            ("R".into(), syn::parse_quote!(providers::blocks)),
-            ("S".into(), syn::parse_quote!(providers::hash)),
-            ("T".into(), syn::parse_quote!(providers::sorted)),
-        ]),
-        materialize: syn::parse_quote!(providers::hash),
-        results: std::collections::BTreeMap::from([(
-            "result".into(),
-            syn::parse_quote!(providers::sorted),
-        )]),
-        semijoin: syn::parse_quote!(recipes::exact),
-        semijoins: std::collections::BTreeMap::from([(
-            "r1".into(),
-            syn::parse_quote!(recipes::zone),
-        )]),
-        keys: syn::parse_quote!(::std::collections::HashSet),
-        key_sets: std::collections::BTreeMap::from([(
-            "r2".into(),
-            syn::parse_quote!(::std::collections::BTreeSet),
-        )]),
-        join: syn::parse_quote!(recipes::hash_join),
-        joins: Default::default(),
-    };
-    let source = syn::parse_quote! {
+fn each_binding_and_access_choice_keeps_its_own_macro_path() {
+    let source: ra::Module = syn::parse_quote! {
         struct P;
         relation R(k:i64); relation S(k:i64); relation T(k:i64);
         answer(k) :- R(k), S(k), T(k);
         relational {
-            r = rename R {k -> k};
-            s = rename S {k -> k};
-            t = rename T {k -> k};
-            r1 = semijoin r with s;
-            r2 = semijoin r1 with t;
-            result = project r2 keep {k};
-            output result as answer(k);
+            r = rename R {k -> k}; s = rename S {k -> k}; t = rename T {k -> k};
+            r1 = semijoin r with s; r2 = semijoin r1 with t;
+            result = project r2 keep {k}; output result as answer(k);
         }
     };
+    let mut options = options(&source);
+    options.inputs = std::collections::BTreeMap::from([
+        ("R".into(), syn::parse_quote!(providers::blocks)),
+        ("S".into(), syn::parse_quote!(providers::hash)),
+        ("T".into(), syn::parse_quote!(providers::sorted)),
+    ]);
+    options
+        .results
+        .insert("result".into(), syn::parse_quote!(providers::sorted));
+    options
+        .scans
+        .insert("r1".into(), syn::parse_quote!(accesses::prune));
+    options
+        .key_providers
+        .insert("r1".into(), syn::parse_quote!(accesses::zone));
+    options
+        .key_sets
+        .insert("r2".into(), syn::parse_quote!(::std::collections::BTreeSet));
     let target = compile_physical(&source, &options).unwrap();
     let rust = prettyplease::unparse(&target);
-    for provider in ["blocks", "hash", "sorted"] {
-        assert!(rust.contains(&format!("&providers::{provider}!")), "{rust}");
+    for selected in [
+        "providers::blocks!",
+        "providers::hash!",
+        "providers::sorted!",
+        "accesses::prune!",
+        "accesses::zone!",
+        "accesses::scan!",
+        "accesses::keys!",
+    ] {
+        assert!(rust.contains(selected), "missing {selected}: {rust}");
     }
-    let compact: String = rust.chars().filter(|c| !c.is_whitespace()).collect();
-    assert!(
-        compact.contains("providers::sorted!{storagecq_storage;"),
-        "{rust}"
-    );
-    assert!(rust.contains("recipes::zone!"));
-    assert!(rust.contains("recipes::exact!"));
+    let compact: String = rust.chars().filter(|ch| !ch.is_whitespace()).collect();
     assert!(compact.contains("keys::std::collections::BTreeSet;"));
-    assert!(!rust.contains("Relation"));
-    assert!(!rust.contains("View"));
 }
 
 #[test]
@@ -255,9 +203,10 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     fs::write(dir.join("Cargo.toml"), manifest).unwrap();
     // Independent target directory prevents nested Cargo from waiting on the
     // workspace test build that is executing this harness.
-    let run_case = |provider: &str, recipe: &str, keys: &str, expected: Option<&str>| {
-        let source = format!(
-            r#"
+    let run_case =
+        |provider: &str, scan: &str, key_provider: &str, keys: &str, expected: Option<&str>| {
+            let source = format!(
+                r#"
             macro_rules! wrong_hash_rows {{
                 (storage $storage:path; type $arity:literal) => {{
                     ::std::collections::HashSet<::core::primitive::u64>
@@ -277,11 +226,13 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
             mini_linq::physical_plan! {{
                 storage cq_storage;
                 access mini_linq::collect_access;
+                iterator mini_linq::stream_access;
                 inputs {{ R => {provider}; S => mini_linq::hash_rows; }}
                 materialize mini_linq::hash_rows;
-                semijoin {recipe};
+                scan {scan};
+                key_provider {key_provider};
                 keys {keys};
-                join mini_linq::hash_join;
+                join mini_linq::hash_witnesses;
                 struct P;
                 relation R(k:i64); relation S(k:i64);
                 answer(k) :- R(k), S(k);
@@ -294,37 +245,38 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
             }}
             fn main() {{}}
         "#
-        );
-        fs::write(dir.join("src/main.rs"), source).unwrap();
-        let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .args(["check", "--offline", "--quiet", "--manifest-path"])
-            .arg(dir.join("Cargo.toml"))
-            .env("CARGO_TARGET_DIR", dir.join("target"))
-            .output()
-            .unwrap();
-        let diagnostic = String::from_utf8_lossy(&output.stderr);
-        if let Some(expected) = expected {
-            assert!(
-                !output.status.success(),
-                "incompatible composition compiled"
             );
-            assert!(
-                diagnostic.contains(expected),
-                "{diagnostic}\nharness: {}",
-                dir.display()
-            );
-        } else {
-            assert!(
-                output.status.success(),
-                "{diagnostic}\nharness: {}",
-                dir.display()
-            );
-        }
-    };
+            fs::write(dir.join("src/main.rs"), source).unwrap();
+            let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+                .args(["check", "--offline", "--quiet", "--manifest-path"])
+                .arg(dir.join("Cargo.toml"))
+                .env("CARGO_TARGET_DIR", dir.join("target"))
+                .output()
+                .unwrap();
+            let diagnostic = String::from_utf8_lossy(&output.stderr);
+            if let Some(expected) = expected {
+                assert!(
+                    !output.status.success(),
+                    "incompatible composition compiled"
+                );
+                assert!(
+                    diagnostic.contains(expected),
+                    "{diagnostic}\nharness: {}",
+                    dir.display()
+                );
+            } else {
+                assert!(
+                    output.status.success(),
+                    "{diagnostic}\nharness: {}",
+                    dir.display()
+                );
+            }
+        };
     // The same dependency graph and ordinary hash route compile successfully.
     run_case(
         "mini_linq::hash_rows",
-        "mini_linq::exact_semijoin",
+        "mini_linq::scan_rows",
+        "mini_linq::exact_keys",
         "::std::collections::HashSet",
         None,
     );
@@ -332,15 +284,25 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     // requested operation. There is no capability-tag precheck or fallback.
     run_case(
         "mini_linq::hash_rows",
-        "mini_linq::zone_semijoin",
+        "mini_linq::prune_rows",
+        "mini_linq::zone_keys",
         "::std::collections::HashSet",
         Some("no block descriptor lowering"),
+    );
+    // Block-capable rows do not manufacture metadata missing from exact keys.
+    run_case(
+        "mini_linq::block_rows",
+        "mini_linq::prune_rows",
+        "mini_linq::exact_keys",
+        "::std::collections::HashSet",
+        Some("metadata rejection requires a summary implementation"),
     );
     // This provider expands every operation, but its chosen element type makes
     // the generated array access ill typed. rustc owns that diagnostic.
     run_case(
         "wrong_hash_rows",
-        "mini_linq::exact_semijoin",
+        "mini_linq::scan_rows",
+        "mini_linq::exact_keys",
         "::std::collections::HashSet",
         Some("cannot index into a value of type"),
     );
@@ -348,9 +310,22 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     // trait and its stated exactness law.
     run_case(
         "mini_linq::hash_rows",
-        "mini_linq::exact_semijoin",
+        "mini_linq::scan_rows",
+        "mini_linq::exact_keys",
         "MethodOnlyKeys",
         Some("ExactMembership"),
     );
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn native_access_fragments_reject_the_removed_relational_envelope() {
+    for source in [
+        "q = project r keep {k}; { r(k) => rows { current }; }",
+        "t = semijoin l with q; { l(k) => rows { current }; q(k) { keys }; }",
+        "storage data; access collect; work (&counter); bindings {}",
+    ] {
+        assert!(syn::parse_str::<cq_ir::physical_provider::Operation>(source).is_err());
+        assert!(syn::parse_str::<cq_ir::rust_access_plan::Plan>(source).is_err());
+    }
 }

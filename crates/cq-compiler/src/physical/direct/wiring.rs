@@ -11,9 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) struct Wiring {
     providers: BTreeMap<String, (syn::Path, syn::Ident)>,
-    recipes: BTreeMap<(String, Option<String>), ConfiguredRecipe>,
+    accesses: BTreeMap<(String, Option<String>), ConfiguredAccess>,
 }
-struct ConfiguredRecipe {
+struct ConfiguredAccess {
     path: syn::Path,
     keys: Option<syn::Path>,
     name: syn::Ident,
@@ -29,11 +29,14 @@ impl Wiring {
             .inputs
             .values()
             .chain(options.results.values())
-            .chain(options.semijoins.values())
+            .chain(options.scans.values())
+            .chain(options.key_providers.values())
             .chain(options.joins.values())
             .chain([
                 &options.materialize,
-                &options.semijoin,
+                &options.scan,
+                &options.key_provider,
+                &options.iterator,
                 &options.join,
                 &options.access,
             ])
@@ -49,36 +52,44 @@ impl Wiring {
         for (_, name) in providers.values_mut() {
             *name = fresh("provider", &mut next, &mut occupied);
         }
-        let mut recipes = BTreeMap::new();
+        let mut accesses = BTreeMap::new();
         for d in &source.plan.definitions {
             let result = symbol_name(&d.result);
-            let (path, keys) = match &d.operator {
-                ra::Operator::Semijoin(_) => (options.recipe(&result), Some(options.keys(&result))),
+            let choices = match &d.operator {
+                ra::Operator::Semijoin(_) => vec![
+                    (options.scans.get(&result).unwrap_or(&options.scan), None),
+                    (options.key_provider(&result), Some(options.keys(&result))),
+                ],
                 ra::Operator::NaturalJoin(_) => {
-                    (options.joins.get(&result).unwrap_or(&options.join), None)
+                    vec![(options.joins.get(&result).unwrap_or(&options.join), None)]
                 }
                 _ => continue,
             };
-            recipes
-                .entry((spelling(path), keys.map(spelling)))
-                .or_insert_with(|| ConfiguredRecipe {
-                    path: path.clone(),
-                    keys: keys.cloned(),
-                    name: local("recipe", 0),
-                });
+            for (path, keys) in choices {
+                accesses
+                    .entry((spelling(path), keys.map(spelling)))
+                    .or_insert_with(|| ConfiguredAccess {
+                        path: path.clone(),
+                        keys: keys.cloned(),
+                        name: local("access", 0),
+                    });
+            }
         }
         let mut next = 0;
-        for recipe in recipes.values_mut() {
-            recipe.name = fresh("recipe", &mut next, &mut occupied);
+        for access in accesses.values_mut() {
+            access.name = fresh("access", &mut next, &mut occupied);
         }
-        Self { providers, recipes }
+        Self {
+            providers,
+            accesses,
+        }
     }
     pub fn provider(&self, path: &syn::Path) -> syn::Path {
         let name = &self.providers[&spelling(path)].1;
         syn::parse_quote!(#name)
     }
-    pub fn recipe(&self, path: &syn::Path, keys: Option<&syn::Path>) -> syn::Path {
-        let name = &self.recipes[&(spelling(path), keys.map(spelling))].name;
+    pub fn access(&self, path: &syn::Path, keys: Option<&syn::Path>) -> syn::Path {
+        let name = &self.accesses[&(spelling(path), keys.map(spelling))].name;
         syn::parse_quote!(#name)
     }
     pub fn emit(&self, options: &PhysicalOptions, observed: bool) -> TokenStream {
@@ -86,20 +97,20 @@ impl Wiring {
             .providers
             .values()
             .map(|(path, name)| wrapper(name, path, &options.storage, None, None, observed));
-        let recipes = self
-            .recipes
+        let accesses = self
+            .accesses
             .values()
-            .map(|ConfiguredRecipe { path, keys, name }| {
+            .map(|ConfiguredAccess { path, keys, name }| {
                 wrapper(
                     name,
                     path,
                     &options.storage,
-                    Some(&options.access),
+                    Some(&options.iterator),
                     keys.as_ref(),
                     observed,
                 )
             });
-        quote!(#(#providers)* #(#recipes)*)
+        quote!(#(#providers)* #(#accesses)*)
     }
 }
 
@@ -109,17 +120,17 @@ pub(super) fn wrapper(
     name: &syn::Ident,
     path: &syn::Path,
     storage: &syn::Path,
-    access: Option<&syn::Path>,
+    iterator: Option<&syn::Path>,
     keys: Option<&syn::Path>,
     observed: bool,
 ) -> TokenStream {
-    let access = access.map(|p| quote!(access #p;));
+    let iterator = iterator.map(|p| quote!(iterator #p;));
     let keys = keys.map(|p| quote!(keys #p;));
     let work = observed.then(|| quote!(work (__ml_work);));
     quote! {
         macro_rules! #name {
             ($($source:tt)*) => {
-                #path! { storage #storage; #access #keys #work $($source)* }
+                #path! { storage #storage; #iterator #keys #work $($source)* }
             };
         }
     }

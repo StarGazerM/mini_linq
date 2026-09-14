@@ -1,7 +1,5 @@
 //! Small semantic relations used by the typed compiler-pass contracts.
 
-pub(crate) mod composed;
-
 pub(crate) mod ordered;
 pub(crate) mod physical;
 pub(crate) mod planned_join;
@@ -497,6 +495,35 @@ pub(crate) fn collect_pipeline_rust_is_exact(
         let #result: ::std::collections::HashSet<_> = ::core::iter::Iterator::collect(#input);
         #result
     }};
+    target == &expected
+}
+
+/// Independently check the support-stream endpoint. The local Pipeline contract
+/// establishes a sole returned terminal `Distinct`; only its implementation is
+/// omitted. The result can repeat values but has exactly the source set support.
+pub(crate) fn stream_pipeline_rust_is_exact(
+    source: &iterator_pipeline::Pipeline,
+    target: &syn::Expr,
+) -> bool {
+    if !iterator_pipeline::contract::well_formed(source) {
+        return false;
+    }
+    let Some((last, prefix)) = source.definitions.split_last() else {
+        return false;
+    };
+    let iterator_pipeline::Operator::Distinct(distinct) = &last.operator else {
+        return false;
+    };
+    let locals = prefix.iter().map(expected_rust_local);
+    let input = &distinct.input_stream;
+    let expected: syn::Expr = syn::parse_quote! {
+        ::core::iter::Iterator::flatten(
+            ::core::iter::once_with(move || {
+                #(#locals)*
+                #input
+            })
+        )
+    };
     target == &expected
 }
 

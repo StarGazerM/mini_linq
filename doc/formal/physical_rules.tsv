@@ -1,21 +1,15 @@
-rule	algorithm	planned_symbol	model_marker	scope
-PA-Need	alg:physical	need	need	Mode-specific role prepass over the full DAG
-PA-Choose	alg:physical	choose	-	Policy chooses capability-correct descriptors; no production implementation
-PA-Build	alg:physical	build	build_exact	Build also maps to build_filter; constructors supply Cover evidence
-PA-Reuse	alg:physical	reuse	reuse	Same-source Groups may answer membership
-PA-Attach	alg:physical	attach	attach	Model additionally exercises explicitly proved source-superset reuse
-PA-Reduce	alg:physical	reduce	reduce	Exact semijoin with optional conservative prefilters
-PA-Transfer	alg:physical	transfer	transfer	Candidate preservation only; exact final assembly required
-PA-Seed	alg:physical	seed	-	Explicit candidate alias evidence; not modeled as a trace command
-PA-Freeze	alg:physical	freeze	-	Latest candidates become assembly aliases; not full reduction evidence
-PA-Output	alg:physical	output	-	Checks complete occurrence and predicate coverage before answer certification
-PA-Lookup	alg:physical	lookup	lookup	Exact group handles with version identity
-PA-Expand	alg:physical	expand	expand	Consumes group temporary once; model fuses subsequent collection
-PA-Exists	alg:physical	exists	-	Membership-only natural join
-PA-Stream	alg:physical	stream	-	Existing M-Unit/Project/Extend recipe with typed Rows temporary
-PA-Collect	alg:physical	collect	collect	Set collection creates new arena and IDs
-PA-View	alg:physical	view	-	Rename layout view or host Select selection
-RX-Block	alg:physical-scan	skip_block	block_may_match	Only bounds and explicit emptiness reject entire blocks
-RX-Row	alg:physical-scan	reject_row	row_may_match	Coarse row filtering
-RX-Probe	alg:physical-scan	probe	probe	Exact witness rejection
-RX-Keep	alg:physical-scan	keep	keep	Persistent survivor selection
+rule	algorithm	path	marker	model_marker	scope
+AF-Realize	alg:access-direct	crates/cq-compiler/src/physical/direct/mod.rs	pub(crate) fn compile(	-	Direct admitted RA edge under provider and host laws
+AF-Bind	alg:access-direct	crates/cq-compiler/src/physical/direct/layout.rs	pub(super) fn analyze(	-	Current layouts and inherited provider bindings
+AF-Build	alg:access-direct	crates/cq-compiler/src/physical/direct/resources.rs	pub(super) fn emit(	-	Projected current RHS Access resource construction
+AF-Reuse	alg:access-direct	crates/cq-compiler/src/physical/direct/resources.rs	pub(super) fn analyze(	-	Same current RHS separator key provider and collection family
+AF-Semi	alg:access-direct	crates/cq-compiler/src/physical/direct/lower.rs	pub(super) fn semijoin(	reduce	Candidate traversal plus exact residual and current selection
+AF-Join	alg:access-direct	crates/cq-compiler/src/physical/direct/lower.rs	pub(super) fn join(	join	Build and Probe exact RHS witnesses
+AF-Store	alg:access-direct	crates/cq-compiler/src/physical/direct/lower.rs	fn materialize(	-	Selected provider preserves materialized row set
+AF-Scan	alg:access-leaf	crates/cq-compiler/src/physical/access/scan.rs	pub fn compile_scan_rows(	scan_rows	Current rows without expansion of metadata tokens
+AF-Prune	alg:access-leaf	crates/cq-compiler/src/physical/access/scan.rs	pub fn compile_prune_rows(	prune_rows	Guard before current selected block payload
+AF-Keys	alg:access-leaf	crates/cq-compiler/src/physical/access/keys.rs	pub fn compile_exact_keys(	exact_keys	Exact key collection and membership
+AF-Zones	alg:access-leaf	crates/cq-compiler/src/physical/access/keys.rs	pub fn compile_zone_keys(	zone_summary	Exact keys plus conservative coordinate metadata
+AF-Hash	alg:access-leaf	crates/cq-compiler/src/physical/access/witnesses.rs	pub fn compile_hash_witnesses(	hash_witnesses	Eager bucket Build and exact Probe
+AF-Nested	alg:access-leaf	crates/cq-compiler/src/physical/access/witnesses.rs	pub fn compile_nested_witnesses(	nested_witnesses	Deferred Build closure with traversal per Probe
+AF-Stream	alg:access-leaf	crates/cq-compiler/src/pipeline.rs	pub fn compile_stream_pipeline(	support_stream	Pre-Distinct sequence and support preservation

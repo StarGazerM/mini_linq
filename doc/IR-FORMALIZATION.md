@@ -293,6 +293,14 @@ descriptor. It is ordinary Rust code plus one typed local hole:
 syn::File[query { pull! { RustAccessPlan } }]
 ```
 
+The configured direct edge also ends at `Rust[Access]`, consuming RA rather than
+IndexRequirements. It keeps layouts, current versions and shared resources in a
+compiler-local environment. Its native provider operations can contain existing
+Access plans or refine candidate traversal into local block/guard/row Access;
+these fragments are not another whole-program stage. Their syntax and laws are
+specified in [Access refinement](ACCESS-REFINEMENT.md). The following storage
+ownership discussion describes the basic canonical backend specifically.
+
 ### Storage ownership
 
 Let `N_i` be the set-normalized `HashSet<Row>` for public input `i`. Let `O_i`
@@ -513,14 +521,15 @@ The exact edge predicates are intentionally different from local checks:
 | CQ -> RelationalPlan | one complete Rename per occurrence, source-order NaturalJoins, final Project, output metadata, and preserved Program |
 | RelationalPlan -> IndexRequirements | identical embedded plan plus exact stable first-use keys |
 | IndexRequirements -> staged Rust | supported input maps to `Ok`; missing required physical key maps to a controlled `Err`; structural tests inspect the complete file |
+| Configured RA -> Rust[Access] | declared source domain, current physical bindings, projected resource identity and emitted Access/source correspondence |
 | RustAccessPlan -> IteratorPipeline | exact ordered operator, Rust source, predicate, binding, output, and explicit distinct correspondence |
-| IteratorPipeline -> `syn::Expr` | direct one-local-per-definition structural correspondence; rustc and runtime tests establish behavior |
+| IteratorPipeline -> `syn::Expr` | endpoint-specific correspondence: distinct iterator, fused set sink, or explicitly support-preserving stream; rustc and runtime tests establish behavior |
 
 A local checker is not a whole-compiler proof. Physical edge checkers inspect
 generated Rust and parse declared nested macro inputs to establish specific
-source-to-target obligations. The composed checker audits provider selection,
+source-to-target obligations. The direct checker audits provider selection,
 current bindings, projections and resource uses; it does not validate arbitrary
-provider expansion or the complete generated API. Rust typing, provider laws
+provider expansion or establish complete Rust adequacy. Rust typing, provider laws
 and execution tests supply separate evidence for those remaining obligations.
 
 ## Proc-macro routing
@@ -532,8 +541,11 @@ The direct public entries are mechanical:
 | `mini_linq!` | `cq::Module` | `compile_cq` | `relational_plan!` |
 | `relational_plan!` | `relational_plan::Module` | `compile_relational_plan` | `index_requirements!` |
 | `index_requirements!` | `index_requirements::Module` | `compile_index_requirements` | staged `syn::File` |
+| `physical_plan!` | RA module plus separate physical options | `compile_physical` | staged `syn::File` with Access/native operation holes |
 | `pull!` | `rust_access_plan::Plan` | `compile_pull` | `iterator_pipeline!` |
-| `iterator_pipeline!` | `iterator_pipeline::Pipeline` | `compile_iterator_pipeline` | ordinary Rust expression |
+| `collect_access!` / `stream_access!` | `rust_access_plan::Plan` | `compile_pull` | `collect_pipeline!` / `stream_pipeline!` |
+| `iterator_pipeline!` | `iterator_pipeline::Pipeline` | `compile_iterator_pipeline` | ordinary distinct iterator expression |
+| `collect_pipeline!` / `stream_pipeline!` | `iterator_pipeline::Pipeline` | `compile_collect_pipeline` / `compile_stream_pipeline` | exact set / support-preserving stream |
 
 The typed compiler functions are reusable without procedural macros, which is
 how unit and structural tests exercise them. The proc-macro functions accept

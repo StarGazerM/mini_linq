@@ -16,6 +16,11 @@ fn all_provider_operations_round_trip_through_declared_syntax() {
         quote!(blocks(&value)),
         quote!(bounds(descriptor)),
         quote!(block_rows(descriptor)(&value)),
+        quote!(build { out(x) => ([x]) :- Rows(x) => for (x,) in (rows); }),
+        quote!(contains(&resource)([key])),
+        quote!(may_match(&resource)(bounds)(&[0, 2])),
+        quote!(probe(&resource)([key])),
+        quote!(candidates crate::rows { &value } (|bounds| keep(bounds))),
     ];
     for source in operations {
         let first: Operation = syn::parse2(source.clone()).unwrap();
@@ -69,6 +74,13 @@ fn configuration_and_malformed_argument_shapes_are_rejected() {
         quote!(bounds(descriptor, other)),
         quote!(block_rows(descriptor)),
         quote!(block_rows(descriptor)(rows)(work)),
+        quote!(build(rows)),
+        quote!(build { rows }),
+        quote!(contains(&resource)),
+        quote!(may_match(&resource)(bounds)),
+        quote!(probe(&resource)(key)(extra)),
+        quote!(candidates crate::rows (&value) (predicate)),
+        quote!(candidates crate::rows { &value }),
     ];
     for source in invalid {
         assert!(

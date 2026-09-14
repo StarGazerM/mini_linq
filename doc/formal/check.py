@@ -45,14 +45,14 @@ def main():
     }
     assert variants == set(paired), "administrative enum inventory changed"
     assert set(paired.values()) <= set(labels)
-    # Proposed physical rules are inventoried separately from production code.
-    physical = (BASE / "ya_physical.tex").read_text()
-    proposed = set(re.findall(r"\\Rule\{([^}]+)\}", physical))
+    # Every implemented Access refinement rule has a source and algorithm link.
+    physical = (BASE / "access_refinement.tex").read_text()
+    physical_labels = set(re.findall(r"\\Rule\{([^}]+)\}", physical))
     with (BASE / "physical_rules.tsv").open() as manifest:
         physical_entries = list(csv.DictReader(manifest, delimiter="\t"))
     physical_names = [entry["rule"] for entry in physical_entries]
     assert len(physical_names) == len(set(physical_names))
-    assert set(physical_names) == proposed, "physical rule mapping mismatch"
+    assert set(physical_names) == physical_labels, "physical rule mapping mismatch"
     algorithms = dict(re.findall(
         r"\\begin\{algorithm\}.*?\\label\{([^}]+)\}(.*?)\\end\{algorithm\}",
         physical, re.S))
@@ -66,25 +66,22 @@ def main():
     assert declared_model_links == {
         entry["rule"]: entry["model_marker"] for entry in physical_entries
         if entry["model_marker"] != "-"}, "model rule/function mapping drift"
+    general_entries = {entry["rule"]: entry for entry in entries}
     for entry in physical_entries:
-        assert entry["planned_symbol"] and entry["scope"], entry
+        assert entry["scope"], entry
         assert entry["algorithm"] in algorithms, entry
-        # Ensure expands explicitly into Choose/Build/Reuse; other rule calls
-        # and runtime cases must occur by full name in their algorithm block.
-        marker = {"PA-Choose": "PA-Choose/Build/Reuse",
-                  "PA-Build": "PA-Choose/Build/Reuse",
-                  "PA-Reuse": "PA-Choose/Build/Reuse"}.get(entry["rule"], entry["rule"])
-        assert marker in algorithms[entry["algorithm"]], entry
+        assert entry["rule"] in algorithms[entry["algorithm"]], entry
         assert entry["model_marker"] == "-" or entry["model_marker"] in functions, entry
-    assert all(entry["kind"] == "abstract" for entry in entries
-               if entry["rule"] in proposed), "design must not claim production implementation"
+        general = general_entries[entry["rule"]]
+        assert general["kind"] == "implementation", entry
+        assert (general["path"], general["marker"]) == (entry["path"], entry["marker"]), entry
     fingerprints = (BASE / "sources.sha256").read_text().splitlines()
     for line in fingerprints:
         expected, path = line.split("  ", 1)
         actual = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
         assert actual == expected, f"source drift: {path}; re-audit before refreshing snapshot"
     print(f"Checked {len(labels)} named rule links and {len(fingerprints)} source fingerprints.")
-    print(f"Includes {len(proposed)} proposed physical rules with algorithm/model links.")
+    print(f"Includes {len(physical_labels)} Access refinement rules with source/algorithm/model links.")
     print("This checks coverage and source identity; it does not check proofs or semantics.")
 
 

@@ -20,20 +20,34 @@ use crate::pass_contracts;
 )]
 pub fn compile_iterator_pipeline(source: &iterator_pipeline::Pipeline) -> syn::Result<syn::Expr> {
     iterator_pipeline::contract::check(source)?;
-    let locals = source
+    deferred_iterator(&source.definitions, &source.return_stream.stream)
+}
+
+/// Realize the result's support as a stream which may contain duplicates.
+///
+/// The checked linear Pipeline has a returned terminal `Distinct` with no
+/// downstream consumer. This endpoint omits precisely that operator; every
+/// preceding operator retains its normal implementation and source order.
+/// The stream's support equals the Pipeline's set denotation. Consumers must
+/// be insensitive to multiplicity, or separately establish output uniqueness.
+/// Resource collectors and conservative summary accumulation satisfy the
+/// first obligation; unique provider handles satisfy the second.
+#[contracts::contract(
+    debug_ensures(
+        iterator_pipeline::contract::well_formed(source) -> ret.as_ref()
+            .is_ok_and(|target| pass_contracts::stream_pipeline_rust_is_exact(source, target))
+    )
+)]
+pub fn compile_stream_pipeline(source: &iterator_pipeline::Pipeline) -> syn::Result<syn::Expr> {
+    iterator_pipeline::contract::check(source)?;
+    let (last, prefix) = source
         .definitions
-        .iter()
-        .map(lower_operator_to_rust)
-        .collect::<Vec<_>>();
-    let return_stream = &source.return_stream.stream;
-    syn::parse2(quote! {
-        ::core::iter::Iterator::flatten(
-            ::core::iter::once_with(move || {
-                #(#locals)*
-                #return_stream
-            })
-        )
-    })
+        .split_last()
+        .expect("a well-formed pipeline has a terminal distinct operator");
+    let iterator_pipeline::Operator::Distinct(distinct) = &last.operator else {
+        unreachable!("a well-formed pipeline ends in distinct");
+    };
+    deferred_iterator(prefix, &distinct.input_stream)
 }
 
 /// Consume a pipeline into its exact result set.
@@ -64,6 +78,21 @@ pub fn compile_collect_pipeline(source: &iterator_pipeline::Pipeline) -> syn::Re
         let #result: ::std::collections::HashSet<_> = ::core::iter::Iterator::collect(#input);
         #result
     }})
+}
+
+fn deferred_iterator(
+    definitions: &[iterator_pipeline::Definition],
+    return_stream: &syn::Ident,
+) -> syn::Result<syn::Expr> {
+    let locals = definitions.iter().map(lower_operator_to_rust);
+    syn::parse2(quote! {
+        ::core::iter::Iterator::flatten(
+            ::core::iter::once_with(move || {
+                #(#locals)*
+                #return_stream
+            })
+        )
+    })
 }
 
 fn lower_operator_to_rust(definition: &iterator_pipeline::Definition) -> TokenStream {
@@ -152,6 +181,55 @@ fn lower_operator_to_rust(definition: &iterator_pipeline::Definition) -> TokenSt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn support_stream_omits_only_the_returned_terminal_distinct() {
+        let source: iterator_pipeline::Pipeline = syn::parse_quote! {
+            iter0 = scan (x,) in (rows) yield (x,);
+            iter1 = filter iter0 as (x,) if (keep(x));
+            iter2 = project iter1 as (x,) yield (x % 2);
+            iter3 = distinct iter2;
+            return iter3;
+        };
+        let actual = compile_stream_pipeline(&source).unwrap();
+        assert!(pass_contracts::stream_pipeline_rust_is_exact(
+            &source, &actual
+        ));
+        assert!(!pass_contracts::iterator_pipeline_rust_is_exact(
+            &source, &actual
+        ));
+        let text = quote!(#actual).to_string();
+        assert!(!text.contains("HashSet"));
+        assert!(!text.contains("iter3"));
+        assert!(text.contains("keep (x)"));
+        assert!(text.contains("x % 2"));
+        assert!(!pass_contracts::stream_pipeline_rust_is_exact(
+            &source,
+            &compile_iterator_pipeline(&source).unwrap()
+        ));
+        let mut wrong_source = source.clone();
+        let iterator_pipeline::Operator::Scan(scan) = &mut wrong_source.definitions[0].operator
+        else {
+            unreachable!();
+        };
+        scan.source = syn::parse_quote!(other_rows);
+        assert!(!pass_contracts::stream_pipeline_rust_is_exact(
+            &wrong_source,
+            &actual
+        ));
+
+        let mut wrong_return = source.clone();
+        wrong_return.return_stream.stream = syn::parse_quote!(iter2);
+        assert!(compile_stream_pipeline(&wrong_return).is_err());
+        assert!(!pass_contracts::stream_pipeline_rust_is_exact(
+            &wrong_return,
+            &actual
+        ));
+        let mut missing_distinct = source;
+        missing_distinct.definitions.pop();
+        missing_distinct.return_stream.stream = syn::parse_quote!(iter2);
+        assert!(compile_stream_pipeline(&missing_distinct).is_err());
+    }
 
     #[test]
     fn set_sink_contract_checks_the_terminal_stream_and_collection_type() {

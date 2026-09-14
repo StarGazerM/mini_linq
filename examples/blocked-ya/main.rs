@@ -3,13 +3,14 @@ use cq_storage::BlockStore;
 use std::collections::{BTreeSet, HashSet};
 use std::num::NonZeroUsize;
 
-// A facade composes providers per binding and a semijoin recipe per operation.
+// A facade composes providers per binding and access implementations per operation.
 // S and T remain native containers; only R offers block descriptors and bounds.
 macro_rules! configured {
-    ($reduction:path; $($ra:tt)*) => {
+    ($scan:path, $key_provider:path; $($ra:tt)*) => {
         ::mini_linq::physical_plan! {
             storage ::cq_storage;
             access ::mini_linq::collect_access;
+            iterator ::mini_linq::stream_access;
             materialize ::mini_linq::hash_rows;
             inputs {
                 R => ::mini_linq::block_rows;
@@ -17,21 +18,23 @@ macro_rules! configured {
                 T => ::mini_linq::sorted_rows;
             }
             results {}
-            semijoin ::mini_linq::exact_semijoin;
-            semijoins { r1 => $reduction; }
+            scan ::mini_linq::scan_rows;
+            scans { r1 => $scan; }
+            key_provider ::mini_linq::exact_keys;
+            key_providers { r1 => $key_provider; }
             keys ::std::collections::HashSet;
             key_sets { r1 => ::std::collections::BTreeSet; }
-            join ::mini_linq::hash_join;
+            join ::mini_linq::hash_witnesses;
             joins {}
             $($ra)*
         }
     };
 }
 macro_rules! exact_rows {
-    ($($ra:tt)*) => { configured!(::mini_linq::exact_semijoin; $($ra)*); };
+    ($($ra:tt)*) => { configured!(::mini_linq::scan_rows, ::mini_linq::exact_keys; $($ra)*); };
 }
 macro_rules! zone_rows {
-    ($($ra:tt)*) => { configured!(::mini_linq::zone_semijoin; $($ra)*); };
+    ($($ra:tt)*) => { configured!(::mini_linq::prune_rows, ::mini_linq::zone_keys; $($ra)*); };
 }
 pub(crate) use {exact_rows, zone_rows};
 mod exact_wiring {

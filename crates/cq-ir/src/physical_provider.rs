@@ -1,7 +1,7 @@
-//! Contextual provider fragments within physical realization.
+//! Native access leaves and storage fragments within physical realization.
 //!
-//! These invocations occur inside the Rust context emitted from
-//! IndexRequirements; native expression leaves can expand after Access lowering. They
+//! These invocations occur inside the Rust program emitted from
+//! RA or IndexRequirements; native expression leaves can expand after Access lowering. They
 //! describe storage operations, not additional relational operators. The selected
 //! implementation supplies the fragment and owes the operation's semantic law;
 //! Rust checks its concrete types, expressions, statements and borrowing.
@@ -13,6 +13,10 @@
 //!              | materialize Ident Ident (Expr) (Expr)
 //!              | blocks (Expr) | bounds (Expr)
 //!              | block_rows (Expr) (Expr)
+//!              | build { AccessPlan }
+//!              | contains (Expr) (Expr) | probe (Expr) (Expr)
+//!              | may_match (Expr) (Expr) (Expr)
+//!              | candidates Path { Expr } (Expr)
 //! ```
 
 use crate::Column;
@@ -29,6 +33,11 @@ pub mod kw {
     syn::custom_keyword!(blocks);
     syn::custom_keyword!(bounds);
     syn::custom_keyword!(block_rows);
+    syn::custom_keyword!(build);
+    syn::custom_keyword!(contains);
+    syn::custom_keyword!(may_match);
+    syn::custom_keyword!(probe);
+    syn::custom_keyword!(candidates);
 }
 
 /// Operations admitted by the supplied provider interface.
@@ -148,5 +157,78 @@ pub enum Operation {
         value_paren: token::Paren,
         #[syn(in = value_paren)]
         value: Box<syn::Expr>,
+    },
+    /// Construct an access resource from the existing annotated query region.
+    /// Its selected implementation determines the resource representation.
+    #[parse(peek = kw::build)]
+    Build {
+        build_token: kw::build,
+        #[syn(braced)]
+        plan_brace: token::Brace,
+        #[syn(in = plan_brace)]
+        plan: Box<crate::rust_access_plan::Plan>,
+    },
+    /// Exact membership of an owned key in a borrowed resource.
+    #[parse(peek = kw::contains)]
+    Contains {
+        contains_token: kw::contains,
+        #[syn(parenthesized)]
+        resource_paren: token::Paren,
+        #[syn(in = resource_paren)]
+        resource: Box<syn::Expr>,
+        #[syn(parenthesized)]
+        key_paren: token::Paren,
+        #[syn(in = key_paren)]
+        key: Box<syn::Expr>,
+    },
+    /// Conservative rejection using enclosing bounds and projected coordinates.
+    #[parse(peek = kw::may_match)]
+    MayMatch {
+        may_match_token: kw::may_match,
+        #[syn(parenthesized)]
+        resource_paren: token::Paren,
+        #[syn(in = resource_paren)]
+        resource: Box<syn::Expr>,
+        #[syn(parenthesized)]
+        bounds_paren: token::Paren,
+        #[syn(in = bounds_paren)]
+        bounds: Box<syn::Expr>,
+        #[syn(parenthesized)]
+        columns_paren: token::Paren,
+        #[syn(in = columns_paren)]
+        columns: Box<syn::Expr>,
+    },
+    /// Enumerate precisely the witnesses for an owned key in a borrowed resource.
+    #[parse(peek = kw::probe)]
+    Probe {
+        probe_token: kw::probe,
+        #[syn(parenthesized)]
+        resource_paren: token::Paren,
+        #[syn(in = resource_paren)]
+        resource: Box<syn::Expr>,
+        #[syn(parenthesized)]
+        key_paren: token::Paren,
+        #[syn(in = key_paren)]
+        key: Box<syn::Expr>,
+    },
+    /// Enumerate handles covering every row needed by the enclosing exact guard.
+    ///
+    /// A scan may ignore the predicate. Pruning may omit a block only if the
+    /// supplied predicate, applied to its enclosing bounds, is false. The
+    /// enclosing access region must establish that every omitted current row
+    /// fails its exact residual predicate. This is a conditional access law,
+    /// not a promise that candidate enumeration itself denotes the full view.
+    #[parse(peek = kw::candidates)]
+    Candidates {
+        candidates_token: kw::candidates,
+        provider: syn::Path,
+        #[syn(braced)]
+        value_brace: token::Brace,
+        #[syn(in = value_brace)]
+        value: Box<syn::Expr>,
+        #[syn(parenthesized)]
+        predicate_paren: token::Paren,
+        #[syn(in = predicate_paren)]
+        predicate: Box<syn::Expr>,
     },
 }

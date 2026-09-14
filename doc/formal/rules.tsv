@@ -139,33 +139,17 @@ ST-Entry	implementation	crates/mini-linq/src/lib.rs	pub fn planned_query	Represe
 ST-Hole	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy is an explicit obligation.
 ST-Rust	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy is an explicit obligation.
 ST-Emit	implementation	crates/mini-linq/src/lib.rs	pub fn iterator_pipeline	Correspondence location; proof obligation C-Conformance remains.
-PA-Need	abstract	-	-	Proposed physical design only; alg:physical; planned need; Mode-specific role prepass over the full DAG.
-PA-Choose	abstract	-	-	Proposed physical design only; alg:physical; planned choose; Policy chooses capability-correct descriptors; no production implementation.
-PA-Build	abstract	-	-	Proposed physical design only; alg:physical; planned build; Build also maps to build_filter; constructors supply Cover evidence.
-PA-Reuse	abstract	-	-	Proposed physical design only; alg:physical; planned reuse; Same-source Groups may answer membership.
-PA-Attach	abstract	-	-	Proposed physical design only; alg:physical; planned attach; Model additionally exercises explicitly proved source-superset reuse.
-PA-Reduce	abstract	-	-	Proposed physical design only; alg:physical; planned reduce; Exact semijoin with optional conservative prefilters.
-PA-Transfer	abstract	-	-	Proposed physical design only; alg:physical; planned transfer; Candidate preservation only; exact final assembly required.
-PA-Seed	abstract	-	-	Proposed physical design only; alg:physical; planned seed; Explicit candidate alias evidence; not modeled as a trace command.
-PA-Freeze	abstract	-	-	Proposed physical design only; alg:physical; planned freeze; Latest candidates become assembly aliases; not full reduction evidence.
-PA-Output	abstract	-	-	Proposed physical design only; alg:physical; planned output; Checks complete occurrence and predicate coverage before answer certification.
-PA-Lookup	abstract	-	-	Proposed physical design only; alg:physical; planned lookup; Exact group handles with version identity.
-PA-Expand	abstract	-	-	Proposed physical design only; alg:physical; planned expand; Consumes group temporary once; model fuses subsequent collection.
-PA-Exists	abstract	-	-	Proposed physical design only; alg:physical; planned exists; Membership-only natural join.
-PA-Stream	abstract	-	-	Proposed physical design only; alg:physical; planned stream; Existing M-Unit/Project/Extend recipe with typed Rows temporary.
-PA-Collect	abstract	-	-	Proposed physical design only; alg:physical; planned collect; Set collection creates new arena and IDs.
-PA-View	abstract	-	-	Proposed physical design only; alg:physical; planned view; Rename layout view or host Select selection.
-RX-Block	abstract	-	-	Proposed physical design only; alg:physical-scan; planned skip_block; Only bounds and explicit emptiness reject entire blocks.
-RX-Row	abstract	-	-	Proposed physical design only; alg:physical-scan; planned reject_row; Coarse row filtering.
-RX-Probe	abstract	-	-	Proposed physical design only; alg:physical-scan; planned probe; Exact witness rejection.
-RX-Keep	abstract	-	-	Proposed physical design only; alg:physical-scan; planned keep; Persistent survivor selection.
-CP-Defer	implementation	crates/cq-compiler/src/passes.rs	pub fn compile_deferred_indexes	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Realize	implementation	crates/cq-compiler/src/passes.rs	pub fn compile_composed	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Bind	implementation	crates/cq-compiler/src/physical/composed/lower.rs	pub(super) fn context(	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Build	implementation	crates/cq-compiler/src/physical/semijoin.rs	fn build_keys(	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Reuse	implementation	crates/cq-compiler/src/physical/composed/resources.rs	pub(super) fn analyze(	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Exact	implementation	crates/cq-compiler/src/physical/semijoin.rs	pub fn compile_exact_semijoin	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Zone	implementation	crates/cq-compiler/src/physical/semijoin.rs	pub fn compile_zone_semijoin	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Hash	implementation	crates/cq-compiler/src/physical/joins.rs	pub fn compile_hash_join	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Nested	implementation	crates/cq-compiler/src/physical/joins.rs	pub fn compile_nested_loop_join	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
-CP-Store	implementation	crates/cq-compiler/src/physical/composed/lower.rs	fn materialize(	Contextual physical edge; alg:block-ra. Source correspondence and bounded gates; provider/host/expansion laws remain premises.
+AF-Realize	implementation	crates/cq-compiler/src/physical/direct/mod.rs	pub(crate) fn compile(	Direct admitted RA edge under provider and host laws. Conditional semantic law; inventory does not verify proof.
+AF-Bind	implementation	crates/cq-compiler/src/physical/direct/layout.rs	pub(super) fn analyze(	Current layouts and inherited provider bindings. Conditional semantic law; inventory does not verify proof.
+AF-Build	implementation	crates/cq-compiler/src/physical/direct/resources.rs	pub(super) fn emit(	Projected current RHS Access resource construction. Conditional semantic law; inventory does not verify proof.
+AF-Reuse	implementation	crates/cq-compiler/src/physical/direct/resources.rs	pub(super) fn analyze(	Same current RHS separator key provider and collection family. Conditional semantic law; inventory does not verify proof.
+AF-Semi	implementation	crates/cq-compiler/src/physical/direct/lower.rs	pub(super) fn semijoin(	Candidate traversal plus exact residual and current selection. Conditional semantic law; inventory does not verify proof.
+AF-Join	implementation	crates/cq-compiler/src/physical/direct/lower.rs	pub(super) fn join(	Build and Probe exact RHS witnesses. Conditional semantic law; inventory does not verify proof.
+AF-Store	implementation	crates/cq-compiler/src/physical/direct/lower.rs	fn materialize(	Selected provider preserves materialized row set. Conditional semantic law; inventory does not verify proof.
+AF-Scan	implementation	crates/cq-compiler/src/physical/access/scan.rs	pub fn compile_scan_rows(	Current rows without expansion of metadata tokens. Conditional semantic law; inventory does not verify proof.
+AF-Prune	implementation	crates/cq-compiler/src/physical/access/scan.rs	pub fn compile_prune_rows(	Guard before current selected block payload. Conditional semantic law; inventory does not verify proof.
+AF-Keys	implementation	crates/cq-compiler/src/physical/access/keys.rs	pub fn compile_exact_keys(	Exact key collection and membership. Conditional semantic law; inventory does not verify proof.
+AF-Zones	implementation	crates/cq-compiler/src/physical/access/keys.rs	pub fn compile_zone_keys(	Exact keys plus conservative coordinate metadata. Conditional semantic law; inventory does not verify proof.
+AF-Hash	implementation	crates/cq-compiler/src/physical/access/witnesses.rs	pub fn compile_hash_witnesses(	Eager bucket Build and exact Probe. Conditional semantic law; inventory does not verify proof.
+AF-Nested	implementation	crates/cq-compiler/src/physical/access/witnesses.rs	pub fn compile_nested_witnesses(	Deferred Build closure with traversal per Probe. Conditional semantic law; inventory does not verify proof.
+AF-Stream	implementation	crates/cq-compiler/src/pipeline.rs	pub fn compile_stream_pipeline(	Pre-Distinct sequence and support preservation. Conditional semantic law; inventory does not verify proof.

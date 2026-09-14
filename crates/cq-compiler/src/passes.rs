@@ -71,37 +71,15 @@ pub fn compile_result_indexes(
     Ok(target)
 }
 
-/// CP-Defer: preserve the complete RA and request no named indexed resources.
-///
-/// This alternative index-selection policy leaves auxiliary construction to the
-/// selected physical implementation. It does not remove written requirements
-/// from an existing IndexRequirements module.
-pub fn compile_deferred_indexes(
+/// Configured RA -> Rust[Access]. Layouts and resource reuse remain local to
+/// this compiler edge; there is no empty index overlay or contextual language.
+pub fn compile_physical(
     source: &relational_plan::Module,
-) -> syn::Result<index_requirements::Module> {
-    relational_plan::contract::check(source)?;
-    let target = index_requirements::Module {
-        relational_plan: source.clone(),
-        indexes_token: Default::default(),
-        indexes_brace: Default::default(),
-        indexes: Default::default(),
-    };
-    pass_contracts::composed::deferred_indexes(source, &target)?;
-    Ok(target)
-}
-
-/// CP-Realize: realize an empty index overlay through selected physical macros.
-///
-/// Every written index requirement is rejected. Each selected implementation
-/// owns construction or borrowing of the auxiliary structures its algorithm
-/// needs; canonical indexed backends retain their separate coverage contracts.
-pub fn compile_composed(
-    source: &index_requirements::Module,
-    options: &crate::physical::composed::PhysicalOptions,
+    options: &crate::physical::direct::PhysicalOptions,
 ) -> syn::Result<syn::File> {
-    pass_contracts::composed::domain(source)?;
-    let target = crate::physical::composed::compile(&source.relational_plan, options)?;
-    pass_contracts::composed::realization(source, &target, options)?;
+    relational_plan::contract::check(source)?;
+    let target = crate::physical::direct::compile(source, options)?;
+    crate::physical::direct::check_physical(source, &target, options)?;
     Ok(target)
 }
 

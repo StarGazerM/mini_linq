@@ -12,7 +12,7 @@ use quote::quote;
 /// Expand a typed block operation with an independently selected mask.
 ///
 /// The result is a Rust type for `Type`, statements for `Materialize`, and an
-/// expression otherwise. The owning physical context supplies argument meanings.
+/// expression otherwise. The enclosing Access region supplies argument meanings.
 pub fn compile_block_provider(
     operation: &Operation,
     options: &ProviderOptions,
@@ -96,6 +96,12 @@ pub fn compile_block_provider(
                 }
                 (__cq_source.0, __cq_mask)
             })
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(
+                operation,
+                "unsupported block storage operation",
+            ));
         }
     };
     Ok(output)

@@ -22,7 +22,7 @@ impl NativeSet {
 /// Expand a typed operation over an ordinary native hash set of integer tuples.
 ///
 /// The result is a Rust type for `Type`, statements for `Materialize`, and an
-/// expression otherwise. The owning physical context supplies argument meanings.
+/// expression otherwise. The enclosing Access region supplies argument meanings.
 pub fn compile_hash_provider(
     input: &Operation,
     options: &ProviderOptions,
@@ -97,7 +97,13 @@ fn native_provider(
         Operation::Blocks { .. } | Operation::Bounds { .. } | Operation::BlockRows { .. } => {
             return Err(syn::Error::new_spanned(
                 operation,
-                "this native row-set provider has no block descriptor lowering; select a block provider for this binding or another semijoin implementation",
+                "this native row-set provider has no block descriptor lowering; select a block provider for this binding or ordinary row access",
+            ));
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(
+                operation,
+                "unsupported native row-set operation",
             ));
         }
     };

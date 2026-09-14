@@ -73,7 +73,7 @@ fn access_checks_fresh_bindings_before_pipeline_construction() {
 }
 
 #[test]
-fn both_pipeline_endpoints_check_empty_and_incomplete_pipelines() {
+fn all_pipeline_endpoints_check_empty_and_incomplete_pipelines() {
     let empty: iterator_pipeline::Pipeline = syn::parse_quote! { return missing; };
     let incomplete: iterator_pipeline::Pipeline = syn::parse_quote! {
         iter0 = unit yield ();
@@ -89,5 +89,6 @@ fn both_pipeline_endpoints_check_empty_and_incomplete_pipelines() {
             diagnostic,
         );
         rejects(|| cq_compiler::compile_collect_pipeline(source), diagnostic);
+        rejects(|| cq_compiler::compile_stream_pipeline(source), diagnostic);
     }
 }

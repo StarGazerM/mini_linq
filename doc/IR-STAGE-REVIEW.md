@@ -1,211 +1,99 @@
-# IR and stage review after compact physical lowering
+# IR and compiler boundary review
 
-Reviewed on 12 September 2026 against the implemented compiler, macro frontends,
-local contracts, edge checkers, and focused debug/release boundary tests.
+This review covers the Access-refinement design and the implementation boundaries.
+The canonical and configured routes are distinct valid edges:
 
-The refactor preserves the established compilation order. No stage-order bypass
-or new relational operator algebra was found. Physical operator inputs now carry
-an existing RA definition and exactly its free binding assumptions. Configuration
-is separate, key construction uses Project, and reduction consumes that projected
-relation. The remaining compactness issue is principally the older, deliberately
-explicit IteratorPipeline grammar; it was reviewed but not redesigned here.
+```text
+CQ → RA → IndexRequirements → Rust[Access] → Rust[Pipeline] → Rust
+RA ── configured direct physical lowering ──→ Rust[Access]
+```
 
-## Complete representation inventory
+The direct edge ends at `Rust[Access]`. Γ is compiler-local physical information,
+not an intervening language. It is required for physical lowering with or without
+Yannakakis; logical RA denotation itself needs only a database valuation.
 
-| Representation and owner | Meaning and information retained | Local boundary check | Next compilation decision |
+## Complete inventory
+
+| Representation and owner | Meaning | Boundary obligation | Next decision |
 | --- | --- | --- | --- |
-| [CQ Module/Program](../crates/cq-ir/src/cq.rs) | Typed input/result declarations, query head and body; Rust expressions and patterns remain native Syn syntax. | Input declarations, arities, head/body binding, expression dependencies, and the admitted CQ forms. Parsing an extension form does not imply its semantic contract admits it. | Written or planned CQ-to-RA scheduling. |
-| [RelationalPlan Module](../crates/cq-ir/src/relational_plan.rs) | Preserved CQ source plus a named DAG of Unit, Rename, NaturalJoin, Project, Semijoin, Select and Extend definitions and an ordered output head. | Defined-before-use operands, headings and types, output consistency and reachability. This local check does not prove equivalence to the retained CQ body. | Select equality-index requirements or the deferred empty overlay. |
-| [IndexRequirements Module](../crates/cq-ir/src/index_requirements.rs) | The complete RA module plus a set of named equality-key demands. `@` distinguishes the RA-result namespace from input relations; it is not a storage-capability tag. | Declared namespace, nonempty increasing in-range keys and no duplicates. Coverage of a particular algorithm is an edge-specific obligation. | A basic/lazy, materialized, or composed physical realization. |
-| [Physical Context](../crates/cq-ir/src/physical_context.rs) | An existing Project, Semijoin or NaturalJoin definition under row/resource binding assumptions. This is the input to a deferred physical lowering, within the physical realization edge. | Exactly the free operand bindings; distinct ordered attributes; result freshness against operands; row/resource roles; canonical projected-key heading. | The selected operator recipe chooses exact or zone traversal, hash witnesses, or nested loops, and emits Rust with applicable Access/provider holes. |
-| [Provider Operation](../crates/cq-ir/src/physical_provider.rs) | A type, expression or statement fragment request: type/input/len/row/scan/rows/select/materialize/blocks/bounds/block_rows. It introduces no RA operators. | Derived syntax owns argument categories. The selected provider rejects unsupported operations; Rust checks expanded types. Parsing alone asserts no block-access or membership law. | Native set or block trait operations chosen by that provider. |
-| [RustAccessPlan](../crates/cq-ir/src/rust_access_plan.rs) | Logical occurrence labels paired with actual Rust iteration, guard and output expressions. Physical control has already been selected. | Binding availability and appropriate `for`/`if` shape; this does not prove that an arbitrary Rust expression denotes its logical label. | Pull lowers the region to IteratorPipeline; the continuation chooses iterator or owned-set realization. |
-| [IteratorPipeline](../crates/cq-ir/src/iterator_pipeline.rs) | A named linear pipeline with explicit source, joins, filters, projection and final distinctness. | Canonical stream sequence, predecessor/binding consistency, one final projection and distinct result, and returned stream. | Standard Rust iterator adapters, or a HashSet sink that folds terminal distinctness into collection. |
-| Syn `File` / `Expr` / `Type` / statements | The actual host program and fragments, including deferred macro holes while expansion is incomplete. This is not a separate runtime query description. | Syn checks syntax; selected edge checkers inspect specified correspondences; Rust checks completed expansion. | Rust compilation and ordinary execution. |
+| [CQ](../crates/cq-ir/src/cq.rs) | Declarations, query, native expressions/patterns | Arity, declarations, binding and admitted source forms | Written or planned scheduling |
+| [RA](../crates/cq-ir/src/relational_plan.rs) | Named algebra DAG, preserved CQ source and ordered output | Definition order, headings, output/reachability; equivalence to CQ is a separate edge obligation | Canonical index demands or direct physical lowering |
+| [IndexRequirements](../crates/cq-ir/src/index_requirements.rs) | RA plus named equality-key demands | Namespace, ordered in-range nonempty keys, uniqueness; chosen realization must cover required access | Canonical physical implementation |
+| Syn `File` with Access holes | Host allocation, lifetime, ordering and local access code | Selected physical edge's correspondence and representation relation | Expand local Access and native operations |
+| [Access](../crates/cq-ir/src/rust_access_plan.rs) | Logical occurrence labels plus actual Rust iteration, guard and output expressions | Logical binding/shape checks; native-leaf denotation remains a premise | Pull lowers to Pipeline |
+| [Provider Operation](../crates/cq-ir/src/physical_provider.rs) | Typed native type/expression/statement fragments, including Build, Probe and Candidates | Argument syntax, operation-specific checks and generated Rust typing | Selected storage or local Access expansion |
+| [Pipeline](../crates/cq-ir/src/iterator_pipeline.rs) | Explicit Scan/Join/Filter/Project/Distinct graph | Stream order, predecessors, bindings, terminal shape | Distinct iterator, fused set collector or support-preserving stream endpoint |
+| Syn `Expr`/`Type`/statements and completed Rust | Host program and its fragments | Syntax first; Rust resolution/typing after macro expansion | Ordinary execution under host/provider laws |
 
-The optimizer's [Predicate/Term](../crates/cq-ir/src/cq/predicate.rs) values are
-recognizers for a movable expression subset, not an alternative CQ parser.
-`JoinPlanReport`, GYO state, clause dependencies, relation headings, Context
-analysis, layouts, resource tables and wiring maps are compiler analysis or proof
-objects. They are not additional serialized query stages. In particular, deriving
-column maps inside `Analysis` does not reintroduce them into Context syntax.
+Provider operations are native leaves, not a whole-program IR between RA and
+Access. Their Build argument is an existing Access plan. Candidates may produce
+a nested Access plan expressing blocks, a metadata guard and selected block rows.
+That local refinement does not run a later stage backwards or reinterpret RA.
 
-## Compiler flow and edge obligations
+GYO state, administrative histories, expression recognizers, layouts, resource
+maps and macro wiring are analysis/proof objects. None requires a serialized
+language merely because a Rust struct holds it.
 
-```text
-CQ
-  -- written/planned scheduling --> RA
-  -- base/result/deferred index selection --> IndexRequirements
-  -- selected physical realization --> Rust with deferred holes
+## Syntax necessity
 
-Within composed realization:
-  existing RA definitions + free bindings --> selected operator recipe
-  --> Rust[Access/provider operations]
+The retained CQ in RA supports source correspondence. Retained RA in
+IndexRequirements gives index demands a named source. Access labels connect
+binding semantics to native Rust leaves. These are semantic/proof sources, not
+redundant execution annotations. They should be evaluated against the checks that
+consume them rather than erased by textual duplication alone.
 
-Within each Access region:
-  Access --> IteratorPipeline --> Rust iterator or exact set
+Physical positions are derived from logical headings and current layouts.
+Resources use generated Rust locals, without new logical projection names.
+Native operations carry their operands only. Storage paths, selected continuations,
+collection families and instrumentation live in frontend options and lexical
+wrappers. No serialized physical Context, operator-recipe query language, or
+empty deferred-index compatibility stage remains in the design.
 
-Provider operations expand wherever their Rust fragment is required.
-```
+The Pipeline grammar deliberately repeats names/binding descriptions to expose
+and check each step. Its compactness can be revisited separately. This refactor
+does not change its syntax or silently weaken the canonical iterator contract.
+The new stream endpoint has the same set support and preserves the pre-Distinct
+sequence. Unique provider traversal therefore stays unique; support equality
+alone would permit an arbitrary replacement endpoint to introduce duplicates.
 
-This is a graph of contextual expansions. Provider calls may survive inside
-Access or Pipeline leaves and expand later; a provider type can also appear in
-an API parameter. A key projection can emit Rust directly without an Access
-region. These facts do not establish a new mandatory provider-before-Access stage.
+## Checking boundaries
 
-| Edge | Checked relationship and implementation ownership |
-| --- | --- |
-| CQ → RA | [passes.rs](../crates/cq-compiler/src/passes.rs) validates the source. The planned path checks the supplied derivation against actual definitions through [planned_join.rs](../crates/cq-compiler/src/pass_contracts/planned_join.rs) and the ordered-clause checker. Basic correspondence remains an additional debug postcondition. |
-| RA → IndexRequirements | Canonical passes preserve the complete RA and derive their exact stable first-use demands. `compile_deferred_indexes` preserves the same source and writes exactly `indexes {}`. It does not erase an existing overlay. |
-| Indexed → basic/lazy/materialized Rust | Each backend checks its admitted domain and coverage and audits the concrete storage/access correspondence. Extra written requirements are real demands, subject to that backend's contract. |
-| Empty-overlay indexed → composed Rust | `compile_composed` rejects every nonempty written overlay before realization. [composed/check.rs](../crates/cq-compiler/src/physical/composed/check.rs) reconstructs current versions, headings, projection identity, sharing, binding dominance and configured macro uses for both execution methods. |
-| Context → Rust with lower holes | [semijoin.rs](../crates/cq-compiler/src/physical/semijoin.rs) and [joins.rs](../crates/cq-compiler/src/physical/joins.rs) check source roles and derive physical positions, then construct locally checked Access regions. These checks are not general equivalence proofs for arbitrary recipes. |
-| Access → Pipeline | The checked public `compile_pull` preserves source order and native patterns/expressions; the existing independent exact-edge predicate is an additional debug postcondition. |
-| Pipeline → Rust | Both public endpoints validate the Pipeline before lowering. Their debug postconditions check the specified iterator or set-sink expansion; Rust and execution tests provide separate behavioral evidence. |
+Public CQ, RA, index, Access and Pipeline pass entries check malformed sources
+unconditionally and return diagnostics in debug and release builds. Debug-only
+assertions may check postconditions, but they are not the source validation API.
+The malformed-source regression suite catches unwinding and requires `Err`.
 
-The public `compile_physical`, blocked and zone convenience functions compose
-the deferred index and composed realization edges. The public `physical_plan!`
-macro forwards configured IndexRequirements through relative
-`mini_linq::composed!`, so the intermediate macro remains replaceable. The
-`workload_query!` compiled convenience mode invokes the typed stages directly;
-it preserves their order but does not expose each intermediate macro alias.
+Canonical edge contracts check their emitted targets and declared source
+correspondence. The direct checker reconstructs the selected implementation's
+expected bindings, layouts, resource versions and ordering from RA and options,
+then checks generated code. This is evidence about the supplied template and
+wiring; it is not arbitrary Rust verification. Native leaf contracts remain
+separate, including exact membership, full key observation, current-mask access,
+handle uniqueness until selection and conservative metadata. Selection may copy
+native rows into new storage; block selections preserve their payload identity. Macro expansion and Rust typing
+reject unavailable operations; they do not prove those laws.
 
-## Syntax necessity and the implemented reduction
+A pruning candidate must cover every exact match in the current left view and
+must never enumerate a handle outside that view or twice. The residual exact
+membership test completes the proof. Metadata does not receive a false claim of
+standalone semijoin denotation. Current RHS versions govern resources; original
+immutable block bounds remain conservative for selected subsets.
 
-```text
-Context ::= Definition { Binding* }
-Binding ::= Atom [=> Path] { Expr };
-```
+## Remaining limits
 
-For `K = heading(l) ∩ heading(r)`, the producer emits the following existing RA
-definitions under the necessary bindings:
+- The direct array implementation supports a declared subset of RA and `i64`
+  rows. Canonical edges retain their own domains.
+- Physical choices are explicit paths and overrides, without cost search,
+  automatic capability discovery or approximate transfer scheduling.
+- The direct query API still shares a block-size parameter and statistics surface;
+  these are administrative API debt, not relational semantics.
+- Arbitrary Rust effects, resolution/hygiene, lifetimes, custom collectors and
+  provider laws are not mechanically proved. Alternate aliases must establish
+  the boundary contract they occupy.
+- Pipeline syntax can be made smaller only while preserving its useful authored
+  program checks; it is outside this change.
 
-```rust
-q = project r keep { k }; {
-    r(k, payload) => rows { right_value };
-}
-t = semijoin l with q; {
-    l(k, other) => rows { left_value };
-    q(k) { key_resource };
-}
-```
-
-The row provider decodes the named relation in its written field order. The
-provider-free binding denotes the exact projected relation `q`, under the selected
-recipe's resource law. It never denotes all of `r`. The producer checks the
-construction and use that establish
-`l semijoin r = l semijoin project_K(r)`, rather than trusting an origin label.
-Fresh projection names avoid all normalized input/result names and previous
-projections. Shared resources require the same current right version, separator,
-recipe and key collection, with compatible meaning, representation and lifetime.
-
-| Information | Classification and decision |
-| --- | --- |
-| Existing RA definition and operand identities | Semantic source of the deferred lowering; retained. |
-| Ordered attribute names in a physical binding | Necessary to map logical fields to actual row positions; order cannot be inferred from a heading set. |
-| Provider path and Rust binding expression | Free representation assumptions unavailable to an independently expanded macro; retained only where needed. |
-| Resource heading | Needed by the reduction to derive left key positions; checked against actual projected construction by the whole-source edge. |
-| Storage dependency, Access continuation, key implementation, work expression | Administrative configuration, now outside Context and Operation. Lexical wrappers bind it once per distinct selected implementation/configuration in each generated method. Direct configured macro calls still need those administrative arguments. |
-| Build/reduce phase suffix, repeated resource origin, unused opposite operand | Removed. Existing Project/Semijoin determines the operation and its free bindings. |
-| Key ordinals, output field maps and cached headings | Derived compiler facts, not serialized Context fields. |
-| Retained CQ source in RA and logical labels in Access | Deliberate correspondence witnesses. Their denotation cannot generally be recovered from optimized RA or arbitrary Rust expressions. Removing them requires relocating that proof input, not silently weakening checking. |
-| Punctuation retained by Syn-derived ASTs | Concrete-syntax preservation, not additional semantic operations. Braces around value expressions also permit Rust macro path capture. |
-
-## Findings resolved in this round
-
-- Semantic Context and provider operations no longer carry service wiring or
-  instrumentation. Compiler functions receive typed source and ordinary options
-  separately; frontend configuration syntax lives in
-  [recipe_input.rs](../crates/mini-linq/src/recipe_input.rs).
-- Key construction no longer receives an entire semijoin or an unused left
-  binding. Reduction no longer receives an unused original right value/provider.
-- Resource provenance is checked against actual Project construction and its
-  later Semijoin use. Projection names and configured macro aliases have separate
-  freshness rules, including normalized raw identifiers and caller-selected bare
-  macro names.
-- The final audit removed a shared-emitter dependency from wrapper verification:
-  the checker now reconstructs administrative bindings independently. It also
-  rejects local macro names that shadow selected implementations or a bare Access
-  continuation, rather than relying only on the emitter's fresh-name allocator.
-- Public CQ, RA, IndexRequirements, Access and Pipeline entries diagnose malformed
-  parsed IR in every build profile. Access/Pipeline functions now return
-  `syn::Result`; callers were migrated, including the separate `xtask` crate.
-- `run` has an uninstrumented expansion. `run_with_stats` enables instrumentation
-  through the same lowering and captures a borrowed counter value; omission no
-  longer means allocating counters and discarding their results.
-- No compiler-owned manual input parser was introduced. Remaining manual parsing
-  and lookahead in `mini-linq` are administrative frontend handling; declared
-  semantic syntax remains in `cq-ir`.
-
-## Remaining findings and limits
-
-**P2 — IteratorPipeline contains derivable syntax.** Its local contract fixes
-`iterN` names, the predecessor, each complete input binding, scan/join yielded
-bindings and the final returned stream
-([iterator_pipeline.rs:179](../crates/cq-ir/src/iterator_pipeline.rs#L179),
-[226](../crates/cq-ir/src/iterator_pipeline.rs#L226),
-[290](../crates/cq-ir/src/iterator_pipeline.rs#L290)). An intentionally linear
-grammar could derive these. That requires a coordinated declared-language,
-lowering, checker, example and paper migration. Terminal distinctness is also
-mandatory in this language: removing its syntax must preserve the set semantics
-and the two endpoint implementations. No Pipeline grammar change is hidden in
-the physical cleanup.
-
-**P3 — Repeated source analyses remain.** The composed entry, layout analysis and
-both method audits independently validate or infer the same source headings.
-This is compile-time duplication rather than serialized IR redundancy. A future
-checked-analysis object could avoid repeated traversals while keeping the target
-audit independent of the emitter's choices. No performance regression is claimed
-without measuring it.
-
-**P3 — Provider result categories are checked outside the Rust return type.**
-The provider compiler functions accept typed `Operation` but return
-`syn::Result<TokenStream>` because operations produce different Rust fragments.
-Their tests parse the declared Type/Expr/statement category, and Rust checks the
-actual expansion. This is weaker than returning the corresponding Syn AST
-category explicitly. It is a target-interface limitation, not an undeclared
-query parser or another semantic IR.
-
-**P3 — Some physical API parameters remain broader than a selected route needs.**
-`materialize` still accepts a block-size expression and owner/value names because
-the block provider needs construction and borrowing control; native row providers
-do not need every argument. The query API still accepts block size on native-only
-routes and declares the statistics API, including storage `Work`/`Counters` types,
-even when a caller uses only `run`. Plain execution omits counter operations, but
-API shape and compile-time dependencies are not yet specialized away. These are
-remaining configuration/interface questions, distinct from the removed semantic
-Context fields. Any further split must preserve independently selected providers
-and avoid introducing a universal capability catalogue.
-
-**Admitted-domain limits are explicit.** Composed array providers require `i64`
-columns, variable-only output with at most twelve fields, and the five supported
-RA operators. These restrictions belong to this physical edge, not all RA or
-every future provider. Canonical backends and the optional language extensions
-retain their own contracts. Exact membership and conservative rejection remain
-different operations; a Bloom filter cannot satisfy the exact membership law.
-
-The reviewed checks are not a proof of the complete generated Rust program.
-The composed audit does not validate arbitrary provider expansion, every API
-statement or arbitrary host effects. Rust establishes types, available trait
-operations and borrowing; it does not prove exact selections, conservative bounds,
-stable provenance, metadata-only access or guard-before-open semantics. Those
-remain explicit provider/recipe laws backed by the applicable execution tests.
-
-## Validation specific to this review
-
-The five new `public_boundaries` tests, seven existing `pass_contracts` tests and
-four `pull_lowering` tests pass in both debug and release: sixteen cases per
-profile. The malformed-source tests use `catch_unwind` and require diagnostic
-`Err` results rather than panics. The standalone `xtask` checks with the updated
-API. The revised formal supplement builds to 21 pages; the unchanged main
-manuscript remains 32 pages. These focused results do not replace the root task's
-workspace, provider, storage, macro-expansion and formal fingerprint gates.
-
-Consolidated final gates also pass: 398 workspace tests, 37 release integration
-tests, workspace Clippy with warnings denied, formatting, all five formal
-example drivers, and both manuscript builds (32/21 pages). The regenerated
-fact-star composed instantiation, explicitly widened from i32 to i64 for this
-backend, matches all 26 golden rows in both execution methods of both selected
-routes. Its expanded plain methods contain no counter operations or deferred
-operator/provider invocations. These remain bounded checks, not a general
-proof of host/provider semantics. Logs: `target/compact-*.log`.
+[Access refinement](ACCESS-REFINEMENT.md) is the single physical design record;
+[compiler structure](COMPILER-STRUCTURE.md) assigns implementation ownership;
+[the formal snapshot](formal/snapshot.txt) records consolidated validation. Historical
+migration proposals and duplicate audits have been removed.

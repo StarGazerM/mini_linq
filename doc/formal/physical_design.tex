@@ -39,30 +39,29 @@
 \lstset{basicstyle=\ttfamily\small,columns=fullflexible,keepspaces=true,
   breaklines=true,frame=single,showstringspaces=false}
 \setlist{nosep}
-\title{MiniLinq: YA-Aware Physical Administration\\Design Supplement}
+\title{MiniLinq: Physical Choices Through Access Refinement}
 \author{Administrative rules, algorithms, and compiler correspondence}
-\date{10 September 2026}
+\date{14 September 2026}
 \begin{document}
 \maketitle
 \begin{abstract}
-This supplement locates physical choices at MiniLinq's existing macro boundaries
-and specifies one arena-based backend family. Its checked private overlay
-refines named Yannakakis semijoins into versioned providers,
-consumer-local filters, immutable survivor views, and exact group accesses.
-Exact reduction and conservative predicate transfer have separate evidence
-and preservation contracts. Administrative rules map to algorithm dispatches,
-runtime scan steps, Rust records, and existing compiler extension points.
-An implemented integer block backend exercises exact reduction, independently
-compiled access choices, reusable exact keys, and caller-owned macro aliases
-through declared contextual syntax within the existing physical stage order.
-A bounded semantic model accompanies the fuller proposed overlay.
+Physical representation and traversal choices refine an existing compiler edge
+from named relational algebra to Rust containing local Access plans. The compiler
+keeps layouts, current relation versions and shared key resources in an ordinary
+lowering environment. Native operations independently select exact keys, optional
+coordinate summaries, current-row or block-pruned candidates, and hash or nested
+join witnesses. Exact residuals preserve semijoin semantics after conservative
+metadata rejection. This supplement gives the operation syntax, representation
+laws, implementation-linked rules, algorithms and conditional preservation argument.
+No additional whole-program IR or runtime relational interpreter is required.
 \end{abstract}
 \noindent Companion to \href{compiler.pdf}{\emph{Administrative Query Compilation
-Across Embedded Languages}}. Source entry: \code{physical_design.tex};
-rules: \code{ya_physical.tex}; executable model: \code{physical_model.py}.
+Across Embedded Languages}}.
+
+\noindent Source: \code{access_refinement.tex}; mapping: \code{physical_rules.tsv};
+model: \code{physical_model.py}.
 \input{architecture_placement}
-\input{block_implementation}
-\input{ya_physical}
+\input{access_refinement}
 \begin{thebibliography}{99}
 \raggedright
 \input{ya_references}

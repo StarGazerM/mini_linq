@@ -4,13 +4,13 @@
 //! receives the source and ordinary options separately. This recursive derived
 //! syntax accepts any directive order without putting configuration in cq-ir.
 
-use cq_compiler::{ProviderOptions, RecipeOptions};
+use cq_compiler::{AccessOptions, ProviderOptions};
 use quote::ToTokens;
 use syn::{Token, parse::Parse, parse::ParseStream, token};
 
 mod kw {
     syn::custom_keyword!(storage);
-    syn::custom_keyword!(access);
+    syn::custom_keyword!(iterator);
     syn::custom_keyword!(keys);
     syn::custom_keyword!(work);
 }
@@ -24,9 +24,9 @@ pub enum Input<S: Parse + ToTokens> {
         semi: token::Semi,
         rest: Box<Self>,
     },
-    #[parse(peek_func = is_access)]
-    Access {
-        keyword: kw::access,
+    #[parse(peek_func = is_iterator)]
+    Iterator {
+        keyword: kw::iterator,
         path: syn::Path,
         semi: token::Semi,
         rest: Box<Self>,
@@ -52,13 +52,13 @@ pub enum Input<S: Parse + ToTokens> {
     Source { source: Box<S> },
 }
 
-// A source definition may itself be named `storage`, `access`, `keys`, or `work`.
+// A source definition may itself be named `storage`, `iterator`, `keys`, or `work`.
 // Its equals sign distinguishes that name from an administrative directive.
 fn is_storage(input: ParseStream<'_>) -> bool {
     input.peek(kw::storage) && !input.peek2(Token![=])
 }
-fn is_access(input: ParseStream<'_>) -> bool {
-    input.peek(kw::access) && !input.peek2(Token![=])
+fn is_iterator(input: ParseStream<'_>) -> bool {
+    input.peek(kw::iterator) && !input.peek2(Token![=])
 }
 fn is_keys(input: ParseStream<'_>) -> bool {
     input.peek(kw::keys) && !input.peek2(Token![=])
@@ -70,7 +70,7 @@ fn is_work(input: ParseStream<'_>) -> bool {
 #[derive(Default)]
 struct Configuration<'a> {
     storage: Option<&'a syn::Path>,
-    access: Option<&'a syn::Path>,
+    iterator: Option<&'a syn::Path>,
     keys: Option<&'a syn::Path>,
     work: Option<&'a syn::Expr>,
 }
@@ -80,7 +80,7 @@ impl<S: Parse + ToTokens> Input<S> {
         match self {
             Self::Source { source } => source,
             Self::Storage { rest, .. }
-            | Self::Access { rest, .. }
+            | Self::Iterator { rest, .. }
             | Self::Keys { rest, .. }
             | Self::Work { rest, .. } => rest.source(),
         }
@@ -94,8 +94,8 @@ impl<S: Parse + ToTokens> Input<S> {
                 Self::Storage { path, rest, .. } => {
                     (configuration.storage.replace(path).is_some(), rest)
                 }
-                Self::Access { path, rest, .. } => {
-                    (configuration.access.replace(path).is_some(), rest)
+                Self::Iterator { path, rest, .. } => {
+                    (configuration.iterator.replace(path).is_some(), rest)
                 }
                 Self::Keys { path, rest, .. } => (configuration.keys.replace(path).is_some(), rest),
                 Self::Work { value, rest, .. } => {
@@ -124,7 +124,7 @@ impl<S: Parse + ToTokens> Input<S> {
 
     pub fn provider_options(&self) -> syn::Result<ProviderOptions> {
         let configuration = self.configuration()?;
-        if let Some(path) = configuration.access.or(configuration.keys) {
+        if let Some(path) = configuration.iterator.or(configuration.keys) {
             return Err(syn::Error::new_spanned(
                 path,
                 "provider configuration admits only `storage` and optional `work`",
@@ -136,11 +136,11 @@ impl<S: Parse + ToTokens> Input<S> {
         })
     }
 
-    pub fn recipe_options(&self) -> syn::Result<RecipeOptions> {
+    pub fn access_options(&self) -> syn::Result<AccessOptions> {
         let configuration = self.configuration()?;
-        Ok(RecipeOptions {
+        Ok(AccessOptions {
             storage: self.required(configuration.storage, "storage")?,
-            access: self.required(configuration.access, "access")?,
+            iterator: self.required(configuration.iterator, "iterator")?,
             keys: configuration.keys.cloned(),
             work: configuration.work.cloned(),
         })
@@ -177,27 +177,27 @@ mod tests {
     }
 
     #[test]
-    fn recipe_configuration_accepts_each_order_without_changing_source() {
+    fn iterator_configuration_accepts_each_order_without_changing_source() {
         let tokens = quote! {
             work (&counters);
             keys crate::Keys;
-            access crate::collect;
+            iterator crate::collect;
             storage crate::data;
             scan (rows)
         };
         let input: Input<Operation> = syn::parse2(tokens.clone()).unwrap();
-        let options = input.recipe_options().unwrap();
+        let options = input.access_options().unwrap();
         assert_eq!(options.storage, syn::parse_quote!(crate::data));
-        assert_eq!(options.access, syn::parse_quote!(crate::collect));
+        assert_eq!(options.iterator, syn::parse_quote!(crate::collect));
         assert_eq!(options.keys, Some(syn::parse_quote!(crate::Keys)));
         assert_eq!(options.work, Some(syn::parse_quote!(&counters)));
         assert_eq!(input.to_token_stream().to_string(), tokens.to_string());
         let input: Input<Operation> = syn::parse_quote! {
-            access crate::collect;
+            iterator crate::collect;
             storage crate::data;
             scan (rows)
         };
-        let options = input.recipe_options().unwrap();
+        let options = input.access_options().unwrap();
         assert!(options.keys.is_none());
         assert!(options.work.is_none());
     }
@@ -206,12 +206,12 @@ mod tests {
     fn duplicates_and_irrelevant_or_missing_configuration_are_rejected() {
         for duplicate in [
             quote!(storage second::data;),
-            quote!(access second::collect;),
+            quote!(iterator second::collect;),
             quote!(keys second::Keys;),
             quote!(work (&other);),
         ] {
             let input: Input<Operation> = syn::parse2(quote! {
-                storage crate::data; access crate::collect;
+                storage crate::data; iterator crate::collect;
                 keys crate::Keys; work (&counters);
                 #duplicate
                 scan (rows)
@@ -219,7 +219,7 @@ mod tests {
             .unwrap();
             assert!(
                 input
-                    .recipe_options()
+                    .access_options()
                     .unwrap_err()
                     .to_string()
                     .contains("duplicate")
@@ -236,12 +236,12 @@ mod tests {
         let input: Input<Operation> = syn::parse_quote!(storage crate::data; scan (rows));
         assert!(
             input
-                .recipe_options()
+                .access_options()
                 .unwrap_err()
                 .to_string()
-                .contains("access")
+                .contains("iterator")
         );
-        for irrelevant in [quote!(access crate::collect;), quote!(keys crate::Keys;)] {
+        for irrelevant in [quote!(iterator crate::collect;), quote!(keys crate::Keys;)] {
             let input: Input<Operation> = syn::parse2(quote! {
                 storage crate::data; #irrelevant scan (rows)
             })
@@ -271,7 +271,7 @@ mod tests {
             value: syn::Expr,
             semi: Token![;],
         }
-        for name in ["storage", "access", "keys", "work"] {
+        for name in ["storage", "iterator", "keys", "work"] {
             let name: syn::Ident = syn::parse_str(name).unwrap();
             let input: Input<Definition> = syn::parse2(quote! {
                 storage crate::data; #name = 1;

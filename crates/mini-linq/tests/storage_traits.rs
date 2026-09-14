@@ -25,16 +25,17 @@ pub(crate) use alternate_blocks;
 // existing zone recipe and the independently selected operand providers.
 macro_rules! alternate_zone {
     (storage $storage:path; $($request:tt)*) => {
-        ::mini_linq::zone_semijoin! { storage crate::alternate; $($request)* }
+        ::mini_linq::zone_keys! { storage crate::alternate; $($request)* }
     };
 }
 pub(crate) use alternate_zone;
 
 macro_rules! mixed_plan {
-    ($name:ident, $recipe:path) => {
+    ($name:ident, $scan:path, $key_provider:path) => {
         ::mini_linq::physical_plan! {
             storage ::cq_storage;
             access ::mini_linq::collect_access;
+            iterator ::mini_linq::stream_access;
             materialize ::mini_linq::hash_rows;
             inputs {
                 R => crate::alternate_blocks;
@@ -42,11 +43,13 @@ macro_rules! mixed_plan {
                 T => ::mini_linq::hash_rows;
             }
             results {}
-            semijoin $recipe;
-            semijoins { s1 => ::mini_linq::zone_semijoin; }
+            scan $scan;
+            scans { s1 => ::mini_linq::prune_rows; }
+            key_provider $key_provider;
+            key_providers { s1 => ::mini_linq::zone_keys; }
             keys crate::alternate::OrderedKeys;
             key_sets {}
-            join ::mini_linq::hash_join;
+            join ::mini_linq::hash_witnesses;
             joins {}
             struct $name;
             relation R(k:i64,x:i64);
@@ -68,8 +71,8 @@ macro_rules! mixed_plan {
     };
 }
 
-mixed_plan!(MixedZone, crate::alternate_zone);
-mixed_plan!(MixedExact, ::mini_linq::exact_semijoin);
+mixed_plan!(MixedZone, ::mini_linq::prune_rows, crate::alternate_zone);
+mixed_plan!(MixedExact, ::mini_linq::scan_rows, ::mini_linq::exact_keys);
 
 #[test]
 fn sparse_coordinates_flat_payload_and_stock_blocks_coexist_in_one_query() {
@@ -106,18 +109,21 @@ fn sparse_coordinates_flat_payload_and_stock_blocks_coexist_in_one_query() {
 }
 
 macro_rules! reduction_plan {
-    ($name:ident, $recipe:path) => {
+    ($name:ident, $scan:path, $key_provider:path) => {
         ::mini_linq::physical_plan! {
             storage ::cq_storage;
             access ::mini_linq::collect_access;
+            iterator ::mini_linq::stream_access;
             materialize ::mini_linq::hash_rows;
             inputs { R => crate::alternate_blocks; S => ::mini_linq::hash_rows; }
             results {}
-            semijoin $recipe;
-            semijoins {}
+            scan $scan;
+            scans {  }
+            key_provider $key_provider;
+            key_providers {  }
             keys crate::alternate::OrderedKeys;
             key_sets {}
-            join ::mini_linq::hash_join;
+            join ::mini_linq::hash_witnesses;
             joins {}
             struct $name;
             relation R(k:i64,x:i64);
@@ -134,8 +140,12 @@ macro_rules! reduction_plan {
     };
 }
 
-reduction_plan!(RejectedZone, crate::alternate_zone);
-reduction_plan!(RejectedExact, ::mini_linq::exact_semijoin);
+reduction_plan!(RejectedZone, ::mini_linq::prune_rows, crate::alternate_zone);
+reduction_plan!(
+    RejectedExact,
+    ::mini_linq::scan_rows,
+    ::mini_linq::exact_keys
+);
 
 #[test]
 fn rejected_metadata_never_opens_the_alternate_payload() {
@@ -152,18 +162,21 @@ fn rejected_metadata_never_opens_the_alternate_payload() {
 }
 
 macro_rules! composite_plan {
-    ($name:ident, $recipe:path) => {
+    ($name:ident, $scan:path, $key_provider:path) => {
         ::mini_linq::physical_plan! {
             storage ::cq_storage;
             access ::mini_linq::collect_access;
+            iterator ::mini_linq::stream_access;
             materialize ::mini_linq::hash_rows;
             inputs { R => crate::alternate_blocks; S => ::mini_linq::hash_rows; }
             results {}
-            semijoin $recipe;
-            semijoins {}
+            scan $scan;
+            scans {  }
+            key_provider $key_provider;
+            key_providers {  }
             keys crate::alternate::OrderedKeys;
             key_sets {}
-            join ::mini_linq::hash_join;
+            join ::mini_linq::hash_witnesses;
             joins {}
             struct $name;
             relation R(a:i64,b:i64,x:i64);
@@ -180,8 +193,16 @@ macro_rules! composite_plan {
     };
 }
 
-composite_plan!(CoordinateEnvelope, ::mini_linq::zone_semijoin);
-composite_plan!(CorrelatedEnvelope, crate::alternate_zone);
+composite_plan!(
+    CoordinateEnvelope,
+    ::mini_linq::prune_rows,
+    ::mini_linq::zone_keys
+);
+composite_plan!(
+    CorrelatedEnvelope,
+    ::mini_linq::prune_rows,
+    crate::alternate_zone
+);
 
 #[test]
 fn a_different_summary_refines_pruning_without_changing_the_zone_recipe() {
@@ -216,6 +237,7 @@ fn a_different_summary_refines_pruning_without_changing_the_zone_recipe() {
 mini_linq::physical_plan! {
     storage ::cq_storage;
     access ::mini_linq::collect_access;
+    iterator ::mini_linq::stream_access;
     materialize ::mini_linq::hash_rows;
     inputs {
         R => crate::alternate_blocks;
@@ -223,11 +245,13 @@ mini_linq::physical_plan! {
         T => ::mini_linq::hash_rows;
     }
     results {}
-    semijoin crate::alternate_zone;
-    semijoins {}
+    scan ::mini_linq::prune_rows;
+    scans {  }
+    key_provider crate::alternate_zone;
+    key_providers {  }
     keys crate::alternate::OrderedKeys;
     key_sets {}
-    join ::mini_linq::hash_join;
+    join ::mini_linq::hash_witnesses;
     joins {}
     struct Versioned;
     relation R(k:i64,x:i64);
@@ -264,14 +288,17 @@ fn the_sparse_selection_preserves_reductions_when_a_block_is_reopened() {
 mini_linq::physical_plan! {
     storage ::cq_storage;
     access ::mini_linq::collect_access;
+    iterator ::mini_linq::stream_access;
     materialize ::mini_linq::hash_rows;
     inputs { R => ::mini_linq::sorted_rows; S => ::mini_linq::hash_rows; }
     results { packed => crate::alternate_blocks; }
-    semijoin crate::alternate_zone;
-    semijoins {}
+    scan ::mini_linq::prune_rows;
+    scans {  }
+    key_provider crate::alternate_zone;
+    key_providers {  }
     keys crate::alternate::OrderedKeys;
     key_sets {}
-    join ::mini_linq::hash_join;
+    join ::mini_linq::hash_witnesses;
     joins {}
     struct Materialized;
     relation R(k:i64,x:i64);
@@ -307,11 +334,11 @@ fn zero_column_provenance_uses_the_alternate_identity_type() {
     let work = alternate::Counters::default();
     let left = alternate_blocks! { storage cq_storage; input (&left) };
     let right = alternate_blocks! { storage cq_storage; input (&right) };
-    let own: HashSet<_> =
+    let own: Vec<_> =
         alternate_blocks! { storage cq_storage; work (&work); rows (&left) }.collect();
     let own = alternate_blocks! { storage cq_storage; select (&left) (own) };
     assert_eq!(alternate_blocks! { storage cq_storage; len (&own) }, 1);
-    let foreign: HashSet<_> =
+    let foreign: Vec<_> =
         alternate_blocks! { storage cq_storage; work (&work); rows (&right) }.collect();
     let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         alternate_blocks! { storage cq_storage; select (&left) (foreign) }

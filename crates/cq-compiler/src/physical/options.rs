@@ -11,11 +11,11 @@ pub struct ProviderOptions {
     pub work: Option<syn::Expr>,
 }
 
-/// Dependencies and implementation choices for deferred operator lowering.
+/// Dependencies and implementation choices for native access leaves.
 #[derive(Clone, Debug)]
-pub struct RecipeOptions {
+pub struct AccessOptions {
     pub storage: syn::Path,
-    pub access: syn::Path,
+    pub iterator: syn::Path,
     pub keys: Option<syn::Path>,
     pub work: Option<syn::Expr>,
 }

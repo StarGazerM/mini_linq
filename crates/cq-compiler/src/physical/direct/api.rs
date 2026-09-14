@@ -44,7 +44,7 @@ pub(super) fn emit(
         #[derive(Debug, Default)]
         #[allow(dead_code)]
         #visibility struct #stats {
-            pub steps: ::std::vec::Vec<(&'static str, usize, #storage::Work)>,
+            pub steps: ::std::vec::Vec<(&'static ::core::primitive::str, ::core::primitive::usize, #storage::Work)>,
             pub output: #storage::Work,
         }
         impl #program {

@@ -11,7 +11,7 @@
 //! Replacements owe the same observation and binding contracts as the defaults;
 //! a resolving alias and compatible tokens alone do not establish those laws.
 
-use cq_ir::{cq, relational_plan};
+use cq_ir::cq;
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
@@ -185,13 +185,11 @@ pub fn iterator_pipeline(input: TokenStream) -> TokenStream {
     stage(input, None, cq_compiler::compile_iterator_pipeline)
 }
 
+mod native_input;
 mod physical_input;
-mod recipe_input;
 
 mod kw {
-    syn::custom_keyword!(storage);
     syn::custom_keyword!(access);
-    syn::custom_keyword!(keys);
 }
 
 fn stage<S: Parse, T: ToTokens>(
@@ -207,11 +205,6 @@ fn stage<S: Parse, T: ToTokens>(
         },
         Err(error) => error.into_compile_error().into(),
     }
-}
-
-struct BlockInput {
-    options: cq_compiler::BlockOptions,
-    source: relational_plan::Module,
 }
 
 struct AccessInput<S> {
@@ -234,84 +227,28 @@ impl<S: Parse> Parse for AccessInput<S> {
         })
     }
 }
-impl Parse for BlockInput {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        input.parse::<kw::storage>()?;
-        let storage = input.parse()?;
-        input.parse::<syn::Token![;]>()?;
-        input.parse::<kw::access>()?;
-        let access = input.parse()?;
-        input.parse::<syn::Token![;]>()?;
-        let keys = if input.peek(kw::keys) {
-            input.parse::<kw::keys>()?;
-            let path = input.parse()?;
-            input.parse::<syn::Token![;]>()?;
-            path
-        } else {
-            syn::parse_quote!(::std::collections::HashSet)
-        };
-        Ok(Self {
-            options: cq_compiler::BlockOptions {
-                storage,
-                access,
-                keys,
-            },
-            source: input.parse()?,
-        })
-    }
-}
-
-/// Exact integer RA over immutable block sources and survivor views.
-///
-/// Supply `storage path; access path;` and optional `keys path;`, then RA.
-/// A wiring module can re-export a caller-owned wrapper as
-/// `planned_relational_plan` to receive a planned query's RA output.
-/// Semijoins scan current selected rows and test exact key membership.
-#[proc_macro]
-pub fn blocked_plan(input: TokenStream) -> TokenStream {
-    stage(input, None, |input: &BlockInput| {
-        cq_compiler::compile_blocked(&input.source, &input.options)
-    })
-}
-
-/// Exact integer RA with zone-map descriptor pruning before payload access.
-///
-/// Accepts the same `storage path; access path;` dependencies and RA syntax as
-/// `blocked_plan`. This compiler recipe retains an exact membership residual.
-#[proc_macro]
-pub fn zonemap_plan(input: TokenStream) -> TokenStream {
-    stage(input, None, |input: &BlockInput| {
-        cq_compiler::compile_zonemap(&input.source, &input.options)
-    })
-}
-
-/// Select no named indexes, preserving configured RA for composed realization.
-/// The next typed boundary is reached through the caller's `mini_linq::composed`
-/// alias; it receives the full IndexRequirements module and unchanged directives.
+/// Configured RA -> Rust with independently selected native Access leaves.
 #[proc_macro]
 pub fn physical_plan(input: TokenStream) -> TokenStream {
+    stage(input, None, |input: &physical_input::PhysicalInput| {
+        cq_compiler::compile_physical(&input.source, &input.options()?)
+    })
+}
+
+/// The same checked Access-to-Pipeline lowering with a support-stream endpoint.
+#[proc_macro]
+pub fn stream_access(input: TokenStream) -> TokenStream {
     stage(
         input,
-        Some(syn::parse_quote!(mini_linq::composed)),
-        |input: &physical_input::PhysicalInput| {
-            input.options()?;
-            let source = cq_compiler::compile_deferred_indexes(&input.source)?;
-            Ok(input.clone().with_source(source))
-        },
+        Some(syn::parse_quote!(mini_linq::stream_pipeline)),
+        cq_compiler::compile_pull,
     )
 }
 
-/// Realize a configured IndexRequirements module with no written index demands.
-/// Written demands are rejected, never silently discarded or treated as hints.
+/// Enumerate the support of a set pipeline; the consumer owns distinctness.
 #[proc_macro]
-pub fn composed(input: TokenStream) -> TokenStream {
-    stage(
-        input,
-        None,
-        |input: &physical_input::PhysicalInput<cq_ir::index_requirements::Module>| {
-            cq_compiler::compile_composed(&input.source, &input.options()?)
-        },
-    )
+pub fn stream_pipeline(input: TokenStream) -> TokenStream {
+    stage(input, None, cq_compiler::compile_stream_pipeline)
 }
 
 macro_rules! physical_entry {
@@ -319,7 +256,7 @@ macro_rules! physical_entry {
         #[doc = $doc]
         #[proc_macro]
         pub fn $name(input: TokenStream) -> TokenStream {
-            stage(input, None, |input: &recipe_input::Input<$source>| {
+            stage(input, None, |input: &native_input::Input<$source>| {
                 cq_compiler::$compile(input.source(), &input.$options()?)
             })
         }
@@ -347,30 +284,44 @@ physical_entry!(
     "Borrowed block access and independently selected masks through storage traits."
 );
 physical_entry!(
-    exact_semijoin,
-    compile_exact_semijoin,
-    cq_ir::physical_context::Context,
-    recipe_options,
-    "Exact row-membership construction and access."
+    scan_rows,
+    compile_scan_rows,
+    cq_ir::physical_provider::Operation,
+    access_options,
+    "Enumerate current candidate handles."
 );
 physical_entry!(
-    zone_semijoin,
-    compile_zone_semijoin,
-    cq_ir::physical_context::Context,
-    recipe_options,
-    "Zone pruning with an exact membership residual."
+    prune_rows,
+    compile_prune_rows,
+    cq_ir::physical_provider::Operation,
+    access_options,
+    "Reject blocks through metadata before opening candidate payload."
 );
 physical_entry!(
-    hash_join,
-    compile_hash_join,
-    cq_ir::physical_context::Context,
-    recipe_options,
-    "Build hash witness groups and probe them."
+    exact_keys,
+    compile_exact_keys,
+    cq_ir::physical_provider::Operation,
+    access_options,
+    "Build and test exact key membership."
 );
 physical_entry!(
-    nested_loop_join,
-    compile_nested_loop_join,
-    cq_ir::physical_context::Context,
-    recipe_options,
-    "Join through paired scans with exact key equality."
+    zone_keys,
+    compile_zone_keys,
+    cq_ir::physical_provider::Operation,
+    access_options,
+    "Build exact keys and their conservative coordinate summary."
+);
+physical_entry!(
+    hash_witnesses,
+    compile_hash_witnesses,
+    cq_ir::physical_provider::Operation,
+    access_options,
+    "Build and probe exact witness buckets."
+);
+physical_entry!(
+    nested_witnesses,
+    compile_nested_witnesses,
+    cq_ir::physical_provider::Operation,
+    access_options,
+    "Defer witness traversal until each probe."
 );
