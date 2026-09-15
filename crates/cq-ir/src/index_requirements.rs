@@ -21,6 +21,22 @@ pub struct IndexRequirement {
     pub key_columns: CommaList<Column>,
 }
 
+/// Factual identity of a written requirement: result namespace, symbol and
+/// ordered key coordinates. This does not derive or require any access policy.
+pub type Signature = (bool, String, Vec<usize>);
+
+pub fn signature(index: &IndexRequirement) -> Signature {
+    (
+        index.result_token.is_some(),
+        symbol_name(&index.relation),
+        index
+            .key_columns
+            .iter()
+            .map(|column| column.index as usize)
+            .collect(),
+    )
+}
+
 /// A complete relational plan followed by a possibly empty index overlay.
 ///
 /// ```text
@@ -107,11 +123,8 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
                 ),
             ));
         }
-        let columns = index
-            .key_columns
-            .iter()
-            .map(|column| column.index as usize)
-            .collect::<Vec<_>>();
+        let key = signature(index);
+        let columns = &key.2;
         if let Some(column) = columns.iter().copied().find(|column| *column >= arity) {
             return Err(syn::Error::new_spanned(
                 index,
@@ -130,11 +143,6 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
                 ),
             ));
         }
-        let key = (
-            index.result_token.is_some(),
-            symbol_name(&index.relation),
-            columns,
-        );
         if !seen.insert(key) {
             return Err(syn::Error::new_spanned(
                 index,

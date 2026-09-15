@@ -1,5 +1,3 @@
-#![cfg(feature = "hw4")]
-
 use mini_linq::mini_linq;
 
 mini_linq! {

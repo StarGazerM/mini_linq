@@ -92,11 +92,8 @@ fn optional_instrumentation_preserves_access_and_evaluates_its_expression_once()
     assert_eq!(counts.blocks_opened, 3);
 
     let rows: HashSet<_> = [[1], [2], [3]].into_iter().collect();
-    let plain: HashSet<_> = mini_linq::hash_rows! { storage cq_storage; scan (&rows) }
-        .copied()
-        .collect();
+    let plain: HashSet<_> = mini_linq::hash_rows! { scan (&rows) }.copied().collect();
     let observed = mini_linq::hash_rows! {
-        storage cq_storage;
         work ({ evaluations.set(evaluations.get() + 1); &work });
         scan (&rows)
     };

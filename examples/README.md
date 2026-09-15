@@ -5,6 +5,8 @@ that happens to provide an API.
 
 | Folder | Demonstrates | Needs completed student passes? |
 |---|---|---|
+| [`composition`](composition/README.md) | One query with explicit stage aliases and only the selected compiler crates enabled | Supplied independent implementation |
+| [`blocked-ya`](blocked-ya/main.rs) | Heterogeneous relation storage and exact semijoin after block metadata pruning | Supplied implementation |
 | [`cq-inspection`](cq-inspection/main.rs) | Parsing one CQ into the typed source IR and inspecting its head and body | No |
 | [`pull-execution`](pull-execution/main.rs) | The supplied `pull!` stage over an already-built physical store, including lazy and materialized execution | No |
 | [`triangle-duckdb`](triangle-duckdb/main.rs) | The whole `mini_linq!` compiler path, visible input rows, execution, equivalent DuckDB SQL, and an exact result comparison | Yes |

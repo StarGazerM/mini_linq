@@ -1,0 +1,28 @@
+[package]
+name = "cq-compose"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cq-ir.workspace = true
+cq-plan = { workspace = true, features = ["canonical", "prefix", "graph"] }
+cq-index = { workspace = true, features = ["input", "result"] }
+cq-physical = { workspace = true, features = ["input", "lazy"] }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[features]
+hw4 = []
+
+[dev-dependencies]
+contracts.workspace = true
+prettyplease.workspace = true
+cq-pull.workspace = true
+cq-pipeline = { workspace = true, features = ["iterator", "collect", "stream"] }
+cq-physical = { workspace = true, features = ["input", "lazy", "materialized", "direct"] }
+cq-access = { workspace = true, features = ["candidate-scan", "candidate-prune", "keys-exact", "keys-zone", "witness-hash", "witness-nested"] }
+cq-providers = { workspace = true, features = ["hash", "sorted", "block"] }
+syn = { workspace = true, features = ["visit", "visit-mut"] }

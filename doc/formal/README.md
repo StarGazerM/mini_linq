@@ -26,7 +26,7 @@ join witnesses and conditional preservation.
 | Macro granularity and research comparison | [architecture_placement.tex](architecture_placement.tex) |
 | Implemented physical choices, laws and algorithms | [access_refinement.tex](access_refinement.tex), [rule map](physical_rules.tsv) |
 | Cursor semantics, quotation and pass composition | [staging.tex](staging.tex) |
-| Replacing components | [extensibility.tex](extensibility.tex), [module map](../COMPILER-STRUCTURE.md) |
+| Replacing components | [extensibility.tex](extensibility.tex), [component map](../COMPILER-STRUCTURE.md) |
 | Complete current boundary audit | [IR-STAGE-REVIEW.md](../IR-STAGE-REVIEW.md) |
 | Bounded evidence and prior work | [evaluation.tex](evaluation.tex), [related_work.tex](related_work.tex) |
 
@@ -68,13 +68,23 @@ source-to-emitted-code correspondence; selected provider laws and expanded Rust
 remain independent checking boundaries. Storage contains data structures and
 traits, without runtime relational operators.
 
-Explicit implementation entries check their own domains; `composition.rs` owns
-convenience dispatch. The materialized computation can produce either the existing
+Eleven compiler/storage packages group implementations by macro boundary.
+Implementation families depend only on `cq-ir`; source-removal builds check their
+independently selected modules. External macro probes also exercise renamed
+dependencies and replacement continuations. These dependency checks do not
+establish semantic substitution laws; the [ownership map](../COMPILER-STRUCTURE.md)
+records the distinct obligations.
+
+Explicit implementation entries check their own domains; `cq-compose` owns
+convenience dispatch. Default index policy and physical continuation are selected
+together at the RA boundary, without a route tag in IX. The materialized computation can produce either the existing
 observed program or a plain callable query through a host macro alias. Both use
 the same checked query body. Repeated borrowed full/delta inputs are supported,
 while recursive program semantics and persistent index maintenance remain future
-work. The [YA release profile](../../teaching/ya/README.md) tests extraction of one
-complete route with separate scheduling and semijoin exercises.
+work. Direct physical lowering separately supports plain/observed item and
+callable hosts, configured provider paths and provider-owned packing sizes.
+The [YA release profile](../../teaching/ya/README.md) extracts seven packages with
+unselected implementations absent and separate scheduling/semijoin exercises.
 
 ## Reproduction
 
@@ -88,26 +98,27 @@ pdfinfo doc/formal/build/compiler.pdf
 pdfinfo doc/formal/build/physical_design.pdf
 make -C doc/formal model
 make -C doc/formal example
-cargo test -p cq-storage -p cq-compiler -p mini-linq --lib --tests --locked
+python3 tools/check_features.py
+cargo test -p cq-storage -p cq-compose -p mini-linq --lib --tests --locked
 cargo test -p mini-linq --test heterogeneous --release --locked
-cargo test -p cq-compiler --test stage1_production --locked
-cargo test -p cq-compiler --test expression_planning --locked
+cargo test -p cq-compose --test planned_execution --locked
+cargo test -p cq-compose --test expression_planning --locked
 cargo test -p mini-linq --test formal_counterexamples --locked
 cargo test -p mini-linq --test formal_counterexamples --release --locked
-cargo test -p cq-compiler -p mini-linq --test reusable_query --locked
+cargo test -p cq-compose -p mini-linq --test reusable_query --locked
 ```
 
 | Experiment | Source and detailed instructions |
 | --- | --- |
-| GYO versus independent tree enumeration | [hypergraph.rs](../../crates/cq-compiler/src/cq_to_relational/hypergraph.rs) |
-| 25 queries and independently authored RA plans | [Stage I verification](../STAGE-I-VERIFICATION.md), [reference tests](../../crates/cq-compiler/tests/stage1_reference.rs) |
-| Four-policy compiled plans | [production tests](../../crates/cq-compiler/tests/stage1_production.rs) |
-| Literal public-macro expansion and execution | [shape tests](../../crates/mini-linq/tests/stage1_shapes.rs) |
-| Rust-expression orders and 120 schedules | [expression tests](../../crates/cq-compiler/tests/expression_planning.rs) |
+| GYO versus independent tree enumeration | [hypergraph.rs](../../crates/cq-plan/src/graph/hypergraph.rs) |
+| 25 queries and independently authored RA plans | [Stage I verification](../PLANNING-VERIFICATION.md), [reference tests](../../crates/cq-compose/tests/relational_reference.rs) |
+| Four-policy compiled plans | [production tests](../../crates/cq-compose/tests/planned_execution.rs) |
+| Literal public-macro expansion and execution | [shape tests](../../crates/mini-linq/tests/planned_queries.rs) |
+| Rust-expression orders and 120 schedules | [expression tests](../../crates/cq-compose/tests/expression_planning.rs) |
 | YA and authored-expression walkthroughs | [example README](example/README.md) |
 | Native hash/bitmap access and conservative prefiltering | [access_representations.rs](example/src/bin/access_representations.rs) |
 | Effect counterexamples | [formal_counterexamples.rs](../../crates/mini-linq/tests/formal_counterexamples.rs) |
-| Empty bindings and local contract agreement | [formal_domains.rs](../../crates/cq-compiler/tests/formal_domains.rs), [empty_bindings.rs](../../crates/mini-linq/tests/empty_bindings.rs) |
+| Empty bindings and local contract agreement | [formal_domains.rs](../../crates/cq-compose/tests/formal_domains.rs), [empty_bindings.rs](../../crates/mini-linq/tests/empty_bindings.rs) |
 
 The overview asserts exact RA, indexes, both sweeps, all thirteen intermediate
 arities/counts, and compiled answers on five input presentations across four
@@ -116,5 +127,5 @@ routes. The expression example compares three routes on 14 presentations;
 expected answers and generated programs remain in the executable artifacts.
 
 The current source identity and consolidated validation are recorded in
-[snapshot.txt](snapshot.txt). The three-crate test gate does not imply validation
+[snapshot.txt](snapshot.txt). A focused component test gate does not imply validation
 of optional workloads or a performance benchmark.

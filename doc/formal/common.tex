@@ -1,0 +1,41 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,mathpartir,stmaryrd}
+\usepackage{booktabs,longtable,array,enumitem,listings,xcolor}
+\usepackage{algorithm,algpseudocode}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue,citecolor=blue]{hyperref}
+\usepackage{microtype}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{obligation}[theorem]{Proof obligation}
+\newtheorem{counterexample}[theorem]{Counterexample}
+\newcommand{\Rule}[3]{\inferrule*[right={\scriptsize\textsc{#1}}]{#2}{#3}}
+\newcommand{\dom}{\operatorname{dom}}
+\newcommand{\data}{\mathsf{dom}}
+\newcommand{\att}{\mathsf{att}}
+\newcommand{\var}{\mathsf{var}}
+\newcommand{\Val}{\operatorname{Val}}
+\newcommand{\vars}{\operatorname{vars}}
+\newcommand{\fv}{\operatorname{FV}}
+\newcommand{\uses}{\operatorname{uses}}
+\newcommand{\binds}{\operatorname{binds}}
+\newcommand{\sort}{\operatorname{sort}}
+\newcommand{\set}{\operatorname{set}}
+\newcommand{\ord}{\operatorname{ord}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\sem}[1]{\llbracket #1\rrbracket}
+\newcommand{\ok}{\mathsf{ok}}
+\newcommand{\step}[1]{\mathrel{\xrightarrow{\textsc{#1}}}}
+\newcommand{\emit}{\operatorname{emit}}
+\newcommand{\fresh}{\operatorname{fresh}}
+\newcommand{\emptyseq}{\epsilon}
+\newcommand{\concat}{\mathbin{+\!+}}
+\newcommand{\restrict}{\mathbin{\upharpoonright}}
+\lstset{basicstyle=\ttfamily\small,columns=fullflexible,keepspaces=true,
+  breaklines=true,frame=single,showstringspaces=false}
+\setlist{nosep}

@@ -22,23 +22,21 @@ provides the broader routes listed in the [IR boundary review](IR-STAGE-REVIEW.m
 ## What students write
 
 The assignments follow three semantic compilation edges. Their implementations
-in this checkout live in separate stage modules:
+in this checkout live in separate implementation modules:
 
-- CQ lowering: `crates/cq-compiler/src/cq_to_relational/canonical.rs`;
-- index selection: `crates/cq-compiler/src/relational_to_indexes.rs`, with input
-  requirements in `relational_to_indexes/input.rs`;
-- indexed physical lowering: `crates/cq-compiler/src/physical/mod.rs`, with
-  input-index storage construction in `physical/input_indexed.rs`.
+- CQ lowering: `crates/cq-plan/src/canonical/lower.rs`;
+- input-index selection: `crates/cq-index/src/input/mod.rs`;
+- indexed physical lowering: `crates/cq-physical/src/input/mod.rs`.
 
 | Homework | Typed function | Successful result |
 |---|---|---|
-| Basic HW1 | `compile_cq(&cq::Module)` | `syn::Result<relational_plan::Module>` containing the unchanged source `Program` and a complete named relational plan |
-| Basic HW2 | `compile_relational_plan(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
-| Basic HW3 | `compile_index_requirements(&index_requirements::Module)` | `syn::Result<syn::File>` containing the complete sequential `Program + Storage` API and exactly one expression-position `pull!` region |
+| Basic HW1 | `cq_plan::canonical::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` containing the unchanged source `Program` and a complete named relational plan |
+| Basic HW2 | `cq_index::input::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
+| Basic HW3 | `cq_physical::input::compile_input_indexed(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete sequential `Program + Storage` API and exactly one expression-position `pull!` region |
 
 Staff supplies the syntax definitions, parsers, local contracts, edge
-contracts, direct proc-macro entries, `compile_pull`,
-`compile_iterator_pipeline`, fixtures, and the structural and runtime harness.
+contracts, direct proc-macro entries, `cq_pull::compile`,
+`cq_pipeline::iterator::compile`, fixtures, and the structural and runtime harness.
 Do not add a second parser, a token-stream compiler API, a generic pass
 framework, or an expansion wrapper.
 
@@ -334,8 +332,8 @@ open an editor window.
 
 Rust Analyzer's **Expand macro recursively at caret** is a separate final-code
 view, not a Racket-style stepper. It recursively expands to ordinary Rust.
-Moreover, `workload_query!` directly calls the first three typed compiler
-functions when compiled queries are enabled, so their results are not nested
+Moreover, `workload_query!` calls `cq_compose::compile_program` when compiled
+queries are enabled, so the first three typed results are not nested
 macro calls for Rust Analyzer to pause on. Do not invoke expansion again from
 the virtual `[EXPANSION].rs` buffer; it is not a supported source document and
 may produce an editor error. Use the six generated files for layer-by-layer
@@ -355,11 +353,11 @@ Start with the smallest edge under construction:
 
 ```text
 cargo test -p cq-ir --test relational_plan
-cargo test -p cq-compiler --test pass_contracts cq_to_relational_plan_contract -- --ignored
-cargo test -p cq-compiler --test pass_contracts relational_plan_to_index_requirements_contract -- --ignored
-cargo test -p cq-compiler --test pass_contracts index_requirements_to_staged_rust_contract -- --ignored
-cargo test -p cq-compiler --test documented_triangle
-cargo test -p cq-compiler --test pull_lowering
+cargo test -p cq-compose --test edge_contracts cq_to_relational_plan_contract
+cargo test -p cq-compose --test edge_contracts relational_plan_to_index_requirements_contract
+cargo test -p cq-compose --test edge_contracts index_requirements_to_staged_rust_contract
+cargo test -p cq-compose --test documented_triangle
+cargo test -p cq-compose --test pull_lowering
 cargo test -p mini-linq --test endpoint
 ```
 

@@ -26,8 +26,10 @@ Pipeline to Rust & Iterator/collection realization & Distinct iteration, fused s
 \end{tabular}
 \end{center}
 Macro aliases replace selected continuations where generated paths actually name
-them. Configured lexical wrappers bind dependency paths and optional counters once;
-semantic fragment arguments carry only their actual operands. A macro replacement
+them. Caller-owned lexical bindings close over implementation-specific dependencies;
+semantic fragment arguments carry only their actual operands. The plain physical
+host invokes configured paths directly; its observed counterpart additionally
+supplies an optional observer expression to runtime operations. A macro replacement
 must establish the observation and ownership laws of its boundary. Expanded Rust
 checks whether the selected operations and types exist, without a compiler-wide
 enumeration of capabilities.
@@ -38,9 +40,23 @@ guard and current BlockRows. Key construction consumes an Access projection of
 the current RHS, and is independent of candidate scanning. Join construction and
 probing similarly use local witness operations. These are expression and statement
 fragments in existing Rust holes, not serialization of whole RA operators with a
-physical environment. \code{physical/direct} owns whole-program lowering;
-\code{physical/access} owns local refinements; \code{physical/providers} owns
+physical environment. \code{cq-physical::direct} owns whole-program lowering;
+\code{cq-access} owns local refinements; \code{cq-providers} owns
 storage-operation expansion. \code{cq-storage} holds data structures and traits.
+These crates group semantic boundary families; feature-selected modules own each
+alternative's lowering, requirements, checks and tests. Shared source analyses are
+language facts or privately owned realization judgments, not a universal analysis
+registry. Cargo isolates families; source-removal tests separately exercise sibling
+module independence.
+
+Storage, collection, iterator and packing choices belong to configured native
+bindings. The generic materialization fragment is
+\code{materialize owner view (rows)}. A block binding supplies its packing
+expression only at actual construction, where it evaluates once; native row sets
+need no such configuration. The physical context keeps witness resources live
+through result materialization, so streaming Access continuations may borrow them.
+Default composition chooses the index policy and physical continuation together
+at the RA boundary; explicitly wired stages retain their caller's continuation.
 
 \subsection{Reading the papers at the right granularity}
 The literature separates representation, scheduling and intermediate semantics.

@@ -51,11 +51,10 @@ fn ordinary_scan_does_not_evaluate_or_expand_a_metadata_predicate() {
     let left = HashSet::from([[9_i64, 2], [8, 3]]);
     let source_calls = Cell::new(0);
     macro_rules! rows {
-        ($($operation:tt)*) => { ::mini_linq::hash_rows! { storage ::cq_storage; $($operation)* } };
+        ($($operation:tt)*) => { ::mini_linq::hash_rows! { $($operation)* } };
     }
     let candidates = mini_linq::scan_rows! {
-        storage ::cq_storage;
-        iterator ::mini_linq::stream_access;
+        work (compile_error!("unused scan observer"));
         candidates rows { observe(&source_calls, &left) }
             (compile_error!("native scan must not require block metadata"))
     };
@@ -84,7 +83,7 @@ fn pruned_access_checks_metadata_before_open_and_keeps_the_exact_residual() {
         };
     }
     let candidates = mini_linq::prune_rows! {
-        storage ::cq_storage; iterator ::mini_linq::stream_access; work (observed_work);
+        iterator ::mini_linq::stream_access; work (observed_work);
         candidates rows { observe(&source_calls, &view) }
             (|bounds: &[(i64, i64)]| mini_linq::zone_keys! {
                 storage ::cq_storage; iterator ::mini_linq::stream_access;
@@ -120,7 +119,7 @@ fn witness_implementations_preserve_pairs_and_nested_build_stays_lazy() {
     macro_rules! build {
         ($implementation:ident) => {
             ::mini_linq::$implementation! {
-                storage ::cq_storage; iterator ::mini_linq::stream_access;
+                iterator ::mini_linq::stream_access;
                 build {
                     witnesses(k, row) => (([k], row)) :-
                     R(k, row) => for (k, row) in ({
@@ -138,12 +137,12 @@ fn witness_implementations_preserve_pairs_and_nested_build_stays_lazy() {
     assert_eq!(calls.get(), 0);
     let expected = vec![[1, 10], [1, 11]];
     let hash_rows: Vec<_> = mini_linq::hash_witnesses! {
-        storage ::cq_storage; iterator ::mini_linq::stream_access; probe (&hash) ([1_i64])
+        probe (&hash) ([1_i64])
     }
     .copied()
     .collect();
     let nested_rows: Vec<_> = mini_linq::nested_witnesses! {
-        storage ::cq_storage; iterator ::mini_linq::stream_access; probe (&nested) ([1_i64])
+        probe (&nested) ([1_i64])
     }
     .copied()
     .collect();
@@ -160,74 +159,94 @@ mod same_role_aliases {
         ($($source:tt)*) => { ::mini_linq::hash_rows! { $($source)* } };
     }
     macro_rules! __ml_access0 {
-        ($($source:tt)*) => { ::mini_linq::exact_keys! { $($source)* } };
+        ($($source:tt)*) => { ::mini_linq::exact_keys! {
+            storage ::cq_storage; iterator ::mini_linq::stream_access;
+            keys ::std::collections::HashSet; $($source)*
+        } };
     }
-    ::mini_linq::physical_plan! {
-        storage ::cq_storage;
-        access ::mini_linq::collect_access;
-        iterator ::mini_linq::stream_access;
-        materialize r#__ml_provider0;
-        inputs { R => r#__ml_provider0; S => r#__ml_provider0; }
-        scan ::mini_linq::scan_rows;
-        key_provider r#__ml_access0;
-        keys ::std::collections::HashSet;
-        join ::mini_linq::hash_witnesses;
-        pub struct ReservedNames;
-        relation R(k:i64); relation S(k:i64);
-        answer(k) :- R(k), S(k);
-        relational {
-            r = rename R {k -> k};
-            s = rename S {k -> k};
-            reduced = semijoin r with s;
-            output reduced as answer(k);
-        }
+    macro_rules! query {
+        ($entry:ident, $name:ident; $($host:tt)*) => {
+            ::mini_linq::$entry! {
+                $($host)*
+                access ::mini_linq::stream_access;
+                materialize r#__ml_provider0;
+                inputs { R => r#__ml_provider0; S => r#__ml_provider0; }
+                scan ::mini_linq::scan_rows;
+                keys r#__ml_access0;
+                join crate::witnesses;
+                pub struct $name;
+                relation R(k:i64); relation S(k:i64);
+                answer(k) :- R(k), S(k);
+                relational {
+                    r = rename R {k -> k};
+                    s = rename S {k -> k};
+                    reduced = semijoin r with s;
+                    output reduced as answer(k);
+                }
+            }
+        };
     }
+    query!(physical_plan, ReservedNames;);
+    query!(observed_physical_plan, ObservedReservedNames; storage ::cq_storage;);
 }
+
+macro_rules! witnesses {
+    ($($source:tt)*) => {
+        ::mini_linq::hash_witnesses! { iterator ::mini_linq::stream_access; $($source)* }
+    };
+}
+pub(crate) use witnesses;
 
 mod cross_role_aliases {
     macro_rules! __ml_access0 {
         ($($source:tt)*) => { ::mini_linq::hash_rows! { $($source)* } };
     }
     macro_rules! __ml_provider0 {
-        ($($source:tt)*) => { ::mini_linq::exact_keys! { $($source)* } };
+        ($($source:tt)*) => { ::mini_linq::exact_keys! {
+            storage ::cq_storage; iterator ::mini_linq::stream_access;
+            keys ::std::collections::HashSet; $($source)*
+        } };
     }
     macro_rules! __ml_provider1 {
-        ($($source:tt)*) => { ::mini_linq::collect_access! { $($source)* } };
+        ($($source:tt)*) => { ::mini_linq::stream_access! { $($source)* } };
     }
-    ::mini_linq::physical_plan! {
-        storage ::cq_storage;
-        access __ml_provider1;
-        iterator ::mini_linq::stream_access;
-        materialize __ml_access0;
-        inputs { R => __ml_access0; S => __ml_access0; }
-        scan ::mini_linq::scan_rows;
-        key_provider __ml_provider0;
-        keys ::std::collections::HashSet;
-        join ::mini_linq::hash_witnesses;
-        pub struct CrossRoleNames;
-        relation R(k:i64,x:i64); relation S(k:i64,y:i64);
-        answer(k,x,y) :- R(k,x), S(k,y);
-        relational {
-            r = rename R {k -> k,x -> x};
-            s = rename S {k -> k,y -> y};
-            reduced = semijoin r with s;
-            joined = natural_join reduced with s;
-            output joined as answer(k,x,y);
-        }
+    macro_rules! query {
+        ($entry:ident, $name:ident; $($host:tt)*) => {
+            ::mini_linq::$entry! {
+                $($host)*
+                access __ml_provider1;
+                materialize __ml_access0;
+                inputs { R => __ml_access0; S => __ml_access0; }
+                scan ::mini_linq::scan_rows;
+                keys __ml_provider0;
+                join crate::witnesses;
+                pub struct $name;
+                relation R(k:i64,x:i64); relation S(k:i64,y:i64);
+                answer(k,x,y) :- R(k,x), S(k,y);
+                relational {
+                    r = rename R {k -> k,x -> x};
+                    s = rename S {k -> k,y -> y};
+                    reduced = semijoin r with s;
+                    joined = natural_join reduced with s;
+                    output joined as answer(k,x,y);
+                }
+            }
+        };
     }
+    query!(physical_plan, CrossRoleNames;);
+    query!(observed_physical_plan, ObservedCrossRoleNames; storage ::cq_storage;);
 }
 
 #[test]
 fn configured_aliases_do_not_shadow_selected_macro_names() {
-    let size = NonZeroUsize::new(2).unwrap();
     let left = HashSet::from([[1], [2], [3]]);
     let right = HashSet::from([[1], [3]]);
     let expected = vec![(1,), (3,)];
     assert_eq!(
-        same_role_aliases::ReservedNames::run(&left, &right, size),
+        same_role_aliases::ReservedNames::run(&left, &right),
         expected
     );
-    let (observed, stats) = same_role_aliases::ReservedNames::run_with_stats(&left, &right, size);
+    let (observed, stats) = same_role_aliases::ObservedReservedNames::run(&left, &right);
     assert_eq!(observed, expected);
     assert_eq!(stats.steps.last().unwrap().2.exact_probes, left.len());
 
@@ -235,11 +254,11 @@ fn configured_aliases_do_not_shadow_selected_macro_names() {
     let right = HashSet::from([[1, 7], [1, 8], [9, 90]]);
     let expected = vec![(1, 10, 7), (1, 10, 8)];
     assert_eq!(
-        cross_role_aliases::CrossRoleNames::run(&left, &right, size),
+        cross_role_aliases::CrossRoleNames::run(&left, &right),
         expected
     );
     assert_eq!(
-        cross_role_aliases::CrossRoleNames::run_with_stats(&left, &right, size).0,
+        cross_role_aliases::ObservedCrossRoleNames::run(&left, &right).0,
         expected
     );
 }

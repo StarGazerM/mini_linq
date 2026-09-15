@@ -1,6 +1,7 @@
 //! This suite invokes logical planning only; physical lowering is not needed.
-use cq_compiler::{JoinPolicy, JoinRule, PlanningOptions, explain_cq_graph};
+use cq_plan::graph::explain;
 use cq_ir::{cq, relational_plan as ra};
+use cq_plan::{JoinPolicy, PlanningOptions, Rule};
 use std::collections::BTreeSet;
 
 #[test]
@@ -16,7 +17,7 @@ fn reductions_respect_tree_dependencies_and_exactly_once_obligations() {
     ];
     for text in cases {
         let source: cq::Module = syn::parse_str(text).unwrap();
-        let (target, report) = explain_cq_graph(
+        let (target, report) = explain(
             &source,
             PlanningOptions {
                 strategy: JoinPolicy::Auto,
@@ -31,7 +32,7 @@ fn reductions_respect_tree_dependencies_and_exactly_once_obligations() {
         let mut frozen = false;
         for rule in report.derivation {
             match rule {
-                JoinRule::Up { child } => {
+                Rule::Up { child } => {
                     assert!(!frozen && down.is_empty());
                     assert!(tree.parent[child].is_some());
                     assert!(
@@ -40,17 +41,17 @@ fn reductions_respect_tree_dependencies_and_exactly_once_obligations() {
                     );
                     assert!(up.insert(child), "duplicate upward edge");
                 }
-                JoinRule::Down { child } => {
+                Rule::Down { child } => {
                     assert!(!frozen && up.len() + 1 == nodes);
                     let parent = tree.parent[child].expect("root has no incoming edge");
                     assert!(tree.parent[parent].is_none() || down.contains(&parent));
                     assert!(down.insert(child), "duplicate downward edge");
                 }
-                JoinRule::Freeze => {
+                Rule::Freeze => {
                     assert!(!frozen && up.len() + 1 == nodes && down.len() + 1 == nodes);
                     frozen = true;
                 }
-                JoinRule::Combine { .. } => assert!(frozen),
+                Rule::Combine { .. } => assert!(frozen),
                 _ => {}
             }
         }
@@ -76,7 +77,7 @@ fn selected_graph_stage_rejects_expression_scheduling() {
         answer(x) :- R(x), let y:i32 = *x + 1, if y > 0;
     };
     assert!(
-        explain_cq_graph(
+        explain(
             &source,
             PlanningOptions {
                 strategy: JoinPolicy::Auto,

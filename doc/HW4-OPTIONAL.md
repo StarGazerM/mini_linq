@@ -505,10 +505,10 @@ must update each affected language contract and its corresponding lowering.
 |---|---|---|
 | Supplied CQ syntax | `crates/cq-ir/src/cq.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
 | CQ validity | `crates/cq-ir/src/cq.rs` | Implement the left-to-right safety rules |
-| Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-compiler/src/cq_to_relational/canonical.rs`, and `cq_to_relational/clause_rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence under `cq_to_relational/check` |
-| Index selection | `crates/cq-compiler/src/relational_to_indexes/input.rs`, `relational_to_indexes/result.rs`, and `relational_to_indexes/check.rs` | Extend key derivation over the complete RelationalPlan and its independent check |
+| Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-plan/src/canonical/lower.rs`, and `crates/cq-plan/src/prefix/rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence in the owning logical implementation module |
+| Index selection | `crates/cq-index/src/input/mod.rs`, `crates/cq-index/src/result/mod.rs`, and their `correspondence.rs` checks | Extend key derivation over the complete RelationalPlan and its independent check |
 | Access annotations | `crates/cq-ir/src/rust_access_plan.rs` | Extend occurrence-to-access checking for negation and aggregation |
-| Physical realization | `crates/cq-compiler/src/physical/input_indexed.rs` and `physical/lazy.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
+| Physical realization | `crates/cq-physical/src/input/mod.rs` and `crates/cq-physical/src/lazy/mod.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
 
 You may add private helpers next to these sites. Do not add a generic pass
 trait, a dynamic query interpreter, or a second storage/access descriptor IR.
@@ -526,7 +526,7 @@ Then isolate both exact pass edges—extended CQ to RelationalPlan and that
 complete plan to IndexRequirements—before testing physical Rust:
 
 ```text
-cargo test -p cq-compiler --features hw4 --test hw4_optional
+cargo test -p cq-compose --features hw4 --test hw4_optional
 ```
 
 After all three completed basic passes support the cumulative extension, run

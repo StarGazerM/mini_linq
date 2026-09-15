@@ -11,10 +11,38 @@
 //! Replacements owe the same observation and binding contracts as the defaults;
 //! a resolving alias and compatible tokens alone do not establish those laws.
 
-use cq_ir::cq;
 use proc_macro::TokenStream;
-use quote::{ToTokens, quote};
-use syn::parse::{Parse, ParseStream};
+#[cfg(feature = "materialized")]
+mod access_input;
+#[cfg(any(
+    feature = "defaults",
+    feature = "canonical",
+    feature = "prefix",
+    feature = "graph",
+    feature = "input-indexes",
+    feature = "result-indexes",
+    feature = "input-indexed",
+    feature = "lazy",
+    feature = "materialized",
+    feature = "physical",
+    feature = "scan-rows",
+    feature = "prune-rows",
+    feature = "exact-keys",
+    feature = "zone-keys",
+    feature = "hash-witnesses",
+    feature = "nested-witnesses",
+    feature = "hash-rows",
+    feature = "sorted-rows",
+    feature = "block-rows",
+    feature = "pull",
+    feature = "iterator-pipeline",
+    feature = "collect-pipeline",
+    feature = "stream-pipeline",
+))]
+mod entry;
+mod workload;
+#[cfg(feature = "materialized")]
+use access_input::AccessInput;
 
 /// Own one workload query as real Rust macro input.
 ///
@@ -24,74 +52,50 @@ use syn::parse::{Parse, ParseStream};
 /// program through the same typed passes as [`mini_linq`].
 #[proc_macro]
 pub fn workload_query(input: TokenStream) -> TokenStream {
-    let source_text = input.to_string();
-    let source: cq::Module = match syn::parse(input) {
-        Ok(source) => source,
-        Err(error) => return error.into_compile_error().into(),
-    };
-    let catalog = quote! {
-        pub(crate) const RUST_PATH: &str = file!();
-        pub(crate) const SOURCE: &str = #source_text;
-
-        pub(crate) fn module() -> ::syn::Result<::cq_ir::cq::Module> {
-            ::syn::parse_str(SOURCE)
-        }
-    };
-
-    #[cfg(feature = "compiled-workloads")]
-    {
-        let program = match cq_compiler::compile_program(&source) {
-            Ok(program) => program,
-            Err(error) => return error.into_compile_error().into(),
-        };
-
-        quote!(#catalog #program).into()
-    }
-
-    #[cfg(not(feature = "compiled-workloads"))]
-    {
-        let _ = source;
-        catalog.into()
-    }
+    workload::expand(input)
 }
 
 /// Parse CQ syntax and route it through the typed CQ compiler pass.
+#[cfg(feature = "defaults")]
 #[proc_macro]
 pub fn mini_linq(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::relational_plan)),
-        cq_compiler::compile_cq,
+        cq_compose::compile_cq,
     )
 }
 
 /// Canonical CQ-to-RA rules for variable-only conjunctive queries.
+#[cfg(feature = "canonical")]
 #[proc_macro]
 pub fn canonical_query(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::relational_plan)),
-        cq_compiler::compile_cq_canonical,
+        cq_plan::canonical::compile,
     )
 }
 
 /// Source-order clause-prefix CQ lowering, selected independently of source shape.
+#[cfg(feature = "prefix")]
 #[proc_macro]
 pub fn prefix_query(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::relational_plan)),
-        cq_compiler::compile_cq_prefix,
+        cq_plan::prefix::compile,
     )
 }
 
 /// Graph planning, including YA reduction when the query is acyclic.
+#[cfg(feature = "graph")]
 #[proc_macro]
 pub fn graph_query(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::relational_plan)),
-        cq_compiler::compile_cq_graph,
+        cq_plan::graph::compile,
     )
 }
 
@@ -107,35 +111,38 @@ pub fn graph_query(input: TokenStream) -> TokenStream {
 ///     answer(x) :- R(x);
 /// }
 /// ```
+#[cfg(feature = "defaults")]
 #[proc_macro]
 pub fn planned_query(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::planned_relational_plan)),
-        cq_compiler::compile_cq_planned,
+        cq_compose::compile_cq_planned,
     )
 }
 
 /// Select indexes on named RA results, preserving the written algebra.
+#[cfg(feature = "result-indexes")]
 #[proc_macro]
 pub fn planned_relational_plan(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::materialized)),
-        cq_compiler::compile_result_indexes,
+        cq_index::result::compile,
     )
 }
 
 /// Indexed RA-to-staged-Rust pass; local holes return exact sets.
 /// The default `collect_access` continuation combines terminal distinctness and
 /// collection. An `access path;` override must satisfy that same set contract.
+#[cfg(feature = "materialized")]
 #[proc_macro]
 pub fn materialized(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         None,
         |input: &AccessInput<cq_ir::index_requirements::Module>| {
-            cq_compiler::compile_materialized_with(&input.source, &input.access)
+            cq_physical::materialized::compile_materialized(&input.source, &input.access)
         },
     )
 }
@@ -144,63 +151,69 @@ pub fn materialized(input: TokenStream) -> TokenStream {
 /// Call it with one iterator per input declaration, in order. Each closure value
 /// has Rust-inferred input types and ordinary capture semantics; no generated
 /// item name enters the query expressions' scope.
+#[cfg(feature = "materialized")]
 #[proc_macro]
 pub fn materialized_query(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         None,
         |input: &AccessInput<cq_ir::index_requirements::Module>| {
-            cq_compiler::compile_materialized_callable(&input.source, &input.access)
+            cq_physical::materialized::compile_materialized_callable(&input.source, &input.access)
         },
     )
 }
 
 /// Select base-input indexes for the admitted linear RA domain.
+#[cfg(feature = "input-indexes")]
 #[proc_macro]
 pub fn input_indexes(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::index_requirements)),
-        cq_compiler::compile_input_indexes,
+        cq_index::input::compile,
     )
 }
 
 /// Select indexes on named RA results without selecting a physical implementation.
+#[cfg(feature = "result-indexes")]
 #[proc_macro]
 pub fn result_indexes(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::index_requirements)),
-        cq_compiler::compile_result_indexes,
+        cq_index::result::compile,
     )
 }
 
 /// Explicit base-input indexed physical implementation.
+#[cfg(feature = "input-indexed")]
 #[proc_macro]
 pub fn input_indexed(input: TokenStream) -> TokenStream {
-    stage(input, None, cq_compiler::compile_input_indexed)
+    entry::stage(input, None, |source| {
+        cq_physical::input::compile_input_indexed(source, &syn::parse_quote!(mini_linq::pull))
+    })
 }
 
 /// Explicit lazy physical implementation for a linear relational prefix.
+#[cfg(feature = "lazy")]
 #[proc_macro]
 pub fn lazy_indexed(input: TokenStream) -> TokenStream {
-    stage(input, None, cq_compiler::compile_lazy_indexed)
+    entry::stage(input, None, |source| {
+        cq_physical::lazy::compile_lazy_indexed(source, &syn::parse_quote!(mini_linq::pull))
+    })
 }
 
-/// Parse RelationalPlan syntax and add its exact base-relation index overlay.
+/// Choose the default index policy and physical continuation together.
+#[cfg(feature = "defaults")]
 #[proc_macro]
 pub fn relational_plan(input: TokenStream) -> TokenStream {
-    stage(
-        input,
-        Some(syn::parse_quote!(mini_linq::index_requirements)),
-        cq_compiler::compile_relational_plan,
-    )
-}
-
-/// Parse IndexRequirements syntax and route it through the typed physical pass.
-#[proc_macro]
-pub fn index_requirements(input: TokenStream) -> TokenStream {
-    stage(input, None, cq_compiler::compile_index_requirements)
+    entry::stage(input, None, |source| {
+        cq_compose::expand_indexed(
+            source,
+            &syn::parse_quote!(mini_linq::input_indexed),
+            &syn::parse_quote!(mini_linq::lazy_indexed),
+        )
+    })
 }
 
 /// Expose the left-deep iterator operators of an annotated Rust access plan.
@@ -217,31 +230,34 @@ pub fn index_requirements(input: TokenStream) -> TokenStream {
 ///     let x = 2 => for (x,) in ([(2,)]);
 /// };
 /// ```
+#[cfg(feature = "pull")]
 #[proc_macro]
 pub fn pull(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::iterator_pipeline)),
-        cq_compiler::compile_pull,
+        cq_pull::compile,
     )
 }
 
 /// Consume an Access plan into an exact `HashSet` through the existing pull
 /// compiler and the independently selectable `collect_pipeline` continuation.
+#[cfg(feature = "pull")]
 #[proc_macro]
 pub fn collect_access(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::collect_pipeline)),
-        cq_compiler::compile_pull,
+        cq_pull::compile,
     )
 }
 
 /// Consume a named pipeline into its exact `HashSet`, folding terminal
 /// distinctness into the set sink. The source language is IteratorPipeline.
+#[cfg(feature = "collect-pipeline")]
 #[proc_macro]
 pub fn collect_pipeline(input: TokenStream) -> TokenStream {
-    stage(input, None, cq_compiler::compile_collect_pipeline)
+    entry::stage(input, None, cq_pipeline::collect::compile)
 }
 
 /// Lower an explicit named physical plan to its actual ordinary-Rust AST.
@@ -249,148 +265,183 @@ pub fn collect_pipeline(input: TokenStream) -> TokenStream {
 /// The compiler writes one standard iterator-adapter local per named operator.
 /// This proc-macro performs no further code generation: quoting the returned
 /// [`syn::Expr`] is its direct `ToTokens` representation.
+#[cfg(feature = "iterator-pipeline")]
 #[proc_macro]
 pub fn iterator_pipeline(input: TokenStream) -> TokenStream {
-    stage(input, None, cq_compiler::compile_iterator_pipeline)
+    entry::stage(input, None, cq_pipeline::iterator::compile)
 }
 
+#[cfg(any(
+    feature = "scan-rows",
+    feature = "prune-rows",
+    feature = "exact-keys",
+    feature = "zone-keys",
+    feature = "hash-witnesses",
+    feature = "nested-witnesses",
+    feature = "hash-rows",
+    feature = "sorted-rows",
+    feature = "block-rows"
+))]
 mod native_input;
+#[cfg(feature = "physical")]
 mod physical_input;
 
-mod kw {
-    syn::custom_keyword!(access);
-}
-
-fn stage<S: Parse, T: ToTokens>(
-    input: TokenStream,
-    next: Option<syn::Path>,
-    lower: impl FnOnce(&S) -> syn::Result<T>,
-) -> TokenStream {
-    let source = syn::parse_macro_input!(input as S);
-    match lower(&source) {
-        Ok(target) => match next {
-            Some(next) => quote!(#next! { #target }).into(),
-            None => quote!(#target).into(),
-        },
-        Err(error) => error.into_compile_error().into(),
-    }
-}
-
-struct AccessInput<S> {
-    access: syn::Path,
-    source: S,
-}
-impl<S: Parse> Parse for AccessInput<S> {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let access = if input.peek(kw::access) {
-            input.parse::<kw::access>()?;
-            let path = input.parse()?;
-            input.parse::<syn::Token![;]>()?;
-            path
-        } else {
-            syn::parse_quote!(mini_linq::collect_access)
-        };
-        Ok(Self {
-            access,
-            source: input.parse()?,
-        })
-    }
-}
-/// Configured RA -> Rust with independently selected native Access leaves.
-#[proc_macro]
-pub fn physical_plan(input: TokenStream) -> TokenStream {
-    stage(input, None, |input: &physical_input::PhysicalInput| {
-        cq_compiler::compile_physical(&input.source, &input.options()?)
-    })
-}
-
-/// The same checked Access-to-Pipeline lowering with a support-stream endpoint.
+/// The Access-to-Pipeline edge with a support-stream continuation.
+#[cfg(feature = "pull")]
 #[proc_macro]
 pub fn stream_access(input: TokenStream) -> TokenStream {
-    stage(
+    entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::stream_pipeline)),
-        cq_compiler::compile_pull,
+        cq_pull::compile,
     )
 }
 
-/// Enumerate the support of a set pipeline; the consumer owns distinctness.
+/// Enumerate Pipeline support; the enclosing consumer owns distinctness.
+#[cfg(feature = "stream-pipeline")]
 #[proc_macro]
 pub fn stream_pipeline(input: TokenStream) -> TokenStream {
-    stage(input, None, cq_compiler::compile_stream_pipeline)
+    entry::stage(input, None, cq_pipeline::stream::compile)
 }
 
-macro_rules! physical_entry {
-    ($name:ident, $compile:ident, $source:ty, $options:ident, $doc:literal) => {
+#[cfg(any(
+    feature = "prune-rows",
+    feature = "exact-keys",
+    feature = "zone-keys",
+    feature = "hash-witnesses",
+    feature = "nested-witnesses",
+    feature = "hash-rows",
+    feature = "sorted-rows",
+    feature = "block-rows"
+))]
+macro_rules! native_entry {
+    ($name:ident, $compile:path, $options:ident, $doc:literal) => {
         #[doc = $doc]
         #[proc_macro]
         pub fn $name(input: TokenStream) -> TokenStream {
-            stage(input, None, |input: &native_input::Input<$source>| {
-                cq_compiler::$compile(input.source(), &input.$options()?)
-            })
+            entry::stage(
+                input,
+                None,
+                |input: &native_input::Input<cq_ir::physical_provider::Operation>| {
+                    $compile(input.source(), &input.$options()?)
+                },
+            )
         }
     };
 }
-physical_entry!(
-    hash_rows,
-    compile_hash_provider,
-    cq_ir::physical_provider::Operation,
-    provider_options,
-    "Native HashSet physical operations."
-);
-physical_entry!(
-    sorted_rows,
-    compile_sorted_provider,
-    cq_ir::physical_provider::Operation,
-    provider_options,
-    "Native BTreeSet physical operations."
-);
-physical_entry!(
-    block_rows,
-    compile_block_provider,
-    cq_ir::physical_provider::Operation,
-    provider_options,
-    "Borrowed block access and independently selected masks through storage traits."
-);
-physical_entry!(
-    scan_rows,
-    compile_scan_rows,
-    cq_ir::physical_provider::Operation,
-    access_options,
-    "Enumerate current candidate handles."
-);
-physical_entry!(
+
+/// Candidate scan requires no storage, collection or iterator configuration.
+#[cfg(feature = "scan-rows")]
+#[proc_macro]
+pub fn scan_rows(input: TokenStream) -> TokenStream {
+    entry::stage(
+        input,
+        None,
+        |input: &native_input::Input<cq_ir::physical_provider::Operation>| {
+            cq_access::candidates::scan::compile(input.scan_source()?)
+        },
+    )
+}
+
+#[cfg(feature = "prune-rows")]
+native_entry!(
     prune_rows,
-    compile_prune_rows,
-    cq_ir::physical_provider::Operation,
-    access_options,
-    "Reject blocks through metadata before opening candidate payload."
+    cq_access::candidates::prune::compile,
+    prune_options,
+    "Prune through block metadata before opening selected payload."
 );
-physical_entry!(
+
+#[cfg(feature = "exact-keys")]
+native_entry!(
     exact_keys,
-    compile_exact_keys,
-    cq_ir::physical_provider::Operation,
-    access_options,
-    "Build and test exact key membership."
+    cq_access::keys::exact::compile,
+    exact_options,
+    "Construct and probe an exact key resource."
 );
-physical_entry!(
+
+#[cfg(feature = "zone-keys")]
+native_entry!(
     zone_keys,
-    compile_zone_keys,
-    cq_ir::physical_provider::Operation,
-    access_options,
-    "Build exact keys and their conservative coordinate summary."
+    cq_access::keys::zone::compile,
+    zone_options,
+    "Construct exact keys with a conservative range summary."
 );
-physical_entry!(
+
+#[cfg(feature = "hash-witnesses")]
+native_entry!(
     hash_witnesses,
-    compile_hash_witnesses,
-    cq_ir::physical_provider::Operation,
-    access_options,
-    "Build and probe exact witness buckets."
+    cq_access::witnesses::hash::compile,
+    hash_witness_options,
+    "Construct and probe hash witness buckets."
 );
-physical_entry!(
+
+#[cfg(feature = "nested-witnesses")]
+native_entry!(
     nested_witnesses,
-    compile_nested_witnesses,
-    cq_ir::physical_provider::Operation,
-    access_options,
+    cq_access::witnesses::nested::compile,
+    nested_witness_options,
     "Defer witness traversal until each probe."
 );
+
+#[cfg(feature = "hash-rows")]
+native_entry!(
+    hash_rows,
+    cq_providers::hash::compile,
+    hash_row_options,
+    "Native hash-set storage operations."
+);
+
+#[cfg(feature = "sorted-rows")]
+native_entry!(
+    sorted_rows,
+    cq_providers::sorted::compile,
+    sorted_row_options,
+    "Native sorted-set storage operations."
+);
+
+#[cfg(feature = "block-rows")]
+native_entry!(
+    block_rows,
+    cq_providers::block::compile,
+    block_options,
+    "Borrowed block storage and selection through operation traits."
+);
+
+/// Compile configured RA into a plain query program.
+#[cfg(feature = "physical")]
+#[proc_macro]
+pub fn physical_plan(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |input: &physical_input::PhysicalInput| {
+        cq_physical::direct::compile_physical(&input.source, &input.options()?)
+    })
+}
+
+/// Compile configured RA into a callable query with ordinary Rust captures.
+#[cfg(feature = "physical")]
+#[proc_macro]
+pub fn physical_query(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |input: &physical_input::PhysicalInput| {
+        cq_physical::direct::compile_physical_query(&input.source, &input.options()?)
+    })
+}
+
+/// Compile configured RA into an explicitly observed query program.
+#[cfg(feature = "physical")]
+#[proc_macro]
+pub fn observed_physical_plan(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |input: &physical_input::PhysicalInput| {
+        cq_physical::direct::compile_observed_physical(&input.source, &input.observed_options()?)
+    })
+}
+
+/// Compile configured RA into an explicitly observed callable query.
+#[cfg(feature = "physical")]
+#[proc_macro]
+pub fn observed_physical_query(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |input: &physical_input::PhysicalInput| {
+        cq_physical::direct::compile_observed_physical_query(
+            &input.source,
+            &input.observed_options()?,
+        )
+    })
+}

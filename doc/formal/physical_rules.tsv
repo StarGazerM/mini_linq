@@ -1,15 +1,15 @@
 rule	algorithm	path	marker	model_marker	scope
-AF-Realize	alg:access-direct	crates/cq-compiler/src/physical/direct/mod.rs	pub(crate) fn compile(	-	Direct admitted RA edge under provider and host laws
-AF-Bind	alg:access-direct	crates/cq-compiler/src/physical/direct/layout.rs	pub(super) fn analyze(	-	Current layouts and inherited provider bindings
-AF-Build	alg:access-direct	crates/cq-compiler/src/physical/direct/resources.rs	pub(super) fn emit(	-	Projected current RHS Access resource construction
-AF-Reuse	alg:access-direct	crates/cq-compiler/src/physical/direct/resources.rs	pub(super) fn analyze(	-	Same current RHS separator key provider and collection family
-AF-Semi	alg:access-direct	crates/cq-compiler/src/physical/direct/lower.rs	pub(super) fn semijoin(	reduce	Candidate traversal plus exact residual and current selection
-AF-Join	alg:access-direct	crates/cq-compiler/src/physical/direct/lower.rs	pub(super) fn join(	join	Build and Probe exact RHS witnesses
-AF-Store	alg:access-direct	crates/cq-compiler/src/physical/direct/lower.rs	fn materialize(	-	Selected provider preserves materialized row set
-AF-Scan	alg:access-leaf	crates/cq-compiler/src/physical/access/scan.rs	pub fn compile_scan_rows(	scan_rows	Current rows without expansion of metadata tokens
-AF-Prune	alg:access-leaf	crates/cq-compiler/src/physical/access/scan.rs	pub fn compile_prune_rows(	prune_rows	Guard before current selected block payload
-AF-Keys	alg:access-leaf	crates/cq-compiler/src/physical/access/keys.rs	pub fn compile_exact_keys(	exact_keys	Exact key collection and membership
-AF-Zones	alg:access-leaf	crates/cq-compiler/src/physical/access/keys.rs	pub fn compile_zone_keys(	zone_summary	Exact keys plus conservative coordinate metadata
-AF-Hash	alg:access-leaf	crates/cq-compiler/src/physical/access/witnesses.rs	pub fn compile_hash_witnesses(	hash_witnesses	Eager bucket Build and exact Probe
-AF-Nested	alg:access-leaf	crates/cq-compiler/src/physical/access/witnesses.rs	pub fn compile_nested_witnesses(	nested_witnesses	Deferred Build closure with traversal per Probe
-AF-Stream	alg:access-leaf	crates/cq-compiler/src/pipeline.rs	pub fn compile_stream_pipeline(	support_stream	Pre-Distinct sequence and support preservation
+AF-Realize	alg:access-direct	crates/cq-physical/src/direct/hosts/plain.rs	pub fn compile_physical(	-	Direct admitted RA edge under provider and host laws
+AF-Bind	alg:access-direct	crates/cq-physical/src/direct/layout.rs	pub(super) fn analyze(	-	Current layouts and inherited provider bindings
+AF-Build	alg:access-direct	crates/cq-physical/src/direct/resources.rs	pub(super) fn emit(	-	Projected current RHS Access resource construction
+AF-Reuse	alg:access-direct	crates/cq-physical/src/direct/resources.rs	pub(super) fn analyze(	-	Same current RHS separator key provider and collection family
+AF-Semi	alg:access-direct	crates/cq-physical/src/direct/lower.rs	pub(super) fn semijoin(	reduce	Candidate traversal plus exact residual and current selection
+AF-Join	alg:access-direct	crates/cq-physical/src/direct/lower.rs	pub(super) fn join(	join	Build and Probe exact RHS witnesses
+AF-Store	alg:access-direct	crates/cq-physical/src/direct/lower.rs	fn materialize(	-	Selected provider preserves materialized row set
+AF-Scan	alg:access-leaf	crates/cq-access/src/candidates/scan.rs	pub fn compile(	scan_rows	Current rows without expansion of metadata tokens
+AF-Prune	alg:access-leaf	crates/cq-access/src/candidates/prune.rs	pub fn compile(	prune_rows	Guard before current selected block payload
+AF-Keys	alg:access-leaf	crates/cq-access/src/keys/exact.rs	pub fn compile(	exact_keys	Exact key collection and membership
+AF-Zones	alg:access-leaf	crates/cq-access/src/keys/zone.rs	pub fn compile(	zone_summary	Exact keys plus conservative coordinate metadata
+AF-Hash	alg:access-leaf	crates/cq-access/src/witnesses/hash.rs	pub fn compile(	hash_witnesses	Eager bucket Build and exact Probe
+AF-Nested	alg:access-leaf	crates/cq-access/src/witnesses/nested.rs	pub fn compile(	nested_witnesses	Deferred Build closure with traversal per Probe
+AF-Stream	alg:access-leaf	crates/cq-pipeline/src/stream.rs	pub fn compile(	support_stream	Pre-Distinct sequence and support preservation

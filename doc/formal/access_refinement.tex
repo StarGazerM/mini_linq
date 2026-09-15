@@ -14,11 +14,12 @@ No physical information is needed to define $D_I$. During lowering, the compiler
 additionally maintains
 \[
  \Gamma(r)=(P_r,e_r,\ell_r),\qquad
- \mathcal M(r,s,Q,T)=e_K.
+ \mathcal M(r,s,Q)=e_K.
 \]
 Here $P_r$ is a selected row-provider macro, $e_r$ a dominating Rust value, and
 $\ell_r$ its ordered layout. $s$ is the sorted shared heading, $Q$ a selected
-key-provider macro and $T$ a key collection family. The resource map records an
+configured key-resource macro. Its lexical binding closes over its collection and
+other implementation choices. The resource map records an
 already constructed Rust value $e_K$. These are ordinary compiler data structures;
 there is no serialized environment, fresh logical resource relation, or additional
 RA operator. The representation premise is
@@ -29,7 +30,8 @@ Rename inherits the input representation; Semijoin inherits the left representat
 and selects handles. Unit, Project and NaturalJoin materialize using a selected
 result provider. Positions are derived from headings and layouts, not repeated in
 an intermediate query syntax. Resource reuse requires the same \emph{current RA
-version} $r$, $s$, $Q$ and $T$. The candidate-scan policy is absent from this key.
+version} $r$, $s$ and configured binding $Q$. Path spelling is a conservative
+identity in a fixed lexical scope, not equivalence discovery between aliases. The candidate-scan policy is absent from this key.
 The implementation does not infer equivalence of differently named versions or
 reuse a stale superset without a separate proof.
 
@@ -42,15 +44,21 @@ extension is
   &\mid&\mathsf{contains}\ (e_K)\ (e_k)\\
   &\mid&\mathsf{may\_match}\ (e_K)\ (e_B)\ (e_c)\\
   &\mid&\mathsf{probe}\ (e_W)\ (e_k)\\
-  &\mid&\mathsf{candidates}\ P\ \{e_v\}\ (e_m).
+  &\mid&\mathsf{candidates}\ P\ \{e_v\}\ (e_m)\\
+  &\mid&\mathsf{materialize}\ x_o\ x_v\ (e_A).
 \end{array}
 \]
 $A$ is an existing Access plan; $P$ a Rust macro path; the $e$ terms are native
 Rust expressions. Other provider fragments implement type, input, row, scan,
-selection, materialization and block operations. The selected frontend parses this
+selection and block operations. Materialization binds an owner $x_o$ and represented
+view $x_v$ from the support of its row iterable $e_A$. The selected frontend parses this
 typed syntax and administrative options separately. Storage paths, continuations,
 collection types and optional observations are bound by configured lexical macros;
-they are not part of each operation's denotation.
+they are not part of each operation's denotation. A block materializer additionally
+requires a bound packing-size expression; the generic operation carries no size
+operand. Its row expression and packing expression each evaluate once at
+construction. Non-materializing operations do not evaluate packing configuration.
+Native materializers collect the row support into their own set representation.
 
 For a current view $v$, write $H(v)$ for its selected handles and $\rho(h)$ for the
 represented row. Handles are decoded against their originating view; block handles additionally
@@ -102,13 +110,13 @@ Provider laws and adequate Rust expansion remain premises of these rules.
  {\Gamma[r\mapsto(P,e,\ell)]\text{ represents }r}
 \and
 \Rule{AF-Build}{\Gamma(r)=(P,e,\ell)\quad s\subseteq\att(r)\\
- Q.\mathsf{build}_T(\pi_s A_r)\text{ establishes exact }K}
- {\operatorname{emit}(e_K=Q.\mathsf{build}_T\{\pi_s A_r\});\quad
-  \mathcal M[(r,s,Q,T)\mapsto e_K]}
+ Q.\mathsf{build}(\pi_s A_r)\text{ establishes exact }K}
+ {\operatorname{emit}(e_K=Q.\mathsf{build}\{\pi_s A_r\});\quad
+  \mathcal M[(r,s,Q)\mapsto e_K]}
 \and
-\Rule{AF-Reuse}{\mathcal M(r,s,Q,T)=e_K\quad
+\Rule{AF-Reuse}{\mathcal M(r,s,Q)=e_K\quad
  e_K\text{ is immutable, live and established}}
- {\operatorname{resource}(r,s,Q,T)=e_K}
+ {\operatorname{resource}(r,s,Q)=e_K}
 \and
 \Rule{AF-Keys}{K=\operatorname{supp}(A)\quad
  T\text{ collects exact key membership}}
@@ -147,8 +155,8 @@ Provider laws and adequate Rust expansion remain premises of these rules.
  {\operatorname{supp}(A)=D_I(l)\bowtie D_I(r)}
 \and
 \Rule{AF-Store}{\operatorname{supp}(A)=D_I(t)\quad
- \operatorname{pack}_P\text{ preserves row sets}}
- {\gamma_P(\operatorname{pack}_P(A),\ell_t)=D_I(t)}
+ P.\mathsf{materialize}(A)\text{ establishes a live owner and exact view }v}
+ {\gamma_P(v,\ell_t)=D_I(t)}
 \and
 \Rule{AF-Stream}{\operatorname{PipelineWF}(p)\quad p=p_0;d\\
  d=\mathsf{Distinct}(u)\text{ is the sole-use terminal node}}
@@ -172,6 +180,12 @@ sequence; support equality alone would allow an arbitrary endpoint to duplicate
 values. A key collector that consumes only a prefix cannot establish AF-Keys.
 Zone construction drains its observation stream after collection so metadata
 covers all source keys, but this does not repair an inexact key collection.
+AF-Store requires ownership to dominate consumption: the generated witness owner
+and operand references remain in the enclosing definition scope until the result
+provider has consumed the join stream. Returning an iterator from an inner scope
+that owns its witness resource would violate this premise. For block storage,
+materialization collects unique rows and then calls the selected build trait with
+its bound size, evaluated once. Size changes layout, not the represented row set.
 
 \subsection{Algorithms and where control is emitted}
 \begin{algorithm}[t]
@@ -180,7 +194,7 @@ covers all source keys, but this does not repair an inexact key collection.
 \begin{algorithmic}[1]
 \Require Valid admitted RA and explicit physical options
 \State Derive layouts, field positions and inherited providers (AF-Bind)
-\State Group semijoin demands by $(\text{current RHS},s,Q,T)$
+\State Group semijoin demands by $(\text{current RHS},s,Q)$
 \For{definition $t=o$ in RA dependency order}
  \For{key resource demanded by this definition}
   \State At first use, emit projected-current-RHS Access construction (AF-Build)
@@ -190,7 +204,7 @@ covers all source keys, but this does not repair an inexact key collection.
   \State Emit Candidates followed by exact Contains in one Access plan (AF-Semi)
   \State Select the resulting handles in the current left view
  \ElsIf{$o=l\bowtie r$}
-  \State Emit RHS $(\text{key},\text{row})$ Build and left-driven Probe Access (AF-Join)
+  \State Bind RHS witness ownership before left-driven Probe Access (AF-Join)
   \State Materialize the set of joined rows with the result provider (AF-Store)
  \ElsIf{$o$ is Unit or Project}
   \State Construct the unit set or projected Access and materialize (AF-Store)
@@ -231,7 +245,13 @@ covers all source keys, but this does not repair an inexact key collection.
 These procedures are independently invoked implementations, not branches of a
 central chooser or runtime catalogue. Lexical macro selection determines which
 procedure is called. Each nested Access plan uses the existing checked Pull edge
-and its configured Pipeline endpoint.
+and its configured Pipeline endpoint. Implementation modules are
+\code{cq-access::candidates::scan}, \code{candidates::prune},
+\code{keys::exact}, \code{keys::zone}, \code{witnesses::hash} and
+\code{witnesses::nested}; each exposes its own \code{compile} entry.
+Provider modules \code{cq-providers::hash}, \code{sorted} and \code{block}
+own coherent representation protocols. No Boolean strategy dispatcher selects
+among these implementations.
 
 \paragraph{Selection and expansion.}
 AF-Scan discards unused predicate tokens, so it does not require a \code{may_match}
@@ -242,6 +262,14 @@ There is no silent fallback or global capability registry. The generated Rust
 contains ordinary iteration, guards, collection and borrowing. \code{cq-storage}
 contains immutable payload and metadata, independent selections, operation traits,
 summaries and passive counters; it does not execute relational operators.
+The plain direct host emits an unobserved \code{run}; the explicitly selected
+observed host emits a \code{run} returning the answer and statistics. Only the
+observed host supplies the optional \code{work (expression);} prefix to runtime
+operation bindings; type operations remain plain. Implementations discard unused
+observer expressions, including candidate scan and deferred witness construction.
+Counter definitions belong to the observed host and do not select relation storage.
+Neither host requires a global packing-size argument. Callable hosts can capture
+ordinary caller values used by configured packing expressions.
 
 \subsection{Preservation and evidence}
 \begin{lemma}[Exact completion of candidates]

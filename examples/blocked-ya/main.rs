@@ -3,38 +3,57 @@ use cq_storage::BlockStore;
 use std::collections::{BTreeSet, HashSet};
 use std::num::NonZeroUsize;
 
+// Bind leaf configuration where each operation protocol is selected.
+macro_rules! bound_block {
+    ($($op:tt)*) => { ::mini_linq::block_rows! { storage ::cq_storage; $($op)* } };
+}
+macro_rules! bound_scan {
+    (work ($work:expr); $($op:tt)*) => { ::mini_linq::scan_rows! { $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::scan_rows! { $($op)* } };
+}
+macro_rules! bound_prune {
+    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::stream_access; $($op)* } };
+}
+macro_rules! bound_exact {
+    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; iterator ::mini_linq::stream_access; keys ::std::collections::HashSet; $($op)* } };
+}
+macro_rules! bound_zone {
+    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::stream_access; keys ::std::collections::BTreeSet; $($op)* } };
+}
+macro_rules! bound_hash {
+    ($($op:tt)*) => { ::mini_linq::hash_witnesses! { iterator ::mini_linq::stream_access; $($op)* } };
+}
+pub(crate) use {bound_block, bound_exact, bound_hash, bound_prune, bound_scan, bound_zone};
+
 // A facade composes providers per binding and access implementations per operation.
 // S and T remain native containers; only R offers block descriptors and bounds.
 macro_rules! configured {
-    ($scan:path, $key_provider:path; $($ra:tt)*) => {
-        ::mini_linq::physical_plan! {
+    ($scan:path, $keys:path; $($ra:tt)*) => {
+        ::mini_linq::observed_physical_plan! {
             storage ::cq_storage;
-            access ::mini_linq::collect_access;
-            iterator ::mini_linq::stream_access;
+            access ::mini_linq::stream_access;
             materialize ::mini_linq::hash_rows;
             inputs {
-                R => ::mini_linq::block_rows;
+                R => crate::bound_block;
                 S => ::mini_linq::hash_rows;
                 T => ::mini_linq::sorted_rows;
             }
             results {}
-            scan ::mini_linq::scan_rows;
+            scan crate::bound_scan;
             scans { r1 => $scan; }
-            key_provider ::mini_linq::exact_keys;
-            key_providers { r1 => $key_provider; }
-            keys ::std::collections::HashSet;
-            key_sets { r1 => ::std::collections::BTreeSet; }
-            join ::mini_linq::hash_witnesses;
+            keys crate::bound_exact;
+            key_sets { r1 => $keys; }
+            join crate::bound_hash;
             joins {}
             $($ra)*
         }
     };
 }
 macro_rules! exact_rows {
-    ($($ra:tt)*) => { configured!(::mini_linq::scan_rows, ::mini_linq::exact_keys; $($ra)*); };
+    ($($ra:tt)*) => { configured!(crate::bound_scan, crate::bound_exact; $($ra)*); };
 }
 macro_rules! zone_rows {
-    ($($ra:tt)*) => { configured!(::mini_linq::prune_rows, ::mini_linq::zone_keys; $($ra)*); };
+    ($($ra:tt)*) => { configured!(crate::bound_prune, crate::bound_zone; $($ra)*); };
 }
 pub(crate) use {exact_rows, zone_rows};
 mod exact_wiring {
@@ -86,8 +105,8 @@ fn main() {
     let r = BlockStore::from_rows([[1, 10], [2, 20], [50, 30], [60, 40]], block_rows);
     let s = HashSet::from([[100, 1], [200, 2], [900, 90]]);
     let t = BTreeSet::from([[7, 100]]);
-    let (answer, selected) = zone::Query::run_with_stats(&r, &s, &t, block_rows);
-    let (reference, all) = exact::Query::run_with_stats(&r, &s, &t, block_rows);
+    let (answer, selected) = zone::Query::run(&r, &s, &t);
+    let (reference, all) = exact::Query::run(&r, &s, &t);
     assert_eq!(answer, vec![(10, 7)]);
     assert_eq!(answer, reference);
     println!("R: BlockStore; S: HashSet; T: BTreeSet; materialized results: HashSet");

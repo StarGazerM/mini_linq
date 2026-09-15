@@ -1,15 +1,15 @@
 //! Change host construction by a macro alias while retaining the same stages.
 mod borrowed {
-    pub use mini_linq::{
-        collect_access, collect_pipeline, materialized_query as materialized, planned_query,
-        planned_relational_plan,
+    pub use ::mini_linq::{
+        collect_access, collect_pipeline, graph_query as query,
+        materialized_query as index_requirements, result_indexes as relational_plan,
     };
 }
 
 #[test]
 fn one_compiled_query_accepts_separate_borrowed_input_bindings() {
     use borrowed as mini_linq;
-    let query = mini_linq::planned_query! {
+    let query = mini_linq::query! {
         struct Pair;
         relation R(a:i32,b:i32); relation S(b:i32,c:i32);
         answer(a,c) :- R(a,b), S(b,c);

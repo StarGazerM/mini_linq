@@ -4,11 +4,10 @@ use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
-use cq_compiler::{
-    compile_cq, compile_index_requirements, compile_iterator_pipeline, compile_pull,
-    compile_relational_plan,
-};
+use cq_compose::{compile_cq, with_default_indexes};
 use cq_ir::{cq, index_requirements, iterator_pipeline, relational_plan, rust_access_plan};
+use cq_pipeline::iterator::compile as compile_iterator_pipeline;
+use cq_pull::compile as compile_pull;
 use cq_workloads::QueryCase;
 use quote::{ToTokens, quote};
 use syn::visit_mut::{self, VisitMut};
@@ -160,8 +159,18 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
         return artifacts.finish(through);
     }
 
-    let indexes = artifacts.attempt("RelationalPlan -> IndexRequirements", || {
-        compile_relational_plan(&logical)
+    type Physical = fn(&index_requirements::Module, &syn::Path) -> syn::Result<syn::File>;
+    let (indexes, physical) = artifacts.attempt("RelationalPlan -> IndexRequirements", || {
+        with_default_indexes(
+            &logical,
+            |indexes| {
+                Ok((
+                    indexes,
+                    cq_physical::input::compile_input_indexed as Physical,
+                ))
+            },
+            |indexes| Ok((indexes, cq_physical::lazy::compile_lazy_indexed as Physical)),
+        )
     })?;
     artifacts.attempt("IndexRequirements local contract", || {
         index_requirements::contract::check(&indexes)
@@ -175,7 +184,7 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
     }
 
     let file = artifacts.attempt("IndexRequirements -> RustAccessPlan", || {
-        compile_index_requirements(&indexes)
+        physical(&indexes, &syn::parse_quote!(::mini_linq::pull))
     })?;
     artifacts.attempt("RustAccessPlan local contract", || {
         check_rust_access_plan_once(&file)

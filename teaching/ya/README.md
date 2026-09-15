@@ -8,28 +8,33 @@ CQ graph planning → RA → named-result indexes → materialized Access
                   → pull Pipeline → Rust set collection
 ```
 
-The export has three crates: `cq-ir`, `cq-compiler`, and `mini-linq`. It does
-not contain the input-indexed, lazy, direct, block, or native-provider
-implementations, the storage crate, workloads, the optional recursion
-assignment, or private reference implementations of the two student targets.
-The shared CQ syntax is preserved; the selected graph planner checks its own
-smaller admitted domain.
+The export contains seven package families: `cq-ir`, `cq-plan`, `cq-index`,
+`cq-physical`, `cq-pull`, `cq-pipeline`, and `mini-linq`. It selects the graph,
+result-index, materialized, pull and collection modules. Canonical/prefix
+planning, input indexes, input/lazy/direct physical compilation, other Pipeline
+endpoints, native access/providers, storage, workloads and the optional recursion
+assignment are physically absent. Shared CQ syntax stays complete; graph planning
+checks its own smaller admitted domain.
 
-Shared analysis and syntax-observation files retain their complete definitions,
-including facts used by other profiles. The release module entries mark these
-unused projections locally; they do not include another scheduling or physical
-lowering implementation.
+Only the selected implementations and their declared family helpers are copied.
+Planning certificates remain under `cq-plan`; Rust emission helpers and independent
+checker observations remain under `cq-physical`. There are no analysis/helper
+packages. Their existing feature guards and module declarations are reduced to
+the selected build. This rewrites build wiring, never algorithm statements.
 
 The two replaceable algorithm files are the logical YA sweep scheduler and
-the materialized physical semijoin lowering. Supplied administrative rules
+the materialized physical semijoin lowering, in `cq-plan/src/graph/ya.rs` and
+`cq-physical/src/materialized/semijoin.rs`, respectively. Supplied administrative rules
 check scheduling premises. Supplied source–target checks examine the emitted
 algebra and Access regions independently of the student algorithms.
 
-The exporter uses an explicit file allowlist and small module-entry templates.
-It does not copy the whole compiler and conceal unused modules behind feature
-flags. `EXPORT.json` in the result records the selected files and their hashes.
-The exported workspace has its own lockfile and contains no path dependency
-back to this checkout.
+The profile explicitly inventories selected source files. The exporter checks
+that list against the same reviewed module ownership used by the source-removal
+gate, and supplies a small frontend with explicit route aliases. Invocation and
+Access parsing helpers come from the production frontend. Typed APIs keep their
+production module paths; no implementation is replaced by a facade. The export
+has its own manifests and lockfile, with no dependency on the parent checkout.
+`EXPORT.json` records every delivered file and its hash.
 
 From the staff checkout:
 

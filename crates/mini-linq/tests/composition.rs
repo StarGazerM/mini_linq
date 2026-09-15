@@ -1,5 +1,12 @@
 //! The same CQ runs through independent macro choices at three boundaries.
 use std::collections::HashSet;
+static SELECTED_ACCESSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+macro_rules! selected_pull {
+    ($($tokens:tt)*) => {{
+        crate::SELECTED_ACCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        ::mini_linq::pull! { $($tokens)* }
+    }};
+}
 
 macro_rules! source {
     () => {
@@ -26,6 +33,7 @@ macro_rules! route {
     };
     (@access standalone) => {
         pub use ::mini_linq::iterator_pipeline;
+        pub(super) use selected_pull as pull;
     };
     (@access callable) => {
         pub use ::mini_linq::{collect_access, collect_pipeline};
@@ -44,6 +52,19 @@ macro_rules! route {
     };
 }
 
+mod defaults {
+    mod wiring {
+        pub use ::mini_linq::{input_indexed, iterator_pipeline, mini_linq, relational_plan};
+        pub(super) use selected_pull as pull;
+    }
+    use wiring as mini_linq;
+    source!();
+    pub(super) fn run(left: &[(i32, i32)], right: &[(i32, i32)]) -> super::HashSet<(i32, i32)> {
+        Query::run(left.iter().copied(), right.iter().copied())
+            .into_iter()
+            .collect()
+    }
+}
 route!(
     input,
     canonical_query,
@@ -82,6 +103,7 @@ route!(
 
 #[test]
 fn explicit_routes_preserve_the_same_query_on_every_small_database() {
+    SELECTED_ACCESSES.store(0, std::sync::atomic::Ordering::Relaxed);
     let universe = [(0, 0), (0, 1), (1, 0), (1, 1)];
     let rows = |mask: usize| {
         universe
@@ -104,6 +126,7 @@ fn explicit_routes_preserve_the_same_query_on_every_small_database() {
                 })
                 .collect();
             for execute in [
+                defaults::run,
                 input::run,
                 lazy::run,
                 materialized::run,
@@ -116,4 +139,9 @@ fn explicit_routes_preserve_the_same_query_on_every_small_database() {
             }
         }
     }
+    assert_eq!(
+        SELECTED_ACCESSES.load(std::sync::atomic::Ordering::Relaxed),
+        1536,
+        "all three standalone routes must use the selected Access macro on each run"
+    );
 }

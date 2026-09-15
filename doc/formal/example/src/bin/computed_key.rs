@@ -29,7 +29,7 @@ impl VisitMut for ExposePipelines {
         };
         let access: rust_access_plan::Plan = syn::parse2(mac.tokens.clone()).unwrap();
         rust_access_plan::contract::check(&access).unwrap();
-        let target = cq_compiler::compile_pull(&access).unwrap();
+        let target = cq_pull::compile(&access).unwrap();
         iterator_pipeline::contract::check(&target).unwrap();
         mac.path = next;
         mac.tokens = quote!(#target);
@@ -38,8 +38,8 @@ impl VisitMut for ExposePipelines {
 
 fn lower_pipeline(mac: &syn::Macro) -> Option<syn::Expr> {
     let lower = match mac.path.segments.last().unwrap().ident.to_string().as_str() {
-        "iterator_pipeline" => cq_compiler::compile_iterator_pipeline,
-        "collect_pipeline" => cq_compiler::compile_collect_pipeline,
+        "iterator_pipeline" => cq_pipeline::iterator::compile,
+        "collect_pipeline" => cq_pipeline::collect::compile,
         _ => return None,
     };
     let pipeline: iterator_pipeline::Pipeline = syn::parse2(mac.tokens.clone()).unwrap();
@@ -77,21 +77,24 @@ fn write(directory: &std::path::Path, name: &str, file: &syn::File) {
 }
 fn boundaries(directory: &std::path::Path, prefix: &str, source: &cq::Module, planned: bool) {
     let ra = if planned {
-        cq_compiler::compile_cq_planned(source)
+        cq_compose::compile_cq_planned(source)
     } else {
-        cq_compiler::compile_cq(source)
+        cq_compose::compile_cq(source)
     }
     .unwrap();
     let ix = if planned {
-        cq_compiler::compile_result_indexes(&ra)
+        cq_index::result::compile(&ra)
     } else {
-        cq_compiler::compile_relational_plan(&ra)
+        cq_index::result::compile(&ra)
     }
     .unwrap();
     let staged = if planned {
-        cq_compiler::compile_materialized(&ix)
+        cq_physical::materialized::compile_materialized(
+            &ix,
+            &syn::parse_quote!(::mini_linq::collect_access),
+        )
     } else {
-        cq_compiler::compile_index_requirements(&ix)
+        cq_physical::lazy::compile_lazy_indexed(&ix, &syn::parse_quote!(::mini_linq::pull))
     }
     .unwrap();
     let (cq_macro, ra_macro, index_macro): (syn::Path, syn::Path, syn::Path) = if planned {
@@ -104,7 +107,7 @@ fn boundaries(directory: &std::path::Path, prefix: &str, source: &cq::Module, pl
         (
             syn::parse_quote!(::mini_linq::mini_linq),
             syn::parse_quote!(::mini_linq::relational_plan),
-            syn::parse_quote!(::mini_linq::index_requirements),
+            syn::parse_quote!(::mini_linq::lazy_indexed),
         )
     };
     write(
@@ -176,16 +179,16 @@ fn main() {
         relation answer(a:i32,b:i32);
         answer(x,*y+1) :- R(x,k), let next:i32 = *k+1, S(next,y), if y > 0;
     };
-    let (ra, report) = cq_compiler::explain_cq_plan(
+    let (ra, report) = cq_compose::explain_cq_plan(
         &source,
-        cq_compiler::PlanningOptions {
-            strategy: cq_compiler::JoinPolicy::Auto,
+        cq_plan::PlanningOptions {
+            strategy: cq_plan::JoinPolicy::Auto,
             max_arity: None,
         },
     )
     .unwrap();
     std::fs::write(directory.join("report.txt"), format!("{report:#?}")).unwrap();
-    cq_compiler::check_cq_plan(&source, &ra, &report).unwrap();
+    cq_compose::check_cq_plan(&source, &ra, &report).unwrap();
     boundaries(&directory, "lazy", &source, false);
     boundaries(&directory, "materialized", &source, true);
     let r = [(1, 6), (2, 6), (3, 8)];

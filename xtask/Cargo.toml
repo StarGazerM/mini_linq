@@ -14,7 +14,10 @@ default = []
 oracle = ["dep:duckdb"]
 
 [dependencies]
-cq-compiler = { path = "../crates/cq-compiler" }
+cq-compose = { path = "../crates/cq-compose" }
+cq-physical = { path = "../crates/cq-physical", default-features = false, features = ["input", "lazy"] }
+cq-pull = { path = "../crates/cq-pull" }
+cq-pipeline = { path = "../crates/cq-pipeline", default-features = false, features = ["iterator"] }
 cq-ir = { path = "../crates/cq-ir" }
 cq-workloads = { path = "../workloads" }
 duckdb = { version = "~1.10505.0", features = ["bundled"], optional = true }

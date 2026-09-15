@@ -1,14 +1,20 @@
 //! End-to-end tests compose the two independent assignment boundaries.
-use mini_linq::planned_query;
+mod wiring {
+    pub use ::mini_linq::{
+        collect_access, collect_pipeline, graph_query as query, materialized as index_requirements,
+        result_indexes as relational_plan,
+    };
+}
 use std::collections::BTreeSet;
+use wiring as mini_linq;
 
-planned_query! {
+mini_linq::query! {
     struct Chain;
     relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
     answer(a,d) :- R(a,b), S(b,c), T(c,d);
 }
 
-planned_query! {
+mini_linq::query! {
     struct Disconnected;
     relation R(a:i32); relation S(b:i32);
     answer(a,b) :- R(a), S(b);

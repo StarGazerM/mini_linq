@@ -35,7 +35,7 @@ iterN = a resumable Iterator value and its Rust item binding
 
 `IteratorPipeline` exposes the physical operator edges but deliberately does
 not choose `map`, `flat_map`, or another Rust combinator. The supplied
-`compile_iterator_pipeline` pass makes those choices and returns `syn::Expr`.
+`cq_pipeline::iterator::compile` pass makes those choices and returns `syn::Expr`.
 That expression is already the faithful concrete target IR. The proc-macro
 entry then uses `ToTokens` only to emit the AST; token emission performs no
 additional planning or lowering.
@@ -44,11 +44,11 @@ additional planning or lowering.
 
 | Owner | Function | Exact result |
 |---|---|---|
-| student, Basic HW1 | `compile_cq(&cq::Module)` | `syn::Result<relational_plan::Module>` |
-| student, Basic HW2 | `compile_relational_plan(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` preserving the complete input plan |
-| student, Basic HW3 | `compile_index_requirements(&index_requirements::Module)` | `syn::Result<syn::File>` containing the complete API and one `pull!` expression |
-| staff | `compile_pull(&rust_access_plan::Plan)` | `syn::Result<iterator_pipeline::Pipeline>` with explicit `iterN` edges |
-| staff | `compile_iterator_pipeline(&iterator_pipeline::Pipeline)` | `syn::Result<syn::Expr>` containing one lazy whole-result-set expression |
+| student, Basic HW1 | `cq_plan::canonical::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` |
+| student, Basic HW2 | `cq_index::input::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` preserving the complete input plan |
+| student, Basic HW3 | `cq_physical::input::compile_input_indexed(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete API and one `pull!` expression |
+| staff | `cq_pull::compile(&rust_access_plan::Plan)` | `syn::Result<iterator_pipeline::Pipeline>` with explicit `iterN` edges |
+| staff | `cq_pipeline::iterator::compile(&iterator_pipeline::Pipeline)` | `syn::Result<syn::Expr>` containing one lazy whole-result-set expression |
 
 These functions accept typed syntax values, not token streams. The
 `mini-linq` proc-macro crate owns token transport: each direct macro parses its
@@ -59,13 +59,13 @@ the macro entry does not duplicate that check.
 
 ## Planned alternatives through the same boundaries
 
-The [Stage I implementation](PLANNED-PASS-IMPLEMENTATION.md) adds alternative
+The [planned implementation](PLANNING.md) adds alternative
 edges without replacing the basic homework contracts:
 
 | Macro entry | Typed transformation |
 |---|---|
 | `planned_query!` | `compile_cq_planned`: CQ -> RelationalPlan |
-| `planned_relational_plan!` | `compile_result_indexes`: RelationalPlan -> IndexRequirements |
+| `planned_relational_plan!` | `cq_index::result::compile`: RelationalPlan -> IndexRequirements |
 | `materialized!` | `compile_materialized`: IndexRequirements -> staged Rust |
 
 The target Rust file has one local `collect_access!` expression per named RA
@@ -310,7 +310,7 @@ separate output metadata preserves the head name and tuple order.
 ### 3. Entire IndexRequirements program
 
 ```rust
-::mini_linq::index_requirements! {
+::mini_linq::input_indexed! {
     pub struct TriangleProgram;
     relation R(c0: i32, c1: i32);
     relation S(c0: i32, c1: i32);
@@ -717,7 +717,7 @@ the next item can actually wait on I/O or a channel.
 
 ### Final Rust expression
 
-- `compile_iterator_pipeline` chooses and constructs the Rust combinators.
+- `cq_pipeline::iterator::compile` chooses and constructs the Rust combinators.
 - One Rust local corresponds to every IteratorPipeline definition.
 - The returned cursor is root-lazy and resumable.
 - Proc-macro `ToTokens` emission performs no further semantic work.
@@ -725,8 +725,9 @@ the next item can actually wait on I/O or a channel.
 ## Homework boundary
 
 The basic assignments cover three typed edges, implemented in this checkout in
-`cq_to_relational/canonical.rs`, `relational_to_indexes.rs`, and `physical/mod.rs`
-under `crates/cq-compiler/src/`:
+`cq-plan/src/canonical/lower.rs`, `cq-index/src/input/mod.rs`, and
+`cq-physical/src/input/mod.rs`
+under `crates/`:
 
 1. Basic HW1 constructs the complete canonical RelationalPlan.
 2. Basic HW2 preserves that plan and derives its exact index overlay.
@@ -749,7 +750,7 @@ extended checkpoint continues to use `mini_linq!`.
 ```text
 cargo test -p cq-ir --test relational_plan
 cargo test -p cq-ir --test iterator_pipeline
-cargo test -p cq-compiler --test pull_lowering
-cargo test -p cq-compiler --test documented_triangle
+cargo test -p cq-compose --test pull_lowering
+cargo test -p cq-compose --test documented_triangle
 cargo test -p mini-linq --test endpoint
 ```

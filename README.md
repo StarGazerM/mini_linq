@@ -29,27 +29,27 @@ CQ, RelationalPlan, IndexRequirements, RustAccessPlan, and IteratorPipeline are 
 The surrounding `syn::File` is a **staged Rust program** or **program residual**: ordinary Rust with
 local IR holes: one in the basic route, several in the materialized route.
 
-The implemented [Stage I planner](doc/PLANNED-PASS-IMPLEMENTATION.md) supplies
+The implemented [Stage I planner](doc/PLANNING.md) supplies
 alternative typed passes through these same languages. `planned_query!`
-selects graph-based CQ-to-RA planning; `planned_relational_plan!` selects
+selects the checked graph or prefix CQ-to-RA composition; `planned_relational_plan!` selects
 indexes for the written RA; `materialized!` emits one set-valued `collect_access!` region
 per named result. It supports bushy joins, alpha-acyclic semijoin reduction,
 cyclic binary fallback, bounded comparisons, and intermediate projection.
 Its `build` materializes the DAG; `query` iterates the stored answer.
-See the [verification matrix](doc/STAGE-I-VERIFICATION.md) and
+See the [verification matrix](doc/PLANNING-VERIFICATION.md) and
 [complete boundary artifacts](doc/planned-example/01-cq.rs).
 
 Language-entry macros emit relative `mini_linq::next_stage!` calls. An ordinary
 module facade aliased as `mini_linq` can re-export a different next-stage macro.
-The [block-access implementation](doc/BLOCK-ACCESS-IMPLEMENTATION.md)
+The [block-access implementation](doc/ACCESS-REFINEMENT.md)
 uses this wiring to compile exact integer RA with independently selected input
 providers, result materializations, candidate scans, key resources and join witnesses. One query
 can borrow a block store, a native hash set and a native sorted set; zone pruning
 affects only its selected operand. The existing
 materialized backend accepts `access macro_path;` as well. Run the concrete
 example with `cargo run -p mini-linq --example blocked-ya --locked`.
-The [module and crate design](doc/COMPILER-STRUCTURE.md) separates physical
-implementations, local compilation decisions, and data structures. `cq-storage`
+The [module and crate structure](doc/COMPILER-STRUCTURE.md) assigns ownership by
+macro boundary, with selectable implementations inside family crates. `cq-storage`
 contains immutable `BlockStore` storage, independent `BlockMask` bitmaps, summaries
 and passive counters. Operational traits specify borrowed block access, selection,
 exact membership and conservative ranges; implementations can change layout
@@ -146,22 +146,30 @@ lowering strategies.
 | Typed edge | Exact result |
 |---|---|
 | `compile_cq(&cq::Module)` | `syn::Result<relational_plan::Module>` with source plus named algebra |
-| `compile_relational_plan(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` with the preserved plan plus exact keys |
-| `compile_index_requirements(&index_requirements::Module)` | `syn::Result<syn::File>` with the sequential API and exactly one `pull!` expression |
+| `cq_index::{input,result}::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` with the preserved plan plus selected key demands |
+| `compile_indexed(&relational_plan::Module, &syn::Path)` | `syn::Result<(index_requirements::Module, syn::File)>` from one default index/physical decision |
 
-Each checked entry lives with its transformation: [canonical CQ lowering](crates/cq-compiler/src/cq_to_relational/canonical.rs),
-[index selection](crates/cq-compiler/src/relational_to_indexes.rs), and
-[indexed physical lowering](crates/cq-compiler/src/physical/mod.rs). Input-index
-analysis is separate from storage construction. [Compiler structure](doc/COMPILER-STRUCTURE.md)
-maps the implementations and independent edge checkers.
+Default compositions live in `cq-compose`; explicit implementations belong to
+`cq-plan`, `cq-index` and `cq-physical` modules. `with_default_indexes` supplies
+separate continuations for the selected pair, allowing tools to inspect IX before
+running physical compilation. An independently authored IX uses an explicit
+physical implementation. [Compiler structure](doc/COMPILER-STRUCTURE.md) records
+all eleven compiler/storage packages, configuration ownership and isolation gates.
+The package's [feature matrix](tools/check_features.py) runs its own tests,
+examples and doctests with selected Cargo features:
+
+```sh
+python3 tools/check_features.py
+```
 
 | Proc-macro entry | Typed function |
 |---|---|
 | `mini_linq` | `compile_cq` |
-| `relational_plan` | `compile_relational_plan` |
-| `index_requirements` | `compile_index_requirements` |
-| `pull` | `compile_pull` |
-| `iterator_pipeline` | `compile_iterator_pipeline` |
+| `relational_plan` | `cq_compose::expand_indexed` with caller-resolved physical continuations |
+| `input_indexes`, `result_indexes` | `cq_index::{input,result}::compile` |
+| `input_indexed`, `lazy_indexed` | Explicit `cq_physical::{input,lazy}` entries |
+| `pull` | `cq_pull::compile` |
+| `iterator_pipeline` | `cq_pipeline::iterator::compile` |
 
 Each entry parses one typed source and directly calls its function. Grammar errors become span-aware
 `compile_error!` output. In authored workload leaves specifically, `workload_query!` directly emits
@@ -224,16 +232,19 @@ After completing the three student passes:
 
 ```text
 cargo run --example triangle-duckdb --features duckdb-example
-cargo test -p cq-compiler --test pass_contracts cq_to_relational_plan_contract
-cargo test -p cq-compiler --test pass_contracts relational_plan_to_index_requirements_contract
-cargo test -p cq-compiler --test pass_contracts index_requirements_to_staged_rust_contract
-cargo test -p cq-compiler --test documented_triangle
-cargo test -p cq-compiler --test pull_lowering
+cargo test -p cq-compose --test edge_contracts cq_to_relational_plan_contract
+cargo test -p cq-compose --test edge_contracts relational_plan_to_index_requirements_contract
+cargo test -p cq-compose --test edge_contracts index_requirements_to_staged_rust_contract
+cargo test -p cq-compose --test documented_triangle
+cargo test -p cq-compose --test pull_lowering
 cargo test -p mini-linq --test endpoint
 cargo test --workspace
 cargo check -p cq-workloads --features compiled-queries --locked
 cargo xtask differential all tiny --scenario all
 ```
+
+The [selective composition example](examples/composition/README.md) builds a
+query with only its chosen implementation modules and explicit macro aliases.
 
 The [project examples](examples/README.md) are named by the boundary they
 demonstrate. `triangle-duckdb` keeps a small set of input rows, the MiniLinq CQ,

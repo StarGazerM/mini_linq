@@ -4,19 +4,16 @@ This branch is a self-contained, editor-facing checkout of the completed basic
 query-lowering checkpoint. It is private staff material and must not be pushed
 to the student repository or distributed before the release policy permits it.
 
-The public typed functions are exported from `cq-compiler`; each implementation
-belongs to its source-to-target stage:
+The private reference groups compiler implementations by macro boundary. The
+[compiler ownership map](doc/COMPILER-STRUCTURE.md) records family crates and
+independently selectable implementation modules. `cq-compose` owns only
+actual default route selection and complete-program composition; callers import
+explicit implementations and planning types from their owning crates.
 
-```text
-compile_cq                  cq_to_relational/canonical.rs
-compile_relational_plan     relational_to_indexes.rs
-compile_index_requirements  physical/mod.rs
-```
-
-The canonical path is CQ → RelationalPlan → IndexRequirements → staged Rust.
-Input-index selection lives in `relational_to_indexes/input.rs`; its storage
-realization lives in `physical/input_indexed.rs`. The route then lowers the
-embedded RustAccessPlan to a named IteratorPipeline and that pipeline to an ordinary Rust `syn::Expr`.
+The basic route is CQ → RelationalPlan → IndexRequirements → staged Rust.
+`cq-plan::canonical`, `cq-index::input` and `cq-physical::input` supply its three
+transformations. `cq-pull` and `cq-pipeline` lower its embedded Access and
+Pipeline regions to native Rust.
 
 The canonical bare-variable route begins with Rename and does not emit `Unit`.
 The implemented Rust-expression route can seed a prefix with the empty-heading
@@ -72,8 +69,8 @@ proc-macro artifacts are replaced.
 The branch-local `.vscode/settings.json` enables
 `cq-workloads/compiled-queries`. That feature forwards
 `mini-linq/compiled-workloads`, so every direct `workload_query!` invocation
-emits its typed-CQ catalog factory and directly calls the three canonical
-compilation edges to emit its generated `Program` and `ProgramStorage`. It does
+emits its typed-CQ catalog factory and calls `cq_compose::compile_program` to emit its generated `Program` and
+`ProgramStorage`. It does
 not invoke a nested `mini_linq!` wrapper.
 
 Consequently, Rust Analyzer's recursive command is **not** a layer stepper: it
@@ -88,10 +85,10 @@ constructing it reads no stored row, and its first `next()` enters the outer
 `once_with`. `Storage::materialize` drains that already-distinct cursor into a
 `Vec` and sorts it. No second raw-result cursor is generated.
 
-The supplied `compile_pull` lowering preserves operator boundaries as an
+The supplied `cq_pull::compile` lowering preserves operator boundaries as an
 IteratorPipeline: `scan`, left-deep binary `join`, `filter`, `project`, and
 explicit `distinct`, with one named `iterN` result and a complete intermediate
-binding tuple at every edge. `compile_iterator_pipeline` then chooses the
+binding tuple at every edge. `cq_pipeline::iterator::compile` then chooses the
 actual Rust `map`, `flat_map`, and `filter` adapters and emits one Rust local
 per `iterN`. Its returned `syn::Expr` is the final concrete IR; proc-macro
 `ToTokens` is pure emission.
@@ -122,10 +119,10 @@ Run the complete baseline suite and its focused pass edges:
 
 ```text
 cargo test --workspace --locked
-cargo test -p cq-compiler --test pass_contracts cq_to_relational_plan_contract
-cargo test -p cq-compiler --test pass_contracts relational_plan_to_index_requirements_contract
-cargo test -p cq-compiler --test pass_contracts index_requirements_to_staged_rust_contract
-cargo test -p cq-compiler --test documented_triangle
+cargo test -p cq-compose --test edge_contracts cq_to_relational_plan_contract
+cargo test -p cq-compose --test edge_contracts relational_plan_to_index_requirements_contract
+cargo test -p cq-compose --test edge_contracts index_requirements_to_staged_rust_contract
+cargo test -p cq-compose --test documented_triangle
 ```
 
 Run all generated programs against the independent DuckDB oracle:

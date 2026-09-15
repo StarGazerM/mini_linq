@@ -1,5 +1,3 @@
-#![cfg(feature = "compiled-workloads")]
-
 use std::collections::HashSet;
 
 use mini_linq::mini_linq;

@@ -1,0 +1,12 @@
+[package]
+name = "mini-linq-composition-example"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+mini-linq = { path = "../../crates/mini-linq", default-features = false, features = [
+    "graph", "result-indexes", "materialized", "pull", "collect-pipeline",
+] }

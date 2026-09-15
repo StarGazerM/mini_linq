@@ -4,7 +4,6 @@
 //! receives the source and ordinary options separately. This recursive derived
 //! syntax accepts any directive order without putting configuration in cq-ir.
 
-use cq_compiler::{AccessOptions, ProviderOptions};
 use quote::ToTokens;
 use syn::{Token, parse::Parse, parse::ParseStream, token};
 
@@ -13,6 +12,7 @@ mod kw {
     syn::custom_keyword!(iterator);
     syn::custom_keyword!(keys);
     syn::custom_keyword!(work);
+    syn::custom_keyword!(packing);
 }
 
 #[derive(Clone, Debug, syn_derive::Parse, syn_derive::ToTokens)]
@@ -48,6 +48,16 @@ pub enum Input<S: Parse + ToTokens> {
         semi: token::Semi,
         rest: Box<Self>,
     },
+    #[parse(peek_func = is_packing)]
+    Packing {
+        keyword: kw::packing,
+        #[syn(parenthesized)]
+        paren: token::Paren,
+        #[syn(in = paren)]
+        value: Box<syn::Expr>,
+        semi: token::Semi,
+        rest: Box<Self>,
+    },
     #[parse(peek_func = |_| true)]
     Source { source: Box<S> },
 }
@@ -67,12 +77,17 @@ fn is_work(input: ParseStream<'_>) -> bool {
     input.peek(kw::work) && !input.peek2(Token![=])
 }
 
+fn is_packing(input: ParseStream<'_>) -> bool {
+    input.peek(kw::packing) && !input.peek2(Token![=])
+}
+
 #[derive(Default)]
 struct Configuration<'a> {
     storage: Option<&'a syn::Path>,
     iterator: Option<&'a syn::Path>,
     keys: Option<&'a syn::Path>,
     work: Option<&'a syn::Expr>,
+    packing: Option<&'a syn::Expr>,
 }
 
 impl<S: Parse + ToTokens> Input<S> {
@@ -82,7 +97,8 @@ impl<S: Parse + ToTokens> Input<S> {
             Self::Storage { rest, .. }
             | Self::Iterator { rest, .. }
             | Self::Keys { rest, .. }
-            | Self::Work { rest, .. } => rest.source(),
+            | Self::Work { rest, .. }
+            | Self::Packing { rest, .. } => rest.source(),
         }
     }
 
@@ -101,6 +117,9 @@ impl<S: Parse + ToTokens> Input<S> {
                 Self::Work { value, rest, .. } => {
                     (configuration.work.replace(value).is_some(), rest)
                 }
+                Self::Packing { value, rest, .. } => {
+                    (configuration.packing.replace(value).is_some(), rest)
+                }
                 Self::Source { .. } => return Ok(configuration),
             };
             if duplicate {
@@ -113,6 +132,7 @@ impl<S: Parse + ToTokens> Input<S> {
         }
     }
 
+    #[cfg(any(feature = "prune-rows", feature = "zone-keys", feature = "block-rows"))]
     fn required(&self, value: Option<&syn::Path>, name: &str) -> syn::Result<syn::Path> {
         value.cloned().ok_or_else(|| {
             syn::Error::new_spanned(
@@ -122,26 +142,104 @@ impl<S: Parse + ToTokens> Input<S> {
         })
     }
 
-    pub fn provider_options(&self) -> syn::Result<ProviderOptions> {
+    fn configured(&self, allowed: &[&str]) -> syn::Result<Configuration<'_>> {
         let configuration = self.configuration()?;
-        if let Some(path) = configuration.iterator.or(configuration.keys) {
-            return Err(syn::Error::new_spanned(
-                path,
-                "provider configuration admits only `storage` and optional `work`",
-            ));
+        for (name, present) in [
+            ("storage", configuration.storage.is_some()),
+            ("iterator", configuration.iterator.is_some()),
+            ("keys", configuration.keys.is_some()),
+            ("work", configuration.work.is_some()),
+            ("packing", configuration.packing.is_some()),
+        ] {
+            if present && !allowed.contains(&name) {
+                return Err(syn::Error::new_spanned(
+                    self,
+                    format!("configuration `{name}` does not belong to this implementation"),
+                ));
+            }
         }
-        Ok(ProviderOptions {
-            storage: self.required(configuration.storage, "storage")?,
+        Ok(configuration)
+    }
+
+    #[cfg(feature = "scan-rows")]
+    pub fn scan_source(&self) -> syn::Result<&S> {
+        // Observed hosts may supply a work expression. Scan performs no work
+        // of its own and must leave this expression unexpanded and unevaluated.
+        self.configured(&["work"])?;
+        Ok(self.source())
+    }
+
+    #[cfg(feature = "prune-rows")]
+    pub fn prune_options(&self) -> syn::Result<cq_access::candidates::prune::Options> {
+        let configuration = self.configured(&["iterator", "work"])?;
+        Ok(cq_access::candidates::prune::Options {
+            iterator: self.required(configuration.iterator, "iterator")?,
             work: configuration.work.cloned(),
         })
     }
 
-    pub fn access_options(&self) -> syn::Result<AccessOptions> {
-        let configuration = self.configuration()?;
-        Ok(AccessOptions {
-            storage: self.required(configuration.storage, "storage")?,
-            iterator: self.required(configuration.iterator, "iterator")?,
+    #[cfg(feature = "exact-keys")]
+    pub fn exact_options(&self) -> syn::Result<cq_access::keys::exact::Options> {
+        let configuration = self.configured(&["storage", "iterator", "keys", "work"])?;
+        Ok(cq_access::keys::exact::Options {
+            storage: configuration.storage.cloned(),
+            iterator: configuration.iterator.cloned(),
             keys: configuration.keys.cloned(),
+            work: configuration.work.cloned(),
+        })
+    }
+
+    #[cfg(feature = "zone-keys")]
+    pub fn zone_options(&self) -> syn::Result<cq_access::keys::zone::Options> {
+        let configuration = self.configured(&["storage", "iterator", "keys", "work"])?;
+        Ok(cq_access::keys::zone::Options {
+            storage: self.required(configuration.storage, "storage")?,
+            iterator: configuration.iterator.cloned(),
+            keys: configuration.keys.cloned(),
+            work: configuration.work.cloned(),
+        })
+    }
+
+    #[cfg(feature = "hash-witnesses")]
+    pub fn hash_witness_options(&self) -> syn::Result<cq_access::witnesses::hash::Options> {
+        let configuration = self.configured(&["iterator", "work"])?;
+        Ok(cq_access::witnesses::hash::Options {
+            iterator: configuration.iterator.cloned(),
+            work: configuration.work.cloned(),
+        })
+    }
+
+    #[cfg(feature = "nested-witnesses")]
+    pub fn nested_witness_options(&self) -> syn::Result<cq_access::witnesses::nested::Options> {
+        let configuration = self.configured(&["iterator", "work"])?;
+        Ok(cq_access::witnesses::nested::Options {
+            iterator: configuration.iterator.cloned(),
+            work: configuration.work.cloned(),
+        })
+    }
+
+    #[cfg(feature = "hash-rows")]
+    pub fn hash_row_options(&self) -> syn::Result<cq_providers::hash::Options> {
+        let configuration = self.configured(&["work"])?;
+        Ok(cq_providers::hash::Options {
+            work: configuration.work.cloned(),
+        })
+    }
+
+    #[cfg(feature = "sorted-rows")]
+    pub fn sorted_row_options(&self) -> syn::Result<cq_providers::sorted::Options> {
+        let configuration = self.configured(&["work"])?;
+        Ok(cq_providers::sorted::Options {
+            work: configuration.work.cloned(),
+        })
+    }
+
+    #[cfg(feature = "block-rows")]
+    pub fn block_options(&self) -> syn::Result<cq_providers::block::Options> {
+        let configuration = self.configured(&["storage", "packing", "work"])?;
+        Ok(cq_providers::block::Options {
+            storage: self.required(configuration.storage, "storage")?,
+            packing: configuration.packing.cloned(),
             work: configuration.work.cloned(),
         })
     }
@@ -153,115 +251,69 @@ mod tests {
     use cq_ir::physical_provider::Operation;
     use quote::quote;
 
+    #[cfg(all(
+        feature = "block-rows",
+        feature = "scan-rows",
+        feature = "exact-keys",
+        feature = "hash-rows"
+    ))]
     #[test]
-    fn provider_source_is_independent_of_optional_configuration() {
-        let plain: Input<Operation> = syn::parse_quote! {
-            storage crate::storage;
-            scan (rows)
-        };
-        let observed: Input<Operation> = syn::parse_quote! {
-            work (&metrics! { local, counters });
-            storage crate::storage;
-            scan (rows)
-        };
-        assert_eq!(plain.source(), observed.source());
-        assert!(plain.provider_options().unwrap().work.is_none());
-        assert!(observed.provider_options().unwrap().work.is_some());
-        assert_eq!(
-            observed.to_token_stream().to_string(),
-            syn::parse2::<Input<Operation>>(observed.to_token_stream())
-                .unwrap()
-                .to_token_stream()
-                .to_string()
-        );
+    fn only_implementation_owned_configuration_is_accepted() {
+        let input: Input<Operation> =
+            syn::parse_quote!(candidates crate::rows { &rows } (predicate));
+        input.scan_source().unwrap();
+        let input: Input<Operation> = syn::parse_quote!(rows(&rows));
+        input.hash_row_options().unwrap();
+        let input: Input<Operation> = syn::parse_quote!(storage crate::data; rows(&rows));
+        assert!(input.hash_row_options().is_err());
+        input.block_options().unwrap();
+        let input: Input<Operation> = syn::parse_quote!(storage crate::data; contains(&keys)([1]));
+        let options = input.exact_options().unwrap();
+        assert!(options.iterator.is_none());
+        cq_access::keys::exact::compile(input.source(), &options).unwrap();
     }
 
     #[test]
-    fn iterator_configuration_accepts_each_order_without_changing_source() {
-        let tokens = quote! {
-            work (&counters);
-            keys crate::Keys;
-            iterator crate::collect;
-            storage crate::data;
-            scan (rows)
-        };
-        let input: Input<Operation> = syn::parse2(tokens.clone()).unwrap();
-        let options = input.access_options().unwrap();
-        assert_eq!(options.storage, syn::parse_quote!(crate::data));
-        assert_eq!(options.iterator, syn::parse_quote!(crate::collect));
-        assert_eq!(options.keys, Some(syn::parse_quote!(crate::Keys)));
-        assert_eq!(options.work, Some(syn::parse_quote!(&counters)));
-        assert_eq!(input.to_token_stream().to_string(), tokens.to_string());
-        let input: Input<Operation> = syn::parse_quote! {
-            iterator crate::collect;
-            storage crate::data;
-            scan (rows)
-        };
-        let options = input.access_options().unwrap();
-        assert!(options.keys.is_none());
-        assert!(options.work.is_none());
-    }
-
-    #[test]
-    fn duplicates_and_irrelevant_or_missing_configuration_are_rejected() {
+    fn duplicate_directives_and_unknown_options_are_rejected() {
         for duplicate in [
-            quote!(storage second::data;),
-            quote!(iterator second::collect;),
-            quote!(keys second::Keys;),
-            quote!(work (&other);),
+            quote!(storage b;),
+            quote!(iterator b;),
+            quote!(keys b;),
+            quote!(work (b);),
+            quote!(packing (b);),
         ] {
             let input: Input<Operation> = syn::parse2(quote! {
-                storage crate::data; iterator crate::collect;
-                keys crate::Keys; work (&counters);
-                #duplicate
-                scan (rows)
+                storage a; iterator a; keys a; work (a); packing (a); #duplicate rows(&rows)
             })
             .unwrap();
             assert!(
                 input
-                    .access_options()
-                    .unwrap_err()
+                    .configuration()
+                    .err()
+                    .unwrap()
                     .to_string()
                     .contains("duplicate")
             );
         }
-        let input: Input<Operation> = syn::parse_quote!(scan(rows));
-        assert!(
-            input
-                .provider_options()
-                .unwrap_err()
-                .to_string()
-                .contains("storage")
-        );
-        let input: Input<Operation> = syn::parse_quote!(storage crate::data; scan (rows));
-        assert!(
-            input
-                .access_options()
-                .unwrap_err()
-                .to_string()
-                .contains("iterator")
-        );
-        for irrelevant in [quote!(iterator crate::collect;), quote!(keys crate::Keys;)] {
-            let input: Input<Operation> = syn::parse2(quote! {
-                storage crate::data; #irrelevant scan (rows)
-            })
-            .unwrap();
-            assert!(
-                input
-                    .provider_options()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("only")
-            );
-        }
-        assert!(
-            syn::parse2::<Input<Operation>>(quote! {
-                storage crate::data; unknown crate::other; scan (rows)
-            })
-            .is_err()
-        );
+        assert!(syn::parse2::<Input<Operation>>(quote!(unknown a; rows(&rows))).is_err());
     }
 
+    #[cfg(feature = "block-rows")]
+    #[test]
+    fn packing_is_administrative_and_round_trips_in_either_order() {
+        let source: Operation = syn::parse_quote!(materialize owner value (rows));
+        for input in [
+            quote!(storage crate::data; packing (unique_size()); #source),
+            quote!(packing (unique_size()); storage crate::data; #source),
+        ] {
+            let parsed: Input<Operation> = syn::parse2(input.clone()).unwrap();
+            assert_eq!(parsed.source(), &source);
+            assert_eq!(parsed.to_token_stream().to_string(), input.to_string());
+            assert!(parsed.block_options().unwrap().packing.is_some());
+        }
+    }
+
+    #[cfg(feature = "block-rows")]
     #[test]
     fn directive_words_remain_available_as_source_definition_names() {
         #[derive(Clone, Debug, syn_derive::Parse, syn_derive::ToTokens)]
@@ -271,14 +323,12 @@ mod tests {
             value: syn::Expr,
             semi: Token![;],
         }
-        for name in ["storage", "iterator", "keys", "work"] {
+        for name in ["storage", "iterator", "keys", "work", "packing"] {
             let name: syn::Ident = syn::parse_str(name).unwrap();
-            let input: Input<Definition> = syn::parse2(quote! {
-                storage crate::data; #name = 1;
-            })
-            .unwrap();
+            let input: Input<Definition> =
+                syn::parse2(quote!(storage crate::data; #name = 1;)).unwrap();
             assert_eq!(input.source().name, name);
-            input.provider_options().unwrap();
+            input.block_options().unwrap();
         }
     }
 }

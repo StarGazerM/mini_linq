@@ -113,8 +113,8 @@ current physical-lowering checkpoint contains one `mini-linq` proc-macro crate,
 Syn-backed CQ, RelationalPlan, IndexRequirements, `rust_access_plan::Plan`,
 `iterator_pipeline::Pipeline`, local language checks, and tests. Its basic
 route assigns three typed compilation edges. Their implementations live in
-`cq_to_relational/canonical.rs`, `relational_to_indexes.rs`, and `physical/mod.rs`
-under `crates/cq-compiler/src/`:
+`crates/cq-plan/src/canonical/lower.rs`, `crates/cq-index/src/input/mod.rs`, and
+`crates/cq-physical/src/input/mod.rs`:
 
 1. **Basic HW1:** CQ to a complete named RelationalPlan;
 2. **Basic HW2:** RelationalPlan to IndexRequirements, preserving that entire
@@ -220,19 +220,19 @@ credit.
 The project uses Rust with a procedural-macro CQ frontend. Staff supplies the
 crate configuration and direct Syn syntax definitions, including derived
 parsing and token emission. Staff also supplies the direct `mini_linq`,
-`relational_plan`, `index_requirements`, `pull`, and `iterator_pipeline`
+`relational_plan`, `input_indexes`, `input_indexed`, `pull`, and `iterator_pipeline`
 proc-macro entries. Each
 entry parses one `TokenStream` into its typed source and calls the corresponding
 typed compiler function directly. Grammar failures become span-aware `syn::Error`
 diagnostics emitted as `compile_error!`. The typed compiler function checks
 source semantics and returns the same diagnostic type; the macro entry does
 not duplicate that check. Students implement only three typed functions.
-`compile_cq(&cq::Module)` returns
+`cq_plan::canonical::compile(&cq::Module)` returns
 `syn::Result<relational_plan::Module>` for CQ to the exact named logical plan.
-`compile_relational_plan(&relational_plan::Module)` returns
+`cq_index::input::compile(&relational_plan::Module)` returns
 `syn::Result<index_requirements::Module>` preserving that full plan and adding
 the exact requirements.
-`compile_index_requirements(&index_requirements::Module)` returns
+`cq_physical::input::compile_input_indexed(&index_requirements::Module, &syn::Path)` returns
 `syn::Result<syn::File>` containing the complete staged Rust program and one
 expression-position
 `pull! { rust_access_plan::Plan }` region. Inside each body they inspect
@@ -260,7 +260,7 @@ judgment. Every public typed compilation entry calls its source's diagnostic
 in debug and release builds. Macro entries do not repeat this check. Tests and
 tools may also call it directly. Debug postconditions check the transformation
 separately; they are not the source-validation gate.
-`compile_cq`, `compile_relational_plan`, and `compile_pull` own nominal target
+`cq_plan::canonical::compile`, `cq_index::input::compile`, and `cq_pull::compile` own nominal target
 well-formedness in postconditions. The physical endpoints return typed Rust AST nodes, while each
 local proc-macro entry parses its embedded Plan before calling the matching
 typed function. Malformed grammar and invalid source semantics both produce
@@ -269,9 +269,9 @@ violated its specified transformation.
 Students do not write a parser, printer, procedural-macro entry point, or
 parallel Rust builder API. The third pass emits actual Rust collection
 construction and access expressions rather than another descriptor language.
-A supplied `compile_pull` pass consumes the occurrence-annotated
+A supplied `cq_pull::compile` pass consumes the occurrence-annotated
 `rust_access_plan::Plan` and produces `iterator_pipeline::Pipeline`; supplied
-`compile_iterator_pipeline` returns one ordinary iterator expression. The plan
+`cq_pipeline::iterator::compile` returns one ordinary iterator expression. The plan
 retains binary operator and intermediate-record boundaries, while the emitted
 combinators retain resumable state. Only `Storage::materialize` loops to drain
 the root iterator. No async runtime is needed for finite in-memory

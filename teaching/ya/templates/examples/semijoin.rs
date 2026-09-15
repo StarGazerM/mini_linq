@@ -1,7 +1,13 @@
-use mini_linq::planned_relational_plan;
+mod wiring {
+    pub use ::mini_linq::{
+        collect_access, collect_pipeline, materialized as index_requirements,
+        result_indexes as relational_plan,
+    };
+}
+use wiring as mini_linq;
 
 // Enter below the YA scheduler to work on physical semijoin lowering alone.
-planned_relational_plan! {
+mini_linq::relational_plan! {
     struct Supported;
     relation Items(key:i32, payload:String); relation Keys(key:i32);
     answer(v) :- Items(k,v), Keys(k);

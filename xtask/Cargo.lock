@@ -341,12 +341,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "cq-compiler"
+name = "cq-access"
 version = "0.1.0"
 dependencies = [
- "contracts",
  "cq-ir",
  "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-compose"
+version = "0.1.0"
+dependencies = [
+ "cq-index",
+ "cq-ir",
+ "cq-physical",
+ "cq-plan",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-index"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
  "quote",
  "syn 2.0.119",
 ]
@@ -362,6 +383,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-physical"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-pipeline"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-plan"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-providers"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-pull"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-workloads"
 version = "0.1.0"
 dependencies = [
@@ -374,8 +448,11 @@ dependencies = [
 name = "cq-xtask"
 version = "0.1.0"
 dependencies = [
- "cq-compiler",
+ "cq-compose",
  "cq-ir",
+ "cq-physical",
+ "cq-pipeline",
+ "cq-pull",
  "cq-workloads",
  "duckdb",
  "prettyplease",
@@ -810,8 +887,15 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
- "cq-compiler",
+ "cq-access",
+ "cq-compose",
+ "cq-index",
  "cq-ir",
+ "cq-physical",
+ "cq-pipeline",
+ "cq-plan",
+ "cq-providers",
+ "cq-pull",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

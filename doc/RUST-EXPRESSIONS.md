@@ -64,7 +64,7 @@ Lexical locals inside Rust expressions follow Rust scope. Define
 `uses(e, B) = free_variables(e).dependencies(B)`; for opaque syntax this is
 all of `B`. This is an availability judgment, not a purity judgment.
 
-[dependencies.rs](../crates/cq-compiler/src/cq_to_relational/dependencies.rs)
+[dependencies.rs](../crates/cq-plan/src/dependencies.rs)
 derives `ClauseFacts = (required, provided, reorderable, atom_arity,
 literal_arguments)`. `provided` includes every bare atom name, even an equality
 key already supplied by another atom; it does not mean every name is fresh.
@@ -88,7 +88,7 @@ not supply lowering rules for negation or aggregation.
 
 ## Prefix state and administrative transitions
 
-[clause_rules.rs](../crates/cq-compiler/src/cq_to_relational/clause_rules.rs)
+[clause_rules.rs](../crates/cq-plan/src/prefix/rules.rs)
 implements `ClauseState = (D,P,B,U,K,O)`:
 
 - `D` is the sequence of immutable RA definitions.
@@ -148,12 +148,12 @@ computations use A-PREFIX or A-LOCAL and cannot be hoisted as literals.
 
 ### Policy and verification
 
-[strategy::choose_clause](../crates/cq-compiler/src/cq_to_relational/strategy.rs)
+[prefix clause choice](../crates/cq-plan/src/prefix/strategy.rs)
 receives only C-READY candidates. Written chooses the first clause; other
 policies prefer ready guards/bindings, then connected atoms, then optional
 width ranking. The policy cannot emit RA or make an inapplicable rule legal.
 
-The [source-to-RA checker](../crates/cq-compiler/src/cq_to_relational/check/ordered.rs)
+The [source-to-RA checker](../crates/cq-plan/src/prefix/check/clauses.rs)
 reads actual definitions and independently checks their operators, Rust
 expressions, bindings, equality constraints, projection, and output. Its
 schedule check shares dependency facts with the planner, so that part is not

@@ -17,19 +17,19 @@
 
 ## Current compiler design
 
-- [Compiler structure](COMPILER-STRUCTURE.md): module and crate ownership.
+- [Compiler structure](COMPILER-STRUCTURE.md): implemented ownership by macro
+  boundary, package dependencies, selectable modules and extraction checks.
 - [IR boundary review](IR-STAGE-REVIEW.md): languages, stages, and supported routes.
-- [Access refinement](ACCESS-REFINEMENT.md): physical choices, current views and exact pruning.
-- [Block-access implementation](BLOCK-ACCESS-IMPLEMENTATION.md): concrete storage traits and macro wiring.
+- [Access refinement](ACCESS-REFINEMENT.md): physical choices, current views, exact pruning and concrete storage traits.
 - [Rust expressions](RUST-EXPRESSIONS.md): binding, evaluation, and scheduling rules.
 - [Extended compiler research manuscript](formal/README.md):
   interacting host-expression dependencies, replaceable compilation paths,
   language judgments, administrative rules, conditional proofs, source
   correspondence, and executable counterexamples. This is an incomplete
   correctness argument with explicitly recorded obligations.
-- [Planner implementation](PLANNED-PASS-IMPLEMENTATION.md): transformation
+- [Planner implementation](PLANNING.md): transformation
   ownership, administrative rules, and the indexed materialized route.
-- [Stage I verification](STAGE-I-VERIFICATION.md): 25 authored RA fixtures,
+- [Planning verification](PLANNING-VERIFICATION.md): 25 authored RA fixtures,
   executable reference tests, and the planner/backend acceptance gates.
 
 ## Staff course planning

@@ -10,10 +10,38 @@ BASE = Path(__file__).resolve().parent
 ROOT = BASE.parent.parent
 
 
-def main():
+def tex_sources():
+    """Follow the literal input/include closure used by both published roots."""
+    visited = set()
+    active = set()
+
+    def visit(path):
+        path = path.resolve()
+        assert path not in active, f"recursive TeX inclusion: {path}"
+        if path in visited:
+            return
+        assert path.is_file(), f"missing included TeX source: {path}"
+        active.add(path)
+        # The documents compile with doc/formal as their working directory.
+        # LaTeX resolves input names from that directory, including nested inputs.
+        text = re.sub(r"(?m)(?<!\\)%.*$", "", path.read_text())
+        for name in re.findall(r"\\(?:input|include)\s*\{([^}]+)\}", text):
+            child = BASE / name
+            if not child.suffix:
+                child = child.with_suffix(".tex")
+            visit(child)
+        active.remove(path)
+        visited.add(path)
+
+    for root in ("compiler.tex", "physical_design.tex"):
+        visit(BASE / root)
+    return sorted(visited)
+
+
+def check_rule_inventory():
     occurrences = [
-        (rule, path.name)
-        for path in sorted(BASE.glob("*.tex"))
+        (rule, str(path.relative_to(BASE)))
+        for path in tex_sources()
         for rule in re.findall(r"\\Rule\{([^}]+)\}", path.read_text())
     ]
     labels = [rule for rule, _ in occurrences]
@@ -31,9 +59,11 @@ def main():
         assert entry["kind"] == "implementation", entry
         source = ROOT / entry["path"]
         assert source.is_file(), source
-        assert entry["marker"] in source.read_text(), entry
+        assert source.read_text().count(entry["marker"]) == 1, (
+            "source marker must identify exactly one location", entry
+        )
     # Inventory of executable rule variants, independent of LaTeX rendering.
-    rule_source = (ROOT / "crates/cq-compiler/src/cq_to_relational/model.rs").read_text()
+    rule_source = (ROOT / "crates/cq-plan/src/model.rs").read_text()
     enum = re.search(r"pub enum Rule \{(.*?)^\}", rule_source, re.S | re.M).group(1)
     variants = set(re.findall(r"^    (\w+)", enum, re.M))
     paired = {
@@ -75,13 +105,23 @@ def main():
         general = general_entries[entry["rule"]]
         assert general["kind"] == "implementation", entry
         assert (general["path"], general["marker"]) == (entry["path"], entry["marker"]), entry
+    return len(labels), len(physical_labels)
+
+
+def check_source_identity():
     fingerprints = (BASE / "sources.sha256").read_text().splitlines()
     for line in fingerprints:
         expected, path = line.split("  ", 1)
         actual = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
         assert actual == expected, f"source drift: {path}; re-audit before refreshing snapshot"
-    print(f"Checked {len(labels)} named rule links and {len(fingerprints)} source fingerprints.")
-    print(f"Includes {len(physical_labels)} Access refinement rules with source/algorithm/model links.")
+    return len(fingerprints)
+
+
+def main():
+    rules, physical_rules = check_rule_inventory()
+    fingerprints = check_source_identity()
+    print(f"Checked {rules} named rule links and {fingerprints} source fingerprints.")
+    print(f"Includes {physical_rules} Access refinement rules with source/algorithm/model links.")
     print("This checks coverage and source identity; it does not check proofs or semantics.")
 
 

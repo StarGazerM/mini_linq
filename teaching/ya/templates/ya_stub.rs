@@ -7,6 +7,6 @@ pub(super) fn reduce(
     derivation: &mut Vec<Rule>,
 ) -> syn::Result<()> {
     let _ = (tree, state, derivation);
-    // Use graph::apply with Rule::Up and Rule::Down. The caller owns Freeze.
+    // Use plan::apply with Rule::Up and Rule::Down. The caller owns Freeze.
     Err(super::error("YA scheduling exercise"))
 }

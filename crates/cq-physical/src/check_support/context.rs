@@ -1,0 +1,57 @@
+//! Independent source facts and local names for physical correspondence.
+use super::*;
+
+pub type Information = BTreeMap<String, ra::RelationInfo>;
+pub type Names = BTreeMap<String, Ident>;
+
+/// Derived relation/name environments used only by the independent judgments.
+pub struct RuleContext<'a> {
+    pub source: &'a ir::Module,
+    pub info: Information,
+    pub variables: Names,
+    pub inputs: Names,
+    pub results: Names,
+}
+
+impl<'a> RuleContext<'a> {
+    pub fn new(source: &'a ir::Module, result_name: impl Fn(usize) -> Ident) -> Option<Self> {
+        let module = &source.relational_plan;
+        let info = ra::check_in(module.program.inputs(), &module.plan).ok()?;
+        let variables = info
+            .values()
+            .flat_map(|r| r.heading.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| (name, format_ident!("v{i}")))
+            .collect();
+        let inputs = module
+            .program
+            .inputs()
+            .enumerate()
+            .map(|(i, d)| (symbol_name(&d.name), format_ident!("input{i}")))
+            .collect();
+        let results = module
+            .plan
+            .definitions
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (symbol_name(&d.result), result_name(i)))
+            .collect();
+        Some(Self {
+            source,
+            info,
+            variables,
+            inputs,
+            results,
+        })
+    }
+}
+pub fn join_key(info: &Information, left: &Ident, right: &Ident) -> Vec<usize> {
+    info[&symbol_name(right)]
+        .heading
+        .iter()
+        .enumerate()
+        .filter_map(|(i, v)| info[&symbol_name(left)].heading.contains(v).then_some(i))
+        .collect()
+}

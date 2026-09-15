@@ -10,7 +10,7 @@
 //! Operation ::= type Column | input (Expr) | len (Expr) | row (Expr)
 //!              | scan (Expr) | rows (Expr)
 //!              | select (Expr) (Expr)
-//!              | materialize Ident Ident (Expr) (Expr)
+//!              | materialize Ident Ident (Expr)
 //!              | blocks (Expr) | bounds (Expr)
 //!              | block_rows (Expr) (Expr)
 //!              | build { AccessPlan }
@@ -122,10 +122,6 @@ pub enum Operation {
         rows_paren: token::Paren,
         #[syn(in = rows_paren)]
         rows: Box<syn::Expr>,
-        #[syn(parenthesized)]
-        block_size_paren: token::Paren,
-        #[syn(in = block_size_paren)]
-        block_size: Box<syn::Expr>,
     },
     /// Enumerate current nonempty descriptors without opening payload.
     #[parse(peek = kw::blocks)]

@@ -205,22 +205,28 @@ Entry & Typed edge & Continuation \\\midrule
 \code{canonical_query} / \code{prefix_query} & explicit CQ edge & \code{relational_plan} \\
 \code{graph_query} & explicit graph CQ & \code{relational_plan} \\
 \code{planned_query} & planned CQ & \code{planned_relational_plan} \\
-\code{relational_plan} & base/extended index & \code{index_requirements} \\
+\code{relational_plan} & paired default choice & input / lazy physical \\
 \code{planned_relational_plan} & result indexes & \code{materialized} \\
 \code{result_indexes} & explicit result indexes & \code{index_requirements} \\
 \code{input_indexes} & input indexes & \code{index_requirements} \\
-\code{index_requirements} & default physical choice & staged Rust file \\
 \code{input_indexed} / \code{lazy_indexed} & explicit physical edge & staged Rust file \\
 \code{materialized} & materialized physical & staged Rust file \\
 \code{materialized_query} & same computation & callable Rust Expr \\
 \code{physical_plan} & configured RA to Access & staged Rust file \\
+\code{physical_query} & same computation & callable Rust Expr \\
+observed physical entries & same computation & instrumented host \\
 \code{pull} / \code{collect_access} & Access to Pipeline & iterator / set endpoint \\
 \code{stream_access} & Access to Pipeline & stream endpoint \\
 iterator / set / stream endpoint & Pipeline to Expr & ToTokens \\\bottomrule
 \end{tabular}
 \end{center}
-Both materialized entries default to set-valued \code{mini_linq::collect_access};
-\code{access path;} overrides it. Basic/lazy holes retain absolute paths.
+The macro frontend defaults materialized entries to set-valued
+\code{mini_linq::collect_access} and input-indexed/lazy entries to
+\code{mini_linq::pull}. Materialized macro entries accept \code{access path;}
+to override their continuation. Each typed physical implementation and its default
+composition receive the continuation path explicitly. The frontend supplies
+invocation-relative \code{mini_linq::pull}, so a local binding can select the
+next edge; standalone typed callers may instead supply an absolute path.
 Direct entries bypass upper passes. \code{workload_query} emits catalog metadata;
 \code{compiled-workloads} also compiles its CQ through defaults.
 Canonical physical code has one Access hole per materialized result or lazy/basic
@@ -229,10 +235,15 @@ and witnesses. Interpolation embeds native Rust; shared RA need not form one pip
 
 \paragraph{Implementation and composition ownership.}
 An explicit entry fixes an implementation and checks its admitted domain.
-\path{composition.rs} chooses the default CQ, index and physical implementations;
-selected implementations do not call back into that selector. Each language edge
-owns independently implemented target checks. Shared linear/key analysis contains
-source facts without physical code or policy selection. This decomposition
+\code{cq-compose} chooses the default CQ, index and physical implementations;
+selected implementations do not call back into that selector. Each implementation module
+owns independently implemented target checks and exposes a checked entry.
+The default RA entry selects an index policy and its physical continuation once;
+the emitted index requirements carry no route tag. Explicit index entries use
+the caller's \code{index_requirements} alias for their physical continuation;
+there is no automatic macro with that name. Neutral heading and index-signature
+facts belong to the IR; domain and access analyses belong to their consuming
+implementation modules. This decomposition
 changes neither the language graph nor the observation contracts below.
 
 \paragraph{One computation in different Rust hosts.}

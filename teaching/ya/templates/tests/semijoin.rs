@@ -1,8 +1,14 @@
 //! This suite enters at RA, so it does not depend on the YA scheduler.
-use mini_linq::planned_relational_plan;
+mod wiring {
+    pub use ::mini_linq::{
+        collect_access, collect_pipeline, materialized as index_requirements,
+        result_indexes as relational_plan,
+    };
+}
 use std::collections::BTreeSet;
+use wiring as mini_linq;
 
-planned_relational_plan! {
+mini_linq::relational_plan! {
     struct PartialKey;
     relation Left(a:i32, payload:i32); relation Right(a:i32, witness:i32);
     answer(a,p) :- Left(a,p), Right(a,w);
@@ -15,7 +21,7 @@ planned_relational_plan! {
     }
 }
 
-planned_relational_plan! {
+mini_linq::relational_plan! {
     struct FullKey;
     relation Left(a:i32, b:i32); relation Right(a:i32, b:i32);
     answer(a,b) :- Left(a,b), Right(a,b);
@@ -28,7 +34,7 @@ planned_relational_plan! {
     }
 }
 
-planned_relational_plan! {
+mini_linq::relational_plan! {
     struct EmptyKey;
     relation Left(a:i32, b:i32); relation Right(c:i32);
     answer(a,b) :- Left(a,b), Right(c);
@@ -41,7 +47,7 @@ planned_relational_plan! {
     }
 }
 
-planned_relational_plan! {
+mini_linq::relational_plan! {
     struct CompositeKey;
     relation Left(a:i32, b:i32, payload:String);
     relation Right(a:i32, b:i32, witness:i32);

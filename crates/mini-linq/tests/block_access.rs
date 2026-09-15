@@ -34,23 +34,61 @@ mod observed_summary {
     }
 }
 
-// Caller-owned wiring expands the declared inputs into per-relation choices.
-// It selects only providers and access implementations; RA stays unchanged.
+// Configured bindings own representation and resource construction choices.
+macro_rules! block_rows {
+    ($($op:tt)*) => { ::mini_linq::block_rows! { storage crate::storage; packing (crate::size(2)); $($op)* } };
+}
+macro_rules! sorted_rows {
+    ($($op:tt)*) => { ::mini_linq::block_rows! { storage crate::sorted_storage; packing (crate::size(2)); $($op)* } };
+}
+macro_rules! exact_keys {
+    ($($op:tt)*) => { ::mini_linq::exact_keys! {
+        storage crate::storage; iterator ::mini_linq::stream_access;
+        keys ::std::collections::HashSet; $($op)*
+    } };
+}
+macro_rules! zone_keys {
+    ($($op:tt)*) => { ::mini_linq::zone_keys! {
+        storage crate::storage; iterator ::mini_linq::stream_access;
+        keys ::std::collections::HashSet; $($op)*
+    } };
+}
+macro_rules! sorted_key_resource {
+    ($($op:tt)*) => { ::mini_linq::exact_keys! {
+        storage crate::sorted_storage; iterator ::mini_linq::stream_access;
+        keys crate::sorted_keys::SortedKeys; $($op)*
+    } };
+}
+macro_rules! sorted_zone_keys {
+    ($($op:tt)*) => { ::mini_linq::zone_keys! {
+        storage crate::sorted_storage; iterator ::mini_linq::stream_access;
+        keys crate::sorted_keys::SortedKeys; $($op)*
+    } };
+}
+macro_rules! prune {
+    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::stream_access; $($op)* } };
+}
+macro_rules! witnesses {
+    ($($op:tt)*) => { ::mini_linq::hash_witnesses! { iterator ::mini_linq::stream_access; $($op)* } };
+}
+pub(crate) use {
+    block_rows, exact_keys, prune, sorted_key_resource, sorted_rows, sorted_zone_keys, witnesses,
+    zone_keys,
+};
+
 macro_rules! uniform_physical {
-    ($storage:path, $scan:path, $key_provider:path, $keys:path;
+    ($rows:path, $scan:path, $keys:path;
      $vis:vis struct $name:ident;
      $(relation $relation:ident($($column:tt)*);)*
      answer $($rest:tt)*) => {
-        ::mini_linq::physical_plan! {
-            storage $storage;
-            access mini_linq::collect_access;
-            iterator mini_linq::stream_access;
-            materialize ::mini_linq::block_rows;
-            inputs { $($relation => ::mini_linq::block_rows;)* }
+        ::mini_linq::observed_physical_plan! {
+            storage crate::storage;
+            access ::mini_linq::stream_access;
+            materialize $rows;
+            inputs { $($relation => $rows;)* }
             scan $scan;
-            key_provider $key_provider;
             keys $keys;
-            join ::mini_linq::hash_witnesses;
+            join crate::witnesses;
             $vis struct $name;
             $(relation $relation($($column)*);)*
             answer $($rest)*
@@ -59,26 +97,22 @@ macro_rules! uniform_physical {
 }
 macro_rules! block_backend {
     ($($plan:tt)*) => {
-        uniform_physical! { crate::storage, ::mini_linq::scan_rows,
-            ::mini_linq::exact_keys, ::std::collections::HashSet; $($plan)* }
+        uniform_physical! { crate::block_rows, ::mini_linq::scan_rows, crate::exact_keys; $($plan)* }
     };
 }
 macro_rules! zone_backend {
     ($($plan:tt)*) => {
-        uniform_physical! { crate::storage, ::mini_linq::prune_rows,
-            ::mini_linq::zone_keys, ::std::collections::HashSet; $($plan)* }
+        uniform_physical! { crate::block_rows, crate::prune, crate::zone_keys; $($plan)* }
     };
 }
 macro_rules! sorted_backend {
     ($($plan:tt)*) => {
-        uniform_physical! { crate::sorted_storage, ::mini_linq::scan_rows,
-            ::mini_linq::exact_keys, crate::sorted_keys::SortedKeys; $($plan)* }
+        uniform_physical! { crate::sorted_rows, ::mini_linq::scan_rows, crate::sorted_key_resource; $($plan)* }
     };
 }
 macro_rules! sorted_zone_backend {
     ($($plan:tt)*) => {
-        uniform_physical! { crate::sorted_storage, ::mini_linq::prune_rows,
-            ::mini_linq::zone_keys, crate::sorted_keys::SortedKeys; $($plan)* }
+        uniform_physical! { crate::sorted_rows, crate::prune, crate::sorted_zone_keys; $($plan)* }
     };
 }
 pub(crate) use {block_backend, sorted_backend, sorted_zone_backend, zone_backend};
@@ -217,10 +251,10 @@ fn check(r: &[[i64; 2]], s: &[[i64; 2]], t: &[[i64; 2]]) {
         BlockStore::from_rows(s.iter().copied(), size(2)),
         BlockStore::from_rows(t.iter().copied(), size(2)),
     );
-    assert_eq!(BlockChain::run(&r, &s, &t, size(2)), expected);
-    assert_eq!(ZoneChain::run(&r, &s, &t, size(2)), expected);
-    assert_eq!(SortedChain::run(&r, &s, &t, size(2)), expected);
-    assert_eq!(SortedZoneChain::run(&r, &s, &t, size(2)), expected);
+    assert_eq!(BlockChain::run(&r, &s, &t).0, expected);
+    assert_eq!(ZoneChain::run(&r, &s, &t).0, expected);
+    assert_eq!(SortedChain::run(&r, &s, &t).0, expected);
+    assert_eq!(SortedZoneChain::run(&r, &s, &t).0, expected);
 }
 
 #[test]
@@ -256,10 +290,10 @@ fn rejected_blocks_and_pruned_index_inputs_are_observable() {
         BlockStore::from_rows(s, size(1)),
         BlockStore::from_rows(t, size(2)),
     );
-    let (actual, zone) = ZoneSweeps::run_with_stats(&r, &s, &t, size(2));
-    let (all, scan) = BlockSweeps::run_with_stats(&r, &s, &t, size(2));
-    let (sorted, sorted_zone) = SortedZoneSweeps::run_with_stats(&r, &s, &t, size(2));
-    let (sorted_all, sorted_scan) = SortedSweeps::run_with_stats(&r, &s, &t, size(2));
+    let (actual, zone) = ZoneSweeps::run(&r, &s, &t);
+    let (all, scan) = BlockSweeps::run(&r, &s, &t);
+    let (sorted, sorted_zone) = SortedZoneSweeps::run(&r, &s, &t);
+    let (sorted_all, sorted_scan) = SortedSweeps::run(&r, &s, &t);
     assert_eq!(actual, expected);
     assert_eq!(all, expected);
     assert_eq!(sorted, expected);
@@ -296,7 +330,7 @@ fn caller_owned_collection_and_summary_are_used_by_the_compiled_route() {
     sorted_keys::take_counts();
     observed_summary::take_guards();
     let rows = BlockStore::from_rows([[1, 1], [2, 2]], size(1));
-    let (answer, stats) = SortedZoneSweeps::run_with_stats(&rows, &rows, &rows, size(2));
+    let (answer, stats) = SortedZoneSweeps::run(&rows, &rows, &rows);
     let (builds, probes) = sorted_keys::take_counts();
     assert_eq!(answer, vec![(1, 1), (2, 2)]);
     // Four different right versions/separators demand four key collections.
@@ -422,10 +456,10 @@ fn composite_keys_products_empty_projection_and_raw_bindings_compile() {
         BlockStore::from_rows(s, size(1)),
     );
     for actual in [
-        composite::exact::BlockComposite::run(&r, &s, size(2)),
-        composite::zone::BlockComposite::run(&r, &s, size(2)),
-        composite::sorted::BlockComposite::run(&r, &s, size(2)),
-        composite::sorted_zone::BlockComposite::run(&r, &s, size(2)),
+        composite::exact::BlockComposite::run(&r, &s).0,
+        composite::zone::BlockComposite::run(&r, &s).0,
+        composite::sorted::BlockComposite::run(&r, &s).0,
+        composite::sorted_zone::BlockComposite::run(&r, &s).0,
     ] {
         assert_eq!(actual, expected);
     }
@@ -440,9 +474,9 @@ fn composite_keys_products_empty_projection_and_raw_bindings_compile() {
             let raw = raw::hash::HashRaw::run(lt, rt);
             macro_rules! check_route {
                 ($route:ident) => {
-                    assert_eq!(product::$route::BlockProduct::run(&l, &r, size(2)), product);
-                    assert_eq!(exists::$route::BlockExists::run(&l, &r, size(2)), exists);
-                    assert_eq!(raw::$route::BlockRaw::run(&l, &r, size(2)), raw);
+                    assert_eq!(product::$route::BlockProduct::run(&l, &r).0, product);
+                    assert_eq!(exists::$route::BlockExists::run(&l, &r).0, exists);
+                    assert_eq!(raw::$route::BlockRaw::run(&l, &r).0, raw);
                 };
             }
             check_route!(exact);
@@ -479,10 +513,10 @@ fn explicit_unit_and_zero_column_views_compose() {
     for rows in [vec![], vec![[1], [1], [2]]] {
         let input = BlockStore::from_rows(rows.iter().copied(), size(1));
         let expected = HashUnit::run(rows.iter().map(|r| (r[0],)));
-        assert_eq!(BlockUnit::run(&input, size(2)), expected);
-        assert_eq!(ZoneUnit::run(&input, size(2)), expected);
-        assert_eq!(SortedUnit::run(&input, size(2)), expected);
-        assert_eq!(SortedZoneUnit::run(&input, size(2)), expected);
+        assert_eq!(BlockUnit::run(&input).0, expected);
+        assert_eq!(ZoneUnit::run(&input).0, expected);
+        assert_eq!(SortedUnit::run(&input).0, expected);
+        assert_eq!(SortedZoneUnit::run(&input).0, expected);
     }
 }
 
@@ -499,7 +533,7 @@ block_backend! {
 #[test]
 fn alternate_raw_spellings_resolve_to_the_same_source_and_column() {
     let rows = BlockStore::from_rows([[3], [1], [3]], size(1));
-    assert_eq!(RawSource::run(&rows, size(2)), vec![(1,), (3,)]);
+    assert_eq!(RawSource::run(&rows).0, vec![(1,), (3,)]);
 }
 
 // Query identifiers must not capture generated data, statistics or helper types.
@@ -528,12 +562,8 @@ fn query_name_cannot_shadow_generated_primitive_types() {
     let expected = vec![(1,), (3,)];
     macro_rules! check {
         ($name:ident) => {
-            assert_eq!(
-                primitive_query_name::$name::run(&rows, &rows, size(2)),
-                expected
-            );
-            let (answer, stats) =
-                primitive_query_name::$name::run_with_stats(&rows, &rows, size(2));
+            assert_eq!(primitive_query_name::$name::run(&rows, &rows).0, expected);
+            let (answer, stats) = primitive_query_name::$name::run(&rows, &rows);
             assert_eq!(answer, expected);
             assert!(stats.steps.iter().any(|(_, _, work)| work.exact_probes > 0));
         };
@@ -566,7 +596,7 @@ fn same_current_right_version_and_separator_share_one_exact_collection() {
     let s = BlockStore::from_rows([[1, 30], [2, 40]], size(1));
     let t = BlockStore::from_rows([[1]], size(1));
     sorted_keys::take_counts();
-    let (answer, stats) = SharedKeys::run_with_stats(&r, &s, &t, size(2));
+    let (answer, stats) = SharedKeys::run(&r, &s, &t);
     let (builds, probes) = sorted_keys::take_counts();
     assert_eq!(answer, vec![(10, 30)]);
     assert_eq!(builds, 1);
@@ -638,10 +668,10 @@ fn semijoin_output_is_exact_without_a_later_join_to_remove_false_positives() {
         let left = BlockStore::from_rows(left, block_rows);
         let right = BlockStore::from_rows(right, block_rows);
         for actual in [
-            BlockReduction::run(&left, &right, block_rows),
-            ZoneReduction::run(&left, &right, block_rows),
-            SortedReduction::run(&left, &right, block_rows),
-            SortedZoneReduction::run(&left, &right, block_rows),
+            BlockReduction::run(&left, &right).0,
+            ZoneReduction::run(&left, &right).0,
+            SortedReduction::run(&left, &right).0,
+            SortedZoneReduction::run(&left, &right).0,
         ] {
             assert_eq!(actual, expected);
         }
@@ -667,10 +697,10 @@ fn semijoin_output_is_exact_without_a_later_join_to_remove_false_positives() {
             let left = BlockStore::from_rows(left.iter().copied(), size(2));
             let right = BlockStore::from_rows(right, size(2));
             for actual in [
-                BlockEmptySeparator::run(&left, &right, size(2)),
-                ZoneEmptySeparator::run(&left, &right, size(2)),
-                SortedEmptySeparator::run(&left, &right, size(2)),
-                SortedZoneEmptySeparator::run(&left, &right, size(2)),
+                BlockEmptySeparator::run(&left, &right).0,
+                ZoneEmptySeparator::run(&left, &right).0,
+                SortedEmptySeparator::run(&left, &right).0,
+                SortedZoneEmptySeparator::run(&left, &right).0,
             ] {
                 assert_eq!(actual, expected);
             }

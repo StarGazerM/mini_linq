@@ -16,9 +16,19 @@ jobs:
         run: rustup show active-toolchain
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Test workspace
-        run: cargo test --workspace --locked
+      - name: Verify component dependency boundaries
+        run: python3 tools/check_dependencies.py --isolate
+      - name: Test package feature configurations
+        run: python3 tools/check_features.py
+      - name: Test completed workspace
+        run: cargo test --workspace --features cq-workloads/compiled-queries,mini-linq/compiled-workloads --locked
       - name: Check Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --features cq-workloads/compiled-queries,mini-linq/compiled-workloads --locked -- -D warnings
       - name: Test teaching tool
         run: cargo test --manifest-path xtask/Cargo.toml --locked
+      - name: Run selectively assembled compiler
+        run: cargo run --manifest-path examples/composition/Cargo.toml --locked
+      - name: Verify standalone YA release
+        run: python3 tools/export_ya.py "$RUNNER_TEMP/mini-linq-ya" --verify
+      - name: Check formal source correspondence
+        run: python3 doc/formal/check.py

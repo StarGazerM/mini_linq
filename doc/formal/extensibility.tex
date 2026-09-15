@@ -1,12 +1,27 @@
 \section{Replacing compiler components}
 \label{sec:extensibility}
 Replacements satisfy the source judgment, domain, target and preservation
-contracts of Theorem~\ref{thm:composition}. Checked entries live with their
-transformations; the crate root re-exports them. Independent checkers live with
-their language edges; their implementations never call the corresponding emitter.
-\path{composition.rs} owns default route selection. Module-bound continuations
-select logical and physical entries explicitly. Shared \path{analysis} modules
-describe linear operands and equality keys without storage code or route choice.
+contracts of Theorem~\ref{thm:composition}. A replaceable implementation owns its
+admitted domain, lowering, configuration and independent source-to-target checks.
+A resource implementation owns construction and all operations interpreting that
+representation. Multiple macro aliases can select the same implementation with
+different continuations; they need not introduce separate packages.
+A checker never calls its emitter. \code{cq-compose} owns default selection;
+explicit implementations do not import that selector.
+
+The implementation has eleven compiler/storage packages. The seven boundary
+families---planning, indexes, physical realization, native Access, row providers,
+pull and Pipeline endpoints---depend only on the shared IR package. Storage is
+independent; composition and the macro frontend select the families they use.
+Route-specific analysis stays with its consuming implementation. Cargo isolates
+families; reviewed source-removal tests separately check sibling implementations.
+The dependency gate checks twenty-four source closures and twenty-two external
+frontend probes, including renamed dependencies and substituted continuations.
+Ordinary package tests additionally run with defaults disabled, each completed
+feature, supported bundles and the prerequisites declared by test/example targets.
+This checks local Cargo target gating separately from external macro replacement.
+Neither package nor source isolation establishes the semantic substitution
+premises. The source snapshot records the completed validation gates.
 
 \paragraph{Representations and algorithms.}
 Ascent BYODS formalizes custom representations through DLDS and
@@ -47,12 +62,14 @@ and witness operations. Row providers own storage access; lexical macros select
 local refinements. Generated operations use ordinary Rust data types and traits.
 
 \paragraph{Extractable teaching implementations.}
-The YA release profile selects graph planning, named-result indexes and exact
-materialized access into a standalone workspace. It separates the two-sweep
-scheduler from semijoin-to-Access lowering; independent administrative and target
-checks remain supplied. Its verification removes each algorithm separately,
-checks the resulting failure, then restores reference implementations and checks
-the selected composition. The release has no dependency on omitted block, lazy
-or direct implementations. This tests an actual dependency boundary; it does not
-establish arbitrary provider laws. Triejoin and recursive program semantics
-remain separate design obligations.
+The YA release profile selects graph planning, named-result indexes, exact
+materialized access, pull and collection into seven packages, including IR and
+the frontend. Its eighty-file inventory separates the two-sweep scheduler from
+semijoin-to-Access lowering; independent administrative and target checks remain
+supplied. Verification checks the foundation with both algorithms absent and
+each exercise's expected failure separately, then runs seventy-five tests and
+two examples with temporary reference implementations. The delivered files have
+the student stubs restored and their inventory hashes checked. Block, lazy,
+direct and other unselected implementations are physically absent. This tests
+an actual dependency boundary; it does not establish arbitrary provider laws.
+Triejoin and recursive program semantics remain separate design obligations.

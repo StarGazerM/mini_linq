@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use cq_compiler::{
-    compile_cq, compile_index_requirements, compile_iterator_pipeline, compile_pull,
-    compile_relational_plan,
-};
+use cq_compose::{compile_cq, compile_indexed};
 use cq_ir::{cq, iterator_pipeline, rust_access_plan};
+use cq_pipeline::iterator::compile as compile_iterator_pipeline;
+use cq_pull::compile as compile_pull;
 use cq_workloads::{QueryCase, Scale};
 use proc_macro2::Span;
 use quote::{ToTokens, format_ident, quote};
@@ -24,8 +23,7 @@ pub fn compile_and_run(
 ) -> Result<Vec<Vec<i32>>> {
     let source: cq::Module = case.module()?;
     let logical = compile_cq(&source)?;
-    let indexes = compile_relational_plan(&logical)?;
-    let mut file = compile_index_requirements(&indexes)?;
+    let (_, mut file) = compile_indexed(&logical, &syn::parse_quote!(::mini_linq::pull))?;
     let mut expander = IteratorPipelineExpander::default();
     expander.visit_file_mut(&mut file);
     if let Some(error) = expander.error {

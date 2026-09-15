@@ -2,17 +2,14 @@
 
 use std::collections::BTreeMap;
 
-use cq_compiler::PhysicalOptions;
 use cq_ir::{relational_plan as ra, symbol_name};
+use cq_physical::direct::{ObservedOptions, PhysicalOptions};
 use quote::ToTokens;
 use syn::{parse::Parse, token};
 
 mod kw {
     syn::custom_keyword!(storage);
     syn::custom_keyword!(access);
-    syn::custom_keyword!(iterator);
-    syn::custom_keyword!(key_provider);
-    syn::custom_keyword!(key_providers);
     syn::custom_keyword!(materialize);
     syn::custom_keyword!(scan);
     syn::custom_keyword!(keys);
@@ -39,12 +36,6 @@ enum Directive {
     Storage(PathDirective<kw::storage>),
     #[parse(peek = kw::access)]
     Access(PathDirective<kw::access>),
-    #[parse(peek = kw::iterator)]
-    Iterator(PathDirective<kw::iterator>),
-    #[parse(peek = kw::key_provider)]
-    KeyProvider(PathDirective<kw::key_provider>),
-    #[parse(peek = kw::key_providers)]
-    KeyProviders(MapDirective<kw::key_providers>),
     #[parse(peek = kw::materialize)]
     Materialize(PathDirective<kw::materialize>),
     #[parse(peek = kw::scan)]
@@ -91,14 +82,32 @@ struct Binding {
 
 impl PhysicalInput {
     pub fn options(&self) -> syn::Result<PhysicalOptions> {
+        let (options, storage) = self.configuration()?;
+        if let Some(storage) = storage {
+            return Err(syn::Error::new_spanned(
+                storage,
+                "counter storage belongs to an observed physical host",
+            ));
+        }
+        Ok(options)
+    }
+    pub fn observed_options(&self) -> syn::Result<ObservedOptions> {
+        let (physical, storage) = self.configuration()?;
+        let storage = storage.ok_or_else(|| {
+            syn::Error::new_spanned(
+                &self.source,
+                "observed physical host requires counter `storage`",
+            )
+        })?;
+        Ok(ObservedOptions { physical, storage })
+    }
+    fn configuration(&self) -> syn::Result<(PhysicalOptions, Option<syn::Path>)> {
         let mut scalar = BTreeMap::new();
         let mut maps = BTreeMap::new();
         for directive in &self.directives {
             let scalar_entry = match directive {
                 Directive::Storage(value) => Some(("storage", &value.path)),
                 Directive::Access(value) => Some(("access", &value.path)),
-                Directive::Iterator(value) => Some(("iterator", &value.path)),
-                Directive::KeyProvider(value) => Some(("key_provider", &value.path)),
                 Directive::Materialize(value) => Some(("materialize", &value.path)),
                 Directive::Scan(value) => Some(("scan", &value.path)),
                 Directive::Keys(value) => Some(("keys", &value.path)),
@@ -116,7 +125,6 @@ impl PhysicalInput {
             }
             let (name, bindings) = match directive {
                 Directive::Inputs(value) => ("inputs", &value.bindings),
-                Directive::KeyProviders(value) => ("key_providers", &value.bindings),
                 Directive::Results(value) => ("results", &value.bindings),
                 Directive::Scans(value) => ("scans", &value.bindings),
                 Directive::KeySets(value) => ("key_sets", &value.bindings),
@@ -143,6 +151,7 @@ impl PhysicalInput {
             }
             maps.insert(name, entries);
         }
+        let storage = scalar.remove("storage");
         let mut required = |name| {
             scalar.remove(name).ok_or_else(|| {
                 syn::Error::new_spanned(
@@ -151,22 +160,21 @@ impl PhysicalInput {
                 )
             })
         };
-        Ok(PhysicalOptions {
-            storage: required("storage")?,
-            access: required("access")?,
-            iterator: required("iterator")?,
-            key_provider: required("key_provider")?,
-            key_providers: maps.remove("key_providers").unwrap_or_default(),
-            materialize: required("materialize")?,
-            scan: required("scan")?,
-            keys: required("keys")?,
-            join: required("join")?,
-            inputs: maps.remove("inputs").unwrap_or_default(),
-            results: maps.remove("results").unwrap_or_default(),
-            scans: maps.remove("scans").unwrap_or_default(),
-            key_sets: maps.remove("key_sets").unwrap_or_default(),
-            joins: maps.remove("joins").unwrap_or_default(),
-        })
+        Ok((
+            PhysicalOptions {
+                access: required("access")?,
+                materialize: required("materialize")?,
+                scan: required("scan")?,
+                keys: required("keys")?,
+                join: required("join")?,
+                inputs: maps.remove("inputs").unwrap_or_default(),
+                results: maps.remove("results").unwrap_or_default(),
+                scans: maps.remove("scans").unwrap_or_default(),
+                key_sets: maps.remove("key_sets").unwrap_or_default(),
+                joins: maps.remove("joins").unwrap_or_default(),
+            },
+            storage,
+        ))
     }
 }
 
@@ -189,10 +197,7 @@ mod tests {
 
     fn required() -> proc_macro2::TokenStream {
         quote! {
-            storage crate::storage;
             access crate::access;
-            iterator crate::iterator;
-            key_provider crate::key_provider;
             materialize crate::rows;
             scan crate::reduce;
             keys crate::Keys;
@@ -206,12 +211,9 @@ mod tests {
         let tokens = quote! {
             inputs { r#R => crate::rows; }
             join crate::pairs;
-            storage crate::storage;
             results {}
             keys crate::Keys;
             access crate::access;
-            iterator crate::iterator;
-            key_provider crate::key_provider;
             materialize crate::rows;
             scan crate::reduce;
             #source
@@ -229,7 +231,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("missing physical directive `storage`")
+                .contains("missing physical directive `access`")
         );
     }
 
@@ -253,7 +255,7 @@ mod tests {
         let source = source();
         let required = required();
         for duplicate in [
-            quote!(storage other::storage;),
+            quote!(access other::access;),
             quote!(inputs {} inputs {}),
             quote!(joins {} joins {}),
         ] {
@@ -261,6 +263,18 @@ mod tests {
             let error = input.options().err().unwrap();
             assert!(error.to_string().contains("duplicate physical directive"));
         }
+    }
+
+    #[test]
+    fn observer_configuration_is_owned_by_its_host() {
+        let source = source();
+        let required = required();
+        let plain: PhysicalInput = syn::parse_quote!(#required #source);
+        assert!(plain.options().is_ok());
+        assert!(plain.observed_options().is_err());
+        let observed: PhysicalInput = syn::parse_quote!(storage crate::counters; #required #source);
+        assert!(observed.options().is_err());
+        assert!(observed.observed_options().is_ok());
     }
 
     #[test]

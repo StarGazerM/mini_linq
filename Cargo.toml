@@ -11,8 +11,15 @@ publish = false
 [workspace]
 members = [
     "crates/cq-ir",
-    "crates/cq-compiler",
     "crates/cq-storage",
+    "crates/cq-plan",
+    "crates/cq-index",
+    "crates/cq-physical",
+    "crates/cq-access",
+    "crates/cq-providers",
+    "crates/cq-pull",
+    "crates/cq-pipeline",
+    "crates/cq-compose",
     "crates/mini-linq",
     "workloads",
 ]
@@ -26,10 +33,17 @@ version = "0.1.0"
 
 [workspace.dependencies]
 contracts = "=0.6.10"
-cq-compiler = { path = "crates/cq-compiler" }
 cq-ir = { path = "crates/cq-ir" }
 cq-storage = { path = "crates/cq-storage" }
+cq-plan = { path = "crates/cq-plan", default-features = false }
+cq-index = { path = "crates/cq-index", default-features = false }
+cq-physical = { path = "crates/cq-physical", default-features = false }
 mini-linq = { path = "crates/mini-linq" }
+cq-access = { path = "crates/cq-access", default-features = false }
+cq-providers = { path = "crates/cq-providers", default-features = false }
+cq-pull = { path = "crates/cq-pull" }
+cq-pipeline = { path = "crates/cq-pipeline", default-features = false }
+cq-compose = { path = "crates/cq-compose" }
 proc-macro2 = "1"
 prettyplease = "0.2"
 quote = "1"

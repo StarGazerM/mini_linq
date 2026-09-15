@@ -18,7 +18,7 @@ Yannakakis; logical RA denotation itself needs only a database valuation.
 | --- | --- | --- | --- |
 | [CQ](../crates/cq-ir/src/cq.rs) | Declarations, query, native expressions/patterns | Arity, declarations, binding and admitted source forms | Written or planned scheduling |
 | [RA](../crates/cq-ir/src/relational_plan.rs) | Named algebra DAG, preserved CQ source and ordered output | Definition order, headings, output/reachability; equivalence to CQ is a separate edge obligation | Input/result index demands or direct physical lowering |
-| [IndexRequirements](../crates/cq-ir/src/index_requirements.rs) | RA plus named equality-key demands | Namespace, ordered in-range nonempty keys, uniqueness; chosen realization must cover required access | Explicit physical implementation or default composition |
+| [IndexRequirements](../crates/cq-ir/src/index_requirements.rs) | RA plus named equality-key demands | Namespace, ordered in-range nonempty keys, uniqueness; chosen realization must cover required access | Explicit physical implementation, selected by the caller or paired at the RA boundary |
 | Syn `File` or `Expr` with Access holes | Host allocation, lifetime, ordering and local access code; a complete API or embedded computation | Selected physical edge's correspondence and representation relation | Expand local Access and native operations |
 | [Access](../crates/cq-ir/src/rust_access_plan.rs) | Logical occurrence labels plus actual Rust iteration, guard and output expressions | Logical binding/shape checks; native-leaf denotation remains a premise | Pull lowers to Pipeline |
 | [Provider Operation](../crates/cq-ir/src/physical_provider.rs) | Typed native type/expression/statement fragments, including Build, Probe and Candidates | Argument syntax, operation-specific checks and generated Rust typing | Selected storage or local Access expansion |
@@ -76,13 +76,19 @@ membership test completes the proof. Metadata does not receive a false claim of
 standalone semijoin denotation. Current RHS versions govern resources; original
 immutable block bounds remain conservative for selected subsets.
 
-Explicit checked entries live with CQ lowering, index selection, physical
-realization, Access lowering and Pipeline realization. Each transformation owns
-its independent correspondence checks. `composition.rs` owns default route
-selection and complete-program composition; an explicit implementation never
-calls that selector. Shared `analysis/{linear,indexes}.rs` provides source facts
-without choosing an implementation or emitting storage. The crate root
-re-exports both explicit entries and the convenience compositions.
+Explicit checked entries live in feature-selected modules within boundary-family
+crates. Each owns its source-to-target checks; source-removal tests check sibling
+independence. `cq-compose` selects the default index/physical pair once and supplies
+concrete caller-resolved continuations. Explicit implementations never import that
+selector. Linear domains and coverage belong to indexed implementations; only
+heading/namespace facts belong to IR. The [component map](COMPILER-STRUCTURE.md)
+records the dependency and replacement boundaries.
+
+The native materialization fragment is `materialize owner value (rows)`.
+Block packing size belongs to the configured provider; native hash/sorted storage
+requires no packing argument. Plain direct hosts use those bound operation paths.
+Observed hosts additionally own an explicit counter convention. Direct callable
+hosts let configured expressions capture caller-local values without changing RA.
 
 The materialized implementation separates its query computation from its host.
 `compile_materialized_query` binds supplied native input expressions once, then
@@ -110,8 +116,9 @@ independence; they do not establish arbitrary macro replacement correctness.
 - Query-host separation currently applies to the materialized hash realization.
   Repeated calls rebuild its local sets/indexes; no recursive program, delta
   scheduler or persistent query index is implied.
-- The direct query API still shares a block-size parameter and statistics surface;
-  these are administrative API debt, not relational semantics.
+- Direct item hosts cannot capture caller-local configuration. Callable hosts use
+  ordinary Rust captures; all returned answers own their rows, while block handles
+  remain internal to the borrowed-input computation.
 - Arbitrary Rust effects, resolution/hygiene, lifetimes, custom collectors and
   provider laws are not mechanically proved. Alternate aliases must establish
   the boundary contract they occupy.

@@ -12,6 +12,8 @@ import re
 import subprocess
 import tempfile
 
+from check_dependencies import source_files, selected_wiring
+
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10 staff environments.
@@ -99,34 +101,36 @@ def manifests(profile: dict) -> dict[str, bytes]:
         lines.append(f"{name} = {toml_value(value)}")
     output = {"Cargo.toml": ("\n".join(lines) + "\n").encode()}
     for name, deps in profile["packages"].items():
-        lines = [
-            "[package]",
-            f"name = {toml_value(name)}",
-            "version.workspace = true",
-            "edition.workspace = true",
-            "rust-version.workspace = true",
-            "license.workspace = true",
-            "publish = false",
-            "",
-            "[dependencies]",
-        ]
-        lines.extend(f"{dep}.workspace = true" for dep in deps)
+        original_package = tomllib.loads((ROOT / f"crates/{name}/Cargo.toml").read_text())
+        required = {dep for dep, value in original_package.get("dependencies", {}).items()
+                    if not isinstance(value, dict) or not value.get("optional", False)}
+        if name != "mini-linq" and not required <= set(deps):
+            raise ValueError(f"selected closure omits required dependencies of {name}: {required - set(deps)}")
+        if not set(deps) <= set(original_package.get("dependencies", {})):
+            raise ValueError(f"profile invents dependencies for {name}")
+        lines = ["[package]", f"name = {toml_value(name)}", "version.workspace = true",
+                 "edition.workspace = true", "rust-version.workspace = true", "license.workspace = true", "publish = false"]
+        features = profile.get("features", {}).get(name, [])
+        if features:
+            lines += ["", "[features]", "default = " + toml_value(features)]
+            for feature in features:
+                entries = original_package["features"][feature]
+                if entries: raise ValueError(f"selected implementation has an unreviewed feature dependency: {name}/{feature}")
+                lines.append(f"{feature} = []")
+        elif name == "cq-ir":
+            # Keep its optional post-assignment syntax-test gate; no compiler
+            # implementation is selected by this feature.
+            lines += ["", "[features]", "hw4 = []"]
+        lines += ["", "[dependencies]"]
+        for dep in deps:
+            selected_features = profile.get("features", {}).get(dep, [])
+            if selected_features:
+                lines.append(f"{dep} = {{ workspace = true, features = {toml_value(selected_features)} }}")
+            else:
+                lines.append(f"{dep}.workspace = true")
         if name == "mini-linq":
-            lines.extend(
-                [
-                    "",
-                    "[lib]",
-                    "proc-macro = true",
-                    "",
-                    "[[example]]",
-                    'name = "ya-chain"',
-                    'path = "examples/ya_chain.rs"',
-                    "",
-                    "[[example]]",
-                    'name = "semijoin"',
-                    'path = "examples/semijoin.rs"',
-                ]
-            )
+            lines += ["", "[lib]", "proc-macro = true", "", "[[example]]", 'name = "ya-chain"',
+                      'path = "examples/ya_chain.rs"', "", "[[example]]", 'name = "semijoin"', 'path = "examples/semijoin.rs"']
         output[f"crates/{name}/Cargo.toml"] = ("\n".join(lines) + "\n").encode()
     return output
 
@@ -169,6 +173,20 @@ def export(destination: Path, should_verify: bool) -> None:
     if destination == ROOT or ROOT.is_relative_to(destination):
         raise ValueError("destination must not contain the source checkout")
     profile = json.loads((PROFILE / "profile.json").read_text())
+    selected_sources = set(profile["copy"]) | set(profile["exercises"])
+    for name in profile["packages"]:
+        if name == "mini-linq":
+            continue
+        actual = {f"crates/{name}/{path}" for path in
+                  source_files(name, profile.get("features", {}).get(name, []), tests=False)}
+        declared = {
+            path for path in selected_sources if path.startswith(f"crates/{name}/src/")
+        }
+        if actual != declared:
+            raise ValueError(
+                f"selected source closure changed for {name}: "
+                f"missing {sorted(actual - declared)}, stale {sorted(declared - actual)}"
+            )
     files: dict[str, tuple[bytes, str]] = {}
 
     def add(target: str, content: bytes, origin: str) -> None:
@@ -181,7 +199,11 @@ def export(destination: Path, should_verify: bool) -> None:
         source = ROOT / local_path(name)
         if source.is_symlink():
             raise ValueError(f"source symlink is not permitted: {name}")
-        add(name, source.read_bytes(), name)
+        content = source.read_bytes()
+        parts = Path(name).parts
+        if len(parts) >= 4 and parts[0] == "crates" and parts[1] in profile.get("features", {}):
+            content = selected_wiring(content.decode(), profile["features"][parts[1]]).encode()
+        add(name, content, name)
     for target, name in profile["templates"].items():
         source = PROFILE / "templates" / local_path(name)
         add(target, source.read_bytes(), f"teaching/ya/templates/{name}")

@@ -377,7 +377,7 @@ return iter3;
 ```
 
 That plan states the physical operator and dataflow structure, but not the
-host-language spelling. `compile_iterator_pipeline` is the semantic lowering
+host-language spelling. `cq_pipeline::iterator::compile` is the semantic lowering
 that maps it to `map`, `flat_map`, and `filter`. This keeps the final emitter
 honest: it does not invent a join or intermediate result while printing.
 

@@ -3,7 +3,7 @@
 Homework 1 implements one typed compiler edge:
 
 ```text
-cq::Module -- compile_cq --> relational_plan::Module
+cq::Module -- cq_plan::canonical::compile --> relational_plan::Module
 ```
 
 Start from the immutable `hw1` release and create a submission branch:
@@ -16,8 +16,8 @@ git switch -c submission/hw1
 Do not start from `main` after a later homework has been announced. The
 [branch policy](../BRANCHES.md) keeps every assignment's starter stable.
 
-The assigned edge is `compile_cq`, implemented in this checkout at
-`crates/cq-compiler/src/cq_to_relational/canonical.rs`. The parsers, local
+The assigned edge is `cq_plan::canonical::compile`, implemented in this checkout at
+`crates/cq-plan/src/canonical/lower.rs`. The parsers, local
 contracts, independent edge checker, fixtures and lower stages are supplied.
 Index selection and physical construction belong to later assignments.
 Use the starter branch's corresponding source file when working on that release.
@@ -98,7 +98,7 @@ query**; the Homework 1 starter defaults to `relational-plan`.
 Run the Homework 1 edge test and formatting check:
 
 ```text
-cargo test -p cq-compiler --test pass_contracts cq_to_relational_plan_contract
+cargo test -p cq-compose --test edge_contracts cq_to_relational_plan_contract
 cargo fmt --all --check
 ```
 

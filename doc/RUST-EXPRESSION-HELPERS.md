@@ -41,8 +41,9 @@ answer(format!("{x}")) :-
 ```
 
 The basic CQ fragment accepts positive atoms with distinct bare variables.
-The canonical CQ stage also implements Rust argument expressions, `if`, and
-`let` through dependency-constrained prefix lowering. Negation and aggregation
+The default CQ composition selects dependency-constrained prefix lowering
+for Rust argument expressions, `if`, and `let`; the explicit canonical
+implementation retains its basic admitted domain. Negation and aggregation
 parse here but receive explicit unsupported-domain errors during lowering. The opt-in `hw4` tests specify that
 later extension; supplying syntax does not make those semantic tests pass.
 

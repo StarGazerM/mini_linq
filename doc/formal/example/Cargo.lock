@@ -10,16 +10,37 @@ checksum = "80771e396e09e4d428c6d034440a3fc62f3927334b66e13c8b8689d3f8785e42"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
-name = "cq-compiler"
+name = "cq-access"
 version = "0.1.0"
 dependencies = [
- "contracts",
  "cq-ir",
  "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-compose"
+version = "0.1.0"
+dependencies = [
+ "cq-index",
+ "cq-ir",
+ "cq-physical",
+ "cq-plan",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-index"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
  "quote",
  "syn 2.0.119",
 ]
@@ -35,11 +56,71 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-physical"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-pipeline"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-plan"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-providers"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-pull"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
- "cq-compiler",
+ "cq-access",
+ "cq-compose",
+ "cq-index",
  "cq-ir",
+ "cq-physical",
+ "cq-pipeline",
+ "cq-plan",
+ "cq-providers",
+ "cq-pull",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -50,8 +131,13 @@ dependencies = [
 name = "mini-linq-paper-overview"
 version = "0.0.0"
 dependencies = [
- "cq-compiler",
+ "cq-compose",
+ "cq-index",
  "cq-ir",
+ "cq-physical",
+ "cq-pipeline",
+ "cq-plan",
+ "cq-pull",
  "mini-linq",
  "prettyplease",
  "quote",
@@ -99,9 +185,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -115,7 +201,7 @@ source = "git+https://github.com/StarGazerM/syn_derive?rev=97bbe5871ac5ca8e9ba64
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
