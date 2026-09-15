@@ -17,7 +17,8 @@ oracles, reference fixtures, and reproducible checks.
 
 Macro entries parse exactly the source language and call its typed pass.
 `planned_query!` routes to `planned_relational_plan!`, which routes to
-`materialized!`, which emits the staged file. Generated `mini_linq::stage!`
+`materialized!`, which emits the staged file. Aliasing `materialized_query!`
+as `materialized` selects a callable expression over the same query computation. Generated `mini_linq::stage!`
 paths resolve through the caller's Rust imports; a module alias can select a
 different continuation with the same contract. `materialized!` also accepts
 `access path;` for its set-valued Access holes. Each intermediate artifact can
@@ -33,11 +34,14 @@ choices are described in [Access refinement](ACCESS-REFINEMENT.md).
 `pull.rs` and `pipeline.rs` own Access and Pipeline lowering. Each stage module
 owns its checked typed entries; the crate root re-exports them. Local language
 contracts remain in `cq-ir`; independent source-to-target relations live in
-`pass_contracts::{canonical,indexes,ordered,planned_join,physical,pull,pipeline}`. [Compiler structure](COMPILER-STRUCTURE.md) records decision
-ownership.
+each edge's `check` module. `composition.rs` selects convenience routes; explicit
+entries select one implementation and diagnose unsupported sources. Shared
+linear/key facts live in `analysis` without selecting a physical realization.
+[Compiler structure](COMPILER-STRUCTURE.md) records decision ownership.
 
 Within CQ-to-RA, `dependencies.rs` derives D-* clause judgments and
-`hypergraph.rs` implements G-* reductions. `rules.rs` implements P-* and Y-*
+`hypergraph.rs` implements G-* reductions. `ya.rs` schedules the two
+reduction sweeps; `rules.rs` implements P-* and Y-*
 transitions on `JoinState`; `clause_rules.rs` implements C-* transitions on
 `ClauseState`, with A-* argument judgments composing C-MATCH. `strategy.rs`
 chooses among legal candidates. The [expression rule specification](RUST-EXPRESSIONS.md#dependency-judgments-and-their-code)
@@ -142,7 +146,7 @@ The rule-to-code correspondence is explicit:
 The graph transitions are in [rules.rs](../crates/cq-compiler/src/cq_to_relational/rules.rs);
 the prefix transitions are in [clause_rules.rs](../crates/cq-compiler/src/cq_to_relational/clause_rules.rs).
 [strategy.rs](../crates/cq-compiler/src/cq_to_relational/strategy.rs) selects
-frontier pairs or ready clauses. The [edge checker](../crates/cq-compiler/src/pass_contracts/planned_join.rs)
+frontier pairs or ready clauses. The [graph and prefix checkers](../crates/cq-compiler/src/cq_to_relational/check/mod.rs)
 consumes the actual emitted definitions and report. Downstream passes consume
 only their RA/index languages, with no dependency on graph state, policy, or reports.
 

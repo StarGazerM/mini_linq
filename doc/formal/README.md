@@ -68,6 +68,14 @@ source-to-emitted-code correspondence; selected provider laws and expanded Rust
 remain independent checking boundaries. Storage contains data structures and
 traits, without runtime relational operators.
 
+Explicit implementation entries check their own domains; `composition.rs` owns
+convenience dispatch. The materialized computation can produce either the existing
+observed program or a plain callable query through a host macro alias. Both use
+the same checked query body. Repeated borrowed full/delta inputs are supported,
+while recursive program semantics and persistent index maintenance remain future
+work. The [YA release profile](../../teaching/ya/README.md) tests extraction of one
+complete route with separate scheduling and semijoin exercises.
+
 ## Reproduction
 
 Requirements: Python 3, Rust/Cargo, `latexmk`, pdfLaTeX, `pdfinfo`, and the packages
@@ -86,6 +94,7 @@ cargo test -p cq-compiler --test stage1_production --locked
 cargo test -p cq-compiler --test expression_planning --locked
 cargo test -p mini-linq --test formal_counterexamples --locked
 cargo test -p mini-linq --test formal_counterexamples --release --locked
+cargo test -p cq-compiler -p mini-linq --test reusable_query --locked
 ```
 
 | Experiment | Source and detailed instructions |

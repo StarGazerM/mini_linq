@@ -1,60 +1,129 @@
 # Compiler structure and decision ownership
 
-The compiler has independently usable language edges and smaller native Access
-operations. [Access refinement](ACCESS-REFINEMENT.md) explains the physical design;
-[the boundary review](IR-STAGE-REVIEW.md) inventories every stage.
+The compiler separates language definitions, checked transformations, and their
+composition. Each selectable implementation owns its admitted domain and calls
+an independent checker. Defaults choose among these entries in one place;
+implementations do not call the default composition.
 
-| Module | Owns | Does not own |
-| --- | --- | --- |
-| `cq-ir` | CQ, named RA, index requirements, Access, Pipeline, provider fragment syntax and local validation | Compilation policies and runtime execution |
-| `mini-linq` frontends | Typed parsing, options, macro entry points and continuation calls | Private query parsers or hidden capability catalogues |
-| `cq_to_relational/canonical.rs` | Checked default CQ entry and canonical written-order lowering | Index selection or physical representation |
-| `cq_to_relational.rs` and its other submodules | Checked planning entries, scheduling rules and graph/YA analysis | Physical representation selection |
-| `relational_to_indexes.rs` | Checked default/result-index entries and demands on named RA results | Runtime storage or block-filter scheduling |
-| `relational_to_indexes/input.rs` | Equality-index demands on declared inputs | Rust storage construction |
-| `relational_to_indexes/linear.rs` | Storage-free facts about admitted linear RA and its operands | Hash layouts, builder code or query execution |
-| `physical/mod.rs` | Checked indexed-physical entry and selection of its admitted realization | CQ scheduling or index inference |
-| `physical/input_indexed.rs`, `lazy.rs`, `materialized.rs` | Input-indexed, lazy result-indexed and materialized Rust realization; materialized checked entries | A universal data-structure interface |
-| `physical/rust.rs` | Shared Rust representation helpers | Logical planning |
-| `physical/direct/mod.rs` | Checked configured RA-to-Access entry | Canonical index demands |
-| `physical/direct/layout.rs` | Admitted RA domain, current result layouts and provider inheritance | Native storage internals |
-| `physical/direct/resources.rs` | Versioned key-resource identity, first use and projected Access construction | Candidate scan choice |
-| `physical/direct/lower.rs` | RA operators to Access, exact residuals and materialization sites | Hash/zone implementation details |
-| `physical/direct/wiring.rs`, `api.rs` | Configured lexical macros, query API and optional observations | Runtime relational operators |
-| `physical/direct/check.rs` | Source-to-emitted-code correspondence for the direct edge | Arbitrary macro semantics or Rust adequacy |
-| `physical/access/scan.rs` | Current-row or block-pruned candidate Access | Exact semijoin membership |
-| `physical/access/keys.rs` | Exact key construction, membership and optional coordinate summary | Relation layout or logical scheduling |
-| `physical/access/witnesses.rs` | Hash-bucket or deferred nested witness access | Whole-program join planning |
-| `physical/providers` | Native-set and block operation expansion through public traits | New RA operators |
-| `pull.rs`, `pipeline.rs` | Access-to-Pipeline and Pipeline-to-Rust endpoints | Storage policy |
-| `pass_contracts/{canonical,indexes,ordered,planned_join,physical,pull,pipeline}` | Independent correspondence checks for the respective edges | Constructing the lowering's expected output by calling its emitter |
-| `cq-storage` | Immutable payload/metadata, masks, operation traits, summaries and passive counters | Relation APIs, semijoin/join functions, query plans or an interpreter |
+| Owner | Responsibility |
+| --- | --- |
+| `cq-ir` | CQ, named RA, index requirements, Access, Pipeline and provider-fragment syntax; local well-formedness |
+| `mini-linq` | Parse the selected language and call a typed entry; emit the next macro invocation |
+| `composition.rs` | Default CQ, index and physical routes; planned graph/prefix dispatch; complete program composition |
+| `analysis/{linear,indexes}.rs` | Shared source facts: linear operands, headings and equality-key coverage; no route choice or generated Rust |
+| `cq_to_relational/{canonical,prefix,graph}.rs` | Explicit CQ-to-RA implementations; each rejects inputs outside its own domain |
+| `cq_to_relational/{rules,clause_rules}.rs` | Checked administrative transitions and their RA emission |
+| `cq_to_relational/{hypergraph,strategy,ya}.rs` | Join-tree analysis, join choice and the YA up/down schedule |
+| `cq_to_relational/check/` | Independent canonical, ordered-prefix, prefix-derivation and graph-derivation checks |
+| `relational_to_indexes/{input,result}.rs` | Explicit input-column or named-result index selection |
+| `relational_to_indexes/check/` | Independent checks for each index-selection edge |
+| `physical/{input_indexed,lazy}.rs` | Explicit input-indexed and lazy result-indexed storage/access implementations |
+| `physical/materialized.rs` | Checked materialized entries and native Rust host adapters |
+| `physical/materialized/query.rs` | Shared indexed set computation, local Access regions and optional counter emission |
+| `physical/materialized/semijoin.rs` | Exact semijoin scan and witness guard for the selected hash realization |
+| `physical/check/` | Separate input-indexed, lazy and materialized correspondence traversals; shared Rust-syntax inspection |
+| `physical/direct/` | Configured RA-to-Access lowering, layouts, versioned resources, wiring and its independent checker |
+| `physical/access/{scan,keys,witnesses}.rs` | Candidate scans, exact/zone resources and join witnesses |
+| `physical/providers/` | Native-set and block operations through public storage traits |
+| `pull.rs`, `pull/check.rs` | Access-to-Pipeline implementation and independent correspondence |
+| `pipeline.rs`, `pipeline/check.rs` | Pipeline-to-Rust endpoints and independent correspondence |
+| `cq-storage` | Data structures, operation traits, masks, summaries and passive counters; no query execution |
 
-Paths in the table are relative to `crates/`; compiler paths without a crate
-prefix are inside `crates/cq-compiler/src/`.
+Compiler paths are relative to `crates/cq-compiler/src/`. Crate names refer to
+`crates/`. Checkers inspect actual targets without calling the emitter to obtain
+an expected answer. Their placement beside the transformation does not remove
+that independence. Compiler options and derivation witnesses in
+`cq_to_relational/model.rs` are ordinary analysis data, not another IR.
 
-Each transformation owns its checked public entry. The crate root re-exports
-the `compile_*` API, while `pass_contracts` declares independently implemented
-edge checkers. Shared analysis is placed at the semantic boundary that defines
-its facts; index selection therefore does not import a physical backend to
-recognize RA. Course assignments select existing edges without defining the
-compiler's module hierarchy.
+## Explicit edges and default composition
 
-Configuration is separate from semantic inputs. Providers are selected per input
-and materialized result; candidate scans and key resources per semijoin; witness
-access per join. Defaults are ordinary paths, with explicit scoped overrides.
-Rename and Semijoin inherit the representation they view. Configuration errors
-are diagnosed where their operation domain is known.
+`compile_cq_canonical`, `compile_cq_prefix` and `compile_cq_graph` select actual
+implementations. Likewise, `compile_input_indexes` and `compile_result_indexes`
+choose an index namespace; `compile_input_indexed`, `compile_lazy_indexed` and
+`compile_materialized_with` choose physical realizations. The default entries
+retain their convenience behavior in `composition.rs`. An explicit entry checks
+its domain rather than switching to another implementation.
 
-The direct physical pass carries Γ in Rust data structures and emits
-`Rust[Access]`. Provider/access macro arguments contain only an operation's actual
-semantic inputs. An implementation belongs at the smallest existing boundary that owns
-its changed construction, access and lifetime. A new IR requires a meaning that
-these boundaries cannot already express, together with grammar, judgment and
-lowering rules; a desire to expose another macro alone does not establish that need.
+Macro continuation paths are relative to the invocation's `mini_linq` binding.
+A module alias can therefore change a downstream edge or host. The selected
+implementation must still satisfy the source, output, binding and observation
+contracts of that position. A resolving macro path alone does not establish them.
 
-A macro alias changes a continuation only where generated paths refer to it.
-Lexical wrappers bind selected paths and services explicitly. Compatibility has
-two parts: expanded Rust must type check, and the implementation must satisfy its
-observation and ownership laws. Source/template audits and bounded executions
-supply evidence for the supplied implementations, not a proof for arbitrary aliases.
+For example, this composition selects the graph planner, result indexes and a
+callable materialized host independently, using the same boundary names:
+
+```rust
+mod wiring {
+    pub use ::mini_linq::{
+        graph_query as mini_linq,
+        result_indexes as relational_plan,
+        materialized_query as index_requirements,
+        collect_access, collect_pipeline,
+    };
+}
+use wiring as mini_linq;
+```
+
+The [composition test](../crates/mini-linq/tests/composition.rs) runs the same CQ
+through five such routes over all 256 two-relation databases on its small domain,
+including duplicate-input variants. The [typed-boundary test](../crates/cq-compiler/tests/composition.rs)
+also verifies explicit rejection of incompatible routes and independent replay
+of graph and prefix derivations for the same source.
+
+## Query computation and its host
+
+`compile_materialized_query(&indexed, &access, &inputs)` returns a checked native
+Rust expression. The input expressions are evaluated once in declaration order;
+each supplies owned tuples through `IntoIterator`. Borrowed inputs can be bound
+as `full.iter().cloned()` or `delta.iter().cloned()`. The expression normalizes
+inputs, builds required indexes, computes named sets and returns an owned
+`HashSet` of answer tuples. It emits no observation counters or generated types.
+
+The same computation supplies the existing observed `Program`/`Storage` API.
+`compile_materialized_callable` wraps the checked expression in an anonymous
+Rust closure. The `materialized_query!` macro exposes that host using the existing
+indexed-language input. Ordinary Rust calls supply its inputs; there is no
+additional binding grammar or query IR. Each closure value has one inferred type
+per input parameter. Its captures and repeatability follow the generated body's
+ordinary Rust rules. The anonymous host introduces no item name that could shadow
+functions referenced directly or through opaque query macros. Its wrapper and
+query body have independent source-to-target checks.
+
+For example, an existing planned query becomes a callable expression through this
+one host binding:
+
+```rust
+mod wiring {
+    pub use ::mini_linq::*;
+    pub use ::mini_linq::materialized_query as materialized;
+}
+use wiring as mini_linq;
+```
+
+The [macro integration test](../crates/mini-linq/tests/reusable_query.rs) compiles
+the same CQ in both hosts and checks repeated borrowed full/delta calls. The
+[compiler tests](../crates/cq-compiler/tests/reusable_query.rs) additionally check
+exact input evaluation, empty/composite semijoin keys and named non-`Copy` values.
+The plain host requires no output ordering; sorted standalone materialization
+adds its own `Ord` requirement. Reusing this computation does not yet implement
+recursive program semantics, and each call still rebuilds this realization's
+local sets and indexes.
+
+## Extraction and remaining boundaries
+
+The [YA teaching profile](../teaching/ya/README.md) selects a concrete dependency
+closure and provides two separately replaceable algorithm files: YA scheduling
+and semijoin-to-Access lowering. Its standalone build checks that unrelated
+physical implementations are not required. Assignment boundaries select existing
+implementations rather than introducing homework modules into the compiler.
+
+The configured direct physical edge remains distinct. Provider choice is per
+input/result, candidate and key choice per semijoin, and witness choice per join.
+Its compiler-local Γ emits existing `Rust[Access]`; its providers retain different
+operation laws. The reusable materialized host does not claim to abstract those
+representations or to provide trie traversal or recursive rule-program semantics.
+A new IR requires a new meaning, grammar and lowering obligation that existing
+boundaries cannot express.
+
+[Access refinement](ACCESS-REFINEMENT.md) gives the physical rules;
+[the boundary review](IR-STAGE-REVIEW.md) inventories the languages and limits.

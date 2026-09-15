@@ -1,6 +1,7 @@
 //! G-PRIVATE / G-ABSORB reduce occurrence-labeled hypergraphs.
 //! Analysis never deletes executable atoms. See doc/formal/planning.tex.
-use super::Heading;
+use super::{Heading, JoinPolicy, PlanningOptions, error};
+use cq_ir::{cq, symbol_name};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,6 +177,44 @@ pub fn analyze(edges: &[Heading]) -> (Vec<GyoRule>, Option<JoinTree>) {
         rules.push(rule);
     }
     (rules, state.finish().expect("GYO reached normal form"))
+}
+
+/// Original atom incidence; this analysis never emits or removes a relation.
+pub(crate) fn incidence(source: &cq::Module) -> Vec<Heading> {
+    source
+        .program
+        .query
+        .body
+        .iter()
+        .filter_map(cq::BodyItem::atom)
+        .map(|atom| atom.variables().map(symbol_name).collect())
+        .collect()
+}
+
+/// Validate the written GYO witness independently of query scheduling.
+pub(crate) fn check_analysis(
+    edges: &[Heading],
+    options: PlanningOptions,
+    analysis: &[GyoRule],
+    tree: &Option<JoinTree>,
+) -> syn::Result<()> {
+    if options.strategy == JoinPolicy::Auto {
+        let mut gyo = GyoState::new(edges);
+        for rule in analysis {
+            gyo.apply(rule).map_err(error)?;
+        }
+        if &gyo.finish().map_err(error)? != tree {
+            return Err(error("GYO certificate does not match the chosen route"));
+        }
+    } else if !analysis.is_empty() || tree.is_some() {
+        return Err(error(
+            "binary route must not claim a Yannakakis certificate",
+        ));
+    }
+    if let Some(tree) = tree {
+        tree.check(edges).map_err(error)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

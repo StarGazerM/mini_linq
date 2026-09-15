@@ -201,25 +201,72 @@ With the ordinary crate binding, the continuations are:
 \begin{center}\small
 \begin{tabular}{lll}\toprule
 Entry & Typed edge & Continuation \\\midrule
-\code{mini_linq} & canonical/extended CQ & \code{relational_plan} \\
+\code{mini_linq} & default CQ choice & \code{relational_plan} \\
+\code{canonical_query} / \code{prefix_query} & explicit CQ edge & \code{relational_plan} \\
+\code{graph_query} & explicit graph CQ & \code{relational_plan} \\
 \code{planned_query} & planned CQ & \code{planned_relational_plan} \\
 \code{relational_plan} & base/extended index & \code{index_requirements} \\
 \code{planned_relational_plan} & result indexes & \code{materialized} \\
-\code{index_requirements} & basic/lazy physical & staged Rust file \\
+\code{result_indexes} & explicit result indexes & \code{index_requirements} \\
+\code{input_indexes} & input indexes & \code{index_requirements} \\
+\code{index_requirements} & default physical choice & staged Rust file \\
+\code{input_indexed} / \code{lazy_indexed} & explicit physical edge & staged Rust file \\
 \code{materialized} & materialized physical & staged Rust file \\
+\code{materialized_query} & same computation & callable Rust Expr \\
 \code{physical_plan} & configured RA to Access & staged Rust file \\
 \code{pull} / \code{collect_access} & Access to Pipeline & iterator / set endpoint \\
 \code{stream_access} & Access to Pipeline & stream endpoint \\
 iterator / set / stream endpoint & Pipeline to Expr & ToTokens \\\bottomrule
 \end{tabular}
 \end{center}
-\code{materialized!} defaults to set-valued \code{mini_linq::collect_access};
+Both materialized entries default to set-valued \code{mini_linq::collect_access};
 \code{access path;} overrides it. Basic/lazy holes retain absolute paths.
 Direct entries bypass upper passes. \code{workload_query} emits catalog metadata;
 \code{compiled-workloads} also compiles its CQ through defaults.
 Canonical physical code has one Access hole per materialized result or lazy/basic
 region. The direct edge also uses local Access for key construction, candidates
 and witnesses. Interpolation embeds native Rust; shared RA need not form one pipeline.
+
+\paragraph{Implementation and composition ownership.}
+An explicit entry fixes an implementation and checks its admitted domain.
+\path{composition.rs} chooses the default CQ, index and physical implementations;
+selected implementations do not call back into that selector. Each language edge
+owns independently implemented target checks. Shared linear/key analysis contains
+source facts without physical code or policy selection. This decomposition
+changes neither the language graph nor the observation contracts below.
+
+\paragraph{One computation in different Rust hosts.}
+Let $Q_M(P;\bar e)$ denote the native expression returned by
+\code{compile_materialized_query} for indexed plan $P$ and input expressions
+$\bar e$ in declaration order. It evaluates $\bar e$ once, binds their values
+simultaneously, normalizes the finite inputs, performs ST-* and M-* with local
+set-valued Access holes, and returns a typed answer set. This notation names a
+Rust AST fragment, not an intermediate language. The existing standalone build
+uses the same lowering with passive result/index/probe observations. If $I$ is
+the database supplied by those finite input iterators, under $\mathcal H_{\rm rel}$
+and exact set-valued Access continuations,
+\[
+ Q_M(P;I)=\pi_{\rm answer}(\operatorname{Build}_M(P;I))=\sem P_I.
+\]
+Equality here observes completed answers; the counted and plain hosts have
+different instrumentation traces. The plain expression introduces no counters
+or host types. Its answer needs lawful clone/hash/equality, while the sorted
+standalone materializer additionally needs ordering.
+
+\code{compile_materialized_callable} places this checked expression in an
+anonymous Rust closure. Input normalization constrains each accessed parameter
+to supply the declared tuple type through \code{IntoIterator}. The
+\code{materialized_query!} entry exposes that adapter without extending the
+indexed grammar: ordinary Rust calls provide full or delta input iterators.
+Aliasing this macro as \code{materialized} changes the planned route's host.
+Each closure value has fixed inferred input types; captures and repeatability
+follow ordinary Rust. The adapter introduces no item binder that could shadow
+a host function, including one named by an opaque macro expansion. Independent
+checks inspect its parameters, result type and query body. Repeated borrowed
+calls and direct/opaque name resolution are tested against ordinary Rust;
+answer sets are compared with the standalone host and a pairwise oracle. They rebuild
+this realization's local stores and establish no recursive-program semantics.
+
 \subsection{The contract of a replaceable edge}
 Local validity belongs to an IR; compilability to a term/pass pair; preservation
 to their observations. A partial compiler $f:L\to M$ has an edge contract:

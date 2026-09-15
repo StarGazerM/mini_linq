@@ -2,14 +2,9 @@
 //! from RA dataflow; storage statements and lookup leaves are checked separately.
 use super::*;
 
-pub(super) fn check(source: &ir::Module, target: &syn::File) -> syn::Result<()> {
+pub(crate) fn check(source: &ir::Module, target: &syn::File) -> syn::Result<()> {
     ir::contract::check(source)?;
-    let accepted = crate::pass_contracts::indexes::supported_linear_plan(&source.relational_plan)
-        && source
-            .indexes
-            .iter()
-            .all(|index| index.result_token.is_none())
-        && check_storage_and_access(source, target).is_some();
+    let accepted = supported(source) && check_storage_and_access(source, target).is_some();
     if accepted {
         Ok(())
     } else {
@@ -352,6 +347,12 @@ fn check_index_builder(
     }
     expect_statement(&mut body, &Stmt::Expr(syn::parse_quote!(#index), None))?;
     body.next().is_none().then_some(())
+}
+
+pub(crate) fn supported(source: &ir::Module) -> bool {
+    source.indexes.iter().all(|i| i.result_token.is_none())
+        && crate::relational_to_indexes::check::supported_linear_plan(&source.relational_plan)
+        && crate::relational_to_indexes::check::covers_required_indexes(source)
 }
 
 #[cfg(test)]

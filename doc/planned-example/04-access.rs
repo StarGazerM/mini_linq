@@ -18,12 +18,12 @@ impl PlannedExample {
         let mut __stats = PlannedExampleExecutionStats::default();
         let __pairs = ::core::cell::Cell::new(0usize);
         let __probes = ::core::cell::Cell::new(0usize);
-        let input0: ::std::collections::HashSet<(i32, i32)> = input0
-            .into_iter()
-            .collect();
-        let input1: ::std::collections::HashSet<(i32, i32)> = input1
-            .into_iter()
-            .collect();
+        let input0: ::std::collections::HashSet<(i32, i32)> = ::core::iter::Iterator::collect(
+            ::core::iter::IntoIterator::into_iter(input0),
+        );
+        let input1: ::std::collections::HashSet<(i32, i32)> = ::core::iter::Iterator::collect(
+            ::core::iter::IntoIterator::into_iter(input1),
+        );
         let relation0: ::std::collections::HashSet<(i32, i32)> = {
             let __left = &input0;
             ::mini_linq::collect_access!(

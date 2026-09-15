@@ -1,4 +1,4 @@
-//! Written-order CQ lowering: canonical atoms or an expression-preserving prefix.
+//! Canonical written-order CQ -> RA for normalized positive atoms.
 
 use cq_ir::{cq, relational_plan};
 use proc_macro2::{Span, TokenStream};
@@ -8,23 +8,17 @@ use std::collections::BTreeMap;
 /// Lower one positive CQ to the canonical named left-deep relational plan.
 #[contracts::contract(
     debug_ensures(
-        cq::contract::well_formed(source) -> ret.as_ref()
-            .is_ok_and(|target| crate::pass_contracts::canonical::relational_plan_is_exact(source, target))
+        cq::contract::well_formed(source) && source.program.query.is_basic() -> ret.as_ref()
+            .is_ok_and(|target| crate::cq_to_relational::check::canonical::relational_plan_is_exact(source, target))
     ),
 )]
-pub fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
+pub fn compile_cq_canonical(source: &cq::Module) -> syn::Result<relational_plan::Module> {
     cq::contract::check(source)?;
     if !source.program.query.is_basic() {
-        let analysis = crate::cq_to_relational::dependencies::ClauseDependencies::analyze(source)?;
-        return crate::cq_to_relational::clause_rules::plan(
+        return Err(syn::Error::new_spanned(
             source,
-            &analysis,
-            crate::PlanningOptions {
-                strategy: crate::JoinPolicy::Written,
-                max_arity: None,
-            },
-        )
-        .map(|(plan, _)| plan);
+            "canonical CQ lowering requires distinct variable arguments and a variable head",
+        ));
     }
     let declarations = source
         .program

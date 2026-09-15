@@ -1,7 +1,7 @@
 //! Fuse the canonical left-deep RA into the existing local pull language.
 //! Build owns only relation rows and indexes; Rust clauses run on cursor demand.
 use super::rust::{expression_aliases, local};
-use crate::relational_to_indexes::{self as indexes, signature};
+use crate::analysis::indexes::{self as indexes, signature};
 use cq_ir::{
     cq, index_requirements as ir, relational_plan as ra, rust_access_plan as access, symbol_name,
 };
@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn supported(source: &ir::Module) -> bool {
     let definitions = &source.relational_plan.plan.definitions;
-    indexes::is_linear_prefix(&source.relational_plan)
+    crate::analysis::linear::is_linear_prefix(&source.relational_plan)
         && source.indexes.iter().all(|key| {
             key.result_token.is_some()
                 && definitions.iter().any(|d| {
@@ -20,7 +20,8 @@ pub(crate) fn supported(source: &ir::Module) -> bool {
         })
 }
 
-pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
+pub fn compile_lazy_indexed(source: &ir::Module) -> syn::Result<syn::File> {
+    ir::contract::check(source)?;
     if !supported(source) {
         return Err(syn::Error::new_spanned(
             source,
@@ -296,7 +297,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
     let visibility = &module.program.visibility;
     let program = &module.program.name;
     let storage = format_ident!("{}Storage", program);
-    syn::parse2(quote! {
+    let target = syn::parse2(quote! {
         #visibility struct #program;
         #visibility struct #storage { #(#fields,)* }
         impl #program {
@@ -309,5 +310,7 @@ pub(crate) fn compile(source: &ir::Module) -> syn::Result<syn::File> {
             }
             pub fn materialize(&self) -> ::std::vec::Vec<#row> { let mut rows: ::std::vec::Vec<_> = self.query().collect(); rows.sort_unstable(); rows }
         }
-    })
+    })?;
+    super::check::lazy(source, &target)?;
+    Ok(target)
 }

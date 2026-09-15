@@ -153,7 +153,7 @@ receives only C-READY candidates. Written chooses the first clause; other
 policies prefer ready guards/bindings, then connected atoms, then optional
 width ranking. The policy cannot emit RA or make an inapplicable rule legal.
 
-The [source-to-RA checker](../crates/cq-compiler/src/pass_contracts/ordered.rs)
+The [source-to-RA checker](../crates/cq-compiler/src/cq_to_relational/check/ordered.rs)
 reads actual definitions and independently checks their operators, Rust
 expressions, bindings, equality constraints, projection, and output. Its
 schedule check shares dependency facts with the planner, so that part is not

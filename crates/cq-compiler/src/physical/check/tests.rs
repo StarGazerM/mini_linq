@@ -331,3 +331,103 @@ fn scaffold_types_cannot_redirect_storage_method_dispatch() {
     arguments.args[1] = syn::parse_quote!(CustomBucket);
     assert!(!accepts(&source, &target, true));
 }
+
+#[test]
+fn reusable_query_checks_host_bindings_storage_and_final_result() {
+    let (source, _) = fixture(false);
+    let access = syn::parse_quote!(::mini_linq::collect_access);
+    let inputs: Vec<Expr> = vec![
+        syn::parse_quote!(left_rows()),
+        syn::parse_quote!(right_rows()),
+    ];
+    let original = crate::compile_materialized_query(&source, &access, &inputs).unwrap();
+    assert!(materialized_query(&source, &original, &access, &inputs).is_ok());
+
+    for method in ["entry", "push"] {
+        let mut invalid = original.clone();
+        let mut mutation = ChangeColumn {
+            method,
+            changed: false,
+        };
+        mutation.visit_expr_mut(&mut invalid);
+        assert!(mutation.changed, "mutation did not reach a {method} column");
+        assert!(materialized_query(&source, &invalid, &access, &inputs).is_err());
+    }
+    for mutation in 0..4 {
+        let mut invalid = original.clone();
+        let Expr::Block(block) = &mut invalid else {
+            unreachable!()
+        };
+        match mutation {
+            0 => {
+                block.block.stmts[0] = syn::parse_quote!(
+                    let (input0, input1) = ((right_rows()), (left_rows()));
+                )
+            }
+            1 => block
+                .block
+                .stmts
+                .insert(1, syn::parse_quote!(let unexpected = left_rows();)),
+            2 => {
+                *block.block.stmts.last_mut().unwrap() =
+                    Stmt::Expr(syn::parse_quote!(relation0), None)
+            }
+            _ => {
+                let answer = block
+                    .block
+                    .stmts
+                    .iter_mut()
+                    .find_map(|statement| match statement {
+                        Stmt::Local(local)
+                            if local_name(local).is_some_and(|name| name == "answer") =>
+                        {
+                            Some(local)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let mut mutation = ChangeColumn {
+                    method: "map",
+                    changed: false,
+                };
+                mutation.visit_expr_mut(&mut answer.init.as_mut().unwrap().expr);
+                assert!(mutation.changed);
+            }
+        }
+        assert!(
+            materialized_query(&source, &invalid, &access, &inputs).is_err(),
+            "invalid query host mutation {mutation} accepted"
+        );
+    }
+}
+
+#[test]
+fn callable_checks_argument_order_return_type_and_native_capture_boundary() {
+    let (source, _) = fixture(false);
+    let access = syn::parse_quote!(::mini_linq::collect_access);
+    let original = crate::compile_materialized_callable(&source, &access).unwrap();
+    materialized_callable(&source, &original, &access).unwrap();
+    for mutation in 0..5 {
+        let mut invalid = original.clone();
+        let Expr::Closure(closure) = &mut invalid else {
+            unreachable!()
+        };
+        match mutation {
+            0 => {
+                let first = closure.inputs[0].clone();
+                closure.inputs[0] = closure.inputs[1].clone();
+                closure.inputs[1] = first;
+            }
+            1 => closure.output = syn::parse_quote!(-> ::std::vec::Vec<(i32,)>),
+            2 => closure.capture = Some(Default::default()),
+            3 => closure.asyncness = Some(Default::default()),
+            _ => {
+                closure.inputs.pop();
+            }
+        }
+        assert!(
+            materialized_callable(&source, &invalid, &access).is_err(),
+            "callable boundary mutation {mutation} accepted"
+        );
+    }
+}

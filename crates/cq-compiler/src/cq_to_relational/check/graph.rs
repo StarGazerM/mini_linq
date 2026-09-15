@@ -24,59 +24,15 @@ pub(crate) fn check(
     proof: &JoinPlanReport,
 ) -> syn::Result<()> {
     cq::contract::check(source)?;
+    require(
+        cq_to_relational::dependencies::ClauseDependencies::analyze(source)?.supports_graph_rules,
+        "graph correspondence requires atom-local declarative clauses",
+    )?;
     ra::contract::check(target)?;
     require(
         target.program == source.program,
         "planning changed the source annotation",
     )?;
-    let clauses = cq_to_relational::dependencies::ClauseDependencies::analyze(source)?;
-    if !clauses.supports_graph_rules {
-        let mut prefix = Vec::new();
-        for (clause, item) in source.program.query.body.iter().enumerate() {
-            if let cq::BodyItem::Positive { atom } = item {
-                for (argument, _) in atom
-                    .args
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, arg)| cq::rust::literal(arg))
-                {
-                    prefix.push(Rule::Constant { clause, argument });
-                }
-            }
-        }
-        require(
-            proof.derivation.starts_with(&prefix) && proof.derivation.last() == Some(&Rule::Finish),
-            "missing constant normalization or Finish",
-        )?;
-        let order = proof.derivation[prefix.len()..proof.derivation.len() - 1]
-            .iter()
-            .map(|rule| match rule {
-                Rule::Match { clause } | Rule::Bind { clause } | Rule::Guard { clause } => {
-                    match (rule, source.program.query.body.get(*clause)) {
-                        (Rule::Match { .. }, Some(cq::BodyItem::Positive { .. }))
-                        | (Rule::Guard { .. }, Some(cq::BodyItem::Filter(_)))
-                        | (Rule::Bind { .. }, Some(cq::BodyItem::Let(_))) => Ok(*clause),
-                        _ => Err(syn::Error::new_spanned(source, "invalid clause derivation")),
-                    }
-                }
-                _ => Err(syn::Error::new_spanned(source, "invalid clause derivation")),
-            })
-            .collect::<syn::Result<Vec<_>>>()?;
-        super::ordered::check_scheduled_in(source, target, &order, &clauses)?;
-        let peak = ra::check_in(target.program.inputs(), &target.plan)?
-            .values()
-            .map(|r| r.heading.len())
-            .max()
-            .unwrap_or(0);
-        require(
-            proof.analysis.is_empty()
-                && proof.join_tree.is_none()
-                && proof.peak_arity == peak
-                && proof.options.max_arity.is_none_or(|limit| peak <= limit),
-            "Rust clauses require a legal complete derivation and exact width",
-        )?;
-        return Ok(());
-    }
     let info = ra::check_in(target.program.inputs(), &target.plan)?;
     let atoms: Vec<_> = source
         .program
@@ -365,4 +321,35 @@ fn require(premise: bool, message: &str) -> syn::Result<()> {
 }
 fn error(message: &str) -> syn::Error {
     syn::Error::new(proc_macro2::Span::call_site(), message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_correspondence_cannot_erase_a_host_clause_by_changing_the_annotation() {
+        let original: cq::Module = syn::parse_quote! {
+            struct P;
+            relation R(a:i32);
+            answer(x) :- R(x);
+        };
+        let (mut target, report) = cq_to_relational::graph::explain_cq_graph(
+            &original,
+            cq_to_relational::PlanningOptions {
+                strategy: cq_to_relational::JoinPolicy::Auto,
+                max_arity: None,
+            },
+        )
+        .unwrap();
+        let source: cq::Module = syn::parse_quote! {
+            struct P;
+            relation R(a:i32);
+            answer(x) :- R(x), let () = effect();
+        };
+        target.program = source.program.clone();
+        cq::contract::check(&source).unwrap();
+        ra::contract::check(&target).unwrap();
+        assert!(check(&source, &target, &report).is_err());
+    }
 }

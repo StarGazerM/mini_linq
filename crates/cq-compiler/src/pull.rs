@@ -4,7 +4,7 @@ use cq_ir::{iterator_pipeline, rust_access_plan};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::pass_contracts;
+pub(crate) mod check;
 
 /// Supplied pull strategy: expose a conventional named iterator plan.
 ///
@@ -14,7 +14,7 @@ use crate::pass_contracts;
 #[contracts::contract(
     debug_ensures(
         rust_access_plan::contract::well_formed(source) -> ret.as_ref()
-            .is_ok_and(|target| pass_contracts::pull::iterator_pipeline_is_exact(source, target))
+            .is_ok_and(|target| check::iterator_pipeline_is_exact(source, target))
     )
 )]
 pub fn compile_pull(source: &rust_access_plan::Plan) -> syn::Result<iterator_pipeline::Pipeline> {

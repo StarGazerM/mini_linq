@@ -36,6 +36,8 @@
 
 - [Rust tutorial design](RUST-TUTORIAL-DESIGN.md)
 - [Semester plan](semester.md)
+- [YA teaching extraction](../teaching/ya/README.md): independently buildable
+  Project 2 slice with separate scheduling and semijoin exercises.
 
 The compiler and course-planning references explain why the project is shaped this way. They
 are not required reading or submission specifications. The assignment

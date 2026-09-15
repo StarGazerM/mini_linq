@@ -1,0 +1,72 @@
+{
+  "packages": {
+    "cq-ir": ["proc-macro2", "quote", "syn", "syn_derive"],
+    "cq-compiler": ["contracts", "cq-ir", "proc-macro2", "quote", "syn"],
+    "mini-linq": ["cq-compiler", "cq-ir", "proc-macro2", "quote", "syn"]
+  },
+  "copy": [
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "rust-toolchain.toml",
+    "crates/cq-ir/src/cq.rs",
+    "crates/cq-ir/src/cq/rust.rs",
+    "crates/cq-ir/src/cq/predicate.rs",
+    "crates/cq-ir/src/relational_plan.rs",
+    "crates/cq-ir/src/index_requirements.rs",
+    "crates/cq-ir/src/rust_access_plan.rs",
+    "crates/cq-ir/src/iterator_pipeline.rs",
+    "crates/cq-ir/tests/languages.rs",
+    "crates/cq-ir/tests/relational_plan.rs",
+    "crates/cq-ir/tests/rust_access_plan.rs",
+    "crates/cq-ir/tests/iterator_pipeline.rs",
+    "crates/cq-compiler/src/analysis/indexes.rs",
+    "crates/cq-compiler/src/cq_to_relational/graph.rs",
+    "crates/cq-compiler/src/cq_to_relational/model.rs",
+    "crates/cq-compiler/src/cq_to_relational/dependencies.rs",
+    "crates/cq-compiler/src/cq_to_relational/hypergraph.rs",
+    "crates/cq-compiler/src/cq_to_relational/rules.rs",
+    "crates/cq-compiler/src/cq_to_relational/strategy.rs",
+    "crates/cq-compiler/src/cq_to_relational/check/graph.rs",
+    "crates/cq-compiler/src/relational_to_indexes/result.rs",
+    "crates/cq-compiler/src/relational_to_indexes/check/result.rs",
+    "crates/cq-compiler/src/physical/materialized.rs",
+    "crates/cq-compiler/src/physical/materialized/query.rs",
+    "crates/cq-compiler/src/physical/rust.rs",
+    "crates/cq-compiler/src/physical/check/materialized.rs",
+    "crates/cq-compiler/src/physical/check/context.rs",
+    "crates/cq-compiler/src/physical/check/syntax.rs",
+    "crates/cq-compiler/src/pull.rs",
+    "crates/cq-compiler/src/pull/check.rs",
+    "crates/cq-compiler/src/pipeline.rs",
+    "crates/cq-compiler/src/pipeline/check.rs",
+    "crates/cq-compiler/tests/stage1_reference/oracle.rs"
+  ],
+  "templates": {
+    "README.md": "README.md",
+    "crates/cq-ir/src/lib.rs": "ir_lib.rs",
+    "crates/cq-compiler/src/lib.rs": "compiler_lib.rs",
+    "crates/cq-compiler/src/analysis.rs": "analysis.rs",
+    "crates/cq-compiler/src/cq_to_relational.rs": "cq_to_relational.rs",
+    "crates/cq-compiler/src/relational_to_indexes.rs": "relational_to_indexes.rs",
+    "crates/cq-compiler/src/physical.rs": "physical.rs",
+    "crates/cq-compiler/src/cq_to_relational/ya.rs": "ya_stub.rs",
+    "crates/cq-compiler/src/physical/materialized/semijoin.rs": "semijoin_stub.rs",
+    "crates/cq-compiler/tests/ya_schedule.rs": "tests/ya_schedule.rs",
+    "crates/mini-linq/src/lib.rs": "macros_lib.rs",
+    "crates/mini-linq/tests/semijoin.rs": "tests/semijoin.rs",
+    "crates/mini-linq/tests/ya_execution.rs": "tests/ya_execution.rs",
+    "crates/mini-linq/tests/hosts.rs": "tests/hosts.rs",
+    "crates/mini-linq/examples/ya_chain.rs": "examples/ya_chain.rs",
+    "crates/mini-linq/examples/semijoin.rs": "examples/semijoin.rs"
+  },
+  "exercises": {
+    "crates/cq-compiler/src/cq_to_relational/ya.rs": {
+      "command": ["cargo", "test", "-p", "cq-compiler", "--test", "ya_schedule", "--locked"],
+      "missing": "YA scheduling exercise"
+    },
+    "crates/cq-compiler/src/physical/materialized/semijoin.rs": {
+      "command": ["cargo", "test", "-p", "mini-linq", "--test", "semijoin", "--locked"],
+      "missing": "semijoin lowering exercise"
+    }
+  }
+}

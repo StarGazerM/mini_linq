@@ -1,28 +1,10 @@
 //! P-* assembly and Y-* semijoin transitions over an occurrence frontier.
 //! Rule premises and state updates follow doc/formal/planning.tex.
 //! The C-* prefix transitions are in clause_rules.rs.
-use super::{Heading, JoinTree, error};
+use super::{Heading, JoinTree, Rule, error};
 use cq_ir::{cq, cq::Predicate, relational_plan as ra, symbol_name};
 use quote::{format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Rule {
-    Introduce { occurrence: usize },
-    Select { group: usize, predicate: usize },
-    Begin,
-    Up { child: usize },
-    Down { child: usize },
-    Freeze,
-    Combine { left: usize, right: usize },
-    Trim { group: usize },
-    Output { group: usize },
-    Match { clause: usize },
-    Guard { clause: usize },
-    Bind { clause: usize },
-    Constant { clause: usize, argument: usize },
-    Finish,
-}
 
 #[derive(Clone)]
 pub(super) struct FrontierEntry {

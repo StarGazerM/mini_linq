@@ -33,7 +33,7 @@ def main():
         assert source.is_file(), source
         assert entry["marker"] in source.read_text(), entry
     # Inventory of executable rule variants, independent of LaTeX rendering.
-    rule_source = (ROOT / "crates/cq-compiler/src/cq_to_relational/rules.rs").read_text()
+    rule_source = (ROOT / "crates/cq-compiler/src/cq_to_relational/model.rs").read_text()
     enum = re.search(r"pub enum Rule \{(.*?)^\}", rule_source, re.S | re.M).group(1)
     variants = set(re.findall(r"^    (\w+)", enum, re.M))
     paired = {

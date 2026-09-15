@@ -17,9 +17,9 @@ Yannakakis; logical RA denotation itself needs only a database valuation.
 | Representation and owner | Meaning | Boundary obligation | Next decision |
 | --- | --- | --- | --- |
 | [CQ](../crates/cq-ir/src/cq.rs) | Declarations, query, native expressions/patterns | Arity, declarations, binding and admitted source forms | Written or planned scheduling |
-| [RA](../crates/cq-ir/src/relational_plan.rs) | Named algebra DAG, preserved CQ source and ordered output | Definition order, headings, output/reachability; equivalence to CQ is a separate edge obligation | Canonical index demands or direct physical lowering |
-| [IndexRequirements](../crates/cq-ir/src/index_requirements.rs) | RA plus named equality-key demands | Namespace, ordered in-range nonempty keys, uniqueness; chosen realization must cover required access | Canonical physical implementation |
-| Syn `File` with Access holes | Host allocation, lifetime, ordering and local access code | Selected physical edge's correspondence and representation relation | Expand local Access and native operations |
+| [RA](../crates/cq-ir/src/relational_plan.rs) | Named algebra DAG, preserved CQ source and ordered output | Definition order, headings, output/reachability; equivalence to CQ is a separate edge obligation | Input/result index demands or direct physical lowering |
+| [IndexRequirements](../crates/cq-ir/src/index_requirements.rs) | RA plus named equality-key demands | Namespace, ordered in-range nonempty keys, uniqueness; chosen realization must cover required access | Explicit physical implementation or default composition |
+| Syn `File` or `Expr` with Access holes | Host allocation, lifetime, ordering and local access code; a complete API or embedded computation | Selected physical edge's correspondence and representation relation | Expand local Access and native operations |
 | [Access](../crates/cq-ir/src/rust_access_plan.rs) | Logical occurrence labels plus actual Rust iteration, guard and output expressions | Logical binding/shape checks; native-leaf denotation remains a premise | Pull lowers to Pipeline |
 | [Provider Operation](../crates/cq-ir/src/physical_provider.rs) | Typed native type/expression/statement fragments, including Build, Probe and Candidates | Argument syntax, operation-specific checks and generated Rust typing | Selected storage or local Access expansion |
 | [Pipeline](../crates/cq-ir/src/iterator_pipeline.rs) | Explicit Scan/Join/Filter/Project/Distinct graph | Stream order, predecessors, bindings, terminal shape | Distinct iterator, fused set collector or support-preserving stream endpoint |
@@ -76,12 +76,30 @@ membership test completes the proof. Metadata does not receive a false claim of
 standalone semijoin denotation. Current RHS versions govern resources; original
 immutable block bounds remain conservative for selected subsets.
 
-Checked entry functions live with their transformations: CQ lowering, index
-selection, physical realization, Access lowering and Pipeline realization. The
-crate root exposes those entries through re-exports. Independent edge relations
-are divided under `pass_contracts` by source/target semantics. Shared linear-RA
-facts belong to index analysis and contain no storage or emitted-Rust choices.
-These are module boundaries within the existing edges, not additional IRs or passes.
+Explicit checked entries live with CQ lowering, index selection, physical
+realization, Access lowering and Pipeline realization. Each transformation owns
+its independent correspondence checks. `composition.rs` owns default route
+selection and complete-program composition; an explicit implementation never
+calls that selector. Shared `analysis/{linear,indexes}.rs` provides source facts
+without choosing an implementation or emitting storage. The crate root
+re-exports both explicit entries and the convenience compositions.
+
+The materialized implementation separates its query computation from its host.
+`compile_materialized_query` binds supplied native input expressions once, then
+returns a checked `syn::Expr` with local Access holes and a `HashSet` answer.
+`compile_materialized_callable` supplies an anonymous closure host; the
+existing full program supplies its observed storage API. Both use the same
+lowering. The plain query emits no counters or host types and requires no output
+`Ord`; standalone sorted materialization adds that requirement. Their common
+observation is the completed answer set, not an identical instrumentation trace.
+The callable has Rust-inferred input types and native capture semantics, with no
+generated item binder in the query's lexical scope. No grammar or semantic stage
+was added.
+
+The [YA extraction profile](../teaching/ya/README.md) selects one implementation
+closure. Its two student-owned algorithms are logical reduction scheduling and
+physical semijoin lowering. Extraction and reference/student builds test module
+independence; they do not establish arbitrary macro replacement correctness.
 
 ## Remaining limits
 
@@ -89,6 +107,9 @@ These are module boundaries within the existing edges, not additional IRs or pas
   rows. Canonical edges retain their own domains.
 - Physical choices are explicit paths and overrides, without cost search,
   automatic capability discovery or approximate transfer scheduling.
+- Query-host separation currently applies to the materialized hash realization.
+  Repeated calls rebuild its local sets/indexes; no recursive program, delta
+  scheduler or persistent query index is implied.
 - The direct query API still shares a block-size parameter and statistics surface;
   these are administrative API debt, not relational semantics.
 - Arbitrary Rust effects, resolution/hygiene, lifetimes, custom collectors and

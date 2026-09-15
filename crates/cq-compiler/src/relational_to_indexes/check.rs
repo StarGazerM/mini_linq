@@ -6,62 +6,16 @@ use cq_ir::{index_requirements, relational_plan, symbol_name as symbol};
 
 type IndexSignature = (String, Vec<usize>);
 
-/// Result-index selection preserves the entire algebra and adds exactly the
-/// first-use whole shared keys. This relation does not call the lowering.
-pub(crate) fn result_indexes_are_exact(
-    source: &cq_ir::relational_plan::Module,
-    target: &cq_ir::index_requirements::Module,
-) -> bool {
-    use cq_ir::{relational_plan::Operator, symbol_name};
-    if target.relational_plan != *source
-        || !cq_ir::index_requirements::contract::well_formed(target)
-    {
-        return false;
-    }
-    let Ok(info) = cq_ir::relational_plan::check_in(source.program.inputs(), &source.plan) else {
-        return false;
-    };
-    let mut expected = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for d in &source.plan.definitions {
-        let (l, r) = match &d.operator {
-            Operator::NaturalJoin(j) => (&j.left, &j.right),
-            Operator::Semijoin(j) => (&j.left, &j.right),
-            _ => continue,
-        };
-        let shared = info[&symbol_name(l)]
-            .heading
-            .intersection(&info[&symbol_name(r)].heading)
-            .collect::<std::collections::BTreeSet<_>>();
-        let key = info[&symbol_name(r)]
-            .heading
-            .iter()
-            .enumerate()
-            .filter_map(|(i, x)| shared.contains(x).then_some(i))
-            .collect::<Vec<_>>();
-        let signature = (true, symbol_name(r), key);
-        if !signature.2.is_empty() && seen.insert(signature.clone()) {
-            expected.push(signature);
-        }
-    }
-    target
-        .indexes
-        .iter()
-        .map(crate::relational_to_indexes::signature)
-        .eq(expected)
-}
+pub(crate) mod result;
+#[cfg(test)]
+use result::result_indexes_are_exact;
 
-/// Whether the indexed linear routes can consume this relational plan.
+/// Whether the input-index strategy can consume this relational plan.
 ///
 /// The base-index route accepts a root Rename, earlier right-hand Renames
 /// consumed one-by-one by left-deep NaturalJoins, and a final Project.
-/// Plans needing result indexes instead use the linear-prefix domain, which
-/// includes Unit, Extend and Select. General named binary algebra is broader
-/// than either route.
+/// Result-index selection has its own correspondence and accepts broader RA.
 pub(crate) fn supported_linear_plan(source: &relational_plan::Module) -> bool {
-    if crate::relational_to_indexes::uses_result_index_route(source) {
-        return crate::relational_to_indexes::is_linear_prefix(source);
-    }
     if !relational_plan::contract::well_formed(source) {
         return false;
     }
@@ -142,9 +96,6 @@ pub(crate) fn indexes_are_exact(
     source: &relational_plan::Module,
     target: &index_requirements::Module,
 ) -> bool {
-    if crate::relational_to_indexes::uses_result_index_route(source) {
-        return result_indexes_are_exact(source, target);
-    }
     index_requirements::contract::well_formed(target)
         && target.relational_plan == *source
         && canonical_indexes(source)
@@ -409,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn unit_seed_is_supported_by_linear_lowering() {
+    fn unit_seed_uses_result_indexes_and_fused_linear_lowering() {
         let source: relational_plan::Module = syn::parse2(quote! {
             struct GlobalSeed;
             relation R(c0: i32);
@@ -425,10 +376,10 @@ mod tests {
         .unwrap();
         relational_plan::contract::check(&source).unwrap();
 
-        assert!(supported_linear_plan(&source));
+        assert!(!supported_linear_plan(&source));
         assert!(canonical_indexes(&source).is_none());
-        let requirements = crate::compile_relational_plan(&source).unwrap();
-        assert!(indexes_are_exact(&source, &requirements));
+        let requirements = crate::compile_result_indexes(&source).unwrap();
+        assert!(result_indexes_are_exact(&source, &requirements));
 
         let indexed: index_requirements::Module = syn::parse2(quote! {
             #source
@@ -436,9 +387,7 @@ mod tests {
         })
         .unwrap();
         index_requirements::contract::check(&indexed).unwrap();
-        assert!(crate::pass_contracts::physical::indexed_input_is_supported(
-            &indexed
-        ));
+        assert!(crate::physical::check::lazy::supported(&indexed));
         crate::compile_index_requirements(&indexed).unwrap();
     }
 }

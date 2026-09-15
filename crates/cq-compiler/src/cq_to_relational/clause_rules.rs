@@ -2,9 +2,9 @@
 //! Each application checks its premises before changing the state. Argument
 //! judgments A-* compose C-MATCH. See doc/RUST-EXPRESSIONS.md for the equations.
 use super::{
-    Heading, JoinPlanReport, PlanningOptions, Rule,
+    Heading, JoinPlanReport, JoinPolicy, PlanningOptions, Rule,
     dependencies::{ClauseDependencies, ClauseFacts},
-    error, fresh, reserved, strategy,
+    error, fresh, reserved,
 };
 use cq_ir::{cq, relational_plan as ra, symbol_name};
 use proc_macro2::{Ident, TokenStream};
@@ -351,7 +351,7 @@ pub(crate) fn plan(
         derivation.push(rule);
     }
     while !state.pending.is_empty() {
-        let clause = strategy::choose_clause(&state, options.strategy)?;
+        let clause = choose_clause(&state, options.strategy)?;
         let rule = match &source.program.query.body[clause] {
             cq::BodyItem::Positive { .. } => Rule::Match { clause },
             cq::BodyItem::Filter(_) => Rule::Guard { clause },
@@ -406,6 +406,33 @@ fn check_arity(target: &ra::Module, options: PlanningOptions) -> syn::Result<usi
         return Err(error("Rust clause schedule exceeds max_arity"));
     }
     Ok(peak)
+}
+
+/// Choose among C-READY clauses. Written order uses the first legal clause;
+/// other policies prefer a ready guard/binding, then connected atoms, then width.
+pub(super) fn choose_clause(state: &ClauseState<'_>, policy: JoinPolicy) -> syn::Result<usize> {
+    state
+        .ready_clauses()
+        .map(|(clause, facts)| {
+            let rank = if policy == JoinPolicy::Written {
+                (false, false, 0, clause)
+            } else if let Some(arity) = facts.atom_arity {
+                let shared = facts.provided.intersection(state.heading()).count()
+                    + facts.literal_arguments.len();
+                let width = if matches!(policy, JoinPolicy::GreedyWidth | JoinPolicy::Auto) {
+                    state.heading().len() + arity - shared
+                } else {
+                    0
+                };
+                (true, shared == 0, width, clause)
+            } else {
+                (false, false, 0, clause)
+            };
+            (rank, clause)
+        })
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, clause)| clause)
+        .ok_or_else(|| error("no pending clause satisfies C-READY"))
 }
 
 #[cfg(test)]
@@ -487,6 +514,7 @@ mod tests {
         reject_unchanged(&mut state, Rule::Finish);
         reject_unchanged(&mut state, Rule::Match { clause: 0 });
         let target = state.into_module().unwrap();
-        crate::pass_contracts::ordered::check_scheduled(&source, &target, &[0, 1, 3, 2]).unwrap();
+        crate::cq_to_relational::check::ordered::check_scheduled(&source, &target, &[0, 1, 3, 2])
+            .unwrap();
     }
 }

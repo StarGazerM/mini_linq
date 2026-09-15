@@ -6,8 +6,11 @@ use std::collections::BTreeSet;
 type IndexSignature = (String, Vec<usize>);
 
 /// Preserve a relational plan and derive its canonical right-Rename keys.
-pub(super) fn compile(source: &relational_plan::Module) -> syn::Result<index_requirements::Module> {
-    let logical = super::linear::input_accesses(source)?;
+pub fn compile_input_indexes(
+    source: &relational_plan::Module,
+) -> syn::Result<index_requirements::Module> {
+    relational_plan::contract::check(source)?;
+    let logical = crate::analysis::linear::input_accesses(source)?;
     let mut seen = BTreeSet::<IndexSignature>::new();
     let requirements = logical
         .accesses
@@ -27,10 +30,17 @@ pub(super) fn compile(source: &relational_plan::Module) -> syn::Result<index_req
         })
         .collect::<Vec<_>>();
 
-    syn::parse2(quote! {
+    let target = syn::parse2(quote! {
         #source
         indexes { #(#requirements;)* }
-    })
+    })?;
+    if !super::check::indexes_are_exact(source, &target) {
+        return Err(syn::Error::new_spanned(
+            source,
+            "input-index pass violated its source-target contract",
+        ));
+    }
+    Ok(target)
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ pub(crate) fn relational_plan_is_exact(
     target: &relational_plan::Module,
 ) -> bool {
     if !source.program.query.is_basic() {
-        return super::ordered::check(source, target).is_ok();
+        return false;
     }
     if !relational_plan::contract::well_formed(target) || target.program != source.program {
         return false;

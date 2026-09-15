@@ -2,9 +2,11 @@
 \label{sec:extensibility}
 Replacements satisfy the source judgment, domain, target and preservation
 contracts of Theorem~\ref{thm:composition}. Checked entries live with their
-transformations; the crate root re-exports them. Independent \path{pass_contracts}
-modules follow the same division. Module-bound continuations select logical and
-physical paths. Shared linear-RA facts describe operands and keys without storage code.
+transformations; the crate root re-exports them. Independent checkers live with
+their language edges; their implementations never call the corresponding emitter.
+\path{composition.rs} owns default route selection. Module-bound continuations
+select logical and physical entries explicitly. Shared \path{analysis} modules
+describe linear operands and equality keys without storage code or route choice.
 
 \paragraph{Representations and algorithms.}
 Ascent BYODS formalizes custom representations through DLDS and
@@ -42,4 +44,15 @@ typing and context contracts without reconstructing CQ
 (Section~\ref{sec:constraint-planning}). The physical supplement gives rules and
 algorithms for direct RA-to-Access lowering, with independent key, candidate-scan
 and witness operations. Row providers own storage access; lexical macros select
-local refinements. Runtime representation choice remains ordinary Rust.
+local refinements. Generated operations use ordinary Rust data types and traits.
+
+\paragraph{Extractable teaching implementations.}
+The YA release profile selects graph planning, named-result indexes and exact
+materialized access into a standalone workspace. It separates the two-sweep
+scheduler from semijoin-to-Access lowering; independent administrative and target
+checks remain supplied. Its verification removes each algorithm separately,
+checks the resulting failure, then restores reference implementations and checks
+the selected composition. The release has no dependency on omitted block, lazy
+or direct implementations. This tests an actual dependency boundary; it does not
+establish arbitrary provider laws. Triejoin and recursive program semantics
+remain separate design obligations.

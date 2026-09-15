@@ -505,8 +505,8 @@ must update each affected language contract and its corresponding lowering.
 |---|---|---|
 | Supplied CQ syntax | `crates/cq-ir/src/cq.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
 | CQ validity | `crates/cq-ir/src/cq.rs` | Implement the left-to-right safety rules |
-| Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-compiler/src/cq_to_relational/canonical.rs`, and `cq_to_relational/clause_rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence under `pass_contracts` |
-| Index selection | `crates/cq-compiler/src/relational_to_indexes.rs`, `relational_to_indexes/input.rs`, and `pass_contracts/indexes.rs` | Extend key derivation over the complete RelationalPlan and its independent check |
+| Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-compiler/src/cq_to_relational/canonical.rs`, and `cq_to_relational/clause_rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence under `cq_to_relational/check` |
+| Index selection | `crates/cq-compiler/src/relational_to_indexes/input.rs`, `relational_to_indexes/result.rs`, and `relational_to_indexes/check.rs` | Extend key derivation over the complete RelationalPlan and its independent check |
 | Access annotations | `crates/cq-ir/src/rust_access_plan.rs` | Extend occurrence-to-access checking for negation and aggregation |
 | Physical realization | `crates/cq-compiler/src/physical/input_indexed.rs` and `physical/lazy.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
 

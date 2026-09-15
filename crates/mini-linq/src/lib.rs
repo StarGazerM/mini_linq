@@ -40,15 +40,7 @@ pub fn workload_query(input: TokenStream) -> TokenStream {
 
     #[cfg(feature = "compiled-workloads")]
     {
-        let logical = match cq_compiler::compile_cq(&source) {
-            Ok(logical) => logical,
-            Err(error) => return error.into_compile_error().into(),
-        };
-        let requirements = match cq_compiler::compile_relational_plan(&logical) {
-            Ok(requirements) => requirements,
-            Err(error) => return error.into_compile_error().into(),
-        };
-        let program = match cq_compiler::compile_index_requirements(&requirements) {
+        let program = match cq_compiler::compile_program(&source) {
             Ok(program) => program,
             Err(error) => return error.into_compile_error().into(),
         };
@@ -70,6 +62,36 @@ pub fn mini_linq(input: TokenStream) -> TokenStream {
         input,
         Some(syn::parse_quote!(mini_linq::relational_plan)),
         cq_compiler::compile_cq,
+    )
+}
+
+/// Canonical CQ-to-RA rules for variable-only conjunctive queries.
+#[proc_macro]
+pub fn canonical_query(input: TokenStream) -> TokenStream {
+    stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::relational_plan)),
+        cq_compiler::compile_cq_canonical,
+    )
+}
+
+/// Source-order clause-prefix CQ lowering, selected independently of source shape.
+#[proc_macro]
+pub fn prefix_query(input: TokenStream) -> TokenStream {
+    stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::relational_plan)),
+        cq_compiler::compile_cq_prefix,
+    )
+}
+
+/// Graph planning, including YA reduction when the query is acyclic.
+#[proc_macro]
+pub fn graph_query(input: TokenStream) -> TokenStream {
+    stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::relational_plan)),
+        cq_compiler::compile_cq_graph,
     )
 }
 
@@ -116,6 +138,53 @@ pub fn materialized(input: TokenStream) -> TokenStream {
             cq_compiler::compile_materialized_with(&input.source, &input.access)
         },
     )
+}
+
+/// Lower indexed RA to an anonymous Rust closure returning an exact set.
+/// Call it with one iterator per input declaration, in order. Each closure value
+/// has Rust-inferred input types and ordinary capture semantics; no generated
+/// item name enters the query expressions' scope.
+#[proc_macro]
+pub fn materialized_query(input: TokenStream) -> TokenStream {
+    stage(
+        input,
+        None,
+        |input: &AccessInput<cq_ir::index_requirements::Module>| {
+            cq_compiler::compile_materialized_callable(&input.source, &input.access)
+        },
+    )
+}
+
+/// Select base-input indexes for the admitted linear RA domain.
+#[proc_macro]
+pub fn input_indexes(input: TokenStream) -> TokenStream {
+    stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::index_requirements)),
+        cq_compiler::compile_input_indexes,
+    )
+}
+
+/// Select indexes on named RA results without selecting a physical implementation.
+#[proc_macro]
+pub fn result_indexes(input: TokenStream) -> TokenStream {
+    stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::index_requirements)),
+        cq_compiler::compile_result_indexes,
+    )
+}
+
+/// Explicit base-input indexed physical implementation.
+#[proc_macro]
+pub fn input_indexed(input: TokenStream) -> TokenStream {
+    stage(input, None, cq_compiler::compile_input_indexed)
+}
+
+/// Explicit lazy physical implementation for a linear relational prefix.
+#[proc_macro]
+pub fn lazy_indexed(input: TokenStream) -> TokenStream {
+    stage(input, None, cq_compiler::compile_lazy_indexed)
 }
 
 /// Parse RelationalPlan syntax and add its exact base-relation index overlay.

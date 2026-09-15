@@ -181,7 +181,7 @@ mod tests {
     use quote::quote;
 
     use super::*;
-    use crate::pass_contracts::pipeline::iterator_pipeline_rust_is_exact;
+    use crate::pipeline::check::iterator_pipeline_rust_is_exact;
 
     #[test]
     fn iterator_pipeline_relations_reject_leaf_order_and_rust_mutations() {

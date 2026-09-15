@@ -1,7 +1,7 @@
 //! Owning input sets, shared base-column indexes, and a lazy query cursor.
 //! This realization preserves final-owner transfer and full-key set reuse.
 
-use crate::relational_to_indexes::linear::{AccessKind, InputAccesses, input_accesses};
+use crate::analysis::linear::{AccessKind, InputAccesses, input_accesses};
 use cq_ir::{cq, index_requirements};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
@@ -30,7 +30,7 @@ impl RelationSchema {
 type Schema = BTreeMap<String, RelationSchema>;
 
 /// Lower IndexRequirements to ordinary staged Rust with one local `pull!`.
-pub(super) fn compile(source: &index_requirements::Module) -> syn::Result<syn::File> {
+fn compile(source: &index_requirements::Module) -> syn::Result<syn::File> {
     if source
         .indexes
         .iter()
@@ -568,4 +568,12 @@ fn missing_index_error(atom: &cq::Atom, columns: &[usize]) -> syn::Error {
 
 fn local_ident(prefix: &str, number: usize) -> syn::Ident {
     format_ident!("{prefix}{number}", span = Span::mixed_site())
+}
+
+/// Compile base-column indexes using owning sets and a lazy Access region.
+pub fn compile_input_indexed(source: &index_requirements::Module) -> syn::Result<syn::File> {
+    index_requirements::contract::check(source)?;
+    let target = compile(source)?;
+    super::check::input_indexed(source, &target)?;
+    Ok(target)
 }
