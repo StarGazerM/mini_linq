@@ -40,7 +40,7 @@ WF-IP-Distinct	implementation	crates/cq-ir/src/iterator_pipeline.rs	fn check_pla
 WF-IP-Return	implementation	crates/cq-ir/src/iterator_pipeline.rs	fn check_plan	Correspondence location; proof obligation C-Conformance remains.
 IX-Result	implementation	crates/cq-compiler/src/relational_to_indexes.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
 IX-Other	implementation	crates/cq-compiler/src/relational_to_indexes.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
-IX-Base	implementation	crates/cq-compiler/src/staff_r1.rs	fn compile_relational_plan	Correspondence location; proof obligation C-Conformance remains.
+IX-Base	implementation	crates/cq-compiler/src/relational_to_indexes/input.rs	pub(super) fn compile	Correspondence location; proof obligation C-Conformance remains.
 IX-Module	implementation	crates/cq-compiler/src/relational_to_indexes.rs	fn compile	Correspondence location; proof obligation C-Conformance remains.
 ST-Key	implementation	crates/cq-compiler/src/physical/materialized.rs	fn build_index	Correspondence location; proof obligation C-Conformance remains.
 ST-Bucket	implementation	crates/cq-compiler/src/physical/materialized.rs	fn build_index	Correspondence location; proof obligation C-Conformance remains.
@@ -93,9 +93,9 @@ Y-Init	implementation	crates/cq-compiler/src/cq_to_relational/rules.rs	fn begin(
 Y-Up	implementation	crates/cq-compiler/src/cq_to_relational/rules.rs	fn up(	Correspondence location; proof obligation C-Conformance remains.
 Y-Down	implementation	crates/cq-compiler/src/cq_to_relational/rules.rs	fn down(	Correspondence location; proof obligation C-Conformance remains.
 Y-Freeze	implementation	crates/cq-compiler/src/cq_to_relational/rules.rs	fn freeze(	Correspondence location; proof obligation C-Conformance remains.
-B-Root	implementation	crates/cq-compiler/src/staff_r1.rs	pub fn compile_cq	Correspondence location; proof obligation C-Conformance remains.
-B-Join	implementation	crates/cq-compiler/src/staff_r1.rs	pub fn compile_cq	Correspondence location; proof obligation C-Conformance remains.
-B-Output	implementation	crates/cq-compiler/src/staff_r1.rs	pub fn compile_cq	Correspondence location; proof obligation C-Conformance remains.
+B-Root	implementation	crates/cq-compiler/src/cq_to_relational/canonical.rs	pub fn compile_cq	Correspondence location; proof obligation C-Conformance remains.
+B-Join	implementation	crates/cq-compiler/src/cq_to_relational/canonical.rs	pub fn compile_cq	Correspondence location; proof obligation C-Conformance remains.
+B-Output	implementation	crates/cq-compiler/src/cq_to_relational/canonical.rs	pub fn compile_cq	Correspondence location; proof obligation C-Conformance remains.
 C-Ready	implementation	crates/cq-compiler/src/cq_to_relational/clause_rules.rs	fn require_ready(	Correspondence location; proof obligation C-Conformance remains.
 C-Constant	implementation	crates/cq-compiler/src/cq_to_relational/clause_rules.rs	fn normalize_constant(	Correspondence location; proof obligation C-Conformance remains.
 C-Guard	implementation	crates/cq-compiler/src/cq_to_relational/clause_rules.rs	fn guard_clause(	Correspondence location; proof obligation C-Conformance remains.

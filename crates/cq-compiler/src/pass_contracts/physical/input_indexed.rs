@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn check(source: &ir::Module, target: &syn::File) -> syn::Result<()> {
     ir::contract::check(source)?;
-    let accepted = super::super::basic_left_deep_plan(&source.relational_plan)
+    let accepted = crate::pass_contracts::indexes::supported_linear_plan(&source.relational_plan)
         && source
             .indexes
             .iter()

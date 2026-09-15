@@ -11,7 +11,7 @@ the only source of truth for that query's syntax and semantics. Every leaf
 directly invokes `::mini_linq::workload_query!` exactly once. That procedural
 macro always emits the typed CQ factory used by the catalog. The optional
 `compiled-queries` feature forwards `mini-linq/compiled-workloads`, making the
-same invocation additionally run all three completed basic passes and emit their
+same invocation additionally run the three canonical compilation edges and emit their
 generated `Program`. There is no `macro_rules!` transport wrapper, nested
 `mini_linq!` invocation, or `include_str!` copy. The catalog retains stable
 ordering and teaching metadata; it does not carry a second copy of the query.
@@ -20,14 +20,14 @@ Generation reads the typed CQ factory but never rewrites a query module.
 
 `workload_query!` is not another query language or IR parser. Its input is the
 same `cq::Module` grammar accepted by `mini_linq!`; its workload-only role is to
-emit catalog metadata in the starter-safe build and optionally invoke the three
-basic typed passes after R1.
+emit catalog metadata in the default build and optionally invoke the three
+canonical typed compilation edges.
 
 The workload tools generate deterministic headerless `i32` CSV inputs,
 mechanically translate each authored CQ to visible SQL, evaluate that SQL in
 an independent in-memory DuckDB engine, and compare the canonical result with
 the Rust program produced by the current MiniLinq passes. The corpus oracle is
-confined to the separate root `xtask` workspace. Ordinary homework builds do
+confined to the separate root `xtask` workspace. Ordinary workspace builds do
 not compile DuckDB; the small project-level comparison enables it only through
 the explicit `duckdb-example` feature. The corpus implementation uses DuckDB's
 [Rust client][duckdb-rust] and [Appender API][duckdb-appender] for bulk input.
@@ -259,7 +259,7 @@ Code task **MiniLinq: Explain query** provides prompts for the same command.
 These ignored trace files are syntax/diff snapshots outside the Cargo crate
 graph, not Rust Analyzer type-checked workspace modules.
 
-With `compiled-queries` enabled after R1, Rust Analyzer can also recursively
+With `compiled-queries` enabled, Rust Analyzer can also recursively
 expand the direct `workload_query!` call, but that command shows final Rust
 rather than stopping at compiler boundaries. `workload_query!` directly calls
 the first three typed passes, so their intermediate results are not nested
@@ -276,9 +276,9 @@ cargo xtask differential all tiny --scenario all
 cargo xtask differential retail_h21_positive medium --scenario no-match
 ```
 
-`generate` and the DuckDB-only `golden` check do not depend on student pass
-implementations. `differential` intentionally does: in the starter checkout it
-stops at the three `todo!()` bodies in `crates/cq-compiler/src/passes.rs`.
+`generate` and the DuckDB-only `golden` check use the query catalog without
+invoking compilation. `differential` compiles through canonical CQ lowering,
+index selection and physical realization before executing the generated Rust.
 `explain`, `list`, and `generate` use the lightweight default tool build and do
 not compile DuckDB. `golden` and `differential` print that they are enabling
 the oracle and transparently re-run Cargo with the optional `oracle` feature;

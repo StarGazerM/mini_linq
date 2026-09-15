@@ -135,22 +135,25 @@ the exact ownership and trait policy.
 This is a conventional demand-driven
 [Volcano](https://people.eecs.berkeley.edu/~prabal/teaching/resources/eecs582/graefe94volcano.pdf)
 route: lazy intermediate streams remain explicit without materializing full intermediate
-relations. The protocol permits native multiway operators, but R1 deliberately uses a left-deep
+relations. The protocol permits native multiway operators, but the canonical route uses a left-deep
 binary decomposition. Rust or LLVM may inline the adapters later; that optimization is not part of
 pull semantics. Storage construction and sorting are blocking, while aggregation and distinctness
 may retain state. Finite in-memory iteration needs no async runtime; `pull` and `push` are sibling
 lowering strategies.
 
-## Student ownership and contracts
+## Compiler ownership and contracts
 
-| Student pass | Exact result |
+| Typed edge | Exact result |
 |---|---|
 | `compile_cq(&cq::Module)` | `syn::Result<relational_plan::Module>` with source plus named algebra |
 | `compile_relational_plan(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` with the preserved plan plus exact keys |
 | `compile_index_requirements(&index_requirements::Module)` | `syn::Result<syn::File>` with the sequential API and exactly one `pull!` expression |
 
-The [student pass bodies](crates/cq-compiler/src/passes.rs) share one file. Staff supplies parsers,
-contracts, macro routing, the two physical lowerings, and structural/runtime tests.
+Each checked entry lives with its transformation: [canonical CQ lowering](crates/cq-compiler/src/cq_to_relational/canonical.rs),
+[index selection](crates/cq-compiler/src/relational_to_indexes.rs), and
+[indexed physical lowering](crates/cq-compiler/src/physical/mod.rs). Input-index
+analysis is separate from storage construction. [Compiler structure](doc/COMPILER-STRUCTURE.md)
+maps the implementations and independent edge checkers.
 
 | Proc-macro entry | Typed function |
 |---|---|

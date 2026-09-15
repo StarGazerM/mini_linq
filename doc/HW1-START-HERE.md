@@ -16,9 +16,11 @@ git switch -c submission/hw1
 Do not start from `main` after a later homework has been announced. The
 [branch policy](../BRANCHES.md) keeps every assignment's starter stable.
 
-Edit only `compile_cq` in `crates/cq-compiler/src/passes.rs`. Staff supplies
-the parsers, both local contracts, the exact edge predicate, fixtures, and the
-physical pull stages. The other two TODOs belong to later homework.
+The assigned edge is `compile_cq`, implemented in this checkout at
+`crates/cq-compiler/src/cq_to_relational/canonical.rs`. The parsers, local
+contracts, independent edge checker, fixtures and lower stages are supplied.
+Index selection and physical construction belong to later assignments.
+Use the starter branch's corresponding source file when working on that release.
 
 ## Read these two artifacts
 
@@ -72,8 +74,7 @@ access expressions, or iterator combinators.
 
 ## Inspect the edge
 
-Before implementation, these commands work with every homework body still
-unfinished:
+These commands inspect syntax and fixtures without invoking CQ lowering:
 
 ```text
 cargo run --example cq-inspection
@@ -97,7 +98,7 @@ query**; the Homework 1 starter defaults to `relational-plan`.
 Run the Homework 1 edge test and formatting check:
 
 ```text
-cargo test -p cq-compiler --test pass_contracts cq_to_relational_plan_contract -- --ignored
+cargo test -p cq-compiler --test pass_contracts cq_to_relational_plan_contract
 cargo fmt --all --check
 ```
 

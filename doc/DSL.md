@@ -92,7 +92,7 @@ incompatible types. Calls and arithmetic are outside this movable fragment.
 declared input-column order. Empty shared headings need no index entry.
 The RA Semijoin keeps exactly its left heading and uses all shared attributes.
 Local physical regions permit empty headings and bound comparison clauses
-paired with Rust `if` accesses. The R1 passes reject forms outside their domain.
+paired with Rust `if` accesses. Each chosen edge rejects forms outside its domain.
 
 Complete, executable artifacts demonstrate each boundary:
 [CQ](planned-example/01-cq.rs), [RA](planned-example/02-relational.rs),
@@ -724,8 +724,9 @@ the next item can actually wait on I/O or a channel.
 
 ## Homework boundary
 
-The only required implementation bodies are the three functions in
-`crates/cq-compiler/src/passes.rs`:
+The basic assignments cover three typed edges, implemented in this checkout in
+`cq_to_relational/canonical.rs`, `relational_to_indexes.rs`, and `physical/mod.rs`
+under `crates/cq-compiler/src/`:
 
 1. Basic HW1 constructs the complete canonical RelationalPlan.
 2. Basic HW2 preserves that plan and derives its exact index overlay.
@@ -736,10 +737,10 @@ The pull and IteratorPipeline-to-Rust lowerings are supplied so students can
 inspect their exact inputs and outputs without also having to invent the
 execution protocol. The [negation-and-aggregation option](HW4-OPTIONAL.md)
 cumulatively extends CQ and RelationalPlan on its own pick-one branch. The
-staff-supplied logical `Unit` source seeds a global clause;
-the positive Basic-HW1 pass never emits it, and the baseline Basic-HW2 pass
-rejects it. Students cumulatively edit the production grammar and passes; the
-legacy-named `hw4` feature gates only that branch's tests. It does not change the
+logical `Unit` source seeds a global clause. The positive Basic-HW1 assignment
+does not emit it, and Basic HW2 need not support it; the implemented default
+expression route already does. Students cumulatively edit the production grammar and passes; the
+`hw4` feature gates only that branch's tests. It does not change the
 meaning of a baseline macro or select a backend. Once implemented, the
 extended checkpoint continues to use `mini_linq!`.
 

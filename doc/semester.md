@@ -112,8 +112,9 @@ Students work individually or in pairs in a supplied Rust codebase. The
 current physical-lowering checkpoint contains one `mini-linq` proc-macro crate,
 Syn-backed CQ, RelationalPlan, IndexRequirements, `rust_access_plan::Plan`,
 `iterator_pipeline::Pipeline`, local language checks, and tests. Its basic
-route has exactly three typed homework lowerings in
-`cq-compiler/src/passes.rs`:
+route assigns three typed compilation edges. Their implementations live in
+`cq_to_relational/canonical.rs`, `relational_to_indexes.rs`, and `physical/mod.rs`
+under `crates/cq-compiler/src/`:
 
 1. **Basic HW1:** CQ to a complete named RelationalPlan;
 2. **Basic HW2:** RelationalPlan to IndexRequirements, preserving that entire
@@ -288,12 +289,11 @@ Students implement only the named compiler and execution passes; they do not
 build SQL parsing, transactions, a storage manager, a cost-based optimizer, or
 a parallel runtime.
 
-`cargo test --workspace` checks the supplied infrastructure. Homework pass
-tests begin ignored because the three pass functions are TODOs; the targeted
-commands and final `--include-ignored` check are listed in
-[R1 physical-lowering checkpoint: Start Here](R1-START-HERE.md). The current
-checkout includes an executable triangle baseline; benchmark and DuckDB
-workflows arrive in a later release.
+`cargo test --workspace` checks the implemented compiler and supplied
+infrastructure. Targeted edge tests are listed in the
+[query-lowering handout](R1-START-HERE.md). The current checkout includes an
+executable triangle baseline and the [workload and DuckDB comparison tools](../workloads/README.md).
+Each released starter specifies which implementation edges students complete.
 
 AI-assisted coding, testing, debugging, and writing are allowed. Each release
 must include the root [AI-use disclosure](../AI-USE.md), naming material

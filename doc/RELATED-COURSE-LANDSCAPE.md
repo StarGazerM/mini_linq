@@ -269,7 +269,7 @@ eventually submit.
 |---|---|---|---:|
 | [CMU BusTub](https://github.com/cmu-db/bustub) | `f0d9e3753482d45f2b5919da1873684600b48508` | `tokei src`; C/C++ headers, C++, and build files under `src` | 19,241 |
 | [MIT GoDB](https://github.com/MIT-DB-Class/GoDB-lab-s26) | `22b3f7febd0b2257f3bc8483c6761a079c11ce15` | `tokei . --exclude '*.md' --exclude '*_test.go'`; Go only | 7,781 |
-| MiniLinq current working tree | branch `codex/r1-tutorial`, measured August 8, 2026 | `tokei crates`; Rust only, including public tests | 3,018 |
+| MiniLinq measured snapshot | branch `codex/r1-tutorial`, measured August 8, 2026 | `tokei crates`; Rust only, including public tests | 3,018 |
 | MiniLinq staff source subset | same working tree | `cq-ir/src`, `cq-compiler/src`, and `mini-linq/src` | 1,614 |
 | MiniLinq public tests subset | same working tree | test directories of the three crates | 1,355 |
 
@@ -324,24 +324,20 @@ the following acceptance conditions:
 6. a fresh clone can reproduce the documented commands; and
 7. the reference-solution diff is measured before the assignment is released.
 
-## 8. Current MiniLinq readiness gap
+## 8. MiniLinq checkpoint scope
 
-The current R1 starter is already within the machinery target and exposes only
-three student `todo!()` bodies in
-[`cq-compiler/src/passes.rs`](../crates/cq-compiler/src/passes.rs). However, the
-companion reference repository still targets an obsolete `BinaryPlanningPass`
-architecture and does not compile against the present staged IRs.
-
-Before claiming the student-code budget, the reference implementation must be
-rebuilt for the current
+The implemented canonical compiler follows
 
 ```text
-CQ -> IndexRequirements -> StoragePlan -> AccessPathPlan -> PullControlPlan
+CQ -> RelationalPlan -> IndexRequirements -> Rust[Access] -> Rust[Pipeline] -> Rust
 ```
 
-chain. The exact starter-to-reference diff should then be recorded in the
-checkpoint manifest. Until that measurement exists, “under 1,000 student
-lines” is a design requirement rather than a verified property.
+Each typed edge lives in its semantic module; the [compiler structure guide](COMPILER-STRUCTURE.md)
+records the current ownership. A course checkpoint can assign selected edges
+while supplying the other stages. The exact starter-to-reference diff must be
+measured for that release before claiming a student-code budget. Historical
+repository line counts above do not establish the size of the current compiler
+or an assignment's solution.
 
 ## 9. Bottom line
 

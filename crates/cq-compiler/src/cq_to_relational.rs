@@ -1,4 +1,5 @@
 //! CQ -> RelationalPlan: dependency judgments, checked rules, and scheduling policy.
+pub(crate) mod canonical;
 pub(crate) mod clause_rules;
 pub(crate) mod dependencies;
 mod hypergraph;
@@ -203,4 +204,55 @@ pub(crate) fn fresh(names: &mut BTreeSet<String>, clause: usize, arg: usize) -> 
         name.push('_');
     }
     quote::format_ident!("{name}")
+}
+
+/// Alternative CQ -> RelationalPlan edge, with automatic graph planning.
+pub fn compile_cq_planned(source: &cq::Module) -> syn::Result<ra::Module> {
+    compile_cq_with_policy(source, crate::JoinPolicy::Auto)
+}
+
+/// Select a planning policy without changing either language boundary.
+pub fn compile_cq_with_policy(
+    source: &cq::Module,
+    policy: crate::JoinPolicy,
+) -> syn::Result<ra::Module> {
+    explain_cq_plan(
+        source,
+        crate::PlanningOptions {
+            strategy: policy,
+            max_arity: None,
+        },
+    )
+    .map(|(plan, _)| plan)
+}
+
+/// Diagnostic entry: the target IR and its derivation report are separate.
+pub fn explain_cq_plan(
+    source: &cq::Module,
+    options: crate::PlanningOptions,
+) -> syn::Result<(ra::Module, crate::JoinPlanReport)> {
+    cq::contract::check(source)?;
+    let (target, report) = crate::cq_to_relational::plan(source, options)?;
+    check_cq_plan(source, &target, &report)?;
+    Ok((target, report))
+}
+
+/// Explicit source-to-target relation; also used by the planned pass gate.
+pub fn check_cq_plan(
+    source: &cq::Module,
+    target: &ra::Module,
+    report: &crate::JoinPlanReport,
+) -> syn::Result<()> {
+    crate::pass_contracts::planned_join::check(source, target, report)
+}
+
+/// Apply an independently supplied schedule through the same rule semantics.
+pub fn compile_cq_derivation(
+    source: &cq::Module,
+    report: &crate::JoinPlanReport,
+) -> syn::Result<ra::Module> {
+    cq::contract::check(source)?;
+    let target = crate::cq_to_relational::from_derivation(source, report)?;
+    check_cq_plan(source, &target, report)?;
+    Ok(target)
 }

@@ -10,20 +10,16 @@ algebra fragment, the index-requirement relation, and the physical Rust lowering
 Its relationship to push, Rayon, multi-query, and arbitrary-type options is
 recorded in the
 [extension compatibility matrix](OPTIONAL-PROJECT-TRACKS.md#route-graph-and-configuration-rule).
-Comments containing `OPTIONAL HW4` mark every production edit site:
-
-```text
-rg -n "OPTIONAL HW4" crates/*/src
-```
+The [implementation-stage table](#implementation-stages) identifies the language,
+lowering and independent checker that owns each required change.
 
 The existing `cq::BodyItem` used by `cq::Query` already supplies the clause
 syntax; there is no second query parser or second query macro. This is a
 cumulative checkpoint: students extend the contracts and the same three typed
 passes, and completed extended queries continue to enter through
-`mini_linq!`. The legacy-named `hw4` Cargo feature gates only this extension's test targets; it
+`mini_linq!`. The `hw4` Cargo feature gates only this extension's test targets; it
 does not install production syntax, swap a pass implementation, or select a
-backend. Syntax for the original first implementation site is now supplied;
-the remaining numbered sites mark semantic work. The supplied
+backend. The supplied
 [Rust-expression helpers](RUST-EXPRESSION-HELPERS.md) expose lexical free names
 and pattern bindings without implementing CQ scope, planning, or lowering.
 
@@ -285,9 +281,9 @@ operators rather than repeating a direct CQ-body walk:
 - add only nonempty keys, deduplicated by `(relation, columns)` in first-use
   plan order.
 
-The baseline Basic-HW2 pass intentionally rejects any plan containing `Unit`.
-The HW4 extension admits the supplied Unit source and continues the logical
-walk through AntiSemijoin and AggregateApply. For the global example, both
+The narrow Basic-HW2 assignment does not require Unit. The implemented default
+expression route already admits it; HW4 must also continue the logical walk
+through AntiSemijoin and AggregateApply. For the global example, both
 heading intersections are empty, so neither clause creates an index
 requirement. An empty key means “enumerate/test the whole relation”; it is not
 written as an empty `R[]` index.
@@ -500,16 +496,19 @@ baseline pull pass then erases those logical labels while preserving their
 concrete leaves in the existing operator IR. HW4 does not add another
 operator language or special emitter.
 
-## Marked implementation sites
+## Implementation stages
 
-| Marker | File | Required change |
+Paths below name the semantic owners in this checkout. The optional extension
+must update each affected language contract and its corresponding lowering.
+
+| Stage | File | Required change |
 |---|---|---|
-| Supplied syntax (former `STUDENT 1/6`) | `crates/cq-ir/src/cq.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
-| `STUDENT 2/6 (WF)` | `crates/cq-ir/src/cq.rs` | Implement the left-to-right safety rules |
-| `STUDENT 3/6 (LOGICAL)` | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-compiler/src/pass_contracts.rs`, and `passes.rs` | Add `AntiSemijoin`/`AggregateApply`, their inferred-heading rules, and the exact extended-CQ-to-plan lowering; reuse the supplied `Unit` |
-| `STUDENT 4/6 (INDEX)` | `crates/cq-compiler/src/pass_contracts.rs` and `passes.rs` | Extend canonical key derivation over the complete RelationalPlan |
-| `STUDENT 5/6 (ANNOTATION)` | `crates/cq-ir/src/rust_access_plan.rs` | Extend occurrence-to-access checking for negation and aggregation |
-| `STUDENT 6/6 (PHYSICAL)` | `crates/cq-compiler/src/passes.rs` | Emit the complete file with annotated concrete negative and aggregate Rust accesses |
+| Supplied CQ syntax | `crates/cq-ir/src/cq.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
+| CQ validity | `crates/cq-ir/src/cq.rs` | Implement the left-to-right safety rules |
+| Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-compiler/src/cq_to_relational/canonical.rs`, and `cq_to_relational/clause_rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence under `pass_contracts` |
+| Index selection | `crates/cq-compiler/src/relational_to_indexes.rs`, `relational_to_indexes/input.rs`, and `pass_contracts/indexes.rs` | Extend key derivation over the complete RelationalPlan and its independent check |
+| Access annotations | `crates/cq-ir/src/rust_access_plan.rs` | Extend occurrence-to-access checking for negation and aggregation |
+| Physical realization | `crates/cq-compiler/src/physical/input_indexed.rs` and `physical/lazy.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
 
 You may add private helpers next to these sites. Do not add a generic pass
 trait, a dynamic query interpreter, or a second storage/access descriptor IR.

@@ -46,14 +46,11 @@ Physical positions are derived from logical headings and current layouts.
 Resources use generated Rust locals, without new logical projection names.
 Native operations carry their operands only. Storage paths, selected continuations,
 collection families and instrumentation live in frontend options and lexical
-wrappers. No serialized physical Context, operator-recipe query language, or
-empty deferred-index compatibility stage remains in the design.
+wrappers.
 
 The Pipeline grammar deliberately repeats names/binding descriptions to expose
-and check each step. Its compactness can be revisited separately. This refactor
-does not change its syntax or silently weaken the canonical iterator contract.
-The new stream endpoint has the same set support and preserves the pre-Distinct
-sequence. Unique provider traversal therefore stays unique; support equality
+and check each step. The stream endpoint has the same set support and preserves
+the pre-Distinct sequence. Unique provider traversal therefore stays unique; support equality
 alone would permit an arbitrary replacement endpoint to introduce duplicates.
 
 ## Checking boundaries
@@ -79,6 +76,13 @@ membership test completes the proof. Metadata does not receive a false claim of
 standalone semijoin denotation. Current RHS versions govern resources; original
 immutable block bounds remain conservative for selected subsets.
 
+Checked entry functions live with their transformations: CQ lowering, index
+selection, physical realization, Access lowering and Pipeline realization. The
+crate root exposes those entries through re-exports. Independent edge relations
+are divided under `pass_contracts` by source/target semantics. Shared linear-RA
+facts belong to index analysis and contain no storage or emitted-Rust choices.
+These are module boundaries within the existing edges, not additional IRs or passes.
+
 ## Remaining limits
 
 - The direct array implementation supports a declared subset of RA and `i64`
@@ -95,5 +99,4 @@ immutable block bounds remain conservative for selected subsets.
 
 [Access refinement](ACCESS-REFINEMENT.md) is the single physical design record;
 [compiler structure](COMPILER-STRUCTURE.md) assigns implementation ownership;
-[the formal snapshot](formal/snapshot.txt) records consolidated validation. Historical
-migration proposals and duplicate audits have been removed.
+[the formal snapshot](formal/snapshot.txt) records consolidated validation.

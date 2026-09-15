@@ -1,9 +1,10 @@
 \section{Replacing compiler components}
 \label{sec:extensibility}
 Replacements satisfy the source judgment, domain, target and preservation
-contracts of Theorem~\ref{thm:composition}. Typed endpoints and module-bound
-continuations select logical and physical paths. Materialized, lazy and direct
-realizations own their admitted domains; direct RA quotation bypasses planning.
+contracts of Theorem~\ref{thm:composition}. Checked entries live with their
+transformations; the crate root re-exports them. Independent \path{pass_contracts}
+modules follow the same division. Module-bound continuations select logical and
+physical paths. Shared linear-RA facts describe operands and keys without storage code.
 
 \paragraph{Representations and algorithms.}
 Ascent BYODS formalizes custom representations through DLDS and

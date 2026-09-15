@@ -58,8 +58,9 @@ Extended CQ with ! and agg
 The general RelationalPlan already supplies the singleton zero-attribute `Unit`
 source. HW4 uses it when global negation or aggregation appears before any
 positive binding; their empty correlation keys require no index entries. The
-baseline Basic-HW2/3 route still rejects `Unit` until that cumulative extension
-is complete.
+narrow Basic-HW2/3 assignment does not require Unit. The implemented default
+expression route already supports it; global negation and aggregation still
+require their own logical and physical lowering.
 
 The negation and aggregation option is cumulative: students edit the production grammar and the same
 typed passes, completed extended queries continue to use `mini_linq!`, and its

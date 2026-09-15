@@ -8,9 +8,15 @@ operations. [Access refinement](ACCESS-REFINEMENT.md) explains the physical desi
 | --- | --- | --- |
 | `cq-ir` | CQ, named RA, index requirements, Access, Pipeline, provider fragment syntax and local validation | Compilation policies and runtime execution |
 | `mini-linq` frontends | Typed parsing, options, macro entry points and continuation calls | Private query parsers or hidden capability catalogues |
-| `cq-compiler/cq_to_relational` | Scheduling rules, graph/YA analysis and source correspondence | Physical representation selection |
-| `cq-compiler/relational_to_indexes` | Named equality-index demands for the canonical route | Block-filter scheduling |
-| `physical/materialized.rs`, `lazy.rs`, `rust.rs` | Their admitted canonical physical realization | A universal data-structure interface |
+| `cq_to_relational/canonical.rs` | Checked default CQ entry and canonical written-order lowering | Index selection or physical representation |
+| `cq_to_relational.rs` and its other submodules | Checked planning entries, scheduling rules and graph/YA analysis | Physical representation selection |
+| `relational_to_indexes.rs` | Checked default/result-index entries and demands on named RA results | Runtime storage or block-filter scheduling |
+| `relational_to_indexes/input.rs` | Equality-index demands on declared inputs | Rust storage construction |
+| `relational_to_indexes/linear.rs` | Storage-free facts about admitted linear RA and its operands | Hash layouts, builder code or query execution |
+| `physical/mod.rs` | Checked indexed-physical entry and selection of its admitted realization | CQ scheduling or index inference |
+| `physical/input_indexed.rs`, `lazy.rs`, `materialized.rs` | Input-indexed, lazy result-indexed and materialized Rust realization; materialized checked entries | A universal data-structure interface |
+| `physical/rust.rs` | Shared Rust representation helpers | Logical planning |
+| `physical/direct/mod.rs` | Checked configured RA-to-Access entry | Canonical index demands |
 | `physical/direct/layout.rs` | Admitted RA domain, current result layouts and provider inheritance | Native storage internals |
 | `physical/direct/resources.rs` | Versioned key-resource identity, first use and projected Access construction | Candidate scan choice |
 | `physical/direct/lower.rs` | RA operators to Access, exact residuals and materialization sites | Hash/zone implementation details |
@@ -21,10 +27,18 @@ operations. [Access refinement](ACCESS-REFINEMENT.md) explains the physical desi
 | `physical/access/witnesses.rs` | Hash-bucket or deferred nested witness access | Whole-program join planning |
 | `physical/providers` | Native-set and block operation expansion through public traits | New RA operators |
 | `pull.rs`, `pipeline.rs` | Access-to-Pipeline and Pipeline-to-Rust endpoints | Storage policy |
+| `pass_contracts/{canonical,indexes,ordered,planned_join,physical,pull,pipeline}` | Independent correspondence checks for the respective edges | Constructing the lowering's expected output by calling its emitter |
 | `cq-storage` | Immutable payload/metadata, masks, operation traits, summaries and passive counters | Relation APIs, semijoin/join functions, query plans or an interpreter |
 
 Paths in the table are relative to `crates/`; compiler paths without a crate
 prefix are inside `crates/cq-compiler/src/`.
+
+Each transformation owns its checked public entry. The crate root re-exports
+the `compile_*` API, while `pass_contracts` declares independently implemented
+edge checkers. Shared analysis is placed at the semantic boundary that defines
+its facts; index selection therefore does not import a physical backend to
+recognize RA. Course assignments select existing edges without defining the
+compiler's module hierarchy.
 
 Configuration is separate from semantic inputs. Providers are selected per input
 and materialized result; candidate scans and key resources per semijoin; witness
@@ -34,8 +48,7 @@ are diagnosed where their operation domain is known.
 
 The direct physical pass carries Γ in Rust data structures and emits
 `Rust[Access]`. Provider/access macro arguments contain only an operation's actual
-semantic inputs. No serialized physical context or empty index pass mediates that
-edge. A new implementation belongs at the smallest existing boundary that owns
+semantic inputs. An implementation belongs at the smallest existing boundary that owns
 its changed construction, access and lifetime. A new IR requires a meaning that
 these boundaries cannot already express, together with grammar, judgment and
 lowering rules; a desire to expose another macro alone does not establish that need.

@@ -15,7 +15,7 @@ use crate::pass_contracts;
 #[contracts::contract(
     debug_ensures(
         iterator_pipeline::contract::well_formed(source) -> ret.as_ref()
-            .is_ok_and(|target| pass_contracts::iterator_pipeline_rust_is_exact(source, target))
+            .is_ok_and(|target| pass_contracts::pipeline::iterator_pipeline_rust_is_exact(source, target))
     )
 )]
 pub fn compile_iterator_pipeline(source: &iterator_pipeline::Pipeline) -> syn::Result<syn::Expr> {
@@ -35,7 +35,7 @@ pub fn compile_iterator_pipeline(source: &iterator_pipeline::Pipeline) -> syn::R
 #[contracts::contract(
     debug_ensures(
         iterator_pipeline::contract::well_formed(source) -> ret.as_ref()
-            .is_ok_and(|target| pass_contracts::stream_pipeline_rust_is_exact(source, target))
+            .is_ok_and(|target| pass_contracts::pipeline::stream_pipeline_rust_is_exact(source, target))
     )
 )]
 pub fn compile_stream_pipeline(source: &iterator_pipeline::Pipeline) -> syn::Result<syn::Expr> {
@@ -58,7 +58,7 @@ pub fn compile_stream_pipeline(source: &iterator_pipeline::Pipeline) -> syn::Res
 #[contracts::contract(
     debug_ensures(
         iterator_pipeline::contract::well_formed(source) -> ret.as_ref()
-            .is_ok_and(|target| pass_contracts::collect_pipeline_rust_is_exact(source, target))
+            .is_ok_and(|target| pass_contracts::pipeline::collect_pipeline_rust_is_exact(source, target))
     )
 )]
 pub fn compile_collect_pipeline(source: &iterator_pipeline::Pipeline) -> syn::Result<syn::Expr> {
@@ -192,10 +192,10 @@ mod tests {
             return iter3;
         };
         let actual = compile_stream_pipeline(&source).unwrap();
-        assert!(pass_contracts::stream_pipeline_rust_is_exact(
+        assert!(pass_contracts::pipeline::stream_pipeline_rust_is_exact(
             &source, &actual
         ));
-        assert!(!pass_contracts::iterator_pipeline_rust_is_exact(
+        assert!(!pass_contracts::pipeline::iterator_pipeline_rust_is_exact(
             &source, &actual
         ));
         let text = quote!(#actual).to_string();
@@ -203,7 +203,7 @@ mod tests {
         assert!(!text.contains("iter3"));
         assert!(text.contains("keep (x)"));
         assert!(text.contains("x % 2"));
-        assert!(!pass_contracts::stream_pipeline_rust_is_exact(
+        assert!(!pass_contracts::pipeline::stream_pipeline_rust_is_exact(
             &source,
             &compile_iterator_pipeline(&source).unwrap()
         ));
@@ -213,7 +213,7 @@ mod tests {
             unreachable!();
         };
         scan.source = syn::parse_quote!(other_rows);
-        assert!(!pass_contracts::stream_pipeline_rust_is_exact(
+        assert!(!pass_contracts::pipeline::stream_pipeline_rust_is_exact(
             &wrong_source,
             &actual
         ));
@@ -221,7 +221,7 @@ mod tests {
         let mut wrong_return = source.clone();
         wrong_return.return_stream.stream = syn::parse_quote!(iter2);
         assert!(compile_stream_pipeline(&wrong_return).is_err());
-        assert!(!pass_contracts::stream_pipeline_rust_is_exact(
+        assert!(!pass_contracts::pipeline::stream_pipeline_rust_is_exact(
             &wrong_return,
             &actual
         ));
@@ -261,10 +261,10 @@ mod tests {
             iter3
         }};
         assert_eq!(actual, expected);
-        assert!(pass_contracts::collect_pipeline_rust_is_exact(
+        assert!(pass_contracts::pipeline::collect_pipeline_rust_is_exact(
             &source, &actual
         ));
-        assert!(!pass_contracts::collect_pipeline_rust_is_exact(
+        assert!(!pass_contracts::pipeline::collect_pipeline_rust_is_exact(
             &source,
             &compile_iterator_pipeline(&source).unwrap()
         ));
@@ -278,7 +278,7 @@ mod tests {
                 unreachable!();
             };
             block.block.stmts[3] = changed;
-            assert!(!pass_contracts::collect_pipeline_rust_is_exact(
+            assert!(!pass_contracts::pipeline::collect_pipeline_rust_is_exact(
                 &source, &target
             ));
         }

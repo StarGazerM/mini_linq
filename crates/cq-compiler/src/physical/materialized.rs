@@ -437,3 +437,23 @@ fn rust_expression(expr: &syn::Expr, input: &ra::RelationInfo, variables: &Names
     });
     quote!({ #aliases #expr })
 }
+
+/// Indexed set DAG -> staged Rust, with local set-valued Access holes.
+pub fn compile_materialized(source: &ir::Module) -> syn::Result<syn::File> {
+    compile_materialized_with(source, &syn::parse_quote!(::mini_linq::collect_access))
+}
+
+/// The same checked hash realization with a caller-selected Access continuation.
+/// The continuation must return the exact `HashSet` denoted by each Access plan;
+/// it owns distinctness and collection. Its path changes neither concrete
+/// storage checks nor local relational access checks.
+pub fn compile_materialized_with(
+    source: &ir::Module,
+    access: &syn::Path,
+) -> syn::Result<syn::File> {
+    ir::contract::check(source)?;
+    crate::relational_to_indexes::check_coverage(source)?;
+    let target = compile(source, access)?;
+    crate::pass_contracts::physical::materialized_with(source, &target, access)?;
+    Ok(target)
+}

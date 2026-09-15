@@ -106,7 +106,7 @@ Every reported heading is compared with the independent interpreter's actual
 intermediate heading. This makes structural and policy validation mandatory
 alongside reference denotation checks; equivalent answers alone cannot pass.
 The generated-data test checks the same reference contracts before evaluating
-its inputs. R1 remains explicitly a semantic baseline, not an eager planner.
+its inputs. The canonical CQ route is the written-order baseline.
 
 The production suite enforces:
 
@@ -223,7 +223,7 @@ that violates running intersection. Production graph and rule-kernel tests run
 under `--lib`.
 
 The contract checks use ordinary `Result` validation in debug and release.
-The basic R1 chain has correct answers but retains a dead variable and reaches
+The canonical chain has correct answers but retains a dead variable and reaches
 arity four; the authored pruned plan has peak arity three. Its eager-pruning
 rejection distinguishes policy compliance from result correctness. Safety,
 eager pruning, and arity limits have separate rejection cases, so relaxing one
@@ -274,7 +274,7 @@ cargo fmt --all --check
 git diff --check
 ```
 
-The optional HW4 tests are not enabled by these commands. R1 regressions check
+The optional HW4 tests are not enabled by these commands. Canonical-route regressions check
 the basic canonical plan, index and lazy-pull contracts independently of the
 planned route.
 

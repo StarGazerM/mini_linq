@@ -4,20 +4,21 @@ This branch is a self-contained, editor-facing checkout of the completed basic
 query-lowering checkpoint. It is private staff material and must not be pushed
 to the student repository or distributed before the release policy permits it.
 
-The three public homework functions remain in
-`crates/cq-compiler/src/passes.rs`. On this branch they delegate to the complete
-implementation in `crates/cq-compiler/src/staff_r1.rs`:
+The public typed functions are exported from `cq-compiler`; each implementation
+belongs to its source-to-target stage:
 
 ```text
-compile_cq                  CQ -> RelationalPlan
-compile_relational_plan     RelationalPlan -> IndexRequirements
-compile_index_requirements  IndexRequirements -> staged syn::File
+compile_cq                  cq_to_relational/canonical.rs
+compile_relational_plan     relational_to_indexes.rs
+compile_index_requirements  physical/mod.rs
 ```
 
-The supplied route then lowers the embedded RustAccessPlan to a named
-IteratorPipeline and that pipeline to an ordinary Rust `syn::Expr`.
+The canonical path is CQ → RelationalPlan → IndexRequirements → staged Rust.
+Input-index selection lives in `relational_to_indexes/input.rs`; its storage
+realization lives in `physical/input_indexed.rs`. The route then lowers the
+embedded RustAccessPlan to a named IteratorPipeline and that pipeline to an ordinary Rust `syn::Expr`.
 
-The bare-variable homework route begins with Rename and does not emit `Unit`.
+The canonical bare-variable route begins with Rename and does not emit `Unit`.
 The implemented Rust-expression route can seed a prefix with the empty-heading
 `Unit` relation; the materialized and direct physical routes also support it.
 These extensions do not implement Optional HW4. See the
@@ -71,8 +72,8 @@ proc-macro artifacts are replaced.
 The branch-local `.vscode/settings.json` enables
 `cq-workloads/compiled-queries`. That feature forwards
 `mini-linq/compiled-workloads`, so every direct `workload_query!` invocation
-still emits its typed-CQ catalog factory and directly calls all three completed
-student passes to emit its generated `Program` and `ProgramStorage`. It does
+emits its typed-CQ catalog factory and directly calls the three canonical
+compilation edges to emit its generated `Program` and `ProgramStorage`. It does
 not invoke a nested `mini_linq!` wrapper.
 
 Consequently, Rust Analyzer's recursive command is **not** a layer stepper: it
@@ -132,11 +133,6 @@ Run all generated programs against the independent DuckDB oracle:
 ```text
 cargo xtask differential all tiny --scenario all
 ```
-
-The separate `join-processing-datalog-reference` repository remains the
-release verifier. Its answer branch archives a pinned student checkpoint,
-overlays the same answer implementation, and proves compatibility without
-depending on this working tree.
 
 Optional Homework 4 is intentionally not implied by the completed basic
 answers. Its `hw4` feature gates only its optional test targets. On an HW4

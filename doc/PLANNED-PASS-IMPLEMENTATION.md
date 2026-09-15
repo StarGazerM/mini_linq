@@ -30,10 +30,10 @@ this route. `physical::lazy` implements the indexed lazy alternative;
 holes, with native operations in `physical::{access,providers}`. That direct
 edge has no index overlay; its per-relation representation and candidate-scan
 choices are described in [Access refinement](ACCESS-REFINEMENT.md).
-`pull.rs` and `pipeline.rs` own Access and Pipeline lowering. `passes.rs`
-exposes checked typed entries and the homework wrappers. Local language
-contracts remain in `cq-ir`; cross-language relations remain under
-`pass_contracts`. [Compiler structure](COMPILER-STRUCTURE.md) records decision
+`pull.rs` and `pipeline.rs` own Access and Pipeline lowering. Each stage module
+owns its checked typed entries; the crate root re-exports them. Local language
+contracts remain in `cq-ir`; independent source-to-target relations live in
+`pass_contracts::{canonical,indexes,ordered,planned_join,physical,pull,pipeline}`. [Compiler structure](COMPILER-STRUCTURE.md) records decision
 ownership.
 
 Within CQ-to-RA, `dependencies.rs` derives D-* clause judgments and

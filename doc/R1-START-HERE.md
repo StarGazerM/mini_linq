@@ -21,8 +21,14 @@ provides the broader routes listed in the [IR boundary review](IR-STAGE-REVIEW.m
 
 ## What students write
 
-The three executable homework bodies are in
-`crates/cq-compiler/src/passes.rs`.
+The assignments follow three semantic compilation edges. Their implementations
+in this checkout live in separate stage modules:
+
+- CQ lowering: `crates/cq-compiler/src/cq_to_relational/canonical.rs`;
+- index selection: `crates/cq-compiler/src/relational_to_indexes.rs`, with input
+  requirements in `relational_to_indexes/input.rs`;
+- indexed physical lowering: `crates/cq-compiler/src/physical/mod.rs`, with
+  input-index storage construction in `physical/input_indexed.rs`.
 
 | Homework | Typed function | Successful result |
 |---|---|---|
@@ -338,7 +344,7 @@ the context of its call site.
 
 Usually the artifacts plus the focused tests below are sufficient. If you
 want to step through the compiler implementation itself, place a breakpoint in
-`crates/cq-compiler/src/passes.rs` and use the Rust Analyzer **Debug** CodeLens
+the module for that edge listed above and use the Rust Analyzer **Debug** CodeLens
 on a focused test with the optional CodeLLDB extension installed. CodeLLDB is
 not required for the homework; it is simply a conventional debugger for the
 pass code, while `cargo xtask explain` remains the source-level IR stepper.
@@ -368,7 +374,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo test --manifest-path xtask/Cargo.toml --locked
 ```
 
-After all three TODOs work, enable direct compilation of the authored workload
+Enable direct compilation of the authored workload
 queries and compare them with DuckDB:
 
 ```text

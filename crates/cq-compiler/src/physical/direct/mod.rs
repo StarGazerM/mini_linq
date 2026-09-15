@@ -153,3 +153,12 @@ pub(crate) fn compile(source: &ra::Module, options: &PhysicalOptions) -> syn::Re
     }
     api::emit(source, &layout, &statements, options, &wiring)
 }
+
+/// Configured RA -> Rust[Access]. Layouts and resource reuse remain local to
+/// this compiler edge; there is no empty index overlay or contextual language.
+pub fn compile_physical(source: &ra::Module, options: &PhysicalOptions) -> syn::Result<syn::File> {
+    ra::contract::check(source)?;
+    let target = compile(source, options)?;
+    check_physical(source, &target, options)?;
+    Ok(target)
+}

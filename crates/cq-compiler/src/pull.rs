@@ -14,7 +14,7 @@ use crate::pass_contracts;
 #[contracts::contract(
     debug_ensures(
         rust_access_plan::contract::well_formed(source) -> ret.as_ref()
-            .is_ok_and(|target| pass_contracts::iterator_pipeline_is_exact(source, target))
+            .is_ok_and(|target| pass_contracts::pull::iterator_pipeline_is_exact(source, target))
     )
 )]
 pub fn compile_pull(source: &rust_access_plan::Plan) -> syn::Result<iterator_pipeline::Pipeline> {

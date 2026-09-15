@@ -215,7 +215,8 @@ kept attributes, deduplication before or after head mapping yields the same
 set. Stateful interleavings need not agree (Counterexample~\ref{cx:effects}).
 \end{proof}
 
-R1 uses the same access cases over schema-ordered base rows and base indexes.
+Input-indexed physical lowering uses the same access cases over schema-ordered
+base rows and base indexes.
 Inputs are normalized to HashSets. Empty-key scans reuse a full-key set or a
 first-use-numbered row vector; proper indexes store complementary vectors.
 One final consumer owns each normalized input: a full index, else a needed

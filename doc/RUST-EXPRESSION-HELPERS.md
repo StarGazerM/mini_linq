@@ -40,11 +40,10 @@ answer(format!("{x}")) :-
         in S(key + offset, amount);
 ```
 
-The public homework starter's HW1 contract accepts positive atoms with distinct
-bare variables, and its three assigned passes remain TODO. This private answer
-branch also implements Rust argument expressions, `if`, and `let` through its
-existing passes. Negation and aggregation parse here but return explicit errors
-from the unfinished semantic contracts. The opt-in `hw4` tests specify that
+The basic CQ fragment accepts positive atoms with distinct bare variables.
+The canonical CQ stage also implements Rust argument expressions, `if`, and
+`let` through dependency-constrained prefix lowering. Negation and aggregation
+parse here but receive explicit unsupported-domain errors during lowering. The opt-in `hw4` tests specify that
 later extension; supplying syntax does not make those semantic tests pass.
 
 ## Collecting free variables

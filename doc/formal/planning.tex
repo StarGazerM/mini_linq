@@ -418,7 +418,7 @@ accepts other legal schedules without enforcing canonical policy choice.
 
 \subsection{Canonical and dependency-constrained prefixes}
 \label{sec:prefix-planning}
-Canonical R1 uses written occurrence order, full joins, and final pruning only.
+Canonical CQ lowering uses written occurrence order, full joins, and final pruning only.
 For $a_i=\delta_{m_i}(R_i)$, starting at $(\emptyseq,\bot;0)$:
 \begin{mathpar}
 
@@ -432,7 +432,7 @@ For $a_i=\delta_{m_i}(R_i)$, starting at $(\emptyseq,\bot;0)$:
  {(D,p;i)\Rightarrow_B(D',\mathsf{output}\ r\ \mathsf{as}\ h(\bar h))}
 \end{mathpar}
 Induction gives its complete join followed by head projection. Extended CQ
-uses the following C-* rules, with Written policy for R1.
+uses the following C-* rules, with Written policy for canonical lowering.
 
 For body $c_0,\ldots,c_{m-1}$, D-facts define barrier edges
 $E_{\rm barrier}=\{(i,j)\mid i<j\land(\neg m_i\lor\neg m_j)\}$.

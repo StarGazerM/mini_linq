@@ -1,4 +1,4 @@
-//! Source-target relations for the result-index physical routes.
+//! Indexed physical input domain and source-target relations.
 //!
 //! These check the concrete storage layouts and local Access regions in the
 //! existing staged Rust file. They do not prove the surrounding API wrappers,
@@ -11,12 +11,24 @@ use quote::{format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{Expr, Ident, Stmt};
 
-mod basic;
+mod input_indexed;
 #[cfg(test)]
 mod tests;
 
-pub(crate) fn basic(source: &ir::Module, target: &syn::File) -> syn::Result<()> {
-    basic::check(source, target)
+/// Whether the indexed linear physical pass has a supported domain and keys.
+pub(crate) fn indexed_input_is_supported(source: &ir::Module) -> bool {
+    if crate::relational_to_indexes::uses_result_index_route(&source.relational_plan) {
+        return super::indexes::supported_linear_plan(&source.relational_plan)
+            && crate::relational_to_indexes::check_coverage(source).is_ok()
+            && crate::physical::lazy::supported(source);
+    }
+    source.indexes.iter().all(|i| i.result_token.is_none())
+        && super::indexes::supported_linear_plan(&source.relational_plan)
+        && super::indexes::covers_required_indexes(source)
+}
+
+pub(crate) fn input_indexed(source: &ir::Module, target: &syn::File) -> syn::Result<()> {
+    input_indexed::check(source, target)
 }
 
 type Information = BTreeMap<String, ra::RelationInfo>;

@@ -176,9 +176,8 @@ tests cover computed arguments and heads, repeated String arguments, wildcards,
 destructuring lets, Rust macro wrappers, and evaluation counts. The default
 route also checks that build and cursor construction execute no query clauses.
 
-In the homework starter, parser and supplied-lowering tests run by default.
-The expression execution fixtures use the existing `compiled-workloads`
-completion gate, alongside the other tests requiring student pass solutions.
+Parser and lowering tests run by default. The expression execution fixtures
+use the `compiled-workloads` feature to compile the complete public macro route.
 
 The production planning acceptance matrix additionally covers 12 expression
 patterns under four policies. It checks expected relation orders, one fully
