@@ -1,5 +1,5 @@
 //! Join planning must respect evaluation boundaries, even for disconnected prefixes.
-use super::{check, query};
+use super::{check, mini_linq, query};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 static KEY_CALLS: AtomicUsize = AtomicUsize::new(0);

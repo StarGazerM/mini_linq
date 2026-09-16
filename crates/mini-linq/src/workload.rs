@@ -18,13 +18,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
     #[cfg(feature = "compiled-workloads")]
     {
-        let program =
-            match cq_compose::compile_program(&source, &syn::parse_quote!(mini_linq::pull)) {
-                Ok(program) => program,
-                Err(error) => return error.into_compile_error().into(),
-            };
-
-        quote!(#catalog #program).into()
+        quote!(#catalog mini_linq::mini_linq! { #source }).into()
     }
 
     #[cfg(not(feature = "compiled-workloads"))]

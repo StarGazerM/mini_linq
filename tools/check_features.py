@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 
@@ -53,6 +54,7 @@ def feature_cases(package):
         add(feature, [feature])
     add("default", None)
     add("completed", sorted(set(features) - UNFINISHED - {"default"}))
+    add("execution-alternatives", ["pull", "push-set", "iterator-pipeline", "collect-pipeline"])
     for target in package["targets"]:
         if not set(target["kind"]) & {"test", "example"}:
             continue
@@ -103,7 +105,11 @@ def main():
         targets = [t for t in package["targets"]
                    if set(t["kind"]) & {"test", "example"}
                    and set(t.get("required-features", [])) <= active]
-        print(f"PASS: {label} ({len(targets)} eligible test/example targets)", flush=True)
+        output = logpath.read_text()
+        tested = sum(map(int, re.findall(r"test result: ok\. (\d+) passed", output)))
+        if label == "push-set" and "push_moves_owned_outputs_and_preserves_outer_values_for_multiple_witnesses ... ok" not in output:
+            raise SystemExit(f"FAIL: push-set did not execute its isolated runtime test; see {logpath}")
+        print(f"PASS: {label} ({tested} tests executed; {len(targets)} eligible test/example targets)", flush=True)
     if not args.list:
         print(f"PASS: {len(cases)} Cargo feature cases; logs: {logdir}", flush=True)
 

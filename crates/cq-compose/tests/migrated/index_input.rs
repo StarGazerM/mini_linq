@@ -8,7 +8,7 @@ mod tests {
     use cq_compose::compile_cq;
     use cq_index::input::compile as compile_input_indexes;
     use cq_ir::cq;
-    use cq_physical::input::compile_input_indexed;
+    use cq_realize::hash_inputs::compile_input_indexed;
     use proc_macro2::TokenStream;
 
     fn index_signature(index: &index_requirements::IndexRequirement) -> IndexSignature {

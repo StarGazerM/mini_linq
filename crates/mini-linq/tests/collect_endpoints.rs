@@ -4,7 +4,7 @@ use std::collections::HashSet;
 fn set_access_evaluates_all_candidates_and_deduplicates_projected_values() {
     let calls = std::cell::Cell::new(0);
     let observed = &calls;
-    let rows = mini_linq::collect_access! {
+    let rows = mini_linq::pull_set! {
         out(x) => (x % 2) :-
         R(x) => for (x,) in ([(1,), (3,), (2,), (4,), (4,)]),
         Keep(x) => if ({ observed.set(observed.get() + 1); x < 4 });
@@ -12,10 +12,10 @@ fn set_access_evaluates_all_candidates_and_deduplicates_projected_values() {
     assert_eq!(calls.get(), 5);
     assert_eq!(rows, HashSet::from([0, 1]));
     assert_eq!(
-        mini_linq::collect_access! { out() => (()) :- Unit() => if (true); },
+        mini_linq::pull_set! { out() => (()) :- Unit() => if (true); },
         HashSet::from([()]),
     );
-    assert!(mini_linq::collect_access! { out() => (()) :- Unit() => if (false); }.is_empty());
+    assert!(mini_linq::pull_set! { out() => (()) :- Unit() => if (false); }.is_empty());
 }
 
 #[test]
@@ -50,7 +50,7 @@ mod composed {
     use wiring as mini_linq;
 
     pub(super) fn rows() -> std::collections::HashSet<i32> {
-        mini_linq::collect_access! {
+        mini_linq::pull_set! {
             out(x) => (x) :- R(x) => for (x,) in ([(1,), (1,), (2,)]);
         }
     }

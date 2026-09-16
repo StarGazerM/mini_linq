@@ -3,8 +3,8 @@
 use cq_compose::compile_cq;
 use cq_index::result::compile as compile_result_indexes;
 use cq_ir::{cq, relational_plan};
-use cq_physical::lazy::compile_lazy_indexed;
-use cq_physical::materialized::compile_materialized;
+use cq_realize::hash_materialized::compile_materialized;
+use cq_realize::hash_prefix::compile_lazy_indexed;
 
 #[test]
 fn an_empty_extension_is_supported_by_both_physical_routes() {
@@ -16,6 +16,6 @@ fn an_empty_extension_is_supported_by_both_physical_routes() {
     let logical = compile_cq(&source).unwrap();
     relational_plan::contract::check(&logical).unwrap();
     let indexed = compile_result_indexes(&logical).unwrap();
-    compile_materialized(&indexed, &syn::parse_quote!(::mini_linq::collect_access)).unwrap();
+    compile_materialized(&indexed, &syn::parse_quote!(::mini_linq::pull_set)).unwrap();
     compile_lazy_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull)).unwrap();
 }

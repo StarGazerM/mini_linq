@@ -1,8 +1,8 @@
 //! End-to-end tests compose the two independent assignment boundaries.
 mod wiring {
     pub use ::mini_linq::{
-        collect_access, collect_pipeline, graph_query as query, materialized as index_requirements,
-        result_indexes as relational_plan,
+        pull_set, collect_pipeline, graph_query as query, hash_materialized as choose_realization,
+        result_indexes as choose_indexes,
     };
 }
 use std::collections::BTreeSet;

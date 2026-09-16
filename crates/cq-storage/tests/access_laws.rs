@@ -71,6 +71,17 @@ fn constructed_directory_and_separate_selection_share_exact_address_domain() {
     assert_ne!(left.identity(), right.identity());
 }
 
+#[test]
+fn block_construction_accepts_a_unique_iterable_without_a_hash_collection() {
+    let rows = [[1, 7], [2, 8], [3, 9]];
+    let store = BlockStore::<2>::pack_unique(rows, NonZeroUsize::new(2).unwrap());
+    let actual: Vec<_> = store
+        .blocks()
+        .flat_map(|b| b.rows().map(|(_, row)| *row))
+        .collect();
+    assert_eq!(actual, rows);
+}
+
 fn has<K: ?Sized>(keys: &impl ExactMembership<K>, key: &K) -> bool {
     keys.contains(key)
 }

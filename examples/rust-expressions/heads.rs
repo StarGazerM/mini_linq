@@ -1,5 +1,5 @@
 //! Computed heads declare their public output types and run before deduplication.
-use super::{check, query};
+use super::{check, mini_linq, query};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 query! {

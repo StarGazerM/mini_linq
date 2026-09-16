@@ -12,16 +12,16 @@ macro_rules! bound_scan {
     ($($op:tt)*) => { ::mini_linq::scan_rows! { $($op)* } };
 }
 macro_rules! bound_prune {
-    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::stream_access; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::pull_stream; $($op)* } };
 }
 macro_rules! bound_exact {
-    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; iterator ::mini_linq::stream_access; keys ::std::collections::HashSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::HashSet; $($op)* } };
 }
 macro_rules! bound_zone {
-    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::stream_access; keys ::std::collections::BTreeSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::BTreeSet; $($op)* } };
 }
 macro_rules! bound_hash {
-    ($($op:tt)*) => { ::mini_linq::hash_witnesses! { iterator ::mini_linq::stream_access; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::hash_pairs! { $($op)* } };
 }
 pub(crate) use {bound_block, bound_exact, bound_hash, bound_prune, bound_scan, bound_zone};
 
@@ -29,9 +29,9 @@ pub(crate) use {bound_block, bound_exact, bound_hash, bound_prune, bound_scan, b
 // S and T remain native containers; only R offers block descriptors and bounds.
 macro_rules! configured {
     ($scan:path, $keys:path; $($ra:tt)*) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
             materialize ::mini_linq::hash_rows;
             inputs {
                 R => crate::bound_block;
@@ -57,17 +57,17 @@ macro_rules! zone_rows {
 }
 pub(crate) use {exact_rows, zone_rows};
 mod exact_wiring {
-    pub(crate) use super::exact_rows as planned_relational_plan;
+    pub(crate) use super::exact_rows as choose_indexes;
     pub use ::mini_linq::*;
 }
 mod zone_wiring {
-    pub(crate) use super::zone_rows as planned_relational_plan;
+    pub(crate) use super::zone_rows as choose_indexes;
     pub use ::mini_linq::*;
 }
 
 macro_rules! chain {
     () => {
-        mini_linq::planned_relational_plan! {
+        mini_linq::choose_indexes! {
             pub struct Query;
             relation R(k:i64, x:i64);
             relation S(z:i64, k:i64);

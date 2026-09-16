@@ -1,7 +1,18 @@
-use mini_linq::{planned_query, planned_relational_plan};
+mod wiring {
+    #[allow(unused_imports)]
+    pub use ::mini_linq::{
+        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+        pull_set,
+    };
+    pub use ::mini_linq::{
+        hash_materialized as choose_realization, result_indexes as choose_indexes,
+    };
+}
+use mini_linq::{choose_indexes, optimized_query};
+use wiring as mini_linq;
 
 type Amount = i32;
-planned_query! {
+optimized_query! {
     struct AliasedSelection;
     relation R(value: Amount);
     answer(x) :- R(x), if (x >= -2147483648), if (x != 0);
@@ -34,7 +45,7 @@ mod rust_boundary {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Key(usize);
-planned_query! {
+optimized_query! {
     struct NonOrderedKeys;
     relation R(key:Key,payload:String);
     relation S(key:Key,rank:u8);
@@ -42,7 +53,7 @@ planned_query! {
 }
 
 struct NotClone;
-planned_query! {
+optimized_query! {
     struct UnusedInput;
     relation Used(value:i32);
     relation Unused(value:NotClone);
@@ -61,14 +72,14 @@ fn ordinary_rust_ownership_and_unused_inputs_are_preserved() {
     assert_eq!(UnusedInput::run([(1,), (1,)], unused), vec![(1,)]);
 }
 
-planned_query! {
+optimized_query! {
     struct Selected;
     relation R(a: i32, b: i32);
     relation S(b: i32, c: i32);
     answer(c,a) :- R(a,b), S(b,c), if (c > 0), if (a < c);
 }
 
-planned_relational_plan! {
+choose_indexes! {
     struct Direct;
     relation Input(key: String, payload: String);
     relation Guard(key: String);

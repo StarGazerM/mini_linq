@@ -266,7 +266,8 @@ type Heading = BTreeSet<String>;
 pub struct RelationInfo {
     pub heading: Heading,
     pub types: BTreeMap<String, syn::Type>,
-    /// Computed bindings are owned Rust values in subsequent expressions.
+    /// Columns introduced by Extend. This records provenance, not the ownership
+    /// mode chosen by a realization when subsequent expressions read the column.
     pub computed: BTreeSet<String>,
     operands: Vec<String>,
 }

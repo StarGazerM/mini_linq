@@ -23,8 +23,8 @@ macro_rules! route {
         mod $name {
             mod wiring {
                 pub use ::mini_linq::$logical as mini_linq;
-                pub use ::mini_linq::$indexes as relational_plan;
-                pub use ::mini_linq::$physical as index_requirements;
+                pub use ::mini_linq::$indexes as choose_indexes;
+                pub use ::mini_linq::$physical as choose_realization;
                 route!(@access $host);
             }
             use wiring as mini_linq;
@@ -36,7 +36,7 @@ macro_rules! route {
         pub(super) use selected_pull as pull;
     };
     (@access callable) => {
-        pub use ::mini_linq::{collect_access, collect_pipeline};
+        pub use ::mini_linq::{pull_set, collect_pipeline};
     };
     (@host standalone) => {
         source!();
@@ -54,7 +54,10 @@ macro_rules! route {
 
 mod defaults {
     mod wiring {
-        pub use ::mini_linq::{input_indexed, iterator_pipeline, mini_linq, relational_plan};
+        pub use ::mini_linq::{
+            canonical_query, choose_indexes, choose_realization, hash_inputs, input_indexes,
+            iterator_pipeline, mini_linq,
+        };
         pub(super) use selected_pull as pull;
     }
     use wiring as mini_linq;
@@ -69,35 +72,35 @@ route!(
     input,
     canonical_query,
     input_indexes,
-    input_indexed,
+    hash_inputs,
     standalone
 );
 route!(
     lazy,
     canonical_query,
     result_indexes,
-    lazy_indexed,
+    hash_prefix,
     standalone
 );
 route!(
     materialized,
     canonical_query,
     result_indexes,
-    materialized_query,
+    hash_materialized_query,
     callable
 );
 route!(
     prefix,
     prefix_query,
     result_indexes,
-    materialized_query,
+    hash_materialized_query,
     callable
 );
 route!(
     graph,
     graph_query,
     result_indexes,
-    materialized_query,
+    hash_materialized_query,
     callable
 );
 

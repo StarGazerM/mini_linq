@@ -29,8 +29,11 @@ pub(crate) fn expected_rust_local(
             let source = &operator.source;
             let binding = &operator.binding;
             let captures = cq::rust::bindings(input_pattern);
+            let retained =
+                cq::rust::known_uses(binding, &captures.iter().map(cq_ir::symbol_name).collect());
             let copies = captures
                 .iter()
+                .filter(|v| retained.contains(&cq_ir::symbol_name(v)))
                 .map(|v| quote!(let #v = ::core::clone::Clone::clone(&#v);));
             quote! {
                 let #stream = ::core::iter::Iterator::flat_map(

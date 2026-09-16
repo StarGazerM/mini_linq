@@ -87,7 +87,7 @@ fn unit_is_an_explicit_named_one_row_source() {
 }
 
 #[test]
-fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
+fn contract_rejects_invalid_scope_arity_and_stream_ownership() {
     let invalid = [
         // Array/slice patterns belonged to the old homogeneous-row backend.
         quote! {
@@ -97,7 +97,7 @@ fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
             return iter2;
         },
         quote! {
-            iter0 = scan (x, y,) in (rows.iter()) yield (y, x,);
+            iter0 = scan (x, y,) in (rows.iter()) yield (y, missing,);
             iter1 = project iter0 as (y, x,) yield ((x.clone(), y.clone(),));
             iter2 = distinct iter1;
             return iter2;
@@ -112,7 +112,7 @@ fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
         },
         quote! {
             iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);
-            iter1 = join iter0 as (y, x,) with (z,) in (lookup(y.clone()))
+            iter1 = join iter0 as (x,) with (z,) in (lookup(x.clone()))
                 yield (x, y, z,);
             iter2 = project iter1 as (x, y, z,) yield ((x.clone(), y.clone(), z.clone(),));
             iter3 = distinct iter2;
@@ -120,14 +120,14 @@ fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
         },
         quote! {
             iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);
-            iter1 = join iter0 as (x, y,) with (z,) in (lookup(y.clone())) yield (x, z,);
+            iter1 = join iter0 as (x, y,) with (z,) in (lookup(y.clone())) yield (x, missing,);
             iter2 = project iter1 as (x, z,) yield ((x.clone(), z.clone(),));
             iter3 = distinct iter2;
             return iter3;
         },
         quote! {
             iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);
-            iter1 = filter iter0 as (y, x,) if (keep(x.clone(), y.clone()));
+            iter1 = filter iter0 as (x, x,) if (keep(x.clone(), x.clone()));
             iter2 = project iter1 as (x, y,) yield ((x.clone(), y.clone(),));
             iter3 = distinct iter2;
             return iter3;
@@ -145,7 +145,7 @@ fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
         },
         quote! {
             scan0 = scan (x,) in (rows.iter()) yield (x,);
-            iter1 = project scan0 as (x,) yield ((x.clone(),));
+            scan0 = project scan0 as (x,) yield ((x.clone(),));
             iter2 = distinct iter1;
             return iter2;
         },
@@ -156,4 +156,41 @@ fn contract_rejects_missing_reordered_or_incomplete_stream_boundaries() {
         assert!(iterator_pipeline::contract::check(&pipeline).is_err());
         assert!(!iterator_pipeline::contract::well_formed(&pipeline));
     }
+}
+
+#[test]
+fn validity_allows_named_bindings_projection_and_retention_choices() {
+    let pipeline: iterator_pipeline::Pipeline = syn::parse_quote! {
+        source = scan (x, ignored,) in (rows) yield (x,);
+        doubled = project source as (value,) yield ((value * 2,));
+        accepted = filter doubled as (key,) if (key > 1);
+        witnesses = join accepted as (key,) with (y, unused,) in (lookup(key)) yield (y,);
+        output = project witnesses as (result,) yield (result);
+        unique = distinct output;
+        return unique;
+    };
+    iterator_pipeline::contract::check(&pipeline).unwrap();
+}
+
+#[test]
+fn already_selected_binding_needs_no_artificial_projection() {
+    let pipeline: iterator_pipeline::Pipeline = syn::parse_quote! {
+        source = scan (x, y,) in (rows) yield (y, x,);
+        unique = distinct source;
+        return unique;
+    };
+    iterator_pipeline::contract::check(&pipeline).unwrap();
+}
+
+#[test]
+fn stream_reuse_requires_an_explicit_ownership_strategy() {
+    let pipeline: iterator_pipeline::Pipeline = syn::parse_quote! {
+        source = scan (x,) in (rows) yield (x,);
+        selected = filter source as (x,) if (x > 0);
+        reused = project source as (x,) yield (x);
+        unique = distinct reused;
+        return unique;
+    };
+    let error = iterator_pipeline::contract::check(&pipeline).unwrap_err();
+    assert!(error.to_string().contains("preceding stream `selected`"));
 }

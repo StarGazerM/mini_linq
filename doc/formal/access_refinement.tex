@@ -1,12 +1,14 @@
 \section{Physical lowering through native Access refinement}
 \label{sec:access-refinement}
-This section specifies the implemented direct physical edge. It accepts named RA
-and emits Rust containing existing Access plans; it does not add a whole-program
-language. Its current domain consists of \code{i64} array rows, Unit, Rename,
-Project, Semijoin and NaturalJoin, with variable-only output of at most twelve
-fields. The generic RA language and canonical physical edges retain their own
-domains. In particular, compiling one integer fact-star instance does not establish
-support for arbitrary host expressions or all declared Rust types.
+The configured realization accepts the existing named RA language and emits
+Rust containing Access plans and native operation fragments. It introduces no
+whole-program IR. Unit, Rename, Select, Extend, Project, Semijoin and NaturalJoin
+retain their RA meanings. Logical column types and native Rust expressions survive
+until the selected row representation expands them: tuple sets support heterogeneous
+Rust columns, while array and block providers require \code{i64} columns. Rust
+checks the selected representation's traits and output host constraints. This is
+representation-parametric lowering, not a promise that every provider supports
+every declared Rust type or operation.
 
 \subsection{Logical valuation and compiler-local information}
 For input database $I$, let $D_I(r)$ denote the set assigned to named RA result $r$.
@@ -26,46 +28,109 @@ RA operator. The representation premise is
 \[
  \gamma_{P_r}(e_r,\ell_r)=D_I(r).
 \]
-Rename inherits the input representation; Semijoin inherits the left representation
-and selects handles. Unit, Project and NaturalJoin materialize using a selected
-result provider. Positions are derived from headings and layouts, not repeated in
+Rename inherits the input representation. Select and Semijoin inherit their input
+representation and select current handles. Unit, Extend, Project and NaturalJoin
+construct their result through a selected provider. Positions are derived from headings and layouts, not repeated in
 an intermediate query syntax. Resource reuse requires the same \emph{current RA
 version} $r$, $s$ and configured binding $Q$. Path spelling is a conservative
 identity in a fixed lexical scope, not equivalence discovery between aliases. The candidate-scan policy is absent from this key.
 The implementation does not infer equivalence of differently named versions or
 reuse a stale superset without a separate proof.
 
-\subsection{Native operation syntax and local contracts}
-The fragment grammar belongs to \code{cq-ir::physical_provider}. Its relevant
-extension is
+\paragraph{Only demanded configuration is required.}
+Let $\operatorname{need}(o)$ list administrative macro choices used by the
+realization rule for operator $o$:
 \[
-\begin{array}{rcl}
- o&::=&\mathsf{build}\ \{A\}\\
-  &\mid&\mathsf{contains}\ (e_K)\ (e_k)\\
-  &\mid&\mathsf{may\_match}\ (e_K)\ (e_B)\ (e_c)\\
-  &\mid&\mathsf{probe}\ (e_W)\ (e_k)\\
-  &\mid&\mathsf{candidates}\ P\ \{e_v\}\ (e_m)\\
-  &\mid&\mathsf{materialize}\ x_o\ x_v\ (e_A).
+\begin{array}{c|l}
+o&\operatorname{need}(o)\\\hline
+\mathsf{Rename}&\varnothing\\
+\mathsf{Unit}&\{\mathsf{materialize}\}\\
+\mathsf{Project},\mathsf{Extend}&\{\mathsf{access},\mathsf{materialize}\}\\
+\mathsf{Select}&\{\mathsf{access}\}\\
+\mathsf{Semijoin}&\{\mathsf{access},\mathsf{scan},\mathsf{keys}\}\\
+\mathsf{NaturalJoin}&\{\mathsf{materialize},\mathsf{join}\}
 \end{array}
 \]
-$A$ is an existing Access plan; $P$ a Rust macro path; the $e$ terms are native
-Rust expressions. Other provider fragments implement type, input, row, scan,
-selection and block operations. Materialization binds an owner $x_o$ and represented
-view $x_v$ from the support of its row iterable $e_A$. The selected frontend parses this
-typed syntax and administrative options separately. Storage paths, continuations,
-collection types and optional observations are bound by configured lexical macros;
-they are not part of each operation's denotation. A block materializer additionally
-requires a bound packing-size expression; the generic operation carries no size
-operand. Its row expression and packing expression each evaluate once at
-construction. Non-materializing operations do not evaluate packing configuration.
-Native materializers collect the row support into their own set representation.
+Input declarations separately require exactly their provider bindings. For a
+result $t$, a role-specific binding overrides its optional default; Access has
+one optional shared binding. Result-provider overrides may target constructing
+operators, candidate/key overrides only Semijoin, and pair overrides only
+NaturalJoin. Thus a rename-only plan needs input bindings alone, and a pair join
+needs no Access continuation. A missing used choice is reported at its RA result.
+These checks establish that requested macro paths are supplied, not that their
+expansions satisfy the required operation or semantic laws.
+
+\subsection{Native operation syntax and local contracts}
+The fragment grammar belongs to \code{cq-ir::native}. In addition to existing
+row and block operations it includes
+\[
+\begin{array}{rcl}
+ o&::=&\mathsf{type}\ (\bar\tau)\mid\mathsf{field}\ (e)\ (i)
+       \mid\mathsf{record}\ (\bar e)\mid\mathsf{key}\ (\bar e)\\
+  &\mid&\mathsf{build}\ \{A\}\mid\mathsf{contains}\ (e_K)\ (e_k)
+       \mid\mathsf{may\_match}\ (e_K)\ (e_B)\ (e_c)\\
+  &\mid&\mathsf{probe}\ (e_W)\ (e_k)
+       \mid\mathsf{candidates}\ P\ \{e_v\}\ (e_m)\\
+  &\mid&\mathsf{materialize}\ x_o\ x_v\ (e_A)\\
+  &\mid&\mathsf{produce}\ x_o\ x_v\ \mathsf{via}\ f\ \{S\}\\
+  &\mid&\mathsf{pairs}\ x\ \mathsf{in}\ (e_l)\ \mathsf{by}\ (k_l),
+       y\ \mathsf{in}\ (e_r)\ \mathsf{by}\ (k_r)\ \{S\}.
+\end{array}
+\]
+$A$ is an existing Access plan, $P$ a Rust macro path, $\bar\tau$ logical Rust
+column types, and $e,S$ native expressions/statements. Type expands to a storage
+type; Field to a row place; Record and Key to values; Materialize and Produce to
+statements binding owner $x_o$ and view $x_v$; Pairs to a unit expression.
+A row provider owns Type/Field/Record together. Hence tuple coordinates and array
+indexing are chosen at the same boundary as their representation. The key provider
+likewise owns key representation together with construction and membership:
+configured lowering passes borrowed field expressions to the existing Key
+fragment. Exact keys retain reference tuples; zone keys require referenced
+\code{i64} coordinates and copy their values into integer arrays. Equality and
+membership concern represented values, not reference identity.
+No contextual relation, heading or redundant column-type list accompanies a leaf.
+
+Materialize consumes an existing row iterable. Produce instead binds a local
+emission function $f$ and executes $S$; the result represents precisely the set
+of emitted rows. A native set inserts directly into its result owner, without an
+intermediate row vector. The block provider collects distinct rows before packing.
+Pairs binds $x,y$ to borrowed iterator items. Each key sees its corresponding
+item; its body sees both. For finite stable traversals and pure keys, define
+\[
+ J(L,R,k_l,k_r)=\langle(x,y)\mid x\in L,\ y\in R,
+                                      \ k_l(x)=k_r(y)\rangle_{\rm mult}.
+\]
+The pair law requires the body's argument multiset to equal $J$; input occurrence
+multiplicity is preserved. Traversal order, rescanning and auxiliary storage belong
+to the selected pair algorithm. This law does not equate arbitrary effect traces.
+Borrowing, key traits and emitted-row types are checked by Rust; Rust does not
+prove the pair or representation laws.
+Configured join keys borrow fields of the current operands. Independently
+authored pair fragments may also produce owned keys from owned traversal items;
+the key and any borrowed referents must remain valid while auxiliary structures
+use them. The pair law abstracts both representations through their key values.
+
+Expression aliases borrow both source and computed fields. A consuming Rust
+expression must explicitly copy or clone its borrowed input when needed. Owned
+Record and output construction remain separate boundaries and may clone retained
+fields. Borrowed reads establish neither clone elimination for an entire query
+nor a projection-liveness optimization.
+
+The frontend parses typed fragments and administrative options separately.
+Storage paths, continuations, collection choices and optional observers are closed
+over by lexical macros. A block constructor additionally binds a packing-size
+expression, evaluated once at construction. Nonconstructing operations do not
+evaluate it. The generic build trait accepts any unique-row iterable; HashSet is
+one provider's deduplication choice, not a required carrier in the storage trait.
 
 For a current view $v$, write $H(v)$ for its selected handles and $\rho(h)$ for the
 represented row. Handles are decoded against their originating view; block handles additionally
 carry store identity and coordinates. A lawful provider enumerates current handles
 once. Candidates pass those handles unchanged to selection, whose result represents
 exactly their rows. A block selection retains the original payload, while native
-sets may copy survivors into a new set with different physical addresses. Neither
+set selection retains the supplied row references without cloning their payload.
+Repeated selection can borrow an earlier view; the enclosing realization retains
+that view and its owners until all dependent uses complete. Neither representation
 may resurrect a row removed from the current view. Let
 \[
  K=\{\rho(h)|_s\mid h\in H(v_r)\},\qquad
@@ -106,6 +171,12 @@ Each rule below maps to an implementation symbol in \code{rules.tsv};
 Provider laws and adequate Rust expansion remain premises of these rules.
 
 \begin{mathpar}
+\Rule{AF-Configure}{\dom(\theta.\mathsf{inputs})=\operatorname{inputs}(D)\\
+ \theta\text{ overrides target the permitted operators}\\
+ \forall(t=o)\in D,\ \forall c\in\operatorname{need}(o),\
+                      \operatorname{resolve}_{\theta}(t,c)\text{ is defined}}
+ {\theta\vdash D\ \mathsf{configured}}
+\and
 \Rule{AF-Bind}{\gamma_P(e,\ell)=D_I(r)\quad e\text{ dominates its uses}}
  {\Gamma[r\mapsto(P,e,\ell)]\text{ represents }r}
 \and
@@ -141,7 +212,9 @@ Provider laws and adequate Rust expansion remain premises of these rules.
  C,m,p_K\text{ satisfy }\eqref{eq:candidate-cover}}
  {P_l.\mathsf{select}(v_l,\{h\in C(v_l,m)\mid p_K(h)\})
   \simeq D_I(l)\ltimes D_I(r)}
-\and
+\end{mathpar}
+The following resource and pair rules have distinct scheduling boundaries.
+\begin{mathpar}
 \Rule{AF-Hash}{A\text{ enumerates }(\mathsf{key}(x),x)\text{ once per current }x}
  {W=\mathsf{hash\_witnesses}.\mathsf{build}\{A\}
   \quad W.\mathsf{probe}(k)=\langle x\mid(k,x)\in A\rangle}
@@ -150,12 +223,41 @@ Provider laws and adequate Rust expansion remain premises of these rules.
  {W=\mathsf{nested\_witnesses}.\mathsf{build}\{A\}=\lambda().A
   \quad W.\mathsf{probe}(k)=\langle x\mid(k,x)\in W()\rangle}
 \and
-\Rule{AF-Join}{W.\mathsf{probe}(k)\text{ enumerates exactly RHS witnesses}\\
- A=\langle a\cup b\mid a\in D_I(l),\ b\in W.\mathsf{probe}(a|_s)\rangle}
- {\operatorname{supp}(A)=D_I(l)\bowtie D_I(r)}
+\Rule{AF-Row}{P.\mathsf{record}(\bar v)=u\quad\gamma_P^{\rm row}(u)=\bar v}
+ {P.\mathsf{field}(u,i)=v_i}
+\and
+\Rule{AF-HashPairs}{I[k]=\langle y\in R\mid k_r(y)=k\rangle}
+ {\mathsf{hash\_pairs}(L,R,k_l,k_r)
+  \text{ emits }\langle(x,y)\mid x\in L,y\in I[k_l(x)]\rangle_{\rm mult}=J}
+\and
+\Rule{AF-NestedPairs}{R\text{ has the same finite occurrences at each traversal}}
+ {\mathsf{nested\_pairs}(L,R,k_l,k_r)\text{ emits }J}
+\and
+\Rule{AF-MergePairs}{L',R'\text{ are the keyed, sorted input occurrences}\\
+ \text{equal-key runs are expanded by Cartesian product}}
+ {\mathsf{sort\_merge\_pairs}(L,R,k_l,k_r)\text{ emits }J}
+\and
+\Rule{AF-Join}{L,R\text{ enumerate }D_I(l),D_I(r)\text{ once}\\
+ k_l(x)=x|_s\quad k_r(y)=y|_s\quad\mathsf{pairs}\text{ satisfies }J}
+ {\operatorname{supp}(\mathsf{emit}\,P.\mathsf{record}(x\cup y))
+   =D_I(l)\bowtie D_I(r)}
+\end{mathpar}
+Selection, expression extension and result construction preserve their represented sets.
+\begin{mathpar}
+\Rule{AF-Select}{\Gamma(r)\text{ represents }r\quad e\text{ is total and pure}}
+ {P.\mathsf{select}(v_r,\{h\in H(v_r)\mid e(\rho(h))\})
+   \simeq\sigma_e D_I(r)}
+\and
+\Rule{AF-Extend}{\Gamma(r)\text{ represents }r\quad e\text{ is total and pure}}
+ {\operatorname{supp}\langle P_t.\mathsf{record}(x\cup e(x))\mid x\in D_I(r)\rangle
+   =\operatorname{extend}_e D_I(r)}
 \and
 \Rule{AF-Store}{\operatorname{supp}(A)=D_I(t)\quad
  P.\mathsf{materialize}(A)\text{ establishes a live owner and exact view }v}
+ {\gamma_P(v,\ell_t)=D_I(t)}
+\and
+\Rule{AF-Produce}{\operatorname{supp}(\text{rows emitted by }S)=D_I(t)\\
+ P.\mathsf{produce}(S)\text{ collects them into a live owner and exact view }v}
  {\gamma_P(v,\ell_t)=D_I(t)}
 \and
 \Rule{AF-Stream}{\operatorname{PipelineWF}(p)\quad p=p_0;d\\
@@ -174,18 +276,25 @@ source language. The canonical iterator endpoint retains Distinct; the set endpo
 folds it into collection. Exact collection preserves support under repeated keys,
 and lawful summaries continue to cover every observed key. The stock coordinate
 summary is additionally idempotent. Semijoin selection consumes handles directly
-into its mask or set, without an intermediate handle HashSet. Candidate and witness
+into its mask or set, without an intermediate handle HashSet. Candidate and resource
 traversals rely on unique provider enumeration and preservation of the pre-Distinct
 sequence; support equality alone would allow an arbitrary endpoint to duplicate
 values. A key collector that consumes only a prefix cannot establish AF-Keys.
 Zone construction drains its observation stream after collection so metadata
 covers all source keys, but this does not repair an inexact key collection.
-AF-Store requires ownership to dominate consumption: the generated witness owner
-and operand references remain in the enclosing definition scope until the result
-provider has consumed the join stream. Returning an iterator from an inner scope
-that owns its witness resource would violate this premise. For block storage,
-materialization collects unique rows and then calls the selected build trait with
-its bound size, evaluated once. Size changes layout, not the represented row set.
+AF-Store and AF-Produce require ownership to dominate consumption. Operand
+references and pair-algorithm auxiliary storage remain live while the body emits
+into its result owner; no borrowed iterator escapes the owner of its witnesses.
+AF-Bind and AF-Reuse require the same dominance for borrowed exact keys and
+chains of selected views: every referent outlives its resource or view consumers.
+Selection changes membership without requiring ownership of the selected payload;
+owned record/result construction may require copies of the fields it retains.
+For block storage, construction supplies a unique-row iterable to
+\code{BuildBlocks::pack_unique} with the configured size. Its unique-row
+precondition avoids another deduplication step. Size changes layout, not the
+represented set. Hash pair production needs equality and hashing; sort/merge needs
+a lawful key order and sorts both sources explicitly. Sorted row storage alone
+does not establish ordering by the requested separator key.
 
 \subsection{Algorithms and where control is emitted}
 \begin{algorithm}[t]
@@ -193,6 +302,7 @@ its bound size, evaluated once. Size changes layout, not the represented row set
 \label{alg:access-direct}
 \begin{algorithmic}[1]
 \Require Valid admitted RA and explicit physical options
+\State Validate input bindings, override targets and used choices (AF-Configure)
 \State Derive layouts, field positions and inherited providers (AF-Bind)
 \State Group semijoin demands by $(\text{current RHS},s,Q)$
 \For{definition $t=o$ in RA dependency order}
@@ -204,10 +314,14 @@ its bound size, evaluated once. Size changes layout, not the represented row set
   \State Emit Candidates followed by exact Contains in one Access plan (AF-Semi)
   \State Select the resulting handles in the current left view
  \ElsIf{$o=l\bowtie r$}
-  \State Bind RHS witness ownership before left-driven Probe Access (AF-Join)
-  \State Materialize the set of joined rows with the result provider (AF-Store)
+  \State Bind both current views; derive separator fields through providers (AF-Row)
+  \State Emit selected Pairs with Record emission into Produce (AF-Join, AF-Produce)
+ \ElsIf{$o=\sigma_e r$}
+  \State Emit current-handle Access, test $e$ through Field, and Select (AF-Select)
+ \ElsIf{$o=\operatorname{extend}_e r$}
+  \State Emit a typed expression and Record in Access; materialize (AF-Extend, AF-Store)
  \ElsIf{$o$ is Unit or Project}
-  \State Construct the unit set or projected Access and materialize (AF-Store)
+  \State Construct records for the unit set or projection and materialize (AF-Store)
  \Else \State Bind the renamed input view (AF-Bind)
  \EndIf
 \EndFor
@@ -237,21 +351,30 @@ its bound size, evaluated once. Size changes layout, not the represented row set
 \Procedure{NestedWitnesses}{$o$}
  \State Expand Build to a closure, or Probe to repeated scan/filter (AF-Nested)
 \EndProcedure
+\Procedure{HashPairs}{$L,R,k_l,k_r,S$}
+ \State Build keyed RHS buckets; scan LHS and emit each matching pair (AF-HashPairs)
+\EndProcedure
+\Procedure{NestedPairs}{$L,R,k_l,k_r,S$}
+ \State For each LHS item rescan RHS and emit equal-key pairs (AF-NestedPairs)
+\EndProcedure
+\Procedure{MergePairs}{$L,R,k_l,k_r,S$}
+ \State Key and sort both inputs; merge runs and cross their occurrences (AF-MergePairs)
+\EndProcedure
 \Procedure{StreamPipeline}{$p$}
  \State Emit its pre-Distinct sequence with the support law (AF-Stream)
 \EndProcedure
 \end{algorithmic}
 \end{algorithm}
-These procedures are independently invoked implementations, not branches of a
-central chooser or runtime catalogue. Lexical macro selection determines which
-procedure is called. Each nested Access plan uses the existing checked Pull edge
-and its configured Pipeline endpoint. Implementation modules are
-\code{cq-access::candidates::scan}, \code{candidates::prune},
-\code{keys::exact}, \code{keys::zone}, \code{witnesses::hash} and
-\code{witnesses::nested}; each exposes its own \code{compile} entry.
-Provider modules \code{cq-providers::hash}, \code{sorted} and \code{block}
-own coherent representation protocols. No Boolean strategy dispatcher selects
-among these implementations.
+These are independently invoked implementations, not a runtime catalogue.
+\code{cq-native} groups row, candidate, key, witness and pair expansion modules at
+one native-fragment boundary. Its \code{rows} modules own coherent array, tuple or
+block representations. Existing Build/Probe witness resources remain independently
+usable fragments; the natural-join rule uses Pairs, whose implementation owns the
+whole local traversal. The query realization still materializes each constructed
+named result in RA dependency order. Exposing pair production does not establish
+arbitrary region fusion or replace that larger scheduling choice. Access fragments
+use the selected set or iterator continuation according to their consumer; pair
+bodies and Produce compile directly to Rust.
 
 \paragraph{Selection and expansion.}
 AF-Scan discards unused predicate tokens, so it does not require a \code{may_match}
@@ -302,8 +425,9 @@ set result of every definition and the ordered output tuple.
 Induct on RA definition order. Input bindings and materialization establish their
 representation relations. Resource construction uses the established current RHS;
 reuse preserves that meaning and lifetime. The first lemma proves Semijoin, while
-exact witness enumeration proves NaturalJoin. Unit, Rename and Project use their
-ordinary set laws. Derived output positions preserve the authored tuple order.
+the pair law proves NaturalJoin. Unit, Rename and Project use their ordinary set
+laws; Select and Extend evaluate expressions against the represented logical
+fields. Output expression rewriting preserves binding and authored tuple order.
 \end{proof}
 The independent emitted-code audit checks the supplied lowering's source bindings,
 field maps, resource identity, lexical selections and ordering. Native operation
@@ -311,5 +435,6 @@ checks and Rust compilation address separate boundaries. Neither establishes the
 semantic laws of arbitrary user macros or complete Rust contextual adequacy.
 \code{physical_model.py} exhaustively checks a finite candidate/mask model against
 an independent nested-loop oracle, including unchanged original metadata and
-composite/empty keys. It is bounded semantic evidence, not a proof of generated
+composite/empty keys. Compiled pair tests separately compare all three algorithms
+with a nested oracle, duplicate occurrences, empty separators and owned rows. It is bounded semantic evidence, not a proof of generated
 Rust, an optimizer model, or a runtime query interpreter.

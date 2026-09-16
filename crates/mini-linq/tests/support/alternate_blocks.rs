@@ -113,7 +113,7 @@ impl<const N: usize> BlockRead for FlatBlocks<N> {
 }
 
 impl<const N: usize> BuildBlocks for FlatBlocks<N> {
-    fn pack_unique(rows: HashSet<Self::Row>, size: NonZeroUsize) -> Self {
+    fn pack_unique(rows: impl IntoIterator<Item = Self::Row>, size: NonZeroUsize) -> Self {
         PACKED.with(|count| count.set(count.get() + 1));
         Self::from_records(rows, size)
     }

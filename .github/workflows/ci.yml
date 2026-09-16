@@ -18,6 +18,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Verify component dependency boundaries
         run: python3 tools/check_dependencies.py --isolate
+      - name: Execute independently assembled query routes
+        run: python3 tools/check_dependencies.py --consumers
       - name: Test package feature configurations
         run: python3 tools/check_features.py
       - name: Test completed workspace

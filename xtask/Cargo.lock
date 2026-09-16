@@ -341,23 +341,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "cq-access"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-compose"
 version = "0.1.0"
 dependencies = [
  "cq-index",
  "cq-ir",
- "cq-physical",
  "cq-plan",
+ "cq-realize",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-execution"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -383,7 +382,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-physical"
+name = "cq-native"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -415,20 +414,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-providers"
+name = "cq-realize"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-pull"
-version = "0.1.0"
-dependencies = [
- "contracts",
  "cq-ir",
  "proc-macro2",
  "quote",
@@ -449,10 +437,10 @@ name = "cq-xtask"
 version = "0.1.0"
 dependencies = [
  "cq-compose",
+ "cq-execution",
  "cq-ir",
- "cq-physical",
  "cq-pipeline",
- "cq-pull",
+ "cq-realize",
  "cq-workloads",
  "duckdb",
  "prettyplease",
@@ -887,15 +875,14 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
- "cq-access",
  "cq-compose",
+ "cq-execution",
  "cq-index",
  "cq-ir",
- "cq-physical",
+ "cq-native",
  "cq-pipeline",
  "cq-plan",
- "cq-providers",
- "cq-pull",
+ "cq-realize",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

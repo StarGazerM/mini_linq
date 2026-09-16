@@ -1,6 +1,26 @@
 //! Executable counterexamples to unrestricted cross-backend equivalence.
 //! Passing these tests confirms a documented semantic gap; it is not evidence
 //! that the two routes preserve arbitrary Rust effects. See doc/formal.
+mod eager_programs {
+    use super::{latest, tick};
+    mod wiring {
+        #[allow(unused_imports)]
+        pub use ::mini_linq::{
+            collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+            pull_set,
+        };
+        pub use ::mini_linq::{
+            hash_materialized as choose_realization, result_indexes as choose_indexes,
+        };
+    }
+    use wiring as mini_linq;
+    mini_linq::optimized_query! {
+        pub(super) struct Materialized;
+        relation R(key:i32);
+        answer(x) :- R(x), let generation:i32 = tick(x), if latest(generation);
+    }
+}
+use eager_programs::Materialized;
 use std::cell::Cell;
 
 thread_local! {
@@ -20,12 +40,6 @@ fn latest(value: i32) -> bool {
 
 mini_linq::mini_linq! {
     struct Lazy;
-    relation R(key:i32);
-    answer(x) :- R(x), let generation:i32 = tick(x), if latest(generation);
-}
-
-mini_linq::planned_query! {
-    struct Materialized;
     relation R(key:i32);
     answer(x) :- R(x), let generation:i32 = tick(x), if latest(generation);
 }

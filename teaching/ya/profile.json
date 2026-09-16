@@ -17,13 +17,13 @@
       "quote",
       "syn"
     ],
-    "cq-physical": [
+    "cq-realize": [
       "cq-ir",
       "proc-macro2",
       "quote",
       "syn"
     ],
-    "cq-pull": [
+    "cq-execution": [
       "cq-ir",
       "contracts",
       "proc-macro2",
@@ -41,8 +41,8 @@
       "cq-ir",
       "cq-plan",
       "cq-index",
-      "cq-physical",
-      "cq-pull",
+      "cq-realize",
+      "cq-execution",
       "cq-pipeline",
       "proc-macro2",
       "quote",
@@ -56,11 +56,14 @@
     "cq-index": [
       "result"
     ],
-    "cq-physical": [
-      "materialized"
+    "cq-realize": [
+      "hash-materialized"
     ],
     "cq-pipeline": [
       "collect"
+    ],
+    "cq-execution": [
+      "pull"
     ]
   },
   "copy": [
@@ -76,7 +79,7 @@
     "crates/cq-ir/src/index_requirements.rs",
     "crates/cq-ir/src/iterator_pipeline.rs",
     "crates/cq-ir/src/lib.rs",
-    "crates/cq-ir/src/physical_provider.rs",
+    "crates/cq-ir/src/native.rs",
     "crates/cq-ir/src/relational_plan.rs",
     "crates/cq-ir/src/rust_access_plan.rs",
     "crates/cq-ir/tests/expression_syntax.rs",
@@ -85,7 +88,7 @@
     "crates/cq-ir/tests/hw4_optional.rs",
     "crates/cq-ir/tests/iterator_pipeline.rs",
     "crates/cq-ir/tests/languages.rs",
-    "crates/cq-ir/tests/physical_provider.rs",
+    "crates/cq-ir/tests/native.rs",
     "crates/cq-ir/tests/relational_plan.rs",
     "crates/cq-ir/tests/rust_access_plan.rs",
     "crates/cq-ir/tests/rust_expressions.rs",
@@ -104,31 +107,32 @@
     "crates/cq-index/src/result/correspondence.rs",
     "crates/cq-index/src/result/mod.rs",
     "crates/cq-index/tests/result.rs",
-    "crates/cq-physical/src/check_support/context.rs",
-    "crates/cq-physical/src/check_support/hash_collections.rs",
-    "crates/cq-physical/src/check_support/mod.rs",
-    "crates/cq-physical/src/check_support/syntax.rs",
-    "crates/cq-physical/src/lib.rs",
-    "crates/cq-physical/src/materialized/check.rs",
-    "crates/cq-physical/src/materialized/coverage.rs",
-    "crates/cq-physical/src/materialized/mod.rs",
-    "crates/cq-physical/src/materialized/query.rs",
-    "crates/cq-physical/src/materialized/tests.rs",
-    "crates/cq-physical/src/rust_bindings.rs",
-    "crates/cq-pull/src/check.rs",
-    "crates/cq-pull/src/lib.rs",
-    "crates/cq-pull/tests/boundary.rs",
+    "crates/cq-realize/src/check_support/context.rs",
+    "crates/cq-realize/src/check_support/hash_collections.rs",
+    "crates/cq-realize/src/check_support/mod.rs",
+    "crates/cq-realize/src/check_support/syntax.rs",
+    "crates/cq-realize/src/lib.rs",
+    "crates/cq-realize/src/hash_materialized/check.rs",
+    "crates/cq-realize/src/hash_materialized/coverage.rs",
+    "crates/cq-realize/src/hash_materialized/mod.rs",
+    "crates/cq-realize/src/hash_materialized/query.rs",
+    "crates/cq-realize/src/hash_materialized/tests.rs",
+    "crates/cq-realize/src/rust_bindings.rs",
+    "crates/cq-execution/src/pull/check.rs",
+    "crates/cq-execution/src/lib.rs",
+    "crates/cq-execution/tests/boundary.rs",
     "crates/cq-pipeline/src/collect.rs",
     "crates/cq-pipeline/src/collect/check.rs",
     "crates/cq-pipeline/src/lib.rs",
     "crates/cq-pipeline/src/observations.rs",
     "crates/cq-pipeline/src/operators.rs",
-    "crates/cq-pipeline/tests/boundary.rs"
+    "crates/cq-pipeline/tests/boundary.rs",
+    "crates/cq-execution/src/pull/mod.rs"
   ],
   "templates": {
     "README.md": "README.md",
     "crates/cq-plan/src/graph/ya.rs": "ya_stub.rs",
-    "crates/cq-physical/src/materialized/semijoin.rs": "semijoin_stub.rs",
+    "crates/cq-realize/src/hash_materialized/semijoin.rs": "semijoin_stub.rs",
     "crates/cq-plan/tests/ya_schedule.rs": "tests/ya_schedule.rs",
     "crates/mini-linq/src/lib.rs": "macros_lib.rs",
     "crates/mini-linq/tests/semijoin.rs": "tests/semijoin.rs",
@@ -150,7 +154,7 @@
       ],
       "missing": "YA scheduling exercise"
     },
-    "crates/cq-physical/src/materialized/semijoin.rs": {
+    "crates/cq-realize/src/hash_materialized/semijoin.rs": {
       "command": [
         "cargo",
         "test",

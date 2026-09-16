@@ -34,6 +34,11 @@ arguments are Rust expressions: `R(x), S(f(x))` matches the value of `f(x)`;
 Atom bindings borrow input fields. Let bindings carry their Rust values;
 ordinary Rust borrowing, ownership, and trait checks still apply.
 
+In configured `relation_program!` / `relation_query!` realization, expressions
+read stored source and computed columns through borrows. Reading a computed
+column does not clone it; an expression that needs an owned value must explicitly
+copy or clone that value. Constructing owned result records is a separate step.
+
 `let PAT = EXPR` introduces fresh pattern bindings; it cannot shadow an existing
 logical variable. Lexical locals inside expressions can shadow them normally.
 Known logical variables must be bound before use. Host functions, constants,
@@ -163,8 +168,10 @@ Lower passes inspect their own IR inputs and do not reconstruct this schedule.
 
 The default execution route keeps one lazy pull region: `build()` prepares rows
 and indexes; clauses execute when the cursor is advanced. The explicit
-materialized route evaluates each named RA result during `build()`. Both still
-lower through RustAccessPlan and IteratorPipeline. Negation and aggregation
+materialized route evaluates each named RA result during `build()`. Their supplied
+pull continuations lower through RustAccessPlan and IteratorPipeline; an eager
+set-valued hole can instead select `push_set!`, which emits Rust loops directly.
+Negation and aggregation
 remain the separate optional exercise; they must reuse this expression grammar.
 
 ## Verification

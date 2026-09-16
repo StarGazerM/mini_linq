@@ -1,9 +1,9 @@
 mod tests {
     use quote::quote;
 
+    use cq_execution::pull::check as iterator_pipeline_is_exact;
     use cq_ir::{iterator_pipeline, rust_access_plan};
     use cq_pipeline::iterator::check as iterator_pipeline_rust_is_exact;
-    use cq_pull::check as iterator_pipeline_is_exact;
 
     #[test]
     fn iterator_pipeline_relations_reject_leaf_order_and_rust_mutations() {

@@ -24,7 +24,7 @@ fn scan_discards_metadata_and_observer_without_configuration() {
 fn key_build_uses_no_membership_trait() {
     use std::collections::HashSet;
     let keys = mini_linq::exact_keys! {
-        iterator mini_linq::stream_access;
+        iterator mini_linq::pull_stream;
         keys ::std::collections::HashSet;
         build { out(k) => ([k]) :- Keys(k) => for (k,) in ([(1_i64,), (2,), (1,)]); }
     };
@@ -155,14 +155,45 @@ fn predicate_helper_does_not_shadow_direct_or_opaque_caller_expressions() {
     }
     let calls = Cell::new(0);
     let direct = mini_linq::prune_rows! {
-        iterator mini_linq::stream_access;
+        iterator mini_linq::pull_stream;
         candidates blocks { &view } (__cq_bind_predicate(&calls))
     };
     assert_eq!(direct.map(|handle| *handle.3).collect::<Vec<_>>(), [[1]]);
     let opaque = mini_linq::prune_rows! {
-        iterator mini_linq::stream_access;
+        iterator mini_linq::pull_stream;
         candidates blocks { &view } (caller_predicate!(&calls))
     };
     assert_eq!(opaque.map(|handle| *handle.3).collect::<Vec<_>>(), [[1]]);
     assert_eq!(calls.get(), 2);
+}
+
+#[cfg(feature = "hash-rows")]
+#[test]
+fn producer_private_accumulator_does_not_capture_body_names() {
+    let __cq_output = 7_i64;
+    macro_rules! caller_row {
+        () => {
+            [__cq_output]
+        };
+    }
+    mini_linq::hash_rows! {
+        produce owner view via emit {
+            emit([__cq_output]);
+            emit(caller_row!());
+        }
+    }
+    assert_eq!(view, &std::collections::HashSet::from([[7]]));
+}
+
+#[cfg(feature = "block-rows")]
+#[test]
+fn block_producer_private_accumulator_does_not_capture_body_names() {
+    let __cq_output = 7_i64;
+    mini_linq::block_rows! {
+        storage cq_storage;
+        packing (std::num::NonZeroUsize::new(1).unwrap());
+        produce owner view via emit { emit([__cq_output]); }
+    }
+    let rows = mini_linq::block_rows! { storage cq_storage; scan (&view) };
+    assert_eq!(rows.copied().collect::<Vec<_>>(), [[7]]);
 }

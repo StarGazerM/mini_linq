@@ -8,5 +8,5 @@ publish = false
 
 [dependencies]
 mini-linq = { path = "../../crates/mini-linq", default-features = false, features = [
-    "graph", "result-indexes", "materialized", "pull", "collect-pipeline",
+    "graph", "result-indexes", "hash-materialized", "pull", "collect-pipeline",
 ] }

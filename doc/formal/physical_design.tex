@@ -1,16 +1,18 @@
 \input{common}
 \title{MiniLinq: Physical Choices Through Access Refinement}
 \author{Administrative rules, algorithms, and compiler correspondence}
-\date{14 September 2026}
+\date{15 September 2026}
 \begin{document}
 \maketitle
 \begin{abstract}
 Physical representation and traversal choices refine an existing compiler edge
 from named relational algebra to Rust containing local Access plans. The compiler
 keeps layouts, current relation versions and shared key resources in an ordinary
-lowering environment. Native operations independently select exact keys, optional
-coordinate summaries, current-row or block-pruned candidates, and hash or nested
-join witnesses. Exact residuals preserve semijoin semantics after conservative
+lowering environment. Native operations independently select typed row
+representations, exact keys and optional coordinate summaries, current-row or
+block-pruned candidates, and complete hash, nested or sort/merge pair algorithms.
+Producer and consumer fragments keep algorithm scheduling separate from result
+construction. Exact residuals preserve semijoin semantics after conservative
 metadata rejection. This supplement gives the operation syntax, representation
 laws, implementation-linked rules, algorithms and conditional preservation argument.
 No additional whole-program IR or runtime relational interpreter is required.

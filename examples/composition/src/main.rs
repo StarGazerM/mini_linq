@@ -2,8 +2,8 @@
 //! The alias selects each next stage; Cargo excludes the other implementations.
 mod wiring {
     pub use ::mini_linq::{
-        collect_access, collect_pipeline, graph_query as mini_linq,
-        materialized_query as index_requirements, result_indexes as relational_plan,
+        pull_set, collect_pipeline, graph_query as mini_linq,
+        hash_materialized_query as choose_realization, result_indexes as choose_indexes,
     };
 }
 use wiring as mini_linq;

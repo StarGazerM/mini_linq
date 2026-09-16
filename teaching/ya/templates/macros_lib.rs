@@ -9,7 +9,7 @@ use proc_macro::TokenStream;
 pub fn graph_query(input: TokenStream) -> TokenStream {
     stage(
         input,
-        Some(syn::parse_quote!(mini_linq::relational_plan)),
+        Some(syn::parse_quote!(mini_linq::choose_indexes)),
         cq_plan::graph::compile,
     )
 }
@@ -18,40 +18,40 @@ pub fn graph_query(input: TokenStream) -> TokenStream {
 pub fn result_indexes(input: TokenStream) -> TokenStream {
     stage(
         input,
-        Some(syn::parse_quote!(mini_linq::index_requirements)),
+        Some(syn::parse_quote!(mini_linq::choose_realization)),
         cq_index::result::compile,
     )
 }
 
 #[proc_macro]
-pub fn materialized(input: TokenStream) -> TokenStream {
+pub fn hash_materialized(input: TokenStream) -> TokenStream {
     stage(
         input,
         None,
         |input: &AccessInput<cq_ir::index_requirements::Module>| {
-            cq_physical::materialized::compile_materialized(&input.source, &input.access)
+            cq_realize::hash_materialized::compile_materialized(&input.source, &input.access)
         },
     )
 }
 
 /// The same selected computation inside an anonymous Rust closure.
 #[proc_macro]
-pub fn materialized_query(input: TokenStream) -> TokenStream {
+pub fn hash_materialized_query(input: TokenStream) -> TokenStream {
     stage(
         input,
         None,
         |input: &AccessInput<cq_ir::index_requirements::Module>| {
-            cq_physical::materialized::compile_materialized_callable(&input.source, &input.access)
+            cq_realize::hash_materialized::compile_materialized_callable(&input.source, &input.access)
         },
     )
 }
 
 #[proc_macro]
-pub fn collect_access(input: TokenStream) -> TokenStream {
+pub fn pull_set(input: TokenStream) -> TokenStream {
     stage(
         input,
         Some(syn::parse_quote!(mini_linq::collect_pipeline)),
-        cq_pull::compile,
+        cq_execution::pull::compile,
     )
 }
 

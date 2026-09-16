@@ -1,6 +1,5 @@
 //! Borrowed access to an immutable block directory and its payload.
 
-use std::collections::HashSet;
 use std::num::NonZeroUsize;
 
 /// An immutable address space whose metadata can be traversed before payload.
@@ -78,7 +77,8 @@ pub trait CoordinateBounds {
 /// The resulting address space must contain exactly the supplied set. Chunk
 /// order and layout are implementation choices; `block_rows` is the requested
 /// maximum number of rows in each nonempty block. Construction is independent
-/// of subsequent access-path or selection choices.
+/// of subsequent access-path or selection choices. The caller supplies distinct
+/// rows; their carrier is not part of this storage contract.
 pub trait BuildBlocks: BlockRead {
-    fn pack_unique(rows: HashSet<Self::Row>, block_rows: NonZeroUsize) -> Self;
+    fn pack_unique(rows: impl IntoIterator<Item = Self::Row>, block_rows: NonZeroUsize) -> Self;
 }

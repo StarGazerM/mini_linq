@@ -1,5 +1,5 @@
 //! Let bindings introduce Rust values; atom variables borrow input fields.
-use super::{check, query};
+use super::{check, mini_linq, query};
 
 query! {
     struct TypedLet;

@@ -33,7 +33,8 @@ existing pull pass and set-valued Pipeline endpoint before standalone rustc comp
 It does not exercise procedural-macro routing for all 25 shapes.
 
 The separate [public-macro end-to-end suite](../crates/mini-linq/tests/planned_queries.rs)
-closes that gap. Every shape is literal CQ passed to `planned_query!`; Cargo
+closes that gap. Every shape is literal CQ passed to `optimized_query!` through
+a facade selecting result indexes and eager hash realization; Cargo
 expands the entire public chain and compiles the generated program. Test code
 calls no compiler passes and performs no AST lowering. Each shape has its own
 named test, and a coverage assertion compares the complete set of names and

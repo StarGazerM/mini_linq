@@ -508,7 +508,7 @@ must update each affected language contract and its corresponding lowering.
 | Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-plan/src/canonical/lower.rs`, and `crates/cq-plan/src/prefix/rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence in the owning logical implementation module |
 | Index selection | `crates/cq-index/src/input/mod.rs`, `crates/cq-index/src/result/mod.rs`, and their `correspondence.rs` checks | Extend key derivation over the complete RelationalPlan and its independent check |
 | Access annotations | `crates/cq-ir/src/rust_access_plan.rs` | Extend occurrence-to-access checking for negation and aggregation |
-| Physical realization | `crates/cq-physical/src/input/mod.rs` and `crates/cq-physical/src/lazy/mod.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
+| Physical realization | `crates/cq-realize/src/hash_inputs/mod.rs` and `crates/cq-realize/src/hash_prefix/mod.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
 
 You may add private helpers next to these sites. Do not add a generic pass
 trait, a dynamic query interpreter, or a second storage/access descriptor IR.

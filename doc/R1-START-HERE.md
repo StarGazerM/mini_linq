@@ -26,16 +26,16 @@ in this checkout live in separate implementation modules:
 
 - CQ lowering: `crates/cq-plan/src/canonical/lower.rs`;
 - input-index selection: `crates/cq-index/src/input/mod.rs`;
-- indexed physical lowering: `crates/cq-physical/src/input/mod.rs`.
+- indexed physical lowering: `crates/cq-realize/src/hash_inputs/mod.rs`.
 
 | Homework | Typed function | Successful result |
 |---|---|---|
 | Basic HW1 | `cq_plan::canonical::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` containing the unchanged source `Program` and a complete named relational plan |
 | Basic HW2 | `cq_index::input::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
-| Basic HW3 | `cq_physical::input::compile_input_indexed(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete sequential `Program + Storage` API and exactly one expression-position `pull!` region |
+| Basic HW3 | `cq_realize::hash_inputs::compile_input_indexed(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete sequential `Program + Storage` API and exactly one expression-position `pull!` region |
 
 Staff supplies the syntax definitions, parsers, local contracts, edge
-contracts, direct proc-macro entries, `cq_pull::compile`,
+contracts, direct proc-macro entries, `cq_execution::pull::compile`,
 `cq_pipeline::iterator::compile`, fixtures, and the structural and runtime harness.
 Do not add a second parser, a token-stream compiler API, a generic pass
 framework, or an expansion wrapper.
@@ -237,10 +237,15 @@ materializes its input. The plan exposes the conventional left-deep binary
 operator boundaries and intermediate binding tuples. It deliberately does not
 contain the Rust names `map` or `flat_map`.
 
+This is the supplied emitter's shape. Authored Pipeline programs may use other
+fresh stream names, rename tuple fields, select/reorder retained bindings and
+project before another operator. Each operator still consumes the preceding
+stream exactly once, and `distinct` remains final.
+
 The second supplied pass performs the semantic lowering from those operators
 to one ordinary Rust `syn::Expr`. It creates one named `let iterN` per plan
 definition. `scan` becomes `map`, binary join becomes `flat_map` whose right
-side is a parameterized `map`, predicates become `filter`, projection becomes
+side is a parameterized `map`, predicates become consuming `filter_map`, projection becomes
 `map`, and distinctness becomes a stateful `HashSet` filter.
 
 An outer `once_with(move || { ... }).flatten()` defers even the root source

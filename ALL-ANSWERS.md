@@ -11,8 +11,8 @@ actual default route selection and complete-program composition; callers import
 explicit implementations and planning types from their owning crates.
 
 The basic route is CQ → RelationalPlan → IndexRequirements → staged Rust.
-`cq-plan::canonical`, `cq-index::input` and `cq-physical::input` supply its three
-transformations. `cq-pull` and `cq-pipeline` lower its embedded Access and
+`cq-plan::canonical`, `cq-index::input` and `cq-realize::hash_inputs` supply its three
+transformations. `cq-execution` and `cq-pipeline` lower its embedded Access and
 Pipeline regions to native Rust.
 
 The canonical bare-variable route begins with Rename and does not emit `Unit`.
@@ -69,15 +69,13 @@ proc-macro artifacts are replaced.
 The branch-local `.vscode/settings.json` enables
 `cq-workloads/compiled-queries`. That feature forwards
 `mini-linq/compiled-workloads`, so every direct `workload_query!` invocation
-emits its typed-CQ catalog factory and calls `cq_compose::compile_program` to emit its generated `Program` and
-`ProgramStorage`. It does
-not invoke a nested `mini_linq!` wrapper.
+emits its typed-CQ catalog factory and an ordinary caller-bound `mini_linq!`
+invocation. Planner, index-policy and realization aliases therefore affect
+workloads just as they affect authored queries.
 
-Consequently, Rust Analyzer's recursive command is **not** a layer stepper: it
-returns the final ordinary Rust, and the first three typed results never exist
-as nested macro invocations in `workload_query!`. Do not try to expand again
-from the virtual `[EXPANSION].rs` buffer. Use `cargo xtask explain` for the six
-compiler boundaries.
+Rust Analyzer's recursive expansion still returns final ordinary Rust; it is
+not a layer stepper. Use `cargo xtask explain` to retain all six intermediate
+artifacts rather than trying to expand the virtual `[EXPANSION].rs` again.
 
 `Program::build` performs one-time input normalization and all physical
 construction. `Storage::query` returns one lazy, distinct result cursor;
@@ -85,10 +83,12 @@ constructing it reads no stored row, and its first `next()` enters the outer
 `once_with`. `Storage::materialize` drains that already-distinct cursor into a
 `Vec` and sorts it. No second raw-result cursor is generated.
 
-The supplied `cq_pull::compile` lowering preserves operator boundaries as an
+The supplied `cq_execution::pull::compile` lowering emits an
 IteratorPipeline: `scan`, left-deep binary `join`, `filter`, `project`, and
 explicit `distinct`, with one named `iterN` result and a complete intermediate
-binding tuple at every edge. `cq_pipeline::iterator::compile` then chooses the
+binding tuple at every edge. The Pipeline language itself also admits fresh
+names, early projections and selected/reordered bindings while retaining linear
+single-consumer ownership. `cq_pipeline::iterator::compile` then chooses the
 actual Rust `map`, `flat_map`, and `filter` adapters and emits one Rust local
 per `iterN`. Its returned `syn::Expr` is the final concrete IR; proc-macro
 `ToTokens` is pure emission.

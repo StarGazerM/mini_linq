@@ -1,7 +1,7 @@
 use super::{edges::assert_pull_pipeline_lowers_to_iterator_expression, fixtures};
+use cq_execution::pull::compile as compile_pull;
 use cq_ir::{cq, index_requirements, iterator_pipeline, rust_access_plan};
 use cq_pipeline::iterator::compile as compile_iterator_pipeline;
-use cq_pull::compile as compile_pull;
 use quote::quote;
 pub fn assert_semantically_invalid_sources_fail_local_contracts() {
     let invalid = fixtures::invalid_sources();

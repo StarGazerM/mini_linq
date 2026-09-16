@@ -17,10 +17,11 @@
 
 ## Current compiler design
 
-- [Compiler structure](COMPILER-STRUCTURE.md): implemented ownership by macro
-  boundary, package dependencies, selectable modules and extraction checks.
-- [IR boundary review](IR-STAGE-REVIEW.md): languages, stages, and supported routes.
-- [Access refinement](ACCESS-REFINEMENT.md): physical choices, current views, exact pruning and concrete storage traits.
+- [Compiler boundaries](IR-STAGE-REVIEW.md): public macro families, native
+  producer syntax, composition laws and remaining implementation limits.
+- [Compiler structure](COMPILER-STRUCTURE.md): package dependencies,
+  module ownership, feature isolation and teaching extraction.
+- [Access refinement](ACCESS-REFINEMENT.md): representation choices, complete pair algorithms, current views and exact pruning.
 - [Rust expressions](RUST-EXPRESSIONS.md): binding, evaluation, and scheduling rules.
 - [Extended compiler research manuscript](formal/README.md):
   interacting host-expression dependencies, replaceable compilation paths,

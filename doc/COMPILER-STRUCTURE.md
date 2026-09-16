@@ -1,331 +1,183 @@
-# Compiler ownership by macro boundary
+# Compiler structure
 
-The compiler is organized into **11 compiler/storage packages**, excluding the
-root course package, workloads and tooling. A package owns a coherent semantic
-boundary family; modules own its independently selectable implementations. The
-[formal snapshot](formal/snapshot.txt) records validation for reviewed sources.
+The unit of replacement is an implementation of a semantic macro boundary.
+Crates group related implementations of that boundary; modules own individual
+algorithms, their admitted domains, emitters, correspondence checks and tests.
+A feature includes an implementation. A caller's Rust macro binding selects it.
 
-The replacement unit is an implementation of a semantic macro boundary. Its
-module owns the algorithm, admitted domain, configuration, correspondence checks
-and tests. Shared helpers stay within that family unless they express
-independently useful facts about an existing language.
+The [boundary specification](IR-STAGE-REVIEW.md) defines the language graph,
+public macro families and replacement laws. The [formal supplement](formal/README.md)
+links inference rules to implementation markers.
 
-## Boundaries and obligations
+## Package responsibilities
 
-The language graph remains:
+| Package | Modules / responsibility | Production workspace dependencies |
+| --- | --- | --- |
+| `cq-ir` | CQ, RA, equality demands, Access, Pipeline and Native syntax; local judgments and factual heading queries | None |
+| `cq-storage` | Data structures and minimal operation traits; block selections, summaries and passive counters | None |
+| `cq-plan` | `canonical`, `prefix`, `graph`; logical scheduling and derivations | `cq-ir` |
+| `cq-index` | `input`, `result`; equality-demand policies | `cq-ir` |
+| `cq-realize` | `hash_inputs`, `hash_prefix`, `hash_materialized`, `relations`; whole-query realization and hosts | `cq-ir` |
+| `cq-native` | `rows`, `candidates`, `keys`, `witnesses`, `pairs`; local Native operation implementations | `cq-ir` |
+| `cq-execution` | `pull`, `push`; Access execution alternatives | `cq-ir` |
+| `cq-pipeline` | `iterator`, `collect`, `stream`; Pipeline endpoints | `cq-ir` |
+| `cq-compose` | Typed named compositions for tools and AST clients | Selected compiler families, `cq-ir` |
+| `mini-linq` | Procedural-macro entries, invocation-scoped continuations and administrative configuration | Selected families and optional composition |
+
+Implementation libraries are ordinary Rust crates because typed clients use
+`compile`, `check`, `explain` and `replay`. The proc-macro crate holds exported
+entries and calls those libraries. It owns no additional query language.
+Runtime storage never invokes a compiler and contains no semijoin interpreter.
+Generated Rust may use caller-selected storage paths without the emitting
+compiler library linking that storage crate.
+
+Combining row providers and access algorithms in `cq-native` reflects their
+shared local-operation dialect. Their modules remain independent alternatives;
+block rows do not imply pruning, zone keys or pull. Combining pull and push in
+`cq-execution` makes their common Access input explicit without pretending their
+results have identical demand contracts. Renaming the whole-query family to
+`cq-realize` avoids implying that pull is somehow outside physical execution.
+
+## Module ownership and features
 
 ```text
-CQ → RA → IndexRequirements → Rust[Access] → Rust[Pipeline] → Rust
-     RA ── configured direct physical lowering ──→ Rust[Access]
+cq-realize/src/                    cq-native/src/
+  hash_inputs/                      rows/{hash,sorted,block,tuple_hash,tuple_sorted}.rs
+  hash_prefix/                      candidates/{scan,prune}.rs
+  hash_materialized/                keys/{exact,zone}.rs
+  relations/                        witnesses/{hash,nested}.rs
+    layout.rs                       pairs/{hash,nested,merge}.rs
+    expressions.rs
+    resources.rs                  cq-execution/src/
+    lower.rs                        pull/{mod,check}.rs
+    check.rs                        push.rs
+    hosts/{plain,observed}.rs
 ```
 
-For an implementation `a`, write `compile_a : L -> Result<T_a>`. The target
-`T_a` is an existing IR or a Rust fragment containing holes `Rust[H1, …, Hn]`.
-`L` and the holes `Hj` are existing languages or native Rust fragments. Each
-implementation has an admitted domain and an observation to preserve. Its selected
-continuation must accept the emitted hole and satisfy the required binding,
-ownership and observation laws. A common token grammar or resolving macro name
-does not prove composition correct. These are mathematical obligations, not a
-Rust `Pass` trait, capability registry, route tag or serialized IR.
+Shared helpers express a common mechanism, not a global backend selector.
+For example, native set emission takes type and row representation syntax from
+its owning implementation. It does not inspect a provider name and choose a
+backend. Each realization checks its own index coverage; the IR describes facts
+and validity, not preferred implementation decisions.
 
-| Boundary | Implementation modules | Responsibility |
-| --- | --- | --- |
-| CQ → RA | canonical, prefix, graph | Scheduling, rules, domain, derivation/replay and correspondence |
-| RA → IndexRequirements | input, result | Key-demand policy, namespace and independent correspondence |
-| IndexRequirements → Rust with Access | input, lazy, materialized | Representation, construction, lifetime and generated computation |
-| Configured RA → Rust with Access | direct | Per-binding layouts, current result versions and resource lifetime |
-| Candidate access | scan, prune | Enumeration and its conditional exact-residual obligation |
-| Key resource | exact, zone | Construction, exact membership and, for zone, conservative range tests |
-| Witness resource | hash, nested | Construction and every probe using that representation |
-| Row provider | hash, sorted, block | Types, input views, handles, selection, materialization and supported block operations |
-| Access → Pipeline | pull | Binding/control translation independent of endpoint |
-| Pipeline → Rust | iterator, collect, stream | Endpoint realization and its set/sequence/demand observation |
+Production dependencies cannot connect implementation families or point back
+at composition. Tests may compose families through development dependencies.
+Cargo features are independent additive implementation switches. Frontend
+`prune-rows` includes candidate pruning alone; its caller supplies row, key and
+iterator implementations separately. A selected macro retains its meaning when
+another implementation is enabled.
 
-A resource protocol is indivisible for replacement: zone construction and the
-operations interpreting its resource must agree; hash construction cannot pair
-with nested probing. Candidate and key-resource choices remain separate, with
-their joint obligation established by the enclosing exact semijoin.
+Cargo isolates crates, not sibling modules. The dependency guard therefore also
+builds source closures with unused siblings physically absent. This establishes
+buildability without turning every helper or algorithm into another package.
+A module can become a package later when dependencies or deployment justify it;
+its macro protocol need not change.
 
-Exported spellings do not create additional implementations. `pull`,
-`collect_access` and `stream_access` use one translation with different
-continuations. `result_indexes` and `planned_relational_plan` use one index policy.
-Materialized program and callable entries share a computation with different
-hosts. `workload_query` is a catalog frontend.
+## Composition and decision ownership
 
-## Packages and modules
-
-| Package | Modules / responsibility | Permitted local dependencies |
-| --- | --- | --- |
-| `cq-ir` | Existing languages, local judgments and factual syntax/heading queries | None |
-| `cq-storage` | Data structures, operation traits, selections, summaries and passive counters | None |
-| `cq-plan` | `canonical`, `prefix`, `graph`; scoped dependency/proof support | `cq-ir` |
-| `cq-index` | `input`, `result`, each with its domain and checker | `cq-ir` |
-| `cq-physical` | `input`, `lazy`, `materialized`, `direct`; private Rust/check helpers | `cq-ir` |
-| `cq-access` | `candidates::{scan,prune}`, `keys::{exact,zone}`, `witnesses::{hash,nested}` | `cq-ir` |
-| `cq-providers` | `hash`, `sorted`, `block`; complete representation protocols | `cq-ir` |
-| `cq-pull` | Access → Pipeline implementation and checker | `cq-ir` |
-| `cq-pipeline` | `iterator`, `collect`, `stream` and endpoint checks | `cq-ir` |
-| `cq-compose` | Named default compositions and source-dependent route selection | Selected compiler families and `cq-ir` |
-| `mini-linq` | Thin procedural-macro entries and administrative parsing | Selected families, optional `cq-compose`, `cq-ir`; storage for execution tests |
-
-The dependency guard checks normal, development, build, optional, target-specific
-and renamed dependencies. An implementation family cannot import another family
-or the composition layer. Cross-family execution tests belong to composition or
-frontend consumers. Generated Rust may use caller-selected storage paths without
-the compiler library linking the runtime storage crate.
-
-Implementations are ordinary Rust libraries because typed clients use `compile`,
-`check`, `explain` and `replay`. The frontend root exports thin macros; its parsing
-helpers are private modules. Rust requires exported procedural macros at the root
-of a `proc-macro` crate, but not their implementation code.
-[Rust Reference](https://doc.rust-lang.org/reference/procedural-macros.html#macro.proc.def)
-
-For example:
+The default route expands one caller-bound decision at a time:
 
 ```text
-cq-access/src/
-  lib.rs
-  candidates/{mod.rs,scan.rs,prune.rs}
-  keys/{mod.rs,exact.rs,zone.rs}
-  witnesses/{mod.rs,hash.rs,nested.rs}
+mini_linq → canonical_query or prefix_query
+          → choose_indexes → input_indexes or result_indexes
+          → choose_realization → hash_inputs, hash_prefix or hash_materialized
+          → pull / pull_set → selected Pipeline endpoint
 ```
 
-Small implementations need no mandatory file template; larger ones split private
-files. Parent modules declare alternatives and narrowly scoped shared helpers.
-They do not select a recognized backend through Boolean or enum dispatch. The
-native-set helper takes the selected type syntax from its owning hash/sorted
-module; it does not decide between them.
+`optimized_query` chooses graph or prefix planning. It shares the same subsequent
+bindings. The graph planner's semijoin RA reaches a compatible realization under
+default wiring. Workload compilation enters this same macro route.
 
-Features independently include implementation modules. Frontend `prune-rows`
-enables only `cq-access/candidate-prune`; it does not enable zone keys, block
-storage, pull or a Pipeline endpoint. Those are separately supplied choices.
-Family dependencies use `default-features = false`; optional convenience bundles
-belong to composition. A selected macro has the same meaning when another
-implementation is enabled. Cargo features are additive and can unify across
-consumers.
-[Cargo Book](https://doc.rust-lang.org/cargo/reference/features.html#feature-unification)
+Each dispatcher examines its actual input. IX contains no hidden route tag.
+Changing an index policy can therefore change which realization accepts the
+result. Explicit implementation entries do not invoke default selection. A
+caller can replace the entire RA-to-Rust edge with configured relation realization
+or bind a smaller native operation inside that realization.
 
-**Enforcement limit:** Cargo isolates families, not sibling modules. Reviewed
-source inventories, import checks and actual source-removal builds check sibling
-independence. This is not one-package-per-algorithm isolation. An implementation
-needing its own dependency stack or release lifecycle can later become a crate
-without changing its macro protocol.
+Typed `cq-compose` clients intentionally run a fixed Rust function composition;
+they are a separate API from invocation-scoped macro composition. Its index and
+realization selection functions expose the same domain decisions, while the
+frontend emits calls rather than consuming later macro choices internally.
 
-## Shared code and analysis ownership
-
-| Fact or helper | Owner |
-| --- | --- |
-| Planner dependency facts, options and derivation/report support | `cq-plan::{dependencies,model,proof}` |
-| Native Rust expression aliases and fresh locals | Private `cq-physical::rust_bindings`, used by emitters |
-| Independent syntax observations and hash/set recognition | Private `cq-physical::check_support`, used by checkers |
-| Input access reconstruction and ownership facts | Private `cq-physical::input::analysis` |
-| Lazy linear-prefix domain | `cq-physical::lazy::domain` |
-| Input-index domain and expected canonical demands | `cq-index::input::{domain,correspondence}` |
-| Sufficient index coverage for a physical realization | Each consuming physical implementation |
-| Namespace-preserving index signature | `cq-ir::index_requirements::signature` |
-| Shared-heading coordinates | `cq-ir::relational_plan::shared_columns` |
-
-The input-index emitter derives demands from RA headings and Rename coordinates.
-Its checker independently derives expected demands. Physical checks verify
-sufficient supplied coverage; they do not invoke the selector or require its
-preferred ordering.
-
-For `R(a,b) ⋈ S(b,c)`, a factual query can report `{b}` and its coordinate in `S`.
-It cannot prescribe a right-result hash index for every backend. Base-input and
-named-result namespaces remain distinct, including self-joins and updated RA
-versions. Route restrictions never become RA validity.
-
-Planner implementations share source facts and proof vocabulary; each owns its
-decisions. Graph planning never calls prefix lowering. Independent checkers may
-share structural observations with other checkers, but never call an emitter to
-manufacture an expected target. Small independent traversals preserve this
-separation without an analysis framework or another IR.
-
-## Configuration belongs to the selected implementation
-
-Native configuration follows the selected implementation and operation:
-
-| Implementation | Required configuration, where used |
-| --- | --- |
-| Candidate scan | None |
-| Candidate prune | Iterator continuation |
-| Exact keys | Build: iterator and collection; contains: exact-membership trait path |
-| Zone keys | Build: iterator, collection and summary/trait path; tests: relevant trait path |
-| Hash/nested witnesses | Build: iterator; probe needs no iterator configuration |
-| Native hash/sorted rows | None |
-| Block rows | Storage/trait path; materialization additionally needs packing size |
-
-Only operations that observe work use an optional counter expression. A binding
-can close over configuration for its whole protocol; a direct membership call
-needs no construction iterator. Derived frontend parsing separates administrative
-directives from existing IR operands. Implementation-specific option values and
-checks determine which directives are accepted and required.
-
-Configured bindings are ordinary lexical Rust macros. For example:
+An eager recipe is a Rust facade:
 
 ```rust
-macro_rules! r_rows {
-    ($($op:tt)*) => {
-        raw::block_rows! { storage ::cq_storage; $($op)* }
-    };
-}
-macro_rules! r_candidates {
-    ($($op:tt)*) => {
-        raw::prune_rows! { iterator raw::stream_access; $($op)* }
-    };
-}
-macro_rules! r_keys {
-    ($($op:tt)*) => {
-        raw::zone_keys! {
-            storage ::cq_storage;
-            iterator raw::stream_access;
-            keys ::std::collections::BTreeSet;
-            $($op)*
-        }
+mod eager {
+    pub use ::mini_linq::{
+        optimized_query, graph_query, prefix_query,
+        result_indexes as choose_indexes,
+        hash_materialized as choose_realization,
+        pull_set, collect_pipeline,
     };
 }
 ```
 
-`raw` aliases the macro frontend. `r_rows` covers borrowed input access; a binding
-used for block materialization also closes over `packing (expression);`. Direct
-physical lowering receives configured paths per input/result, candidate, key
-resource and witness resource, plus its own Access continuation. It does not
-inject a leaf's storage, collection or iterator choices. The same configured
-provider supplies types and operations. One query can use R=block, S=hash and
-T=sorted independently.
+Use `eager as mini_linq` in the scope where that recipe is desired. A facade is
+not a new IR or compiler pass. Mixed lazy/eager tests use separate scopes because
+host-expression effects can differ between the two schedules.
 
-The native materialization operation is `materialize owner value (rows)`.
-Packing size belongs only to block-provider configuration. Rows evaluate first,
-then packing size, each once per actual construction. The provider represents the
-supplied rows exactly and keeps its handles within valid storage lifetimes.
-Generated helper bindings must preserve caller expression resolution, including
-names hidden inside macros.
+## Configuration and rejection
 
-The direct edge has plain and observed item/callable hosts. Item hosts expose
-`run` without a global packing argument; bound expressions must be legal in that
-item's scope. `physical_query` and `observed_physical_query` return closures over
-borrowed inputs in declaration order. Configured expressions can capture caller
-values, including dynamic packing sizes. Both return owned answers; internal
-handles cannot escape their input/storage lifetime. All four hosts share the
-same RA definition lowering.
+Relation bindings select providers per input and producing RA result. Rename,
+Select and Semijoin inherit their source representation. Separate bindings select
+candidate traversal, key resources and complete pair algorithms. Scoped defaults
+are optional when all used operations have explicit bindings. Unused operations
+do not require configuration.
 
-The observed host owns counters and per-result checkpoints. It forwards the
-actual counter expression through `work (expression);` to configured operation
-bindings. The stats storage path does not choose relation representations.
-Type-position provider calls use the plain binding without an observer prefix.
-Paired plain/observed bindings must use the same representation.
+Native options are checked for the selected operation. Scan needs none; pruning
+needs its iterator continuation; exact/zone construction needs its collection and
+iterator; block construction needs packing size. A direct membership test needs
+no construction iterator. Observers add an explicit counter expression only to
+operations that can use it.
 
-For example, an observed pruning adapter binds its iterator and forwards work:
+Leaf operations are declared once in `cq-ir::native` using derived parsing. The
+frontend parses only administrative macro paths and expressions around them.
+Unsupported combinations fail at selected expansion or Rust type checking:
+there is no universal storage wrapper, silently substituted representation or
+runtime capability registry.
 
-```rust
-macro_rules! observed_candidates {
-    (work ($work:expr); $($op:tt)*) => {
-        raw::prune_rows! {
-            iterator raw::stream_access;
-            work ($work);
-            $($op)*
-        }
-    };
-}
-```
+Provider traits expose only the required storage operations. `BuildBlocks`
+accepts any iterator of unique rows; a HashSet is not part of its public carrier
+contract. Materialization owns uniqueness before block construction. Private
+storage layout stays behind qualified trait calls in generated code.
 
-An observed scan adapter may discard that prefix; raw scan also accepts it
-without emitting or evaluating the unused expression. Plain-only adapters need
-no observer support. This is an explicit observer convention, not an extra
-relational operation or a universal runtime API.
+Ownership is divided at the same boundaries. Relation lowering supplies borrowed
+field expressions to key operations and pair algorithms; exact key providers
+retain references, while zone providers copy referenced integer coordinates.
+Set selection stores row references, so the enclosing realization keeps earlier
+views and owners alive for repeated selection and borrowed resources. Expression
+aliases also borrow computed fields. Consuming expressions must request ownership
+explicitly; construction of owned records and answers may still clone fields.
+These are operation and lifetime contracts within the existing Native dialect,
+not another ownership IR or a universal storage wrapper.
 
-Two binding invariants govern direct lowering:
+The observed relation host forwards its counter through selected native paths;
+it does not choose storage. Item and callable hosts share definition lowering.
+The callable captures packing expressions in ordinary Rust scope. Internal
+handles cannot escape the borrowed inputs; returned answers are owned.
 
-- Key-resource reuse requires the same current right-hand RA result, ordered key
-  coordinates and configured macro binding. Different aliases cannot share
-  merely because they wrap the same raw implementation. Path spelling within a
-  fixed lexical scope is a conservative identity, not equivalence discovery.
-- Wrappers forward operand tokens without expanding them. Scan discards its
-  unused metadata predicate, so unsupported `may_match` tokens do not expand.
-  Pruning expands them and rejects exact-only keys or providers without block
-  operations through selected expansion or Rust typing.
-
-## Decision ownership and composition
-
-| Decision | Owner |
-| --- | --- |
-| Explicit algorithm / next stage | Caller aliases and configured bindings |
-| Source-dependent default route | Named composition in `cq-compose` |
-| Legal operator order | Selected planner implementation |
-| Indexed realization domain and coverage | Selected physical implementation |
-| Storage per input/result | Direct physical binding choices |
-| Zone/exact, scan/prune, hash/nested | Selected native implementation modules |
-| Block packing and key collection | Selected provider/resource binding |
-| Input-data-dependent execution choice | An implementation emitting both valid Rust branches |
-
-`cq-compose::with_default_indexes` chooses the default index policy and physical
-continuation together at the RA boundary. `expand_indexed` emits the resulting IX
-inside the selected caller-supplied macro path. `compile_indexed` uses the same
-branch for typed complete-program compilation. The path is administrative wiring;
-IX carries no route identifier. Composition never names the frontend crate.
-
-Frontend defaults use invocation-relative paths such as
-`mini_linq::input_indexed`, permitting lexical aliases and renamed dependencies.
-Explicit index entries still emit the caller-resolved `index_requirements`
-continuation. That spelling can name a selected physical macro in a wiring
-module; there is no standalone automatic selector that guesses an earlier index
-choice. Independently authored IX invokes an explicit physical entry and receives
-that implementation's diagnostics.
-
-Composition does not infer block support from provider names or replace a user's
-hash storage. Successful expansion does not establish provider semantic laws.
-
-## Verification and teaching extraction
-
-[The dependency/source-removal gate](../tools/check_dependencies.py) checks:
-
-- The package dependency table, exact frontend feature forwarding and rejected
-  forbidden-dependency mutations.
-- Twenty-four implementation/foundation source closures with siblings physically
-  omitted. Only declarations and feature metadata are reduced; algorithm sources
-  are copied unchanged. Family tests also run with all implementations enabled.
-- Twenty-two external frontend probes with renamed dependencies and actual macro
-  calls. Replacement continuations work while built-in next stages are disabled.
+## Validation and extraction
 
 ```sh
+cargo test --workspace
 python3 tools/check_dependencies.py --isolate
-```
-
-The [package feature matrix](../tools/check_features.py) separately runs ordinary
-`cargo test -p mini-linq` commands with no defaults, each completed feature,
-default/completed bundles, and the feature combinations declared by test/example
-targets. Cargo prerequisites gate multi-stage tests; native boundary tests keep
-their individual feature gates, so scan-only builds execute the scan regression.
-Cases are derived from Cargo metadata, including transitive feature dependencies.
-The unfinished `hw4` exercise is excluded. This matrix checks supported package
-workflows, not every possible subset of features.
-
-```sh
 python3 tools/check_features.py
-python3 tools/check_features.py --only scan-rows
+python3 tools/export_ya.py --help
+make -C doc/formal
 ```
 
-Execution and correspondence remain separate gates. They cover independently
-authored RA/IX/Access/Pipeline, mutated targets, operation-specific configuration,
-discarded operands, once-only evaluation, caller name resolution, dynamic packing,
-owned outputs, heterogeneous blocked-YA, current masks, stale versions,
-differently configured resources and observed work counts. See the
-[composition tests](../crates/mini-linq/tests/composition.rs),
-[standalone example](../examples/composition/README.md),
-[blocked-YA example](../examples/blocked-ya/main.rs) and
-[native boundary tests](../crates/mini-linq/tests/native_boundaries.rs).
+The dependency tool distinguishes a macro-resolution probe from an executable
+query consumer. Feature tests run real package targets, including independently
+selected push execution, tuple providers and pair algorithms. The matrix is
+derived from Cargo metadata and target prerequisites; it does not enumerate all
+possible feature subsets.
 
-[YA extraction](../teaching/ya/README.md) selects graph, result-index,
-materialized, pull and collection implementations into seven packages, including
-IR and the frontend. Other implementations are physically absent. The current
-profile inventories 80 delivered files and separates two student algorithms:
-the YA scheduler and semijoin lowering. Verification checks the supplied
-foundation, each missing exercise separately, 75 reference-overlay tests and
-both examples, then restores the stubs and checks every inventory hash. No parent
-checkout, storage runtime or unrelated compiler family is required.
+[YA extraction](../teaching/ya/README.md) physically selects its graph, result-index,
+eager hash, pull and collection implementations. Students receive the required
+syntax and foundation without unrelated native storage or execution alternatives.
+Its reference overlay and restored exercise stubs are verified independently.
 
-The formal rule/source maps and [snapshot](formal/snapshot.txt) record reviewed
-implementation correspondence and completed validation. Dependency isolation,
-module extraction and semantic correctness are distinct claims. These checks do
-not prove arbitrary provider laws, arbitrary compositions, full Rust elaboration,
-recursive program semantics or a general physical optimizer.
+Execution tests and correspondence tests answer different questions. Source
+isolation alone proves neither relational equivalence nor legal ownership in
+emitted code. The [snapshot](formal/snapshot.txt) records the commands actually
+completed and source identity; this document does not assert unrun coverage.

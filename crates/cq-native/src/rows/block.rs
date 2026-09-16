@@ -1,0 +1,331 @@
+//! Block-directory, payload and mask expansions.
+//! Handles carry storage identity separately from payload addresses, including
+//! for zero-column records whose addresses cannot identify their allocation.
+//! Recipes must preserve the handles produced by `rows`/`block_rows`: filtering,
+//! reordering and deduplication are valid; recombining handle fields is not.
+//! Selection uses their coordinates and checks identity/current membership.
+use cq_ir::native::Operation;
+use proc_macro2::TokenStream;
+use quote::quote;
+
+#[derive(Clone, Debug)]
+pub struct Options {
+    pub storage: syn::Path,
+    pub packing: Option<syn::Expr>,
+    pub work: Option<syn::Expr>,
+}
+
+/// Expand a typed block operation with an independently selected mask.
+///
+/// The result is a Rust type for `Type`, statements for `Materialize`, and an
+/// expression otherwise. The enclosing Access region supplies argument meanings.
+pub fn compile(operation: &Operation, options: &Options) -> syn::Result<TokenStream> {
+    let storage = &options.storage;
+    let output = match operation {
+        Operation::Field { row, column, .. } => quote!((#row)[#column]),
+        Operation::Record { fields, .. } => {
+            let width = fields.len();
+            quote!({ let row: [::core::primitive::i64; #width] = [#fields]; row })
+        }
+        Operation::Type { schema, .. } => {
+            let arity = super::schema::array_width(schema)?;
+            quote!(#storage::BlockStore<#arity>)
+        }
+        Operation::Input { value, .. } => {
+            quote!({
+                let __cq_store = (#value);
+                (__cq_store, <#storage::BlockMask as #storage::MakeSelection<_>>::all(__cq_store))
+            })
+        }
+        Operation::Len { value, .. } => {
+            quote!(#storage::BlockSelection::len(&(#value).1))
+        }
+        Operation::Row { value, .. } => {
+            quote!((#value).3)
+        }
+        Operation::Materialize {
+            owner, value, rows, ..
+        } => construct(
+            owner,
+            value,
+            quote!((#rows).into_iter().collect()),
+            operation,
+            options,
+        )?,
+        Operation::Produce {
+            owner,
+            value,
+            emit,
+            body,
+            ..
+        } => {
+            let output = syn::Ident::new("__cq_output", proc_macro2::Span::mixed_site());
+            let rows = quote!({
+                let mut #output = ::std::collections::HashSet::new();
+                {
+                    let mut #emit = |row| { #output.insert(row); };
+                    #body;
+                }
+                #output
+            });
+            construct(owner, value, rows, operation, options)?
+        }
+        Operation::Scan { value, .. } => block_scan(storage, value, options.work.as_ref(), true),
+        Operation::Rows { value, .. } => block_scan(storage, value, options.work.as_ref(), false),
+        Operation::Blocks { value, .. } => {
+            let binding = work_binding(options.work.as_ref());
+            let inspection = options
+                .work
+                .as_ref()
+                .map(|_| quote!(.inspect(move |_| __cq_work.add(|w| w.blocks_considered += 1))));
+            quote!({
+                let __cq_source = (#value);
+                #binding
+                #storage::BlockRead::blocks(__cq_source.0)
+                    .filter(move |b| #storage::BlockSelection::block_nonempty(
+                        &__cq_source.1, #storage::BlockDescriptor::id(b)))
+                    #inspection
+            })
+        }
+        Operation::Bounds { descriptor, .. } => {
+            quote!(#storage::CoordinateBounds::bounds(&(#descriptor)))
+        }
+        Operation::BlockRows {
+            descriptor, value, ..
+        } => block_rows(storage, descriptor, value, options.work.as_ref()),
+        Operation::Select { value, rows, .. } => {
+            quote!({
+                let __cq_source = (#value);
+                let __cq_selected = (#rows);
+                let mut __cq_mask = <#storage::BlockMask as #storage::MakeSelection<_>>::empty(__cq_source.0);
+                for (__cq_store, __cq_block, __cq_row, _) in __cq_selected {
+                    assert!(__cq_store == #storage::BlockRead::identity(__cq_source.0),
+                        "selected row belongs to another block store");
+                    assert!(#storage::BlockSelection::contains(&__cq_source.1, __cq_block, __cq_row),
+                        "selected coordinates are absent from the current mask");
+                    #storage::BlockSelection::insert(&mut __cq_mask, __cq_block, __cq_row);
+                }
+                (__cq_source.0, __cq_mask)
+            })
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(
+                operation,
+                "unsupported block storage operation",
+            ));
+        }
+    };
+    Ok(output)
+}
+
+fn construct(
+    owner: &syn::Ident,
+    value: &syn::Ident,
+    rows: TokenStream,
+    operation: &Operation,
+    options: &Options,
+) -> syn::Result<TokenStream> {
+    let storage = &options.storage;
+    let block_size = options.packing.as_ref().ok_or_else(|| {
+        syn::Error::new_spanned(
+            operation,
+            "block materialization requires configuration `packing`",
+        )
+    })?;
+    Ok(quote! {
+        let #owner = ({
+            fn __cq_pack<const N: ::core::primitive::usize>(
+                rows: ::std::collections::HashSet<[::core::primitive::i64; N]>,
+                size: ::core::num::NonZeroUsize,
+            ) -> #storage::BlockStore<N>
+            where #storage::BlockStore<N>: #storage::BuildBlocks<Row = [::core::primitive::i64; N]>,
+            {
+                <#storage::BlockStore<N> as #storage::BuildBlocks>::pack_unique(rows, size)
+            }
+            __cq_pack
+        })(#rows, (#block_size));
+        let #value = (&#owner, <#storage::BlockMask as #storage::MakeSelection<_>>::all(&#owner));
+    })
+}
+
+fn block_scan(
+    storage: &syn::Path,
+    value: &syn::Expr,
+    work: Option<&syn::Expr>,
+    payload_only: bool,
+) -> TokenStream {
+    let binding = work_binding(work);
+    let local_work = work.map(|_| syn::parse_quote!(__cq_work));
+    let rows = block_rows(
+        storage,
+        &syn::parse_quote!(__cq_block),
+        &syn::parse_quote!(__cq_source),
+        local_work.as_ref(),
+    );
+    let projection = payload_only.then(|| quote!(.map(|(_, _, _, row)| row)));
+    quote!({
+        let __cq_source = (#value);
+        #binding
+        #storage::BlockRead::blocks(__cq_source.0)
+            .filter(move |b| #storage::BlockSelection::block_nonempty(
+                &__cq_source.1, #storage::BlockDescriptor::id(b)))
+            .flat_map(move |__cq_block| #rows)
+            #projection
+    })
+}
+
+fn block_rows(
+    storage: &syn::Path,
+    descriptor: &syn::Expr,
+    value: &syn::Expr,
+    work: Option<&syn::Expr>,
+) -> TokenStream {
+    let binding = work_binding(work);
+    let opened = work.map(|_| quote!(let mut __cq_opened = false;));
+    let update = work.map(|_| {
+        quote! {
+            __cq_work.add(|w| {
+                if !__cq_opened {
+                    __cq_opened = true;
+                    w.blocks_opened += 1;
+                }
+                w.rows_visited += 1;
+            });
+        }
+    });
+    quote!({
+        let __cq_block = (#descriptor);
+        let __cq_source = (#value);
+        #binding
+        let __cq_store = #storage::BlockRead::identity(#storage::BlockDescriptor::store(&__cq_block));
+        assert!(__cq_store == #storage::BlockRead::identity(__cq_source.0),
+            "block descriptor belongs to another block store");
+        let __cq_block_id = #storage::BlockDescriptor::id(&__cq_block);
+        #opened
+        #storage::BlockDescriptor::rows(__cq_block)
+            .filter(move |(row, _)| #storage::BlockSelection::contains(&__cq_source.1, __cq_block_id, *row))
+            .map(move |(__cq_row, __cq_payload)| {
+                #update
+                (__cq_store, __cq_block_id, __cq_row, __cq_payload)
+            })
+    })
+}
+
+fn work_binding(work: Option<&syn::Expr>) -> Option<TokenStream> {
+    work.map(|work| quote!(let __cq_work = (#work);))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+    fn options() -> Options {
+        Options {
+            storage: syn::parse_quote!(crate::data),
+            packing: None,
+            work: None,
+        }
+    }
+
+    #[test]
+    fn packing_belongs_only_to_materialization_and_evaluates_once() {
+        let mut options = options();
+        let operation = syn::parse_quote!(materialize owner value (unique_rows()));
+        assert!(
+            compile(&operation, &options)
+                .unwrap_err()
+                .to_string()
+                .contains("packing")
+        );
+        options.packing = Some(syn::parse_quote!(unique_size()));
+        let output = compile(&operation, &options).unwrap().to_string();
+        assert_eq!(output.matches("unique_rows").count(), 1);
+        assert_eq!(output.matches("unique_size").count(), 1);
+        let operation = syn::parse_quote!(rows(&rows));
+        assert!(
+            !compile(&operation, &options)
+                .unwrap()
+                .to_string()
+                .contains("unique_size")
+        );
+        options.packing = None;
+        compile(&operation, &options).unwrap();
+    }
+
+    #[test]
+    fn operations_emit_their_declared_rust_fragment_category() {
+        let mut options = options();
+        options.packing = Some(syn::parse_quote!(size));
+        for operation in [
+            quote!(type ()),
+            quote!(input(&rows)),
+            quote!(len(&value)),
+            quote!(row(handle)),
+            quote!(scan(&value)),
+            quote!(rows(&value)),
+            quote!(select(&value)(selected)),
+            quote!(materialize owner value (rows)),
+            quote!(blocks(&value)),
+            quote!(bounds(descriptor)),
+            quote!(block_rows(descriptor)(&value)),
+        ] {
+            let input: Operation = syn::parse2(operation).unwrap();
+            let output = compile(&input, &options).unwrap();
+            match input {
+                Operation::Type { .. } => {
+                    syn::parse2::<syn::Type>(output).unwrap();
+                }
+                Operation::Materialize { .. } => {
+                    syn::parse2::<syn::Block>(quote!({ #output })).unwrap();
+                }
+                _ => {
+                    syn::parse2::<syn::Expr>(output).unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn observers_are_absent_by_default_and_evaluated_once_by_traversal() {
+        let mut options = options();
+        for operation in [
+            quote!(scan(&value)),
+            quote!(rows(&value)),
+            quote!(blocks(&value)),
+            quote!(block_rows(descriptor)(&value)),
+        ] {
+            let input = syn::parse2(operation).unwrap();
+            let plain = compile(&input, &options).unwrap().to_string();
+            assert!(!plain.contains("__cq_work"));
+            assert!(!plain.contains("__cq_opened"));
+            options.work = Some(syn::parse_quote!(unique_work()));
+            assert_eq!(
+                compile(&input, &options)
+                    .unwrap()
+                    .to_string()
+                    .matches("unique_work")
+                    .count(),
+                1
+            );
+            options.work = None;
+        }
+        options.work = Some(syn::parse_quote!(compile_error!("unused work")));
+        options.packing = Some(syn::parse_quote!(size));
+        for operation in [
+            quote!(type (i64, i64, i64,)),
+            quote!(input(&rows)),
+            quote!(row(handle)),
+            quote!(len(&value)),
+            quote!(select(&value)(selected)),
+            quote!(materialize owner value (rows)),
+        ] {
+            let input = syn::parse2(operation).unwrap();
+            assert!(
+                !compile(&input, &options)
+                    .unwrap()
+                    .to_string()
+                    .contains("unused work")
+            );
+        }
+    }
+}

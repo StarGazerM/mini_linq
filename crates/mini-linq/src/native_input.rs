@@ -170,18 +170,18 @@ impl<S: Parse + ToTokens> Input<S> {
     }
 
     #[cfg(feature = "prune-rows")]
-    pub fn prune_options(&self) -> syn::Result<cq_access::candidates::prune::Options> {
+    pub fn prune_options(&self) -> syn::Result<cq_native::candidates::prune::Options> {
         let configuration = self.configured(&["iterator", "work"])?;
-        Ok(cq_access::candidates::prune::Options {
+        Ok(cq_native::candidates::prune::Options {
             iterator: self.required(configuration.iterator, "iterator")?,
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "exact-keys")]
-    pub fn exact_options(&self) -> syn::Result<cq_access::keys::exact::Options> {
+    pub fn exact_options(&self) -> syn::Result<cq_native::keys::exact::Options> {
         let configuration = self.configured(&["storage", "iterator", "keys", "work"])?;
-        Ok(cq_access::keys::exact::Options {
+        Ok(cq_native::keys::exact::Options {
             storage: configuration.storage.cloned(),
             iterator: configuration.iterator.cloned(),
             keys: configuration.keys.cloned(),
@@ -190,9 +190,9 @@ impl<S: Parse + ToTokens> Input<S> {
     }
 
     #[cfg(feature = "zone-keys")]
-    pub fn zone_options(&self) -> syn::Result<cq_access::keys::zone::Options> {
+    pub fn zone_options(&self) -> syn::Result<cq_native::keys::zone::Options> {
         let configuration = self.configured(&["storage", "iterator", "keys", "work"])?;
-        Ok(cq_access::keys::zone::Options {
+        Ok(cq_native::keys::zone::Options {
             storage: self.required(configuration.storage, "storage")?,
             iterator: configuration.iterator.cloned(),
             keys: configuration.keys.cloned(),
@@ -201,43 +201,71 @@ impl<S: Parse + ToTokens> Input<S> {
     }
 
     #[cfg(feature = "hash-witnesses")]
-    pub fn hash_witness_options(&self) -> syn::Result<cq_access::witnesses::hash::Options> {
+    pub fn hash_witness_options(&self) -> syn::Result<cq_native::witnesses::hash::Options> {
         let configuration = self.configured(&["iterator", "work"])?;
-        Ok(cq_access::witnesses::hash::Options {
+        Ok(cq_native::witnesses::hash::Options {
             iterator: configuration.iterator.cloned(),
             work: configuration.work.cloned(),
         })
     }
 
+    #[cfg(any(
+        feature = "hash-pairs",
+        feature = "nested-pairs",
+        feature = "sort-merge-pairs"
+    ))]
+    pub fn pair_options(&self) -> syn::Result<cq_native::pairs::Options> {
+        let configuration = self.configured(&["work"])?;
+        Ok(cq_native::pairs::Options {
+            work: configuration.work.cloned(),
+        })
+    }
+
     #[cfg(feature = "nested-witnesses")]
-    pub fn nested_witness_options(&self) -> syn::Result<cq_access::witnesses::nested::Options> {
+    pub fn nested_witness_options(&self) -> syn::Result<cq_native::witnesses::nested::Options> {
         let configuration = self.configured(&["iterator", "work"])?;
-        Ok(cq_access::witnesses::nested::Options {
+        Ok(cq_native::witnesses::nested::Options {
             iterator: configuration.iterator.cloned(),
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "hash-rows")]
-    pub fn hash_row_options(&self) -> syn::Result<cq_providers::hash::Options> {
+    pub fn hash_row_options(&self) -> syn::Result<cq_native::rows::hash::Options> {
         let configuration = self.configured(&["work"])?;
-        Ok(cq_providers::hash::Options {
+        Ok(cq_native::rows::hash::Options {
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "sorted-rows")]
-    pub fn sorted_row_options(&self) -> syn::Result<cq_providers::sorted::Options> {
+    pub fn sorted_row_options(&self) -> syn::Result<cq_native::rows::sorted::Options> {
         let configuration = self.configured(&["work"])?;
-        Ok(cq_providers::sorted::Options {
+        Ok(cq_native::rows::sorted::Options {
+            work: configuration.work.cloned(),
+        })
+    }
+
+    #[cfg(feature = "tuple-hash-rows")]
+    pub fn tuple_hash_row_options(&self) -> syn::Result<cq_native::rows::tuple_hash::Options> {
+        let configuration = self.configured(&["work"])?;
+        Ok(cq_native::rows::tuple_hash::Options {
+            work: configuration.work.cloned(),
+        })
+    }
+
+    #[cfg(feature = "tuple-sorted-rows")]
+    pub fn tuple_sorted_row_options(&self) -> syn::Result<cq_native::rows::tuple_sorted::Options> {
+        let configuration = self.configured(&["work"])?;
+        Ok(cq_native::rows::tuple_sorted::Options {
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "block-rows")]
-    pub fn block_options(&self) -> syn::Result<cq_providers::block::Options> {
+    pub fn block_options(&self) -> syn::Result<cq_native::rows::block::Options> {
         let configuration = self.configured(&["storage", "packing", "work"])?;
-        Ok(cq_providers::block::Options {
+        Ok(cq_native::rows::block::Options {
             storage: self.required(configuration.storage, "storage")?,
             packing: configuration.packing.cloned(),
             work: configuration.work.cloned(),
@@ -248,7 +276,7 @@ impl<S: Parse + ToTokens> Input<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_ir::physical_provider::Operation;
+    use cq_ir::native::Operation;
     use quote::quote;
 
     #[cfg(all(
@@ -270,7 +298,7 @@ mod tests {
         let input: Input<Operation> = syn::parse_quote!(storage crate::data; contains(&keys)([1]));
         let options = input.exact_options().unwrap();
         assert!(options.iterator.is_none());
-        cq_access::keys::exact::compile(input.source(), &options).unwrap();
+        cq_native::keys::exact::compile(input.source(), &options).unwrap();
     }
 
     #[test]

@@ -41,13 +41,7 @@ fn relational_checks_operand_scope_before_index_selection() {
     };
     project.input = syn::parse_quote!(missing);
     rejects(
-        || {
-            cq_compose::expand_indexed(
-                &source,
-                &syn::parse_quote!(custom::input),
-                &syn::parse_quote!(custom::lazy),
-            )
-        },
+        || cq_compose::select_indexes(&source),
         "must name a result defined earlier",
     );
 }
@@ -65,7 +59,7 @@ fn indexes_check_duplicate_and_out_of_range_requirements_before_realization() {
         };
         rejects(
             || {
-                cq_physical::input::compile_input_indexed(
+                cq_realize::hash_inputs::compile_input_indexed(
                     &indexed,
                     &syn::parse_quote!(::mini_linq::pull),
                 )

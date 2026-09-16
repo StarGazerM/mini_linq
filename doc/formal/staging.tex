@@ -108,6 +108,40 @@ Delay postpones both constructions. This bisimulation covers finite successful
 partial demand, not failed/divergent execution or Rust representation adequacy.
 \end{proof}
 
+\subsection{Access directly to an eager set}
+The alternative \code{push_set!} entry lowers the same checked Access syntax to
+nested Rust control flow and one HashSet sink $S$. Let $E_B(\bar a,h,S)$ compile
+remaining clauses $\bar a$, head $h$, and incoming ordered bindings $B$:
+write $L(\bar a,h)$ for conservative backwards liveness. It starts with the
+head's free query names; an If adds its predicate's dependencies, and a For
+removes its introduced names before adding its source dependencies. Opaque Rust
+expressions conservatively depend on the whole query binding environment.
+\begin{mathpar}
+\Rule{PS-Done}{}{E_B([],h,S)=\mathsf{S.insert}(h)}
+\and
+\Rule{PS-For}{N=\binds(p)\quad V=B\cap L(\bar a,h)}
+ {E_B(\mathsf{for}\ p\ \mathsf{in}\ e;\bar a,h,S)=\\
+ \mathsf{for}\ p\ \mathsf{in}\ e\ \{
+ \operatorname{copies}(V);E_{B\concat N}(\bar a,h,S)\}}
+\and
+\Rule{PS-If}{}
+ {E_B(\mathsf{if}\ e;\bar a,h,S)=
+ \mathsf{if}\ e\ \{E_B(\bar a,h,S)\}}
+\and
+\Rule{PS-Set}{\operatorname{AccessWF}(A)\quad A=(h\mathbin{:-}\bar a)}
+ {A\Downarrow_{\rm push}
+ \{\mathsf{let\ mut}\ S=\mathsf{HashSet::new}();E_{[]}(\bar a,h,S);S\}}
+\end{mathpar}
+Here $\operatorname{copies}(V)$ clones only incoming bindings needed after the
+current source has been evaluated. A value used solely by that source needs no
+Clone implementation. The compiler records $B$ while walking clauses, then nests
+code and computes liveness in reverse order. It constructs no Pipeline
+or intermediate row collection. Under finite sources, total pure leaves and
+lawful silent clone/hash/equality, induction on clauses gives the same completed
+set as exhausted Access. This is an eager-set contract: partial iterator demand,
+evaluation timing and arbitrary destructor effects are not preserved by replacing
+an iterator-valued hole with \code{push_set!}.
+
 \subsection{Pipeline-to-Rust inference rules}
 One Rust local implements each definition in the existing order. Method
 notation abbreviates fully qualified \code{core::iter} calls:
@@ -120,7 +154,7 @@ notation abbreviates fully qualified \code{core::iter} calls:
 
 \Rule{R-Join}{}{s=\mathsf{Join}(l,p,q,e,b)\Downarrow_R\\
  \mathsf{let}\ s=l.\mathsf{flatMap}(\mathsf{move}\ |p|\,
- \mathsf{IntoIter}(e).\mathsf{map}(\mathsf{move}\ |q|\{\operatorname{copies}(p);b\}));}
+ \mathsf{IntoIter}(e).\mathsf{map}(\mathsf{move}\ |q|\{\operatorname{copies}(p,b);b\}));}
 
 \Rule{R-Filter}{}{s=\mathsf{Filter}(l,p,e)\Downarrow_R\\
  \mathsf{let}\ s=l.\mathsf{filterMap}(\mathsf{move}\ |p|\,
@@ -133,9 +167,9 @@ notation abbreviates fully qualified \code{core::iter} calls:
  \mathsf{let}\ s=\{\mathsf{let\ mut}\ seen=\mathsf{HashSet::new}();\\
  l.\mathsf{filter}(\mathsf{move}\ |row|\,seen.\mathsf{insert}(\mathsf{Clone}(row)))\};}
 \end{mathpar}
-$\operatorname{copies}(p)$ emits \code{let x = Clone::clone(&x);} in pattern
-order once per inner item. Consuming filter-map supplies owned bindings without
-adding a borrowed tuple layer.
+$\operatorname{copies}(p,b)$ clones only incoming names retained in $b$, once
+per inner item. Dropped bindings need no Clone implementation. Consuming
+filter-map supplies owned bindings without adding a borrowed tuple layer.
 \begin{mathpar}
 \Rule{R-Block}{d_j\Downarrow_R t_j\quad(0\le j\le m)}
  {\bar d;\mathsf{return}\ s_m\Downarrow_R
@@ -197,54 +231,63 @@ hygienic~\cite{macros}.
 \Rule{ST-Emit}{e:\mathsf{Expr}}{e\longrightarrow\operatorname{ToTokens}(e)}
 \end{mathpar}
 The entry fixes a relative \code{mini_linq::}$k$ path; a module alias binds it.
-With the ordinary crate binding, the continuations are:
+The defaults below are compositions of caller-relative macro invocations;
+explicit implementation entries retain their declared domains.
 \begin{center}\small
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{lll}\toprule
-Entry & Typed edge & Continuation \\\midrule
-\code{mini_linq} & default CQ choice & \code{relational_plan} \\
-\code{canonical_query} / \code{prefix_query} & explicit CQ edge & \code{relational_plan} \\
-\code{graph_query} & explicit graph CQ & \code{relational_plan} \\
-\code{planned_query} & planned CQ & \code{planned_relational_plan} \\
-\code{relational_plan} & paired default choice & input / lazy physical \\
-\code{planned_relational_plan} & result indexes & \code{materialized} \\
-\code{result_indexes} & explicit result indexes & \code{index_requirements} \\
-\code{input_indexes} & input indexes & \code{index_requirements} \\
-\code{input_indexed} / \code{lazy_indexed} & explicit physical edge & staged Rust file \\
-\code{materialized} & materialized physical & staged Rust file \\
-\code{materialized_query} & same computation & callable Rust Expr \\
-\code{physical_plan} & configured RA to Access & staged Rust file \\
-\code{physical_query} & same computation & callable Rust Expr \\
-observed physical entries & same computation & instrumented host \\
-\code{pull} / \code{collect_access} & Access to Pipeline & iterator / set endpoint \\
-\code{stream_access} & Access to Pipeline & stream endpoint \\
-iterator / set / stream endpoint & Pipeline to Expr & ToTokens \\\bottomrule
+Entry & Typed input / role & Emitted continuation \\\midrule
+\code{mini_linq} & CQ choice & \code{canonical_query} / \code{prefix_query} \\
+\code{optimized_query} & CQ choice & \code{graph_query} / \code{prefix_query} \\
+canonical / prefix / graph entries & CQ to RA & \code{choose_indexes} \\
+\code{choose_indexes} & RA choice & \code{input_indexes} / \code{result_indexes} \\
+input / result index entries & RA to IX & \code{choose_realization} \\
+\code{choose_realization} & IX choice & admitted hash realization \\
+\code{hash_inputs} / \code{hash_prefix} & IX, lazy hash realization & Rust with Access \\
+\code{hash_materialized} & IX, eager hash realization & Rust with Access \\
+\code{hash_materialized_query} & same eager computation & callable Rust Expr \\
+\code{relation_program} / \code{relation_query} & configured RA realization & item / callable host \\
+observed relation entries & same realization & instrumented host \\
+\code{pull} / \code{pull_set} / \code{pull_stream} & Access to Pipeline & iterator / set / stream endpoint \\
+\code{push_set} & Access to eager Rust & exact set expression \\
+iterator / set / stream endpoints & Pipeline to Rust & ToTokens \\\bottomrule
 \end{tabular}
 \end{center}
-The macro frontend defaults materialized entries to set-valued
-\code{mini_linq::collect_access} and input-indexed/lazy entries to
-\code{mini_linq::pull}. Materialized macro entries accept \code{access path;}
-to override their continuation. Each typed physical implementation and its default
-composition receive the continuation path explicitly. The frontend supplies
-invocation-relative \code{mini_linq::pull}, so a local binding can select the
-next edge; standalone typed callers may instead supply an absolute path.
-Direct entries bypass upper passes. \code{workload_query} emits catalog metadata;
-\code{compiled-workloads} also compiles its CQ through defaults.
-Canonical physical code has one Access hole per materialized result or lazy/basic
-region. The direct edge also uses local Access for key construction, candidates
-and witnesses. Interpolation embeds native Rust; shared RA need not form one pipeline.
+The default IX chooser tries the two lazy hash domains, then delegates remaining
+plans to the eager hash entry, which checks its own domain. A graph plan's
+semijoins therefore reach a compatible default consumer. Choices emit no
+route tag into IX, and replacing a preceding alias does not silently bypass later
+aliases. The optimized CQ entry chooses a planner; it does not prescribe eager
+execution. A caller can instead compose an explicit eager recipe by binding
+\code{result_indexes} as \code{choose_indexes} and \code{hash_materialized} as
+\code{choose_realization}.
+
+Eager hash entries default to \code{mini_linq::pull_set}; lazy hash entries use
+\code{mini_linq::pull}. Eager entries accept an explicit Access continuation.
+Typed realization APIs receive their continuation paths explicitly. Macro paths
+resolve relative to the invocation's \code{mini_linq} binding, whereas typed
+clients may supply absolute paths. Workload catalog generation with
+\code{compiled-workloads} emits the ordinary CQ entry, so its compilation honors
+the same planner, index and realization aliases.
+
+Configured relation entries accept RA directly and emit selected native operations
+and Access holes. Hash realizations are concrete algorithms: their storage and
+schedule are fixed before their Access holes expand. A later execution alias
+cannot undo those commitments. Per-relation provider selection belongs to the
+configured realization, including mixed tuple and block inputs; its pair hole
+owns a complete local join traversal. Whole-query materialization still belongs
+to the enclosing realization. Rust interpolation composes those pieces without
+serializing another relational language or forcing shared RA into one pipeline.
 
 \paragraph{Implementation and composition ownership.}
-An explicit entry fixes an implementation and checks its admitted domain.
-\code{cq-compose} chooses the default CQ, index and physical implementations;
-selected implementations do not call back into that selector. Each implementation module
-owns independently implemented target checks and exposes a checked entry.
-The default RA entry selects an index policy and its physical continuation once;
-the emitted index requirements carry no route tag. Explicit index entries use
-the caller's \code{index_requirements} alias for their physical continuation;
-there is no automatic macro with that name. Neutral heading and index-signature
-facts belong to the IR; domain and access analyses belong to their consuming
-implementation modules. This decomposition
-changes neither the language graph nor the observation contracts below.
+An explicit implementation owns its domain, lowering and independent target
+checks. The frontend wires macro continuations; \code{cq-compose} offers typed
+recipes for typed clients. Implementations do not import that recipe selector.
+Neutral headings and equality-signature facts belong to the IR, while strategy
+analyses belong to their consumers. The macro chooser dispatches through actual
+caller bindings at every advertised choice. This source-level separation makes
+replacement observable, but still requires compatible domains, runtime
+representations and observations as formalized below.
 
 \paragraph{One computation in different Rust hosts.}
 Let $Q_M(P;\bar e)$ denote the native expression returned by
@@ -267,9 +310,9 @@ standalone materializer additionally needs ordering.
 \code{compile_materialized_callable} places this checked expression in an
 anonymous Rust closure. Input normalization constrains each accessed parameter
 to supply the declared tuple type through \code{IntoIterator}. The
-\code{materialized_query!} entry exposes that adapter without extending the
+\code{hash_materialized_query!} entry exposes that adapter without extending the
 indexed grammar: ordinary Rust calls provide full or delta input iterators.
-Aliasing this macro as \code{materialized} changes the planned route's host.
+Aliasing this macro as \code{hash_materialized} changes the explicit eager recipe's host.
 Each closure value has fixed inferred input types; captures and repeatability
 follow ordinary Rust. The adapter introduces no item binder that could shadow
 a host function, including one named by an opaque macro expansion. Independent

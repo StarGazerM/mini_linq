@@ -10,9 +10,9 @@ pub(crate) fn compile_indexed(
     source: &cq_ir::index_requirements::Module,
 ) -> syn::Result<syn::File> {
     use syn::visit_mut::VisitMut;
-    let mut rust = cq_physical::materialized::compile_materialized(
+    let mut rust = cq_realize::hash_materialized::compile_materialized(
         source,
-        &syn::parse_quote!(::mini_linq::collect_access),
+        &syn::parse_quote!(::mini_linq::pull_set),
     )?;
     struct Lower {
         count: usize,
@@ -20,11 +20,11 @@ pub(crate) fn compile_indexed(
     impl VisitMut for Lower {
         fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
             if let syn::Expr::Macro(m) = expr {
-                if m.mac.path.segments.last().unwrap().ident == "collect_access" {
+                if m.mac.path.segments.last().unwrap().ident == "pull_set" {
                     let access =
                         syn::parse2::<cq_ir::rust_access_plan::Plan>(m.mac.tokens.clone()).unwrap();
                     cq_ir::rust_access_plan::contract::check(&access).unwrap();
-                    let pipeline = cq_pull::compile(&access).unwrap();
+                    let pipeline = cq_execution::pull::compile(&access).unwrap();
                     cq_ir::iterator_pipeline::contract::check(&pipeline).unwrap();
                     *expr = cq_pipeline::collect::compile(&pipeline).unwrap();
                     self.count += 1;

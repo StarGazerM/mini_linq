@@ -40,5 +40,6 @@ host syntax. Neither proves correctness for arbitrary effectful Rust.
 The relational claims assume total, deterministic, representation-independent
 host computations. An implemented lazy/materialized counterexample shows why
 this restriction matters. Negation, aggregation and broader optimizer search
-remain outside successful lowering; push execution and WCOJ are possible
-replacements, not implemented backends.
+remain outside successful lowering. Pull execution and eager push-to-set execution
+are implemented alternatives with distinct demand contracts; WCOJ remains a separate
+design obligation.

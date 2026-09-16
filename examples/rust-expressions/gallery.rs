@@ -1,4 +1,4 @@
-use super::query;
+use super::{mini_linq, query};
 
 #[path = "arguments.rs"]
 mod arguments;

@@ -27,7 +27,7 @@ macro_rules! stock_blocks {
 macro_rules! alternate_zone {
     ($($request:tt)*) => {
         ::mini_linq::zone_keys! {
-            storage crate::alternate; iterator ::mini_linq::stream_access;
+            storage crate::alternate; iterator ::mini_linq::pull_stream;
             keys crate::alternate::OrderedKeys; $($request)*
         }
     };
@@ -35,7 +35,7 @@ macro_rules! alternate_zone {
 macro_rules! coordinate_zone {
     ($($request:tt)*) => {
         ::mini_linq::zone_keys! {
-            storage ::cq_storage; iterator ::mini_linq::stream_access;
+            storage ::cq_storage; iterator ::mini_linq::pull_stream;
             keys crate::alternate::OrderedKeys; $($request)*
         }
     };
@@ -43,16 +43,16 @@ macro_rules! coordinate_zone {
 macro_rules! exact_keys {
     ($($request:tt)*) => {
         ::mini_linq::exact_keys! {
-            storage ::cq_storage; iterator ::mini_linq::stream_access;
+            storage ::cq_storage; iterator ::mini_linq::pull_stream;
             keys crate::alternate::OrderedKeys; $($request)*
         }
     };
 }
 macro_rules! prune {
-    ($($request:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::stream_access; $($request)* } };
+    ($($request:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::pull_stream; $($request)* } };
 }
 macro_rules! witnesses {
-    ($($request:tt)*) => { ::mini_linq::hash_witnesses! { iterator ::mini_linq::stream_access; $($request)* } };
+    ($($request:tt)*) => { ::mini_linq::hash_pairs! { $($request)* } };
 }
 pub(crate) use {
     alternate_blocks, alternate_zone, coordinate_zone, exact_keys, prune, stock_blocks, witnesses,
@@ -60,9 +60,9 @@ pub(crate) use {
 
 macro_rules! mixed_plan {
     ($name:ident, $scan:path, $key_provider:path) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
             materialize ::mini_linq::hash_rows;
             inputs {
                 R => crate::alternate_blocks;
@@ -135,9 +135,9 @@ fn sparse_coordinates_flat_payload_and_stock_blocks_coexist_in_one_query() {
 
 macro_rules! reduction_plan {
     ($name:ident, $scan:path, $key_provider:path) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
             materialize ::mini_linq::hash_rows;
             inputs { R => crate::alternate_blocks; S => ::mini_linq::hash_rows; }
             results {}
@@ -181,9 +181,9 @@ fn rejected_metadata_never_opens_the_alternate_payload() {
 
 macro_rules! composite_plan {
     ($name:ident, $scan:path, $key_provider:path) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
             materialize ::mini_linq::hash_rows;
             inputs { R => crate::alternate_blocks; S => ::mini_linq::hash_rows; }
             results {}
@@ -241,9 +241,9 @@ fn a_different_summary_refines_pruning_without_changing_the_zone_recipe() {
     assert_eq!(coordinate_opens - correlated_opens, 1);
 }
 
-mini_linq::observed_physical_plan! {
+mini_linq::observed_relation_program! {
     storage ::cq_storage;
-    access ::mini_linq::stream_access;
+    access ::mini_linq::pull_stream;
     materialize ::mini_linq::hash_rows;
     inputs {
         R => crate::alternate_blocks;
@@ -289,9 +289,9 @@ fn the_sparse_selection_preserves_reductions_when_a_block_is_reopened() {
     assert_eq!(final_reduction.2.exact_probes, 1);
 }
 
-mini_linq::observed_physical_plan! {
+mini_linq::observed_relation_program! {
     storage ::cq_storage;
-    access ::mini_linq::stream_access;
+    access ::mini_linq::pull_stream;
     materialize ::mini_linq::hash_rows;
     inputs { R => ::mini_linq::sorted_rows; S => ::mini_linq::hash_rows; }
     results { packed => crate::alternate_blocks; }

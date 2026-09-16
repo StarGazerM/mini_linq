@@ -1,12 +1,12 @@
 //! The direct RA edge and unsupported native access compositions.
 use cq_compose::compile_cq_planned;
 use cq_ir::{cq, relational_plan as ra};
-use cq_physical::direct::PhysicalOptions;
-use cq_physical::direct::compile_physical;
+use cq_realize::relations::RelationOptions;
+use cq_realize::relations::compile_program;
 
-fn options(source: &ra::Module) -> PhysicalOptions {
-    PhysicalOptions {
-        access: syn::parse_quote!(user::access),
+fn options(source: &ra::Module) -> RelationOptions {
+    RelationOptions {
+        access: Some(syn::parse_quote!(user::access)),
         inputs: source
             .program
             .inputs()
@@ -17,46 +17,30 @@ fn options(source: &ra::Module) -> PhysicalOptions {
                 )
             })
             .collect(),
-        materialize: syn::parse_quote!(providers::rows),
+        materialize: Some(syn::parse_quote!(providers::rows)),
         results: Default::default(),
-        scan: syn::parse_quote!(accesses::scan),
+        scan: Some(syn::parse_quote!(accesses::scan)),
         scans: Default::default(),
-        keys: syn::parse_quote!(accesses::keys),
+        keys: Some(syn::parse_quote!(accesses::keys)),
         key_sets: Default::default(),
-        join: syn::parse_quote!(accesses::witnesses),
+        join: Some(syn::parse_quote!(accesses::witnesses)),
         joins: Default::default(),
     }
 }
 
 #[test]
-fn unsupported_sources_are_diagnostics_not_alternative_routes() {
-    let sources: &[(&str, &str)] = &[
-        (
-            "struct P; relation R(a:i64); relation answer(v:String); answer(x) :- R(x);",
-            "i64 columns",
-        ),
-        (
-            "struct P; relation R(a:i32); answer(x) :- R(x);",
-            "i64 columns",
-        ),
-        (
-            "struct P; relation R(a:i64); answer(x) :- R(x), if x > 0;",
-            "supports Unit",
-        ),
-        (
-            "struct P; relation R(a:i64); relation answer(v:i64); answer(x+1) :- R(x);",
-            "variable-only output",
-        ),
-        (
-            "struct P; relation R(a:i64); answer(y) :- R(x), let y:i64 = *x+1;",
-            "supports Unit",
-        ),
-    ];
-    for (text, expected) in sources {
+fn typed_relations_and_rust_expressions_are_not_rejected_by_a_global_array_domain() {
+    for text in [
+        "struct P; relation R(a:i32); answer(x) :- R(x);",
+        "struct P; relation R(a:String); answer(x) :- R(x);",
+        "struct P; relation R(a:i64); answer(x) :- R(x), if x > 0;",
+        "struct P; relation R(a:i64); relation answer(v:i64); answer(x+1) :- R(x);",
+        "struct P; relation R(a:i64); answer(y) :- R(x), let y:i64 = *x+1;",
+    ] {
         let source: cq::Module = syn::parse_str(text).unwrap();
         let ra = compile_cq_planned(&source).unwrap();
-        let error = compile_physical(&ra, &options(&ra)).unwrap_err();
-        assert!(error.to_string().contains(expected), "{error}");
+        let target = compile_program(&ra, &options(&ra)).unwrap();
+        cq_realize::relations::check_program(&ra, &target, &options(&ra)).unwrap();
     }
 }
 
@@ -69,8 +53,8 @@ fn direct_lowering_emits_existing_access_regions_and_native_operations() {
     };
     let source = compile_cq_planned(&source).unwrap();
     let options = options(&source);
-    let target = compile_physical(&source, &options).unwrap();
-    cq_physical::direct::check_physical(&source, &target, &options).unwrap();
+    let target = compile_program(&source, &options).unwrap();
+    cq_realize::relations::check_program(&source, &target, &options).unwrap();
     let rust = prettyplease::unparse(&target);
     for selected in [
         "user::access!",
@@ -122,7 +106,7 @@ fn direct_lowering_emits_existing_access_regions_and_native_operations() {
     regions.visit_file(&target);
     assert!(
         regions.0.len() >= 4,
-        "all relational work should already be Access regions"
+        "semijoin and projection retain independently lowerable Access regions"
     );
     assert!(!rust.contains("Counters::default"));
 }
@@ -158,7 +142,7 @@ fn each_binding_and_access_choice_keeps_its_own_macro_path() {
         "r2".into(),
         syn::parse_quote!(accesses::separately_bound_keys),
     );
-    let target = compile_physical(&source, &options).unwrap();
+    let target = compile_program(&source, &options).unwrap();
     let rust = prettyplease::unparse(&target);
     for selected in [
         "providers::blocks!",
@@ -199,11 +183,13 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
                     scan: &str,
                     resource: &str,
                     keys: &str,
+                    with_keys: bool,
                     expected: Option<&str>| {
+        let keys_binding = if with_keys { "keys keys;" } else { "" };
         let source = format!(
             r#"
             macro_rules! wrong_hash_rows {{
-                (type $arity:literal) => {{
+                (type ($($column:ty),* $(,)?)) => {{
                     ::std::collections::HashSet<::core::primitive::u64>
                 }};
                 ($($request:tt)*) => {{ ::mini_linq::hash_rows! {{ $($request)* }} }};
@@ -222,18 +208,17 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
                 ($($op:tt)*) => {{ mini_linq::block_rows! {{ storage cq_storage; $($op)* }} }};
             }}
             macro_rules! prune {{
-                ($($op:tt)*) => {{ mini_linq::prune_rows! {{ iterator mini_linq::stream_access; $($op)* }} }};
+                ($($op:tt)*) => {{ mini_linq::prune_rows! {{ iterator mini_linq::pull_stream; $($op)* }} }};
             }}
             macro_rules! keys {{
-                ($($op:tt)*) => {{ {resource}! {{ storage cq_storage; iterator mini_linq::stream_access; keys {keys}; $($op)* }} }};
+                ($($op:tt)*) => {{ {resource}! {{ storage cq_storage; iterator mini_linq::pull_stream; keys {keys}; $($op)* }} }};
             }}
-            mini_linq::physical_plan! {{
-                access mini_linq::stream_access;
+            mini_linq::relation_program! {{
+                access mini_linq::pull_stream;
                 inputs {{ R => {provider}; S => mini_linq::hash_rows; }}
                 materialize mini_linq::hash_rows;
                 scan {scan};
-                keys keys;
-                join mini_linq::hash_witnesses;
+                {keys_binding}
                 struct P;
                 relation R(k:i64); relation S(k:i64);
                 answer(k) :- R(k), S(k);
@@ -279,6 +264,7 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
         "mini_linq::scan_rows",
         "mini_linq::exact_keys",
         "::std::collections::HashSet",
+        true,
         None,
     );
     // Explicitly selecting zone pruning on native row storage fails at its
@@ -288,6 +274,7 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
         "prune",
         "mini_linq::zone_keys",
         "::std::collections::HashSet",
+        true,
         Some("no block descriptor lowering"),
     );
     // Block-capable rows do not manufacture metadata missing from exact keys.
@@ -296,6 +283,7 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
         "prune",
         "mini_linq::exact_keys",
         "::std::collections::HashSet",
+        true,
         Some("metadata rejection requires a summary implementation"),
     );
     // This provider expands every operation, but its chosen element type makes
@@ -305,6 +293,7 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
         "mini_linq::scan_rows",
         "mini_linq::exact_keys",
         "::std::collections::HashSet",
+        true,
         Some("cannot index into a value of type"),
     );
     // A familiar method spelling does not silently stand in for the operation
@@ -314,7 +303,18 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
         "mini_linq::scan_rows",
         "mini_linq::exact_keys",
         "MethodOnlyKeys",
+        true,
         Some("ExactMembership"),
+    );
+    // The real proc-macro boundary names the missing implementation at the
+    // operation that needs it, instead of demanding all defaults up front.
+    run_case(
+        "mini_linq::hash_rows",
+        "mini_linq::scan_rows",
+        "mini_linq::exact_keys",
+        "::std::collections::HashSet",
+        false,
+        Some("relation `reduced` requires a `keys` implementation"),
     );
     fs::remove_dir_all(&dir).unwrap();
 }
@@ -326,7 +326,7 @@ fn native_access_fragments_reject_the_removed_relational_envelope() {
         "t = semijoin l with q; { l(k) => rows { current }; q(k) { keys }; }",
         "storage data; access collect; work (&counter); bindings {}",
     ] {
-        assert!(syn::parse_str::<cq_ir::physical_provider::Operation>(source).is_err());
+        assert!(syn::parse_str::<cq_ir::native::Operation>(source).is_err());
         assert!(syn::parse_str::<cq_ir::rust_access_plan::Plan>(source).is_err());
     }
 }

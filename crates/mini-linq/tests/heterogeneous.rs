@@ -17,22 +17,22 @@ macro_rules! bound_scan {
     ($($op:tt)*) => { ::mini_linq::scan_rows! { $($op)* } };
 }
 macro_rules! bound_prune {
-    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::stream_access; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::pull_stream; $($op)* } };
 }
 macro_rules! bound_exact {
-    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; iterator ::mini_linq::stream_access; keys ::std::collections::HashSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::HashSet; $($op)* } };
 }
 macro_rules! bound_zone {
-    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::stream_access; keys ::std::collections::HashSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::HashSet; $($op)* } };
 }
 macro_rules! zone_sorted {
-    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::stream_access; keys ::std::collections::BTreeSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::BTreeSet; $($op)* } };
 }
 macro_rules! bound_hash {
-    ($($op:tt)*) => { ::mini_linq::hash_witnesses! { iterator ::mini_linq::stream_access; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::hash_pairs! { $($op)* } };
 }
 macro_rules! bound_nested {
-    ($($op:tt)*) => { ::mini_linq::nested_witnesses! { iterator ::mini_linq::stream_access; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::nested_pairs! { $($op)* } };
 }
 pub(crate) use {
     bound_block, bound_exact, bound_hash, bound_nested, bound_prune, bound_scan, bound_zone,
@@ -47,9 +47,9 @@ pub(crate) use caller_sorted;
 
 macro_rules! mixed_exact {
     ($($plan:tt)*) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
 
             materialize ::mini_linq::hash_rows;
             inputs {
@@ -72,9 +72,9 @@ macro_rules! mixed_exact {
 
 macro_rules! mixed_zone {
     ($($plan:tt)*) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
 
             materialize ::mini_linq::hash_rows;
             inputs {
@@ -97,9 +97,9 @@ macro_rules! mixed_zone {
 
 macro_rules! mixed_nested {
     ($($plan:tt)*) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
 
             materialize ::mini_linq::hash_rows;
             inputs {
@@ -227,9 +227,9 @@ fn only_the_chosen_operand_uses_block_access() {
     assert_eq!(loop_join.2.index_rows, 0);
 }
 
-mini_linq::observed_physical_plan! {
+mini_linq::observed_relation_program! {
     storage ::cq_storage;
-    access ::mini_linq::stream_access;
+    access ::mini_linq::pull_stream;
 
     materialize ::mini_linq::hash_rows;
     inputs {
@@ -280,9 +280,9 @@ fn later_reductions_use_current_keys_and_cannot_resurrect_selected_rows() {
     assert_eq!(step("r3").2.rows_visited, 1);
 }
 
-mini_linq::observed_physical_plan! {
+mini_linq::observed_relation_program! {
     storage ::cq_storage;
-    access ::mini_linq::stream_access;
+    access ::mini_linq::pull_stream;
 
     materialize ::mini_linq::hash_rows;
     inputs { R => ::mini_linq::sorted_rows; S => ::mini_linq::hash_rows; }
@@ -322,9 +322,9 @@ fn only_explicit_materialization_constructs_block_storage() {
 
 macro_rules! native {
     ($($plan:tt)*) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
 
             materialize ::mini_linq::hash_rows;
             inputs {
@@ -361,9 +361,9 @@ fn native_inputs_and_results_have_no_block_layout_dependency() {
     assert_eq!(stats.output.blocks_opened, 0);
 }
 
-mini_linq::observed_physical_plan! {
+mini_linq::observed_relation_program! {
     storage ::cq_storage;
-    access ::mini_linq::stream_access;
+    access ::mini_linq::pull_stream;
 
     materialize ::mini_linq::sorted_rows;
     inputs { R => crate::bound_block; S => ::mini_linq::hash_rows; }
@@ -400,9 +400,9 @@ fn summary_false_positives_still_require_exact_composite_keys() {
     assert!(Composite::run(&r, &HashSet::new()).0.is_empty());
 }
 
-mini_linq::observed_physical_plan! {
+mini_linq::observed_relation_program! {
     storage ::cq_storage;
-    access ::mini_linq::stream_access;
+    access ::mini_linq::pull_stream;
 
     materialize ::mini_linq::hash_rows;
     inputs { R => ::mini_linq::hash_rows; S => crate::caller_sorted; }
@@ -451,6 +451,7 @@ fn zero_column_resources_and_empty_separator_use_native_sets() {
 // discharges that layout law and replaces Build of the ordinary Access region
 // with its source binding; all resource operations retain the exact provider.
 macro_rules! borrow_keys {
+    ($(work ($work:expr);)? key ($($field:expr),* $(,)?)) => { [$(*($field)),*] };
     (
         $(work ($work:expr);)?
         build {
@@ -464,9 +465,9 @@ macro_rules! borrow_keys {
 }
 pub(crate) use borrow_keys;
 
-mini_linq::observed_physical_plan! {
+mini_linq::observed_relation_program! {
     storage ::cq_storage;
-    access ::mini_linq::stream_access;
+    access ::mini_linq::pull_stream;
 
     materialize ::mini_linq::hash_rows;
     inputs { R => ::mini_linq::hash_rows; S => ::mini_linq::hash_rows; }
@@ -509,9 +510,9 @@ fn caller_recipe_can_borrow_existing_keys_without_scanning_or_constructing_them(
     assert_eq!(reduced.2.rows_visited, r.len());
 }
 
-mini_linq::observed_physical_plan! {
+mini_linq::observed_relation_program! {
     storage ::cq_storage;
-    access ::mini_linq::stream_access;
+    access ::mini_linq::pull_stream;
 
     inputs {
         R => crate::bound_block;
@@ -577,9 +578,9 @@ pub(crate) use counted_block_rows;
 
 macro_rules! decode_query {
     ($name:ident, $scan:path, $keys:path; $($query:tt)*) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage ::cq_storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
 
             inputs { R => crate::counted_block_rows; S => ::mini_linq::hash_rows; }
             materialize ::mini_linq::hash_rows;
@@ -694,8 +695,8 @@ fn callable_packing_captures_configuration_and_returns_owned_answers() {
                 $($op)*
             }};
         }
-        let query = ::mini_linq::physical_query! {
-            access ::mini_linq::stream_access;
+        let query = ::mini_linq::relation_query! {
+            access ::mini_linq::pull_stream;
             inputs { R => source_rows; }
             materialize packed;
             scan crate::bound_scan;
@@ -725,9 +726,9 @@ fn observed_callable_has_its_own_counter_scope_on_every_call() {
             storage ::cq_storage; packing (__ml_work); $($op)*
         }};
     }
-    let query = ::mini_linq::observed_physical_query! {
+    let query = ::mini_linq::observed_relation_query! {
         storage ::cq_storage;
-        access ::mini_linq::stream_access;
+        access ::mini_linq::pull_stream;
         inputs { R => ::mini_linq::hash_rows; }
         materialize packed;
         scan crate::bound_scan;
@@ -757,7 +758,7 @@ fn observed_callable_has_its_own_counter_scope_on_every_call() {
 #[allow(non_snake_case)]
 mod __MlStatistics {
     pub use cq_storage::*;
-    pub use mini_linq::{hash_rows, stream_access};
+    pub use mini_linq::{hash_rows, pull_stream};
 
     pub fn packing() -> std::num::NonZeroUsize {
         std::num::NonZeroUsize::new(1).unwrap()
@@ -766,9 +767,9 @@ mod __MlStatistics {
 
 #[test]
 fn callable_statistics_helper_cannot_shadow_configured_paths_or_opaque_bindings() {
-    let direct = ::mini_linq::observed_physical_query! {
+    let direct = ::mini_linq::observed_relation_query! {
         storage __MlStatistics;
-        access __MlStatistics::stream_access;
+        access __MlStatistics::pull_stream;
         inputs { R => __MlStatistics::hash_rows; }
         materialize __MlStatistics::hash_rows;
         scan crate::bound_scan;
@@ -791,7 +792,7 @@ fn callable_statistics_helper_cannot_shadow_configured_paths_or_opaque_bindings(
         ($($op:tt)*) => { __MlStatistics::hash_rows! { $($op)* } };
     }
     macro_rules! opaque_access {
-        ($($op:tt)*) => { __MlStatistics::stream_access! { $($op)* } };
+        ($($op:tt)*) => { __MlStatistics::pull_stream! { $($op)* } };
     }
     macro_rules! opaque_packing {
         ($($op:tt)*) => { ::mini_linq::block_rows! {
@@ -800,7 +801,7 @@ fn callable_statistics_helper_cannot_shadow_configured_paths_or_opaque_bindings(
             $($op)*
         }};
     }
-    let opaque = ::mini_linq::observed_physical_query! {
+    let opaque = ::mini_linq::observed_relation_query! {
         storage ::cq_storage;
         access opaque_access;
         inputs { R => opaque_rows; }

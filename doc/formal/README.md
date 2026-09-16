@@ -9,8 +9,8 @@ layout.
 The main paper follows valuations and native Rust leaves, occurrence graphs, GYO,
 Yannakakis reduction, dependency scheduling, named RA, index requirements, local
 cursors and quotation across independently usable languages. The supplement
-adds compiler-local physical bindings, exact/zone key resources, candidate scans,
-join witnesses and conditional preservation.
+adds compiler-local representation bindings, exact/zone key resources, candidate
+scans, complete pair algorithms, row construction and conditional preservation.
 
 ## Reading map
 
@@ -31,7 +31,7 @@ join witnesses and conditional preservation.
 | Bounded evidence and prior work | [evaluation.tex](evaluation.tex), [related_work.tex](related_work.tex) |
 
 [TERMINOLOGY.md](TERMINOLOGY.md) records AHV terminology and course adaptations.
-[rules.tsv](rules.tsv) maps 140 main-manuscript rules and 14 Access-refinement rules to
+[rules.tsv](rules.tsv) maps 166 rules, including 22 native-refinement rules, to
 implementation symbols or explicitly abstract cases. [check.py](check.py) checks
 those links, algorithm/model correspondence, the 14 executable planner commands
 and recorded source fingerprints. It does not check mathematical proofs.
@@ -57,8 +57,12 @@ Computed or nonvariable atom arguments, lets, computed heads and general guards
 select prefix planning. General subtree placement is demonstrated by authored RA,
 not discovered by the planner. Negation and aggregation parse but do not lower.
 Cost-based physical search, WCOJ, bags and factorized execution are not implemented.
-The direct array route accepts `i64` Unit/Rename/Project/Semijoin/NaturalJoin plans
-and variable-only output of at most twelve fields, as specified in the supplement.
+The configured relation realization supports Unit, Rename, Select, Extend,
+Project, Semijoin and NaturalJoin with native Rust output expressions. It derives
+logical fields and delegates Type/Field/Record to each selected provider. Tuple
+sets support heterogeneous Rust columns; stock arrays and block storage require
+`i64` columns. Rust checks each selected operation's trait and borrowing
+requirements, including the result host's output ordering requirement.
 
 The canonical physical route consumes real index requirements. The alternative
 configured edge consumes RA and emits Rust with Access holes; Γ is ordinary
@@ -68,22 +72,37 @@ source-to-emitted-code correspondence; selected provider laws and expanded Rust
 remain independent checking boundaries. Storage contains data structures and
 traits, without runtime relational operators.
 
-Eleven compiler/storage packages group implementations by macro boundary.
-Implementation families depend only on `cq-ir`; source-removal builds check their
-independently selected modules. External macro probes also exercise renamed
+Compiler families group implementations by the boundary they own: `cq-plan`,
+`cq-index`, `cq-realize`, `cq-native`, `cq-execution` and `cq-pipeline` use shared
+languages from `cq-ir`. `cq-storage` holds runtime data structures; `cq-compose`
+and the macro frontend supply composition. Source-removal builds check selected
+modules independently. External macro probes also exercise renamed
 dependencies and replacement continuations. These dependency checks do not
 establish semantic substitution laws; the [ownership map](../COMPILER-STRUCTURE.md)
 records the distinct obligations.
 
-Explicit implementation entries check their own domains; `cq-compose` owns
-convenience dispatch. Default index policy and physical continuation are selected
-together at the RA boundary, without a route tag in IX. The materialized computation can produce either the existing
+Explicit implementation entries check their own domains. The macro frontend
+chooses CQ, index and realization implementations through caller-relative macro
+invocations; `cq-compose` provides separate typed recipes. IX carries equality
+demands without a route tag. `optimized_query!` selects a planner; a facade can
+bind result indexes and eager realization explicitly. Compiled workloads follow
+the same macro bindings. The materialized computation can produce either an
 observed program or a plain callable query through a host macro alias. Both use
 the same checked query body. Repeated borrowed full/delta inputs are supported,
 while recursive program semantics and persistent index maintenance remain future
 work. Direct physical lowering separately supports plain/observed item and
 callable hosts, configured provider paths and provider-owned packing sizes.
-The [YA release profile](../../teaching/ya/README.md) extracts seven packages with
+Complete pair fragments select hash, nested or sort/merge control before result
+rows enter the chosen provider's emission sink. Semijoin retains conservative
+candidates followed by exact membership on current relation versions.
+
+Pull Access execution lowers to Pipeline, while `push_set!` emits eager Rust
+loops directly. Pipeline permits arbitrary fresh stream names, tuple binding
+renaming, selective retention and early projections, while retaining a linear
+single-consumer chain and terminal Distinct. Eager-set, distinct-iterator and
+pre-Distinct-stream holes have different observation contracts.
+
+The [YA release profile](../../teaching/ya/README.md) extracts the selected packages with
 unselected implementations absent and separate scheduling/semijoin exercises.
 
 ## Reproduction
@@ -119,6 +138,10 @@ cargo test -p cq-compose -p mini-linq --test reusable_query --locked
 | Native hash/bitmap access and conservative prefiltering | [access_representations.rs](example/src/bin/access_representations.rs) |
 | Effect counterexamples | [formal_counterexamples.rs](../../crates/mini-linq/tests/formal_counterexamples.rs) |
 | Empty bindings and local contract agreement | [formal_domains.rs](../../crates/cq-compose/tests/formal_domains.rs), [empty_bindings.rs](../../crates/mini-linq/tests/empty_bindings.rs) |
+| Caller-relative macro choices | [macro_routing.rs](../../crates/mini-linq/tests/macro_routing.rs) |
+| Complete pair algorithms and multiplicity | [pair_algorithms.rs](../../crates/mini-linq/tests/pair_algorithms.rs) |
+| Pull/push observations and authored Pipeline programs | [execution_models.rs](../../crates/mini-linq/tests/execution_models.rs) |
+| Typed and mixed relation representations | [physical_typed.rs](../../crates/mini-linq/tests/physical_typed.rs) |
 
 The overview asserts exact RA, indexes, both sweeps, all thirteen intermediate
 arities/counts, and compiled answers on five input presentations across four

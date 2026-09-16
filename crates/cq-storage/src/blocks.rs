@@ -113,7 +113,7 @@ impl<const N: usize> CoordinateBounds for Block<'_, N> {
 }
 
 impl<const N: usize> BuildBlocks for BlockStore<N> {
-    fn pack_unique(rows: HashSet<Self::Row>, block_rows: NonZeroUsize) -> Self {
+    fn pack_unique(rows: impl IntoIterator<Item = Self::Row>, block_rows: NonZeroUsize) -> Self {
         Self::pack_rows(rows, block_rows)
     }
 }

@@ -14,7 +14,7 @@ Read these files in order:
 3. `crates/cq-plan/src/graph/ya.rs`: implement the two sweeps.
    `rules.rs` supplies checked `Up`, `Down`, and `Freeze` transitions;
    `crates/cq-plan/src/proof.rs` supplies a checked join tree.
-4. `crates/cq-physical/src/materialized/semijoin.rs`: implement the
+4. `crates/cq-realize/src/hash_materialized/semijoin.rs`: implement the
    physical operator. `rust_access_plan.rs` defines its target clauses.
 
 For a join-tree edge from parent `p` to child `c`, the upward sweep replaces
@@ -43,7 +43,7 @@ Pipeline IR before Rust generation. There is no query interpreter in the
 runtime of the exported program.
 
 The export contains seven packages: `cq-ir`, `cq-plan`, `cq-index`,
-`cq-physical`, `cq-pull`, `cq-pipeline`, and `mini-linq`. Only the selected
+`cq-realize`, `cq-execution`, `cq-pipeline`, and `mini-linq`. Only the selected
 graph, named-result index, materialized, pull and collection implementation
 modules are present. Their public APIs have the same module paths as in the
 parent compiler. The package roots and Cargo metadata include those modules;

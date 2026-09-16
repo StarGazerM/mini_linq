@@ -6,7 +6,7 @@ mod indexed;
 use cq_plan::{
     JoinPlanReport, JoinPolicy, PlanningOptions, Rule, dependencies::ClauseDependencies,
 };
-pub use indexed::{compile_indexed, expand_indexed, with_default_indexes};
+pub use indexed::{compile_indexed, select_indexes, use_input_indexes};
 
 pub fn compile_cq(source: &cq::Module) -> syn::Result<ra::Module> {
     if source.program.query.is_basic() {
@@ -73,8 +73,12 @@ pub fn compile_cq_derivation(
     Ok(target)
 }
 
-/// The default complete composition, also used by the workload catalog.
-pub fn compile_program(source: &cq::Module, access: &syn::Path) -> syn::Result<syn::File> {
+/// The fixed typed composition. Public macros bind their own continuations.
+pub fn compile_program(
+    source: &cq::Module,
+    iterator_access: &syn::Path,
+    set_access: &syn::Path,
+) -> syn::Result<syn::File> {
     let plan = compile_cq(source)?;
-    compile_indexed(&plan, access).map(|(_, program)| program)
+    compile_indexed(&plan, iterator_access, set_access).map(|(_, program)| program)
 }

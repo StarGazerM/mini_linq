@@ -13,11 +13,14 @@ fn fixture(lazy: bool) -> (ir::Module, syn::File) {
     let logical = cq_compose::compile_cq(&cq).unwrap();
     let indexed = cq_index::result::compile(&logical).unwrap();
     let file = if lazy {
-        cq_physical::lazy::compile_lazy_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull))
-    } else {
-        cq_physical::materialized::compile_materialized(
+        cq_realize::hash_prefix::compile_lazy_indexed(
             &indexed,
-            &syn::parse_quote!(::mini_linq::collect_access),
+            &syn::parse_quote!(::mini_linq::pull),
+        )
+    } else {
+        cq_realize::hash_materialized::compile_materialized(
+            &indexed,
+            &syn::parse_quote!(::mini_linq::pull_set),
         )
     }
     .unwrap();
@@ -26,13 +29,17 @@ fn fixture(lazy: bool) -> (ir::Module, syn::File) {
 
 fn accepts(source: &ir::Module, file: &syn::File, is_lazy: bool) -> bool {
     if is_lazy {
-        cq_physical::lazy::check_lazy_indexed(source, file, &syn::parse_quote!(::mini_linq::pull))
-            .is_ok()
-    } else {
-        cq_physical::materialized::check_materialized(
+        cq_realize::hash_prefix::check_lazy_indexed(
             source,
             file,
-            &syn::parse_quote!(::mini_linq::collect_access),
+            &syn::parse_quote!(::mini_linq::pull),
+        )
+        .is_ok()
+    } else {
+        cq_realize::hash_materialized::check_materialized(
+            source,
+            file,
+            &syn::parse_quote!(::mini_linq::pull_set),
         )
         .is_ok()
     }
@@ -57,20 +64,20 @@ fn build(file: &mut syn::File) -> &mut syn::Block {
 fn configured_access_path_does_not_weaken_storage_or_clause_checks() {
     let (source, _) = fixture(false);
     let path = syn::parse_quote!(custom::access);
-    let mut file = cq_physical::materialized::compile_materialized(&source, &path).unwrap();
-    assert!(cq_physical::materialized::check_materialized(&source, &file, &path).is_ok());
+    let mut file = cq_realize::hash_materialized::compile_materialized(&source, &path).unwrap();
+    assert!(cq_realize::hash_materialized::check_materialized(&source, &file, &path).is_ok());
     assert!(
-        cq_physical::materialized::check_materialized(
+        cq_realize::hash_materialized::check_materialized(
             &source,
             &file,
-            &syn::parse_quote!(::mini_linq::collect_access)
+            &syn::parse_quote!(::mini_linq::pull_set)
         )
         .is_err()
     );
     build(&mut file)
         .stmts
         .insert(3, syn::parse_quote!(input0.clear();));
-    assert!(cq_physical::materialized::check_materialized(&source, &file, &path).is_err());
+    assert!(cq_realize::hash_materialized::check_materialized(&source, &file, &path).is_err());
 }
 
 #[test]
@@ -168,7 +175,7 @@ fn deleting_a_zero_binding_computation_is_detected_even_when_access_is_well_form
                 return;
             }
             let Some(mut plan) = access_macro(mac, &syn::parse_quote!(::mini_linq::pull))
-                .or_else(|| access_macro(mac, &syn::parse_quote!(::mini_linq::collect_access)))
+                .or_else(|| access_macro(mac, &syn::parse_quote!(::mini_linq::pull_set)))
             else {
                 return;
             };
@@ -283,15 +290,15 @@ fn base_and_result_indexes_with_the_same_name_have_separate_representations() {
         #logical indexes { @R[0]; R[0]; }
     };
     ir::contract::check(&indexed).unwrap();
-    let target = cq_physical::materialized::compile_materialized(
+    let target = cq_realize::hash_materialized::compile_materialized(
         &indexed,
-        &syn::parse_quote!(::mini_linq::collect_access),
+        &syn::parse_quote!(::mini_linq::pull_set),
     )
     .unwrap();
-    cq_physical::materialized::check_materialized(
+    cq_realize::hash_materialized::check_materialized(
         &indexed,
         &target,
-        &syn::parse_quote!(::mini_linq::collect_access),
+        &syn::parse_quote!(::mini_linq::pull_set),
     )
     .unwrap();
 }
@@ -345,16 +352,19 @@ fn scaffold_types_cannot_redirect_storage_method_dispatch() {
 #[test]
 fn reusable_query_checks_host_bindings_storage_and_final_result() {
     let (source, _) = fixture(false);
-    let access = syn::parse_quote!(::mini_linq::collect_access);
+    let access = syn::parse_quote!(::mini_linq::pull_set);
     let inputs: Vec<Expr> = vec![
         syn::parse_quote!(left_rows()),
         syn::parse_quote!(right_rows()),
     ];
     let original =
-        cq_physical::materialized::compile_materialized_query(&source, &access, &inputs).unwrap();
+        cq_realize::hash_materialized::compile_materialized_query(&source, &access, &inputs)
+            .unwrap();
     assert!(
-        cq_physical::materialized::check_materialized_query(&source, &original, &access, &inputs)
-            .is_ok()
+        cq_realize::hash_materialized::check_materialized_query(
+            &source, &original, &access, &inputs
+        )
+        .is_ok()
     );
 
     for method in ["entry", "push"] {
@@ -366,7 +376,7 @@ fn reusable_query_checks_host_bindings_storage_and_final_result() {
         mutation.visit_expr_mut(&mut invalid);
         assert!(mutation.changed, "mutation did not reach a {method} column");
         assert!(
-            cq_physical::materialized::check_materialized_query(
+            cq_realize::hash_materialized::check_materialized_query(
                 &source, &invalid, &access, &inputs
             )
             .is_err()
@@ -414,7 +424,7 @@ fn reusable_query_checks_host_bindings_storage_and_final_result() {
             }
         }
         assert!(
-            cq_physical::materialized::check_materialized_query(
+            cq_realize::hash_materialized::check_materialized_query(
                 &source, &invalid, &access, &inputs
             )
             .is_err(),
@@ -426,10 +436,11 @@ fn reusable_query_checks_host_bindings_storage_and_final_result() {
 #[test]
 fn callable_checks_argument_order_return_type_and_native_capture_boundary() {
     let (source, _) = fixture(false);
-    let access = syn::parse_quote!(::mini_linq::collect_access);
+    let access = syn::parse_quote!(::mini_linq::pull_set);
     let original =
-        cq_physical::materialized::compile_materialized_callable(&source, &access).unwrap();
-    cq_physical::materialized::check_materialized_callable(&source, &original, &access).unwrap();
+        cq_realize::hash_materialized::compile_materialized_callable(&source, &access).unwrap();
+    cq_realize::hash_materialized::check_materialized_callable(&source, &original, &access)
+        .unwrap();
     for mutation in 0..5 {
         let mut invalid = original.clone();
         let Expr::Closure(closure) = &mut invalid else {
@@ -449,7 +460,7 @@ fn callable_checks_argument_order_return_type_and_native_capture_boundary() {
             }
         }
         assert!(
-            cq_physical::materialized::check_materialized_callable(&source, &invalid, &access)
+            cq_realize::hash_materialized::check_materialized_callable(&source, &invalid, &access)
                 .is_err(),
             "callable boundary mutation {mutation} accepted"
         );

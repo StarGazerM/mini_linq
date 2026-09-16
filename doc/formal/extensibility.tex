@@ -9,19 +9,16 @@ different continuations; they need not introduce separate packages.
 A checker never calls its emitter. \code{cq-compose} owns default selection;
 explicit implementations do not import that selector.
 
-The implementation has eleven compiler/storage packages. The seven boundary
-families---planning, indexes, physical realization, native Access, row providers,
-pull and Pipeline endpoints---depend only on the shared IR package. Storage is
-independent; composition and the macro frontend select the families they use.
-Route-specific analysis stays with its consuming implementation. Cargo isolates
-families; reviewed source-removal tests separately check sibling implementations.
-The dependency gate checks twenty-four source closures and twenty-two external
-frontend probes, including renamed dependencies and substituted continuations.
-Ordinary package tests additionally run with defaults disabled, each completed
-feature, supported bundles and the prerequisites declared by test/example targets.
-This checks local Cargo target gating separately from external macro replacement.
-Neither package nor source isolation establishes the semantic substitution
-premises. The source snapshot records the completed validation gates.
+Compiler families are isolated by semantic boundary: planning, equality demands,
+whole-query realization, native operation expansion, Access execution and Pipeline
+endpoints. Implementations depend on shared syntax without calling a universal
+strategy dispatcher. Storage contains data structures and minimal operation traits;
+composition and the procedural-macro frontend wire implementations together.
+Route-specific analysis stays with its consumer. Feature-closure and source-removal
+probes test actual build dependencies, while external macro consumers test lexical
+replacement. Ordinary package tests cover supported feature selections and target
+prerequisites. Neither package isolation nor successful feature resolution proves
+semantic substitution; the source snapshot records which gates completed.
 
 \paragraph{Representations and algorithms.}
 Ascent BYODS formalizes custom representations through DLDS and
@@ -40,9 +37,10 @@ establish these premises, and changing input meaning, such as adding an
 equivalence closure, changes the source contract.
 
 \paragraph{Push and multiway execution.}
-A physical pass could replace local pull quotations with loops inserting
-into the same materialized result sets. A public lazy Iterator instead
-requires a replacement that preserves its demand and stopping contract
+The implemented \code{push_set!} lowers Access directly to nested loops and one
+result set (PS-*), without a Pipeline intermediate. It can replace a set-valued
+Access continuation when completed-set observations agree. A public lazy Iterator
+requires an implementation preserving its demand and stopping contract
 (Section~\ref{sec:scope})~\cite{paper-pushpull}.
 A WCOJ pass must retain a complete positive join region before committing
 to binary intermediates, then supply variable-prefix restriction and
@@ -58,18 +56,18 @@ Direct RA/Index/Access/Pipeline entries and local quotations retain binding,
 typing and context contracts without reconstructing CQ
 (Section~\ref{sec:constraint-planning}). The physical supplement gives rules and
 algorithms for direct RA-to-Access lowering, with independent key, candidate-scan
-and witness operations. Row providers own storage access; lexical macros select
+and complete pair-production operations. Row providers own construction and access;
+lexical macros select
 local refinements. Generated operations use ordinary Rust data types and traits.
 
 \paragraph{Extractable teaching implementations.}
 The YA release profile selects graph planning, named-result indexes, exact
-materialized access, pull and collection into seven packages, including IR and
-the frontend. Its eighty-file inventory separates the two-sweep scheduler from
-semijoin-to-Access lowering; independent administrative and target checks remain
-supplied. Verification checks the foundation with both algorithms absent and
-each exercise's expected failure separately, then runs seventy-five tests and
-two examples with temporary reference implementations. The delivered files have
-the student stubs restored and their inventory hashes checked. Block, lazy,
-direct and other unselected implementations are physically absent. This tests
-an actual dependency boundary; it does not establish arbitrary provider laws.
-Triejoin and recursive program semantics remain separate design obligations.
+materialized access, pull and collection. Its generated inventory separates the
+two-sweep scheduler from semijoin-to-Access lowering; independent administrative
+and target checks remain supplied. Verification checks the foundation with both
+exercise algorithms absent and each expected failure separately, then compiles
+and executes the temporary reference implementations. The delivered files have
+the student stubs restored and their inventory hashes checked. Unselected native,
+block, prefix and configured-relation implementations are physically absent.
+This exercises an actual source boundary without establishing arbitrary provider
+laws. Triejoin and recursive program semantics remain separate design obligations.

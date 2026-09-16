@@ -14,10 +14,9 @@ members = [
     "crates/cq-storage",
     "crates/cq-plan",
     "crates/cq-index",
-    "crates/cq-physical",
-    "crates/cq-access",
-    "crates/cq-providers",
-    "crates/cq-pull",
+    "crates/cq-realize",
+    "crates/cq-native",
+    "crates/cq-execution",
     "crates/cq-pipeline",
     "crates/cq-compose",
     "crates/mini-linq",
@@ -37,11 +36,10 @@ cq-ir = { path = "crates/cq-ir" }
 cq-storage = { path = "crates/cq-storage" }
 cq-plan = { path = "crates/cq-plan", default-features = false }
 cq-index = { path = "crates/cq-index", default-features = false }
-cq-physical = { path = "crates/cq-physical", default-features = false }
+cq-realize = { path = "crates/cq-realize", default-features = false }
 mini-linq = { path = "crates/mini-linq" }
-cq-access = { path = "crates/cq-access", default-features = false }
-cq-providers = { path = "crates/cq-providers", default-features = false }
-cq-pull = { path = "crates/cq-pull" }
+cq-native = { path = "crates/cq-native", default-features = false }
+cq-execution = { path = "crates/cq-execution", default-features = false }
 cq-pipeline = { path = "crates/cq-pipeline", default-features = false }
 cq-compose = { path = "crates/cq-compose" }
 proc-macro2 = "1"

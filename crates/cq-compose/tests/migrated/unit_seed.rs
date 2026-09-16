@@ -28,6 +28,6 @@ fn unit_seed_uses_result_indexes_and_fused_linear_lowering() {
     })
     .unwrap();
     index_requirements::contract::check(&indexed).unwrap();
-    cq_physical::lazy::compile_lazy_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull))
+    cq_realize::hash_prefix::compile_lazy_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull))
         .unwrap();
 }

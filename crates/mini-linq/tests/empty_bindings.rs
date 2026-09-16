@@ -1,4 +1,30 @@
 //! Empty binding patterns preserve the extension's evaluation population.
+mod eager_programs {
+    use super::tick;
+    mod wiring {
+        #[allow(unused_imports)]
+        pub use ::mini_linq::{
+            collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+            pull_set,
+        };
+        pub use ::mini_linq::{
+            hash_materialized as choose_realization, result_indexes as choose_indexes,
+        };
+    }
+    use wiring as mini_linq;
+    mini_linq::optimized_query! {
+        pub(super) struct Materialized;
+        relation R(key: i32);
+        answer(x) :- R(x), let () = tick(), let _ = tick();
+    }
+    mini_linq::optimized_query! {
+        pub(super) struct MaterializedRoot;
+        relation R(key: i32);
+        answer(x) :- let () = tick(), R(x);
+    }
+}
+use eager_programs::Materialized;
+use eager_programs::MaterializedRoot;
 use std::cell::Cell;
 
 thread_local! {
@@ -15,20 +41,8 @@ mini_linq::mini_linq! {
     answer(x) :- R(x), let () = tick(), let _ = tick();
 }
 
-mini_linq::planned_query! {
-    struct Materialized;
-    relation R(key: i32);
-    answer(x) :- R(x), let () = tick(), let _ = tick();
-}
-
 mini_linq::mini_linq! {
     struct LazyRoot;
-    relation R(key: i32);
-    answer(x) :- let () = tick(), R(x);
-}
-
-mini_linq::planned_query! {
-    struct MaterializedRoot;
     relation R(key: i32);
     answer(x) :- let () = tick(), R(x);
 }

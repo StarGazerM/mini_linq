@@ -3,7 +3,7 @@
 //! CQ, [`relational_plan::Module`], and IndexRequirements each have one public
 //! parser and local language contract. The relational plan gives every set
 //! operator a named DAG result before indexes or Rust storage are chosen.
-//! [`physical_provider`] declares native Access fragments.
+//! [`native`] declares native Access fragments.
 //! [`rust_access_plan::Plan`] then associates every logical occurrence with
 //! its concrete Rust access or output expression. The pull strategy lowers
 //! those annotations to an explicit
@@ -17,7 +17,7 @@ use syn::{Ident, Index, Token};
 pub mod cq;
 pub mod index_requirements;
 pub mod iterator_pipeline;
-pub mod physical_provider;
+pub mod native;
 pub mod relational_plan;
 pub mod rust_access_plan;
 

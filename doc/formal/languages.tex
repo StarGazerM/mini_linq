@@ -208,30 +208,39 @@ o::={}&\mathsf{Unit}(())\mid\mathsf{Scan}(p,e,b)
  \mid\mathsf{Distinct}(s).
 \end{split}
 \]
-The judgment $o:(\bar B,\phi)\leadsto(\bar B',\phi')$ suppresses the stream
-counter: each step defines fresh $s_i=\code{iter}i$ and increments $i$;
-nonsources consume $s_{i-1}$, and start requires $i=0$.
-Write phases $0,\mathsf b,\mathsf p,\mathsf d$ for start, binding, projected, distinct. Patterns have
-distinct simple names; $\#$ denotes disjointness and $b_{\bar B}$ their tuple.
+The judgment $o:(a,\phi)\leadsto(a',\phi')$ tracks tuple arity
+$a\in\mathbb N\cup\{?\}$ and phase $\phi\in\{0,\mathsf b,\mathsf d\}$.
+Every definition has a fresh arbitrary stream name; each nonsource consumes the
+immediately preceding stream $s$. Thus the language is a linear single-consumer
+chain, not a graph with implicitly shared iterator ownership. Let $p:a$ mean a
+simple tuple pattern with distinct names and arity $a$ when $a$ is known. Let
+$\operatorname{ret}(b,N)$ be an ordered, duplicate-free tuple of names selected
+from $N$. Define $\operatorname{arity}(e)=n$ for a syntactic $n$-tuple and $?$ for
+an opaque Rust expression; Rust checks the latter's actual type.
 \begin{mathpar}
-\Rule{WF-IP-Unit}{}{\mathsf{Unit}(()):(\epsilon,0)\leadsto(\epsilon,\mathsf b)}
+\Rule{WF-IP-Unit}{}{\mathsf{Unit}(()):(?,0)\leadsto(0,\mathsf b)}
 
-\Rule{WF-IP-Scan}{\binds(p)=\bar N\quad b'=b_{\bar N}}
- {\mathsf{Scan}(p,e,b'):(\epsilon,0)\leadsto(\bar N,\mathsf b)}
+\Rule{WF-IP-Scan}{N=\binds(p)\quad\bar R=\operatorname{ret}(b,N)}
+ {\mathsf{Scan}(p,e,b):(?,0)\leadsto(|\bar R|,\mathsf b)}
 
-\Rule{WF-IP-Join}{p=(\bar B)\quad\binds(q)=\bar N\quad\bar B\#\bar N\quad b'=b_{\bar B\concat\bar N}}
- {\mathsf{Join}(s_{i-1},p,q,e,b'):(\bar B,\mathsf b)\leadsto(\bar B\concat\bar N,\mathsf b)}
+\Rule{WF-IP-Join}{p:a\quad N=\binds(q)\quad\binds(p)\cap N=\varnothing\\
+ \bar R=\operatorname{ret}(b,\binds(p)\cup N)}
+ {\mathsf{Join}(s,p,q,e,b):(a,\mathsf b)\leadsto(|\bar R|,\mathsf b)}
 
-\Rule{WF-IP-Filter}{p=(\bar B)}
- {\mathsf{Filter}(s_{i-1},p,e):(\bar B,\mathsf b)\leadsto(\bar B,\mathsf b)}
+\Rule{WF-IP-Filter}{p:a}
+ {\mathsf{Filter}(s,p,e):(a,\mathsf b)\leadsto(|\binds(p)|,\mathsf b)}
 
-\Rule{WF-IP-Project}{p=(\bar B)}
- {\mathsf{Project}(s_{i-1},p,e):(\bar B,\mathsf b)\leadsto(\epsilon,\mathsf p)}
+\Rule{WF-IP-Project}{p:a}
+ {\mathsf{Project}(s,p,e):(a,\mathsf b)\leadsto(\operatorname{arity}(e),\mathsf b)}
 
 \Rule{WF-IP-Distinct}{}
- {\mathsf{Distinct}(s_{i-1}):(\bar B,\mathsf p)\leadsto(\bar B,\mathsf d)}
+ {\mathsf{Distinct}(s):(a,\mathsf b)\leadsto(a,\mathsf d)}
 
-\Rule{WF-IP-Return}{s=s_{i-1}}{(\bar B,\mathsf d);\mathsf{return}\ s\Rightarrow\ok}
+\Rule{WF-IP-Return}{s\text{ is the last defined stream}}
+ {(a,\mathsf d);\mathsf{return}\ s\Rightarrow\ok}
 \end{mathpar}
-The implementation retains dead binding metadata after Project; correspondence
-quotients that unobserved state.
+Tuple consumers may rename their input fields. Scan and Join may select and
+reorder retained bindings; Project may occur before later Join, Filter or Project.
+Only Distinct is obligatorily final. Canonical stream numbering, complete binding
+retention and one final projection are properties of the supplied pull emitter,
+not validity restrictions on independently authored Pipeline programs.

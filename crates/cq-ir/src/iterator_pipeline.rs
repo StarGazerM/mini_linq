@@ -16,12 +16,21 @@ pub mod kw {
     syn::custom_keyword!(with);
 }
 
-/// A named, left-deep Volcano iterator pipeline.
+/// A named, single-consumer iterator pipeline.
 ///
 /// Every physical operator defines one stream and every non-source operator
-/// explicitly names its predecessor. Complete tuple bindings make each
-/// intermediate stream's item schema visible. Rust iterator combinators are
-/// deliberately absent: choosing them belongs to the next lowering.
+/// explicitly names its predecessor. Names are arbitrary; a consumer may
+/// rename tuple bindings, and sources/joins may retain or reorder bindings.
+/// Projection can occur anywhere in the chain, including before a dependent
+/// join. The returned stream has a terminal distinct operator. Rust iterator
+/// combinators are deliberately absent: choosing them belongs to the next
+/// lowering.
+///
+/// This language does not promise shared or branching streams. Each adapter
+/// consumes its predecessor once; supporting reuse would require an explicit
+/// ownership, buffering, or recomputation decision. Canonical stream numbering
+/// and complete binding retention belong to the supplied pull strategy, not
+/// to this language's validity rules.
 ///
 /// ```text
 /// iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);
@@ -170,14 +179,13 @@ fn check_plan(plan: &Pipeline) -> syn::Result<()> {
     let Some((first, remaining)) = plan.definitions.split_first() else {
         return Err(syn::Error::new_spanned(
             &plan.return_stream,
-            "named iterator plan must define a source and projection",
+            "named iterator plan must define a source and terminal distinct",
         ));
     };
 
     let mut defined = BTreeSet::new();
     check_unique_stream(first, &mut defined)?;
-    check_stream_number(&first.stream, 0)?;
-    let mut binding = match &first.operator {
+    let mut arity = match &first.operator {
         Operator::Unit(source) => {
             let actual = expression_binding(&source.binding)?;
             if !actual.is_empty() {
@@ -186,14 +194,12 @@ fn check_plan(plan: &Pipeline) -> syn::Result<()> {
                     "the unit source must yield the empty binding `()`",
                 ));
             }
-            actual
+            Some(0)
         }
         Operator::Scan(source) => {
             let introduced = enumerating_pattern_binding(&source.item_pattern)?;
             check_fresh(&introduced, &BTreeSet::new(), &source.item_pattern)?;
-            let actual = expression_binding(&source.binding)?;
-            check_same_binding("scan output", &actual, &introduced, &source.binding)?;
-            actual
+            Some(check_retained_binding(&source.binding, &introduced)?.len())
         }
         _ => {
             return Err(syn::Error::new_spanned(
@@ -204,11 +210,9 @@ fn check_plan(plan: &Pipeline) -> syn::Result<()> {
     };
 
     let mut previous = first.stream.clone();
-    let mut saw_project = false;
     let mut saw_distinct = false;
-    for (position, definition) in remaining.iter().enumerate() {
+    for definition in remaining {
         check_unique_stream(definition, &mut defined)?;
-        check_stream_number(&definition.stream, position + 1)?;
         if saw_distinct {
             return Err(syn::Error::new_spanned(
                 definition,
@@ -217,51 +221,24 @@ fn check_plan(plan: &Pipeline) -> syn::Result<()> {
         }
         match &definition.operator {
             Operator::Join(operator) => {
-                if saw_project {
-                    return Err(syn::Error::new_spanned(
-                        operator,
-                        "a join cannot follow projection",
-                    ));
-                }
                 check_input_stream(&operator.input_stream, &previous)?;
-                check_input_pattern(&operator.input_pattern, &binding)?;
+                let mut available = check_input_pattern(&operator.input_pattern, arity)?;
                 let introduced = enumerating_pattern_binding(&operator.item_pattern)?;
-                let already_bound = binding.iter().cloned().collect();
+                let already_bound = available.iter().cloned().collect();
                 check_fresh(&introduced, &already_bound, &operator.item_pattern)?;
-                let mut expected = binding.clone();
-                expected.extend(introduced);
-                let actual = expression_binding(&operator.binding)?;
-                check_same_binding("join output", &actual, &expected, &operator.binding)?;
-                binding = actual;
+                available.extend(introduced);
+                arity = Some(check_retained_binding(&operator.binding, &available)?.len());
             }
             Operator::Filter(operator) => {
-                if saw_project {
-                    return Err(syn::Error::new_spanned(
-                        operator,
-                        "a filter cannot follow projection",
-                    ));
-                }
                 check_input_stream(&operator.input_stream, &previous)?;
-                check_input_pattern(&operator.input_pattern, &binding)?;
+                arity = Some(check_input_pattern(&operator.input_pattern, arity)?.len());
             }
             Operator::Project(operator) => {
-                if saw_project {
-                    return Err(syn::Error::new_spanned(
-                        operator,
-                        "an iterator pipeline has exactly one projection",
-                    ));
-                }
                 check_input_stream(&operator.input_stream, &previous)?;
-                check_input_pattern(&operator.input_pattern, &binding)?;
-                saw_project = true;
+                check_input_pattern(&operator.input_pattern, arity)?;
+                arity = expression_arity(&operator.output);
             }
             Operator::Distinct(operator) => {
-                if !saw_project {
-                    return Err(syn::Error::new_spanned(
-                        operator,
-                        "distinct must immediately follow projection",
-                    ));
-                }
                 check_input_stream(&operator.input_stream, &previous)?;
                 saw_distinct = true;
             }
@@ -275,12 +252,6 @@ fn check_plan(plan: &Pipeline) -> syn::Result<()> {
         previous = definition.stream.clone();
     }
 
-    if !saw_project {
-        return Err(syn::Error::new_spanned(
-            &plan.return_stream,
-            "named iterator plan must contain one `project` operator",
-        ));
-    }
     if !saw_distinct {
         return Err(syn::Error::new_spanned(
             &plan.return_stream,
@@ -288,17 +259,6 @@ fn check_plan(plan: &Pipeline) -> syn::Result<()> {
         ));
     }
     check_input_stream(&plan.return_stream.stream, &previous)
-}
-
-fn check_stream_number(stream: &Ident, position: usize) -> syn::Result<()> {
-    let expected = format!("iter{position}");
-    if symbol_name(stream) == expected {
-        return Ok(());
-    }
-    Err(syn::Error::new_spanned(
-        stream,
-        format!("definition {position} must name its result `{expected}`"),
-    ))
 }
 
 fn check_unique_stream(definition: &Definition, defined: &mut BTreeSet<String>) -> syn::Result<()> {
@@ -322,27 +282,42 @@ fn check_input_stream(actual: &Ident, expected: &Ident) -> syn::Result<()> {
     ))
 }
 
-fn check_input_pattern(pattern: &Pat, expected: &[String]) -> syn::Result<()> {
+fn check_input_pattern(pattern: &Pat, arity: Option<usize>) -> syn::Result<Vec<String>> {
     let actual = tuple_pattern_binding(pattern)?;
-    check_same_binding("operator input", &actual, expected, pattern)
+    check_fresh(&actual, &BTreeSet::new(), pattern)?;
+    if let Some(expected) = arity {
+        if actual.len() != expected {
+            return Err(syn::Error::new_spanned(
+                pattern,
+                format!("operator input must bind {expected} tuple fields"),
+            ));
+        }
+    }
+    Ok(actual)
 }
 
-fn check_same_binding<T: ToTokens>(
-    context: &str,
-    actual: &[String],
-    expected: &[String],
-    tokens: &T,
-) -> syn::Result<()> {
-    if actual == expected {
-        return Ok(());
+fn check_retained_binding(expression: &Expr, available: &[String]) -> syn::Result<Vec<String>> {
+    let actual = expression_binding(expression)?;
+    check_fresh(&actual, &BTreeSet::new(), expression)?;
+    for name in &actual {
+        if !available.contains(name) {
+            return Err(syn::Error::new_spanned(
+                expression,
+                format!("output binding `{name}` is not introduced by this operator"),
+            ));
+        }
     }
-    Err(syn::Error::new_spanned(
-        tokens,
-        format!(
-            "{context} must be the complete binding `({})`",
-            tuple_display(expected)
-        ),
-    ))
+    Ok(actual)
+}
+
+fn expression_arity(expression: &Expr) -> Option<usize> {
+    match expression {
+        Expr::Tuple(tuple) => Some(tuple.elems.len()),
+        Expr::Paren(paren) => expression_arity(&paren.expr),
+        Expr::Group(group) => expression_arity(&group.expr),
+        // Rust type checking determines opaque leaf-expression result types.
+        _ => None,
+    }
 }
 
 fn check_fresh<T: ToTokens>(
@@ -428,12 +403,4 @@ fn simple_pattern_name(pattern: &Pat) -> syn::Result<String> {
         ));
     }
     Ok(symbol_name(&pattern.ident))
-}
-
-fn tuple_display(binding: &[String]) -> String {
-    match binding {
-        [] => String::new(),
-        [only] => format!("{only},"),
-        many => many.join(", "),
-    }
 }

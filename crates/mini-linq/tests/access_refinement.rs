@@ -21,7 +21,7 @@ fn key_builders_evaluate_access_sources_and_optional_work_once() {
         ($implementation:ident) => {
             ::mini_linq::$implementation! {
                 storage ::cq_storage;
-                iterator ::mini_linq::stream_access;
+                iterator ::mini_linq::pull_stream;
                 keys ::std::collections::HashSet;
                 work (observe(&work_calls, &work));
                 build {
@@ -70,7 +70,7 @@ fn pruned_access_checks_metadata_before_open_and_keeps_the_exact_residual() {
     );
     let view = mini_linq::block_rows! { storage ::cq_storage; input (&store) };
     let keys = mini_linq::zone_keys! {
-        storage ::cq_storage; iterator ::mini_linq::stream_access; keys ::std::collections::HashSet;
+        storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::HashSet;
         build { keys(k) => ([k]) :- K(k) => for (k,) in ([(1_i64,), (3,)]); }
     };
     let keys_ref = &keys;
@@ -83,21 +83,21 @@ fn pruned_access_checks_metadata_before_open_and_keeps_the_exact_residual() {
         };
     }
     let candidates = mini_linq::prune_rows! {
-        iterator ::mini_linq::stream_access; work (observed_work);
+        iterator ::mini_linq::pull_stream; work (observed_work);
         candidates rows { observe(&source_calls, &view) }
             (|bounds: &[(i64, i64)]| mini_linq::zone_keys! {
-                storage ::cq_storage; iterator ::mini_linq::stream_access;
+                storage ::cq_storage; iterator ::mini_linq::pull_stream;
                 may_match (keys_ref) (bounds) (&[1])
             })
     };
-    let selected: HashSet<_> = mini_linq::collect_access! {
+    let selected: HashSet<_> = mini_linq::pull_set! {
         out(h) => (*rows! { row (h) }) :-
         Candidate(h) => for (h,) in (candidates.map(|h| (h,))),
         if mini_linq::zone_keys! {
-            storage ::cq_storage; iterator ::mini_linq::stream_access;
+            storage ::cq_storage; iterator ::mini_linq::pull_stream;
             contains (keys_ref) ([rows! { row (h) }[1]])
         } => if (mini_linq::zone_keys! {
-            storage ::cq_storage; iterator ::mini_linq::stream_access; work (observed_work);
+            storage ::cq_storage; iterator ::mini_linq::pull_stream; work (observed_work);
             contains (keys_ref) ([rows! { row (h) }[1]])
         });
     };
@@ -119,7 +119,7 @@ fn witness_implementations_preserve_pairs_and_nested_build_stays_lazy() {
     macro_rules! build {
         ($implementation:ident) => {
             ::mini_linq::$implementation! {
-                iterator ::mini_linq::stream_access;
+                iterator ::mini_linq::pull_stream;
                 build {
                     witnesses(k, row) => (([k], row)) :-
                     R(k, row) => for (k, row) in ({
@@ -160,7 +160,7 @@ mod same_role_aliases {
     }
     macro_rules! __ml_access0 {
         ($($source:tt)*) => { ::mini_linq::exact_keys! {
-            storage ::cq_storage; iterator ::mini_linq::stream_access;
+            storage ::cq_storage; iterator ::mini_linq::pull_stream;
             keys ::std::collections::HashSet; $($source)*
         } };
     }
@@ -168,7 +168,7 @@ mod same_role_aliases {
         ($entry:ident, $name:ident; $($host:tt)*) => {
             ::mini_linq::$entry! {
                 $($host)*
-                access ::mini_linq::stream_access;
+                access ::mini_linq::pull_stream;
                 materialize r#__ml_provider0;
                 inputs { R => r#__ml_provider0; S => r#__ml_provider0; }
                 scan ::mini_linq::scan_rows;
@@ -186,13 +186,13 @@ mod same_role_aliases {
             }
         };
     }
-    query!(physical_plan, ReservedNames;);
-    query!(observed_physical_plan, ObservedReservedNames; storage ::cq_storage;);
+    query!(relation_program, ReservedNames;);
+    query!(observed_relation_program, ObservedReservedNames; storage ::cq_storage;);
 }
 
 macro_rules! witnesses {
     ($($source:tt)*) => {
-        ::mini_linq::hash_witnesses! { iterator ::mini_linq::stream_access; $($source)* }
+        ::mini_linq::hash_pairs! { $($source)* }
     };
 }
 pub(crate) use witnesses;
@@ -203,12 +203,12 @@ mod cross_role_aliases {
     }
     macro_rules! __ml_provider0 {
         ($($source:tt)*) => { ::mini_linq::exact_keys! {
-            storage ::cq_storage; iterator ::mini_linq::stream_access;
+            storage ::cq_storage; iterator ::mini_linq::pull_stream;
             keys ::std::collections::HashSet; $($source)*
         } };
     }
     macro_rules! __ml_provider1 {
-        ($($source:tt)*) => { ::mini_linq::stream_access! { $($source)* } };
+        ($($source:tt)*) => { ::mini_linq::pull_stream! { $($source)* } };
     }
     macro_rules! query {
         ($entry:ident, $name:ident; $($host:tt)*) => {
@@ -233,8 +233,8 @@ mod cross_role_aliases {
             }
         };
     }
-    query!(physical_plan, CrossRoleNames;);
-    query!(observed_physical_plan, ObservedCrossRoleNames; storage ::cq_storage;);
+    query!(relation_program, CrossRoleNames;);
+    query!(observed_relation_program, ObservedCrossRoleNames; storage ::cq_storage;);
 }
 
 #[test]
@@ -265,11 +265,11 @@ fn configured_aliases_do_not_shadow_selected_macro_names() {
 
 #[test]
 fn streaming_access_preserves_support_without_allocating_a_distinct_set() {
-    let stream: Vec<_> = mini_linq::stream_access! {
+    let stream: Vec<_> = mini_linq::pull_stream! {
         out(k) => ([k]) :- R(k,_v) => for (k,_v) in ([(1_i64,10), (1,11), (2,20)]);
     }
     .collect();
-    let support: HashSet<_> = mini_linq::collect_access! {
+    let support: HashSet<_> = mini_linq::pull_set! {
         out(k) => ([k]) :- R(k,_v) => for (k,_v) in ([(1_i64,10), (1,11), (2,20)]);
     };
     assert_eq!(stream, vec![[1], [1], [2]]);

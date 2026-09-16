@@ -1,5 +1,16 @@
 //! Run with: cargo run -p mini-linq --example rust-expressions-planned --features compiled-workloads
-use mini_linq::planned_query as query;
+mod wiring {
+    #[allow(unused_imports)]
+    pub use ::mini_linq::{
+        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+        pull_set,
+    };
+    pub use ::mini_linq::{
+        hash_materialized as choose_realization, result_indexes as choose_indexes,
+    };
+}
+use mini_linq::optimized_query as query;
+use wiring as mini_linq;
 
 mod gallery;
 mod plans;

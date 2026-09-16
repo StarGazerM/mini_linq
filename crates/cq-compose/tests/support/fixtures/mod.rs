@@ -22,9 +22,9 @@ pub struct InvalidSources {
     pub rust_access_plan: TokenStream,
 }
 
-mod input_indexed;
+mod hash_inputs;
 mod invalid;
 mod logical;
-pub use input_indexed::index_requirements_to_staged_rust;
+pub use hash_inputs::index_requirements_to_staged_rust;
 pub use invalid::{invalid_sources, missing_required_index};
 pub use logical::cq_to_relational_plan_and_indexes;

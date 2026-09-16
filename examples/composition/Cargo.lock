@@ -14,6 +14,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-execution"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-index"
 version = "0.1.0"
 dependencies = [
@@ -30,16 +41,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
-]
-
-[[package]]
-name = "cq-physical"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -64,10 +65,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-pull"
+name = "cq-realize"
 version = "0.1.0"
 dependencies = [
- "contracts",
  "cq-ir",
  "proc-macro2",
  "quote",
@@ -78,12 +78,12 @@ dependencies = [
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-execution",
  "cq-index",
  "cq-ir",
- "cq-physical",
  "cq-pipeline",
  "cq-plan",
- "cq-pull",
+ "cq-realize",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

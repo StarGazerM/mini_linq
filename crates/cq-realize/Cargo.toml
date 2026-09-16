@@ -1,0 +1,19 @@
+[package]
+name = "cq-realize"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+hash-inputs = []
+hash-prefix = []
+hash-materialized = []
+relations = []
+
+[dependencies]
+cq-ir = { path = "../cq-ir" }
+proc-macro2.workspace = true
+quote.workspace = true
+syn = { workspace = true, features = ["visit-mut"] }

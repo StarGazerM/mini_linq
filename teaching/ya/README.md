@@ -9,7 +9,7 @@ CQ graph planning → RA → named-result indexes → materialized Access
 ```
 
 The export contains seven package families: `cq-ir`, `cq-plan`, `cq-index`,
-`cq-physical`, `cq-pull`, `cq-pipeline`, and `mini-linq`. It selects the graph,
+`cq-realize`, `cq-execution`, `cq-pipeline`, and `mini-linq`. It selects the graph,
 result-index, materialized, pull and collection modules. Canonical/prefix
 planning, input indexes, input/lazy/direct physical compilation, other Pipeline
 endpoints, native access/providers, storage, workloads and the optional recursion
@@ -18,13 +18,13 @@ checks its own smaller admitted domain.
 
 Only the selected implementations and their declared family helpers are copied.
 Planning certificates remain under `cq-plan`; Rust emission helpers and independent
-checker observations remain under `cq-physical`. There are no analysis/helper
+checker observations remain under `cq-realize`. There are no analysis/helper
 packages. Their existing feature guards and module declarations are reduced to
 the selected build. This rewrites build wiring, never algorithm statements.
 
 The two replaceable algorithm files are the logical YA sweep scheduler and
 the materialized physical semijoin lowering, in `cq-plan/src/graph/ya.rs` and
-`cq-physical/src/materialized/semijoin.rs`, respectively. Supplied administrative rules
+`cq-realize/src/hash_materialized/semijoin.rs`, respectively. Supplied administrative rules
 check scheduling premises. Supplied source–target checks examine the emitted
 algebra and Access regions independently of the student algorithms.
 

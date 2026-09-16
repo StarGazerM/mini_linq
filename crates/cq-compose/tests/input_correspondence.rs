@@ -81,10 +81,12 @@ fn mutate_access(target: &mut syn::File, change: impl FnOnce(&mut ac::Plan)) {
 #[test]
 fn base_storage_contract_checks_keys_payloads_and_ownership_schedule() {
     let source = fixture();
-    let target =
-        cq_physical::input::compile_input_indexed(&source, &syn::parse_quote!(::mini_linq::pull))
-            .unwrap();
-    cq_physical::input::check_input_indexed(
+    let target = cq_realize::hash_inputs::compile_input_indexed(
+        &source,
+        &syn::parse_quote!(::mini_linq::pull),
+    )
+    .unwrap();
+    cq_realize::hash_inputs::check_input_indexed(
         &source,
         &target,
         &syn::parse_quote!(::mini_linq::pull),
@@ -133,7 +135,7 @@ fn base_storage_contract_checks_keys_payloads_and_ownership_schedule() {
         let mut invalid = target.clone();
         replace_expression(&mut invalid, original, replacement);
         assert!(
-            cq_physical::input::check_input_indexed(
+            cq_realize::hash_inputs::check_input_indexed(
                 &source,
                 &invalid,
                 &syn::parse_quote!(::mini_linq::pull)
@@ -143,19 +145,27 @@ fn base_storage_contract_checks_keys_payloads_and_ownership_schedule() {
     }
     let mut full = source;
     full.indexes.push(syn::parse_quote!(R[0,1]));
-    let target =
-        cq_physical::input::compile_input_indexed(&full, &syn::parse_quote!(::mini_linq::pull))
-            .unwrap();
-    cq_physical::input::check_input_indexed(&full, &target, &syn::parse_quote!(::mini_linq::pull))
-        .unwrap();
+    let target = cq_realize::hash_inputs::compile_input_indexed(
+        &full,
+        &syn::parse_quote!(::mini_linq::pull),
+    )
+    .unwrap();
+    cq_realize::hash_inputs::check_input_indexed(
+        &full,
+        &target,
+        &syn::parse_quote!(::mini_linq::pull),
+    )
+    .unwrap();
 }
 
 #[test]
 fn base_access_contract_rejects_wrong_stores_keys_and_missing_occurrences() {
     let source = fixture();
-    let target =
-        cq_physical::input::compile_input_indexed(&source, &syn::parse_quote!(::mini_linq::pull))
-            .unwrap();
+    let target = cq_realize::hash_inputs::compile_input_indexed(
+        &source,
+        &syn::parse_quote!(::mini_linq::pull),
+    )
+    .unwrap();
     for mutation in 0..4 {
         let mut invalid = target.clone();
         mutate_access(&mut invalid, |plan| match mutation {
@@ -194,7 +204,7 @@ fn base_access_contract_rejects_wrong_stores_keys_and_missing_occurrences() {
         });
         ac::contract::check(&pull_from_file(&invalid)).unwrap();
         assert!(
-            cq_physical::input::check_input_indexed(
+            cq_realize::hash_inputs::check_input_indexed(
                 &source,
                 &invalid,
                 &syn::parse_quote!(::mini_linq::pull)

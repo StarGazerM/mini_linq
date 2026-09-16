@@ -46,8 +46,8 @@ additional planning or lowering.
 |---|---|---|
 | student, Basic HW1 | `cq_plan::canonical::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` |
 | student, Basic HW2 | `cq_index::input::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` preserving the complete input plan |
-| student, Basic HW3 | `cq_physical::input::compile_input_indexed(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete API and one `pull!` expression |
-| staff | `cq_pull::compile(&rust_access_plan::Plan)` | `syn::Result<iterator_pipeline::Pipeline>` with explicit `iterN` edges |
+| student, Basic HW3 | `cq_realize::hash_inputs::compile_input_indexed(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete API and one `pull!` expression |
+| staff | `cq_execution::pull::compile(&rust_access_plan::Plan)` | `syn::Result<iterator_pipeline::Pipeline>` with explicit `iterN` edges |
 | staff | `cq_pipeline::iterator::compile(&iterator_pipeline::Pipeline)` | `syn::Result<syn::Expr>` containing one lazy whole-result-set expression |
 
 These functions accept typed syntax values, not token streams. The
@@ -64,11 +64,17 @@ edges without replacing the basic homework contracts:
 
 | Macro entry | Typed transformation |
 |---|---|
-| `planned_query!` | `compile_cq_planned`: CQ -> RelationalPlan |
-| `planned_relational_plan!` | `cq_index::result::compile`: RelationalPlan -> IndexRequirements |
-| `materialized!` | `compile_materialized`: IndexRequirements -> staged Rust |
+| `optimized_query!` | Choose caller-bound `graph_query!` or `prefix_query!`; each lowers CQ -> RelationalPlan |
+| `result_indexes!` | `cq_index::result::compile`: RelationalPlan -> IndexRequirements |
+| `hash_materialized!` | `cq_realize::hash_materialized::compile_materialized`: IndexRequirements -> staged Rust |
 
-The target Rust file has one local `collect_access!` expression per named RA
+The eager composition binds `result_indexes` as `choose_indexes` and
+`hash_materialized` as `choose_realization` in a local facade. Planner selection
+does not also select eager execution. With ordinary crate bindings,
+`choose_indexes!` chooses an index policy and `choose_realization!` chooses a
+hash realization from the actual IX domain; both dispatch through caller aliases.
+
+The target Rust file has one local `pull_set!` expression per named RA
 result. That continuation uses the existing pull and IteratorPipeline passes
 and collects a set. Materialized sets outside these expressions preserve
 shared DAG references. `build` performs the materialization; `query` traverses
@@ -248,6 +254,18 @@ constructs the owned result row; and `distinct` enforces CQ set semantics.
 These are streams of intermediate bindings, not materialized intermediate
 relations.
 
+Stream names need not be `iterN`. Consumers may rename tuple fields, and scan
+or join may select and reorder retained bindings. Projection may precede another
+join, filter or projection. The language requires a linear, single-consumer
+chain ending in `distinct`; canonical names and one final projection describe
+the supplied pull emitter, not every valid authored pipeline.
+
+`push_set!` is a separate Access execution implementation: it emits nested Rust
+loops and one exact-set sink directly, with no Pipeline intermediate. It can
+replace a set-valued Access continuation under completed-set observations.
+It cannot replace the lazy `pull!` hole in this basic checkpoint without changing
+the generated `query()` demand contract.
+
 Both logical RelationalPlan and physical IteratorPipeline spell an identity
 source `unit`, but they remain different typed objects. Logical `Unit` denotes
 the set relation `{()}`. Physical `Unit` denotes a lazy cursor equivalent to
@@ -280,7 +298,7 @@ operator nor an index or Rust execution choice.
 ### 2. Entire RelationalPlan program
 
 ```rust
-::mini_linq::relational_plan! {
+::mini_linq::choose_indexes! {
     pub struct TriangleProgram;
     relation R(c0: i32, c1: i32);
     relation S(c0: i32, c1: i32);
@@ -310,7 +328,7 @@ separate output metadata preserves the head name and tuple order.
 ### 3. Entire IndexRequirements program
 
 ```rust
-::mini_linq::input_indexed! {
+::mini_linq::hash_inputs! {
     pub struct TriangleProgram;
     relation R(c0: i32, c1: i32);
     relation S(c0: i32, c1: i32);
@@ -726,7 +744,7 @@ the next item can actually wait on I/O or a channel.
 
 The basic assignments cover three typed edges, implemented in this checkout in
 `cq-plan/src/canonical/lower.rs`, `cq-index/src/input/mod.rs`, and
-`cq-physical/src/input/mod.rs`
+`cq-realize/src/hash_inputs/mod.rs`
 under `crates/`:
 
 1. Basic HW1 constructs the complete canonical RelationalPlan.

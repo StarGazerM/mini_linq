@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use cq_execution::pull::compile as compile_pull;
 use cq_pipeline::iterator::compile as compile_iterator_pipeline;
-use cq_pull::compile as compile_pull;
 use syn::visit_mut::{self, VisitMut};
 
 static TEMPORARY_NUMBER: AtomicU64 = AtomicU64::new(0);

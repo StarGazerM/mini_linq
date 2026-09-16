@@ -1,5 +1,5 @@
 //! Atom arguments bind bare names and match the values of Rust expressions.
-use super::{check, query};
+use super::{check, mini_linq, query};
 
 fn successor(x: &i32) -> i32 {
     x + 1

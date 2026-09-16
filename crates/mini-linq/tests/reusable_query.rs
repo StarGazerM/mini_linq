@@ -3,8 +3,14 @@ use std::collections::HashSet;
 
 mod callable {
     mod wiring {
-        pub use ::mini_linq::materialized_query as materialized;
-        pub use ::mini_linq::*;
+        #[allow(unused_imports)]
+        pub use ::mini_linq::{
+            collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+            pull_set,
+        };
+        pub use ::mini_linq::{
+            hash_materialized_query as choose_realization, result_indexes as choose_indexes,
+        };
     }
     use wiring as mini_linq;
 
@@ -12,7 +18,7 @@ mod callable {
         left: &[(String, String)],
         right: &[(String, String)],
     ) -> HashSet<(String, String)> {
-        let query = mini_linq::planned_query! {
+        let query = mini_linq::optimized_query! {
             struct CallerNamed;
             relation R(a:String,b:String); relation S(b:String,c:String);
             answer(a,c) :- R(a,b), S(b,c);
@@ -23,7 +29,18 @@ mod callable {
 }
 
 mod standalone {
-    mini_linq::planned_query! {
+    mod wiring {
+        #[allow(unused_imports)]
+        pub use ::mini_linq::{
+            collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+            pull_set,
+        };
+        pub use ::mini_linq::{
+            hash_materialized as choose_realization, result_indexes as choose_indexes,
+        };
+    }
+    use wiring as mini_linq;
+    mini_linq::optimized_query! {
         pub struct CallerNamed;
         relation R(a:String,b:String); relation S(b:String,c:String);
         answer(a,c) :- R(a,b), S(b,c);
@@ -72,7 +89,7 @@ mod host_names {
 
     #[test]
     fn callable_preserves_direct_and_opaque_host_function_resolution() {
-        let direct = mini_linq::materialized_query! {
+        let direct = mini_linq::hash_materialized_query! {
             struct Direct;
             relation R(a:i32);
             answer(x) :- R(x), if (__ml_query(x) && __ml_query_(x));
@@ -83,7 +100,7 @@ mod host_names {
             }
             indexes {}
         };
-        let opaque = mini_linq::materialized_query! {
+        let opaque = mini_linq::hash_materialized_query! {
             struct Opaque;
             relation R(a:i32);
             answer(x) :- R(x), if (allowed!(x));
@@ -106,7 +123,7 @@ mod host_names {
 #[test]
 fn callable_uses_native_local_capture_semantics() {
     let threshold = 1;
-    let query = mini_linq::materialized_query! {
+    let query = mini_linq::hash_materialized_query! {
         struct Captured;
         relation R(a:i32);
         answer(x) :- R(x), if (*x > threshold);

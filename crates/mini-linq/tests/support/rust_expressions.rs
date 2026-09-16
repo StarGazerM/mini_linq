@@ -1,5 +1,24 @@
+mod default_programs {
+    use ::mini_linq;
+    use mini_linq::mini_linq;
+    use super::{accepts, successor, lazy_label};
+mini_linq! {
+    pub(super) struct BasicExpressions;
+    relation R(a: i32, b: i32);
+    relation answer(value: String);
+    answer(format!("{x}")) :- R(x, successor(x)), if accepts(x);
+}
+mini_linq! {
+    pub(super) struct LazyBindings;
+    relation R(x: i32);
+    relation S(x: i32, y: i32);
+    relation answer(value: String);
+    answer(text) :- R(x), let text = lazy_label(x), S(x, y), if !text.is_empty();
+}
+}
+use default_programs::{BasicExpressions, LazyBindings};
 // Public macro tests: these exercise every lowering and Rust's type checker.
-use mini_linq::mini_linq;
+
 
 fn successor(x: &i32) -> i32 {
     x + 1
@@ -102,12 +121,7 @@ query! {
     relation R(value: i32);
     answer(x) :- R(x), if positive!(x);
 }
-mini_linq! {
-    struct BasicExpressions;
-    relation R(a: i32, b: i32);
-    relation answer(value: String);
-    answer(format!("{x}")) :- R(x, successor(x)), if accepts(x);
-}
+
 
 query! {
     struct TypedLet;
@@ -212,13 +226,7 @@ fn lazy_label(x: &i32) -> String {
     LAZY_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     format!("item-{x}")
 }
-mini_linq! {
-    struct LazyBindings;
-    relation R(x: i32);
-    relation S(x: i32, y: i32);
-    relation answer(value: String);
-    answer(text) :- R(x), let text = lazy_label(x), S(x, y), if !text.is_empty();
-}
+
 #[test]
 fn default_route_preserves_laziness_and_owned_bindings_across_joins() {
     use std::sync::atomic::Ordering::Relaxed;

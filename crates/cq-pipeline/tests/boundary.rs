@@ -79,7 +79,7 @@ fn all_pipeline_endpoints_check_empty_and_incomplete_pipelines() {
         return iter1;
     };
     for (source, diagnostic) in [
-        (&empty, "must define a source and projection"),
+        (&empty, "must define a source and terminal distinct"),
         (&incomplete, "must end with `distinct`"),
     ] {
         #[cfg(feature = "iterator")]

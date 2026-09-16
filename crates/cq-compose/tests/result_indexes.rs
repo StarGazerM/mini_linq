@@ -94,9 +94,9 @@ fn missing_wrong_version_and_incomplete_keys_are_controlled_errors() {
             .collect();
         ir::contract::check(&missing).unwrap();
         assert!(
-            cq_physical::materialized::compile_materialized(
+            cq_realize::hash_materialized::compile_materialized(
                 &missing,
-                &syn::parse_quote!(::mini_linq::collect_access)
+                &syn::parse_quote!(::mini_linq::pull_set)
             )
             .is_err()
         );
@@ -114,9 +114,9 @@ fn missing_wrong_version_and_incomplete_keys_are_controlled_errors() {
     wrong.indexes.first_mut().unwrap().key_columns = std::iter::once(changed).collect();
     ir::contract::check(&wrong).unwrap();
     assert!(
-        cq_physical::materialized::compile_materialized(
+        cq_realize::hash_materialized::compile_materialized(
             &wrong,
-            &syn::parse_quote!(::mini_linq::collect_access)
+            &syn::parse_quote!(::mini_linq::pull_set)
         )
         .is_err()
     );
@@ -124,9 +124,9 @@ fn missing_wrong_version_and_incomplete_keys_are_controlled_errors() {
     wrong.indexes.first_mut().unwrap().relation = ra.plan.output.input.clone();
     ir::contract::check(&wrong).unwrap();
     assert!(
-        cq_physical::materialized::compile_materialized(
+        cq_realize::hash_materialized::compile_materialized(
             &wrong,
-            &syn::parse_quote!(::mini_linq::collect_access)
+            &syn::parse_quote!(::mini_linq::pull_set)
         )
         .is_err()
     );
@@ -147,8 +147,11 @@ fn base_and_result_namespaces_are_distinct_and_input_route_rejects_result_indexe
     let indexed = cq_index::result::compile(&canonical).unwrap();
     ir::contract::check(&indexed).unwrap();
     assert!(
-        cq_physical::input::compile_input_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull))
-            .is_err()
+        cq_realize::hash_inputs::compile_input_indexed(
+            &indexed,
+            &syn::parse_quote!(::mini_linq::pull)
+        )
+        .is_err()
     );
     let mut base = indexed.clone();
     let k = base.indexes.first_mut().unwrap();
@@ -156,9 +159,9 @@ fn base_and_result_namespaces_are_distinct_and_input_route_rejects_result_indexe
     k.relation = syn::parse_quote!(S);
     ir::contract::check(&base).unwrap();
     assert!(
-        cq_physical::materialized::compile_materialized(
+        cq_realize::hash_materialized::compile_materialized(
             &base,
-            &syn::parse_quote!(::mini_linq::collect_access)
+            &syn::parse_quote!(::mini_linq::pull_set)
         )
         .is_err()
     );
@@ -190,9 +193,9 @@ fn valid_extra_requirements_are_built_without_changing_the_plan() {
     indexed.indexes.push(syn::parse_quote!(R[0]));
     indexed.indexes.push(syn::parse_quote!(@r0[1]));
     ir::contract::check(&indexed).unwrap();
-    let staged = cq_physical::materialized::compile_materialized(
+    let staged = cq_realize::hash_materialized::compile_materialized(
         &indexed,
-        &syn::parse_quote!(::mini_linq::collect_access),
+        &syn::parse_quote!(::mini_linq::pull_set),
     )
     .unwrap();
     // The written extras are real concrete builders, not ignored annotations.

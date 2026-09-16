@@ -19,8 +19,8 @@ Boundary & Owns & Appropriate choice\\
 \midrule
 CQ to RA & Logical scheduling and equivalence & Legal join order, YA reduction, expression placement\\
 RA/IX to Rust with Access & Construction, layouts, lifetimes and local Access plans & Per-relation providers and resource sharing\\
-Native Access operations & Resource construction, membership, candidates and witnesses & Exact/zone keys, row/pruned scans, hash/nested witnesses\\
-Access to Pipeline & Binding/control translation & A compatible local lowering\\
+Native fragments & Row construction/access, resource operations and whole pair traversal & Tuple/array/block rows, exact/zone keys, scan/prune, hash/nested/merge pairs\\
+Access execution & Binding/control and observation contract & Pull to Pipeline, or eager push directly to a set\\
 Pipeline to Rust & Iterator/collection realization & Distinct iteration, fused set collection or support-preserving streaming\\
 \bottomrule
 \end{tabular}
@@ -37,26 +37,32 @@ enumeration of capabilities.
 The direct pass lowers Semijoin once to candidate iteration followed by exact
 membership. Candidate expansion can produce local Access with Blocks, a metadata
 guard and current BlockRows. Key construction consumes an Access projection of
-the current RHS, and is independent of candidate scanning. Join construction and
-probing similarly use local witness operations. These are expression and statement
-fragments in existing Rust holes, not serialization of whole RA operators with a
-physical environment. \code{cq-physical::direct} owns whole-program lowering;
-\code{cq-access} owns local refinements; \code{cq-providers} owns
-storage-operation expansion. \code{cq-storage} holds data structures and traits.
-These crates group semantic boundary families; feature-selected modules own each
-alternative's lowering, requirements, checks and tests. Shared source analyses are
-language facts or privately owned realization judgments, not a universal analysis
-registry. Cargo isolates families; source-removal tests separately exercise sibling
-module independence.
+the current RHS, and is independent of candidate scanning. NaturalJoin emits a
+Pairs fragment with two row traversals, derived key expressions and a result
+emission body. Hash, nested and sort/merge implementations therefore own their
+whole local schedule; the caller does not preselect build/probe control. These
+are native expression and statement fragments, not serialized RA operators with
+a physical environment. \code{cq-realize::relations} owns the enclosing RA
+realization; \code{cq-native} owns row, candidate, key, witness and pair expansion;
+\code{cq-execution} owns Access execution alternatives; \code{cq-storage} holds
+minimal storage traits and data structures. Feature modules isolate implementations
+within those families. Shared language facts and private strategy analyses do not
+form a universal analysis registry.
 
-Storage, collection, iterator and packing choices belong to configured native
-bindings. The generic materialization fragment is
-\code{materialize owner view (rows)}. A block binding supplies its packing
-expression only at actual construction, where it evaluates once; native row sets
-need no such configuration. The physical context keeps witness resources live
-through result materialization, so streaming Access continuations may borrow them.
-Default composition chooses the index policy and physical continuation together
-at the RA boundary; explicitly wired stages retain their caller's continuation.
+Storage and packing choices are bound in native macros. Materialize consumes an
+iterator; Produce offers an emission function so the selected pair algorithm can
+write directly into the chosen result representation. Type/Field/Record prevent
+array indexing from leaking into general RA rules. Block construction evaluates
+its configured packing expression once; its trait requires a unique-row iterable,
+not a particular collection. The query-level realization still owns materialization,
+resource sharing and lifetimes. Exposing a pair algorithm does not automatically
+expose arbitrary region fusion.
+
+Default CQ, index and realization choices each emit a caller-relative continuation,
+so replacing an earlier macro preserves later bindings. An explicit eager recipe
+is a facade binding the index and realization macros, rather than a duplicate
+planner or index language. Native leaf substitution and whole-query replacement
+remain different granularities with different proof obligations.
 
 \subsection{Reading the papers at the right granularity}
 The literature separates representation, scheduling and intermediate semantics.

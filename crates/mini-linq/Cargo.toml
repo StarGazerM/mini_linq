@@ -9,29 +9,35 @@ license.workspace = true
 proc-macro = true
 
 [features]
-default = ["defaults", "canonical", "prefix", "graph", "input-indexes", "result-indexes", "input-indexed", "lazy", "materialized", "physical", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-witnesses", "nested-witnesses", "hash-rows", "sorted-rows", "block-rows", "pull", "iterator-pipeline", "collect-pipeline", "stream-pipeline"]
+default = ["defaults", "canonical", "prefix", "graph", "input-indexes", "result-indexes", "hash-inputs", "hash-prefix", "hash-materialized", "relations", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-witnesses", "nested-witnesses", "hash-pairs", "nested-pairs", "sort-merge-pairs", "hash-rows", "sorted-rows", "tuple-hash-rows", "tuple-sorted-rows", "block-rows", "pull", "push-set", "iterator-pipeline", "collect-pipeline", "stream-pipeline"]
 hw4 = []
 compiled-workloads = ["defaults"]
-defaults = ["dep:cq-compose", "canonical", "prefix", "graph", "input-indexes", "result-indexes", "input-indexed", "lazy", "materialized", "pull", "iterator-pipeline", "collect-pipeline"]
+defaults = ["dep:cq-compose", "canonical", "prefix", "graph", "input-indexes", "result-indexes", "hash-inputs", "hash-prefix", "hash-materialized", "pull", "iterator-pipeline", "collect-pipeline"]
 canonical = ["dep:cq-plan", "cq-plan/canonical"]
 prefix = ["dep:cq-plan", "cq-plan/prefix"]
 graph = ["dep:cq-plan", "cq-plan/graph"]
 input-indexes = ["dep:cq-index", "cq-index/input"]
 result-indexes = ["dep:cq-index", "cq-index/result"]
-input-indexed = ["dep:cq-physical", "cq-physical/input"]
-lazy = ["dep:cq-physical", "cq-physical/lazy"]
-materialized = ["dep:cq-physical", "cq-physical/materialized"]
-physical = ["dep:cq-physical", "cq-physical/direct"]
-scan-rows = ["dep:cq-access", "cq-access/candidate-scan"]
-prune-rows = ["dep:cq-access", "cq-access/candidate-prune"]
-exact-keys = ["dep:cq-access", "cq-access/keys-exact"]
-zone-keys = ["dep:cq-access", "cq-access/keys-zone"]
-hash-witnesses = ["dep:cq-access", "cq-access/witness-hash"]
-nested-witnesses = ["dep:cq-access", "cq-access/witness-nested"]
-hash-rows = ["dep:cq-providers", "cq-providers/hash"]
-sorted-rows = ["dep:cq-providers", "cq-providers/sorted"]
-block-rows = ["dep:cq-providers", "cq-providers/block"]
-pull = ["dep:cq-pull"]
+hash-inputs = ["dep:cq-realize", "cq-realize/hash-inputs"]
+hash-prefix = ["dep:cq-realize", "cq-realize/hash-prefix"]
+hash-materialized = ["dep:cq-realize", "cq-realize/hash-materialized"]
+relations = ["dep:cq-realize", "cq-realize/relations"]
+scan-rows = ["dep:cq-native", "cq-native/candidate-scan"]
+prune-rows = ["dep:cq-native", "cq-native/candidate-prune"]
+exact-keys = ["dep:cq-native", "cq-native/keys-exact"]
+zone-keys = ["dep:cq-native", "cq-native/keys-zone"]
+hash-witnesses = ["dep:cq-native", "cq-native/witness-hash"]
+nested-witnesses = ["dep:cq-native", "cq-native/witness-nested"]
+hash-pairs = ["dep:cq-native", "cq-native/pairs-hash"]
+nested-pairs = ["dep:cq-native", "cq-native/pairs-nested"]
+sort-merge-pairs = ["dep:cq-native", "cq-native/pairs-merge"]
+hash-rows = ["dep:cq-native", "cq-native/rows-hash"]
+sorted-rows = ["dep:cq-native", "cq-native/rows-sorted"]
+block-rows = ["dep:cq-native", "cq-native/rows-block"]
+tuple-hash-rows = ["dep:cq-native", "cq-native/rows-tuple-hash"]
+tuple-sorted-rows = ["dep:cq-native", "cq-native/rows-tuple-sorted"]
+pull = ["dep:cq-execution", "cq-execution/pull"]
+push-set = ["dep:cq-execution", "cq-execution/push"]
 iterator-pipeline = ["dep:cq-pipeline", "cq-pipeline/iterator"]
 collect-pipeline = ["dep:cq-pipeline", "cq-pipeline/collect"]
 stream-pipeline = ["dep:cq-pipeline", "cq-pipeline/stream"]
@@ -45,10 +51,9 @@ syn.workspace = true
 cq-compose = { workspace = true, optional = true }
 cq-plan = { workspace = true, optional = true }
 cq-index = { workspace = true, optional = true }
-cq-physical = { workspace = true, optional = true }
-cq-access = { workspace = true, optional = true }
-cq-providers = { workspace = true, optional = true }
-cq-pull = { workspace = true, optional = true }
+cq-realize = { workspace = true, optional = true }
+cq-native = { workspace = true, optional = true }
+cq-execution = { workspace = true, optional = true }
 cq-pipeline = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -58,7 +63,7 @@ cq-plan = { workspace = true, features = ["prefix", "graph"] }
 [[example]]
 name = "blocked-ya"
 path = "../../examples/blocked-ya/main.rs"
-required-features = ["physical", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-witnesses", "hash-rows", "sorted-rows", "block-rows", "pull", "stream-pipeline"]
+required-features = ["relations", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-pairs", "hash-rows", "sorted-rows", "block-rows", "pull", "stream-pipeline"]
 test = true
 harness = false
 
@@ -86,11 +91,11 @@ required-features = ["hw4", "defaults"]
 
 [[test]]
 name = "access_refinement"
-required-features = ["physical", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-witnesses", "nested-witnesses", "hash-rows", "block-rows", "pull", "collect-pipeline", "stream-pipeline"]
+required-features = ["relations", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-pairs", "hash-witnesses", "nested-witnesses", "hash-rows", "block-rows", "pull", "collect-pipeline", "stream-pipeline"]
 
 [[test]]
 name = "block_access"
-required-features = ["defaults", "physical", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-witnesses", "block-rows", "stream-pipeline"]
+required-features = ["defaults", "relations", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-pairs", "block-rows", "stream-pipeline"]
 
 [[test]]
 name = "collect_endpoints"
@@ -98,6 +103,10 @@ required-features = ["pull", "collect-pipeline"]
 
 [[test]]
 name = "composition"
+required-features = ["defaults"]
+
+[[test]]
+name = "macro_routing"
 required-features = ["defaults"]
 
 [[test]]
@@ -114,7 +123,7 @@ required-features = ["defaults"]
 
 [[test]]
 name = "heterogeneous"
-required-features = ["physical", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-witnesses", "nested-witnesses", "hash-rows", "sorted-rows", "block-rows", "pull", "stream-pipeline"]
+required-features = ["relations", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-pairs", "nested-pairs", "hash-rows", "sorted-rows", "block-rows", "pull", "stream-pipeline"]
 
 [[test]]
 name = "hw4_optional"
@@ -146,8 +155,24 @@ required-features = ["defaults"]
 
 [[test]]
 name = "storage_traits"
-required-features = ["physical", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-witnesses", "hash-rows", "sorted-rows", "block-rows", "pull", "stream-pipeline"]
+required-features = ["relations", "scan-rows", "prune-rows", "exact-keys", "zone-keys", "hash-pairs", "hash-rows", "sorted-rows", "block-rows", "pull", "stream-pipeline"]
 
 [[test]]
 name = "typed_relations"
 required-features = ["compiled-workloads"]
+
+[[test]]
+name = "pair_algorithms"
+required-features = ["hash-pairs", "nested-pairs", "sort-merge-pairs", "hash-rows", "sorted-rows"]
+
+[[test]]
+name = "physical_typed"
+required-features = ["relations", "tuple-hash-rows", "tuple-sorted-rows", "block-rows", "hash-pairs", "scan-rows", "exact-keys", "zone-keys", "prune-rows", "pull", "collect-pipeline", "stream-pipeline"]
+
+[[test]]
+name = "relation_configuration"
+required-features = ["relations", "tuple-hash-rows", "hash-pairs"]
+
+[[test]]
+name = "borrowed_reads"
+required-features = ["relations", "tuple-hash-rows", "tuple-sorted-rows", "scan-rows", "exact-keys", "pull", "stream-pipeline", "hash-pairs", "nested-pairs", "sort-merge-pairs"]

@@ -43,33 +43,33 @@ macro_rules! sorted_rows {
 }
 macro_rules! exact_keys {
     ($($op:tt)*) => { ::mini_linq::exact_keys! {
-        storage crate::storage; iterator ::mini_linq::stream_access;
+        storage crate::storage; iterator ::mini_linq::pull_stream;
         keys ::std::collections::HashSet; $($op)*
     } };
 }
 macro_rules! zone_keys {
     ($($op:tt)*) => { ::mini_linq::zone_keys! {
-        storage crate::storage; iterator ::mini_linq::stream_access;
+        storage crate::storage; iterator ::mini_linq::pull_stream;
         keys ::std::collections::HashSet; $($op)*
     } };
 }
 macro_rules! sorted_key_resource {
     ($($op:tt)*) => { ::mini_linq::exact_keys! {
-        storage crate::sorted_storage; iterator ::mini_linq::stream_access;
+        storage crate::sorted_storage; iterator ::mini_linq::pull_stream;
         keys crate::sorted_keys::SortedKeys; $($op)*
     } };
 }
 macro_rules! sorted_zone_keys {
     ($($op:tt)*) => { ::mini_linq::zone_keys! {
-        storage crate::sorted_storage; iterator ::mini_linq::stream_access;
+        storage crate::sorted_storage; iterator ::mini_linq::pull_stream;
         keys crate::sorted_keys::SortedKeys; $($op)*
     } };
 }
 macro_rules! prune {
-    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::stream_access; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::pull_stream; $($op)* } };
 }
 macro_rules! witnesses {
-    ($($op:tt)*) => { ::mini_linq::hash_witnesses! { iterator ::mini_linq::stream_access; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::hash_pairs! { $($op)* } };
 }
 pub(crate) use {
     block_rows, exact_keys, prune, sorted_key_resource, sorted_rows, sorted_zone_keys, witnesses,
@@ -81,9 +81,9 @@ macro_rules! uniform_physical {
      $vis:vis struct $name:ident;
      $(relation $relation:ident($($column:tt)*);)*
      answer $($rest:tt)*) => {
-        ::mini_linq::observed_physical_plan! {
+        ::mini_linq::observed_relation_program! {
             storage crate::storage;
-            access ::mini_linq::stream_access;
+            access ::mini_linq::pull_stream;
             materialize $rows;
             inputs { $($relation => $rows;)* }
             scan $scan;
@@ -118,36 +118,57 @@ macro_rules! sorted_zone_backend {
 pub(crate) use {block_backend, sorted_backend, sorted_zone_backend, zone_backend};
 
 mod block_wiring {
-    pub(crate) use crate::block_backend as planned_relational_plan;
-    pub use ::mini_linq::*;
+    pub(crate) use crate::block_backend as choose_indexes;
+    #[allow(unused_imports)]
+    pub use ::mini_linq::{
+        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+        pull_set, pull_stream, stream_pipeline,
+    };
 }
 mod zone_wiring {
-    pub(crate) use crate::zone_backend as planned_relational_plan;
-    pub use ::mini_linq::*;
+    pub(crate) use crate::zone_backend as choose_indexes;
+    #[allow(unused_imports)]
+    pub use ::mini_linq::{
+        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+        pull_set, pull_stream, stream_pipeline,
+    };
 }
 mod sorted_wiring {
-    pub(crate) use crate::sorted_backend as planned_relational_plan;
-    pub use ::mini_linq::*;
+    pub(crate) use crate::sorted_backend as choose_indexes;
+    #[allow(unused_imports)]
+    pub use ::mini_linq::{
+        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+        pull_set, pull_stream, stream_pipeline,
+    };
 }
 mod sorted_zone_wiring {
-    pub(crate) use crate::sorted_zone_backend as planned_relational_plan;
-    pub use ::mini_linq::*;
+    pub(crate) use crate::sorted_zone_backend as choose_indexes;
+    #[allow(unused_imports)]
+    pub use ::mini_linq::{
+        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+        pull_set, pull_stream, stream_pipeline,
+    };
 }
 
 macro_rules! chosen_hash {
     ($($plan:tt)*) => {
-        ::mini_linq::materialized! { access mini_linq::collect_access; $($plan)* }
+        ::mini_linq::hash_materialized! { access mini_linq::pull_set; $($plan)* }
     };
 }
 pub(crate) use chosen_hash;
 mod hash_wiring {
-    pub(crate) use crate::chosen_hash as materialized;
-    pub use ::mini_linq::*;
+    pub(crate) use crate::chosen_hash as choose_realization;
+    pub use ::mini_linq::result_indexes as choose_indexes;
+    #[allow(unused_imports)]
+    pub use ::mini_linq::{
+        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
+        pull_set, pull_stream, stream_pipeline,
+    };
 }
 
 macro_rules! chain {
     ($name:ident) => {
-        mini_linq::planned_query! {
+        mini_linq::optimized_query! {
             pub struct $name;
             relation R(k: i64, x: i64);
             relation S(z: i64, k: i64);
@@ -157,6 +178,7 @@ macro_rules! chain {
     };
 }
 mod default_queries {
+    use crate::hash_wiring as mini_linq;
     chain!(HashChain);
 }
 mod block_queries {
@@ -211,8 +233,9 @@ macro_rules! sweeps {
         }
     };
 }
-use mini_linq::planned_relational_plan;
-sweeps!(planned_relational_plan, HashSweeps);
+use hash_wiring as mini_linq;
+use hash_wiring::choose_indexes;
+sweeps!(choose_indexes, HashSweeps);
 sweeps!(block_backend, BlockSweeps);
 sweeps!(zone_backend, ZoneSweeps);
 sweeps!(sorted_backend, SortedSweeps);
@@ -372,7 +395,7 @@ mod expression_route {
 
     mod wiring {
         pub(crate) use super::observed_pipeline as iterator_pipeline;
-        pub use ::mini_linq::*;
+        pub use ::mini_linq::pull;
     }
     use mini_linq::pull as chosen_access;
     use wiring as mini_linq;
@@ -404,23 +427,24 @@ macro_rules! pair {
     ($module:ident, $hash:ident, $blocked:ident; $($body:tt)*) => {
         mod $module {
             pub mod hash {
-                mini_linq::planned_query! { pub struct $hash; $($body)* }
+                use crate::hash_wiring as mini_linq;
+                mini_linq::optimized_query! { pub struct $hash; $($body)* }
             }
             pub mod exact {
                 use crate::block_wiring as mini_linq;
-                mini_linq::planned_query! { pub struct $blocked; $($body)* }
+                mini_linq::optimized_query! { pub struct $blocked; $($body)* }
             }
             pub mod zone {
                 use crate::zone_wiring as mini_linq;
-                mini_linq::planned_query! { pub struct $blocked; $($body)* }
+                mini_linq::optimized_query! { pub struct $blocked; $($body)* }
             }
             pub mod sorted {
                 use crate::sorted_wiring as mini_linq;
-                mini_linq::planned_query! { pub struct $blocked; $($body)* }
+                mini_linq::optimized_query! { pub struct $blocked; $($body)* }
             }
             pub mod sorted_zone {
                 use crate::sorted_zone_wiring as mini_linq;
-                mini_linq::planned_query! { pub struct $blocked; $($body)* }
+                mini_linq::optimized_query! { pub struct $blocked; $($body)* }
             }
         }
     };
@@ -502,7 +526,7 @@ macro_rules! unit_plan {
         }
     };
 }
-unit_plan!(planned_relational_plan, HashUnit);
+unit_plan!(choose_indexes, HashUnit);
 unit_plan!(block_backend, BlockUnit);
 unit_plan!(zone_backend, ZoneUnit);
 unit_plan!(sorted_backend, SortedUnit);
@@ -539,7 +563,7 @@ fn alternate_raw_spellings_resolve_to_the_same_source_and_column() {
 // Query identifiers must not capture generated data, statistics or helper types.
 macro_rules! primitive_query {
     ($name:ident) => {
-        mini_linq::planned_query! {
+        mini_linq::optimized_query! {
             pub struct $name;
             relation R(a: i64);
             relation S(a: i64);
@@ -625,7 +649,7 @@ macro_rules! composite_reduction {
         }
     };
 }
-composite_reduction!(planned_relational_plan, HashReduction);
+composite_reduction!(choose_indexes, HashReduction);
 composite_reduction!(block_backend, BlockReduction);
 composite_reduction!(zone_backend, ZoneReduction);
 composite_reduction!(sorted_backend, SortedReduction);
@@ -647,7 +671,7 @@ macro_rules! empty_separator {
         }
     };
 }
-empty_separator!(planned_relational_plan, HashEmptySeparator);
+empty_separator!(choose_indexes, HashEmptySeparator);
 empty_separator!(block_backend, BlockEmptySeparator);
 empty_separator!(zone_backend, ZoneEmptySeparator);
 empty_separator!(sorted_backend, SortedEmptySeparator);

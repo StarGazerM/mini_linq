@@ -28,9 +28,10 @@ signature, preserving first-use order. Fold definitions using:
 \end{mathpar}
 IX-Base folds actual join order on a root Rename, left-deep joins with direct
 right Renames, and final Project. Both algorithms preserve every definition.
-The default entry selects result indexes for extended linear RA; the planned
-entry supports general DAGs. Selection returns exactly the stable required
-list; physical backends also accept valid extras. Coverage requires the exact
+The default chooser selects base indexes only within their declared domain and
+uses named-result indexes otherwise, including extended linear plans and general
+DAGs. Selection returns the stable required list; an independently authored IX may
+contain valid extras that an explicit realization must admit or reject. Coverage requires the exact
 right result version, including reduced/projected versions.
 \begin{theorem}[Index selection]
 Both selection algorithms preserve the entire RA and hence its denotation.
@@ -168,11 +169,13 @@ Access plans. A compiler-local environment records layouts, current relation
 versions and selected providers. Semijoin lowers to candidate traversal followed
 by exact membership; local Access refinement can reject blocks by conservative
 metadata before opening current selected payload. Exact key construction and
-candidate scanning are independent choices. Join witnesses select hash buckets
-or deferred nested traversal. Resource reuse requires the same current RHS,
-separator, key provider and collection family. The supplement gives corresponding
-rules, algorithms and conditional preservation for the admitted integer-array
-domain; it adds no whole-program IR or runtime relational interpreter.
+candidate scanning are independent choices. A complete pair-production fragment
+selects hash, repeated nested traversal or sort/merge, while a row provider owns
+field access and row construction. Resource reuse requires the same current RHS,
+separator and configured key provider. Typed tuple and integer-array/block
+representations can coexist when the selected operations type-check. The supplement
+gives corresponding rules, algorithms and conditional preservation; it adds no
+whole-program IR or runtime relational interpreter.
 
 \subsection{Lazy linear lowering and the basic storage algorithm}
 The lazy domain follows RA dataflow: Unit/Rename starts current $p$; other

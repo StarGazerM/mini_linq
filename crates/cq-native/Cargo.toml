@@ -1,0 +1,30 @@
+[package]
+name = "cq-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+candidate-scan = []
+candidate-prune = []
+keys-exact = []
+keys-zone = []
+witness-hash = []
+witness-nested = []
+pairs-hash = []
+pairs-nested = []
+pairs-merge = []
+
+rows-hash = []
+rows-sorted = []
+rows-block = []
+rows-tuple-hash = []
+rows-tuple-sorted = []
+
+[dependencies]
+cq-ir = { path = "../cq-ir" }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true

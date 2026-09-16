@@ -1,5 +1,5 @@
 //! The condition after the CQ `if` is a Rust expression.
-use super::{check, query};
+use super::{check, mini_linq, query};
 
 fn accepts(x: &i32) -> bool {
     *x > 0 && *x < 4

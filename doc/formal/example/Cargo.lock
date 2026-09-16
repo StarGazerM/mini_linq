@@ -14,23 +14,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-access"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-compose"
 version = "0.1.0"
 dependencies = [
  "cq-index",
  "cq-ir",
- "cq-physical",
  "cq-plan",
+ "cq-realize",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-execution"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -56,7 +55,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-physical"
+name = "cq-native"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -88,20 +87,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-providers"
+name = "cq-realize"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-pull"
-version = "0.1.0"
-dependencies = [
- "contracts",
  "cq-ir",
  "proc-macro2",
  "quote",
@@ -112,15 +100,14 @@ dependencies = [
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
- "cq-access",
  "cq-compose",
+ "cq-execution",
  "cq-index",
  "cq-ir",
- "cq-physical",
+ "cq-native",
  "cq-pipeline",
  "cq-plan",
- "cq-providers",
- "cq-pull",
+ "cq-realize",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -132,12 +119,12 @@ name = "mini-linq-paper-overview"
 version = "0.0.0"
 dependencies = [
  "cq-compose",
+ "cq-execution",
  "cq-index",
  "cq-ir",
- "cq-physical",
  "cq-pipeline",
  "cq-plan",
- "cq-pull",
+ "cq-realize",
  "mini-linq",
  "prettyplease",
  "quote",

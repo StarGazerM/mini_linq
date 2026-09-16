@@ -299,7 +299,7 @@ and route or emit the returned type:
 mini_linq(TokenStream)
   -> parse cq::Module
   -> compile_cq(&cq::Module)
-  -> quote relational_plan! { target }
+  -> quote choose_indexes! { target }
 ```
 
 The same pattern repeats for RelationalPlan, IndexRequirements,

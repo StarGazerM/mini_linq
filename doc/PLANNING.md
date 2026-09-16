@@ -11,30 +11,51 @@ oracles, reference fixtures, and reproducible checks.
 |---|---|---|---|
 | `cq::Module` | `cq_compose::compile_cq_planned` | `relational_plan::Module` | Occurrence analysis, legal join order, semijoin reduction, selection and projection placement |
 | `relational_plan::Module` | `cq_index::result::compile` | `index_requirements::Module` | Exact first-use keys on named right operands; preserve the entire RA |
-| `index_requirements::Module` | `cq_physical::materialized::compile_materialized` | staged `syn::File` with set-valued `collect_access!` holes | Tuple representation, hash storage, existence access, materialization and DAG sharing |
-| `rust_access_plan::Plan` | existing `cq_pull::compile` | `iterator_pipeline::Pipeline` | Explicit local physical streams and binding flow |
+| `index_requirements::Module` | `cq_realize::hash_materialized::compile_materialized` | staged `syn::File` with set-valued `pull_set!` holes | Tuple representation, hash storage, existence access, materialization and DAG sharing |
+| `rust_access_plan::Plan` | existing `cq_execution::pull::compile` | `iterator_pipeline::Pipeline` | Explicit local physical streams and binding flow |
 | `iterator_pipeline::Pipeline` | `cq_pipeline::iterator::compile` / `cq_pipeline::collect::compile` | `syn::Expr` | Iterator / owned-set realization |
 
-Macro entries parse exactly the source language and call its typed pass.
-`planned_query!` routes to `planned_relational_plan!`, which routes to
-`materialized!`, which emits the staged file. Aliasing `materialized_query!`
-as `materialized` selects a callable expression over the same query computation. Generated `mini_linq::stage!`
-paths resolve through the caller's Rust imports; a module alias can select a
-different continuation with the same contract. `materialized!` also accepts
-`access path;` for its set-valued Access holes. Each intermediate artifact can
-be quoted directly at its entry.
+Explicit macro entries parse a source language and call its typed pass.
+`optimized_query!` chooses caller-bound `graph_query!` or `prefix_query!`; each
+emits RA to `choose_indexes!`. To select eager indexed execution explicitly,
+compose the following facade:
+
+```rust
+mod wiring {
+    pub use ::mini_linq::*;
+    pub use ::mini_linq::{
+        result_indexes as choose_indexes,
+        hash_materialized as choose_realization,
+    };
+}
+use wiring as mini_linq;
+```
+
+Then invoke `mini_linq::optimized_query!` with a CQ. The result-index pass
+emits `choose_realization!`, which this facade binds to eager hash realization.
+Aliasing `hash_materialized_query` instead selects a callable over the same
+computation. With ordinary crate bindings, the index and realization choosers
+select compatible implementations from their source domains and still invoke
+the caller's aliases. No planner choice implies eager execution.
+
+Generated paths resolve through those Rust imports; an alias can select a
+continuation with the same contract. `hash_materialized!` also accepts
+`access path;` for its set-valued Access holes, including `push_set!` when only
+completed answers are observed. Each intermediate artifact can be quoted directly.
 
 The route selects implementation modules: `cq-plan::graph` and `cq-plan::prefix`
-produce RA; `cq-index::result` derives named demands; `cq-physical::materialized`
-constructs indexed set computations and native hosts. `cq-physical::lazy` owns
-the lazy alternative. `cq-physical::direct` accepts configured RA directly and
-uses `cq-access` refinements and `cq-providers` native operations, as specified
+produce RA; `cq-index::result` derives named demands; `cq-realize::hash_materialized`
+constructs indexed set computations and native hosts. `cq-realize::hash_prefix`
+owns the expression-aware lazy alternative. `cq-realize::relations` accepts
+configured RA directly and uses row, key, candidate and pair operations from
+`cq-native`, as specified
 in [Access refinement](ACCESS-REFINEMENT.md).
 
 Each implementation owns its checked public entries and independent target
-checks. `cq-compose` contains actual default selection and checked report/replay
-dispatch, with no re-exported implementations. `cq-pull` and `cq-pipeline` own
-the remaining two edges. `cq-ir` supplies language judgments and factual heading
+checks. `cq-compose` provides typed convenience recipes and checked report/replay
+dispatch; the macro frontend composes actual continuation calls.
+`cq-execution` owns pull and eager push alternatives; `cq-pipeline` owns the
+iterator endpoints. `cq-ir` supplies language judgments and factual heading
 queries. Realization domains and index-coverage checks belong to their consumers.
 [Compiler structure](COMPILER-STRUCTURE.md) records the dependency graph.
 

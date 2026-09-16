@@ -63,16 +63,22 @@ fn explicit_edges_reject_unsupported_domains_instead_of_switching_implementation
     assert!(cq_index::input::compile(&graph).is_err());
     let indexed = cq_index::result::compile(&graph).unwrap();
     assert!(
-        cq_physical::input::compile_input_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull))
-            .is_err()
+        cq_realize::hash_inputs::compile_input_indexed(
+            &indexed,
+            &syn::parse_quote!(::mini_linq::pull)
+        )
+        .is_err()
     );
     assert!(
-        cq_physical::lazy::compile_lazy_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull))
-            .is_err()
+        cq_realize::hash_prefix::compile_lazy_indexed(
+            &indexed,
+            &syn::parse_quote!(::mini_linq::pull)
+        )
+        .is_err()
     );
-    cq_physical::materialized::compile_materialized(
+    cq_realize::hash_materialized::compile_materialized(
         &indexed,
-        &syn::parse_quote!(::mini_linq::collect_access),
+        &syn::parse_quote!(::mini_linq::pull_set),
     )
     .unwrap();
 }
@@ -149,18 +155,10 @@ fn incomplete_expression_proofs_return_diagnostics_before_graph_state_constructi
 }
 
 #[test]
-fn default_index_choice_emits_only_its_bound_physical_continuation() {
-    for (body, expected_path, result_keys) in [
-        (
-            quote::quote!(R(x), S(x)),
-            syn::parse_quote!(renamed::input),
-            false,
-        ),
-        (
-            quote::quote!(R(x), S(x), let () = ()),
-            syn::parse_quote!(renamed::lazy),
-            true,
-        ),
+fn default_index_policy_preserves_the_plan_and_uses_its_admitted_namespace() {
+    for (body, result_keys) in [
+        (quote::quote!(R(x), S(x)), false),
+        (quote::quote!(R(x), S(x), let () = ()), true),
     ] {
         let cq: cq_ir::cq::Module = syn::parse2(quote::quote! {
             struct P; relation R(a:i32); relation S(a:i32);
@@ -168,16 +166,8 @@ fn default_index_choice_emits_only_its_bound_physical_continuation() {
         })
         .unwrap();
         let ra = cq_compose::compile_cq(&cq).unwrap();
-        let tokens = cq_compose::expand_indexed(
-            &ra,
-            &syn::parse_quote!(renamed::input),
-            &syn::parse_quote!(renamed::lazy),
-        )
-        .unwrap();
-        let invocation: syn::ItemMacro = syn::parse2(tokens).unwrap();
-        assert_eq!(invocation.mac.path, expected_path);
-        let indexes: cq_ir::index_requirements::Module =
-            syn::parse2(invocation.mac.tokens).unwrap();
+        assert_eq!(cq_compose::use_input_indexes(&ra).unwrap(), !result_keys);
+        let indexes = cq_compose::select_indexes(&ra).unwrap();
         assert!(!indexes.indexes.is_empty());
         assert!(
             indexes
@@ -187,4 +177,19 @@ fn default_index_choice_emits_only_its_bound_physical_continuation() {
         );
         assert_eq!(indexes.relational_plan, ra);
     }
+}
+
+#[test]
+fn graph_default_uses_a_compatible_realization_and_completed_set_continuation() {
+    let graph = cq_plan::graph::compile(&source()).unwrap();
+    assert!(!cq_compose::use_input_indexes(&graph).unwrap());
+    let iterator = syn::parse_quote!(selected::iterator);
+    let set = syn::parse_quote!(selected::set);
+    let (indexes, program) = cq_compose::compile_indexed(&graph, &iterator, &set).unwrap();
+    assert!(cq_realize::hash_inputs::check_domain(&indexes).is_err());
+    assert!(cq_realize::hash_prefix::check_domain(&indexes).is_err());
+    cq_realize::hash_materialized::check_materialized(&indexes, &program, &set).unwrap();
+    assert!(
+        cq_realize::hash_materialized::check_materialized(&indexes, &program, &iterator).is_err()
+    );
 }

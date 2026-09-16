@@ -12,7 +12,7 @@ when practical. If an option is shared, teams receive different workloads,
 claims, or adversarial cases. Students complete one extension deeply; combining
 tracks is not required.
 
-The current baseline is a genuine pull path. `cq_pull::compile` first exposes a
+The current baseline is a genuine pull path. `cq_execution::pull::compile` first exposes a
 named IteratorPipeline with results `iter0`, `iter1`, and so on, and `scan`,
 left-deep binary `join`, `filter`, `project`, and `distinct` operators. Each
 consumer explicitly names its predecessor. The supplied Rust lowering maps

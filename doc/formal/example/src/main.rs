@@ -1,6 +1,23 @@
 //! Reproduce the paper's worked example using the actual typed pass APIs.
 //! All generated artifacts go beneath doc/formal/build/example by default.
 //! Also executes both public macro routes and compiles/runs both final Rust files.
+mod eager_programs {
+    mod wiring {
+        #[allow(unused_imports)]
+        pub use ::mini_linq::{optimized_query, graph_query, prefix_query, pull_set, collect_pipeline, pull, iterator_pipeline};
+        pub use ::mini_linq::{result_indexes as choose_indexes, hash_materialized as choose_realization};
+    }
+    use wiring as mini_linq;
+    mini_linq::optimized_query! {
+        pub struct MaterializedOverview;
+        relation R(a:i32,b:i32,c:i32,d:i32);
+        relation S(a:i32,b:i32,c:i32);
+        relation T(a:i32,b:i32);
+        relation answer(a:i32,b:i32);
+        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
+    }
+}
+pub use eager_programs::MaterializedOverview;
 use cq_ir::{cq, iterator_pipeline, relational_plan, rust_access_plan};
 use cq_plan::Rule as JoinRule;
 use quote::quote;
@@ -15,25 +32,18 @@ mini_linq::mini_linq! {
     relation answer(a:i32,b:i32);
     answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
 }
-mini_linq::planned_query! {
-    pub struct MaterializedOverview;
-    relation R(a:i32,b:i32,c:i32,d:i32);
-    relation S(a:i32,b:i32,c:i32);
-    relation T(a:i32,b:i32);
-    relation answer(a:i32,b:i32);
-    answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
-}
+
 struct ExposePipelines;
 impl VisitMut for ExposePipelines {
     fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
         let next = match mac.path.segments.last().unwrap().ident.to_string().as_str() {
             "pull" => syn::parse_quote!(::mini_linq::iterator_pipeline),
-            "collect_access" => syn::parse_quote!(::mini_linq::collect_pipeline),
+            "pull_set" => syn::parse_quote!(::mini_linq::collect_pipeline),
             _ => return,
         };
         let access: rust_access_plan::Plan = syn::parse2(mac.tokens.clone()).unwrap();
         rust_access_plan::contract::check(&access).unwrap();
-        let target = cq_pull::compile(&access).unwrap();
+        let target = cq_execution::pull::compile(&access).unwrap();
         iterator_pipeline::contract::check(&target).unwrap();
         mac.path = next;
         mac.tokens = quote!(#target);
@@ -127,36 +137,46 @@ fn boundaries(directory: &std::path::Path, prefix: &str, source: &cq::Module, pl
             .collect::<Vec<_>>()
     );
     let staged = if planned {
-        cq_physical::materialized::compile_materialized(
+        cq_realize::hash_materialized::compile_materialized(
             &ix,
-            &syn::parse_quote!(::mini_linq::collect_access),
+            &syn::parse_quote!(::mini_linq::pull_set),
         )
     } else {
-        cq_physical::lazy::compile_lazy_indexed(&ix, &syn::parse_quote!(::mini_linq::pull))
+        cq_realize::hash_prefix::compile_lazy_indexed(&ix, &syn::parse_quote!(::mini_linq::pull))
     }
     .unwrap();
+    let wiring = if planned {
+        quote! {
+            mod wiring {
+                #[allow(unused_imports)]
+        pub use ::mini_linq::{optimized_query, graph_query, prefix_query, pull_set, collect_pipeline, pull, iterator_pipeline};
+                pub use ::mini_linq::{result_indexes as choose_indexes, hash_materialized as choose_realization};
+            }
+            use wiring as mini_linq;
+        }
+    } else { quote!() };
     let (cq_macro, ra_macro, index_macro): (syn::Path, syn::Path, syn::Path) = if planned {
         (
-            syn::parse_quote!(::mini_linq::planned_query),
-            syn::parse_quote!(::mini_linq::planned_relational_plan),
-            syn::parse_quote!(::mini_linq::materialized),
+            syn::parse_quote!(mini_linq::optimized_query),
+            syn::parse_quote!(mini_linq::choose_indexes),
+            syn::parse_quote!(::mini_linq::hash_materialized),
         )
     } else {
         (
             syn::parse_quote!(::mini_linq::mini_linq),
-            syn::parse_quote!(::mini_linq::relational_plan),
-            syn::parse_quote!(::mini_linq::lazy_indexed),
+            syn::parse_quote!(::mini_linq::choose_indexes),
+            syn::parse_quote!(::mini_linq::hash_prefix),
         )
     };
     write(
         directory,
         &format!("{prefix}-01-cq"),
-        &syn::parse2(quote!(#cq_macro! { #source })).unwrap(),
+        &syn::parse2(quote!(#wiring #cq_macro! { #source })).unwrap(),
     );
     write(
         directory,
         &format!("{prefix}-02-relational"),
-        &syn::parse2(quote!(#ra_macro! { #ra })).unwrap(),
+        &syn::parse2(quote!(#wiring #ra_macro! { #ra })).unwrap(),
     );
     write(
         directory,
