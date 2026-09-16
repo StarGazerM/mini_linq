@@ -25,6 +25,8 @@ mod access_input;
     feature = "hash-prefix",
     feature = "hash-materialized",
     feature = "relations",
+    feature = "nested-push",
+    feature = "nested-pull",
     feature = "scan-rows",
     feature = "prune-rows",
     feature = "exact-keys",
@@ -308,7 +310,11 @@ pub fn iterator_pipeline(input: TokenStream) -> TokenStream {
     feature = "block-rows"
 ))]
 mod native_input;
-#[cfg(feature = "relations")]
+#[cfg(any(
+    feature = "relations",
+    feature = "nested-push",
+    feature = "nested-pull"
+))]
 mod relation_input;
 
 /// The Access-to-Pipeline edge with a support-stream continuation.
@@ -483,6 +489,24 @@ native_entry!(
 pub fn relation_program(input: TokenStream) -> TokenStream {
     entry::stage(input, None, |input: &relation_input::RelationInput| {
         cq_realize::relations::compile_program(&input.source, &input.options()?)
+    })
+}
+
+/// Explore planned RA as a nested push producer of distinct borrowed answers.
+#[cfg(feature = "nested-push")]
+#[proc_macro]
+pub fn nested_push(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |input: &relation_input::RelationInput| {
+        cq_realize::nested_push::compile(&input.source, &input.input_bindings()?)
+    })
+}
+
+/// Explore planned RA as a lazy nested iterator of distinct borrowed answers.
+#[cfg(feature = "nested-pull")]
+#[proc_macro]
+pub fn nested_pull(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |input: &relation_input::RelationInput| {
+        cq_realize::nested_pull::compile(&input.source, &input.input_bindings()?)
     })
 }
 

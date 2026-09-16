@@ -1,15 +1,34 @@
 # Compiler boundaries and replacement laws
 
-This document records the implemented boundaries and the proposed correction
-below. The correction is a design, not a claim that the compiler has already
-changed. The rule/source correspondence for the implemented compiler is maintained
-in [the formal supplement](formal/README.md).
+This document distinguishes the retained compiler baseline from the narrow
+execution experiment below. The broader migration remains a design, not a claim
+that all compiler paths have changed. The baseline's rule/source correspondence
+is maintained in [the formal supplement](formal/README.md).
 
-## Proposed execution-boundary redesign
+## Execution-boundary redesign and nested experiment
 
-Status: design only, 16 September 2026. The later sections describe the current
-implementation. This proposal supersedes treating its Access boundary as the
-general place to choose whole-query push or pull execution.
+Status: exploratory implementation, 16 September 2026. `nested_pull!` and
+`nested_push!` implement two independent nested realizations directly from existing
+RA. They establish the earlier execution choice for a restricted pure fragment;
+they do not complete the broader migration described below. Existing hash and
+configured-relation realizations remain useful comparison baselines, not
+compatibility aliases for the experiment.
+
+The [experiment specification](NESTED-RA-EXPERIMENT.md) gives the admitted domain,
+borrowed API, support argument and example. Both implementations accept only
+per-input provider bindings and Unit/Rename/Project/NaturalJoin/Semijoin.
+They reject Select/Extend and non-variable output expressions; variable order
+and repetitions are preserved. Providers supply Type/Scan/Field directly on caller-owned
+storage; no temporary Input view is required. Pull exposes `iter`, while push
+exposes `for_each`. Both return or deliver distinct tuples of borrowed fields,
+deduplicate only at final output, and recompute shared pure subplans without
+materializing intermediate relations.
+Neither path requires IX, Access, Pipeline, a new IR, or a new crate.
+
+Nested join choice is fixed inside each experiment. This does not demonstrate
+per-join algorithm replacement, block pruning, cost planning, or revised
+statistics. The proposal still supersedes treating the baseline's Access
+boundary as the general place to choose whole-query push or pull execution.
 
 ### Decision and scope
 
@@ -238,6 +257,10 @@ or request does not remove that obligation.
 
 ### Migration and acceptance criteria
 
+These remain criteria for a broader replacement. The nested experiment is a
+limited implementation of the early branch choice; retaining baseline routes
+for comparison is deliberate until that scope is demonstrated and accepted.
+
 1. Define the admitted RA/IX domain and result observation of each realization
    before changing emitted code. Reuse heading, key and dependency facts; do not
    hide one branch's scheduling decisions in a shared helper.
@@ -269,6 +292,9 @@ with scan/join names or wrapping push and pull variants in one enum is insuffici
 
 ## Languages, implementations and compositions
 
+The retained baseline has the following edges. The nested realizations above
+branch directly from RA and do not pass through these Access/Pipeline paths.
+
 ```text
 CQ → RA → IndexRequirements → Rust[Access] → Rust[Pipeline] → Rust
      RA ── configured relation realization ──→ Rust[Access, Native]
@@ -293,7 +319,9 @@ host adapter. It does not by itself identify a new pass or language.
 
 ## Public macro families
 
-The frontend exports 39 macros, grouped here by the boundary or recipe they own.
+The baseline macro families are grouped here by the boundary or recipe they own.
+The exploratory `nested_pull` and `nested_push` entries are described above and
+in the [experiment specification](NESTED-RA-EXPERIMENT.md).
 
 | Family | Entries | Contract and decision owner |
 | --- | --- | --- |

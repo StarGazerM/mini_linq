@@ -17,7 +17,7 @@ links inference rules to implementation markers.
 | `cq-storage` | Data structures and minimal operation traits; block selections, summaries and passive counters | None |
 | `cq-plan` | `canonical`, `prefix`, `graph`; logical scheduling and derivations | `cq-ir` |
 | `cq-index` | `input`, `result`; equality-demand policies | `cq-ir` |
-| `cq-realize` | `hash_inputs`, `hash_prefix`, `hash_materialized`, `relations`; whole-query realization and hosts | `cq-ir` |
+| `cq-realize` | `hash_inputs`, `hash_prefix`, `hash_materialized`, `relations`, exploratory `nested_push` / `nested_pull`; whole-query realization and hosts | `cq-ir` |
 | `cq-native` | `rows`, `candidates`, `keys`, `witnesses`, `pairs`; local Native operation implementations | `cq-ir` |
 | `cq-execution` | `pull`, `push`; Access execution alternatives | `cq-ir` |
 | `cq-pipeline` | `iterator`, `collect`, `stream`; Pipeline endpoints | `cq-ir` |
@@ -45,6 +45,9 @@ cq-realize/src/                    cq-native/src/
   hash_inputs/                      rows/{hash,sorted,block,tuple_hash,tuple_sorted}.rs
   hash_prefix/                      candidates/{scan,prune}.rs
   hash_materialized/                keys/{exact,zone}.rs
+  nested_push.rs                    (independent whole-RA push experiment)
+  nested_pull.rs                    (independent whole-RA pull experiment)
+  nested_support.rs                 (domain checks and host syntax only)
   relations/                        witnesses/{hash,nested}.rs
     layout.rs                       pairs/{hash,nested,merge}.rs
     expressions.rs
@@ -55,6 +58,8 @@ cq-realize/src/                    cq-native/src/
 ```
 
 Shared helpers express a common mechanism, not a global backend selector.
+The nested experiments share validation and parameter/type spelling. Their
+recursive execution lowering stays separate; neither calls the other's emitter.
 For example, native set emission takes type and row representation syntax from
 its owning implementation. It does not inspect a provider name and choose a
 backend. Each realization checks its own index coverage; the IR describes facts

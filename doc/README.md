@@ -17,6 +17,8 @@
 
 ## Current compiler design
 
+- [Nested RA experiment](NESTED-RA-EXPERIMENT.md): independent push/pull
+  realization from planned RA, borrowed outputs, and its restricted domain.
 - [Compiler boundaries](IR-STAGE-REVIEW.md): public macro families, native
   producer syntax, composition laws and remaining implementation limits.
 - [Compiler structure](COMPILER-STRUCTURE.md): package dependencies,

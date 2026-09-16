@@ -2,18 +2,47 @@
 
 #[cfg(any(feature = "hash-prefix", feature = "hash-materialized"))]
 use cq_ir::relational_plan as ra;
+#[cfg(any(
+    feature = "hash-prefix",
+    feature = "hash-materialized",
+    feature = "relations"
+))]
 use cq_ir::{cq, symbol_name};
 #[cfg(any(feature = "hash-prefix", feature = "hash-materialized"))]
 use proc_macro2::Span;
+#[cfg(any(
+    feature = "hash-prefix",
+    feature = "hash-materialized",
+    feature = "relations"
+))]
 use proc_macro2::TokenStream;
+#[cfg(any(
+    feature = "hash-prefix",
+    feature = "hash-materialized",
+    feature = "relations"
+))]
 use quote::{format_ident, quote};
+#[cfg(any(
+    feature = "hash-prefix",
+    feature = "hash-materialized",
+    feature = "relations"
+))]
 use std::collections::BTreeSet;
+#[cfg(any(
+    feature = "hash-prefix",
+    feature = "hash-materialized",
+    feature = "relations"
+))]
 use syn::spanned::Spanned;
 
 /// Preserve primitive type spellings when generated host names share their
 /// identifiers. User aliases, raw identifiers, and already qualified paths keep
 /// their ordinary Rust resolution. This changes type syntax, not row layout.
-#[cfg(feature = "relations")]
+#[cfg(any(
+    feature = "relations",
+    feature = "nested-push",
+    feature = "nested-pull"
+))]
 pub fn qualify_type(source: &syn::Type) -> syn::Type {
     struct Qualify;
     impl syn::visit_mut::VisitMut for Qualify {
@@ -78,6 +107,11 @@ pub fn expression_aliases(
 /// Bind reads at the original Rust syntax contexts without taking ownership.
 /// The caller supplies each field borrow. Opaque macros conservatively bind
 /// all possible dependencies, so unused aliases must not clone their payloads.
+#[cfg(any(
+    feature = "hash-prefix",
+    feature = "hash-materialized",
+    feature = "relations"
+))]
 pub fn read_aliases(
     expr: &syn::Expr,
     heading: &BTreeSet<String>,

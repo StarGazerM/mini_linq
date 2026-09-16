@@ -11,6 +11,8 @@ hash-inputs = []
 hash-prefix = []
 hash-materialized = []
 relations = []
+nested-push = []
+nested-pull = []
 
 [dependencies]
 cq-ir = { path = "../cq-ir" }

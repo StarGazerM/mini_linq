@@ -19,6 +19,11 @@ registry. [The boundary specification](doc/IR-STAGE-REVIEW.md) lists the macro
 families and their semantic obligations; [compiler structure](doc/COMPILER-STRUCTURE.md)
 explains crate/module ownership.
 
+The opt-in [nested RA experiment](doc/NESTED-RA-EXPERIMENT.md) selects whole-query
+push or pull directly after planning. Its `nested_push!` and `nested_pull!`
+macros generate distinct borrowed answers without intermediate relations or a
+new IR. The existing routes above remain the baseline for comparison.
+
 ## Choose a composition
 
 `mini_linq!` chooses canonical or source-prefix planning. `optimized_query!`

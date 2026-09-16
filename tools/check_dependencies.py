@@ -35,6 +35,7 @@ FRONTEND = {
     "input-indexes": ("cq-index", "input"), "result-indexes": ("cq-index", "result"),
     "hash-inputs": ("cq-realize", "hash-inputs"), "hash-prefix": ("cq-realize", "hash-prefix"),
     "hash-materialized": ("cq-realize", "hash-materialized"), "relations": ("cq-realize", "relations"),
+    "nested-push": ("cq-realize", "nested-push"), "nested-pull": ("cq-realize", "nested-pull"),
     "scan-rows": ("cq-native", "candidate-scan"), "prune-rows": ("cq-native", "candidate-prune"),
     "exact-keys": ("cq-native", "keys-exact"), "zone-keys": ("cq-native", "keys-zone"),
     "hash-witnesses": ("cq-native", "witness-hash"), "nested-witnesses": ("cq-native", "witness-nested"),
@@ -62,6 +63,8 @@ IMPLEMENTATIONS = {
         "hash-prefix": ["src/hash_prefix", "src/check_support", "src/rust_bindings.rs"],
         "hash-materialized": ["src/hash_materialized", "src/check_support", "src/rust_bindings.rs"],
         "relations": ["src/relations", "src/rust_bindings.rs"],
+        "nested-push": ["src/nested_push.rs", "src/nested_support.rs", "src/rust_bindings.rs"],
+        "nested-pull": ["src/nested_pull.rs", "src/nested_support.rs", "src/rust_bindings.rs"],
     },
     "cq-native": {
         "candidate-scan": ["src/candidates/scan.rs"], "candidate-prune": ["src/candidates/prune.rs"],
@@ -343,9 +346,67 @@ for host in NATIVE_HOSTS:
     CONSUMERS[host.replace("_", "-")] = (
         ["relations", "hash-rows", "hash-pairs", "scan-rows", "pull", "stream-pipeline"], host, None)
 
+NESTED_HOSTS = {"nested_push": "for_each", "nested_pull": "iter"}
+for host in NESTED_HOSTS:
+    feature = host.replace("_", "-")
+    features = [feature, "tuple-hash-rows", "tuple-sorted-rows"]
+    CONSUMERS[feature] = (features, host, None)
+    CONSUMERS["graph-" + feature] = (["graph", *features], host, "graph_query")
+
+
+def nested_consumer_source(host, planner):
+    """Execute each whole-RA engine alone, then through the caller's RA alias."""
+    query = 'struct Q; relation R(a:Value,b:Value); relation S(a:Value,b:Value); answer(x,z) :- R(x,y), S(y,z);'
+    if planner:
+        declaration = f'''macro_rules! realize {{
+    ($($ra:tt)*) => {{ raw::{host}! {{
+        inputs {{ R => raw::tuple_hash_rows; S => raw::tuple_sorted_rows; }} $($ra)*
+    }} }};
+}}
+use realize as choose_indexes;
+mod wiring {{ pub(super) use super::choose_indexes; }}
+use wiring as mini_linq;
+raw::{planner}! {{ {query} }}'''
+    else:
+        declaration = f'''raw::{host}! {{
+inputs {{ R => raw::tuple_hash_rows; S => raw::tuple_sorted_rows; }}
+{query}
+relational {{
+    l = rename R {{a -> x,b -> y}}; r = rename S {{a -> y,b -> z}};
+    live = semijoin l with r; joined = natural_join live with r;
+    p = project joined keep {{x,z}}; output p as answer(x,z);
+}}
+}}'''
+    execute = 'let mut rows = Vec::new(); Q::for_each(&left, &right, |(x,z)| rows.push((x.0,z.0)));' if NESTED_HOSTS[host] == "for_each" else 'let rows: Vec<_> = Q::iter(&left, &right).map(|(x,z)| (x.0,z.0)).collect();'
+    return f'''use std::collections::{{BTreeSet, HashSet}};
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Value(i32);
+{declaration}
+fn execute(left: &[(i32,i32)], right: &[(i32,i32)]) -> HashSet<(i32,i32)> {{
+let left: HashSet<_> = left.iter().map(|&(a,b)| (Value(a),Value(b))).collect();
+let right: BTreeSet<_> = right.iter().map(|&(a,b)| (Value(a),Value(b))).collect();
+{execute}
+let result: HashSet<_> = rows.iter().copied().collect();
+assert_eq!(rows.len(), result.len(), "the public output must already be distinct");
+result
+}}
+fn main() {{
+let universe = [(0,0),(0,1),(1,0),(1,1)];
+for lm in 0..16 {{ for rm in 0..16 {{
+let rows = |mask: usize| universe.iter().enumerate().filter_map(|(i,row)| (mask & (1 << i) != 0).then_some(*row)).collect::<Vec<_>>();
+let left = rows(lm); let right = rows(rm);
+let expected: HashSet<_> = left.iter().flat_map(|&(x,y)| right.iter().filter_map(move |&(key,z)| (y == key).then_some((x,z)))).collect();
+assert_eq!(execute(&left,&right),expected,"{{lm}} join {{rm}}");
+let duplicated: Vec<_> = left.iter().chain(&left).copied().collect();
+assert_eq!(execute(&duplicated,&right),expected);
+}} }}
+}}'''
+
 
 def consumer_source(label, entry, route):
     """Real planner/index/realization/execution composition over 256 databases."""
+    if entry in NESTED_HOSTS:
+        return nested_consumer_source(entry, route)
     query = 'struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32); answer(x,z) :- R(x,y), S(y,z);'
     native = entry in NATIVE_HOSTS
     callable_, observed = NATIVE_HOSTS.get(entry, (bool(route and route[1] == "hash_materialized_query"), False))
@@ -424,8 +485,22 @@ def check_consumers(only=()):
             print(f"PASS: semantic consumer {label}; 256 databases plus duplicate-input checks", flush=True)
 
 
+def nested_frontend_source(feature, scan="($v).iter()"):
+    macro = feature.replace('-', '_')
+    run = 'let mut result = Vec::new(); Q::for_each(&rows, |row| result.push(*row.0));' if feature == 'nested-push' else 'let result: Vec<_> = Q::iter(&rows).map(|row| *row.0).collect();'
+    return f'''macro_rules! rows {{
+        (type ($($ty:ty,)*)) => {{ Vec<($($ty,)*)> }};
+        (scan ($v:expr)) => {{ {scan} }};
+        (field ($v:expr) ($column:tt)) => {{ ($v).$column }};
+        }}
+        raw::{macro}! {{ inputs {{ R => rows; }} {RA} }}
+        fn main() {{ let rows = vec![(1i32,), (1,), (2,)]; {run} assert_eq!(result, vec![1, 2]); }}'''
+
+
 def frontend_source(feature):
     """Atomic probes establish resolution or native behavior, not whole-query semantics."""
+    if feature in ("nested-push", "nested-pull"):
+        return nested_frontend_source(feature)
     if feature in ("canonical", "prefix", "graph", "input-indexes", "result-indexes"):
         macro, source, next_name, marker = {
             "canonical": ("canonical_query", CQ, "choose_indexes", "relational"),
@@ -574,8 +649,19 @@ def check_frontends(packages, only=()):
             with (logdir / f"frontend-{feature}.log").open("w") as log:
                 result = subprocess.run(["cargo", "run", *args], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"actual frontend {feature} failed; see {logdir / ('frontend-' + feature + '.log')}")
-            kind = "resolution probe" if feature in RESOLUTION_PROBES else "native-operation probe"
+            kind = "RA execution probe" if feature in ("nested-push", "nested-pull") else "resolution probe" if feature in RESOLUTION_PROBES else "native-operation probe"
             print(f"PASS: {kind} {feature}; renamed dependency and isolated {name}/{implementation}", flush=True)
+            if feature in ("nested-push", "nested-pull"):
+                # A provider which lends fields of owned temporary scan rows
+                # cannot implement this borrowed-output host. Rust must reject
+                # the actual expanded lifetime, independently of route metadata.
+                (destination / "src/main.rs").write_text(nested_frontend_source(feature, "($v).iter().copied()"))
+                failure_log = logdir / f"frontend-{feature}-temporary.log"
+                with failure_log.open("w") as log:
+                    result = subprocess.run(["cargo", "check", *args], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+                if not result.returncode or not re.search(r"error\[E(?:0515|0597|0716)\]", failure_log.read_text()):
+                    raise ValueError(f"temporary-row provider did not produce the expected lifetime rejection: {feature}; see {failure_log}")
+                print(f"PASS: {feature} rejects temporary-row field borrows through Rust lifetime checking", flush=True)
 
 
 def main():

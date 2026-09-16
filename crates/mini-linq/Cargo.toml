@@ -22,6 +22,8 @@ hash-inputs = ["dep:cq-realize", "cq-realize/hash-inputs"]
 hash-prefix = ["dep:cq-realize", "cq-realize/hash-prefix"]
 hash-materialized = ["dep:cq-realize", "cq-realize/hash-materialized"]
 relations = ["dep:cq-realize", "cq-realize/relations"]
+nested-push = ["dep:cq-realize", "cq-realize/nested-push"]
+nested-pull = ["dep:cq-realize", "cq-realize/nested-pull"]
 scan-rows = ["dep:cq-native", "cq-native/candidate-scan"]
 prune-rows = ["dep:cq-native", "cq-native/candidate-prune"]
 exact-keys = ["dep:cq-native", "cq-native/keys-exact"]
@@ -68,6 +70,13 @@ test = true
 harness = false
 
 [[example]]
+name = "ra-execution"
+path = "../../examples/ra-execution/main.rs"
+required-features = ["graph", "nested-push", "nested-pull", "tuple-hash-rows", "tuple-sorted-rows"]
+test = true
+harness = false
+
+[[example]]
 name = "rust-expressions"
 path = "../../examples/rust-expressions/main.rs"
 required-features = ["compiled-workloads"]
@@ -88,6 +97,10 @@ required-features = ["hw4", "defaults"]
 
 # Multi-stage tests state their full macro composition. Native boundary tests
 # instead gate individual cases so selected implementations remain executable.
+
+[[test]]
+name = "nested_execution"
+required-features = ["graph", "nested-push", "nested-pull", "tuple-hash-rows", "tuple-sorted-rows"]
 
 [[test]]
 name = "access_refinement"

@@ -109,6 +109,11 @@ def main():
         tested = sum(map(int, re.findall(r"test result: ok\. (\d+) passed", output)))
         if label == "push-set" and "push_moves_owned_outputs_and_preserves_outer_values_for_multiple_witnesses ... ok" not in output:
             raise SystemExit(f"FAIL: push-set did not execute its isolated runtime test; see {logpath}")
+        if any(t["name"] == "nested_execution" for t in targets):
+            for test in ("ya_star_matches_oracle_with_borrowed_nonclone_inputs",
+                         "pull_does_no_traversal_until_demanded_and_stops_on_drop"):
+                if f"{test} ... ok" not in output:
+                    raise SystemExit(f"FAIL: {label} did not execute the nested RA regression {test}; see {logpath}")
         print(f"PASS: {label} ({tested} tests executed; {len(targets)} eligible test/example targets)", flush=True)
     if not args.list:
         print(f"PASS: {len(cases)} Cargo feature cases; logs: {logdir}", flush=True)
