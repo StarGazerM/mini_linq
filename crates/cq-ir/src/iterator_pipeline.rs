@@ -27,10 +27,16 @@ pub mod kw {
 /// lowering.
 ///
 /// This language does not promise shared or branching streams. Each adapter
-/// consumes its predecessor once; supporting reuse would require an explicit
-/// ownership, buffering, or recomputation decision. Canonical stream numbering
+/// takes ownership of its predecessor and may poll it repeatedly. Supporting
+/// reuse requires an explicit ownership, buffering, or recomputation decision.
+/// Canonical stream numbering
 /// and complete binding retention belong to the supplied pull strategy, not
 /// to this language's validity rules.
+///
+/// A cursor executes when a consumer advances it, including `next` or `any`;
+/// collecting its results is optional. Construction timing of embedded Rust
+/// source expressions belongs to the selected endpoint's demand contract. The
+/// supplied iterator endpoint defers their evaluation until the first poll.
 ///
 /// ```text
 /// iter0 = scan (x, y,) in (rows.iter()) yield (x, y,);

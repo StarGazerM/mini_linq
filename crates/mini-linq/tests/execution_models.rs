@@ -2,6 +2,7 @@
 
 #[cfg(all(feature = "pull", feature = "push-set", feature = "collect-pipeline"))]
 use std::cell::RefCell;
+#[cfg(any(feature = "push-set", feature = "collect-pipeline"))]
 use std::collections::HashSet;
 
 #[cfg(all(feature = "pull", feature = "push-set", feature = "collect-pipeline"))]

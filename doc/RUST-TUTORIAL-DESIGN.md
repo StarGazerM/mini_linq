@@ -401,6 +401,12 @@ The closure is invoked only when the outer iterator is first advanced. The
 complete Triangle final residual uses the same shape and declares one
 `let iterN` for every operator.
 
+Building the outer iterator still constructs closure and adapter state.
+Advancement by `next()` or `any()` performs query work without collecting any
+result collection. `collect()` both consumes the cursor and stores its outputs;
+it is one possible consumer, not the trigger required for all iterator execution.
+The nested adapter types persist even when each construction has a `let` name.
+
 CQ projection has set semantics, while a join cursor may enumerate several
 witnesses for the same result. IteratorPipeline therefore includes an explicit
 `Distinct` after `Project`. Its Rust implementation owns state:
@@ -501,12 +507,15 @@ does not scan remaining rows.
 - **“`r2` is an intermediate table.”** It is a set-valued mapping in logical
   algebra. No materialization decision exists at that layer.
 - **“`iter2` is a `for` loop.”** It is a lazy cursor value with resumable state.
+- **“An iterator runs only when materialized.”** `next()` and short-circuit
+  consumers also execute it; collecting outputs is optional.
 - **“IteratorPipeline already means `flat_map`.”** It names the operator edge;
   the next pass chooses the exact Rust combinator.
 - **“Quoting is code generation.”** Once the final target is `syn::Expr`, the
   quoting step is pure token emission. Semantic work must already be done.
-- **“Laziness means indexes are built on first `next()`.”** All physical
-  storage is eagerly built by `Program::build`; only query traversal is lazy.
+- **“Laziness means indexes are built on first `next()`.”** In this teaching
+  composition, `Program::build` eagerly prepares storage; query traversal is
+  lazy. Resource construction timing belongs to the selected realization.
 - **“Materialization provides set semantics.”** Explicit cursor `Distinct`
   does; materialization only collects and sorts.
 - **“Async makes pull more lazy.”** Async adds suspension for waiting, not the

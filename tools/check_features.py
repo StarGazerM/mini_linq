@@ -109,11 +109,20 @@ def main():
         tested = sum(map(int, re.findall(r"test result: ok\. (\d+) passed", output)))
         if label == "push-set" and "push_moves_owned_outputs_and_preserves_outer_values_for_multiple_witnesses ... ok" not in output:
             raise SystemExit(f"FAIL: push-set did not execute its isolated runtime test; see {logpath}")
-        if any(t["name"] == "nested_execution" for t in targets):
+        if any(t["name"] == "staged_execution" for t in targets):
             for test in ("ya_star_matches_oracle_with_borrowed_nonclone_inputs",
-                         "pull_does_no_traversal_until_demanded_and_stops_on_drop"):
+                         "projection_and_shared_dag_have_set_semantics",
+                         "pull_does_no_traversal_until_demanded_and_stops_on_drop",
+                         "pull_join_preserves_inner_cursor_and_replays_for_next_left",
+                         "pull_consumers_execute_without_materializing_and_unused_branches_stay_unopened",
+                         "shared_ra_uses_have_independent_cursors_over_one_lazy_source",
+                         "shared_join_cursors_can_alternate_between_cached_rows_and_the_frontier",
+                         "pull_ya_shares_reductions_and_reads_each_source_occurrence_once",
+                         "output_itself_can_be_nonclone",
+                         "semijoin_short_circuits_witnesses",
+                         "disjoint_semijoin_is_existence_and_repeated_output_borrows"):
                 if f"{test} ... ok" not in output:
-                    raise SystemExit(f"FAIL: {label} did not execute the nested RA regression {test}; see {logpath}")
+                    raise SystemExit(f"FAIL: {label} did not execute the staged query regression {test}; see {logpath}")
         print(f"PASS: {label} ({tested} tests executed; {len(targets)} eligible test/example targets)", flush=True)
     if not args.list:
         print(f"PASS: {len(cases)} Cargo feature cases; logs: {logdir}", flush=True)

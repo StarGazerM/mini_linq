@@ -88,5 +88,7 @@ fn all_pipeline_endpoints_check_empty_and_incomplete_pipelines() {
         rejects(|| cq_pipeline::collect::compile(source), diagnostic);
         #[cfg(feature = "stream")]
         rejects(|| cq_pipeline::stream::compile(source), diagnostic);
+        #[cfg(feature = "exists")]
+        rejects(|| cq_pipeline::exists::compile(source), diagnostic);
     }
 }

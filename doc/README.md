@@ -17,12 +17,14 @@
 
 ## Current compiler design
 
-- [Nested RA experiment](NESTED-RA-EXPERIMENT.md): independent push/pull
-  realization from planned RA, borrowed outputs, and its restricted domain.
+- [Staged borrowed execution](STAGED-BORROWED-EXECUTION.md): borrowed outputs,
+  lazy reuse and existence through the existing index, Access and Pipeline stages.
 - [Compiler boundaries](IR-STAGE-REVIEW.md): public macro families, native
   producer syntax, composition laws and remaining implementation limits.
 - [Compiler structure](COMPILER-STRUCTURE.md): package dependencies,
   module ownership, feature isolation and teaching extraction.
+- [Name audit](NAME-AUDIT.md): compiler roles, misleading names, proposed naming
+  rules and boundary differences that require more than renaming.
 - [Access refinement](ACCESS-REFINEMENT.md): representation choices, complete pair algorithms, current views and exact pruning.
 - [Rust expressions](RUST-EXPRESSIONS.md): binding, evaluation, and scheduling rules.
 - [Extended compiler research manuscript](formal/README.md):

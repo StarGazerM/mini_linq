@@ -7,10 +7,13 @@ The canonical stage graph is
  \longrightarrow\mathsf{Rust}[\mathsf{Pipeline}]\longrightarrow\mathsf{Rust}.
 \]
 The configured direct edge separately maps
-$\mathsf{RA}\xrightarrow{\Gamma}\mathsf{Rust}[\mathsf{Access}]$.
+$\mathsf{RA}\xrightarrow{\Gamma}\mathsf{Rust}[\mathsf{Access},\mathsf{Native}]$.
 $\Gamma$ is compiler-local lowering information, not an intervening language.
-Canonical IX records real equality-index demands; the direct edge accepts RA and
-constructs local resources itself. Neither path needs a no-op index stage.
+IX records written equality-index demands; the configured edge accepts RA and
+constructs local resources itself. The borrowed scan composition explicitly
+selects the empty-demand policy, then consumes IX through the same physical,
+Access and Pipeline APIs. That policy fixes no concrete index representation;
+its scan consumer rejects nonempty demands rather than ignoring them.
 
 \begin{center}\small
 \begin{tabular}{>{\raggedright\arraybackslash}p{.25\linewidth}>{\raggedright\arraybackslash}p{.31\linewidth}>{\raggedright\arraybackslash}p{.34\linewidth}}
@@ -18,10 +21,10 @@ constructs local resources itself. Neither path needs a no-op index stage.
 Boundary & Owns & Appropriate choice\\
 \midrule
 CQ to RA & Logical scheduling and equivalence & Legal join order, YA reduction, expression placement\\
-RA/IX to Rust with Access & Construction, layouts, lifetimes and local Access plans & Per-relation providers and resource sharing\\
+RA/IX to Rust with Access/Native & Construction, layouts, lifetimes and local Access plans & Per-relation providers and resource sharing\\
 Native fragments & Row construction/access, resource operations and whole pair traversal & Tuple/array/block rows, exact/zone keys, scan/prune, hash/nested/merge pairs\\
 Access execution & Binding/control and observation contract & Pull to Pipeline, or eager push directly to a set\\
-Pipeline to Rust & Iterator/collection realization & Distinct iteration, fused set collection or support-preserving streaming\\
+Pipeline to Rust & Iterator/collection realization & Distinct iteration, set collection, support streaming or first-witness existence\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -48,6 +51,15 @@ realization; \code{cq-native} owns row, candidate, key, witness and pair expansi
 minimal storage traits and data structures. Feature modules isolate implementations
 within those families. Shared language facts and private strategy analyses do not
 form a universal analysis registry.
+
+
+The borrowed scan implementation emits one checked Access region per named RA
+result. Repeated consumers use Native Build/Scan over a selected replay data
+structure; single-use iterators move into their consumers. Its semijoin guard
+contains a local Access quotation with an existential Pipeline endpoint. All
+query adapters still come from the common Pipeline emitter. The data structure
+retains demanded reference tuples and owns independent cursor positions; it
+contains no query operator or RA evaluator.
 
 Storage and packing choices are bound in native macros. Materialize consumes an
 iterator; Produce offers an emission function so the selected pair algorithm can

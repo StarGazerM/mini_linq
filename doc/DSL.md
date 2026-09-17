@@ -67,6 +67,8 @@ edges without replacing the basic homework contracts:
 | `optimized_query!` | Choose caller-bound `graph_query!` or `prefix_query!`; each lowers CQ -> RelationalPlan |
 | `result_indexes!` | `cq_index::result::compile`: RelationalPlan -> IndexRequirements |
 | `hash_materialized!` | `cq_realize::hash_materialized::compile_materialized`: IndexRequirements -> staged Rust |
+| `no_indexes!` | `cq_index::none::compile`: RelationalPlan -> unchanged plan with an empty IndexRequirements overlay |
+| `borrowed_scans!` | `cq_realize::borrowed_scans::compile`: empty-index IX -> Rust containing borrowed Access and Native regions |
 
 The eager composition binds `result_indexes` as `choose_indexes` and
 `hash_materialized` as `choose_realization` in a local facade. Planner selection
@@ -148,7 +150,7 @@ IndexModule       ::= RelationalModule "indexes" "{"
                       "}"
 IndexRequirement  ::= Ident "[" [Column ("," Column)* [","]] "]"
 
-RustAccessPlan    ::= Output ":-" Clause ("," Clause)* ";"
+RustAccessPlan    ::= Output ":-" [Clause ("," Clause)*] ";"
 Output            ::= Atom "=>" "(" RustExpr ")"
 Clause            ::= Atom "=>" RustAccess
 RustAccess        ::= "for" RustPat "in" "(" RustExpr ")"
@@ -245,14 +247,27 @@ column order. Repeated uses of one `(relation, key)` share one requirement.
 access. Its Rust leaves are concrete: row-store iteration, hash lookup,
 membership condition, and output expression have already been chosen. The
 remaining labels let the local checker enforce source-order binding and the
-required `for` versus `if` control shape.
+required `for` versus `if` control shape. An empty body denotes one empty binding:
+`out() => (()) :- ;` realizes Unit. A fresh-variable `for` uses the exact tuple
+pattern in relation-column order, or a simple identifier when exactly one
+variable is fresh. For example, `Rows(row) => for row in (scan())` binds a whole
+physical item without a synthetic singleton-tuple adapter.
 
 `IteratorPipeline` gives every lazy operator result a name. `scan` creates the
 root cursor; each binary `join` consumes the preceding cursor and a
 parameterized right source; `filter` preserves its input binding; `project`
-constructs the owned result row; and `distinct` enforces CQ set semantics.
+constructs the selected output value, which may contain borrowed fields; and
+`distinct` enforces CQ set semantics.
 These are streams of intermediate bindings, not materialized intermediate
 relations.
+
+An iterator is the pull protocol: a consumer requests the next answer.
+`next()`, `any()` and full consumers such as `count()` execute that traversal
+without collecting output rows. Materialization additionally retains the
+answers. Constructing nested adapters does not exhaust their inputs; the supplied
+iterator endpoint also defers source-expression evaluation until its first poll.
+This single-consumer cursor language differs from RA, whose named relation may
+be used several times and requires a separate realization choice for reuse.
 
 Stream names need not be `iterN`. Consumers may rename tuple fields, and scan
 or join may select and reorder retained bindings. Projection may precede another
@@ -720,24 +735,32 @@ the next item can actually wait on I/O or a channel.
 - An occurrence with fresh variables uses `for` and binds exactly those fresh
   variables in relation-column order.
 - A fully bound positive occurrence uses `if` and binds nothing.
-- The head refers only to bound variables and carries the exact owned Rust
-  result expression.
+- The body may be empty, denoting one empty binding.
+- Exactly one fresh variable may use an identifier pattern; otherwise `for`
+  binds the exact tuple of fresh variables in relation-column order.
+- The head refers only to bound variables and carries the exact Rust output
+  expression; the basic owned-result route and the borrowed route use different
+  output ownership contracts.
 
 ### IteratorPipeline
 
-- Definitions are sequentially named `iter0`, `iter1`, and so on.
+- Definitions have fresh stream names; the pull compiler emits `iter0`, `iter1`,
+  and so on, while authored pipelines may choose other names.
 - Every non-source operator consumes the immediately preceding stream.
-- Complete input and output binding tuples make every operator edge visible.
-- There is exactly one projection, immediately followed by one final
-  `distinct`; the returned stream is that distinct result.
+- Input binding patterns and output binding tuples make every operator edge
+  visible. Source patterns may bind a single identifier; retention may omit
+  unused bindings.
+- Projections may occur before terminal `distinct`; early projections and
+  binding renaming are allowed. The returned stream is that distinct result.
 - The exact edge contract preserves every Rust source, predicate, binding, and
   output from RustAccessPlan.
 
 ### Final Rust expression
 
-- `cq_pipeline::iterator::compile` chooses and constructs the Rust combinators.
+- Pipeline endpoints share `cq_pipeline::operators` for Rust combinator emission.
 - One Rust local corresponds to every IteratorPipeline definition.
-- The returned cursor is root-lazy and resumable.
+- The iterator endpoint returns a root-lazy resumable cursor. Support-stream,
+  first-witness and collected-set endpoints have their own observation contracts.
 - Proc-macro `ToTokens` emission performs no further semantic work.
 
 ## Homework boundary

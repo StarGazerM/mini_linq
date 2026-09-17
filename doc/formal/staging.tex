@@ -12,6 +12,12 @@ FlatSeek, FlatRun, Delay are written respectively
 $D,O(v),S(z),M_f(g),F_p(g),X_U(g),Q_f(g),A_{f,z}(g),Z(e)$.
 Closures include their environments. These rules describe finite successful
 polls; missing derivations distinguish neither panic nor divergence.
+Constructing a delayed cursor is separate from these polls: it may initialize
+closure, adapter and bookkeeping state. A client can request one answer or stop
+at an existential witness without materializing a result collection. Draining
+the cursor and retaining its answers are separate observations; collection is
+one consumer, not a prerequisite for cursor execution. Nested cursor structure
+does not by itself imply eager traversal or memoization of shared RA results.
 \newcommand{\gp}[5]{#1\Downarrow_{#2}^{#3}(#4,#5)}
 \newcommand{\np}[5]{#1\Downarrow_{N,#2}^{#3}(#4,#5)}
 \newcommand{\hp}[4]{#1\Downarrow_{H,#2}^{#3}#4}
@@ -65,6 +71,56 @@ dropping causes no further polls, while Rust destructors require host adequacy.
 Access denotes Delay of nested loops: first For gives Source/Map; first If
 gives One($()$)/Filter; later For uses FlatSeek and later If Filter. The head
 adds Map and final Distinct with empty seen set, independently of label truth.
+\subsection{Demand replay behind Native storage operations}
+The borrowed scan realization preserves the existing IX, Access and Pipeline
+boundaries. It emits each named RA definition once. Let $u(r)$ count direct
+operand and output occurrences, including both operands of a self-join. A
+result is retained iff $u(r)>1$ or it is a join/semijoin right operand; other
+streams move to their sole consumer. Retention emits Native Build containing
+an Access region. The selected native implementation invokes the selected
+Access continuation and constructs a replay resource through the
+\code{BuildReplay} trait. Native Scan uses \code{ReplayRead::cursor}.
+Thus producer control is lowered by Access and Pipeline, and private replay
+state belongs to a generic data structure rather than the physical compiler.
+
+A retained stream has state $h=(s,B)$, where $s$ is an optional upstream cursor
+and $B$ its finite produced prefix. Each consumer owns an independent offset
+$i$, initially zero, with $0\leq i\leq |B|$. Write
+$\operatorname{poll}(\mathsf{none})=(\bot,\mathsf{none})$; polling a present source
+delegates to its next operation and clears it at the first None. The shared
+state transition for one cursor is:
+\begin{mathpar}
+\Rule{RP-Hit}{i<|B|}
+ {((s,B),i)\longrightarrow(B_i,((s,B),i+1))}
+
+\Rule{RP-Append}{i=|B|\quad\operatorname{poll}(s)=(v^+,s')}
+ {((s,B),i)\longrightarrow(v,((s',B\concat[v]),i+1))}
+
+\Rule{RP-End}{i=|B|\quad\operatorname{poll}(s)=(\bot,\mathsf{none})}
+ {((s,B),i)\longrightarrow(\bot,((\mathsf{none},B),i))}
+\end{mathpar}
+Other cursors' offsets do not change. RP-Hit performs no upstream poll;
+RP-Append retains exactly the next occurrence, including duplicates. RP-End
+releases upstream state and prevents subsequent polling. The concrete
+\code{Replay<I>} privately stores an optional source and a prefix using
+\code{Rc}/\code{RefCell}; \code{ReplayCursor<I>} owns its handle and position.
+The trait requires Copy items. In the borrowed route these are tuples of
+references into caller storage, so copying a tuple never clones its payload.
+
+\paragraph{Invariant and scope.}
+Induction on these transitions shows that $B$ is a prefix of the one upstream
+enumeration and every cursor observes that enumeration from its own offset.
+Under finite stable providers and pure lawful field equality, topological
+induction over the emitted Access regions preserves each RA operator's support.
+The final distinct Pipeline endpoint therefore returns the RA answer set.
+This is value correctness, not equality of instrumentation or effect traces.
+State dependencies point to earlier definitions, so they form no ownership
+cycle and a source poll cannot recursively borrow its own replay state.
+The selected stream/iterator endpoints defer source construction; replay
+construction itself performs no upstream poll. Existence stops at its first
+witness. Nested matching still repeats comparisons, retained prefixes can grow
+large, and \code{Rc} makes replay-bearing queries non-\code{Send}.
+
 \subsection{Access-to-Pipeline inference rules}
 State $(\bar B,s,D,n)$ records ordered bindings, stream, definitions, and next
 number; $s_n=\code{iter}n$. Tuple patterns/expressions use binding order.
@@ -91,7 +147,7 @@ The rules preserve Rust leaves:
  s_{n+1}=\mathsf{Distinct}(s_n);\mathsf{return}\ s_{n+1}]}
 \end{mathpar}
 Root consumes first For; Seed consumes nothing before folding a first If.
-It also handles empty typed plans, although parsing requires a clause.
+It also handles parsed empty-body plans, which denote one empty binding.
 \begin{theorem}[Access lowering]
 On well-formed Access plans, IP lowering preserves
 binding well-formedness and finite successful abstract poll derivations.
@@ -178,12 +234,21 @@ filter-map supplies owned bindings without adding a borrowed tuple layer.
 \Rule{R-Set}{\bar d\Downarrow_R\bar t}
  {\bar d;s=\mathsf{Distinct}(l);\mathsf{return}\ s\Downarrow_{\rm set}
  \{\bar t;\mathsf{let}\ s:\mathsf{HashSet}(\_) = l.\mathsf{collect}();s\}}
+
+\Rule{R-Exists}{\bar d\Downarrow_R\bar t\quad
+ e=\mathsf{flatten}(\mathsf{onceWith}(\mathsf{move}\ ||\{\bar t;l\}))}
+ {\bar d;s=\mathsf{Distinct}(l);\mathsf{return}\ s\Downarrow_{\rm exists}
+ \mathsf{next}(e).\mathsf{isSome}()}
 \end{mathpar}
 R-Block (\code{iterator_pipeline!}) delays construction until polling;
 R-Set (\code{collect_pipeline!}) eagerly collects the completed set, absorbing
 terminal Distinct. It requires the finite set-observation contract,
-not an online cursor contract. Native adapter laws~\cite{iterator}, ownership and
-resolution remain premises.
+not an online cursor contract. R-Exists (\code{exists_pipeline!}) removes only
+terminal Distinct and polls the ordinary prefix once. It preserves every prior
+operator, including projection, and stops at the first witness. Removing
+Distinct preserves nonemptiness and avoids adding Eq/Hash to an existential
+payload. It promises a first-witness boolean, not an iterator or collected set.
+Native adapter laws~\cite{iterator}, ownership and resolution remain premises.
 \begin{theorem}[Adapter adequacy, conditional]
 Assume the generated Rust type-checks; host callbacks and source iterators
 realize their specified host judgments; generated cloning/hashing/dropping
@@ -241,16 +306,17 @@ Entry & Typed input / role & Emitted continuation \\\midrule
 \code{optimized_query} & CQ choice & \code{graph_query} / \code{prefix_query} \\
 canonical / prefix / graph entries & CQ to RA & \code{choose_indexes} \\
 \code{choose_indexes} & RA choice & \code{input_indexes} / \code{result_indexes} \\
-input / result index entries & RA to IX & \code{choose_realization} \\
+input / result / no-index entries & RA to IX & \code{choose_realization} \\
 \code{choose_realization} & IX choice & admitted hash realization \\
 \code{hash_inputs} / \code{hash_prefix} & IX, lazy hash realization & Rust with Access \\
 \code{hash_materialized} & IX, eager hash realization & Rust with Access \\
+\code{borrowed_scans} & empty-index IX & Rust with Access and Native \\
 \code{hash_materialized_query} & same eager computation & callable Rust Expr \\
 \code{relation_program} / \code{relation_query} & configured RA realization & item / callable host \\
 observed relation entries & same realization & instrumented host \\
-\code{pull} / \code{pull_set} / \code{pull_stream} & Access to Pipeline & iterator / set / stream endpoint \\
+\code{pull} / set / stream / exists entries & Access to Pipeline & chosen Pipeline endpoint \\
 \code{push_set} & Access to eager Rust & exact set expression \\
-iterator / set / stream endpoints & Pipeline to Rust & ToTokens \\\bottomrule
+iterator / set / stream / exists endpoints & Pipeline to Rust & ToTokens \\\bottomrule
 \end{tabular}
 \end{center}
 The default IX chooser tries the two lazy hash domains, then delegates remaining

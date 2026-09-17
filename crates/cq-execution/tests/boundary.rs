@@ -56,3 +56,33 @@ fn access_checks_fresh_bindings_before_pipeline_construction() {
     };
     rejects(|| cq_execution::pull::compile(&source), "fresh variables");
 }
+
+#[test]
+fn scalar_items_and_empty_bodies_lower_through_the_existing_pull_pass() {
+    let scalar: rust_access_plan::Plan = syn::parse_quote! {
+        answer(row, field) => ((row, field)) :-
+        Rows(row) => for row in (opaque_rows),
+        Fields(row, field) => for field in (fields(row));
+    };
+    let pipeline = compile_pull(&scalar).unwrap();
+    assert!(cq_execution::pull::check(&scalar, &pipeline));
+    let iterator_pipeline::Operator::Scan(scan) = &pipeline.definitions[0].operator else {
+        panic!("the input item should remain the scan's binding");
+    };
+    assert!(matches!(scan.item_pattern, syn::Pat::Ident(_)));
+    let iterator_pipeline::Operator::Join(join) = &pipeline.definitions[1].operator else {
+        panic!("the dependent item should remain the join's binding");
+    };
+    assert!(matches!(join.item_pattern, syn::Pat::Ident(_)));
+
+    let unit: rust_access_plan::Plan = syn::parse_quote! {
+        answer() => (()) :- ;
+    };
+    let pipeline = compile_pull(&unit).unwrap();
+    assert!(cq_execution::pull::check(&unit, &pipeline));
+    assert!(matches!(
+        pipeline.definitions[0].operator,
+        iterator_pipeline::Operator::Unit(_)
+    ));
+    assert_eq!(pipeline.definitions.len(), 3);
+}

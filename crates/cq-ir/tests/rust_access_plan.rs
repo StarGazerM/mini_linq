@@ -14,6 +14,52 @@ fn empty_headings_use_existence_guards_and_preserve_empty_tuple_output() {
 }
 
 #[test]
+fn an_empty_access_body_is_unit_and_cannot_bind_output_variables() {
+    let unit: rust_access_plan::Plan = syn::parse_quote! {
+        answer() => (()) :- ;
+    };
+    rust_access_plan::contract::check(&unit).unwrap();
+    assert!(unit.body.is_empty());
+    assert_eq!(
+        syn::parse2::<rust_access_plan::Plan>(unit.to_token_stream()).unwrap(),
+        unit
+    );
+    let unbound: rust_access_plan::Plan = syn::parse_quote! {
+        answer(x) => ((x,)) :- ;
+    };
+    assert!(rust_access_plan::contract::check(&unbound).is_err());
+}
+
+#[test]
+fn one_fresh_variable_can_bind_an_opaque_item_without_a_tuple_adapter() {
+    let valid: rust_access_plan::Plan = syn::parse_quote! {
+        answer(row, value) => ((row, value)) :-
+        Rows(row) => for r#row in (opaque_rows),
+        Fields(row, value) => for value in (fields(row));
+    };
+    rust_access_plan::contract::check(&valid).unwrap();
+    assert_eq!(
+        syn::parse2::<rust_access_plan::Plan>(valid.to_token_stream()).unwrap(),
+        valid
+    );
+    for pattern in [
+        quote!(other),
+        quote!(mut row),
+        quote!(ref row),
+        quote!(row @ _),
+    ] {
+        let invalid: rust_access_plan::Plan = syn::parse_quote! {
+            answer(row) => ((row,)) :- Rows(row) => for #pattern in (opaque_rows);
+        };
+        assert!(rust_access_plan::contract::check(&invalid).is_err());
+    }
+    let missing: rust_access_plan::Plan = syn::parse_quote! {
+        answer(x, y) => ((x, y)) :- Pair(x, y) => for x in (pairs);
+    };
+    assert!(rust_access_plan::contract::check(&missing).is_err());
+}
+
+#[test]
 fn selection_annotations_require_bound_variables_and_an_if_access() {
     let valid: rust_access_plan::Plan = syn::parse_quote! {
         answer(x) => ((x.clone(),)) :- R(x) => for (x,) in (rows.iter()),

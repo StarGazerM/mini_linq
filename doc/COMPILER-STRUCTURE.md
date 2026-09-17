@@ -14,13 +14,13 @@ links inference rules to implementation markers.
 | Package | Modules / responsibility | Production workspace dependencies |
 | --- | --- | --- |
 | `cq-ir` | CQ, RA, equality demands, Access, Pipeline and Native syntax; local judgments and factual heading queries | None |
-| `cq-storage` | Data structures and minimal operation traits; block selections, summaries and passive counters | None |
+| `cq-storage` | Data structures and minimal operation traits; block selections, summaries, demand replay and passive counters | None |
 | `cq-plan` | `canonical`, `prefix`, `graph`; logical scheduling and derivations | `cq-ir` |
-| `cq-index` | `input`, `result`; equality-demand policies | `cq-ir` |
-| `cq-realize` | `hash_inputs`, `hash_prefix`, `hash_materialized`, `relations`, exploratory `nested_push` / `nested_pull`; whole-query realization and hosts | `cq-ir` |
+| `cq-index` | `input`, `result`, `none`; equality-demand policies | `cq-ir` |
+| `cq-realize` | `hash_inputs`, `hash_prefix`, `hash_materialized`, `relations`, `borrowed_scans`; physical realization and hosts | `cq-ir` |
 | `cq-native` | `rows`, `candidates`, `keys`, `witnesses`, `pairs`; local Native operation implementations | `cq-ir` |
 | `cq-execution` | `pull`, `push`; Access execution alternatives | `cq-ir` |
-| `cq-pipeline` | `iterator`, `collect`, `stream`; Pipeline endpoints | `cq-ir` |
+| `cq-pipeline` | `iterator`, `collect`, `stream`, `exists`; Pipeline endpoints | `cq-ir` |
 | `cq-compose` | Typed named compositions for tools and AST clients | Selected compiler families, `cq-ir` |
 | `mini-linq` | Procedural-macro entries, invocation-scoped continuations and administrative configuration | Selected families and optional composition |
 
@@ -35,8 +35,8 @@ Combining row providers and access algorithms in `cq-native` reflects their
 shared local-operation dialect. Their modules remain independent alternatives;
 block rows do not imply pruning, zone keys or pull. Combining pull and push in
 `cq-execution` makes their common Access input explicit without pretending their
-results have identical demand contracts. Renaming the whole-query family to
-`cq-realize` avoids implying that pull is somehow outside physical execution.
+results have identical demand contracts. These are the current package names;
+their exact input and output languages define the boundaries.
 
 ## Module ownership and features
 
@@ -45,9 +45,9 @@ cq-realize/src/                    cq-native/src/
   hash_inputs/                      rows/{hash,sorted,block,tuple_hash,tuple_sorted}.rs
   hash_prefix/                      candidates/{scan,prune}.rs
   hash_materialized/                keys/{exact,zone}.rs
-  nested_push.rs                    (independent whole-RA push experiment)
-  nested_pull.rs                    (independent whole-RA pull experiment)
-  nested_support.rs                 (domain checks and host syntax only)
+  borrowed_scans/                    rows/replay.rs
+    domain.rs                       (Native Build/Scan backed by storage traits)
+    lower.rs
   relations/                        witnesses/{hash,nested}.rs
     layout.rs                       pairs/{hash,nested,merge}.rs
     expressions.rs
@@ -58,8 +58,8 @@ cq-realize/src/                    cq-native/src/
 ```
 
 Shared helpers express a common mechanism, not a global backend selector.
-The nested experiments share validation and parameter/type spelling. Their
-recursive execution lowering stays separate; neither calls the other's emitter.
+Borrowed scan realization emits Access and Native fragments; iterator adapter
+emission remains shared in `cq-pipeline::operators`.
 For example, native set emission takes type and row representation syntax from
 its owning implementation. It does not inspect a provider name and choose a
 backend. Each realization checks its own index coverage; the IR describes facts
@@ -96,8 +96,26 @@ default wiring. Workload compilation enters this same macro route.
 Each dispatcher examines its actual input. IX contains no hidden route tag.
 Changing an index policy can therefore change which realization accepts the
 result. Explicit implementation entries do not invoke default selection. A
-caller can replace the entire RA-to-Rust edge with configured relation realization
-or bind a smaller native operation inside that realization.
+caller can replace the IX-to-Rust-with-Access-and-Native realization with another
+implementation admitting that IX, or bind a smaller Native operation inside it.
+The separately configured relation entry accepts RA directly and emits the same
+embedded languages; it is an explicit alternative entry, not a continuation
+that discards an authored IX.
+
+The borrowed route binds `no_indexes as choose_indexes` and
+`borrowed_scans as choose_realization`. The first emits checked IX with an empty
+overlay; the second emits checked Access regions. `pull_stream`, `pull_exists`
+and `pull` invoke the same Access-to-Pipeline compiler with different endpoint
+bindings. Source traversal, joins, filters and projections all use the shared
+Pipeline operator emitter. No physical pass quotes these adapters itself.
+
+Input relation names select Native macros in the facade's `inputs` module.
+`replay_rows` implements only Native Build and Scan: Build preserves a selected
+Access producer; Scan uses `ReplayRead::cursor`. `cq-storage` privately owns the
+source, retained prefix and independent cursor positions through `BuildReplay`
+and `ReplayRead`. Storage contains no semijoin or RA evaluator. The physical pass
+marks reused/right-side definitions for retention and clones owning handles;
+all payloads remain borrowed. See [the route specification](STAGED-BORROWED-EXECUTION.md).
 
 Typed `cq-compose` clients intentionally run a fixed Rust function composition;
 they are a separate API from invocation-scoped macro composition. Its index and
@@ -129,7 +147,8 @@ candidate traversal, key resources and complete pair algorithms. Scoped defaults
 are optional when all used operations have explicit bindings. Unused operations
 do not require configuration.
 
-Native options are checked for the selected operation. Scan needs none; pruning
+Native options are checked for the selected operation. Ordinary row scans need
+no construction options; replay scans select their storage path. Pruning
 needs its iterator continuation; exact/zone construction needs its collection and
 iterator; block construction needs packing size. A direct membership test needs
 no construction iterator. Observers add an explicit counter expression only to

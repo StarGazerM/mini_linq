@@ -273,8 +273,10 @@ A supplied `cq_execution::pull::compile` pass consumes the occurrence-annotated
 `rust_access_plan::Plan` and produces `iterator_pipeline::Pipeline`; supplied
 `cq_pipeline::iterator::compile` returns one ordinary iterator expression. The plan
 retains binary operator and intermediate-record boundaries, while the emitted
-combinators retain resumable state. Only `Storage::materialize` loops to drain
-the root iterator. No async runtime is needed for finite in-memory
+combinators retain resumable state. Calling `next()` or a consumer such as
+`any()` executes query traversal; `Storage::materialize` drains the root into
+a collection. Other consumers can drain it without storing the answers.
+No async runtime is needed for finite in-memory
 sources. The later push
 checkpoint targets an explicit staff-supplied Rust mechanism; students do not
 have to invent the callback/channel IR or runtime shell.

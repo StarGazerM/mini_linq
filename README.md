@@ -8,7 +8,7 @@ The completed implementation and its tests live in implementation modules;
 student exercises without maintaining a second compiler.
 
 ```text
-CQ → RA → IndexRequirements → Rust[Access] → Rust[Pipeline] → Rust
+CQ → RA → IndexRequirements → Rust[Access, Native] → Rust[Pipeline, Native] → Rust
      RA ── configured relation realization ──→ Rust[Access, Native]
                                 Access ── push to set ──→ Rust
 ```
@@ -19,10 +19,13 @@ registry. [The boundary specification](doc/IR-STAGE-REVIEW.md) lists the macro
 families and their semantic obligations; [compiler structure](doc/COMPILER-STRUCTURE.md)
 explains crate/module ownership.
 
-The opt-in [nested RA experiment](doc/NESTED-RA-EXPERIMENT.md) selects whole-query
-push or pull directly after planning. Its `nested_push!` and `nested_pull!`
-macros generate distinct borrowed answers without intermediate relations or a
-new IR. The existing routes above remain the baseline for comparison.
+The opt-in [staged borrowed route](doc/STAGED-BORROWED-EXECUTION.md) uses the same
+index, Access and Pipeline boundaries. An explicit empty index policy selects
+borrowed scan realization; local Access regions become support streams,
+first-witness booleans or a distinct answer iterator. Selected replay storage
+retains demanded prefixes of shared results, with independent cursors and no
+payload cloning. `next()` or `any()` executes traversal; `collect()` additionally
+stores outputs. Prefix storage and nested comparisons remain explicit costs.
 
 ## Choose a composition
 

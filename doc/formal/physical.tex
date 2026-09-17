@@ -25,6 +25,9 @@ signature, preserving first-use order. Fold definitions using:
 
 \Rule{IX-Module}{\Sigma;\Delta\vdash(D,\emptyseq)\Rightarrow_{\rm ix}K}
  {\Sigma\vdash D\Downarrow_{\rm result}(D,K)}
+
+\Rule{IX-None}{\Sigma;\Delta\vdash D:\ok}
+ {\Sigma\vdash D\Downarrow_{\rm none}(D,\emptyseq)}
 \end{mathpar}
 IX-Base folds actual join order on a root Rename, left-deep joins with direct
 right Renames, and final Project. Both algorithms preserve every definition.
@@ -34,15 +37,84 @@ DAGs. Selection returns the stable required list; an independently authored IX m
 contain valid extras that an explicit realization must admit or reject. Coverage requires the exact
 right result version, including reduced/projected versions.
 \begin{theorem}[Index selection]
-Both selection algorithms preserve the entire RA and hence its denotation.
-Their output satisfies IX-WF and contains exactly one signature for each
-nonempty key required in their respective domains, ordered by first use.
+All selection algorithms preserve the entire RA and hence its denotation.
+The base/result policies satisfy IX-WF and contain exactly one signature for
+each nonempty key required in their respective domains, ordered by first use.
+The explicit no-index policy returns the valid empty overlay. Its consumer
+must support scans without equality-index demands; it does not claim hash-index
+coverage or erase demands from an already authored IX input.
 \end{theorem}
 \begin{proof}
 Induct on definitions. Checked layouts give increasing in-range ordinals;
 each binary step appends its nonempty unseen signature, preserving uniqueness
 and first use. Every consumer is visited and $D$ is copied unchanged.
 \end{proof}
+
+\subsection{Borrowed scans through Access and Pipeline}
+The \code{borrowed_scans} realization accepts checked IX $(D,\emptyseq)$ with
+Unit, Rename, Project, Join and Semijoin and variable-only output. It rejects
+Select, Extend, computed outputs and nonempty index demands. Let $\Gamma(r)$
+be its earlier Rust binding and $S_r$ an Access source: a single-use iterator
+moves directly, while a retained resource is captured by an owning handle and
+scanned through its Native provider. Let $P_R$ select an input provider;
+$\beta_m(x)$ borrows its logical fields in result-heading order. Define
+$\mathsf{row}(x,S)$ as the checked Access clause
+$\mathsf{Rows}(x)\Rightarrow\mathsf{for}\ x\ \mathsf{in}\ S$,
+$E(x,y)$ as equality of shared coordinates, and $x\oplus y$ as the merged
+reference tuple in heading order. These abbreviate existing Access syntax.
+\begin{mathpar}
+\Rule{BS-Unit}{}
+ {\mathcal A(\mathbf1)=(\mathsf{out}()\Rightarrow()\mathbin{:-}\emptyseq)}
+
+\Rule{BS-Rename}{}
+ {\mathcal A(\delta_m R)=(\mathsf{out}(x)\Rightarrow\beta_m(x)
+ \mathbin{:-}\mathsf{row}(x,P_R.\mathsf{scan}(R)))}
+
+\Rule{BS-Project}{}
+ {\mathcal A(\pi_U r)=(\mathsf{out}(x)\Rightarrow x|_U
+ \mathbin{:-}\mathsf{row}(x,S_r))}
+
+\Rule{BS-Join}{}
+ {\mathcal A(r\bowtie s)=(\mathsf{out}(x,y)\Rightarrow x\oplus y
+ \mathbin{:-}\mathsf{row}(x,S_r),\mathsf{row}(y,S_s),\mathsf{if}(E(x,y)))}
+
+\Rule{BS-Semi}{A_x=(\mathsf{out}(y)\Rightarrow()
+ \mathbin{:-}\mathsf{row}(y,S_s),\mathsf{if}(E(x,y)))}
+ {\mathcal A(r\ltimes s)=(\mathsf{out}(x)\Rightarrow x
+ \mathbin{:-}\mathsf{row}(x,S_r),\mathsf{if}(\mathsf{Exists}\{A_x\}))}
+\end{mathpar}
+Here Exists is a caller-bound Access invocation, lowered by the same pull pass
+to Pipeline and then by R-Exists. It is not a quoted iterator predicate or a
+runtime semijoin operation. Each generated region is independently checked.
+Let $\operatorname{reuse}(r)$ hold when direct uses exceed one or $r$ is a
+join/semijoin RHS; count both operand occurrences of a self-join.
+\begin{mathpar}
+\Rule{BS-Retain}{r=o\quad\operatorname{reuse}(r)\quad A=\mathcal A(o)}
+ {\Gamma\Rightarrow\Gamma[r\mapsto\mathsf{Replay}.\mathsf{build}\{A\}]}
+
+\Rule{BS-Stream}{r=o\quad\neg\operatorname{reuse}(r)\quad A=\mathcal A(o)}
+ {\Gamma\Rightarrow\Gamma[r\mapsto\mathsf{Stream}\{A\}]}
+
+\Rule{BS-Output}{A_h=(\mathsf{out}(x)\Rightarrow h(x)
+ \mathbin{:-}\mathsf{row}(x,S_r))}
+ {\mathsf{output}\ r\ \mathsf{as}\ h\Downarrow\mathsf{Iterator}\{A_h\}}
+\end{mathpar}
+Stream, Exists and Iterator denote three Access continuations selecting
+support, existential and distinct Pipeline endpoints. Replay Build delegates
+its Access body to the selected support continuation, then invokes
+\code{BuildReplay::replay}; Scan invokes \code{ReplayRead::cursor}. The public
+traits expose no cache layout or relational operations. Reusable bindings own
+shared source state; copied handles do not clone payload or source iterators.
+Intermediates retain reference tuples, while only final answers require the
+Eq/Hash obligations of distinctness. Intermediate support may repeat occurrences.
+
+Under finite stable inputs, lawful common-field equality and output Eq/Hash,
+induction over these local regions preserves relational support. Replay's
+prefix invariant (Section~\ref{sec:cursor}) preserves that support across
+independent consumers. Source evaluation is delayed by the selected Pipeline
+endpoints; first-witness consumption does not drain its source. This composition
+adds no IR or execution bypass. It retains demanded prefixes and still performs
+nested matching; arbitrary effect traces and optimal YA complexity are not claimed.
 
 \subsection{Storage representation relation}
 Let $\operatorname{row}_V(t)=\langle t(x)\mid x\in\ord(V)\rangle$.

@@ -5,6 +5,8 @@
 pub mod block;
 #[cfg(feature = "rows-hash")]
 pub mod hash;
+#[cfg(feature = "rows-replay")]
+pub mod replay;
 #[cfg(feature = "rows-sorted")]
 pub mod sorted;
 #[cfg(feature = "rows-tuple-hash")]

@@ -199,13 +199,17 @@ membership rows, and the owned result tuple clone only the selected fields.
 
 ### Generated API
 
-`Program::build(inputs...) -> ProgramStorage` performs all data work. It
+`Program::build(inputs...) -> ProgramStorage` performs eager storage preparation. It
 normalizes inputs, builds row stores and indexes, and returns their owner.
 
 `Storage::query(&self) -> impl Iterator<Item = Row> + '_` returns one lazy
 iterator for the entire distinct result set. Its whole body is exactly one
 `pull!` expression. Creating the iterator reads no stored row; the first
 `next()` starts the root access.
+
+Consumers such as `next()`, `any()` and `count()` execute traversal without
+materializing the result. Nested iterator adapters retain cursor state between
+requests; constructing their enclosing expression does not drain their inputs.
 
 `Storage::materialize(&self) -> Vec<Row>` collects `self.query()`, sorts the
 already-distinct rows with `sort_unstable`, and returns them. It does not

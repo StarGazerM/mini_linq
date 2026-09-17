@@ -31,7 +31,8 @@ scans, complete pair algorithms, row construction and conditional preservation.
 | Bounded evidence and prior work | [evaluation.tex](evaluation.tex), [related_work.tex](related_work.tex) |
 
 [TERMINOLOGY.md](TERMINOLOGY.md) records AHV terminology and course adaptations.
-[rules.tsv](rules.tsv) maps 166 rules, including 22 native-refinement rules, to
+[rules.tsv](rules.tsv) maps 179 rules, including 22 native-refinement rules and
+three demand-replay rules, to
 implementation symbols or explicitly abstract cases. [check.py](check.py) checks
 those links, algorithm/model correspondence, the 14 executable planner commands
 and recorded source fingerprints. It does not check mathematical proofs.
@@ -100,7 +101,19 @@ Pull Access execution lowers to Pipeline, while `push_set!` emits eager Rust
 loops directly. Pipeline permits arbitrary fresh stream names, tuple binding
 renaming, selective retention and early projections, while retaining a linear
 single-consumer chain and terminal Distinct. Eager-set, distinct-iterator and
-pre-Distinct-stream holes have different observation contracts.
+pre-Distinct-stream and first-witness holes have different observation contracts.
+
+The opt-in [borrowed execution route](../STAGED-BORROWED-EXECUTION.md) uses the
+same RA-to-IX, IX-to-Access, Access-to-Pipeline and Pipeline-to-Rust boundaries.
+Its no-index policy preserves RA and emits an empty demand overlay; the borrowed
+realization rejects a nonempty overlay and unsupported effectful operators.
+Each RA definition produces a checked Access region. Support, first-witness and
+distinct-output continuations share the Pipeline operator compiler. Native Build
+and Scan select a replay data structure for reused or restarted definitions;
+RP-Hit/Append/End in [staging.tex](staging.tex) describe its source and prefix.
+This preserves borrowed outputs and delayed source access, with prefix storage
+and single-threaded state. Matching still uses nested scans. It adds no IR and
+contains no direct whole-RA iterator emitter or runtime relational interpreter.
 
 The [YA release profile](../../teaching/ya/README.md) extracts the selected packages with
 unselected implementations absent and separate scheduling/semijoin exercises.

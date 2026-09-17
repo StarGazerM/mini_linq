@@ -20,6 +20,7 @@ pairs-merge = []
 rows-hash = []
 rows-sorted = []
 rows-block = []
+rows-replay = []
 rows-tuple-hash = []
 rows-tuple-sorted = []
 

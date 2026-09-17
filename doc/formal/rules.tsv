@@ -165,3 +165,16 @@ PS-For	implementation	crates/cq-execution/src/push.rs	pub fn compile(	Eager comp
 PS-If	implementation	crates/cq-execution/src/push.rs	pub fn compile(	Eager completed-set Access lowering under finite pure host and ownership premises.
 PS-Set	implementation	crates/cq-execution/src/push.rs	pub fn compile(	Eager completed-set Access lowering under finite pure host and ownership premises.
 AF-Configure	implementation	crates/cq-realize/src/relations/mod.rs	fn validate(&self, source:	Require only choices demanded by actual RA operators and validate override targets. Macro semantic laws remain separate obligations.
+RP-Hit	implementation	crates/cq-storage/src/replay.rs	// RP-Hit:	Replay one cached borrowed tuple without polling the source. Conditional stable-provider value law; inventory does not verify proof.
+RP-Append	implementation	crates/cq-storage/src/replay.rs	// RP-Append:	Advance the source at the cache frontier and retain one borrowed tuple. Conditional stable-provider value law; inventory does not verify proof.
+RP-End	implementation	crates/cq-storage/src/replay.rs	// RP-End:	Clear the source at exhaustion; retain the prefix for other cursors. Conditional stable-provider value law; inventory does not verify proof.
+IX-None	implementation	crates/cq-index/src/none.rs	pub fn compile(	Preserve checked RA and select an empty equality-demand overlay; the consumer must admit scan-only execution.
+BS-Unit	implementation	crates/cq-realize/src/borrowed_scans/lower.rs	// BS-Unit:	Emit checked empty-body Access with one empty binding.
+BS-Rename	implementation	crates/cq-realize/src/borrowed_scans/lower.rs	// BS-Rename:	Emit an input Native scan and borrowed field projection inside checked Access.
+BS-Project	implementation	crates/cq-realize/src/borrowed_scans/lower.rs	// BS-Project:	Emit Access projection of the selected reference coordinates.
+BS-Join	implementation	crates/cq-realize/src/borrowed_scans/lower.rs	// BS-Join:	Emit two Access row sources and common-field equality; Pipeline owns traversal.
+BS-Semi	implementation	crates/cq-realize/src/borrowed_scans/lower.rs	// BS-Semi:	Emit an Access guard containing a selected first-witness Access continuation.
+BS-Retain	implementation	crates/cq-realize/src/borrowed_scans/lower.rs	// BS-Retain:	Select Native Build for a shared or restarted checked Access region.
+BS-Stream	implementation	crates/cq-realize/src/borrowed_scans/lower.rs	// BS-Stream:	Select the support-stream Access continuation for a single-use region.
+BS-Output	implementation	crates/cq-realize/src/borrowed_scans/lower.rs	// BS-Output:	Select the distinct-output Access continuation over requested reference coordinates.
+R-Exists	implementation	crates/cq-pipeline/src/exists.rs	pub fn compile(	Remove terminal Distinct only and demand one item from the shared deferred Pipeline prefix.

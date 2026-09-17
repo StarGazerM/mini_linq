@@ -1,54 +1,91 @@
-Revision: Native algorithm and representation boundaries, 15 September 2026.
+Compiler audit snapshot — 17 September 2026
 
-Architecture: CQ -> RA -> IndexRequirements -> Rust[Access] -> Rust[Pipeline] -> Rust remains the indexed route. Configured relation realization separately lowers RA to Rust containing Access and native fragments. Push-to-set lowers Access directly to Rust. No contextual whole-query IR, route tag, capability registry or runtime relational interpreter is introduced.
+Scope
+The borrowed execution experiment now composes the existing stage APIs:
+CQ -> RA -> IndexRequirements -> Rust[Access, Native] -> Rust[Pipeline, Native] -> Rust.
+Rust[...] denotes ordinary Rust containing macro invocations, not a new IR.
+The old direct relational-to-iterator/loop implementations and their test/document
+entry points were deleted without compatibility aliases. Existing hash and
+configured-relation implementations retain their declared domains and APIs.
 
-Ownership: cq-plan owns canonical/prefix/graph planning; cq-index owns base-input and named-result equality demands. cq-realize owns hash_inputs, hash_prefix, hash_materialized and relations realizations. cq-native groups rows, candidates, keys, witnesses and complete pair algorithms at the native-fragment boundary. cq-execution owns pull and push Access execution, cq-pipeline the iterator/collect/stream endpoints. cq-ir owns their grammars and local judgments; cq-storage contains runtime data structures and minimal operation traits. cq-compose supplies typed recipes and mini-linq exposes the procedural macros.
+The no-index policy preserves checked RA and writes an empty overlay. Borrowed
+scan lowering consumes IX and rejects nonempty demands, Select, Extend and
+computed outputs. Each admitted RA definition becomes a checked Access region.
+Access now admits an empty body for Unit and a simple identifier for exactly
+one fresh variable. Intermediate support, existential consumption and final
+answers use the same Access-to-Pipeline compiler with separate endpoint choices.
 
-Composition: each macro chooser invokes its selected caller-relative continuation. mini_linq chooses canonical/prefix; optimized_query chooses graph/prefix; both emit choose_indexes through the selected planner. Index policies emit choose_realization. The default realization chooser examines actual IX and selects an admitted hash implementation. An eager recipe is a facade binding result_indexes as choose_indexes and hash_materialized as choose_realization. Compiled workloads enter the ordinary macro route. Typed recipes are a separate API with explicit iterator-valued and set-valued continuations.
+Shared/restarted definitions use Native Build/Scan. Replay privately owns one
+source, a demanded prefix and independent cursor positions. Generated code uses
+BuildReplay and ReplayRead; storage contains no relational operator or compiler
+dispatch. Field payloads remain borrowed. Construction performs no input scan
+or field read; existence stops at its first witness. Prefix retention can grow
+to full inputs, comparisons remain nested, and replay uses non-Send Rc state.
+These are finite stable pure-value guarantees, not effect or performance claims.
 
-Native semantics: Type receives logical Rust column types; each row provider owns Field and Record. Tuple sets can coexist with i64 arrays and block storage in configured RA. Key construction remains representation-owned. Produce binds a local emission sink; Pairs owns complete traversal and auxiliary storage for equal-key pair production. Hash, repeated nested traversal and sort/merge preserve occurrence multiplicity under finite stable traversal and pure-key premises. Sort/merge explicitly sorts both inputs. The selected result provider deduplicates emitted rows. The surrounding realization still owns named-result materialization and resource lifetimes; these local seams do not establish arbitrary region fusion.
+Validation completed
+- Workspace tests with compiled workloads and all new borrowed-route features:
+  530 tests passed across 88 test/doc-test targets. Seven subsequently added
+  typed-domain/index-policy tests passed in focused selected-feature runs.
+  Log: target/staged-workspace-tests.log.
+- Strict workspace/all-target Clippy with the same route features passed.
+  The minimal borrowed-route all-target Clippy configuration also passed.
+  Logs: target/staged-workspace-clippy.log, target/staged-minimal-clippy.log.
+- All 11 staged semantic/demand regressions passed, including the 512-database
+  oracle, non-Clone output payloads, shared cursor interleaving, source/reduction
+  reuse and witness short circuit. Log: target/staged-execution-tests.log.
+- Standalone xtask: 18 tests passed. Log: target/staged-xtask.log.
+- Current-source YA extraction passed 59 foundation tests, both expected student
+  exercise failures, 81 reference-overlay tests and both examples. Both student
+  stubs were restored; 81 files were delivered to the temporary export.
+  Log: target/staged-ya-export.log.
+- All five paper examples passed, including the 264-case representation driver.
+  The finite model checked 98,415 current-view candidates and 1,280 witness
+  cases plus its boundary/support/stale-version checks. This is bounded model
+  evidence, not a proof about generated Rust. Log: target/staged-paper-examples.log.
+- The formal inventory maps 179 named rules, including 22 native-refinement
+  rules. Added mappings cover empty index policy, borrowed Access lowering,
+  replay storage transitions and existential Pipeline consumption. Both PDFs
+  build without warnings. Fingerprints identify reviewed source, not proofs.
+- Full dependency isolation passed 34 source-removal builds, six combined
+  compiler-family builds, 32 isolated macro probes, 15 independent complete
+  query compositions (256 databases each plus duplicate-input checks), and
+  an accepted borrowed fixture with seven expected rejections. The isolated
+  existence endpoint also executed its emitted-Rust regression.
+  Log: target/staged-full-dependencies.log.
+- All 50 supported feature configurations passed across the initial matrix
+  and resumed run. A test-only HashSet import was too narrowly gated in the
+  initial run; it was corrected, and the failed/remaining cases plus affected
+  isolated features passed. The corrected pull/collect configuration also
+  passed strict Clippy. No query compiler change was needed for that failure.
+  Logs: target/staged-full-features.log, target/staged-full-features-resume.log,
+  target/staged-feature-verification.json, target/staged-import-clippy.log.
+- Workspace formatting and diff whitespace checks passed.
 
-Configuration: optional defaults and per-result overrides supply only the roles used by actual RA operators. Rename needs only input providers; Unit only an output provider; Project/Extend need Access and an output provider; Select needs Access; Semijoin needs Access, candidate scan and key resource; NaturalJoin needs an output provider and pair algorithm. Missing used choices are source errors rather than implicit fallbacks.
+Actual expansion evidence
+The current capture is target/staged-execution-review. It records 58 actual
+procedural-macro input/output pairs for one Star query, with 699 copied source
+fingerprints unchanged during capture. The recorder returns original token
+streams without reparsing. The unchanged example compiles and runs against an
+independent oracle. Full inputs and immediate outputs are in steps.md; raw
+files, invocation index, command, instrumentation patch and verification are
+retained beside it. review.md annotates all 58 calls, with every non-root call
+matched to a direct invocation in its captured parent output. Declarative macros
+are traced in a separate compilation.
 
-Pruning: candidates enumerate only current handles and cover every exact match. Zone metadata rejects a block before opening its selected payload; exact membership completes the semijoin. Resource sharing requires the same current RHS version, separator and configured key binding. BuildBlocks::pack_unique accepts any unique-row iterable; uniqueness is a caller precondition and HashSet is not imposed as the trait's carrier.
+The first three actual calls are graph_query, no_indexes and borrowed_scans.
+Later calls include ten pull_stream/stream_pipeline pairs, four
+pull_exists/exists_pipeline pairs, one pull/iterator_pipeline pair, fourteen
+replay operations and eleven input-provider operations. Only the physical pass
+resolves RA definitions; Access and Pipeline lowering remain real selected
+macro invocations. Invocation order is not runtime evaluation order.
+Older expansion directories are historical and do not describe this revision.
 
-Execution observations: pull lowers checked Access to Pipeline; push_set emits nested Rust loops and one set sink directly, cloning only incoming bindings conservatively live after each dependent source. Pipeline permits arbitrary fresh stream names, tuple alpha-renaming, selected/reordered bindings and early or repeated projections. It remains a linear single-consumer chain with final Distinct. Eager-set, distinct-iterator and pre-Distinct-stream observations are different contracts. Arbitrary host effects, panic/drop behavior and demand timing are not equated by completed-set preservation.
-
-Formal verification: the rule inventory currently validates 166 named rule/source links, including 22 native-refinement rules linked to algorithms and, where applicable, the finite model. The finite model passes 98,415 current-view candidate cases and 1,280 witness cases, plus correlated-key, i64-boundary, empty-key, stream-support and stale-version checks. Both PDFs build without unresolved references/citations or layout warnings. Log: /tmp/mini-linq-formal-redesign.log. These checks establish inventory correspondence, bounded model results and document buildability; they do not prove generated Rust or arbitrary selected macro laws.
-
-Completed validation for this source revision:
-- cargo test --workspace --no-fail-fast --features cq-workloads/compiled-queries,mini-linq/compiled-workloads --locked: 502 tests passed across 85 test/doc-test targets, with no warnings. Log: /tmp/mini-linq-workspace-final.log.
-- cargo clippy --workspace --all-targets --features cq-workloads/compiled-queries,mini-linq/compiled-workloads --locked -- -D warnings passed. The subsequent missing-index diagnostic refinement also passed hash-inputs Clippy and its unchanged edge-contract regression. Logs: /tmp/mini-linq-clippy-redesign.log and /tmp/mini-linq-final-diagnostic-clippy.log.
-- cargo fmt --all -- --check and git diff --check passed.
-- tools/check_features.py: all 44 supported Cargo feature configurations passed. Log: target/redesign-features.log.
-- Dependency/source checks: 30 source-removal units (two foundations and 28 selected implementations), all six combined compiler families, and 28 isolated frontend probes passed. A frontend fixture's stale Field punctuation was corrected and every frontend probe rerun. Final logs: target/redesign-isolation.log (source/family successes before the corrected fixture), target/redesign-frontends.log, target/redesign-hash-inputs-isolation.log (final diagnostic refinement).
-- tools/check_dependencies.py --consumers: 13 independently assembled complete query routes passed, each over 256 database pairs and duplicate-input checks. Log: target/redesign-consumers.log. These semantic consumers are separate from resolution-only/native-operation probes.
-- cargo test --manifest-path xtask/Cargo.toml --locked: 18 tests passed. The standalone selective composition example and blocked-YA example ran successfully. Blocked-YA returned [(10,7)] on both access choices, with 17 zone-path row visits versus 20 exact-scan visits; these are logical in-memory counts, not I/O measurements.
-- tools/export_ya.py /tmp/mini-linq-ya-final --verify: final current-source export passed 57 foundation tests, both intended exercise failures, 78 reference-overlay tests and both examples; exercise stubs were restored. The export contains 81 delivered files. Log: /tmp/mini-linq-ya-final.log.
-- make -C doc/formal example: all five executable paper drivers passed, including the 264-case access-representation experiment. Log: /tmp/mini-linq-paper-examples.log.
-- make -C doc/formal check pdf: 166 rule links and 379 source fingerprints match; both PDFs build. Log: /tmp/mini-linq-formal-final.log. Fingerprints include the revised compiler, tests, examples, extraction/tooling sources and boundary documentation.
-
-The 39 exported macros are inventoried by semantic family in doc/IR-STAGE-REVIEW.md. Obsolete public macro names and package facades were removed without compatibility aliases. The optional hw4 exercise remains outside the completed implementation and supported feature matrix.
-
-Limits: package isolation, source extraction, emitted-scaffold correspondence and semantic correctness are distinct claims. Row providers impose their actual Rust operation requirements; a successful expansion is not a proof of its relational law. Cost-based physical search, arbitrary region fusion, factorized/bag execution, recursive-program semantics, WCOJ and complete Rust effect adequacy remain outside the implemented claims. The separate doc/notes repository is unchanged.
-
-Focused update, 16 September 2026: generated input-borrow locals now use __ml_view{result}_input{operand}, reserving __ml_owner{result} for actual output owners. Join, Project and Extend lowering, independent correspondence expectations and existing mutation tests were updated together. All 21 cq-realize relation tests and 20 frontend tests across heterogeneous, physical_typed, relation_configuration and reusable_query passed; the blocked-YA example retained its answer and counters. Formatting and diff checks passed. The three affected source fingerprints were refreshed after this audit. Earlier broad validation above predates this identifier-only change; it was not rerun in full.
-
-Borrowed-read update, 16 September 2026: configured relation lowering now borrows fields for pair keys, exact-key construction and membership probes. Set-provider Select retains row references, including references to earlier selected views, instead of cloning payload. Existing Key syntax takes borrowed field expressions; exact keys retain references and zone keys copy referenced i64 coordinates into their constructed metadata representation. Configured source/computed expression aliases borrow values; ownership is not inferred from RA computed-column provenance. Explicit owned Record and answer construction may still clone retained fields. The fixed hash realizations preserve their separate expression-binding convention. No new IR grammar, stage or capability tag was added.
-
-Validation after the borrowed-read change: 502 existing workspace tests passed with compiled workloads and no warnings (target/borrowed-reads-workspace.log). Five new regressions passed separately (target/borrowed-reads-regressions.log): non-Clone repeated hash/sorted selection, non-Clone semijoin keys/payloads, source/computed expression reads, and zero unmatched-key clones across hash/nested/merge. All workspace targets passed Clippy -D warnings (target/borrowed-reads-clippy.log). Four affected feature configurations passed (target/borrowed-reads-features.log); the earlier full matrix was not rerun. Dependency boundaries and their mutation checks passed (target/borrowed-reads-dependencies.log). Blocked-YA retained [(10,7)], three skipped blocks and 17 versus 20 row visits. Both formal PDFs rebuilt (target/borrowed-reads-paper.log); formatting and diff checks passed. The source inventory now includes 381 audited fingerprints, including the new regression and the expression-convention documentation.
-
-Execution-boundary design, 16 September 2026: doc/IR-STAGE-REVIEW.md now distinguishes the implemented architecture from a pending redesign. The proposal keeps existing RA, with optional IX, as the common input to alternative push and pull realizations; it does not introduce two new IRs. IteratorPipeline remains specific to pull, and the current iterable Access language ceases to be the proposed general execution-choice boundary. The proposal records completed-set, demand, effect, sharing, borrowing and native-operation obligations plus migration gates. This is documentation only: no compiler implementation, grammar, macro route, formal rule or PDF was changed. Only that reviewed documentation fingerprint was refreshed; earlier runtime validation does not validate the proposed realizations.
-
-
-Nested RA exploration, 16 September 2026 (after checkpoint ddf20ff): cq-realize now offers independently selected nested_push and nested_pull modules through matching opt-in procedural macros. Both consume checked RA with existing per-input bindings and emit Rust directly. The five-operator pure domain is Unit/Rename/Project/NaturalJoin/Semijoin with variable-only output, including repetitions. Shared helpers check that domain and spell host signatures; execution lowering remains separate. Input Type/Scan/Field must expose stable borrows into caller storage. iter returns lazy distinct borrowed answers; for_each delivers distinct borrowed answers to a consumer. No intermediate relations, payload clones, new IR, grammar, crate or runtime interpreter were added. Shared DAG uses are recomputed. The stock block provider is not automatically admitted by this direct-storage scan protocol. Select/Extend, arbitrary output expressions, per-join algorithm choice, effect-preserving sharing and pruning are outside this experiment. doc/NESTED-RA-EXPERIMENT.md records the support induction, provider/lifetime laws, actual example and these limits. Existing LaTeX rule counts and proofs cover their prior baseline, not a newly mechanized proof of these realizations.
-
-Validation of the exploration:
-- Checkpoint ddf20ff passed 507 workspace tests, formatting, formal inventory/source checks, dependency gates and eight selected feature configurations before the experiment.
-- 518 workspace tests passed with compiled workloads and both nested features (target/nested-workspace-tests.log). Workspace/all-target Clippy passed with -D warnings (target/nested-workspace-clippy.log).
-- Six new integration tests include a 512-input-combination YA star oracle, duplicate-producing projection, shared definitions, Unit/empty intermediate headings, repeated outputs, non-Clone keys/payloads/outputs, deferred scan construction, partial demand and short-circuit semijoin witnesses (target/nested-execution-tests.log). A final generated-binder naming adjustment was followed by rerunning these six tests.
-- Both nested implementations build with all sibling sources removed and pass five domain/configuration rejection tests. Both isolated frontend macros execute, and providers returning temporary copied rows fail Rust lifetime checking (E0716/E0515). All cq-realize features also pass together. Logs: target/component-logs and target/nested-execution-frontends.log.
-- Four direct/planned external consumers each passed 256 database pairs plus duplicate-input checks with non-Clone values and answer multiplicity assertions (target/nested-execution-consumers.log).
-- Four affected feature configurations passed, including the completed frontend bundle (166 tests) and the minimal nested composition (target/nested-execution-features.log). This is not a rerun of every supported feature combination.
-- The ra-execution example runs with only its five declared features. tools/trace_macros.py captured 91 actual procedural-macro invocations in an instrumented source copy, returning original TokenStreams to rustc. Both graph calls emit identical planned RA. Each nested realization contains one final seen-set allocation and no clone calls. Raw tokens, formatted per-call pages, commands, source hashes and instrumentation are in target/ra-execution-trace; source hashes were unchanged during capture. The reusable capture tool is checked in; generated traces remain build artifacts.
-- The source fingerprint inventory includes the experiment, its example, tests, documentation and capture tooling. No LaTeX rule or PDF change is claimed for this code exploration.
+Naming audit
+The post-implementation audit in doc/NAME-AUDIT.md covers crate responsibilities,
+implementation modules, all 44 exported procedural macros and caller-bound
+paths. It proposes names without renaming APIs. CQ planning is part of CQ-to-RA
+lowering; index demand selection is a policy; Access/Pipeline/Native libraries
+are compiler transformations; storage is runtime data. Existing RA/IX input
+asymmetry, push/pull targets, partial Native domains and absent planning feedback
+are recorded separately because naming changes cannot repair those contracts.

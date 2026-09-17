@@ -175,12 +175,16 @@ An Access plan $h(\bar x)\Rightarrow e_h\mathrel{:-}\bar a$ has clauses
 $\ell\Rightarrow\mathsf{for}\ p\ \mathsf{in}\ e$ or
 $\ell\Rightarrow\mathsf{if}\ e$. Labels describe logical occurrences,
 guards, or bindings; Rust leaves supply concrete sources and operations.
+The clause sequence may be empty; it then supplies exactly one empty binding.
 For ordered bindings $\bar B$, $\operatorname{new}(\ell,B)$ lists first
-positive-label names outside $B$, in label order.
+positive-label names outside $B$, in label order. Write $p\sim\bar N$ when
+$p$ is the simple tuple pattern $(\bar N)$, or $\bar N=[x]$ and $p=x$ is
+one simple identifier pattern. Both forms bind precisely the listed names;
+Rust checks the source item's shape.
 \begin{mathpar}
 
 \Rule{AC-For}{\bar N=\operatorname{new}(\ell,B)\ne\emptyseq\quad
- p=(\bar N)\text{ is a simple tuple pattern}}
+ p\sim\bar N}
  {\bar B\vdash\ell\Rightarrow\mathsf{for}\ p\ \mathsf{in}\ e\Rightarrow\bar B\concat\bar N}
 
 \Rule{AC-If}{\operatorname{new}(\ell,B)=\emptyseq}
@@ -191,7 +195,7 @@ positive-label names outside $B$, in label order.
 
 \Rule{AC-Bind}{\ell=\mathsf{let}\ p_0=e_0\quad e_0\checkmark_B\quad
  \bar N=\binds(p_0)\quad |\set(\bar N)|=|\bar N|\quad \set(\bar N)\cap B=\emptyset\\
- p=(\bar N)\text{ is a simple tuple pattern}}
+ p\sim\bar N}
  {\bar B\vdash\ell\Rightarrow\mathsf{for}\ p\ \mathsf{in}\ e\Rightarrow\bar B\concat\bar N}
 \end{mathpar}
 AC-For/If concern positive labels; an empty label uses If. AC-Bind permits
@@ -239,7 +243,9 @@ an opaque Rust expression; Rust checks the latter's actual type.
 \Rule{WF-IP-Return}{s\text{ is the last defined stream}}
  {(a,\mathsf d);\mathsf{return}\ s\Rightarrow\ok}
 \end{mathpar}
-Tuple consumers may rename their input fields. Scan and Join may select and
+Scan and Join source patterns may bind a single identifier; their carried
+bindings remain tuples. Tuple consumers may rename their input fields. Scan and
+Join may select and
 reorder retained bindings; Project may occur before later Join, Filter or Project.
 Only Distinct is obligatorily final. Canonical stream numbering, complete binding
 retention and one final projection are properties of the supplied pull emitter,

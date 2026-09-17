@@ -141,7 +141,7 @@ fn pattern_variables(pattern: &syn::Pat) -> impl Iterator<Item = syn::Ident> + '
         syn::Pat::Tuple(pattern) => pattern.elems.iter().map(simple_pattern_ident).collect(),
         syn::Pat::Ident(pattern) => vec![pattern.ident.clone()],
         _ => unreachable!(
-            "the RustAccessPlan contract requires a simple tuple pattern for generated `for` accesses"
+            "the RustAccessPlan contract requires a simple identifier or tuple binding for `for` accesses"
         ),
     };
     variables.into_iter()

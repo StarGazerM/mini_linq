@@ -5,6 +5,11 @@
 //! [`Rename`] turns one occurrence into a query-variable heading. Result IDs
 //! such as `r0` are serialized DAG references, not algebra operators or an
 //! assumed prerequisite for relational algebra.
+//!
+//! A result name denotes a set-valued definition that may have several uses.
+//! It promises neither materialization nor a reusable iterator instance. The
+//! selected realization decides whether those uses recompute or share retained
+//! data; each independent traversal needs its own cursor state.
 
 use std::collections::{BTreeMap, BTreeSet};
 

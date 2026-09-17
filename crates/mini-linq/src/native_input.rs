@@ -230,6 +230,21 @@ impl<S: Parse + ToTokens> Input<S> {
         })
     }
 
+    #[cfg(feature = "replay-rows")]
+    pub fn replay_options(&self) -> syn::Result<cq_native::rows::replay::Options> {
+        let configuration = self.configured(&["storage", "iterator"])?;
+        Ok(cq_native::rows::replay::Options {
+            storage: configuration
+                .storage
+                .cloned()
+                .unwrap_or_else(|| syn::parse_quote!(mini_linq::storage)),
+            iterator: configuration
+                .iterator
+                .cloned()
+                .unwrap_or_else(|| syn::parse_quote!(mini_linq::pull_stream)),
+        })
+    }
+
     #[cfg(feature = "hash-rows")]
     pub fn hash_row_options(&self) -> syn::Result<cq_native::rows::hash::Options> {
         let configuration = self.configured(&["work"])?;

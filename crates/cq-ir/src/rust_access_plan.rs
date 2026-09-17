@@ -31,17 +31,29 @@ use crate::{CommaList, cq, symbol_name};
 /// key sets. Empty headings use existence guards; a logical comparison must
 /// be paired with an `if` whose variables are already bound.
 ///
+/// An empty body denotes one empty binding, so it can realize Unit without a
+/// synthetic input or an existence predicate. A `for` pattern binds either a
+/// tuple of fresh variables or one simple identifier when exactly one is fresh.
+///
 /// ```text
-/// Plan ::= Output ":-" Clause ("," Clause)* ";"
+/// Plan ::= Output ":-" [Clause ("," Clause)*] ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Plan {
     pub head: Output,
     pub colon_token: Token![:],
     pub minus_token: Token![-],
-    #[parse(CommaList::parse_separated_nonempty)]
+    #[parse(parse_body)]
     pub body: CommaList<Clause>,
     pub semi_token: Token![;],
+}
+
+fn parse_body(input: syn::parse::ParseStream<'_>) -> syn::Result<CommaList<Clause>> {
+    if input.peek(Token![;]) {
+        Ok(CommaList::new())
+    } else {
+        CommaList::parse_separated_nonempty(input)
+    }
 }
 
 /// The result occurrence paired directly with the Rust value to yield.
@@ -250,6 +262,13 @@ fn check_positive_clause(
 }
 
 fn check_fresh_pattern(position: usize, pattern: &Pat, expected: &[&Ident]) -> syn::Result<()> {
+    if let [expected] = expected {
+        if simple_pattern_ident(pattern)
+            .is_some_and(|actual| symbol_name(actual) == symbol_name(expected))
+        {
+            return Ok(());
+        }
+    }
     let elements = match pattern {
         Pat::Tuple(tuple) if tuple.attrs.is_empty() => &tuple.elems,
         _ => return Err(fresh_pattern_error(position, pattern, expected)),
@@ -268,6 +287,10 @@ fn check_fresh_pattern(position: usize, pattern: &Pat, expected: &[&Ident]) -> s
 }
 
 fn fresh_pattern_error(position: usize, pattern: &Pat, expected: &[&Ident]) -> syn::Error {
+    let scalar = match expected {
+        [variable] => format!(" or identifier `{variable}`"),
+        _ => String::new(),
+    };
     let expected = expected
         .iter()
         .map(|variable| symbol_name(variable))
@@ -276,7 +299,7 @@ fn fresh_pattern_error(position: usize, pattern: &Pat, expected: &[&Ident]) -> s
     syn::Error::new_spanned(
         pattern,
         format!(
-            "Rust `for` pattern at body clause {} must be the simple tuple pattern `({expected},)` containing exactly its fresh variables in relation-column order",
+            "Rust `for` pattern at body clause {} must be the simple tuple pattern `({expected},)`{scalar} containing exactly its fresh variables in relation-column order",
             position + 1
         ),
     )

@@ -38,11 +38,7 @@ use syn::spanned::Spanned;
 /// Preserve primitive type spellings when generated host names share their
 /// identifiers. User aliases, raw identifiers, and already qualified paths keep
 /// their ordinary Rust resolution. This changes type syntax, not row layout.
-#[cfg(any(
-    feature = "relations",
-    feature = "nested-push",
-    feature = "nested-pull"
-))]
+#[cfg(any(feature = "relations", feature = "borrowed-scans"))]
 pub fn qualify_type(source: &syn::Type) -> syn::Type {
     struct Qualify;
     impl syn::visit_mut::VisitMut for Qualify {

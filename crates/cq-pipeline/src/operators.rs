@@ -2,7 +2,7 @@ use cq_ir::{cq, iterator_pipeline};
 use proc_macro2::TokenStream;
 use quote::quote;
 
-#[cfg(any(feature = "iterator", feature = "stream"))]
+#[cfg(any(feature = "iterator", feature = "stream", feature = "exists"))]
 pub(crate) fn deferred_iterator(
     definitions: &[iterator_pipeline::Definition],
     return_stream: &syn::Ident,

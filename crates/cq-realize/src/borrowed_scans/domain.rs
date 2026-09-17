@@ -1,16 +1,22 @@
-//! Shared domain checks and Rust signature spelling for the pure nested routes.
-//! Execution environments and control flow belong to each route separately.
+//! Domain and borrowed signatures for the scan-based physical implementation.
 
-use cq_ir::{cq, relational_plan as ra, symbol_name};
+use cq_ir::{cq, index_requirements as ix, relational_plan as ra, symbol_name};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::BTreeMap;
 
-pub(crate) fn check(
-    source: &ra::Module,
+pub(super) fn check(
+    source: &ix::Module,
     inputs: &BTreeMap<String, syn::Path>,
 ) -> syn::Result<BTreeMap<String, ra::RelationInfo>> {
-    ra::contract::check(source)?;
+    ix::contract::check(source)?;
+    if !source.indexes.is_empty() {
+        return Err(syn::Error::new_spanned(
+            source,
+            "borrowed scans require an empty index overlay; select the no_indexes policy",
+        ));
+    }
+    let source = &source.relational_plan;
     let infos = ra::check_in(source.program.inputs(), &source.plan)?;
     for definition in &source.plan.definitions {
         let unsupported = match &definition.operator {
@@ -21,7 +27,7 @@ pub(crate) fn check(
         return Err(syn::Error::new_spanned(
             &definition.operator,
             format!(
-                "nested execution does not admit {unsupported}; Rust expression operators require a different realization"
+                "borrowed scans does not admit {unsupported}; Rust expression operators require a different realization"
             ),
         ));
     }
@@ -34,7 +40,7 @@ pub(crate) fn check(
         {
             return Err(syn::Error::new_spanned(
                 expression,
-                "nested execution output must project attributes; Rust expression outputs are not admitted",
+                "borrowed scans output must project attributes; Rust expression outputs are not admitted",
             ));
         }
     }
@@ -62,7 +68,7 @@ pub(crate) fn check(
     Ok(infos)
 }
 
-pub(crate) fn arguments(source: &ra::Module) -> BTreeMap<String, syn::Ident> {
+pub(super) fn arguments(source: &ra::Module) -> BTreeMap<String, syn::Ident> {
     source
         .program
         .inputs()
@@ -76,7 +82,7 @@ pub(crate) fn arguments(source: &ra::Module) -> BTreeMap<String, syn::Ident> {
         .collect()
 }
 
-pub(crate) fn parameters(
+pub(super) fn parameters(
     source: &ra::Module,
     inputs: &BTreeMap<String, syn::Path>,
     arguments: &BTreeMap<String, syn::Ident>,
@@ -98,7 +104,7 @@ pub(crate) fn parameters(
         .collect()
 }
 
-pub(crate) fn output_type(
+pub(super) fn output_type(
     source: &ra::Module,
     info: &ra::RelationInfo,
     lifetime: &syn::Lifetime,
@@ -113,12 +119,9 @@ pub(crate) fn output_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::borrowed_scans::{Options, compile};
 
-    fn providers() -> BTreeMap<String, syn::Path> {
-        BTreeMap::from([("R".into(), syn::parse_quote!(rows))])
-    }
-
-    fn source() -> ra::Module {
+    fn source() -> ix::Module {
         syn::parse_quote! {
             struct Query;
             relation R(value: i32);
@@ -127,32 +130,57 @@ mod tests {
                 rows = rename R { value -> x };
                 output rows as answer(x);
             }
+            indexes {}
         }
     }
 
-    fn rejects(source: &ra::Module, inputs: &BTreeMap<String, syn::Path>, message: &str) {
-        // The fixtures are valid RA: it is this realization's smaller domain
-        // or its provider configuration that must reject them.
-        ra::contract::check(source).unwrap();
-        #[cfg(feature = "nested-push")]
-        assert!(
-            crate::nested_push::compile(source, inputs)
-                .unwrap_err()
-                .to_string()
-                .contains(message)
-        );
-        #[cfg(feature = "nested-pull")]
-        assert!(
-            crate::nested_pull::compile(source, inputs)
-                .unwrap_err()
-                .to_string()
-                .contains(message)
+    fn options() -> Options {
+        Options {
+            inputs: BTreeMap::from([("R".into(), syn::parse_quote!(rows))]),
+            stream: syn::parse_quote!(support),
+            output: syn::parse_quote!(answers),
+            exists: syn::parse_quote!(witness),
+            replay: syn::parse_quote!(replay),
+        }
+    }
+
+    fn rejects(source: &ix::Module, options: &Options, diagnostic: &str) {
+        // Each fixture is valid IX; these are the selected realization's
+        // additional obligations, rather than parser or input-IR failures.
+        ix::contract::check(source).unwrap();
+        let error = compile(source, options).unwrap_err();
+        assert!(error.to_string().contains(diagnostic), "{error}");
+    }
+
+    #[test]
+    fn provider_bindings_must_match_declared_inputs_exactly() {
+        let source = source();
+        let mut missing = options();
+        missing.inputs.clear();
+        rejects(&source, &missing, "missing input provider for `R`");
+        let mut extra = options();
+        extra
+            .inputs
+            .insert("Unknown".into(), syn::parse_quote!(other_rows));
+        rejects(
+            &source,
+            &extra,
+            "input provider binding `Unknown` does not name an input relation",
         );
     }
 
     #[test]
-    fn selection_requires_a_different_realization() {
-        let source = syn::parse_quote! {
+    fn a_nonempty_index_overlay_cannot_be_silently_ignored() {
+        for requirement in [syn::parse_quote!(R[0]), syn::parse_quote!(@rows[0])] {
+            let mut source = source();
+            source.indexes.push(requirement);
+            rejects(&source, &options(), "require an empty index overlay");
+        }
+    }
+
+    #[test]
+    fn selection_and_extension_require_another_realization() {
+        let selection = syn::parse_quote! {
             struct Query;
             relation R(value: i32);
             answer(x) :- R(x), if x > 0;
@@ -161,13 +189,10 @@ mod tests {
                 filtered = select rows if (x > 0);
                 output filtered as answer(x);
             }
+            indexes {}
         };
-        rejects(&source, &providers(), "does not admit Select");
-    }
-
-    #[test]
-    fn extension_requires_a_different_realization() {
-        let source = syn::parse_quote! {
+        rejects(&selection, &options(), "does not admit Select");
+        let extension = syn::parse_quote! {
             struct Query;
             relation R(value: i32);
             answer(y) :- R(x), let y: i32 = x + 1;
@@ -177,12 +202,13 @@ mod tests {
                 result = project computed keep { y };
                 output result as answer(y);
             }
+            indexes {}
         };
-        rejects(&source, &providers(), "does not admit Extend");
+        rejects(&extension, &options(), "does not admit Extend");
     }
 
     #[test]
-    fn computed_output_requires_a_different_realization() {
+    fn computed_output_cannot_be_emitted_as_a_borrowed_projection() {
         let source = syn::parse_quote! {
             struct Query;
             relation R(value: i32);
@@ -192,31 +218,12 @@ mod tests {
                 rows = rename R { value -> x };
                 output rows as answer(x + 1);
             }
+            indexes {}
         };
         rejects(
             &source,
-            &providers(),
+            &options(),
             "Rust expression outputs are not admitted",
-        );
-    }
-
-    #[test]
-    fn missing_provider_is_rejected_before_emission() {
-        rejects(
-            &source(),
-            &BTreeMap::new(),
-            "missing input provider for `R`",
-        );
-    }
-
-    #[test]
-    fn extra_provider_is_rejected_before_emission() {
-        let mut inputs = providers();
-        inputs.insert("Unknown".into(), syn::parse_quote!(other_rows));
-        rejects(
-            &source(),
-            &inputs,
-            "input provider binding `Unknown` does not name an input relation",
         );
     }
 }

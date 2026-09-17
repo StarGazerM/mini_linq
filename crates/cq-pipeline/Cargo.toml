@@ -10,6 +10,7 @@ default = []
 iterator = []
 collect = []
 stream = []
+exists = []
 
 [dependencies]
 cq-ir.workspace = true

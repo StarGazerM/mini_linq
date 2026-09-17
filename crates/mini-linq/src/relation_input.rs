@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use cq_ir::{relational_plan as ra, symbol_name};
-#[cfg(feature = "relations")]
 use cq_realize::relations::{ObservedOptions, RelationOptions};
 use quote::ToTokens;
 use syn::{parse::Parse, token};
@@ -82,41 +81,6 @@ struct Binding {
 }
 
 impl RelationInput {
-    /// The nested experiments select only input providers. They reuse the
-    /// existing administrative syntax without accepting unrelated policies.
-    #[cfg(any(feature = "nested-push", feature = "nested-pull"))]
-    pub fn input_bindings(&self) -> syn::Result<BTreeMap<String, syn::Path>> {
-        let mut inputs = None;
-        for directive in &self.directives {
-            let Directive::Inputs(value) = directive else {
-                return Err(syn::Error::new_spanned(
-                    directive,
-                    "nested realization accepts only `inputs` bindings",
-                ));
-            };
-            if inputs.is_some() {
-                return Err(syn::Error::new_spanned(
-                    directive,
-                    "duplicate inputs directive",
-                ));
-            }
-            let mut entries = BTreeMap::new();
-            for binding in &value.bindings {
-                if entries
-                    .insert(symbol_name(&binding.name), binding.path.clone())
-                    .is_some()
-                {
-                    return Err(syn::Error::new_spanned(
-                        &binding.name,
-                        "duplicate input binding",
-                    ));
-                }
-            }
-            inputs = Some(entries);
-        }
-        Ok(inputs.unwrap_or_default())
-    }
-    #[cfg(feature = "relations")]
     pub fn options(&self) -> syn::Result<RelationOptions> {
         let (options, storage) = self.configuration()?;
         if let Some(storage) = storage {
@@ -127,7 +91,6 @@ impl RelationInput {
         }
         Ok(options)
     }
-    #[cfg(feature = "relations")]
     pub fn observed_options(&self) -> syn::Result<ObservedOptions> {
         let (relations, storage) = self.configuration()?;
         let storage = storage.ok_or_else(|| {
@@ -138,7 +101,6 @@ impl RelationInput {
         })?;
         Ok(ObservedOptions { relations, storage })
     }
-    #[cfg(feature = "relations")]
     fn configuration(&self) -> syn::Result<(RelationOptions, Option<syn::Path>)> {
         let mut scalar = BTreeMap::new();
         let mut maps = BTreeMap::new();
@@ -208,7 +170,7 @@ impl RelationInput {
     }
 }
 
-#[cfg(all(test, feature = "relations"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use quote::quote;

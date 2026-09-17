@@ -25,8 +25,10 @@ mod access_input;
     feature = "hash-prefix",
     feature = "hash-materialized",
     feature = "relations",
-    feature = "nested-push",
-    feature = "nested-pull",
+    feature = "borrowed-scans",
+    feature = "no-indexes",
+    feature = "replay-rows",
+    feature = "exists-pipeline",
     feature = "scan-rows",
     feature = "prune-rows",
     feature = "exact-keys",
@@ -307,14 +309,11 @@ pub fn iterator_pipeline(input: TokenStream) -> TokenStream {
     feature = "tuple-hash-rows",
     feature = "tuple-sorted-rows",
     feature = "sorted-rows",
-    feature = "block-rows"
+    feature = "block-rows",
+    feature = "replay-rows"
 ))]
 mod native_input;
-#[cfg(any(
-    feature = "relations",
-    feature = "nested-push",
-    feature = "nested-pull"
-))]
+#[cfg(feature = "relations")]
 mod relation_input;
 
 /// The Access-to-Pipeline edge with a support-stream continuation.
@@ -348,7 +347,8 @@ pub fn stream_pipeline(input: TokenStream) -> TokenStream {
     feature = "tuple-hash-rows",
     feature = "tuple-sorted-rows",
     feature = "sorted-rows",
-    feature = "block-rows"
+    feature = "block-rows",
+    feature = "replay-rows"
 ))]
 macro_rules! native_entry {
     ($name:ident, $compile:path, $options:ident, $doc:literal) => {
@@ -492,21 +492,23 @@ pub fn relation_program(input: TokenStream) -> TokenStream {
     })
 }
 
-/// Explore planned RA as a nested push producer of distinct borrowed answers.
-#[cfg(feature = "nested-push")]
+/// Lower an empty-index plan through borrowed Access and Native boundaries.
+/// Input R binds mini_linq::inputs::R; each execution/resource boundary remains
+/// an independently resolved macro invocation in the generated Rust.
+#[cfg(feature = "borrowed-scans")]
 #[proc_macro]
-pub fn nested_push(input: TokenStream) -> TokenStream {
-    entry::stage(input, None, |input: &relation_input::RelationInput| {
-        cq_realize::nested_push::compile(&input.source, &input.input_bindings()?)
-    })
-}
-
-/// Explore planned RA as a lazy nested iterator of distinct borrowed answers.
-#[cfg(feature = "nested-pull")]
-#[proc_macro]
-pub fn nested_pull(input: TokenStream) -> TokenStream {
-    entry::stage(input, None, |input: &relation_input::RelationInput| {
-        cq_realize::nested_pull::compile(&input.source, &input.input_bindings()?)
+pub fn borrowed_scans(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |source: &cq_ir::index_requirements::Module| {
+        cq_realize::borrowed_scans::compile(
+            source,
+            &cq_realize::borrowed_scans::Options {
+                inputs: entry::relation_macros(&source.relational_plan),
+                stream: syn::parse_quote!(mini_linq::pull_stream),
+                output: syn::parse_quote!(mini_linq::pull),
+                exists: syn::parse_quote!(mini_linq::pull_exists),
+                replay: syn::parse_quote!(mini_linq::replay_rows),
+            },
+        )
     })
 }
 
@@ -536,3 +538,40 @@ pub fn observed_relation_query(input: TokenStream) -> TokenStream {
         cq_realize::relations::compile_observed_query(&input.source, &input.observed_options()?)
     })
 }
+
+/// Request no equality indexes while retaining the IndexRequirements boundary.
+#[cfg(feature = "no-indexes")]
+#[proc_macro]
+pub fn no_indexes(input: TokenStream) -> TokenStream {
+    entry::stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::choose_realization)),
+        cq_index::none::compile,
+    )
+}
+
+/// Lower Access through Pipeline to an existential consumer.
+#[cfg(feature = "pull")]
+#[proc_macro]
+pub fn pull_exists(input: TokenStream) -> TokenStream {
+    entry::stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::exists_pipeline)),
+        cq_execution::pull::compile,
+    )
+}
+
+/// Consume a checked Pipeline only until its first witness.
+#[cfg(feature = "exists-pipeline")]
+#[proc_macro]
+pub fn exists_pipeline(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, cq_pipeline::exists::compile)
+}
+
+#[cfg(feature = "replay-rows")]
+native_entry!(
+    replay_rows,
+    cq_native::rows::replay::compile,
+    replay_options,
+    "Retain demanded Access rows in a replay resource; scan with owning cursors."
+);

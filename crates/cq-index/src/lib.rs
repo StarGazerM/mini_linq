@@ -5,3 +5,6 @@
 pub mod input;
 #[cfg(feature = "result")]
 pub mod result;
+
+#[cfg(feature = "none")]
+pub mod none;

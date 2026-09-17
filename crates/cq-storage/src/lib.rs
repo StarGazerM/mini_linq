@@ -15,6 +15,7 @@ mod blocks;
 mod mask;
 mod membership;
 mod metrics;
+mod replay;
 mod selection;
 mod summary;
 
@@ -23,6 +24,7 @@ pub use blocks::{Block, BlockStore};
 pub use mask::BlockMask;
 pub use membership::ExactMembership;
 pub use metrics::{Counters, Work};
+pub use replay::{BuildReplay, Replay, ReplayCursor, ReplayRead};
 pub use selection::{BlockSelection, MakeSelection};
 pub use summary::{RangeSummary, ZoneSummary};
 

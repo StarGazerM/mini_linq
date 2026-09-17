@@ -20,6 +20,9 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--example', required=True, help='mini-linq example target')
 parser.add_argument('--features', required=True, help='explicit comma-separated frontend features')
 parser.add_argument('--out', type=Path, required=True, help='new artifact directory; must not exist')
+parser.add_argument('--declarative', action='store_true',
+                    help='also record rustc macro_rules tracing in a separate compilation')
+parser.add_argument('--stdout', action='store_true', help='print the complete step-by-step report')
 args = parser.parse_args()
 OUT = args.out.resolve()
 OUT.mkdir(parents=True, exist_ok=False)
@@ -97,17 +100,43 @@ env = os.environ.copy()
 env['CARGO_TARGET_DIR'] = str(OUT / 'build')
 env['MINI_LINQ_TRACE_DIR'] = str(OUT / 'raw')
 command = ['cargo', 'run', '-p', 'mini-linq', '--no-default-features', '--features', args.features, '--example', args.example, '--locked']
-(OUT / 'command.json').write_text(json.dumps({'cwd': str(COPY), 'command': command,
-    'env': {k: env[k] for k in ['CARGO_TARGET_DIR', 'MINI_LINQ_TRACE_DIR']}}, indent=2)+'\n')
+commands = {'cwd': str(COPY), 'command': command,
+    'env': {k: env[k] for k in ['CARGO_TARGET_DIR', 'MINI_LINQ_TRACE_DIR']}}
+(OUT / 'command.json').write_text(json.dumps(commands, indent=2)+'\n')
 with (OUT / 'compile.log').open('w') as log:
     subprocess.run(command, cwd=COPY, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+if args.declarative:
+    # Keep unstable tracing local to this subprocess and this example target.
+    # A second build does not duplicate the procedural recorder's events.
+    trace_env = env.copy()
+    trace_env.pop('MINI_LINQ_TRACE_DIR')
+    trace_env['RUSTC_BOOTSTRAP'] = '1'
+    trace_command = ['cargo', 'rustc', *command[2:], '--', '-Ztrace-macros']
+    commands['declarative'] = {'command': trace_command,
+        'env': {'CARGO_TARGET_DIR': trace_env['CARGO_TARGET_DIR'], 'RUSTC_BOOTSTRAP': '1'},
+        'unset_env': ['MINI_LINQ_TRACE_DIR']}
+    (OUT / 'command.json').write_text(json.dumps(commands, indent=2)+'\n')
+    with (OUT / 'declarative.log').open('w') as log:
+        subprocess.run(trace_command, cwd=COPY, env=trace_env,
+                       stdout=log, stderr=subprocess.STDOUT, check=True)
 assert all(hashlib.sha256((ROOT / p).read_bytes()).hexdigest() == digest
            for p, digest in sources.items()), 'Original source changed while capturing'
-pairs = sorted((OUT / 'raw').glob('*/*.input.tokens'))
+pairs = sorted((OUT / 'raw').glob('*/*.input.tokens'),
+               key=lambda path: (int(path.parent.name), int(path.name.split('-', 1)[0])))
 index = ['# Actual proc-macro boundaries', '',
          'These calls were captured during rustc expansion of the unchanged example.',
          'Raw token files are authoritative. Formatted Rust is a reading aid only.',
-         'See command.json, compile.log, source-hashes.json and instrumentation.patch.', '']
+         'Sequence numbers are invocation order within each compiler process, not runtime order.',
+         'See command.json, compile.log, source-hashes.json and instrumentation.patch.', '',
+         '[Print all procedural steps](steps.md)', '']
+if args.declarative:
+    index.extend(['[Declarative macro input/output trace](declarative.log) was captured in a',
+                  'second compilation of the same source with target-local `-Ztrace-macros`.',
+                  'The two logs are separate observations, not one merged event timeline.', ''])
+index.extend(['| Process / step | Macro | Input begins | Output bytes |',
+              '| --- | --- | --- | ---: |'])
+pages = []
+calls = []
 for source in pairs:
     target = source.with_name(source.name.replace('.input.tokens', '.output.tokens'))
     assert target.exists(), f'Missing output for {source}'
@@ -117,11 +146,33 @@ for source in pairs:
     pretty = subprocess.run(['rustfmt', '--edition', '2024', '--emit', 'stdout'],
                             input=target.read_text(), text=True, capture_output=True)
     rendered = pretty.stdout if pretty.returncode == 0 else target.read_text()
-    page.write_text(f'# {stem}\n\nActual input:\n\n```rust\n{source.read_text()}\n```\n\n'
-                    f'Actual output (formatted where Rust syntax permits):\n\n```rust\n{rendered}\n```\n')
-    index.append(f'- [{source.parent.name}/{stem}]({relative}/{stem}.md)')
+    content = (f'## {source.parent.name}/{stem}\n\n'
+               f'[Raw input]({source.name}) · [Raw output]({target.name})\n\n'
+               f'Actual input:\n\n```rust\n{source.read_text()}\n```\n\n'
+               f'Actual output (formatted where Rust syntax permits):\n\n```rust\n{rendered}\n```\n')
+    page.write_text(content)
+    pages.append(content.replace(f']({source.name})', f']({relative}/{source.name})')
+                        .replace(f']({target.name})', f']({relative}/{target.name})'))
+    step, macro = stem.split('-', 1)
+    beginning = source.read_text().split(maxsplit=1)[0] if source.read_text().strip() else '(empty)'
+    output_bytes = len(target.read_bytes())
+    index.append(f'| [{source.parent.name}/{step}]({relative}/{stem}.md) | `{macro}` | '
+                 f'`{beginning.replace("|", "&#124;")}` | {output_bytes} |')
+    calls.append({'process': int(source.parent.name), 'step': int(step), 'macro': macro,
+                  'input': str(source.relative_to(OUT)), 'output': str(target.relative_to(OUT)),
+                  'output_bytes': output_bytes})
 (OUT / 'README.md').write_text('\n'.join(index) + '\n')
+report = '\n'.join(index[:index.index('| Process / step | Macro | Input begins | Output bytes |')])
+report += '\n\n' + '\n---\n\n'.join(pages)
+if args.declarative:
+    report += '\n---\n\n## Declarative macros: separate compiler trace\n\n```text\n'
+    report += (OUT / 'declarative.log').read_text() + '\n```\n'
+(OUT / 'steps.md').write_text(report)
+(OUT / 'calls.json').write_text(json.dumps(calls, indent=2) + '\n')
 (OUT / 'verification.txt').write_text(
     f'{len(pairs)} actual invocation pairs; {len(sources)} original source hashes unchanged.\n'
     'Recording returns the original TokenStream without reparsing.\n')
-print(f'Captured {len(pairs)} actual proc-macro calls in {OUT}; original source hashes unchanged.')
+if args.stdout:
+    print(report)
+else:
+    print(f'Captured {len(pairs)} actual proc-macro calls in {OUT}; original source hashes unchanged.')
