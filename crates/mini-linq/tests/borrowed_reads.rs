@@ -1,11 +1,11 @@
 #![cfg(all(
-    feature = "relations",
+    feature = "configured",
     feature = "tuple-hash-rows",
     feature = "tuple-sorted-rows",
-    feature = "scan-rows",
+    feature = "scan-candidates",
     feature = "exact-keys",
-    feature = "pull",
-    feature = "stream-pipeline",
+    feature = "access-to-pipeline",
+    feature = "pipeline-support-iter",
     feature = "hash-pairs",
     feature = "nested-pairs",
     feature = "sort-merge-pairs"
@@ -60,17 +60,17 @@ fn repeated_native_selection_borrows_nonclone_hash_and_sorted_rows() {
 macro_rules! exact {
     ($($operation:tt)*) => { mini_linq::exact_keys! {
         storage ::cq_storage;
-        iterator mini_linq::pull_stream;
+        access_iter mini_linq::access_to_support_iter;
         keys ::std::collections::HashSet;
         $($operation)*
     } };
 }
 
-mini_linq::relation_program! {
-    access mini_linq::pull_stream;
-    materialize mini_linq::tuple_hash_rows;
+mini_linq::configured_program! {
+    access mini_linq::access_to_support_iter;
+    result_rows mini_linq::tuple_hash_rows;
     inputs { R => mini_linq::tuple_hash_rows; S => mini_linq::tuple_sorted_rows; }
-    scan mini_linq::scan_rows;
+    candidates mini_linq::scan_candidates;
     keys exact;
     struct BorrowedSemijoin;
     relation R(key: Key, payload: Payload, value: i32);
@@ -88,7 +88,7 @@ mini_linq::relation_program! {
     }
 }
 
-mini_linq::relation_program! {
+mini_linq::configured_program! {
     inputs { R => mini_linq::tuple_hash_rows; }
     struct BorrowedSourceExpression;
     relation R(key: Key, payload: Payload, value: i32);
@@ -137,11 +137,11 @@ macro_rules! ignore_value {
     };
 }
 
-mini_linq::relation_program! {
-    access mini_linq::pull_stream;
-    materialize mini_linq::tuple_hash_rows;
+mini_linq::configured_program! {
+    access mini_linq::access_to_support_iter;
+    result_rows mini_linq::tuple_hash_rows;
     inputs { R => mini_linq::tuple_hash_rows; }
-    scan mini_linq::scan_rows;
+    candidates mini_linq::scan_candidates;
     struct BorrowedComputedExpression;
     relation R(value: i32);
     relation answer(result: i32);
@@ -209,12 +209,12 @@ impl Hash for CountedKey {
 
 macro_rules! join_program {
     ($name:ident, $algorithm:ident) => {
-        mini_linq::relation_program! {
-            access mini_linq::pull_stream;
-            materialize mini_linq::tuple_hash_rows;
+        mini_linq::configured_program! {
+            access mini_linq::access_to_support_iter;
+            result_rows mini_linq::tuple_hash_rows;
             inputs { L => mini_linq::tuple_hash_rows; R => mini_linq::tuple_sorted_rows; }
-            scan mini_linq::scan_rows;
-            join mini_linq::$algorithm;
+            candidates mini_linq::scan_candidates;
+            pairs mini_linq::$algorithm;
             struct $name;
             relation L(key: CountedKey, left: i32);
             relation R(key: CountedKey, right: i32);

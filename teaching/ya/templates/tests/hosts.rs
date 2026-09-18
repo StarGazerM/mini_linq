@@ -1,8 +1,9 @@
 //! Change host construction by a macro alias while retaining the same stages.
 mod borrowed {
     pub use ::mini_linq::{
-        pull_set, collect_pipeline, graph_query as query,
-        hash_materialized_query as choose_realization, result_indexes as choose_indexes,
+        access_to_set, cq_to_ra_hypergraph as query,
+        materialized_hash_callable as choose_relation_lowering, pipeline_to_set,
+        result_index_demands as choose_index_policy,
     };
 }
 

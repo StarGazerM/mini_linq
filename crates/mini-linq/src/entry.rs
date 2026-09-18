@@ -5,7 +5,7 @@ use syn::parse::Parse;
 /// Input relation names bind Native macros in the caller's `inputs` namespace.
 /// Keeping this separate from stage bindings leaves all RA names available.
 /// This constructs symbolic paths; Rust resolves their implementations.
-#[cfg(feature = "borrowed-scans")]
+#[cfg(feature = "borrowed-nested")]
 pub(crate) fn relation_macros(
     source: &cq_ir::relational_plan::Module,
 ) -> std::collections::BTreeMap<String, syn::Path> {

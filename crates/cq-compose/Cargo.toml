@@ -7,9 +7,9 @@ license.workspace = true
 
 [dependencies]
 cq-ir.workspace = true
-cq-plan = { workspace = true, features = ["canonical", "prefix", "graph"] }
-cq-index = { workspace = true, features = ["input", "result"] }
-cq-realize = { workspace = true, features = ["hash-inputs", "hash-prefix", "hash-materialized"] }
+cq-query-lowering = { workspace = true, features = ["written-order", "clause-prefix", "hypergraph"] }
+cq-index-policy = { workspace = true, features = ["base-demands", "result-demands"] }
+cq-relation-lowering = { workspace = true, features = ["base-hash", "prefix-hash", "materialized-hash"] }
 syn.workspace = true
 
 [features]
@@ -20,8 +20,8 @@ proc-macro2.workspace = true
 quote.workspace = true
 contracts.workspace = true
 prettyplease.workspace = true
-cq-execution = { workspace = true, features = ["pull"] }
-cq-pipeline = { workspace = true, features = ["iterator", "collect", "stream"] }
-cq-realize = { workspace = true, features = ["hash-inputs", "hash-prefix", "hash-materialized", "relations"] }
-cq-native = { workspace = true, features = ["candidate-scan", "candidate-prune", "keys-exact", "keys-zone", "witness-hash", "witness-nested", "rows-hash", "rows-sorted", "rows-block"] }
+cq-access-lowering = { workspace = true, features = ["to-pipeline"] }
+cq-pipeline-lowering = { workspace = true, features = ["distinct-iter", "collect-set", "support-iter"] }
+cq-relation-lowering = { workspace = true, features = ["base-hash", "prefix-hash", "materialized-hash", "configured"] }
+cq-native-lowering = { workspace = true, features = ["candidate-scan", "candidate-prune", "keys-exact", "keys-zone", "witness-hash", "witness-nested", "rows-hash", "rows-sorted", "rows-block"] }
 syn = { workspace = true, features = ["visit", "visit-mut"] }

@@ -35,45 +35,45 @@ mod observed_summary {
 }
 
 // Configured bindings own representation and resource construction choices.
-macro_rules! block_rows {
-    ($($op:tt)*) => { ::mini_linq::block_rows! { storage crate::storage; packing (crate::size(2)); $($op)* } };
+macro_rules! array_block_rows {
+    ($($op:tt)*) => { ::mini_linq::array_block_rows! { storage crate::storage; packing (crate::size(2)); $($op)* } };
 }
-macro_rules! sorted_rows {
-    ($($op:tt)*) => { ::mini_linq::block_rows! { storage crate::sorted_storage; packing (crate::size(2)); $($op)* } };
+macro_rules! array_sorted_rows {
+    ($($op:tt)*) => { ::mini_linq::array_block_rows! { storage crate::sorted_storage; packing (crate::size(2)); $($op)* } };
 }
 macro_rules! exact_keys {
     ($($op:tt)*) => { ::mini_linq::exact_keys! {
-        storage crate::storage; iterator ::mini_linq::pull_stream;
+        storage crate::storage; access_iter ::mini_linq::access_to_support_iter;
         keys ::std::collections::HashSet; $($op)*
     } };
 }
-macro_rules! zone_keys {
-    ($($op:tt)*) => { ::mini_linq::zone_keys! {
-        storage crate::storage; iterator ::mini_linq::pull_stream;
+macro_rules! summarized_exact_keys {
+    ($($op:tt)*) => { ::mini_linq::summarized_exact_keys! {
+        storage crate::storage; access_iter ::mini_linq::access_to_support_iter;
         keys ::std::collections::HashSet; $($op)*
     } };
 }
 macro_rules! sorted_key_resource {
     ($($op:tt)*) => { ::mini_linq::exact_keys! {
-        storage crate::sorted_storage; iterator ::mini_linq::pull_stream;
+        storage crate::sorted_storage; access_iter ::mini_linq::access_to_support_iter;
         keys crate::sorted_keys::SortedKeys; $($op)*
     } };
 }
 macro_rules! sorted_zone_keys {
-    ($($op:tt)*) => { ::mini_linq::zone_keys! {
-        storage crate::sorted_storage; iterator ::mini_linq::pull_stream;
+    ($($op:tt)*) => { ::mini_linq::summarized_exact_keys! {
+        storage crate::sorted_storage; access_iter ::mini_linq::access_to_support_iter;
         keys crate::sorted_keys::SortedKeys; $($op)*
     } };
 }
 macro_rules! prune {
-    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::pull_stream; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::prune_block_candidates! { access_iter ::mini_linq::access_to_support_iter; $($op)* } };
 }
 macro_rules! witnesses {
     ($($op:tt)*) => { ::mini_linq::hash_pairs! { $($op)* } };
 }
 pub(crate) use {
-    block_rows, exact_keys, prune, sorted_key_resource, sorted_rows, sorted_zone_keys, witnesses,
-    zone_keys,
+    array_block_rows, array_sorted_rows, exact_keys, prune, sorted_key_resource, sorted_zone_keys,
+    summarized_exact_keys, witnesses,
 };
 
 macro_rules! uniform_physical {
@@ -81,14 +81,14 @@ macro_rules! uniform_physical {
      $vis:vis struct $name:ident;
      $(relation $relation:ident($($column:tt)*);)*
      answer $($rest:tt)*) => {
-        ::mini_linq::observed_relation_program! {
-            storage crate::storage;
-            access ::mini_linq::pull_stream;
-            materialize $rows;
+        ::mini_linq::observed_configured_program! {
+            counter_storage crate::storage;
+            access ::mini_linq::access_to_support_iter;
+            result_rows $rows;
             inputs { $($relation => $rows;)* }
-            scan $scan;
+            candidates $scan;
             keys $keys;
-            join crate::witnesses;
+            pairs crate::witnesses;
             $vis struct $name;
             $(relation $relation($($column)*);)*
             answer $($rest)*
@@ -97,78 +97,83 @@ macro_rules! uniform_physical {
 }
 macro_rules! block_backend {
     ($($plan:tt)*) => {
-        uniform_physical! { crate::block_rows, ::mini_linq::scan_rows, crate::exact_keys; $($plan)* }
+        uniform_physical! { crate::array_block_rows, ::mini_linq::scan_candidates, crate::exact_keys; $($plan)* }
     };
 }
 macro_rules! zone_backend {
     ($($plan:tt)*) => {
-        uniform_physical! { crate::block_rows, crate::prune, crate::zone_keys; $($plan)* }
+        uniform_physical! { crate::array_block_rows, crate::prune, crate::summarized_exact_keys; $($plan)* }
     };
 }
 macro_rules! sorted_backend {
     ($($plan:tt)*) => {
-        uniform_physical! { crate::sorted_rows, ::mini_linq::scan_rows, crate::sorted_key_resource; $($plan)* }
+        uniform_physical! { crate::array_sorted_rows, ::mini_linq::scan_candidates, crate::sorted_key_resource; $($plan)* }
     };
 }
 macro_rules! sorted_zone_backend {
     ($($plan:tt)*) => {
-        uniform_physical! { crate::sorted_rows, crate::prune, crate::sorted_zone_keys; $($plan)* }
+        uniform_physical! { crate::array_sorted_rows, crate::prune, crate::sorted_zone_keys; $($plan)* }
     };
 }
 pub(crate) use {block_backend, sorted_backend, sorted_zone_backend, zone_backend};
 
 mod block_wiring {
-    pub(crate) use crate::block_backend as choose_indexes;
+    pub(crate) use crate::block_backend as choose_index_policy;
     #[allow(unused_imports)]
     pub use ::mini_linq::{
-        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
-        pull_set, pull_stream, stream_pipeline,
+        access_to_distinct_iter, access_to_set, access_to_support_iter, choose_graph_or_prefix,
+        cq_to_ra_clause_prefix, cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
+        pipeline_to_support_iter,
     };
 }
 mod zone_wiring {
-    pub(crate) use crate::zone_backend as choose_indexes;
+    pub(crate) use crate::zone_backend as choose_index_policy;
     #[allow(unused_imports)]
     pub use ::mini_linq::{
-        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
-        pull_set, pull_stream, stream_pipeline,
+        access_to_distinct_iter, access_to_set, access_to_support_iter, choose_graph_or_prefix,
+        cq_to_ra_clause_prefix, cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
+        pipeline_to_support_iter,
     };
 }
 mod sorted_wiring {
-    pub(crate) use crate::sorted_backend as choose_indexes;
+    pub(crate) use crate::sorted_backend as choose_index_policy;
     #[allow(unused_imports)]
     pub use ::mini_linq::{
-        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
-        pull_set, pull_stream, stream_pipeline,
+        access_to_distinct_iter, access_to_set, access_to_support_iter, choose_graph_or_prefix,
+        cq_to_ra_clause_prefix, cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
+        pipeline_to_support_iter,
     };
 }
 mod sorted_zone_wiring {
-    pub(crate) use crate::sorted_zone_backend as choose_indexes;
+    pub(crate) use crate::sorted_zone_backend as choose_index_policy;
     #[allow(unused_imports)]
     pub use ::mini_linq::{
-        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
-        pull_set, pull_stream, stream_pipeline,
+        access_to_distinct_iter, access_to_set, access_to_support_iter, choose_graph_or_prefix,
+        cq_to_ra_clause_prefix, cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
+        pipeline_to_support_iter,
     };
 }
 
 macro_rules! chosen_hash {
     ($($plan:tt)*) => {
-        ::mini_linq::hash_materialized! { access mini_linq::pull_set; $($plan)* }
+        ::mini_linq::materialized_hash_program! { access mini_linq::access_to_set; $($plan)* }
     };
 }
 pub(crate) use chosen_hash;
 mod hash_wiring {
-    pub(crate) use crate::chosen_hash as choose_realization;
-    pub use ::mini_linq::result_indexes as choose_indexes;
+    pub(crate) use crate::chosen_hash as choose_relation_lowering;
+    pub use ::mini_linq::result_index_demands as choose_index_policy;
     #[allow(unused_imports)]
     pub use ::mini_linq::{
-        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
-        pull_set, pull_stream, stream_pipeline,
+        access_to_distinct_iter, access_to_set, access_to_support_iter, choose_graph_or_prefix,
+        cq_to_ra_clause_prefix, cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
+        pipeline_to_support_iter,
     };
 }
 
 macro_rules! chain {
     ($name:ident) => {
-        mini_linq::optimized_query! {
+        mini_linq::choose_graph_or_prefix! {
             pub struct $name;
             relation R(k: i64, x: i64);
             relation S(z: i64, k: i64);
@@ -234,8 +239,8 @@ macro_rules! sweeps {
     };
 }
 use hash_wiring as mini_linq;
-use hash_wiring::choose_indexes;
-sweeps!(choose_indexes, HashSweeps);
+use hash_wiring::choose_index_policy;
+sweeps!(choose_index_policy, HashSweeps);
 sweeps!(block_backend, BlockSweeps);
 sweeps!(zone_backend, ZoneSweeps);
 sweeps!(sorted_backend, SortedSweeps);
@@ -323,11 +328,11 @@ fn rejected_blocks_and_pruned_index_inputs_are_observable() {
     assert_eq!(sorted_all, expected);
     assert_eq!(sorted_zone.steps, zone.steps);
     assert_eq!(sorted_scan.steps, scan.steps);
-    for (((name, rows, _), (_, all_rows, _)), (hash_name, _, hash_rows)) in
+    for (((name, rows, _), (_, all_rows, _)), (hash_name, _, array_hash_rows)) in
         zone.steps.iter().zip(&scan.steps).zip(&hash.results)
     {
         assert_eq!(name, hash_name);
-        assert_eq!(rows, hash_rows);
+        assert_eq!(rows, array_hash_rows);
         assert_eq!(rows, all_rows);
     }
     let step = |name| zone.steps.iter().find(|(n, _, _)| *n == name).unwrap();
@@ -388,16 +393,16 @@ mod expression_route {
     macro_rules! observed_pipeline {
         ($($plan:tt)*) => {{
             crate::expression_route::PIPELINE_CALLS.fetch_add(1, Ordering::Relaxed);
-            ::mini_linq::iterator_pipeline! { $($plan)* }
+            ::mini_linq::pipeline_to_distinct_iter! { $($plan)* }
         }};
     }
     pub(crate) use observed_pipeline;
 
     mod wiring {
-        pub(crate) use super::observed_pipeline as iterator_pipeline;
-        pub use ::mini_linq::pull;
+        pub(crate) use super::observed_pipeline as pipeline_to_distinct_iter;
+        pub use ::mini_linq::access_to_distinct_iter;
     }
-    use mini_linq::pull as chosen_access;
+    use mini_linq::access_to_distinct_iter as chosen_access;
     use wiring as mini_linq;
 
     #[test]
@@ -416,7 +421,7 @@ mod expression_route {
 }
 mod default_expression {
     pub fn rows() -> Vec<(i32,)> {
-        mini_linq::pull! {
+        mini_linq::access_to_distinct_iter! {
             out(x) => ((x,)) :- R(x) => for (x,) in ([(1,), (2,)]);
         }
         .collect()
@@ -428,23 +433,23 @@ macro_rules! pair {
         mod $module {
             pub mod hash {
                 use crate::hash_wiring as mini_linq;
-                mini_linq::optimized_query! { pub struct $hash; $($body)* }
+                mini_linq::choose_graph_or_prefix! { pub struct $hash; $($body)* }
             }
             pub mod exact {
                 use crate::block_wiring as mini_linq;
-                mini_linq::optimized_query! { pub struct $blocked; $($body)* }
+                mini_linq::choose_graph_or_prefix! { pub struct $blocked; $($body)* }
             }
             pub mod zone {
                 use crate::zone_wiring as mini_linq;
-                mini_linq::optimized_query! { pub struct $blocked; $($body)* }
+                mini_linq::choose_graph_or_prefix! { pub struct $blocked; $($body)* }
             }
             pub mod sorted {
                 use crate::sorted_wiring as mini_linq;
-                mini_linq::optimized_query! { pub struct $blocked; $($body)* }
+                mini_linq::choose_graph_or_prefix! { pub struct $blocked; $($body)* }
             }
             pub mod sorted_zone {
                 use crate::sorted_zone_wiring as mini_linq;
-                mini_linq::optimized_query! { pub struct $blocked; $($body)* }
+                mini_linq::choose_graph_or_prefix! { pub struct $blocked; $($body)* }
             }
         }
     };
@@ -526,7 +531,7 @@ macro_rules! unit_plan {
         }
     };
 }
-unit_plan!(choose_indexes, HashUnit);
+unit_plan!(choose_index_policy, HashUnit);
 unit_plan!(block_backend, BlockUnit);
 unit_plan!(zone_backend, ZoneUnit);
 unit_plan!(sorted_backend, SortedUnit);
@@ -563,7 +568,7 @@ fn alternate_raw_spellings_resolve_to_the_same_source_and_column() {
 // Query identifiers must not capture generated data, statistics or helper types.
 macro_rules! primitive_query {
     ($name:ident) => {
-        mini_linq::optimized_query! {
+        mini_linq::choose_graph_or_prefix! {
             pub struct $name;
             relation R(a: i64);
             relation S(a: i64);
@@ -649,7 +654,7 @@ macro_rules! composite_reduction {
         }
     };
 }
-composite_reduction!(choose_indexes, HashReduction);
+composite_reduction!(choose_index_policy, HashReduction);
 composite_reduction!(block_backend, BlockReduction);
 composite_reduction!(zone_backend, ZoneReduction);
 composite_reduction!(sorted_backend, SortedReduction);
@@ -671,7 +676,7 @@ macro_rules! empty_separator {
         }
     };
 }
-empty_separator!(choose_indexes, HashEmptySeparator);
+empty_separator!(choose_index_policy, HashEmptySeparator);
 empty_separator!(block_backend, BlockEmptySeparator);
 empty_separator!(zone_backend, ZoneEmptySeparator);
 empty_separator!(sorted_backend, SortedEmptySeparator);
@@ -688,9 +693,9 @@ fn semijoin_output_is_exact_without_a_later_join_to_remove_false_positives() {
         HashReduction::run(left.map(|[a, b, x]| (a, b, x)), right.map(|[b, a]| (b, a))),
         expected,
     );
-    for block_rows in [size(1), size(4)] {
-        let left = BlockStore::from_rows(left, block_rows);
-        let right = BlockStore::from_rows(right, block_rows);
+    for array_block_rows in [size(1), size(4)] {
+        let left = BlockStore::from_rows(left, array_block_rows);
+        let right = BlockStore::from_rows(right, array_block_rows);
         for actual in [
             BlockReduction::run(&left, &right).0,
             ZoneReduction::run(&left, &right).0,

@@ -1,9 +1,9 @@
 use super::fixtures::LoweringFixture;
+use cq_access_lowering::to_pipeline::compile as compile_pull;
 use cq_compose::compile_cq;
-use cq_execution::pull::compile as compile_pull;
-use cq_index::input::compile as compile_input_indexes;
+use cq_index_policy::base_demands::compile as compile_input_indexes;
 use cq_ir::{cq, index_requirements, iterator_pipeline, relational_plan, rust_access_plan};
-use cq_pipeline::iterator::compile as compile_iterator_pipeline;
+use cq_pipeline_lowering::distinct_iter::compile as compile_iterator_pipeline;
 pub fn assert_cq_to_relational_plan(fixture: LoweringFixture) {
     let source: cq::Module = syn::parse2(fixture.source).unwrap();
     cq::contract::check(&source).unwrap();

@@ -59,9 +59,9 @@ fn indexes_check_duplicate_and_out_of_range_requirements_before_realization() {
         };
         rejects(
             || {
-                cq_realize::hash_inputs::compile_input_indexed(
+                cq_relation_lowering::base_hash::compile(
                     &indexed,
-                    &syn::parse_quote!(::mini_linq::pull),
+                    &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
                 )
             },
             diagnostic,

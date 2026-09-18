@@ -2,7 +2,7 @@
 \label{sec:overview}
 The graph-planned, eagerly materialized composition compiles the following query,
 with all columns declared \code{i32}. Its facade chooses named-result indexes
-and eager hash realization, then invokes \code{optimized_query!}. Complete inputs,
+and eager hash realization, then invokes \code{choose_graph_or_prefix!}. Complete inputs,
 generated artifacts and assertions are in \path{doc/formal/example/src/main.rs}.
 \begin{lstlisting}
 answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
@@ -95,7 +95,7 @@ The prefix order is $(k,\mathit{tag},y,x)$; Project permutes it into the
 result layout. This local permutation is separate from RA's column pruning.
 Pipeline lowering implements Scan and Project with \code{map}, Join with
 \code{flat_map}, and terminal Distinct by the selected endpoint. Here
-\code{pull_set!} selects eager set collection, absorbing Distinct into the
+\code{access_to_set!} selects eager set collection, absorbing Distinct into the
 result HashSet. The iterator endpoint instead uses a seen-set filter and
 \code{once_with(...).flatten()} to delay initialization until polling.
 \code{query()} later reads the answer materialized during \code{build()}.

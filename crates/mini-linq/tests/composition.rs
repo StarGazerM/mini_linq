@@ -4,7 +4,7 @@ static SELECTED_ACCESSES: std::sync::atomic::AtomicUsize = std::sync::atomic::At
 macro_rules! selected_pull {
     ($($tokens:tt)*) => {{
         crate::SELECTED_ACCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        ::mini_linq::pull! { $($tokens)* }
+        ::mini_linq::access_to_distinct_iter! { $($tokens)* }
     }};
 }
 
@@ -23,8 +23,8 @@ macro_rules! route {
         mod $name {
             mod wiring {
                 pub use ::mini_linq::$logical as mini_linq;
-                pub use ::mini_linq::$indexes as choose_indexes;
-                pub use ::mini_linq::$physical as choose_realization;
+                pub use ::mini_linq::$indexes as choose_index_policy;
+                pub use ::mini_linq::$physical as choose_relation_lowering;
                 route!(@access $host);
             }
             use wiring as mini_linq;
@@ -32,11 +32,11 @@ macro_rules! route {
         }
     };
     (@access standalone) => {
-        pub use ::mini_linq::iterator_pipeline;
-        pub(super) use selected_pull as pull;
+        pub use ::mini_linq::pipeline_to_distinct_iter;
+        pub(super) use selected_pull as access_to_distinct_iter;
     };
     (@access callable) => {
-        pub use ::mini_linq::{pull_set, collect_pipeline};
+        pub use ::mini_linq::{access_to_set, pipeline_to_set};
     };
     (@host standalone) => {
         source!();
@@ -55,10 +55,10 @@ macro_rules! route {
 mod defaults {
     mod wiring {
         pub use ::mini_linq::{
-            canonical_query, choose_indexes, choose_realization, hash_inputs, input_indexes,
-            iterator_pipeline, mini_linq,
+            base_index_demands, choose_index_policy, choose_relation_lowering,
+            cq_to_ra_written_order, lower_base_hash, mini_linq, pipeline_to_distinct_iter,
         };
-        pub(super) use selected_pull as pull;
+        pub(super) use selected_pull as access_to_distinct_iter;
     }
     use wiring as mini_linq;
     source!();
@@ -70,37 +70,37 @@ mod defaults {
 }
 route!(
     input,
-    canonical_query,
-    input_indexes,
-    hash_inputs,
+    cq_to_ra_written_order,
+    base_index_demands,
+    lower_base_hash,
     standalone
 );
 route!(
     lazy,
-    canonical_query,
-    result_indexes,
-    hash_prefix,
+    cq_to_ra_written_order,
+    result_index_demands,
+    lower_prefix_hash,
     standalone
 );
 route!(
     materialized,
-    canonical_query,
-    result_indexes,
-    hash_materialized_query,
+    cq_to_ra_written_order,
+    result_index_demands,
+    materialized_hash_callable,
     callable
 );
 route!(
     prefix,
-    prefix_query,
-    result_indexes,
-    hash_materialized_query,
+    cq_to_ra_clause_prefix,
+    result_index_demands,
+    materialized_hash_callable,
     callable
 );
 route!(
     graph,
-    graph_query,
-    result_indexes,
-    hash_materialized_query,
+    cq_to_ra_hypergraph,
+    result_index_demands,
+    materialized_hash_callable,
     callable
 );
 

@@ -1,14 +1,14 @@
 //! This suite enters at RA, so it does not depend on the YA scheduler.
 mod wiring {
     pub use ::mini_linq::{
-        pull_set, collect_pipeline, hash_materialized as choose_realization,
-        result_indexes as choose_indexes,
+        access_to_set, materialized_hash_program as choose_relation_lowering, pipeline_to_set,
+        result_index_demands as choose_index_policy,
     };
 }
 use std::collections::BTreeSet;
 use wiring as mini_linq;
 
-mini_linq::choose_indexes! {
+mini_linq::choose_index_policy! {
     struct PartialKey;
     relation Left(a:i32, payload:i32); relation Right(a:i32, witness:i32);
     answer(a,p) :- Left(a,p), Right(a,w);
@@ -21,7 +21,7 @@ mini_linq::choose_indexes! {
     }
 }
 
-mini_linq::choose_indexes! {
+mini_linq::choose_index_policy! {
     struct FullKey;
     relation Left(a:i32, b:i32); relation Right(a:i32, b:i32);
     answer(a,b) :- Left(a,b), Right(a,b);
@@ -34,7 +34,7 @@ mini_linq::choose_indexes! {
     }
 }
 
-mini_linq::choose_indexes! {
+mini_linq::choose_index_policy! {
     struct EmptyKey;
     relation Left(a:i32, b:i32); relation Right(c:i32);
     answer(a,b) :- Left(a,b), Right(c);
@@ -47,7 +47,7 @@ mini_linq::choose_indexes! {
     }
 }
 
-mini_linq::choose_indexes! {
+mini_linq::choose_index_policy! {
     struct CompositeKey;
     relation Left(a:i32, b:i32, payload:String);
     relation Right(a:i32, b:i32, witness:i32);

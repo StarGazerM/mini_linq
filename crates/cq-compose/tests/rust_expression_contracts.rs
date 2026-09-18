@@ -2,8 +2,8 @@ use cq_compose::check_cq_plan;
 use cq_compose::compile_cq_derivation;
 use cq_compose::explain_cq_plan;
 use cq_ir::{cq, relational_plan as ra};
-use cq_plan::JoinPolicy;
-use cq_plan::PlanningOptions;
+use cq_query_lowering::JoinPolicy;
+use cq_query_lowering::PlanningOptions;
 
 fn source() -> cq::Module {
     syn::parse_quote! {
@@ -147,7 +147,7 @@ fn adjacent_guards_cannot_be_swapped_even_when_both_are_available() {
 
 #[test]
 fn a_legal_alternative_join_schedule_can_reenter_the_same_rules() {
-    use cq_plan::Rule as JoinRule;
+    use cq_query_lowering::Rule as JoinRule;
     let source: cq::Module = syn::parse_quote! {
         struct P; relation R(a:i32,b:i32); relation S(a:i32,b:i32); relation T(a:i32);
         relation answer(value:i32);

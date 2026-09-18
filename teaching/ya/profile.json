@@ -6,31 +6,31 @@
       "syn",
       "syn_derive"
     ],
-    "cq-plan": [
+    "cq-query-lowering": [
       "cq-ir",
       "proc-macro2",
       "quote",
       "syn"
     ],
-    "cq-index": [
+    "cq-index-policy": [
       "cq-ir",
       "quote",
       "syn"
     ],
-    "cq-realize": [
+    "cq-relation-lowering": [
       "cq-ir",
       "proc-macro2",
       "quote",
       "syn"
     ],
-    "cq-execution": [
+    "cq-access-lowering": [
       "cq-ir",
       "contracts",
       "proc-macro2",
       "quote",
       "syn"
     ],
-    "cq-pipeline": [
+    "cq-pipeline-lowering": [
       "cq-ir",
       "contracts",
       "proc-macro2",
@@ -39,31 +39,31 @@
     ],
     "mini-linq": [
       "cq-ir",
-      "cq-plan",
-      "cq-index",
-      "cq-realize",
-      "cq-execution",
-      "cq-pipeline",
+      "cq-query-lowering",
+      "cq-index-policy",
+      "cq-relation-lowering",
+      "cq-access-lowering",
+      "cq-pipeline-lowering",
       "proc-macro2",
       "quote",
       "syn"
     ]
   },
   "features": {
-    "cq-plan": [
-      "graph"
+    "cq-query-lowering": [
+      "hypergraph"
     ],
-    "cq-index": [
-      "result"
+    "cq-index-policy": [
+      "result-demands"
     ],
-    "cq-realize": [
-      "hash-materialized"
+    "cq-relation-lowering": [
+      "materialized-hash"
     ],
-    "cq-pipeline": [
-      "collect"
+    "cq-pipeline-lowering": [
+      "collect-set"
     ],
-    "cq-execution": [
-      "pull"
+    "cq-access-lowering": [
+      "to-pipeline"
     ]
   },
   "copy": [
@@ -93,47 +93,47 @@
     "crates/cq-ir/tests/rust_access_plan.rs",
     "crates/cq-ir/tests/rust_expressions.rs",
     "crates/cq-ir/tests/syntax_boundaries.rs",
-    "crates/cq-plan/src/dependencies.rs",
-    "crates/cq-plan/src/graph/check.rs",
-    "crates/cq-plan/src/graph/hypergraph.rs",
-    "crates/cq-plan/src/graph/mod.rs",
-    "crates/cq-plan/src/graph/plan.rs",
-    "crates/cq-plan/src/graph/rules.rs",
-    "crates/cq-plan/src/graph/strategy.rs",
-    "crates/cq-plan/src/lib.rs",
-    "crates/cq-plan/src/model.rs",
-    "crates/cq-plan/src/proof.rs",
-    "crates/cq-index/src/lib.rs",
-    "crates/cq-index/src/result/correspondence.rs",
-    "crates/cq-index/src/result/mod.rs",
-    "crates/cq-index/tests/result.rs",
-    "crates/cq-realize/src/check_support/context.rs",
-    "crates/cq-realize/src/check_support/hash_collections.rs",
-    "crates/cq-realize/src/check_support/mod.rs",
-    "crates/cq-realize/src/check_support/syntax.rs",
-    "crates/cq-realize/src/lib.rs",
-    "crates/cq-realize/src/hash_materialized/check.rs",
-    "crates/cq-realize/src/hash_materialized/coverage.rs",
-    "crates/cq-realize/src/hash_materialized/mod.rs",
-    "crates/cq-realize/src/hash_materialized/query.rs",
-    "crates/cq-realize/src/hash_materialized/tests.rs",
-    "crates/cq-realize/src/rust_bindings.rs",
-    "crates/cq-execution/src/pull/check.rs",
-    "crates/cq-execution/src/lib.rs",
-    "crates/cq-execution/tests/boundary.rs",
-    "crates/cq-pipeline/src/collect.rs",
-    "crates/cq-pipeline/src/collect/check.rs",
-    "crates/cq-pipeline/src/lib.rs",
-    "crates/cq-pipeline/src/observations.rs",
-    "crates/cq-pipeline/src/operators.rs",
-    "crates/cq-pipeline/tests/boundary.rs",
-    "crates/cq-execution/src/pull/mod.rs"
+    "crates/cq-query-lowering/src/dependencies.rs",
+    "crates/cq-query-lowering/src/hypergraph/check.rs",
+    "crates/cq-query-lowering/src/hypergraph/structure.rs",
+    "crates/cq-query-lowering/src/hypergraph/mod.rs",
+    "crates/cq-query-lowering/src/hypergraph/plan.rs",
+    "crates/cq-query-lowering/src/hypergraph/rules.rs",
+    "crates/cq-query-lowering/src/hypergraph/strategy.rs",
+    "crates/cq-query-lowering/src/lib.rs",
+    "crates/cq-query-lowering/src/model.rs",
+    "crates/cq-query-lowering/src/proof.rs",
+    "crates/cq-index-policy/src/lib.rs",
+    "crates/cq-index-policy/src/result_demands/correspondence.rs",
+    "crates/cq-index-policy/src/result_demands/mod.rs",
+    "crates/cq-index-policy/tests/result_demands.rs",
+    "crates/cq-relation-lowering/src/check_support/context.rs",
+    "crates/cq-relation-lowering/src/check_support/hash_collections.rs",
+    "crates/cq-relation-lowering/src/check_support/mod.rs",
+    "crates/cq-relation-lowering/src/check_support/syntax.rs",
+    "crates/cq-relation-lowering/src/lib.rs",
+    "crates/cq-relation-lowering/src/materialized_hash/check.rs",
+    "crates/cq-relation-lowering/src/materialized_hash/coverage.rs",
+    "crates/cq-relation-lowering/src/materialized_hash/mod.rs",
+    "crates/cq-relation-lowering/src/materialized_hash/query.rs",
+    "crates/cq-relation-lowering/src/materialized_hash/tests.rs",
+    "crates/cq-relation-lowering/src/rust_bindings.rs",
+    "crates/cq-access-lowering/src/to_pipeline/check.rs",
+    "crates/cq-access-lowering/src/lib.rs",
+    "crates/cq-access-lowering/tests/boundary.rs",
+    "crates/cq-pipeline-lowering/src/collect_set.rs",
+    "crates/cq-pipeline-lowering/src/collect_set/check.rs",
+    "crates/cq-pipeline-lowering/src/lib.rs",
+    "crates/cq-pipeline-lowering/src/observations.rs",
+    "crates/cq-pipeline-lowering/src/operators.rs",
+    "crates/cq-pipeline-lowering/tests/boundary.rs",
+    "crates/cq-access-lowering/src/to_pipeline/mod.rs"
   ],
   "templates": {
     "README.md": "README.md",
-    "crates/cq-plan/src/graph/ya.rs": "ya_stub.rs",
-    "crates/cq-realize/src/hash_materialized/semijoin.rs": "semijoin_stub.rs",
-    "crates/cq-plan/tests/ya_schedule.rs": "tests/ya_schedule.rs",
+    "crates/cq-query-lowering/src/hypergraph/ya.rs": "ya_stub.rs",
+    "crates/cq-relation-lowering/src/materialized_hash/semijoin.rs": "semijoin_stub.rs",
+    "crates/cq-query-lowering/tests/ya_schedule.rs": "tests/ya_schedule.rs",
     "crates/mini-linq/src/lib.rs": "macros_lib.rs",
     "crates/mini-linq/tests/semijoin.rs": "tests/semijoin.rs",
     "crates/mini-linq/tests/ya_execution.rs": "tests/ya_execution.rs",
@@ -142,19 +142,19 @@
     "crates/mini-linq/examples/semijoin.rs": "examples/semijoin.rs"
   },
   "exercises": {
-    "crates/cq-plan/src/graph/ya.rs": {
+    "crates/cq-query-lowering/src/hypergraph/ya.rs": {
       "command": [
         "cargo",
         "test",
         "-p",
-        "cq-plan",
+        "cq-query-lowering",
         "--test",
         "ya_schedule",
         "--locked"
       ],
       "missing": "YA scheduling exercise"
     },
-    "crates/cq-realize/src/hash_materialized/semijoin.rs": {
+    "crates/cq-relation-lowering/src/materialized_hash/semijoin.rs": {
       "command": [
         "cargo",
         "test",

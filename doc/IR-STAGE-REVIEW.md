@@ -28,7 +28,7 @@ iterator cursors.
 
 ## Borrowed scan composition
 
-`no_indexes!` preserves RA and appends `indexes {}`. `borrowed_scans!` accepts that
+`no_index_demands!` preserves RA and appends `indexes {}`. `lower_borrowed_nested!` accepts that
 IX form, checks its restricted domain, and emits one Access region for each RA
 definition. It rejects nonempty demands instead of ignoring them. Unit has an
 empty Access body. Rename reads fields through Native providers; Project and
@@ -38,7 +38,7 @@ iterator endpoint. No new whole-query language is introduced.
 
 Each shared definition and each join/semijoin RHS receives a replay resource.
 Single-use streams move into their consumer. This lifetime decision is made by
-the physical implementation, while `replay_rows!` delegates storage construction
+the physical implementation, while `replay_resource!` delegates storage construction
 to `BuildReplay` and cursor access to `ReplayRead`. Its Build contains a real
 Access invocation, so its producer still traverses Access and Pipeline stages.
 Replay stores only demanded prefixes and returns copied reference tuples. It
@@ -112,25 +112,25 @@ observations.
 | Family | Entries | Contract and decision owner |
 | --- | --- | --- |
 | Catalog | `workload_query` | CQ catalog; compiled workloads use the same caller-bound query route. |
-| Query composition | `mini_linq`, `optimized_query` | Select canonical/prefix or graph/prefix planning, then invoke the caller-bound planner macro. |
-| Logical planning | `canonical_query`, `prefix_query`, `graph_query` | CQ → RA; planner owns legal scheduling and its admitted domain. |
-| Default index choice | `choose_indexes` | RA → invocation of `input_indexes` or `result_indexes`. |
-| Index policy | `input_indexes`, `result_indexes`, `no_indexes` | RA → IX; base-input, named-result, or empty equality demands. |
-| Default realization choice | `choose_realization` | Inspect actual IX and dispatch to an admitted whole-query realization. |
-| Fixed hash realization | `hash_inputs`, `hash_prefix`, `hash_materialized` | IX → Rust[Access]; each explicitly commits to its hash layout and schedule. |
-| Borrowed scan realization | `borrowed_scans` | IX → Rust[Access, Native]; empty-index pure RA, borrowed tuples and reusable resource ownership. |
-| Hash callable host | `hash_materialized_query` | Same eager computation in an anonymous callable. |
-| Configured relation realization | `relation_program`, `relation_query` | RA → Rust[Access, Native]; selected per-input/result representations and local algorithms. |
-| Observed relation hosts | `observed_relation_program`, `observed_relation_query` | Same realization with explicit counters/checkpoints. |
-| Pull execution | `pull`, `pull_set`, `pull_stream`, `pull_exists` | One Access → Pipeline lowering; distinct iterator, set, support stream or existential observation. |
-| Push execution | `push_set` | Access → eager Rust loops and exact-set sink. |
-| Pipeline endpoints | `iterator_pipeline`, `collect_pipeline`, `stream_pipeline`, `exists_pipeline` | Pipeline → Rust; distinct iterator, exact set, support stream or first-witness boolean. |
-| Candidates | `scan_rows`, `prune_rows` | Current-view handle enumeration; prune tests metadata before payload. |
-| Key resource | `exact_keys`, `zone_keys` | Key construction and exact membership; zone also provides conservative rejection. |
+| Query composition | `mini_linq`, `choose_graph_or_prefix` | Select canonical/prefix or graph/prefix planning, then invoke the caller-bound planner macro. |
+| Logical planning | `cq_to_ra_written_order`, `cq_to_ra_clause_prefix`, `cq_to_ra_hypergraph` | CQ → RA; planner owns legal scheduling and its admitted domain. |
+| Default index choice | `choose_index_policy` | RA → invocation of `base_index_demands` or `result_index_demands`. |
+| Index policy | `base_index_demands`, `result_index_demands`, `no_index_demands` | RA → IX; base-input, named-result, or empty equality demands. |
+| Default realization choice | `choose_relation_lowering` | Inspect actual IX and dispatch to an admitted whole-query realization. |
+| Fixed hash realization | `lower_base_hash`, `lower_prefix_hash`, `materialized_hash_program` | IX → Rust[Access]; each explicitly commits to its hash layout and schedule. |
+| Borrowed scan realization | `lower_borrowed_nested` | IX → Rust[Access, Native]; empty-index pure RA, borrowed tuples and reusable resource ownership. |
+| Hash callable host | `materialized_hash_callable` | Same eager computation in an anonymous callable. |
+| Configured relation realization | `configured_program`, `configured_callable` | RA → Rust[Access, Native]; selected per-input/result representations and local algorithms. |
+| Observed relation hosts | `observed_configured_program`, `observed_configured_callable` | Same realization with explicit counters/checkpoints. |
+| Pull execution | `access_to_distinct_iter`, `access_to_set`, `access_to_support_iter`, `access_to_exists` | One Access → Pipeline lowering; distinct iterator, set, support stream or existential observation. |
+| Push execution | `access_to_set_loops` | Access → eager Rust loops and exact-set sink. |
+| Pipeline endpoints | `pipeline_to_distinct_iter`, `pipeline_to_set`, `pipeline_to_support_iter`, `pipeline_to_exists` | Pipeline → Rust; distinct iterator, exact set, support stream or first-witness boolean. |
+| Candidates | `scan_candidates`, `prune_block_candidates` | Current-view handle enumeration; prune tests metadata before payload. |
+| Key resource | `exact_keys`, `summarized_exact_keys` | Key construction and exact membership; zone also provides conservative rejection. |
 | Witness resource | `hash_witnesses`, `nested_witnesses` | Coherent Build/Probe resource protocols for consumers that request them. |
 | Pair algorithm | `hash_pairs`, `nested_pairs`, `sort_merge_pairs` | Complete equal-key pair enumeration, including both traversals and auxiliary storage. |
-| Array rows | `hash_rows`, `sorted_rows`, `block_rows` | Concrete i64-array representations; block operations are provided only by block rows. |
-| Replay resource | `replay_rows` | Native Build/Scan; build through an Access continuation and return owning cursors over a shared demanded prefix. |
+| Array rows | `array_hash_rows`, `array_sorted_rows`, `array_block_rows` | Concrete i64-array representations; block operations are provided only by block rows. |
+| Replay resource | `replay_resource` | Native Build/Scan; build through an Access continuation and return owning cursors over a shared demanded prefix. |
 | Tuple rows | `tuple_hash_rows`, `tuple_sorted_rows` | Heterogeneous Rust tuple representations. |
 
 Convenience recipes are documented separately from transformations. Item and
@@ -223,7 +223,7 @@ or exact-membership laws.
 
 - Logical planners own relational scheduling. Index policies describe equality
   demands, not storage capabilities or control-flow tags.
-- `hash_inputs`, `hash_prefix` and `hash_materialized` are concrete implementations;
+- `lower_base_hash`, `lower_prefix_hash` and `materialized_hash_program` are concrete implementations;
   their later Access holes cannot undo earlier hash layout decisions.
 - Configured relation realization supports typed headings, Select, Extend and
   computed output. It materializes producing RA definitions, selects views for
@@ -239,7 +239,7 @@ or exact-membership laws.
   projections and retained bindings are flexible; stream duplication is not an
   implicit cloning/ownership operation.
 - Push and pull are execution alternatives only where the observation matches.
-  `push_set` can replace an eager exact-set hole, not a demand-sensitive iterator
+  `access_to_set_loops` can replace an eager exact-set hole, not a demand-sensitive iterator
   hole merely because both accept Access syntax.
 
 ## Validation obligations

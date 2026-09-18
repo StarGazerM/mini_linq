@@ -267,7 +267,7 @@ macro invocations. Do not try to re-expand the virtual `[EXPANSION].rs` view.
 Rust Analyzer does not provide MiniLinq-specific completion or semantic
 intelligence inside the query token tree itself.
 
-Then compile the current typed passes, expand the supplied `pull` lowering,
+Then compile the current typed passes, expand the supplied `access_to_distinct_iter` lowering,
 compile the resulting standalone Rust, run it on the same CSV directory, and
 compare every ordered result row with DuckDB:
 

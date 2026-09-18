@@ -25,74 +25,94 @@ except ModuleNotFoundError:
 ROOT = Path(__file__).resolve().parents[1]
 FOUNDATIONS = {"cq-ir": set(), "cq-storage": set()}
 FAMILIES = {name: {"cq-ir"} for name in (
-    "cq-plan", "cq-index", "cq-realize", "cq-native", "cq-execution", "cq-pipeline")}
+    "cq-query-lowering", "cq-index-policy", "cq-relation-lowering", "cq-native-lowering", "cq-access-lowering", "cq-pipeline-lowering")}
 ALLOWED = FOUNDATIONS | FAMILIES | {
     "cq-compose": {"cq-ir", *FAMILIES},
     "mini-linq": {"cq-ir", "cq-storage", "cq-compose", *FAMILIES},
 }
 FRONTEND = {
-    "canonical": ("cq-plan", "canonical"), "prefix": ("cq-plan", "prefix"), "graph": ("cq-plan", "graph"),
-    "input-indexes": ("cq-index", "input"), "result-indexes": ("cq-index", "result"),
-    "no-indexes": ("cq-index", "none"),
-    "hash-inputs": ("cq-realize", "hash-inputs"), "hash-prefix": ("cq-realize", "hash-prefix"),
-    "hash-materialized": ("cq-realize", "hash-materialized"), "relations": ("cq-realize", "relations"),
-    "borrowed-scans": ("cq-realize", "borrowed-scans"),
-    "scan-rows": ("cq-native", "candidate-scan"), "prune-rows": ("cq-native", "candidate-prune"),
-    "exact-keys": ("cq-native", "keys-exact"), "zone-keys": ("cq-native", "keys-zone"),
-    "hash-witnesses": ("cq-native", "witness-hash"), "nested-witnesses": ("cq-native", "witness-nested"),
-    "hash-pairs": ("cq-native", "pairs-hash"), "nested-pairs": ("cq-native", "pairs-nested"),
-    "sort-merge-pairs": ("cq-native", "pairs-merge"),
-    "hash-rows": ("cq-native", "rows-hash"), "sorted-rows": ("cq-native", "rows-sorted"),
-    "block-rows": ("cq-native", "rows-block"),
-    "tuple-hash-rows": ("cq-native", "rows-tuple-hash"),
-    "tuple-sorted-rows": ("cq-native", "rows-tuple-sorted"),
-    "replay-rows": ("cq-native", "rows-replay"),
-    "pull": ("cq-execution", "pull"), "push-set": ("cq-execution", "push"),
-    "iterator-pipeline": ("cq-pipeline", "iterator"), "collect-pipeline": ("cq-pipeline", "collect"),
-    "stream-pipeline": ("cq-pipeline", "stream"), "exists-pipeline": ("cq-pipeline", "exists"),
+    "written-order": ("cq-query-lowering", "written-order"), "clause-prefix": ("cq-query-lowering", "clause-prefix"), "hypergraph": ("cq-query-lowering", "hypergraph"),
+    "base-index-demands": ("cq-index-policy", "base-demands"), "result-index-demands": ("cq-index-policy", "result-demands"),
+    "no-index-demands": ("cq-index-policy", "no-demands"),
+    "base-hash": ("cq-relation-lowering", "base-hash"), "prefix-hash": ("cq-relation-lowering", "prefix-hash"),
+    "materialized-hash": ("cq-relation-lowering", "materialized-hash"), "configured": ("cq-relation-lowering", "configured"),
+    "borrowed-nested": ("cq-relation-lowering", "borrowed-nested"),
+    "scan-candidates": ("cq-native-lowering", "candidate-scan"), "prune-block-candidates": ("cq-native-lowering", "candidate-prune"),
+    "exact-keys": ("cq-native-lowering", "keys-exact"), "summarized-exact-keys": ("cq-native-lowering", "keys-zone"),
+    "hash-witnesses": ("cq-native-lowering", "witness-hash"), "nested-witnesses": ("cq-native-lowering", "witness-nested"),
+    "hash-pairs": ("cq-native-lowering", "pairs-hash"), "nested-pairs": ("cq-native-lowering", "pairs-nested"),
+    "sort-merge-pairs": ("cq-native-lowering", "pairs-merge"),
+    "array-hash-rows": ("cq-native-lowering", "rows-hash"), "array-sorted-rows": ("cq-native-lowering", "rows-sorted"),
+    "array-block-rows": ("cq-native-lowering", "rows-block"),
+    "tuple-hash-rows": ("cq-native-lowering", "rows-tuple-hash"),
+    "tuple-sorted-rows": ("cq-native-lowering", "rows-tuple-sorted"),
+    "replay-resource": ("cq-native-lowering", "rows-replay"),
+    "access-to-pipeline": ("cq-access-lowering", "to-pipeline"), "access-to-set-loops": ("cq-access-lowering", "to-set-loops"),
+    "pipeline-distinct-iter": ("cq-pipeline-lowering", "distinct-iter"), "pipeline-set": ("cq-pipeline-lowering", "collect-set"),
+    "pipeline-support-iter": ("cq-pipeline-lowering", "support-iter"), "pipeline-exists": ("cq-pipeline-lowering", "exists"),
+}
+# Explicit invocation fixtures: feature names, implementation modules and public
+# macro names are separate contracts, not spellings derived from one another.
+FRONTEND_MACROS = {
+    "written-order": "cq_to_ra_written_order", "clause-prefix": "cq_to_ra_clause_prefix", "hypergraph": "cq_to_ra_hypergraph",
+    "base-index-demands": "base_index_demands", "result-index-demands": "result_index_demands", "no-index-demands": "no_index_demands",
+    "base-hash": "lower_base_hash", "prefix-hash": "lower_prefix_hash", "materialized-hash": "materialized_hash_program",
+    "configured": "configured_program", "borrowed-nested": "lower_borrowed_nested",
+    "scan-candidates": "scan_candidates", "prune-block-candidates": "prune_block_candidates",
+    "exact-keys": "exact_keys", "summarized-exact-keys": "summarized_exact_keys",
+    "hash-witnesses": "hash_witnesses", "nested-witnesses": "nested_witnesses",
+    "hash-pairs": "hash_pairs", "nested-pairs": "nested_pairs", "sort-merge-pairs": "sort_merge_pairs",
+    "array-hash-rows": "array_hash_rows", "array-sorted-rows": "array_sorted_rows", "array-block-rows": "array_block_rows",
+    "tuple-hash-rows": "tuple_hash_rows", "tuple-sorted-rows": "tuple_sorted_rows", "replay-resource": "replay_resource",
+    "access-to-pipeline": "access_to_distinct_iter", "access-to-set-loops": "access_to_set_loops",
+    "pipeline-distinct-iter": "pipeline_to_distinct_iter", "pipeline-set": "pipeline_to_set",
+    "pipeline-support-iter": "pipeline_to_support_iter", "pipeline-exists": "pipeline_to_exists",
 }
 # Prefixes name complete implementation directories, or individual source files.
 # An implementation can access its own descendants and these declared helpers.
 IMPLEMENTATIONS = {
-    "cq-plan": {
-        "canonical": ["src/canonical", "tests/canonical.rs"],
-        "prefix": ["src/prefix", "src/dependencies.rs", "src/model.rs", "src/proof.rs", "tests/prefix.rs"],
-        "graph": ["src/graph", "src/dependencies.rs", "src/model.rs", "src/proof.rs", "tests/graph.rs"],
+    "cq-query-lowering": {
+        "written-order": ["src/written_order", "tests/written_order.rs"],
+        "clause-prefix": ["src/clause_prefix", "src/dependencies.rs", "src/model.rs", "src/proof.rs", "tests/clause_prefix.rs"],
+        "hypergraph": ["src/hypergraph", "src/dependencies.rs", "src/model.rs", "src/proof.rs", "tests/hypergraph.rs"],
     },
-    "cq-index": {**{name: [f"src/{name}", f"tests/{name}.rs"] for name in ("input", "result")},
-                 "none": ["src/none.rs"]},
-    "cq-realize": {
-        "hash-inputs": ["src/hash_inputs", "src/check_support"],
-        "hash-prefix": ["src/hash_prefix", "src/check_support", "src/rust_bindings.rs"],
-        "hash-materialized": ["src/hash_materialized", "src/check_support", "src/rust_bindings.rs"],
-        "relations": ["src/relations", "src/rust_bindings.rs"],
-        "borrowed-scans": ["src/borrowed_scans", "src/rust_bindings.rs"],
+    "cq-index-policy": {
+        "base-demands": ["src/base_demands", "tests/base_demands.rs"],
+        "result-demands": ["src/result_demands", "tests/result_demands.rs"],
+        "no-demands": ["src/no_demands.rs"],
     },
-    "cq-native": {
+    "cq-relation-lowering": {
+        "base-hash": ["src/base_hash", "src/check_support"],
+        "prefix-hash": ["src/prefix_hash", "src/check_support", "src/rust_bindings.rs"],
+        "materialized-hash": ["src/materialized_hash", "src/check_support", "src/rust_bindings.rs"],
+        "configured": ["src/configured", "src/rust_bindings.rs"],
+        "borrowed-nested": ["src/borrowed_nested", "src/rust_bindings.rs"],
+    },
+    "cq-native-lowering": {
         "candidate-scan": ["src/candidates/scan.rs"], "candidate-prune": ["src/candidates/prune.rs"],
         "keys-exact": ["src/keys/exact.rs"], "keys-zone": ["src/keys/zone.rs"],
         "witness-hash": ["src/witnesses/hash.rs"], "witness-nested": ["src/witnesses/nested.rs"],
         "pairs-hash": ["src/pairs/hash.rs"], "pairs-nested": ["src/pairs/nested.rs"],
         "pairs-merge": ["src/pairs/merge.rs"],
-        "rows-hash": ["src/rows/hash.rs", "src/rows/native.rs", "src/rows/schema.rs", "src/rows/native_tests.rs", "tests/schemas.rs"],
-        "rows-sorted": ["src/rows/sorted.rs", "src/rows/native.rs", "src/rows/schema.rs", "src/rows/native_tests.rs"],
+        "rows-hash": ["src/rows/hash.rs", "src/rows/set_ops.rs", "src/rows/schema.rs", "src/rows/set_ops_tests.rs", "tests/schemas.rs"],
+        "rows-sorted": ["src/rows/sorted.rs", "src/rows/set_ops.rs", "src/rows/schema.rs", "src/rows/set_ops_tests.rs"],
         "rows-block": ["src/rows/block.rs", "src/rows/schema.rs", "tests/schemas.rs"],
-        "rows-tuple-hash": ["src/rows/tuple_hash.rs", "src/rows/native.rs", "src/rows/schema.rs", "tests/schemas.rs"],
-        "rows-tuple-sorted": ["src/rows/tuple_sorted.rs", "src/rows/native.rs", "src/rows/schema.rs"],
+        "rows-tuple-hash": ["src/rows/tuple_hash.rs", "src/rows/set_ops.rs", "src/rows/schema.rs", "tests/schemas.rs"],
+        "rows-tuple-sorted": ["src/rows/tuple_sorted.rs", "src/rows/set_ops.rs", "src/rows/schema.rs"],
         "rows-replay": ["src/rows/replay.rs"],
     },
-    "cq-execution": {
-        "pull": ["src/pull", "tests/boundary.rs"],
-        "push": ["src/push.rs", "tests/push.rs"],
+    "cq-access-lowering": {
+        "to-pipeline": ["src/to_pipeline", "tests/boundary.rs"],
+        "to-set-loops": ["src/to_set_loops.rs", "tests/to_set_loops.rs"],
     },
-    "cq-pipeline": {
-        **{name: [f"src/{name}.rs", f"src/{name}", "src/operators.rs", "src/observations.rs", "tests/boundary.rs"]
-           for name in ("iterator", "collect", "stream")},
+    "cq-pipeline-lowering": {
+        **{feature: [f"src/{module}.rs", f"src/{module}", "src/operators.rs", "src/observations.rs", "tests/boundary.rs"]
+           for feature, module in (("distinct-iter", "distinct_iter"), ("collect-set", "collect_set"), ("support-iter", "support_iter"))},
         "exists": ["src/exists.rs", "src/operators.rs", "tests/exists.rs"],
     },
 }
 MODULE_WIRING = {
-    "cq-native": [f"src/{group}/mod.rs" for group in ("candidates", "keys", "witnesses", "pairs", "rows")],
+    "cq-native-lowering": [f"src/{group}/mod.rs" for group in ("candidates", "keys", "witnesses", "pairs", "rows")],
 }
 
 
@@ -110,6 +130,8 @@ def metadata():
 
 
 def check(data, announce=True):
+    if set(FRONTEND_MACROS) != set(FRONTEND):
+        raise ValueError("frontend invocation fixture inventory differs from feature contracts")
     packages = {p["name"]: p for p in data["packages"]}
     for name, allowed in ALLOWED.items():
         if name not in packages: raise ValueError(f"declared compiler component disappeared: {name}")
@@ -149,17 +171,17 @@ def negative_dependency_checks(data):
     # Metadata normalizes package aliases, optional and target-specific deps.
     for kind, remote in [(None, False), ("build", False), (None, True), ("build", True)]:
         altered = copy.deepcopy(data)
-        package = next(p for p in altered["packages"] if p["name"] == "cq-index")
-        dep = {"name": "cq-realize", "kind": kind, "optional": True, "rename": "innocent_alias",
+        package = next(p for p in altered["packages"] if p["name"] == "cq-index-policy")
+        dep = {"name": "cq-relation-lowering", "kind": kind, "optional": True, "rename": "innocent_alias",
                "target": "cfg(unix)", "uses_default_features": False}
-        if not remote: dep["path"] = str(ROOT / "crates/cq-realize")
+        if not remote: dep["path"] = str(ROOT / "crates/cq-relation-lowering")
         package["dependencies"].append(dep)
         try: check(altered, announce=False)
         except ValueError: pass
         else: raise ValueError("dependency guard accepted a forbidden renamed/optional/target dependency")
     altered = copy.deepcopy(data)
-    package = next(p for p in altered["packages"] if p["name"] == "cq-index")
-    package["dependencies"].append({"name": "cq-realize", "kind": "dev", "path": str(ROOT / "crates/cq-realize")})
+    package = next(p for p in altered["packages"] if p["name"] == "cq-index-policy")
+    package["dependencies"].append({"name": "cq-relation-lowering", "kind": "dev", "path": str(ROOT / "crates/cq-relation-lowering")})
     check(altered, announce=False)
     print("PASS: four production dependency mutations rejected; cross-implementation test dependency accepted", flush=True)
 
@@ -196,12 +218,12 @@ def audit_imports():
             base = ROOT / "crates" / name
             primary = base / paths[0]
             owned = list(primary.rglob("*.rs")) if primary.is_dir() else [primary]
-            if name == "cq-pipeline": owned += list((base / "src" / feature).rglob("*.rs"))
+            if name == "cq-pipeline-lowering": owned += list(primary.with_suffix("").rglob("*.rs"))
             for path in owned:
                 audit_implementation_text(name, feature, path.relative_to(base), path.read_text())
                 checked += 1
-    for text in ('use crate::result;', '#[cfg(feature = "result")] fn route() {}'):
-        try: audit_implementation_text("cq-index", "input", "mutation.rs", text)
+    for text in ('use crate::result_demands;', '#[cfg(feature = "result-demands")] fn route() {}'):
+        try: audit_implementation_text("cq-index-policy", "base-demands", "mutation.rs", text)
         except ValueError: pass
         else: raise ValueError("ownership guard accepted sibling import/feature mutation")
     print(f"PASS: {checked} implementation files audited; sibling import and feature mutations rejected", flush=True)
@@ -322,8 +344,8 @@ RA = CQ + ' relational { r = rename R {a -> x}; p = project r keep {x}; output p
 ACCESS = 'answer(x) => ((x,)) :- R(x) => for (x,) in ([(1i32,), (2,)]);'
 PIPELINE = 'iter0 = scan (x,) in ([(1i32,), (1,), (2,)]) yield (x,); iter1 = project iter0 as (x,) yield ((x,)); iter2 = distinct iter1; return iter2;'
 RESOLUTION_PROBES = {
-    "canonical", "prefix", "graph", "input-indexes", "result-indexes", "no-indexes", "pull",
-    "hash-inputs", "hash-prefix", "hash-materialized", "relations", "borrowed-scans", "prune-rows",
+    "written-order", "clause-prefix", "hypergraph", "base-index-demands", "result-index-demands", "no-index-demands", "access-to-pipeline",
+    "base-hash", "prefix-hash", "materialized-hash", "configured", "borrowed-nested", "prune-block-candidates",
 }
 
 # Concrete consumer compositions are test data, not compiler policy. Each runs
@@ -331,46 +353,46 @@ RESOLUTION_PROBES = {
 CONSUMERS = {
     "full-defaults": (None, "mini_linq", None),
     "default-route": (["defaults"], "mini_linq", None),
-    "graph-default": (["defaults"], "graph_query", None),
-    "eager-optimized": (["defaults"], "optimized_query", ("result_indexes", "hash_materialized")),
-    "canonical-input": (["canonical", "input-indexes", "hash-inputs", "pull", "iterator-pipeline"],
-                        "canonical_query", ("input_indexes", "hash_inputs")),
-    "canonical-result-lazy": (["canonical", "result-indexes", "hash-prefix", "pull", "iterator-pipeline"],
-                            "canonical_query", ("result_indexes", "hash_prefix")),
-    "prefix-result-lazy": (["prefix", "result-indexes", "hash-prefix", "pull", "iterator-pipeline"],
-                          "prefix_query", ("result_indexes", "hash_prefix")),
-    "graph-result-materialized": (["graph", "result-indexes", "hash-materialized", "pull", "collect-pipeline"],
-                                 "graph_query", ("result_indexes", "hash_materialized")),
-    "materialized-callable": (["graph", "result-indexes", "hash-materialized", "pull", "collect-pipeline"],
-                              "graph_query", ("result_indexes", "hash_materialized_query")),
+    "hypergraph-default": (["defaults"], "cq_to_ra_hypergraph", None),
+    "graph-or-prefix-materialized": (["defaults"], "choose_graph_or_prefix", ("result_index_demands", "materialized_hash_program")),
+    "written-order-base-demands": (["written-order", "base-index-demands", "base-hash", "access-to-pipeline", "pipeline-distinct-iter"],
+                        "cq_to_ra_written_order", ("base_index_demands", "lower_base_hash")),
+    "written-order-result-demands": (["written-order", "result-index-demands", "prefix-hash", "access-to-pipeline", "pipeline-distinct-iter"],
+                            "cq_to_ra_written_order", ("result_index_demands", "lower_prefix_hash")),
+    "clause-prefix-result-demands": (["clause-prefix", "result-index-demands", "prefix-hash", "access-to-pipeline", "pipeline-distinct-iter"],
+                          "cq_to_ra_clause_prefix", ("result_index_demands", "lower_prefix_hash")),
+    "hypergraph-materialized": (["hypergraph", "result-index-demands", "materialized-hash", "access-to-pipeline", "pipeline-set"],
+                                 "cq_to_ra_hypergraph", ("result_index_demands", "materialized_hash_program")),
+    "materialized-callable": (["hypergraph", "result-index-demands", "materialized-hash", "access-to-pipeline", "pipeline-set"],
+                              "cq_to_ra_hypergraph", ("result_index_demands", "materialized_hash_callable")),
 }
 NATIVE_HOSTS = {
-    "relation_program": (False, False), "relation_query": (True, False),
-    "observed_relation_program": (False, True), "observed_relation_query": (True, True),
+    "configured_program": (False, False), "configured_callable": (True, False),
+    "observed_configured_program": (False, True), "observed_configured_callable": (True, True),
 }
 for host in NATIVE_HOSTS:
     CONSUMERS[host.replace("_", "-")] = (
-        ["relations", "hash-rows", "hash-pairs", "scan-rows", "pull", "stream-pipeline"], host, None)
+        ["configured", "array-hash-rows", "hash-pairs", "scan-candidates", "access-to-pipeline", "pipeline-support-iter"], host, None)
 
-BORROWED_FEATURES = ["borrowed-scans", "pull", "iterator-pipeline", "stream-pipeline",
-                     "exists-pipeline", "replay-rows", "tuple-hash-rows", "tuple-sorted-rows"]
-CONSUMERS["borrowed-scans"] = (BORROWED_FEATURES, "borrowed_scans", None)
-CONSUMERS["graph-borrowed-scans"] = (["graph", "no-indexes", *BORROWED_FEATURES], "borrowed_scans", "graph_query")
+BORROWED_FEATURES = ["borrowed-nested", "access-to-pipeline", "pipeline-distinct-iter", "pipeline-support-iter",
+                     "pipeline-exists", "replay-resource", "tuple-hash-rows", "tuple-sorted-rows"]
+CONSUMERS["borrowed-nested"] = (BORROWED_FEATURES, "lower_borrowed_nested", None)
+CONSUMERS["hypergraph-borrowed-nested"] = (["hypergraph", "no-index-demands", *BORROWED_FEATURES], "lower_borrowed_nested", "cq_to_ra_hypergraph")
 
 
 def borrowed_consumer_source(planner):
     """Execute the complete IX/Access/Pipeline route directly and after planning."""
     # A valid relation may share a name with a stage API; their aliases must
     # remain in separate namespaces.
-    first_input = "choose_indexes" if planner else "R"
+    first_input = "choose_index_policy" if planner else "R"
     query = f'struct Q; relation {first_input}(a:Value,b:Value); relation S(a:Value,b:Value); answer(x,z) :- {first_input}(x,y), S(y,z);'
     provider_aliases = f"pub mod inputs {{ pub use raw::{{tuple_hash_rows as {first_input}, tuple_sorted_rows as S}}; }}"
-    stages = '''pub use raw::{borrowed_scans as choose_realization, pull, pull_stream, pull_exists,
-iterator_pipeline, stream_pipeline, exists_pipeline, replay_rows};
+    stages = '''pub use raw::{lower_borrowed_nested as choose_relation_lowering, access_to_distinct_iter, access_to_support_iter, access_to_exists,
+pipeline_to_distinct_iter, pipeline_to_support_iter, pipeline_to_exists, replay_resource};
 pub use cq_storage as storage;'''
     if planner:
         declaration = f'''mod wiring {{
-    pub use raw::{{{planner} as query, no_indexes as choose_indexes}};
+    pub use raw::{{{planner} as query, no_index_demands as choose_index_policy}};
     {stages}
     {provider_aliases}
 }}
@@ -379,7 +401,7 @@ mini_linq::query! {{ {query} }}'''
     else:
         declaration = f'''mod wiring {{ {stages} {provider_aliases} }}
 use wiring as mini_linq;
-raw::borrowed_scans! {{
+raw::lower_borrowed_nested! {{
 {query}
 relational {{
     l = rename R {{a -> x,b -> y}}; r = rename S {{a -> y,b -> z}};
@@ -416,19 +438,19 @@ assert_eq!(execute(&duplicated,&right),expected);
 
 def consumer_source(label, entry, route):
     """Real planner/index/realization/execution composition over 256 databases."""
-    if entry == "borrowed_scans":
+    if entry == "lower_borrowed_nested":
         return borrowed_consumer_source(route)
     query = 'struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32); answer(x,z) :- R(x,y), S(y,z);'
     native = entry in NATIVE_HOSTS
-    callable_, observed = NATIVE_HOSTS.get(entry, (bool(route and route[1] == "hash_materialized_query"), False))
+    callable_, observed = NATIVE_HOSTS.get(entry, (bool(route and route[1] == "materialized_hash_callable"), False))
     if native:
         query = query.replace("i32", "i64") + '''
 relational { r = rename R {a -> x,b -> y}; s = rename S {a -> y,b -> z};
 j = natural_join r with s; p = project j keep {x,z}; output p as answer(x,z); }'''
-        observer = "storage cq_storage;" if observed else ""
-        query = f'''{observer} access raw::pull_stream; materialize raw::hash_rows;
-inputs {{ R => raw::hash_rows; S => raw::hash_rows; }}
-scan raw::scan_rows; keys unused_keys; join raw::hash_pairs;
+        observer = "counter_storage cq_storage;" if observed else ""
+        query = f'''{observer} access raw::access_to_support_iter; result_rows raw::array_hash_rows;
+inputs {{ R => raw::array_hash_rows; S => raw::array_hash_rows; }}
+candidates raw::scan_candidates; keys unused_keys; pairs raw::hash_pairs;
 {query}'''
         wiring = 'use raw as mini_linq;'
         prepare = '''let left: HashSet<_> = left.iter().map(|&(a,b)| [i64::from(a),i64::from(b)]).collect();
@@ -438,9 +460,9 @@ let right: HashSet<_> = right.iter().map(|&(a,b)| [i64::from(a),i64::from(b)]).c
     else:
         if route:
             index, backend = route
-            endpoints = 'pull, iterator_pipeline' if backend in ('hash_inputs', 'hash_prefix') else 'pull_set, collect_pipeline'
-            planners = 'graph_query, prefix_query, ' if entry == 'optimized_query' else ''
-            wiring = f'mod wiring {{ pub use raw::{{{planners}{index} as choose_indexes, {backend} as choose_realization, {endpoints}}}; }} use wiring as mini_linq;'
+            endpoints = 'access_to_distinct_iter, pipeline_to_distinct_iter' if backend in ('lower_base_hash', 'lower_prefix_hash') else 'access_to_set, pipeline_to_set'
+            planners = 'cq_to_ra_hypergraph, cq_to_ra_clause_prefix, ' if entry == 'choose_graph_or_prefix' else ''
+            wiring = f'mod wiring {{ pub use raw::{{{planners}{index} as choose_index_policy, {backend} as choose_relation_lowering, {endpoints}}}; }} use wiring as mini_linq;'
         else:
             wiring = 'use raw as mini_linq;'
         prepare = ''
@@ -483,7 +505,7 @@ def check_consumers(only=()):
             (destination / "src").mkdir()
             (destination / "src/main.rs").write_text(consumer_source(label, entry, route))
             feature_text = '' if features is None else ', default-features = false, features = ' + toml(features)
-            runtime = NATIVE_HOSTS.get(entry, (False, False))[1] or entry == "borrowed_scans"
+            runtime = NATIVE_HOSTS.get(entry, (False, False))[1] or entry == "lower_borrowed_nested"
             (destination / "Cargo.toml").write_text(
                 '[package]\nname = "semantic-consumer"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
                 'raw = { package = "mini-linq", path = ' + toml(str(ROOT / "crates/mini-linq")) + feature_text + ' }\n'
@@ -494,7 +516,7 @@ def check_consumers(only=()):
                                         cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"semantic consumer failed: {label}; see {logpath}")
             print(f"PASS: semantic consumer {label}; 256 databases plus duplicate-input checks", flush=True)
-            if label == "borrowed-scans":
+            if label == "borrowed-nested":
                 check_borrowed_rejections(destination, env, logdir)
 
 
@@ -507,13 +529,13 @@ def borrowed_runtime_source(scan="($v).iter()", *, bind_provider=True):
         (field ($v:expr) ($column:tt)) => {{ ($v).$column }};
         }}
         mod wiring {{
-            pub use raw::{{pull, pull_stream, pull_exists, iterator_pipeline,
-                           stream_pipeline, exists_pipeline, replay_rows}};
+            pub use raw::{{access_to_distinct_iter, access_to_support_iter, access_to_exists, pipeline_to_distinct_iter,
+                           pipeline_to_support_iter, pipeline_to_exists, replay_resource}};
             pub use cq_storage as storage;
             pub mod inputs {{ {provider_alias} }}
         }}
         use wiring as mini_linq;
-        raw::borrowed_scans! {{ {RA} indexes {{}} }}
+        raw::lower_borrowed_nested! {{ {RA} indexes {{}} }}
         fn main() {{ let rows = vec![(1i32,), (1,), (2,)];
             let result: Vec<_> = Q::iter(&rows).map(|row| *row.0).collect();
             assert_eq!(result, vec![1, 2]); }}'''
@@ -531,7 +553,7 @@ macro_rules! support {{ ($($ir:tt)*) => {{{{
     let text = stringify!($($ir)*);
     assert!(text.contains("=>") && text.contains("for"), "expected Access, got {{text}}");
     SUPPORT.fetch_add(1, Ordering::SeqCst);
-    if text.contains("pull_exists") {{ EXISTENCE_REGIONS.fetch_add(1, Ordering::SeqCst); }}
+    if text.contains("access_to_exists") {{ EXISTENCE_REGIONS.fetch_add(1, Ordering::SeqCst); }}
     ::std::iter::empty::<(&i32,)>()
 }}}}; }}
 macro_rules! replay {{ (build {{ $($ir:tt)* }}) => {{{{
@@ -546,14 +568,14 @@ macro_rules! output {{ ($($ir:tt)*) => {{{{
     ::std::iter::once((&OUTPUT,))
 }}}}; }}
 mod wiring {{
-    pub(crate) use support as pull_stream;
-    pub(crate) use output as pull;
-    pub(crate) use replay as replay_rows;
+    pub(crate) use support as access_to_support_iter;
+    pub(crate) use output as access_to_distinct_iter;
+    pub(crate) use replay as replay_resource;
     pub mod inputs {{ pub(crate) use rows as R; }}
 }}
 use wiring as mini_linq;
-raw::borrowed_scans! {{ {RA} indexes {{}} }}
-raw::borrowed_scans! {{
+raw::lower_borrowed_nested! {{ {RA} indexes {{}} }}
+raw::lower_borrowed_nested! {{
     struct Shared; relation R(a:i32); answer(x) :- R(x);
     relational {{
         r = rename R {{a -> x}};
@@ -583,7 +605,7 @@ def check_borrowed_rejections(destination, env, logdir):
         "selection": (base.replace("p = project r keep {x};", "p = select r if (x > 0);"), r"does not admit Select"),
         "extension": (base.replace("p = project r keep {x};", "e = extend r with { y: i32 } value ((x + 1,)); p = project e keep {x};"), r"does not admit Extend"),
         "bare-ra": (base.replace(" indexes {}", ""), r"expected `indexes`"),
-        "inputs-envelope": (base.replace("raw::borrowed_scans! {", "raw::borrowed_scans! { inputs { R => rows; }", 1), r"expected `struct`"),
+        "inputs-envelope": (base.replace("raw::lower_borrowed_nested! {", "raw::lower_borrowed_nested! { inputs { R => rows; }", 1), r"expected `struct`"),
     }
     # Establish that all negative variants start from an executable fixture.
     cases = {"accepted": (base, None), **cases}
@@ -603,74 +625,73 @@ def check_borrowed_rejections(destination, env, logdir):
 
 def frontend_source(feature):
     """Atomic probes establish resolution or native behavior, not whole-query semantics."""
-    if feature == "borrowed-scans":
+    macro = FRONTEND_MACROS[feature]
+    if feature == "borrowed-nested":
         return borrowed_resolution_source()
-    if feature in ("canonical", "prefix", "graph", "input-indexes", "result-indexes", "no-indexes"):
+    if feature in ("written-order", "clause-prefix", "hypergraph", "base-index-demands", "result-index-demands", "no-index-demands"):
         macro, source, next_name, marker = {
-            "canonical": ("canonical_query", CQ, "choose_indexes", "relational"),
-            "prefix": ("prefix_query", CQ, "choose_indexes", "relational"),
-            "graph": ("graph_query", CQ, "choose_indexes", "relational"),
-            "input-indexes": ("input_indexes", RA, "choose_realization", "indexes"),
-            "result-indexes": ("result_indexes", RA, "choose_realization", "indexes"),
-            "no-indexes": ("no_indexes", RA, "choose_realization", "indexes"),
+            "written-order": ("cq_to_ra_written_order", CQ, "choose_index_policy", "relational"),
+            "clause-prefix": ("cq_to_ra_clause_prefix", CQ, "choose_index_policy", "relational"),
+            "hypergraph": ("cq_to_ra_hypergraph", CQ, "choose_index_policy", "relational"),
+            "base-index-demands": ("base_index_demands", RA, "choose_relation_lowering", "indexes"),
+            "result-index-demands": ("result_index_demands", RA, "choose_relation_lowering", "indexes"),
+            "no-index-demands": ("no_index_demands", RA, "choose_relation_lowering", "indexes"),
         }[feature]
-        exact = 'assert!(SEEN.chars().filter(|c| !c.is_whitespace()).collect::<String>().ends_with("indexes{}"));' if feature == "no-indexes" else ''
+        exact = 'assert!(SEEN.chars().filter(|c| !c.is_whitespace()).collect::<String>().ends_with("indexes{}"));' if feature == "no-index-demands" else ''
         return f'''#[macro_export] macro_rules! accept {{ ($($t:tt)*) => {{ const SEEN: &str = stringify!($($t)*); }}; }}
 mod wiring {{ pub use crate::accept as {next_name}; }}
 use wiring as mini_linq;
 raw::{macro}! {{ {source} }}
 fn main() {{ assert!(SEEN.contains("{marker}")); {exact} }}'''
-    if feature == "pull":
+    if feature == "access-to-pipeline":
         return f'''#[macro_export] macro_rules! output {{ ($($t:tt)*) => {{ (stringify!($($t)*), 42) }}; }}
 #[macro_export] macro_rules! support {{ ($($t:tt)*) => {{ (stringify!($($t)*), 43) }}; }}
 #[macro_export] macro_rules! exists {{ ($($t:tt)*) => {{ (stringify!($($t)*), 44) }}; }}
-mod wiring {{ pub use crate::{{output as iterator_pipeline, support as stream_pipeline, exists as exists_pipeline}}; }}
+mod wiring {{ pub use crate::{{output as pipeline_to_distinct_iter, support as pipeline_to_support_iter, exists as pipeline_to_exists}}; }}
 use wiring as mini_linq;
 fn main() {{
-    let (text, marker) = raw::pull! {{ {ACCESS} }};
+    let (text, marker) = raw::access_to_distinct_iter! {{ {ACCESS} }};
     assert!(text.contains("scan") && text.contains("distinct")); assert_eq!(marker, 42);
-    let (text, marker) = raw::pull_stream! {{ {ACCESS} }};
+    let (text, marker) = raw::access_to_support_iter! {{ {ACCESS} }};
     assert!(text.contains("scan") && text.contains("return")); assert_eq!(marker, 43);
-    let (text, marker) = raw::pull_exists! {{ {ACCESS} }};
+    let (text, marker) = raw::access_to_exists! {{ {ACCESS} }};
     assert!(text.contains("scan") && text.contains("return")); assert_eq!(marker, 44);
 }}'''
-    if feature == "push-set":
+    if feature == "access-to-set-loops":
         return f'''fn main() {{
-let rows = raw::push_set! {{ {ACCESS} }};
+let rows = raw::access_to_set_loops! {{ {ACCESS} }};
 assert_eq!(rows, ::std::collections::HashSet::from([(1i32,), (2,)]));
 }}'''
-    if feature == "exists-pipeline":
+    if feature == "pipeline-exists":
         return '''fn main() {
 struct Payload;
 let visited = ::std::cell::Cell::new(0);
 let counter = &visited;
-let exists = raw::exists_pipeline! {
+let exists = raw::pipeline_to_exists! {
     a = scan x in ((0..3).map(move |_| { counter.set(counter.get() + 1); Payload })) yield (x,);
     b = project a as (x,) yield ((x,));
     c = distinct b;
     return c;
 };
 assert!(exists); assert_eq!(visited.get(), 1);
-assert!(!raw::exists_pipeline! {
+assert!(!raw::pipeline_to_exists! {
     a = scan x in (::std::iter::empty::<Payload>()) yield (x,);
     b = distinct a;
     return b;
 });
 }'''
-    if feature.endswith("-pipeline"):
-        macro = feature.replace('-', '_')
-        result = 'result.len()' if feature == 'collect-pipeline' else 'result.count()'
-        expected = 3 if feature == 'stream-pipeline' else 2
+    if FRONTEND[feature][0] == "cq-pipeline-lowering":
+        result = 'result.len()' if feature == 'pipeline-set' else 'result.count()'
+        expected = 3 if feature == 'pipeline-support-iter' else 2
         return f'fn main() {{ let result = raw::{macro}! {{ {PIPELINE} }}; assert_eq!({result}, {expected}); }}'
-    if feature in ("hash-inputs", "hash-prefix", "hash-materialized"):
-        macro = feature.replace('-', '_')
-        endpoint = '::std::collections::HashSet::<(i32,)>::new()' if feature == 'hash-materialized' else '::std::iter::empty::<(i32,)>()'
-        continuation = 'pull_set' if feature == 'hash-materialized' else 'pull'
+    if feature in ("base-hash", "prefix-hash", "materialized-hash"):
+        endpoint = '::std::collections::HashSet::<(i32,)>::new()' if feature == 'materialized-hash' else '::std::iter::empty::<(i32,)>()'
+        continuation = 'access_to_set' if feature == 'materialized-hash' else 'access_to_distinct_iter'
         return f'''#[macro_export] macro_rules! chosen_access {{ ($($t:tt)*) => {{ {endpoint} }}; }}
 mod wiring {{ pub use crate::chosen_access as {continuation}; }} use wiring as mini_linq;
 raw::{macro}! {{ {RA} indexes {{}} }}
 fn main() {{ let _ = Q::run([(1i32,)]); }}'''
-    if feature == "relations":
+    if feature == "configured":
         return '''macro_rules! rows {
 (type ($($ty:ty,)*)) => { ::std::collections::HashSet<[i64;1]> };
 (input ($v:expr)) => { $v }; (row ($v:expr)) => { $v };
@@ -679,33 +700,31 @@ fn main() {{ let _ = Q::run([(1i32,)]); }}'''
 (materialize $owner:ident $value:ident ($v:expr)) => { let $owner = $v; let $value = &$owner; };
 }
 macro_rules! chosen_access { ($($t:tt)*) => { ::std::collections::HashSet::<[i64;1]>::new() }; }
-raw::relation_program! { access chosen_access; materialize rows; scan unused_scan; keys unused_keys; join unused_join;
+raw::configured_program! { access chosen_access; result_rows rows; candidates unused_scan; keys unused_keys; pairs unused_join;
 inputs { R => rows; } struct Q; relation R(a:i64); answer(x) :- R(x);
 relational { r = rename R {a -> x}; p = project r keep {x}; output p as answer(x); } }
 fn main() { let rows = std::collections::HashSet::from([[1i64]]); let _ = Q::run(&rows); }'''
-    if feature == "scan-rows":
+    if feature == "scan-candidates":
         return '''macro_rules! rows { (rows ($v:expr)) => { $v.into_iter() }; }
-fn main() { let result = raw::scan_rows! { work (compile_error!("unused observer")); candidates rows { [1,2] } (compile_error!("unused predicate")) };
+fn main() { let result = raw::scan_candidates! { work (compile_error!("unused observer")); candidates rows { [1,2] } (compile_error!("unused predicate")) };
 assert_eq!(result.sum::<i32>(),3); }'''
-    if feature == "prune-rows":
+    if feature == "prune-block-candidates":
         return '''macro_rules! chosen_access { ($($t:tt)*) => { [7i32].into_iter() }; }
-fn main() { let result = raw::prune_rows! { iterator chosen_access; candidates unused_provider { () } (|_: &()| true) };
+fn main() { let result = raw::prune_block_candidates! { access_iter chosen_access; candidates unused_provider { () } (|_: &()| true) };
 assert_eq!(result.sum::<i32>(),7); }'''
-    if feature in ("exact-keys", "zone-keys"):
-        macro = feature.replace('-', '_'); storage = 'storage cq_storage;' if feature == 'zone-keys' else ''
+    if feature in ("exact-keys", "summarized-exact-keys"):
+        storage = 'storage cq_storage;' if feature == 'summarized-exact-keys' else ''
         return f'''macro_rules! chosen_access {{ ($($t:tt)*) => {{ [[1i64],[3]].into_iter() }}; }}
-fn main() {{ let keys = raw::{macro}! {{ {storage} iterator chosen_access; keys ::std::collections::BTreeSet;
+fn main() {{ let keys = raw::{macro}! {{ {storage} access_iter chosen_access; keys ::std::collections::BTreeSet;
 build {{ out(x) => ([x]) :- Rows(x) => for (x,) in (unused); }} }};
 assert!(raw::{macro}! {{ storage cq_storage; contains(&keys)([1i64]) }});
 assert!(!raw::{macro}! {{ storage cq_storage; contains(&keys)([2i64]) }}); }}'''
     if feature in ("hash-witnesses", "nested-witnesses"):
-        macro = feature.replace('-', '_')
         return f'''macro_rules! chosen_access {{ ($($t:tt)*) => {{ [(1i32,10i32),(2,20)].into_iter() }}; }}
-fn main() {{ let resource = raw::{macro}! {{ iterator chosen_access;
+fn main() {{ let resource = raw::{macro}! {{ access_iter chosen_access;
 build {{ out(x) => (x) :- Rows(x) => for (x,) in (unused); }} }};
 let found: Vec<_> = raw::{macro}! {{ probe(&resource)(1i32) }}.collect(); assert_eq!(found,vec![10]); }}'''
     if feature in ("hash-pairs", "nested-pairs", "sort-merge-pairs"):
-        macro = feature.replace('-', '_')
         return f'''fn main() {{
 let left = [(1i32,10i32), (1,10), (2,20)];
 let right = [(1i32,30i32), (1,40), (3,50)];
@@ -713,14 +732,12 @@ let mut rows = Vec::new();
 raw::{macro}! {{ pairs l in (left.iter()) by (l.0), r in (right.iter()) by (r.0) {{ rows.push((l.1,r.1)); }} }};
 rows.sort(); assert_eq!(rows, vec![(10,30),(10,30),(10,40),(10,40)]);
 }}'''
-    if feature in ("hash-rows", "sorted-rows"):
-        macro = feature.replace('-', '_')
+    if feature in ("array-hash-rows", "array-sorted-rows"):
         return f'''fn main() {{ let input = [[1i64],[1],[2]];
 raw::{macro}! {{ materialize owner value (input) }}
 let _: &raw::{macro}! {{ type (i64,) }} = value;
 assert_eq!(raw::{macro}! {{ rows(value) }}.count(),2); }}'''
     if feature in ("tuple-hash-rows", "tuple-sorted-rows"):
-        macro = feature.replace('-', '_')
         return f'''fn main() {{
 raw::{macro}! {{ produce owner value via emit {{
     emit((String::from("a"), 1i32)); emit((String::from("a"), 1i32)); emit((String::from("b"), 2i32));
@@ -728,12 +745,12 @@ raw::{macro}! {{ produce owner value via emit {{
 let _: &raw::{macro}! {{ type (String, i32,) }} = value;
 assert_eq!(raw::{macro}! {{ rows(value) }}.count(), 2);
 }}'''
-    if feature == "block-rows":
+    if feature == "array-block-rows":
         return '''fn main() { let input = std::collections::HashSet::from([[1i64],[2]]);
-raw::block_rows! { storage cq_storage; packing (::std::num::NonZeroUsize::new(1).unwrap()); materialize owner value (input) }
-let _: &raw::block_rows! { storage cq_storage; type (i64,) } = &owner;
-assert_eq!(raw::block_rows! { storage cq_storage; rows(&value) }.count(),2); }'''
-    if feature == "replay-rows":
+raw::array_block_rows! { storage cq_storage; packing (::std::num::NonZeroUsize::new(1).unwrap()); materialize owner value (input) }
+let _: &raw::array_block_rows! { storage cq_storage; type (i64,) } = &owner;
+assert_eq!(raw::array_block_rows! { storage cq_storage; rows(&value) }.count(),2); }'''
+    if feature == "replay-resource":
         return f'''use std::sync::atomic::{{AtomicUsize, Ordering}};
 static VISITS: AtomicUsize = AtomicUsize::new(0);
 macro_rules! support {{ ($($ir:tt)*) => {{{{
@@ -741,12 +758,12 @@ macro_rules! support {{ ($($ir:tt)*) => {{{{
     assert!(text.contains("=>") && text.contains("for"));
     [1i32, 2].into_iter().inspect(|_| {{ VISITS.fetch_add(1, Ordering::SeqCst); }})
 }}}}; }}
-mod wiring {{ pub use cq_storage as storage; pub(crate) use support as pull_stream; }}
+mod wiring {{ pub use cq_storage as storage; pub(crate) use support as access_to_support_iter; }}
 use wiring as mini_linq;
 fn main() {{
-    let rows = raw::replay_rows! {{ build {{ {ACCESS} }} }};
-    let mut first = raw::replay_rows! {{ scan (rows) }};
-    let mut second = raw::replay_rows! {{ scan (rows) }};
+    let rows = raw::replay_resource! {{ build {{ {ACCESS} }} }};
+    let mut first = raw::replay_resource! {{ scan (rows) }};
+    let mut second = raw::replay_resource! {{ scan (rows) }};
     assert_eq!(VISITS.load(Ordering::SeqCst), 0);
     assert_eq!(first.next(), Some(1));
     assert_eq!(second.next(), Some(1));
@@ -780,7 +797,7 @@ def check_frontends(packages, only=()):
         with tempfile.TemporaryDirectory(prefix="mini-linq-frontend-") as temporary:
             destination = Path(temporary); (destination / "src").mkdir()
             (destination / "src/main.rs").write_text(frontend_source(feature))
-            runtime = feature in ("exact-keys", "zone-keys", "block-rows", "replay-rows")
+            runtime = feature in ("exact-keys", "summarized-exact-keys", "array-block-rows", "replay-resource")
             (destination / "Cargo.toml").write_text(
                 '[package]\nname = "frontend-probe"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
                 'raw = { package = "mini-linq", path = ' + toml(str(ROOT / "crates/mini-linq"))
@@ -807,7 +824,7 @@ def check_frontends(packages, only=()):
                 result = subprocess.run(["cargo", "run", *args], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"actual frontend {feature} failed; see {logdir / ('frontend-' + feature + '.log')}")
             kind = ("resolution probe" if feature in RESOLUTION_PROBES else
-                    "Pipeline endpoint probe" if feature.endswith("-pipeline") else "native-operation probe")
+                    "Pipeline endpoint probe" if name == "cq-pipeline-lowering" else "native-operation probe")
             print(f"PASS: {kind} {feature}; renamed dependency and isolated {name}/{implementation}", flush=True)
 
 

@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use cq_access_lowering::to_pipeline::compile as compile_pull;
 use cq_compose::{compile_cq, compile_indexed};
 use cq_ir::{cq, iterator_pipeline, rust_access_plan};
-use cq_pipeline::iterator::compile as compile_iterator_pipeline;
-use cq_execution::pull::compile as compile_pull;
+use cq_pipeline_lowering::distinct_iter::compile as compile_iterator_pipeline;
 use cq_workloads::{QueryCase, Scale};
 use proc_macro2::Span;
 use quote::{ToTokens, format_ident, quote};
@@ -25,8 +25,8 @@ pub fn compile_and_run(
     let logical = compile_cq(&source)?;
     let (_, mut file) = compile_indexed(
         &logical,
-        &syn::parse_quote!(::mini_linq::pull),
-        &syn::parse_quote!(::mini_linq::pull_set),
+        &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+        &syn::parse_quote!(::mini_linq::access_to_set),
     )?;
     let mut expander = IteratorPipelineExpander::default();
     expander.visit_file_mut(&mut file);
@@ -252,7 +252,7 @@ impl VisitMut for IteratorPipelineExpander {
                 syn::parse2::<rust_access_plan::Plan>(macro_invocation.tokens).and_then(|plan| {
                     let target = compile_pull(&plan)?;
                     syn::parse2(quote! {
-                        ::mini_linq::iterator_pipeline! { #target }
+                        ::mini_linq::pipeline_to_distinct_iter! { #target }
                     })
                 });
             match lowered {
@@ -280,14 +280,14 @@ fn is_pull(path: &syn::Path) -> bool {
     path.leading_colon.is_some()
         && path.segments.len() == 2
         && path.segments[0].ident == "mini_linq"
-        && path.segments[1].ident == "pull"
+        && path.segments[1].ident == "access_to_distinct_iter"
 }
 
 fn is_iterator_pipeline(path: &syn::Path) -> bool {
     path.leading_colon.is_some()
         && path.segments.len() == 2
         && path.segments[0].ident == "mini_linq"
-        && path.segments[1].ident == "iterator_pipeline"
+        && path.segments[1].ident == "pipeline_to_distinct_iter"
 }
 
 #[cfg(test)]
@@ -298,7 +298,7 @@ mod tests {
     fn standalone_runner_expands_both_typed_iterator_stages() {
         let mut file: syn::File = syn::parse2(quote! {
             fn query(left: &::std::vec::Vec<(i32,)>) {
-                ::mini_linq::pull! {
+                ::mini_linq::access_to_distinct_iter! {
                     answer(x) => ((::core::clone::Clone::clone(x),)) :-
                         Left(x) => for (x,) in (left.iter());
                 }

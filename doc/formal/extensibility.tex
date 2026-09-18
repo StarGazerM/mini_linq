@@ -37,7 +37,7 @@ establish these premises, and changing input meaning, such as adding an
 equivalence closure, changes the source contract.
 
 \paragraph{Push and multiway execution.}
-The implemented \code{push_set!} lowers Access directly to nested loops and one
+The implemented \code{access_to_set_loops!} lowers Access directly to nested loops and one
 result set (PS-*), without a Pipeline intermediate. It can replace a set-valued
 Access continuation when completed-set observations agree. A public lazy Iterator
 requires an implementation preserving its demand and stopping contract

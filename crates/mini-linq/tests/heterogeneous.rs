@@ -10,23 +10,23 @@ fn size(n: usize) -> NonZeroUsize {
 // Each binding owns its complete operation protocol; the physical host forwards
 // only semantic operands and, for observed execution, its explicit work argument.
 macro_rules! bound_block {
-    ($($op:tt)*) => { ::mini_linq::block_rows! { storage ::cq_storage; packing (crate::size(1)); $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::array_block_rows! { storage ::cq_storage; packing (crate::size(1)); $($op)* } };
 }
 macro_rules! bound_scan {
-    (work ($work:expr); $($op:tt)*) => { ::mini_linq::scan_rows! { $($op)* } };
-    ($($op:tt)*) => { ::mini_linq::scan_rows! { $($op)* } };
+    (work ($work:expr); $($op:tt)*) => { ::mini_linq::scan_candidates! { $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::scan_candidates! { $($op)* } };
 }
 macro_rules! bound_prune {
-    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::pull_stream; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::prune_block_candidates! { access_iter ::mini_linq::access_to_support_iter; $($op)* } };
 }
 macro_rules! bound_exact {
-    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::HashSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; access_iter ::mini_linq::access_to_support_iter; keys ::std::collections::HashSet; $($op)* } };
 }
 macro_rules! bound_zone {
-    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::HashSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::summarized_exact_keys! { storage ::cq_storage; access_iter ::mini_linq::access_to_support_iter; keys ::std::collections::HashSet; $($op)* } };
 }
 macro_rules! zone_sorted {
-    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::BTreeSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::summarized_exact_keys! { storage ::cq_storage; access_iter ::mini_linq::access_to_support_iter; keys ::std::collections::BTreeSet; $($op)* } };
 }
 macro_rules! bound_hash {
     ($($op:tt)*) => { ::mini_linq::hash_pairs! { $($op)* } };
@@ -41,30 +41,30 @@ pub(crate) use {
 
 // A caller-owned macro can participate without being a compiler-known variant.
 macro_rules! caller_sorted {
-    ($($request:tt)*) => { ::mini_linq::sorted_rows! { $($request)* } };
+    ($($request:tt)*) => { ::mini_linq::array_sorted_rows! { $($request)* } };
 }
 pub(crate) use caller_sorted;
 
 macro_rules! mixed_exact {
     ($($plan:tt)*) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
 
-            materialize ::mini_linq::hash_rows;
+            result_rows ::mini_linq::array_hash_rows;
             inputs {
                 R => crate::bound_block;
-                S => ::mini_linq::hash_rows;
-                T => ::mini_linq::sorted_rows;
+                S => ::mini_linq::array_hash_rows;
+                T => ::mini_linq::array_sorted_rows;
             }
-            results {}
-            scan crate::bound_scan;
-            scans {  }
+            result_bindings {}
+            candidates crate::bound_scan;
+            candidate_bindings {  }
             keys crate::bound_exact;
             key_sets {  }
 
-            join crate::bound_hash;
-            joins {}
+            pairs crate::bound_hash;
+            pair_bindings {}
             $($plan)*
         }
     };
@@ -72,24 +72,24 @@ macro_rules! mixed_exact {
 
 macro_rules! mixed_zone {
     ($($plan:tt)*) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
 
-            materialize ::mini_linq::hash_rows;
+            result_rows ::mini_linq::array_hash_rows;
             inputs {
                 R => crate::bound_block;
-                S => ::mini_linq::hash_rows;
-                T => ::mini_linq::sorted_rows;
+                S => ::mini_linq::array_hash_rows;
+                T => ::mini_linq::array_sorted_rows;
             }
-            results {}
-            scan crate::bound_scan;
-            scans { r1 => crate::bound_prune; }
+            result_bindings {}
+            candidates crate::bound_scan;
+            candidate_bindings { r1 => crate::bound_prune; }
             keys crate::bound_exact;
             key_sets { r1 => crate::zone_sorted; }
 
-            join crate::bound_hash;
-            joins {}
+            pairs crate::bound_hash;
+            pair_bindings {}
             $($plan)*
         }
     };
@@ -97,24 +97,24 @@ macro_rules! mixed_zone {
 
 macro_rules! mixed_nested {
     ($($plan:tt)*) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
 
-            materialize ::mini_linq::hash_rows;
+            result_rows ::mini_linq::array_hash_rows;
             inputs {
                 R => crate::bound_block;
-                S => ::mini_linq::hash_rows;
-                T => ::mini_linq::sorted_rows;
+                S => ::mini_linq::array_hash_rows;
+                T => ::mini_linq::array_sorted_rows;
             }
-            results { live => ::mini_linq::sorted_rows; }
-            scan crate::bound_scan;
-            scans { r1 => crate::bound_prune; }
+            result_bindings { live => ::mini_linq::array_sorted_rows; }
+            candidates crate::bound_scan;
+            candidate_bindings { r1 => crate::bound_prune; }
             keys crate::bound_exact;
             key_sets { r1 => crate::zone_sorted; }
 
-            join crate::bound_hash;
-            joins {
+            pairs crate::bound_hash;
+            pair_bindings {
                 rs => crate::bound_nested;
                 joined => crate::bound_nested;
             }
@@ -227,24 +227,24 @@ fn only_the_chosen_operand_uses_block_access() {
     assert_eq!(loop_join.2.index_rows, 0);
 }
 
-mini_linq::observed_relation_program! {
-    storage ::cq_storage;
-    access ::mini_linq::pull_stream;
+mini_linq::observed_configured_program! {
+    counter_storage ::cq_storage;
+    access ::mini_linq::access_to_support_iter;
 
-    materialize ::mini_linq::hash_rows;
+    result_rows ::mini_linq::array_hash_rows;
     inputs {
         R => crate::bound_block;
-        S => ::mini_linq::hash_rows;
-        T => ::mini_linq::sorted_rows;
+        S => ::mini_linq::array_hash_rows;
+        T => ::mini_linq::array_sorted_rows;
     }
-    results {}
-    scan crate::bound_scan;
-    scans { r1 => crate::bound_prune; r2 => crate::bound_prune; r3 => crate::bound_prune; }
+    result_bindings {}
+    candidates crate::bound_scan;
+    candidate_bindings { r1 => crate::bound_prune; r2 => crate::bound_prune; r3 => crate::bound_prune; }
     keys crate::bound_exact;
     key_sets { r1 => crate::bound_zone; r2 => crate::bound_zone; r3 => crate::bound_zone; }
 
-    join crate::bound_hash;
-    joins {}
+    pairs crate::bound_hash;
+    pair_bindings {}
     struct Versioned;
     relation R(k:i64,x:i64);
     relation S(z:i64,k:i64);
@@ -280,20 +280,20 @@ fn later_reductions_use_current_keys_and_cannot_resurrect_selected_rows() {
     assert_eq!(step("r3").2.rows_visited, 1);
 }
 
-mini_linq::observed_relation_program! {
-    storage ::cq_storage;
-    access ::mini_linq::pull_stream;
+mini_linq::observed_configured_program! {
+    counter_storage ::cq_storage;
+    access ::mini_linq::access_to_support_iter;
 
-    materialize ::mini_linq::hash_rows;
-    inputs { R => ::mini_linq::sorted_rows; S => ::mini_linq::hash_rows; }
-    results { packed => crate::bound_block; }
-    scan crate::bound_scan;
-    scans { reduced => crate::bound_prune; }
+    result_rows ::mini_linq::array_hash_rows;
+    inputs { R => ::mini_linq::array_sorted_rows; S => ::mini_linq::array_hash_rows; }
+    result_bindings { packed => crate::bound_block; }
+    candidates crate::bound_scan;
+    candidate_bindings { reduced => crate::bound_prune; }
     keys crate::bound_exact;
     key_sets { reduced => crate::bound_zone; }
 
-    join crate::bound_hash;
-    joins {}
+    pairs crate::bound_hash;
+    pair_bindings {}
     struct ExplicitPacking;
     relation R(k:i64,x:i64);
     relation S(k:i64);
@@ -322,24 +322,24 @@ fn only_explicit_materialization_constructs_block_storage() {
 
 macro_rules! native {
     ($($plan:tt)*) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
 
-            materialize ::mini_linq::hash_rows;
+            result_rows ::mini_linq::array_hash_rows;
             inputs {
-                R => ::mini_linq::hash_rows;
-                S => ::mini_linq::hash_rows;
+                R => ::mini_linq::array_hash_rows;
+                S => ::mini_linq::array_hash_rows;
                 T => crate::caller_sorted;
             }
-            results { live => crate::caller_sorted; }
-            scan crate::bound_scan;
-            scans {  }
+            result_bindings { live => crate::caller_sorted; }
+            candidates crate::bound_scan;
+            candidate_bindings {  }
             keys crate::bound_exact;
             key_sets {  }
 
-            join crate::bound_nested;
-            joins { rs => crate::bound_hash; }
+            pairs crate::bound_nested;
+            pair_bindings { rs => crate::bound_hash; }
             $($plan)*
         }
     };
@@ -361,20 +361,20 @@ fn native_inputs_and_results_have_no_block_layout_dependency() {
     assert_eq!(stats.output.blocks_opened, 0);
 }
 
-mini_linq::observed_relation_program! {
-    storage ::cq_storage;
-    access ::mini_linq::pull_stream;
+mini_linq::observed_configured_program! {
+    counter_storage ::cq_storage;
+    access ::mini_linq::access_to_support_iter;
 
-    materialize ::mini_linq::sorted_rows;
-    inputs { R => crate::bound_block; S => ::mini_linq::hash_rows; }
-    results {}
-    scan crate::bound_prune;
-    scans {  }
+    result_rows ::mini_linq::array_sorted_rows;
+    inputs { R => crate::bound_block; S => ::mini_linq::array_hash_rows; }
+    result_bindings {}
+    candidates crate::bound_prune;
+    candidate_bindings {  }
     keys crate::bound_zone;
     key_sets {  }
 
-    join crate::bound_hash;
-    joins {}
+    pairs crate::bound_hash;
+    pair_bindings {}
     struct Composite;
     relation R(a:i64,b:i64,x:i64);
     relation S(b:i64,a:i64);
@@ -400,20 +400,20 @@ fn summary_false_positives_still_require_exact_composite_keys() {
     assert!(Composite::run(&r, &HashSet::new()).0.is_empty());
 }
 
-mini_linq::observed_relation_program! {
-    storage ::cq_storage;
-    access ::mini_linq::pull_stream;
+mini_linq::observed_configured_program! {
+    counter_storage ::cq_storage;
+    access ::mini_linq::access_to_support_iter;
 
-    materialize ::mini_linq::hash_rows;
-    inputs { R => ::mini_linq::hash_rows; S => crate::caller_sorted; }
-    results { u => crate::caller_sorted; exists => crate::caller_sorted; }
-    scan crate::bound_scan;
-    scans {  }
+    result_rows ::mini_linq::array_hash_rows;
+    inputs { R => ::mini_linq::array_hash_rows; S => crate::caller_sorted; }
+    result_bindings { u => crate::caller_sorted; exists => crate::caller_sorted; }
+    candidates crate::bound_scan;
+    candidate_bindings {  }
     keys crate::bound_exact;
     key_sets {  }
 
-    join crate::bound_hash;
-    joins { ur => crate::bound_nested; }
+    pairs crate::bound_hash;
+    pair_bindings { ur => crate::bound_nested; }
     struct NativeUnit;
     relation R(a:i64);
     relation S(b:i64);
@@ -465,18 +465,18 @@ macro_rules! borrow_keys {
 }
 pub(crate) use borrow_keys;
 
-mini_linq::observed_relation_program! {
-    storage ::cq_storage;
-    access ::mini_linq::pull_stream;
+mini_linq::observed_configured_program! {
+    counter_storage ::cq_storage;
+    access ::mini_linq::access_to_support_iter;
 
-    materialize ::mini_linq::hash_rows;
-    inputs { R => ::mini_linq::hash_rows; S => ::mini_linq::hash_rows; }
-    scan crate::bound_scan;
-    scans {  }
+    result_rows ::mini_linq::array_hash_rows;
+    inputs { R => ::mini_linq::array_hash_rows; S => ::mini_linq::array_hash_rows; }
+    candidates crate::bound_scan;
+    candidate_bindings {  }
     keys crate::borrow_keys;
     key_sets {  }
 
-    join crate::bound_hash;
+    pairs crate::bound_hash;
     struct BorrowedKeys;
     relation R(k:i64,x:i64);
     relation S(k:i64);
@@ -510,21 +510,21 @@ fn caller_recipe_can_borrow_existing_keys_without_scanning_or_constructing_them(
     assert_eq!(reduced.2.rows_visited, r.len());
 }
 
-mini_linq::observed_relation_program! {
-    storage ::cq_storage;
-    access ::mini_linq::pull_stream;
+mini_linq::observed_configured_program! {
+    counter_storage ::cq_storage;
+    access ::mini_linq::access_to_support_iter;
 
     inputs {
         R => crate::bound_block;
-        S => ::mini_linq::hash_rows;
-        T => ::mini_linq::hash_rows;
+        S => ::mini_linq::array_hash_rows;
+        T => ::mini_linq::array_hash_rows;
     }
-    materialize ::mini_linq::hash_rows;
-    scan crate::bound_scan;
-    scans { r1 => crate::bound_prune; }
+    result_rows ::mini_linq::array_hash_rows;
+    candidates crate::bound_scan;
+    candidate_bindings { r1 => crate::bound_prune; }
     keys crate::bound_zone;
 
-    join crate::bound_hash;
+    pairs crate::bound_hash;
     struct SharedAcrossAccess;
     relation R(k:i64,x:i64);
     relation S(k:i64,y:i64);
@@ -570,7 +570,7 @@ macro_rules! counted_block_rows {
     (work ($work:expr); row ($handle:expr)) => { crate::counted_block_rows! { row ($handle) } };
     (row ($handle:expr)) => {{
         crate::record_row_decode();
-        ::mini_linq::block_rows! { storage ::cq_storage; row ($handle) }
+        ::mini_linq::array_block_rows! { storage ::cq_storage; row ($handle) }
     }};
     ($($operation:tt)*) => { crate::bound_block! { $($operation)* } };
 }
@@ -578,16 +578,16 @@ pub(crate) use counted_block_rows;
 
 macro_rules! decode_query {
     ($name:ident, $scan:path, $keys:path; $($query:tt)*) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
 
-            inputs { R => crate::counted_block_rows; S => ::mini_linq::hash_rows; }
-            materialize ::mini_linq::hash_rows;
-            scan $scan;
+            inputs { R => crate::counted_block_rows; S => ::mini_linq::array_hash_rows; }
+            result_rows ::mini_linq::array_hash_rows;
+            candidates $scan;
             keys $keys;
 
-            join crate::bound_hash;
+            pairs crate::bound_hash;
             struct $name;
             $($query)*
         }
@@ -684,24 +684,24 @@ fn callable_packing_captures_configuration_and_returns_owned_answers() {
         macro_rules! source_rows {
             (scan ($rows:expr)) => {{
                 observed.borrow_mut().push("rows");
-                ::mini_linq::hash_rows! { scan ($rows) }
+                ::mini_linq::array_hash_rows! { scan ($rows) }
             }};
-            ($($op:tt)*) => { ::mini_linq::hash_rows! { $($op)* } };
+            ($($op:tt)*) => { ::mini_linq::array_hash_rows! { $($op)* } };
         }
         macro_rules! packed {
-            ($($op:tt)*) => { ::mini_linq::block_rows! {
+            ($($op:tt)*) => { ::mini_linq::array_block_rows! {
                 storage ::cq_storage;
                 packing ({ observed.borrow_mut().push("packing"); packing });
                 $($op)*
             }};
         }
-        let query = ::mini_linq::relation_query! {
-            access ::mini_linq::pull_stream;
+        let query = ::mini_linq::configured_callable! {
+            access ::mini_linq::access_to_support_iter;
             inputs { R => source_rows; }
-            materialize packed;
-            scan crate::bound_scan;
+            result_rows packed;
+            candidates crate::bound_scan;
             keys crate::bound_exact;
-            join crate::bound_hash;
+            pairs crate::bound_hash;
             struct Packed;
             relation R(k:i64,x:i64);
             answer(x) :- R(k,x);
@@ -722,18 +722,18 @@ fn callable_packing_captures_configuration_and_returns_owned_answers() {
 fn observed_callable_has_its_own_counter_scope_on_every_call() {
     let __ml_work = size(1);
     macro_rules! packed {
-        ($($op:tt)*) => { ::mini_linq::block_rows! {
+        ($($op:tt)*) => { ::mini_linq::array_block_rows! {
             storage ::cq_storage; packing (__ml_work); $($op)*
         }};
     }
-    let query = ::mini_linq::observed_relation_query! {
-        storage ::cq_storage;
-        access ::mini_linq::pull_stream;
-        inputs { R => ::mini_linq::hash_rows; }
-        materialize packed;
-        scan crate::bound_scan;
+    let query = ::mini_linq::observed_configured_callable! {
+        counter_storage ::cq_storage;
+        access ::mini_linq::access_to_support_iter;
+        inputs { R => ::mini_linq::array_hash_rows; }
+        result_rows packed;
+        candidates crate::bound_scan;
         keys crate::bound_exact;
-        join crate::bound_hash;
+        pairs crate::bound_hash;
         struct Packed;
         relation R(k:i64,x:i64);
         answer(x) :- R(k,x);
@@ -758,7 +758,7 @@ fn observed_callable_has_its_own_counter_scope_on_every_call() {
 #[allow(non_snake_case)]
 mod __MlStatistics {
     pub use cq_storage::*;
-    pub use mini_linq::{hash_rows, pull_stream};
+    pub use mini_linq::{access_to_support_iter, array_hash_rows};
 
     pub fn packing() -> std::num::NonZeroUsize {
         std::num::NonZeroUsize::new(1).unwrap()
@@ -767,14 +767,14 @@ mod __MlStatistics {
 
 #[test]
 fn callable_statistics_helper_cannot_shadow_configured_paths_or_opaque_bindings() {
-    let direct = ::mini_linq::observed_relation_query! {
-        storage __MlStatistics;
-        access __MlStatistics::pull_stream;
-        inputs { R => __MlStatistics::hash_rows; }
-        materialize __MlStatistics::hash_rows;
-        scan crate::bound_scan;
+    let direct = ::mini_linq::observed_configured_callable! {
+        counter_storage __MlStatistics;
+        access __MlStatistics::access_to_support_iter;
+        inputs { R => __MlStatistics::array_hash_rows; }
+        result_rows __MlStatistics::array_hash_rows;
+        candidates crate::bound_scan;
         keys crate::bound_exact;
-        join crate::bound_hash;
+        pairs crate::bound_hash;
         struct Q;
         relation R(x:i64); answer(x) :- R(x);
         relational {
@@ -789,26 +789,26 @@ fn callable_statistics_helper_cannot_shadow_configured_paths_or_opaque_bindings(
     assert_eq!(stats.steps.len(), 2);
 
     macro_rules! opaque_rows {
-        ($($op:tt)*) => { __MlStatistics::hash_rows! { $($op)* } };
+        ($($op:tt)*) => { __MlStatistics::array_hash_rows! { $($op)* } };
     }
     macro_rules! opaque_access {
-        ($($op:tt)*) => { __MlStatistics::pull_stream! { $($op)* } };
+        ($($op:tt)*) => { __MlStatistics::access_to_support_iter! { $($op)* } };
     }
     macro_rules! opaque_packing {
-        ($($op:tt)*) => { ::mini_linq::block_rows! {
+        ($($op:tt)*) => { ::mini_linq::array_block_rows! {
             storage __MlStatistics;
             packing (__MlStatistics::packing());
             $($op)*
         }};
     }
-    let opaque = ::mini_linq::observed_relation_query! {
-        storage ::cq_storage;
+    let opaque = ::mini_linq::observed_configured_callable! {
+        counter_storage ::cq_storage;
         access opaque_access;
         inputs { R => opaque_rows; }
-        materialize opaque_packing;
-        scan crate::bound_scan;
+        result_rows opaque_packing;
+        candidates crate::bound_scan;
         keys crate::bound_exact;
-        join crate::bound_hash;
+        pairs crate::bound_hash;
         struct Q;
         relation R(x:i64); answer(x) :- R(x);
         relational {

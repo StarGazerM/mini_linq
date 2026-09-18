@@ -12,7 +12,7 @@ when practical. If an option is shared, teams receive different workloads,
 claims, or adversarial cases. Students complete one extension deeply; combining
 tracks is not required.
 
-The current baseline is a genuine pull path. `cq_execution::pull::compile` first exposes a
+The current baseline is a genuine pull path. `cq_access_lowering::to_pipeline::compile` first exposes a
 named IteratorPipeline with results `iter0`, `iter1`, and so on, and `scan`,
 left-deep binary `join`, `filter`, `project`, and `distinct` operators. Each
 consumer explicitly names its predecessor. The supplied Rust lowering maps
@@ -135,9 +135,9 @@ The terminology is precise:
 - A complete `syn::File` containing a local macro invocation is a **staged Rust
   program** or **program residual**.
 - The syntax object parsed by that local macro is a local IR.
-- `pull`, `push`, and `push_tokio` name transformations. They are not names for
+- `access_to_distinct_iter`, `push`, and `push_tokio` name transformations. They are not names for
   an otherwise unspecified query IR.
-- IteratorPipeline is the concrete operator target of `pull`; callback and
+- IteratorPipeline is the concrete operator target of `access_to_distinct_iter`; callback and
   scheduled push transformations have different targets.
 
 ## Track A: push execution, Tokio channels, and an IVM continuation
@@ -590,7 +590,7 @@ it must not build a second identical `HashSet`. Exactly one final physical
 consumer moves each normalized relation, while any earlier genuinely distinct
 builder borrows it; a declared input unused by every query and written extra
 requirement is not iterated. It emits one query-local
-`pull! { rust_access_plan::Plan }` per query and returns a source-order result
+`access_to_distinct_iter! { rust_access_plan::Plan }` per query and returns a source-order result
 tuple from a single convenience `run` call:
 
 ```rust

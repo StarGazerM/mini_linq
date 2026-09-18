@@ -4,9 +4,10 @@ use std::collections::{BTreeSet, HashSet};
 mod wiring {
     pub use ::cq_storage as storage;
     pub use ::mini_linq::{
-        borrowed_scans as choose_realization, exists_pipeline, graph_query as query,
-        iterator_pipeline, no_indexes as choose_indexes, pull, pull_exists, pull_stream,
-        replay_rows, stream_pipeline,
+        access_to_distinct_iter, access_to_exists, access_to_support_iter,
+        cq_to_ra_hypergraph as query, lower_borrowed_nested as choose_relation_lowering,
+        no_index_demands as choose_index_policy, pipeline_to_distinct_iter, pipeline_to_exists,
+        pipeline_to_support_iter, replay_resource,
     };
     pub mod inputs {
         pub use ::mini_linq::{

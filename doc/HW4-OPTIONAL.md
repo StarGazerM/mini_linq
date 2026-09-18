@@ -345,7 +345,7 @@ extended judgment. They share the numbered `STUDENT 4/6` region.
 The existing physical pass must consume the extended IndexRequirements object
 and emit the same complete staged `Program + Storage` Rust file as Basic HW3, not
 another negation/aggregation or storage descriptor IR. Its one
-`pull! { rust_access_plan::Plan }` expression must retain every extended
+`access_to_distinct_iter! { rust_access_plan::Plan }` expression must retain every extended
 logical occurrence beside the exact Rust leaf that implements it.
 
 For the example, the relevant concrete objects are conceptually:
@@ -385,7 +385,7 @@ The occurrence-annotated residual region is already Rust-shaped. This excerpt
 focuses on the new occurrence-to-access relation:
 
 ```rust
-::mini_linq::pull! {
+::mini_linq::access_to_distinct_iter! {
     spend(person, total) => ((
         ::core::clone::Clone::clone(person),
         total,
@@ -446,7 +446,7 @@ pull lowering and IteratorPipeline-to-Rust lowering unchanged. The access plan
 above becomes:
 
 ```rust
-::mini_linq::iterator_pipeline! {
+::mini_linq::pipeline_to_distinct_iter! {
     iter0 = scan (person,) in (self.rows0.iter()) yield (person,);
     iter1 = filter iter0 as (person,)
         if (!self.index0.contains_key(&(
@@ -505,10 +505,10 @@ must update each affected language contract and its corresponding lowering.
 |---|---|---|
 | Supplied CQ syntax | `crates/cq-ir/src/cq.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
 | CQ validity | `crates/cq-ir/src/cq.rs` | Implement the left-to-right safety rules |
-| Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-plan/src/canonical/lower.rs`, and `crates/cq-plan/src/prefix/rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence in the owning logical implementation module |
-| Index selection | `crates/cq-index/src/input/mod.rs`, `crates/cq-index/src/result/mod.rs`, and their `correspondence.rs` checks | Extend key derivation over the complete RelationalPlan and its independent check |
+| Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-query-lowering/src/written_order/lower.rs`, and `crates/cq-query-lowering/src/clause_prefix/rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence in the owning logical implementation module |
+| Index selection | `crates/cq-index-policy/src/base_demands/mod.rs`, `crates/cq-index-policy/src/result_demands/mod.rs`, and their `correspondence.rs` checks | Extend key derivation over the complete RelationalPlan and its independent check |
 | Access annotations | `crates/cq-ir/src/rust_access_plan.rs` | Extend occurrence-to-access checking for negation and aggregation |
-| Physical realization | `crates/cq-realize/src/hash_inputs/mod.rs` and `crates/cq-realize/src/hash_prefix/mod.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
+| Physical realization | `crates/cq-relation-lowering/src/base_hash/mod.rs` and `crates/cq-relation-lowering/src/prefix_hash/mod.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
 
 You may add private helpers next to these sites. Do not add a generic pass
 trait, a dynamic query interpreter, or a second storage/access descriptor IR.

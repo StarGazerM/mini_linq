@@ -2,8 +2,8 @@
     feature = "hash-pairs",
     feature = "nested-pairs",
     feature = "sort-merge-pairs",
-    feature = "hash-rows",
-    feature = "sorted-rows"
+    feature = "array-hash-rows",
+    feature = "array-sorted-rows"
 ))]
 //! Algorithm replacement owns traversal, while the selected provider owns output.
 use std::collections::{BTreeSet, HashSet};
@@ -49,10 +49,16 @@ fn different_traversal_algorithms_and_result_stores_match_an_independent_oracle(
                         .map(move |r| [l.1, r.1])
                 })
                 .collect();
-            assert_eq!(result!(hash_pairs, hash_rows, &left, &right), expected);
-            assert_eq!(result!(nested_pairs, sorted_rows, &left, &right), expected);
             assert_eq!(
-                result!(sort_merge_pairs, hash_rows, &left, &right),
+                result!(hash_pairs, array_hash_rows, &left, &right),
+                expected
+            );
+            assert_eq!(
+                result!(nested_pairs, array_sorted_rows, &left, &right),
+                expected
+            );
+            assert_eq!(
+                result!(sort_merge_pairs, array_hash_rows, &left, &right),
                 expected
             );
         }

@@ -29,7 +29,7 @@ stores outputs. Prefix storage and nested comparisons remain explicit costs.
 
 ## Choose a composition
 
-`mini_linq!` chooses canonical or source-prefix planning. `optimized_query!`
+`mini_linq!` chooses canonical or source-prefix planning. `choose_graph_or_prefix!`
 chooses graph or prefix planning. Their generated stage calls resolve through
 the caller's `mini_linq` binding, including compiled workload queries.
 
@@ -38,15 +38,15 @@ An explicit eager composition is an ordinary Rust facade:
 ```rust
 mod eager {
     pub use ::mini_linq::{
-        optimized_query, graph_query, prefix_query,
-        result_indexes as choose_indexes,
-        hash_materialized as choose_realization,
-        pull_set, collect_pipeline,
+        choose_graph_or_prefix, cq_to_ra_hypergraph, cq_to_ra_clause_prefix,
+        result_index_demands as choose_index_policy,
+        materialized_hash_program as choose_relation_lowering,
+        access_to_set, pipeline_to_set,
     };
 }
 use eager as mini_linq;
 
-mini_linq::optimized_query! {
+mini_linq::choose_graph_or_prefix! {
     pub struct Query;
     relation R(a:i32,b:i32);
     relation S(b:i32,c:i32);
@@ -54,12 +54,12 @@ mini_linq::optimized_query! {
 }
 ```
 
-The explicit hash realizations are `hash_inputs!`, `hash_prefix!` and
-`hash_materialized!`. Their storage and materialization commitments are part of
+The explicit hash realizations are `lower_base_hash!`, `lower_prefix_hash!` and
+`materialized_hash_program!`. Their storage and materialization commitments are part of
 the selected implementation. Changing a later Access macro changes execution
 within that already chosen representation.
 
-`relation_program!` and `relation_query!` instead lower configured RA with
+`configured_program!` and `configured_callable!` instead lower configured RA with
 per-input/result row providers and per-operation algorithms. One query can
 combine block storage, heterogeneous tuple hash storage and tuple sorted results.
 Its native pair boundary supports hash, nested-loop and sort-merge joins. Its
@@ -67,8 +67,8 @@ candidate boundary supports scans or block metadata rejection followed by exact
 membership. Unsupported storage operations fail during macro expansion or Rust
 type checking. See [native access](doc/ACCESS-REFINEMENT.md).
 
-`pull!`, `pull_set!` and `pull_stream!` share Access-to-Pipeline lowering with
-different consumers. `push_set!` emits nested Rust loops directly into an exact
+`access_to_distinct_iter!`, `access_to_set!` and `access_to_support_iter!` share Access-to-Pipeline lowering with
+different consumers. `access_to_set_loops!` emits nested Rust loops directly into an exact
 set. A set-producing implementation can replace a set hole; it does not thereby
 satisfy an iterator's demand contract. Host-expression effects make this
 restriction observable and are covered by executable counterexamples.

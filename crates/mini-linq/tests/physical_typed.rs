@@ -1,16 +1,16 @@
 #![cfg(all(
-    feature = "relations",
+    feature = "configured",
     feature = "tuple-hash-rows",
     feature = "tuple-sorted-rows",
-    feature = "block-rows",
+    feature = "array-block-rows",
     feature = "hash-pairs",
-    feature = "scan-rows",
+    feature = "scan-candidates",
     feature = "exact-keys",
-    feature = "zone-keys",
-    feature = "prune-rows",
-    feature = "pull",
-    feature = "collect-pipeline",
-    feature = "stream-pipeline"
+    feature = "summarized-exact-keys",
+    feature = "prune-block-candidates",
+    feature = "access-to-pipeline",
+    feature = "pipeline-set",
+    feature = "pipeline-support-iter"
 ))]
 
 use std::{
@@ -19,48 +19,48 @@ use std::{
 };
 
 macro_rules! blocks {
-    ($($operation:tt)*) => { ::mini_linq::block_rows! { storage ::cq_storage; $($operation)* } };
+    ($($operation:tt)*) => { ::mini_linq::array_block_rows! { storage ::cq_storage; $($operation)* } };
 }
 macro_rules! exact {
     ($($operation:tt)*) => { ::mini_linq::exact_keys! {
         storage ::cq_storage;
-        iterator ::mini_linq::pull_stream;
+        access_iter ::mini_linq::access_to_support_iter;
         keys ::std::collections::HashSet;
         $($operation)*
     } };
 }
 macro_rules! zone {
-    ($($operation:tt)*) => { ::mini_linq::zone_keys! {
+    ($($operation:tt)*) => { ::mini_linq::summarized_exact_keys! {
         storage ::cq_storage;
-        iterator ::mini_linq::pull_stream;
+        access_iter ::mini_linq::access_to_support_iter;
         keys ::std::collections::BTreeSet;
         $($operation)*
     } };
 }
 macro_rules! prune {
-    ($($operation:tt)*) => { ::mini_linq::prune_rows! {
-        iterator ::mini_linq::pull_stream; $($operation)*
+    ($($operation:tt)*) => { ::mini_linq::prune_block_candidates! {
+        access_iter ::mini_linq::access_to_support_iter; $($operation)*
     } };
 }
 
 macro_rules! mixed_query {
     ($name:ident, $scan:path, $keys:path) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_set;
-            materialize ::mini_linq::tuple_hash_rows;
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_set;
+            result_rows ::mini_linq::tuple_hash_rows;
             inputs {
                 People => ::mini_linq::tuple_hash_rows;
                 Tags => ::mini_linq::tuple_sorted_rows;
                 Facts => blocks;
             }
-            results { extended => ::mini_linq::tuple_sorted_rows; }
-            scan ::mini_linq::scan_rows;
-            scans { live_facts => $scan; }
+            result_bindings { extended => ::mini_linq::tuple_sorted_rows; }
+            candidates ::mini_linq::scan_candidates;
+            candidate_bindings { live_facts => $scan; }
             keys exact;
             key_sets { live_facts => $keys; }
-            join ::mini_linq::hash_pairs;
-            joins {}
+            pairs ::mini_linq::hash_pairs;
+            pair_bindings {}
             struct $name;
             relation People(name: String, age: i32, key: i64);
             relation Tags(key: i64, label: String);
@@ -87,7 +87,7 @@ macro_rules! mixed_query {
     };
 }
 mixed_query!(Pruned, prune, zone);
-mixed_query!(Scanned, ::mini_linq::scan_rows, exact);
+mixed_query!(Scanned, ::mini_linq::scan_candidates, exact);
 
 #[test]
 fn typed_relations_expressions_and_block_pruning_compose_in_one_query() {

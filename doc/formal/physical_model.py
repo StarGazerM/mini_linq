@@ -12,8 +12,8 @@ from itertools import product
 PHYSICAL_MODEL_RULES = {
     "AF-Keys": "exact_keys",
     "AF-Zones": "zone_summary",
-    "AF-Scan": "scan_rows",
-    "AF-Prune": "prune_rows",
+    "AF-Scan": "scan_candidates",
+    "AF-Prune": "prune_block_candidates",
     "AF-Semi": "reduce",
     "AF-Hash": "hash_witnesses",
     "AF-Nested": "nested_witnesses",
@@ -44,11 +44,11 @@ def may_match(summary, bounds, columns):
     )
 
 
-def scan_rows(store, current):
+def scan_candidates(store, current):
     return [i for i in range(len(store)) if i in current]
 
 
-def prune_rows(store, current, block_size, summary, columns):
+def prune_block_candidates(store, current, block_size, summary, columns):
     handles = []
     for start in range(0, len(store), block_size):
         block = store[start:start + block_size]
@@ -113,10 +113,10 @@ def main():
                 keys = exact_keys(right, right_columns)
                 summary = zone_summary(keys)
                 expected = oracle(left_store, left_mask, right, left_columns, right_columns)
-                all_handles = scan_rows(left_store, left_mask)
+                all_handles = scan_candidates(left_store, left_mask)
                 assert reduce(left_store, all_handles, keys, left_columns) == expected
                 for size in (1, 2, 3):
-                    candidates = prune_rows(left_store, left_mask, size, summary, left_columns)
+                    candidates = prune_block_candidates(left_store, left_mask, size, summary, left_columns)
                     assert len(candidates) == len(set(candidates))
                     assert expected <= set(candidates) <= left_mask
                     assert reduce(left_store, candidates, keys, left_columns) == expected

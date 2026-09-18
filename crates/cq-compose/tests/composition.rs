@@ -1,8 +1,8 @@
 //! Explicit edges admit their own domains; convenience routing does not constrain them.
 use cq_ir::{cq, relational_plan as ra};
-use cq_plan::JoinPolicy;
-use cq_plan::PlanningOptions;
-use cq_plan::Rule as JoinRule;
+use cq_query_lowering::JoinPolicy;
+use cq_query_lowering::PlanningOptions;
+use cq_query_lowering::Rule as JoinRule;
 
 fn source() -> cq::Module {
     syn::parse_quote! {
@@ -19,8 +19,9 @@ fn the_same_cq_can_select_either_derivation_grammar_and_replay_it() {
         strategy: JoinPolicy::Auto,
         max_arity: None,
     };
-    let (graph, graph_proof) = cq_plan::graph::explain(&source, options).unwrap();
-    let (prefix, prefix_proof) = cq_plan::prefix::explain(&source, options).unwrap();
+    let (graph, graph_proof) = cq_query_lowering::hypergraph::explain(&source, options).unwrap();
+    let (prefix, prefix_proof) =
+        cq_query_lowering::clause_prefix::explain(&source, options).unwrap();
     assert!(
         graph_proof
             .derivation
@@ -48,11 +49,11 @@ fn explicit_edges_reject_unsupported_domains_instead_of_switching_implementation
     let expression: cq::Module = syn::parse_quote! {
         struct P; relation R(a:i32); answer(x) :- R(x), let y = *x + 1, if y > 0;
     };
-    assert!(cq_plan::canonical::compile(&expression).is_err());
-    assert!(cq_plan::graph::compile(&expression).is_err());
-    cq_plan::prefix::compile(&expression).unwrap();
+    assert!(cq_query_lowering::written_order::compile(&expression).is_err());
+    assert!(cq_query_lowering::hypergraph::compile(&expression).is_err());
+    cq_query_lowering::clause_prefix::compile(&expression).unwrap();
 
-    let graph = cq_plan::graph::compile(&source()).unwrap();
+    let graph = cq_query_lowering::hypergraph::compile(&source()).unwrap();
     assert!(
         graph
             .plan
@@ -60,25 +61,25 @@ fn explicit_edges_reject_unsupported_domains_instead_of_switching_implementation
             .iter()
             .any(|d| matches!(d.operator, ra::Operator::Semijoin(_)))
     );
-    assert!(cq_index::input::compile(&graph).is_err());
-    let indexed = cq_index::result::compile(&graph).unwrap();
+    assert!(cq_index_policy::base_demands::compile(&graph).is_err());
+    let indexed = cq_index_policy::result_demands::compile(&graph).unwrap();
     assert!(
-        cq_realize::hash_inputs::compile_input_indexed(
+        cq_relation_lowering::base_hash::compile(
             &indexed,
-            &syn::parse_quote!(::mini_linq::pull)
+            &syn::parse_quote!(::mini_linq::access_to_distinct_iter)
         )
         .is_err()
     );
     assert!(
-        cq_realize::hash_prefix::compile_lazy_indexed(
+        cq_relation_lowering::prefix_hash::compile(
             &indexed,
-            &syn::parse_quote!(::mini_linq::pull)
+            &syn::parse_quote!(::mini_linq::access_to_distinct_iter)
         )
         .is_err()
     );
-    cq_realize::hash_materialized::compile_materialized(
+    cq_relation_lowering::materialized_hash::compile(
         &indexed,
-        &syn::parse_quote!(::mini_linq::pull_set),
+        &syn::parse_quote!(::mini_linq::access_to_set),
     )
     .unwrap();
 }
@@ -89,9 +90,9 @@ fn every_explicit_entry_checks_source_well_formedness() {
         struct P; relation R(a:i32); answer(x) :- Missing(x);
     };
     for lower in [
-        cq_plan::canonical::compile,
-        cq_plan::prefix::compile,
-        cq_plan::graph::compile,
+        cq_query_lowering::written_order::compile,
+        cq_query_lowering::clause_prefix::compile,
+        cq_query_lowering::hypergraph::compile,
     ] {
         assert!(
             lower(&invalid)
@@ -100,9 +101,12 @@ fn every_explicit_entry_checks_source_well_formedness() {
                 .contains("not declared")
         );
     }
-    let mut invalid = cq_plan::canonical::compile(&source()).unwrap();
+    let mut invalid = cq_query_lowering::written_order::compile(&source()).unwrap();
     invalid.plan.output.input = syn::parse_quote!(missing);
-    for lower in [cq_index::input::compile, cq_index::result::compile] {
+    for lower in [
+        cq_index_policy::base_demands::compile,
+        cq_index_policy::result_demands::compile,
+    ] {
         assert!(lower(&invalid).is_err());
     }
 }
@@ -120,7 +124,7 @@ fn incomplete_expression_proofs_return_diagnostics_before_graph_state_constructi
         },
     ];
     for source in sources {
-        let (target, proof) = cq_plan::prefix::explain(
+        let (target, proof) = cq_query_lowering::clause_prefix::explain(
             &source,
             PlanningOptions {
                 strategy: JoinPolicy::Written,
@@ -181,15 +185,13 @@ fn default_index_policy_preserves_the_plan_and_uses_its_admitted_namespace() {
 
 #[test]
 fn graph_default_uses_a_compatible_realization_and_completed_set_continuation() {
-    let graph = cq_plan::graph::compile(&source()).unwrap();
+    let graph = cq_query_lowering::hypergraph::compile(&source()).unwrap();
     assert!(!cq_compose::use_input_indexes(&graph).unwrap());
     let iterator = syn::parse_quote!(selected::iterator);
     let set = syn::parse_quote!(selected::set);
     let (indexes, program) = cq_compose::compile_indexed(&graph, &iterator, &set).unwrap();
-    assert!(cq_realize::hash_inputs::check_domain(&indexes).is_err());
-    assert!(cq_realize::hash_prefix::check_domain(&indexes).is_err());
-    cq_realize::hash_materialized::check_materialized(&indexes, &program, &set).unwrap();
-    assert!(
-        cq_realize::hash_materialized::check_materialized(&indexes, &program, &iterator).is_err()
-    );
+    assert!(cq_relation_lowering::base_hash::check_domain(&indexes).is_err());
+    assert!(cq_relation_lowering::prefix_hash::check_domain(&indexes).is_err());
+    cq_relation_lowering::materialized_hash::check(&indexes, &program, &set).unwrap();
+    assert!(cq_relation_lowering::materialized_hash::check(&indexes, &program, &iterator).is_err());
 }

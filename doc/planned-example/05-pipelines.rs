@@ -26,7 +26,7 @@ impl PlannedExample {
         );
         let relation0: ::std::collections::HashSet<(i32, i32)> = {
             let __left = &input0;
-            ::mini_linq::collect_pipeline! {
+            ::mini_linq::pipeline_to_set! {
                 iter0 = scan(v0, v1,) in (__left.iter()) yield (v0, v1,); iter1 = project
                 iter0 as (v0, v1,) yield ((::core::clone::Clone::clone(v0),
                 ::core::clone::Clone::clone(v1),)); iter2 = distinct iter1; return iter2;
@@ -40,7 +40,7 @@ impl PlannedExample {
         __stats.index_rows += relation0.len();
         let relation1: ::std::collections::HashSet<(i32, i32)> = {
             let __left = &input1;
-            ::mini_linq::collect_pipeline! {
+            ::mini_linq::pipeline_to_set! {
                 iter0 = scan(v1, v2,) in (__left.iter()) yield (v1, v2,); iter1 = project
                 iter0 as (v1, v2,) yield ((::core::clone::Clone::clone(v1),
                 ::core::clone::Clone::clone(v2),)); iter2 = distinct iter1; return iter2;
@@ -49,7 +49,7 @@ impl PlannedExample {
         __stats.results.push(("r1", 2usize, relation1.len()));
         let relation2: ::std::collections::HashSet<(i32, i32)> = {
             let __left = &relation1;
-            ::mini_linq::collect_pipeline! {
+            ::mini_linq::pipeline_to_set! {
                 iter0 = scan(v1, v2,) in (__left.iter()) yield (v1, v2,); iter1 = filter
                 iter0 as (v1, v2,) if ({ let value : ::core::primitive::i32 = * v2; value
                 } > 0i32); iter2 = project iter1 as (v1, v2,) yield
@@ -62,7 +62,7 @@ impl PlannedExample {
             let __left = &relation2;
             let __index = &index0;
             let __probes_ref = &__probes;
-            ::mini_linq::collect_pipeline! {
+            ::mini_linq::pipeline_to_set! {
                 iter0 = scan(v1, v2,) in (__left.iter()) yield (v1, v2,); iter1 = filter
                 iter0 as (v1, v2,) if ({ __probes_ref.set(__probes_ref.get() + 1);
                 __index.contains(& (::core::clone::Clone::clone(v1),)) }); iter2 =
@@ -80,7 +80,7 @@ impl PlannedExample {
             let __left = &relation0;
             let __index = &index1;
             let __probes_ref = &__probes;
-            ::mini_linq::collect_pipeline! {
+            ::mini_linq::pipeline_to_set! {
                 iter0 = scan(v0, v1,) in (__left.iter()) yield (v0, v1,); iter1 = filter
                 iter0 as (v0, v1,) if ({ __probes_ref.set(__probes_ref.get() + 1);
                 __index.contains(& (::core::clone::Clone::clone(v1),)) }); iter2 =
@@ -99,7 +99,7 @@ impl PlannedExample {
         __stats.index_rows += relation4.len();
         let relation5: ::std::collections::HashSet<(i32,)> = {
             let __left = &relation3;
-            ::mini_linq::collect_pipeline! {
+            ::mini_linq::pipeline_to_set! {
                 iter0 = scan(v1, v2,) in (__left.iter()) yield (v1, v2,); iter1 = project
                 iter0 as (v1, v2,) yield ((::core::clone::Clone::clone(v1),)); iter2 =
                 distinct iter1; return iter2;
@@ -110,7 +110,7 @@ impl PlannedExample {
             let __left = &relation5;
             let __index = &index2;
             let __pairs_ref = &__pairs;
-            ::mini_linq::collect_pipeline! {
+            ::mini_linq::pipeline_to_set! {
                 iter0 = scan(v1,) in (__left.iter()) yield (v1,); iter1 = join iter0 as
                 (v1,) with(v0,) in (__index.get(& (::core::clone::Clone::clone(v1),))
                 .into_iter().flatten()) yield (v1, v0,); iter2 = project iter1 as (v1,
@@ -122,7 +122,7 @@ impl PlannedExample {
         __stats.results.push(("r6", 2usize, relation6.len()));
         let relation7: ::std::collections::HashSet<(i32,)> = {
             let __left = &relation6;
-            ::mini_linq::collect_pipeline! {
+            ::mini_linq::pipeline_to_set! {
                 iter0 = scan(v0, v1,) in (__left.iter()) yield (v0, v1,); iter1 = project
                 iter0 as (v0, v1,) yield ((::core::clone::Clone::clone(v0),)); iter2 =
                 distinct iter1; return iter2;

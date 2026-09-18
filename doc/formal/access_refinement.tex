@@ -44,11 +44,11 @@ realization rule for operator $o$:
 \begin{array}{c|l}
 o&\operatorname{need}(o)\\\hline
 \mathsf{Rename}&\varnothing\\
-\mathsf{Unit}&\{\mathsf{materialize}\}\\
-\mathsf{Project},\mathsf{Extend}&\{\mathsf{access},\mathsf{materialize}\}\\
+\mathsf{Unit}&\{\mathsf{result\_rows}\}\\
+\mathsf{Project},\mathsf{Extend}&\{\mathsf{access},\mathsf{result\_rows}\}\\
 \mathsf{Select}&\{\mathsf{access}\}\\
-\mathsf{Semijoin}&\{\mathsf{access},\mathsf{scan},\mathsf{keys}\}\\
-\mathsf{NaturalJoin}&\{\mathsf{materialize},\mathsf{join}\}
+\mathsf{Semijoin}&\{\mathsf{access},\mathsf{candidates},\mathsf{keys}\}\\
+\mathsf{NaturalJoin}&\{\mathsf{result\_rows},\mathsf{pairs}\}
 \end{array}
 \]
 Input declarations separately require exactly their provider bindings. For a
@@ -366,7 +366,7 @@ does not establish ordering by the requested separator key.
 \end{algorithmic}
 \end{algorithm}
 These are independently invoked implementations, not a runtime catalogue.
-\code{cq-native} groups row, candidate, key, witness and pair expansion modules at
+\code{cq-native-lowering} groups row, candidate, key, witness and pair expansion modules at
 one native-fragment boundary. Its \code{rows} modules own coherent array, tuple or
 block representations. Existing Build/Probe witness resources remain independently
 usable fragments; the natural-join rule uses Pairs, whose implementation owns the

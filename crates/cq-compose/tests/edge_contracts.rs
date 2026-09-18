@@ -1,6 +1,6 @@
 mod support;
 
-use support::{edges, fixtures, hash_inputs, invalid};
+use support::{base_hash, edges, fixtures, invalid};
 
 #[test]
 fn supplied_fixtures_are_well_formed() {
@@ -39,7 +39,7 @@ fn relational_plan_to_index_requirements_contract() {
 #[test]
 fn index_requirements_to_staged_rust_contract() {
     for fixture in fixtures::index_requirements_to_staged_rust() {
-        hash_inputs::assert_index_requirements_to_staged_rust(fixture);
+        base_hash::assert_index_requirements_to_staged_rust(fixture);
     }
-    hash_inputs::assert_missing_required_index_rejected(fixtures::missing_required_index());
+    base_hash::assert_missing_required_index_rejected(fixtures::missing_required_index());
 }

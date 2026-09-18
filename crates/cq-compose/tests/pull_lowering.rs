@@ -1,6 +1,6 @@
-use cq_execution::pull::compile as compile_pull;
+use cq_access_lowering::to_pipeline::compile as compile_pull;
 use cq_ir::rust_access_plan;
-use cq_pipeline::iterator::compile as compile_iterator_pipeline;
+use cq_pipeline_lowering::distinct_iter::compile as compile_iterator_pipeline;
 use quote::quote;
 use syn::visit::{self, Visit};
 

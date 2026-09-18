@@ -51,7 +51,7 @@ and first use. Every consumer is visited and $D$ is copied unchanged.
 \end{proof}
 
 \subsection{Borrowed scans through Access and Pipeline}
-The \code{borrowed_scans} realization accepts checked IX $(D,\emptyseq)$ with
+The \code{lower_borrowed_nested} realization accepts checked IX $(D,\emptyseq)$ with
 Unit, Rename, Project, Join and Semijoin and variable-only output. It rejects
 Select, Extend, computed outputs and nonempty index demands. Let $\Gamma(r)$
 be its earlier Rust binding and $S_r$ an Access source: a single-use iterator

@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 
-use mini_linq::{iterator_pipeline, pull};
+use mini_linq::{access_to_distinct_iter, pipeline_to_distinct_iter};
 
 pub struct AnnotatedTriangle;
 
@@ -48,7 +48,7 @@ impl AnnotatedTriangle {
 
 impl AnnotatedTriangleStorage {
     pub fn query(&self) -> impl Iterator<Item = (i32, i32, i32)> + '_ {
-        pull! {
+        access_to_distinct_iter! {
             triangle(x, y, z) => (((*x).clone(), (*y).clone(), (*z).clone())) :-
             R(x, y) => for (x, y) in (self.rows0.iter()),
             S(y, z) => for (z,) in (
@@ -74,7 +74,7 @@ struct ProjectionSet {
 
 impl ProjectionSet {
     fn query(&self) -> impl Iterator<Item = (i32,)> + '_ {
-        pull! {
+        access_to_distinct_iter! {
             project(x) => (((*x).clone(),)) :-
             R(x, _y) => for (x, _y) in (self.rows0.iter());
         }
@@ -88,7 +88,7 @@ struct LazyResultSet {
 
 impl LazyResultSet {
     fn query(&self) -> impl Iterator<Item = (i32,)> + '_ {
-        pull! {
+        access_to_distinct_iter! {
             answer(x) => (((*x).clone(),)) :-
             R(x) => for (x,) in (
                 self.rows0.iter().inspect(|_| {
@@ -142,7 +142,7 @@ fn pull_defers_the_root_source_expression_until_first_next() {
     let evaluations = Cell::new(0);
     let counter = &evaluations;
 
-    let mut rows = pull! {
+    let mut rows = access_to_distinct_iter! {
         answer(x) => ((x,)) :-
         R(x) => for (x,) in ({
             counter.set(counter.get() + 1);
@@ -165,7 +165,7 @@ fn generated_iter0_does_not_capture_a_user_leaf_named_iter0() {
     let index = std::collections::HashMap::from([((1,), vec![(10,), (11,)]), ((2,), vec![(20,)])]);
     let iter0 = &index;
 
-    let result = pull! {
+    let result = access_to_distinct_iter! {
         answer(x, y) => ((x, y,)) :-
         Seed(x) => for (x,) in (rows.into_iter()),
         Edge(x, y) => for (y,) in (
@@ -182,7 +182,7 @@ fn iterator_pipeline_is_an_independently_invocable_lazy_stage() {
     let evaluations = Cell::new(0);
     let counter = &evaluations;
 
-    let mut rows = iterator_pipeline! {
+    let mut rows = pipeline_to_distinct_iter! {
         iter0 = scan (x,) in ({
             counter.set(counter.get() + 1);
             [(1,), (2,), (3,)].into_iter()
@@ -213,7 +213,7 @@ fn quoted_let_accesses_preserve_bindings_and_empty_binding_effects_on_demand() {
         let (bindings, effects) = counter.get();
         counter.set((bindings, effects + 1));
     };
-    let mut rows = pull! {
+    let mut rows = access_to_distinct_iter! {
         answer(x, y) => ((x, y)) :-
             R(x) => for (x,) in ([(1,), (2,), (1,)]),
             let y = compute(x) => for (y,) in (::std::iter::once((compute(x),))),

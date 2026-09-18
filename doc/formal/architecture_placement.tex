@@ -45,9 +45,9 @@ Pairs fragment with two row traversals, derived key expressions and a result
 emission body. Hash, nested and sort/merge implementations therefore own their
 whole local schedule; the caller does not preselect build/probe control. These
 are native expression and statement fragments, not serialized RA operators with
-a physical environment. \code{cq-realize::relations} owns the enclosing RA
-realization; \code{cq-native} owns row, candidate, key, witness and pair expansion;
-\code{cq-execution} owns Access execution alternatives; \code{cq-storage} holds
+a physical environment. \code{cq-relation-lowering::configured} owns the enclosing RA
+realization; \code{cq-native-lowering} owns row, candidate, key, witness and pair expansion;
+\code{cq-access-lowering} owns Access execution alternatives; \code{cq-storage} holds
 minimal storage traits and data structures. Feature modules isolate implementations
 within those families. Shared language facts and private strategy analyses do not
 form a universal analysis registry.
@@ -114,7 +114,7 @@ zone-map source must decide block rejection before reading the skipped payload.
 Installing a clever \code{for} source after the existing eager input
 \code{HashSet} normalization cannot save that earlier input read. A block-aware
 physical pass must emit the appropriate input/scan context; it may still reuse
-\code{pull!} for the local output loop.
+\code{access_to_distinct_iter!} for the local output loop.
 
 For a strategy $a$, write its compiler edge as
 \[
@@ -151,14 +151,14 @@ quotation with the same logical bindings but different concrete expressions:
 \begin{lstlisting}
 let answer = if observed_range_fits_bitmap(&build_keys) {
     let bits = build_exact_bitmap(&build_keys);
-    mini_linq::pull! {
+    mini_linq::access_to_distinct_iter! {
         out(k) => ((k,)) :-
         Probe(k) => for (k,) in (probe_rows.iter().copied()),
         Build(k) => if (bitmap_contains(bits, k));
     }.collect::<HashSet<_>>()
 } else {
     let keys = build_exact_hash_set(&build_keys);
-    mini_linq::pull! {
+    mini_linq::access_to_distinct_iter! {
         out(k) => ((k,)) :-
         Probe(k) => for (k,) in (probe_rows.iter().copied()),
         Build(k) => if (keys.contains(&k));

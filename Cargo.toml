@@ -12,12 +12,12 @@ publish = false
 members = [
     "crates/cq-ir",
     "crates/cq-storage",
-    "crates/cq-plan",
-    "crates/cq-index",
-    "crates/cq-realize",
-    "crates/cq-native",
-    "crates/cq-execution",
-    "crates/cq-pipeline",
+    "crates/cq-query-lowering",
+    "crates/cq-index-policy",
+    "crates/cq-relation-lowering",
+    "crates/cq-native-lowering",
+    "crates/cq-access-lowering",
+    "crates/cq-pipeline-lowering",
     "crates/cq-compose",
     "crates/mini-linq",
     "workloads",
@@ -34,13 +34,13 @@ version = "0.1.0"
 contracts = "=0.6.10"
 cq-ir = { path = "crates/cq-ir" }
 cq-storage = { path = "crates/cq-storage" }
-cq-plan = { path = "crates/cq-plan", default-features = false }
-cq-index = { path = "crates/cq-index", default-features = false }
-cq-realize = { path = "crates/cq-realize", default-features = false }
+cq-query-lowering = { path = "crates/cq-query-lowering", default-features = false }
+cq-index-policy = { path = "crates/cq-index-policy", default-features = false }
+cq-relation-lowering = { path = "crates/cq-relation-lowering", default-features = false }
 mini-linq = { path = "crates/mini-linq" }
-cq-native = { path = "crates/cq-native", default-features = false }
-cq-execution = { path = "crates/cq-execution", default-features = false }
-cq-pipeline = { path = "crates/cq-pipeline", default-features = false }
+cq-native-lowering = { path = "crates/cq-native-lowering", default-features = false }
+cq-access-lowering = { path = "crates/cq-access-lowering", default-features = false }
+cq-pipeline-lowering = { path = "crates/cq-pipeline-lowering", default-features = false }
 cq-compose = { path = "crates/cq-compose" }
 proc-macro2 = "1"
 prettyplease = "0.2"

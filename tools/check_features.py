@@ -54,7 +54,7 @@ def feature_cases(package):
         add(feature, [feature])
     add("default", None)
     add("completed", sorted(set(features) - UNFINISHED - {"default"}))
-    add("execution-alternatives", ["pull", "push-set", "iterator-pipeline", "collect-pipeline"])
+    add("execution-alternatives", ["access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set"])
     for target in package["targets"]:
         if not set(target["kind"]) & {"test", "example"}:
             continue
@@ -107,8 +107,8 @@ def main():
                    and set(t.get("required-features", [])) <= active]
         output = logpath.read_text()
         tested = sum(map(int, re.findall(r"test result: ok\. (\d+) passed", output)))
-        if label == "push-set" and "push_moves_owned_outputs_and_preserves_outer_values_for_multiple_witnesses ... ok" not in output:
-            raise SystemExit(f"FAIL: push-set did not execute its isolated runtime test; see {logpath}")
+        if label == "access-to-set-loops" and "push_moves_owned_outputs_and_preserves_outer_values_for_multiple_witnesses ... ok" not in output:
+            raise SystemExit(f"FAIL: access-to-set-loops did not execute its isolated runtime test; see {logpath}")
         if any(t["name"] == "staged_execution" for t in targets):
             for test in ("ya_star_matches_oracle_with_borrowed_nonclone_inputs",
                          "projection_and_shared_dag_have_set_semantics",

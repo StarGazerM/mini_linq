@@ -1,13 +1,13 @@
 //! Existing Access quotations over different native Rust representations.
 //! The 64-key range cutoff is illustrative, not a cost-based optimizer.
 //! This checks local exact access and conservative prefiltering, not YA scheduling.
-use mini_linq::pull;
+use mini_linq::access_to_distinct_iter;
 use std::collections::{BTreeSet, HashSet};
 
 type Answer = BTreeSet<(i32,)>;
 
 fn hash_access(probe: &[i32], keys: &HashSet<i32>) -> Answer {
-    pull! {
+    access_to_distinct_iter! {
         answer(x) => ((x,)) :-
         P(x) => for (x,) in (probe.iter().copied().map(|x| (x,))),
         S(x) => if (keys.contains(&x));
@@ -16,7 +16,7 @@ fn hash_access(probe: &[i32], keys: &HashSet<i32>) -> Answer {
 }
 
 fn bitmap_access(probe: &[i32], base: i32, bits: u64) -> Answer {
-    pull! {
+    access_to_distinct_iter! {
         answer(x) => ((x,)) :-
         P(x) => for (x,) in (probe.iter().copied().map(|x| (x,))),
         S(x) => if ({
@@ -58,7 +58,7 @@ fn coarse_bit(key: i32) -> u64 {
 fn prefiltered_access(probe: &[i32], keys: &HashSet<i32>, coarse: u64) -> Answer {
     // This deliberately collision-prone 8-bucket filter is not an exact S lookup.
     // MayS denotes its candidate keys; the separate S guard establishes matches.
-    pull! {
+    access_to_distinct_iter! {
         answer(x) => ((x,)) :-
         P(x) => for (x,) in (probe.iter().copied().map(|x| (x,))),
         MayS(x) => if (coarse & coarse_bit(x) != 0),

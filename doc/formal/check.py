@@ -63,7 +63,7 @@ def check_rule_inventory():
             "source marker must identify exactly one location", entry
         )
     # Inventory of executable rule variants, independent of LaTeX rendering.
-    rule_source = (ROOT / "crates/cq-plan/src/model.rs").read_text()
+    rule_source = (ROOT / "crates/cq-query-lowering/src/model.rs").read_text()
     enum = re.search(r"pub enum Rule \{(.*?)^\}", rule_source, re.S | re.M).group(1)
     variants = set(re.findall(r"^    (\w+)", enum, re.M))
     paired = {

@@ -1,23 +1,23 @@
 rule	algorithm	path	marker	model_marker	scope
-AF-Realize	alg:access-direct	crates/cq-realize/src/relations/hosts/plain.rs	pub fn compile_program(	-	Direct admitted RA edge under provider and host laws
-AF-Bind	alg:access-direct	crates/cq-realize/src/relations/layout.rs	pub(super) fn analyze(	-	Current layouts and inherited provider bindings
-AF-Build	alg:access-direct	crates/cq-realize/src/relations/resources.rs	pub(super) fn emit(	-	Projected current RHS Access resource construction
-AF-Reuse	alg:access-direct	crates/cq-realize/src/relations/resources.rs	pub(super) fn analyze(	-	Same current RHS separator and configured key provider
-AF-Semi	alg:access-direct	crates/cq-realize/src/relations/lower.rs	pub(super) fn semijoin(	reduce	Candidate traversal plus exact residual and current selection
-AF-Join	alg:access-direct	crates/cq-realize/src/relations/lower.rs	pub(super) fn join(	join	Whole pair production with exact separator keys and result emission
-AF-Store	alg:access-direct	crates/cq-realize/src/relations/lower.rs	fn materialize(	-	Selected provider preserves materialized row set
-AF-Scan	alg:access-leaf	crates/cq-native/src/candidates/scan.rs	pub fn compile(	scan_rows	Current rows without expansion of metadata tokens
-AF-Prune	alg:access-leaf	crates/cq-native/src/candidates/prune.rs	pub fn compile(	prune_rows	Guard before current selected block payload
-AF-Keys	alg:access-leaf	crates/cq-native/src/keys/exact.rs	pub fn compile(	exact_keys	Exact key collection and membership
-AF-Zones	alg:access-leaf	crates/cq-native/src/keys/zone.rs	pub fn compile(	zone_summary	Exact keys plus conservative coordinate metadata
-AF-Hash	alg:access-leaf	crates/cq-native/src/witnesses/hash.rs	pub fn compile(	hash_witnesses	Eager bucket Build and exact Probe
-AF-Nested	alg:access-leaf	crates/cq-native/src/witnesses/nested.rs	pub fn compile(	nested_witnesses	Deferred Build closure with traversal per Probe
-AF-Stream	alg:access-leaf	crates/cq-pipeline/src/stream.rs	pub fn compile(	support_stream	Pre-Distinct sequence and support preservation
-AF-Row	alg:access-direct	crates/cq-native/src/rows/native.rs	pub(super) fn compile(	-	Typed row representation with coherent Field and Record
-AF-Produce	alg:access-direct	crates/cq-native/src/rows/native.rs	pub(super) fn compile(	-	Emission sink establishes the selected exact result representation
-AF-Select	alg:access-direct	crates/cq-realize/src/relations/lower.rs	pub(super) fn select(	-	Current-handle selection by a typed pure host predicate
-AF-Extend	alg:access-direct	crates/cq-realize/src/relations/lower.rs	pub(super) fn extend(	-	Typed host extension and provider-owned row construction
-AF-HashPairs	alg:access-leaf	crates/cq-native/src/pairs/hash.rs	pub fn compile(	-	Own RHS hash construction and LHS probing preserving pair multiplicity
-AF-NestedPairs	alg:access-leaf	crates/cq-native/src/pairs/nested.rs	pub fn compile(	-	Own repeated RHS traversal preserving exact pair multiplicity
-AF-MergePairs	alg:access-leaf	crates/cq-native/src/pairs/merge.rs	pub fn compile(	-	Own sorting both inputs and expanding matching key runs
-AF-Configure	alg:access-direct	crates/cq-realize/src/relations/mod.rs	fn validate(&self, source:	-	Only used choices require configured paths; role overrides follow actual RA operators
+AF-Realize	alg:access-direct	crates/cq-relation-lowering/src/configured/hosts/plain.rs	pub fn compile_program(	-	Direct admitted RA edge under provider and host laws
+AF-Bind	alg:access-direct	crates/cq-relation-lowering/src/configured/layout.rs	pub(super) fn analyze(	-	Current layouts and inherited provider bindings
+AF-Build	alg:access-direct	crates/cq-relation-lowering/src/configured/resources.rs	pub(super) fn emit(	-	Projected current RHS Access resource construction
+AF-Reuse	alg:access-direct	crates/cq-relation-lowering/src/configured/resources.rs	pub(super) fn analyze(	-	Same current RHS separator and configured key provider
+AF-Semi	alg:access-direct	crates/cq-relation-lowering/src/configured/lower.rs	pub(super) fn semijoin(	reduce	Candidate traversal plus exact residual and current selection
+AF-Join	alg:access-direct	crates/cq-relation-lowering/src/configured/lower.rs	pub(super) fn join(	join	Whole pair production with exact separator keys and result emission
+AF-Store	alg:access-direct	crates/cq-relation-lowering/src/configured/lower.rs	fn materialize(	-	Selected provider preserves materialized row set
+AF-Scan	alg:access-leaf	crates/cq-native-lowering/src/candidates/scan.rs	pub fn compile(	scan_candidates	Current rows without expansion of metadata tokens
+AF-Prune	alg:access-leaf	crates/cq-native-lowering/src/candidates/prune.rs	pub fn compile(	prune_block_candidates	Guard before current selected block payload
+AF-Keys	alg:access-leaf	crates/cq-native-lowering/src/keys/exact.rs	pub fn compile(	exact_keys	Exact key collection and membership
+AF-Zones	alg:access-leaf	crates/cq-native-lowering/src/keys/zone.rs	pub fn compile(	zone_summary	Exact keys plus conservative coordinate metadata
+AF-Hash	alg:access-leaf	crates/cq-native-lowering/src/witnesses/hash.rs	pub fn compile(	hash_witnesses	Eager bucket Build and exact Probe
+AF-Nested	alg:access-leaf	crates/cq-native-lowering/src/witnesses/nested.rs	pub fn compile(	nested_witnesses	Deferred Build closure with traversal per Probe
+AF-Stream	alg:access-leaf	crates/cq-pipeline-lowering/src/support_iter.rs	pub fn compile(	support_stream	Pre-Distinct sequence and support preservation
+AF-Row	alg:access-direct	crates/cq-native-lowering/src/rows/set_ops.rs	pub(super) fn compile(	-	Typed row representation with coherent Field and Record
+AF-Produce	alg:access-direct	crates/cq-native-lowering/src/rows/set_ops.rs	pub(super) fn compile(	-	Emission sink establishes the selected exact result representation
+AF-Select	alg:access-direct	crates/cq-relation-lowering/src/configured/lower.rs	pub(super) fn select(	-	Current-handle selection by a typed pure host predicate
+AF-Extend	alg:access-direct	crates/cq-relation-lowering/src/configured/lower.rs	pub(super) fn extend(	-	Typed host extension and provider-owned row construction
+AF-HashPairs	alg:access-leaf	crates/cq-native-lowering/src/pairs/hash.rs	pub fn compile(	-	Own RHS hash construction and LHS probing preserving pair multiplicity
+AF-NestedPairs	alg:access-leaf	crates/cq-native-lowering/src/pairs/nested.rs	pub fn compile(	-	Own repeated RHS traversal preserving exact pair multiplicity
+AF-MergePairs	alg:access-leaf	crates/cq-native-lowering/src/pairs/merge.rs	pub fn compile(	-	Own sorting both inputs and expanding matching key runs
+AF-Configure	alg:access-direct	crates/cq-relation-lowering/src/configured/mod.rs	fn validate(&self, source:	-	Only used choices require configured paths; role overrides follow actual RA operators

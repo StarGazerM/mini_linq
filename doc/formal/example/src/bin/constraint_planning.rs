@@ -1,14 +1,20 @@
 //! Compare an extended query with an independently authored optimized RA plan.
 //! The current planner is not claimed to discover the authored plan.
 mod eager_programs {
-    use super::{combine, left_key, right_key, permitted};
+    use super::{combine, left_key, permitted, right_key};
     mod wiring {
         #[allow(unused_imports)]
-        pub use ::mini_linq::{optimized_query, graph_query, prefix_query, pull_set, collect_pipeline, pull, iterator_pipeline};
-        pub use ::mini_linq::{result_indexes as choose_indexes, hash_materialized as choose_realization};
+        pub use ::mini_linq::{
+            access_to_distinct_iter, access_to_set, choose_graph_or_prefix, cq_to_ra_clause_prefix,
+            cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
+        };
+        pub use ::mini_linq::{
+            materialized_hash_program as choose_relation_lowering,
+            result_index_demands as choose_index_policy,
+        };
     }
     use wiring as mini_linq;
-    mini_linq::optimized_query! {
+    mini_linq::choose_graph_or_prefix! {
         pub(super) struct Planned;
         relation R(a:i32,b:i32); relation S(a:i32,b:i32);
         relation T(a:i32,b:i32); relation U(a:i32,b:i32,c:i32);
@@ -18,7 +24,7 @@ mod eager_programs {
             U(left_key(k,*y),right_key(*x,*z),w),
             if *x > 0, if permitted(k,*z), V(w);
     }
-    mini_linq::choose_indexes! {
+    mini_linq::choose_index_policy! {
         pub(super) struct Authored;
         relation R(a:i32,b:i32); relation S(a:i32,b:i32);
         relation T(a:i32,b:i32); relation U(a:i32,b:i32,c:i32);
@@ -48,8 +54,8 @@ mod eager_programs {
         }
     }
 }
-use eager_programs::Planned;
 use eager_programs::Authored;
+use eager_programs::Planned;
 use std::collections::BTreeSet;
 
 fn combine(x: i32, y: i32) -> i32 {
@@ -75,10 +81,6 @@ mini_linq::mini_linq! {
         U(left_key(k,*y),right_key(*x,*z),w),
         if *x > 0, if permitted(k,*z), V(w);
 }
-
-
-
-
 
 #[derive(Clone, Default)]
 struct Input {

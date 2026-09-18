@@ -341,18 +341,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "cq-compose"
-version = "0.1.0"
-dependencies = [
- "cq-index",
- "cq-ir",
- "cq-plan",
- "cq-realize",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-execution"
+name = "cq-access-lowering"
 version = "0.1.0"
 dependencies = [
  "contracts",
@@ -363,7 +352,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-index"
+name = "cq-compose"
+version = "0.1.0"
+dependencies = [
+ "cq-index-policy",
+ "cq-ir",
+ "cq-query-lowering",
+ "cq-relation-lowering",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -382,7 +382,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-native"
+name = "cq-native-lowering"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -392,18 +392,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-pipeline"
-version = "0.1.0"
-dependencies = [
- "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-plan"
+name = "cq-pipeline-lowering"
 version = "0.1.0"
 dependencies = [
  "contracts",
@@ -414,7 +403,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-realize"
+name = "cq-query-lowering"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-relation-lowering"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -436,11 +436,11 @@ dependencies = [
 name = "cq-xtask"
 version = "0.1.0"
 dependencies = [
+ "cq-access-lowering",
  "cq-compose",
- "cq-execution",
  "cq-ir",
- "cq-pipeline",
- "cq-realize",
+ "cq-pipeline-lowering",
+ "cq-relation-lowering",
  "cq-workloads",
  "duckdb",
  "prettyplease",
@@ -875,14 +875,14 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-access-lowering",
  "cq-compose",
- "cq-execution",
- "cq-index",
+ "cq-index-policy",
  "cq-ir",
- "cq-native",
- "cq-pipeline",
- "cq-plan",
- "cq-realize",
+ "cq-native-lowering",
+ "cq-pipeline-lowering",
+ "cq-query-lowering",
+ "cq-relation-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

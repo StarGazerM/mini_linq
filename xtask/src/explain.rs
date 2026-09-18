@@ -4,10 +4,10 @@ use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
+use cq_access_lowering::to_pipeline::compile as compile_pull;
 use cq_compose::{compile_cq, select_indexes};
 use cq_ir::{cq, index_requirements, iterator_pipeline, relational_plan, rust_access_plan};
-use cq_pipeline::iterator::compile as compile_iterator_pipeline;
-use cq_execution::pull::compile as compile_pull;
+use cq_pipeline_lowering::distinct_iter::compile as compile_iterator_pipeline;
 use cq_workloads::QueryCase;
 use quote::{ToTokens, quote};
 use syn::visit_mut::{self, VisitMut};
@@ -82,10 +82,10 @@ impl Stage {
                 "the logical plan plus its exact equality-index requirements"
             }
             Self::RustAccessPlan => {
-                "the complete staged Rust file containing one RustAccessPlan in `pull!`"
+                "the complete staged Rust file containing one RustAccessPlan in `access_to_distinct_iter!`"
             }
             Self::IteratorPipeline => {
-                "the same staged Rust file after `pull!` exposes named lazy operators"
+                "the same staged Rust file after `access_to_distinct_iter!` exposes named lazy operators"
             }
             Self::FinalRust => "the complete ordinary Rust file after iterator lowering",
         }
@@ -174,13 +174,16 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
     }
 
     let file = artifacts.attempt("IndexRequirements -> RustAccessPlan", || {
-        if cq_realize::hash_inputs::check_domain(&indexes).is_ok() {
-            cq_realize::hash_inputs::compile_input_indexed(
+        if cq_relation_lowering::base_hash::check_domain(&indexes).is_ok() {
+            cq_relation_lowering::base_hash::compile(
                 &indexes,
-                &syn::parse_quote!(::mini_linq::pull),
+                &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
             )
         } else {
-            cq_realize::hash_prefix::compile_lazy_indexed(&indexes, &syn::parse_quote!(::mini_linq::pull))
+            cq_relation_lowering::prefix_hash::compile(
+                &indexes,
+                &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+            )
         }
     })?;
     artifacts.attempt("RustAccessPlan local contract", || {
@@ -613,8 +616,8 @@ enum NestedMacro {
 impl NestedMacro {
     const fn name(self) -> &'static str {
         match self {
-            Self::Pull => "pull",
-            Self::IteratorPipeline => "iterator_pipeline",
+            Self::Pull => "access_to_distinct_iter",
+            Self::IteratorPipeline => "pipeline_to_distinct_iter",
         }
     }
 
@@ -816,7 +819,9 @@ fn check_rust_access_plan_once(file: &syn::File) -> syn::Result<()> {
         body: None,
     };
     collector.visit_file_mut(&mut copy);
-    let tokens = collector.body.expect("exactly one pull macro was counted");
+    let tokens = collector
+        .body
+        .expect("exactly one access_to_distinct_iter macro was counted");
     let source: rust_access_plan::Plan = syn::parse2(tokens)?;
     rust_access_plan::contract::check(&source)
 }
@@ -882,7 +887,7 @@ impl PullLowerer {
         } else {
             Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
-                "the one `::mini_linq::pull!` invocation is not in expression position",
+                "the one `::mini_linq::access_to_distinct_iter!` invocation is not in expression position",
             ))
         }
     }
@@ -906,7 +911,7 @@ impl VisitMut for PullLowerer {
 
         match self.lower(&invocation).and_then(|target| {
             syn::parse2(quote! {
-                ::mini_linq::iterator_pipeline! { #target }
+                ::mini_linq::pipeline_to_distinct_iter! { #target }
             })
         }) {
             Ok(lowered) => {
@@ -931,7 +936,7 @@ impl VisitMut for PullLowerer {
 
         match self.lower(&invocation).and_then(|target| {
             syn::parse2(quote! {
-                ::mini_linq::iterator_pipeline! { #target }
+                ::mini_linq::pipeline_to_distinct_iter! { #target }
             })
         }) {
             Ok(lowered) => {
@@ -963,7 +968,7 @@ impl IteratorPipelineLowerer {
         } else {
             Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
-                "the one `::mini_linq::iterator_pipeline!` invocation is not in expression position",
+                "the one `::mini_linq::pipeline_to_distinct_iter!` invocation is not in expression position",
             ))
         }
     }
@@ -1260,13 +1265,13 @@ mod tests {
         assert!(relational.contains("natural_join r2 with r3"));
 
         let access = fs::read_to_string(directory.join(Stage::RustAccessPlan.file_name())).unwrap();
-        assert!(access.contains("::mini_linq::pull! {\n"));
+        assert!(access.contains("::mini_linq::access_to_distinct_iter! {\n"));
         assert!(access.contains("\n                R(x, y) => for"));
         assert!(access.contains("\n                T(z, x) => if"));
 
         let pipeline =
             fs::read_to_string(directory.join(Stage::IteratorPipeline.file_name())).unwrap();
-        assert!(pipeline.contains("::mini_linq::iterator_pipeline! {\n"));
+        assert!(pipeline.contains("::mini_linq::pipeline_to_distinct_iter! {\n"));
         assert!(pipeline.contains("\n            iter0 = scan"));
         assert!(pipeline.contains("if (\n"));
         assert!(pipeline.contains("yield (\n"));
@@ -1279,7 +1284,7 @@ mod tests {
         let mut file: syn::File = syn::parse2(quote! {
             fn query() {
                 unrelated!();
-                ::mini_linq::pull! {
+                ::mini_linq::access_to_distinct_iter! {
                     answer(x) => (x) :- R(x) => for (x,) in ([1].iter());
                 }
             }
@@ -1304,10 +1309,10 @@ mod tests {
     fn duplicate_target_macros_are_rejected_before_rewriting() {
         let mut file: syn::File = syn::parse2(quote! {
             fn query() {
-                ::mini_linq::pull! {
+                ::mini_linq::access_to_distinct_iter! {
                     answer(x) => (x) :- R(x) => for x in ([1].iter());
                 };
-                ::mini_linq::pull! {
+                ::mini_linq::access_to_distinct_iter! {
                     answer(x) => (x) :- R(x) => for x in ([1].iter());
                 }
             }

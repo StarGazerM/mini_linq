@@ -13,7 +13,7 @@ fn fixture() -> ir::Module {
         answer(x,y,z) :- R(x,y), S(y,z), T(z,x);
     };
     let ra = cq_compose::compile_cq(&source).unwrap();
-    let mut indexed = cq_index::input::compile(&ra).unwrap();
+    let mut indexed = cq_index_policy::base_demands::compile(&ra).unwrap();
     for extra in [
         syn::parse_quote!(R[0]),
         syn::parse_quote!(R[1]),
@@ -69,7 +69,11 @@ fn mutate_access(target: &mut syn::File, change: impl FnOnce(&mut ac::Plan)) {
                 Stmt::Macro(mac) => &mut mac.mac,
                 _ => panic!("query lost its Access region"),
             };
-            let mut plan = access_macro(mac, &syn::parse_quote!(::mini_linq::pull)).unwrap();
+            let mut plan = access_macro(
+                mac,
+                &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+            )
+            .unwrap();
             change(&mut plan);
             mac.tokens = quote!(#plan);
             return;
@@ -81,15 +85,15 @@ fn mutate_access(target: &mut syn::File, change: impl FnOnce(&mut ac::Plan)) {
 #[test]
 fn base_storage_contract_checks_keys_payloads_and_ownership_schedule() {
     let source = fixture();
-    let target = cq_realize::hash_inputs::compile_input_indexed(
+    let target = cq_relation_lowering::base_hash::compile(
         &source,
-        &syn::parse_quote!(::mini_linq::pull),
+        &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
     )
     .unwrap();
-    cq_realize::hash_inputs::check_input_indexed(
+    cq_relation_lowering::base_hash::check(
         &source,
         &target,
-        &syn::parse_quote!(::mini_linq::pull),
+        &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
     )
     .unwrap();
     for (original, replacement) in [
@@ -135,25 +139,25 @@ fn base_storage_contract_checks_keys_payloads_and_ownership_schedule() {
         let mut invalid = target.clone();
         replace_expression(&mut invalid, original, replacement);
         assert!(
-            cq_realize::hash_inputs::check_input_indexed(
+            cq_relation_lowering::base_hash::check(
                 &source,
                 &invalid,
-                &syn::parse_quote!(::mini_linq::pull)
+                &syn::parse_quote!(::mini_linq::access_to_distinct_iter)
             )
             .is_err()
         );
     }
     let mut full = source;
     full.indexes.push(syn::parse_quote!(R[0,1]));
-    let target = cq_realize::hash_inputs::compile_input_indexed(
+    let target = cq_relation_lowering::base_hash::compile(
         &full,
-        &syn::parse_quote!(::mini_linq::pull),
+        &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
     )
     .unwrap();
-    cq_realize::hash_inputs::check_input_indexed(
+    cq_relation_lowering::base_hash::check(
         &full,
         &target,
-        &syn::parse_quote!(::mini_linq::pull),
+        &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
     )
     .unwrap();
 }
@@ -161,9 +165,9 @@ fn base_storage_contract_checks_keys_payloads_and_ownership_schedule() {
 #[test]
 fn base_access_contract_rejects_wrong_stores_keys_and_missing_occurrences() {
     let source = fixture();
-    let target = cq_realize::hash_inputs::compile_input_indexed(
+    let target = cq_relation_lowering::base_hash::compile(
         &source,
-        &syn::parse_quote!(::mini_linq::pull),
+        &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
     )
     .unwrap();
     for mutation in 0..4 {
@@ -204,10 +208,10 @@ fn base_access_contract_rejects_wrong_stores_keys_and_missing_occurrences() {
         });
         ac::contract::check(&pull_from_file(&invalid)).unwrap();
         assert!(
-            cq_realize::hash_inputs::check_input_indexed(
+            cq_relation_lowering::base_hash::check(
                 &source,
                 &invalid,
-                &syn::parse_quote!(::mini_linq::pull)
+                &syn::parse_quote!(::mini_linq::access_to_distinct_iter)
             )
             .is_err()
         );
@@ -217,10 +221,16 @@ fn base_access_contract_rejects_wrong_stores_keys_and_missing_occurrences() {
 fn pull_from_file(target: &syn::File) -> ac::Plan {
     let query = method(target, &syn::parse_quote!(BasicContractStorage), "query").unwrap();
     match query.block.stmts.first().unwrap() {
-        Stmt::Expr(expression, None) => {
-            access_expression(expression, &syn::parse_quote!(::mini_linq::pull)).unwrap()
-        }
-        Stmt::Macro(mac) => access_macro(&mac.mac, &syn::parse_quote!(::mini_linq::pull)).unwrap(),
+        Stmt::Expr(expression, None) => access_expression(
+            expression,
+            &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+        )
+        .unwrap(),
+        Stmt::Macro(mac) => access_macro(
+            &mac.mac,
+            &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+        )
+        .unwrap(),
         _ => panic!("missing Access region"),
     }
 }

@@ -6,13 +6,13 @@ scan realization. All query iterator operators are emitted by the shared
 Pipeline compiler. Input access and replay storage remain Native operations.
 
 ```text
-query!                 CQ → RA
-choose_indexes!        RA → IX with indexes {}
-choose_realization!    IX → Rust containing Access and Native calls
-  replay_rows!         Native Build → storage construction around Access
-  pull_stream!         Access → Pipeline → stream_pipeline! → support iterator
-  pull_exists!         Access → Pipeline → exists_pipeline! → first-witness bool
-  pull!                Access → Pipeline → iterator_pipeline! → distinct iterator
+query!                      CQ → RA
+choose_index_policy!        RA → IX with indexes {}
+choose_relation_lowering!   IX → Rust containing Access and Native calls
+  replay_resource!          Native Build → storage construction around Access
+  access_to_support_iter!   Access → Pipeline → pipeline_to_support_iter! → support iterator
+  access_to_exists!         Access → Pipeline → pipeline_to_exists! → first-witness bool
+  access_to_distinct_iter!  Access → Pipeline → pipeline_to_distinct_iter! → distinct iterator
 ```
 
 The indented entries are local macro invocations inside the physical output.
@@ -23,32 +23,32 @@ replay cursor; input Type, Scan and Field expand through each relation's provide
 
 | Caller-facing binding | Selected implementation | Exact boundary |
 | --- | --- | --- |
-| `mini_linq::query` | `graph_query` | CQ → planned named RA |
-| `mini_linq::choose_indexes` | `no_indexes` | RA → IX, preserving RA and writing no demands |
-| `mini_linq::choose_realization` | `borrowed_scans` | IX → staged Rust with Access/Native holes |
+| `mini_linq::query` | `cq_to_ra_hypergraph` | CQ → planned named RA |
+| `mini_linq::choose_index_policy` | `no_index_demands` | RA → IX, preserving RA and writing no demands |
+| `mini_linq::choose_relation_lowering` | `lower_borrowed_nested` | IX → staged Rust with Access/Native holes |
 | `mini_linq::inputs::Facts`, `Tags` | `tuple_hash_rows` | Native Type/Scan/Field on caller-owned tuple sets |
 | `mini_linq::inputs::Allowed` | `tuple_sorted_rows` | Same operations on a caller-owned sorted set |
-| `mini_linq::pull_stream` | `pull_stream` | Access → Pipeline, selecting `stream_pipeline` |
-| `mini_linq::pull_exists` | `pull_exists` | Access → Pipeline, selecting `exists_pipeline` |
-| `mini_linq::pull` | `pull` | Access → Pipeline, selecting `iterator_pipeline` |
-| `mini_linq::replay_rows` | `replay_rows` | Native Build/Scan → selected storage traits |
+| `mini_linq::access_to_support_iter` | `access_to_support_iter` | Access → Pipeline, selecting `pipeline_to_support_iter` |
+| `mini_linq::access_to_exists` | `access_to_exists` | Access → Pipeline, selecting `pipeline_to_exists` |
+| `mini_linq::access_to_distinct_iter` | `access_to_distinct_iter` | Access → Pipeline, selecting `pipeline_to_distinct_iter` |
+| `mini_linq::replay_resource` | `replay_resource` | Native Build/Scan → selected storage traits |
 | `mini_linq::storage` | `cq_storage` | `BuildReplay`, `ReplayRead`, `Replay` |
 
 These bindings are ordinary Rust imports. The example and selected feature list
 are in [main.rs](../examples/ra-execution/main.rs) and
 [the frontend manifest](../crates/mini-linq/Cargo.toml). No helper macro changes a
-stage's input language. The planner's `choose_indexes` continuation now invokes
+stage's input language. The planner's `choose_index_policy` continuation now invokes
 an actual RA-to-IX pass.
 
 The frontend's replay defaults are symbolic paths `mini_linq::storage` and
-`mini_linq::pull_stream`. Existing Native administrative `storage`/`iterator`
+`mini_linq::access_to_support_iter`. Existing Native administrative `storage`/`access_iter`
 options can override those paths. Typed compiler clients supply explicit macro
-paths in `borrowed_scans::Options`; the implementation never calls another
+paths in `borrowed_nested::Options`; the implementation never calls another
 compiler family directly.
 
 ## Input domain and borrowed API
 
-`borrowed_scans` admits a checked IX module with an empty overlay, and RA
+`lower_borrowed_nested` admits a checked IX module with an empty overlay, and RA
 Unit, Rename, Project, NaturalJoin and Semijoin. Output arguments must be bound
 variables; reordering and repetition are allowed. Select, Extend, computed
 outputs, invalid provider bindings and nonempty index requirements are rejected.
@@ -80,11 +80,11 @@ for a captured macro expansion.
 | Rename | One Native input scan, output borrowed fields in result order | Support stream |
 | Project | One predecessor scan, output selected reference coordinates | Support stream |
 | NaturalJoin | Two predecessor scans followed by shared-coordinate equality | Support stream of merged reference tuples |
-| Semijoin | Left scan and an `if` containing a right-side Access region | `pull_exists` stops at the first compatible right row |
+| Semijoin | Left scan and an `if` containing a right-side Access region | `access_to_exists` stops at the first compatible right row |
 | Output | One result scan and head-order projection | Distinct answer iterator |
 
 Each region is parsed as `cq_ir::rust_access_plan::Plan` and checked before
-emission. It then goes through `cq_execution::pull::compile` to the existing
+emission. It then goes through `cq_access_lowering::to_pipeline::compile` to the existing
 linear `IteratorPipeline`. The shared operator emitter supplies all `map`,
 `flat_map`, filtering and projection code. The existence endpoint omits only the
 terminal Distinct, retains every preceding operator, and polls once for a witness.
@@ -109,7 +109,7 @@ right operand. The latter can need many cursors even with one written use.
 Definitions are emitted once in checked topological order. Other streams move
 to their sole consumer.
 
-A retained definition emits Native `build { AccessPlan }`. `replay_rows` preserves
+A retained definition emits Native `build { AccessPlan }`. `replay_resource` preserves
 the Access quotation and constructs storage through `BuildReplay::replay` after
 the selected Access/Pipeline stages have supplied its lazy iterator. Native
 `scan(value)` calls `ReplayRead::cursor(&value)`. This uses existing Native
@@ -169,26 +169,26 @@ costs, not a claim of optimal YA execution, constant space or measured speedup.
 The configured relation route still provides block pruning, key resources,
 Select/Extend and complete pair algorithms. The hash routes still implement
 their admitted index demands. The borrowed scan implementation does not replace
-those distinct domains. Eager `push_set` remains an alternative at a compatible
+those distinct domains. Eager `access_to_set_loops` remains an alternative at a compatible
 set-valued Access hole; it is not a replacement for a lazy support contract.
 
 ## Reproduction and expansion review
 
 ```sh
 cargo run -p mini-linq --no-default-features \
-  --features graph,no-indexes,borrowed-scans,replay-rows,pull,stream-pipeline,exists-pipeline,iterator-pipeline,tuple-hash-rows,tuple-sorted-rows \
+  --features hypergraph,no-index-demands,borrowed-nested,replay-resource,access-to-pipeline,pipeline-support-iter,pipeline-exists,pipeline-distinct-iter,tuple-hash-rows,tuple-sorted-rows \
   --example ra-execution --locked
 
 python3 tools/trace_macros.py --example ra-execution \
-  --features graph,no-indexes,borrowed-scans,replay-rows,pull,stream-pipeline,exists-pipeline,iterator-pipeline,tuple-hash-rows,tuple-sorted-rows \
-  --out target/staged-execution-review --declarative
+  --features hypergraph,no-index-demands,borrowed-nested,replay-resource,access-to-pipeline,pipeline-support-iter,pipeline-exists,pipeline-distinct-iter,tuple-hash-rows,tuple-sorted-rows \
+  --out target/renamed-execution-review-final --declarative
 ```
 
 The capture records each actual macro input and immediate output, preserving
 Access and Pipeline invocations for inspection. Source fingerprints identify
 the compiled workspace. Expansion counts are static sites, not runtime visits.
-The generated local [annotated review](../target/staged-execution-review/review.md)
-explains every captured call and its verified parent; [steps.md](../target/staged-execution-review/steps.md)
+The generated local [annotated review](../target/renamed-execution-review-final/review.md)
+explains every captured call and its verified parent; [steps.md](../target/renamed-execution-review-final/steps.md)
 contains all complete inputs and immediate outputs for the single Star query.
 The [validation snapshot](formal/snapshot.txt) records the completed gates;
 the [formal rules](formal/staging.tex) describe replay and endpoint obligations.

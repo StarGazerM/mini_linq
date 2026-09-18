@@ -17,10 +17,13 @@ fn unit_seed_uses_result_indexes_and_fused_linear_lowering() {
     .unwrap();
     relational_plan::contract::check(&source).unwrap();
 
-    assert!(cq_index::input::check_domain(&source).is_err());
-    assert!(cq_index::input::compile(&source).is_err());
-    let requirements = cq_index::result::compile(&source).unwrap();
-    assert!(cq_index::result::check(&source, &requirements));
+    assert!(cq_index_policy::base_demands::check_domain(&source).is_err());
+    assert!(cq_index_policy::base_demands::compile(&source).is_err());
+    let requirements = cq_index_policy::result_demands::compile(&source).unwrap();
+    assert!(cq_index_policy::result_demands::check(
+        &source,
+        &requirements
+    ));
 
     let indexed: index_requirements::Module = syn::parse2(quote! {
         #source
@@ -28,6 +31,9 @@ fn unit_seed_uses_result_indexes_and_fused_linear_lowering() {
     })
     .unwrap();
     index_requirements::contract::check(&indexed).unwrap();
-    cq_realize::hash_prefix::compile_lazy_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull))
-        .unwrap();
+    cq_relation_lowering::prefix_hash::compile(
+        &indexed,
+        &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+    )
+    .unwrap();
 }

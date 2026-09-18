@@ -13,8 +13,8 @@ language domains; [Rust expressions](RUST-EXPRESSIONS.md) and
 CQ
   -- Basic HW1 --> RelationalPlan
   -- Basic HW2 --> IndexRequirements containing that complete RelationalPlan
-  -- Basic HW3 --> staged syn::File containing pull! { RustAccessPlan }
-  -- supplied pull --> same file containing iterator_pipeline! { IteratorPipeline }
+  -- Basic HW3 --> staged syn::File containing access_to_distinct_iter! { RustAccessPlan }
+  -- supplied pull --> same file containing pipeline_to_distinct_iter! { IteratorPipeline }
   -- supplied Rust lowering --> final syn::File containing ordinary Rust
 ```
 
@@ -35,7 +35,7 @@ iterN = a resumable Iterator value and its Rust item binding
 
 `IteratorPipeline` exposes the physical operator edges but deliberately does
 not choose `map`, `flat_map`, or another Rust combinator. The supplied
-`cq_pipeline::iterator::compile` pass makes those choices and returns `syn::Expr`.
+`cq_pipeline_lowering::distinct_iter::compile` pass makes those choices and returns `syn::Expr`.
 That expression is already the faithful concrete target IR. The proc-macro
 entry then uses `ToTokens` only to emit the AST; token emission performs no
 additional planning or lowering.
@@ -44,11 +44,11 @@ additional planning or lowering.
 
 | Owner | Function | Exact result |
 |---|---|---|
-| student, Basic HW1 | `cq_plan::canonical::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` |
-| student, Basic HW2 | `cq_index::input::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` preserving the complete input plan |
-| student, Basic HW3 | `cq_realize::hash_inputs::compile_input_indexed(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete API and one `pull!` expression |
-| staff | `cq_execution::pull::compile(&rust_access_plan::Plan)` | `syn::Result<iterator_pipeline::Pipeline>` with explicit `iterN` edges |
-| staff | `cq_pipeline::iterator::compile(&iterator_pipeline::Pipeline)` | `syn::Result<syn::Expr>` containing one lazy whole-result-set expression |
+| student, Basic HW1 | `cq_query_lowering::written_order::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` |
+| student, Basic HW2 | `cq_index_policy::base_demands::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` preserving the complete input plan |
+| student, Basic HW3 | `cq_relation_lowering::base_hash::compile(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete API and one `access_to_distinct_iter!` expression |
+| staff | `cq_access_lowering::to_pipeline::compile(&rust_access_plan::Plan)` | `syn::Result<iterator_pipeline::Pipeline>` with explicit `iterN` edges |
+| staff | `cq_pipeline_lowering::distinct_iter::compile(&iterator_pipeline::Pipeline)` | `syn::Result<syn::Expr>` containing one lazy whole-result-set expression |
 
 These functions accept typed syntax values, not token streams. The
 `mini-linq` proc-macro crate owns token transport: each direct macro parses its
@@ -64,19 +64,19 @@ edges without replacing the basic homework contracts:
 
 | Macro entry | Typed transformation |
 |---|---|
-| `optimized_query!` | Choose caller-bound `graph_query!` or `prefix_query!`; each lowers CQ -> RelationalPlan |
-| `result_indexes!` | `cq_index::result::compile`: RelationalPlan -> IndexRequirements |
-| `hash_materialized!` | `cq_realize::hash_materialized::compile_materialized`: IndexRequirements -> staged Rust |
-| `no_indexes!` | `cq_index::none::compile`: RelationalPlan -> unchanged plan with an empty IndexRequirements overlay |
-| `borrowed_scans!` | `cq_realize::borrowed_scans::compile`: empty-index IX -> Rust containing borrowed Access and Native regions |
+| `choose_graph_or_prefix!` | Choose caller-bound `cq_to_ra_hypergraph!` or `cq_to_ra_clause_prefix!`; each lowers CQ -> RelationalPlan |
+| `result_index_demands!` | `cq_index_policy::result_demands::compile`: RelationalPlan -> IndexRequirements |
+| `materialized_hash_program!` | `cq_relation_lowering::materialized_hash::compile`: IndexRequirements -> staged Rust |
+| `no_index_demands!` | `cq_index_policy::no_demands::compile`: RelationalPlan -> unchanged plan with an empty IndexRequirements overlay |
+| `lower_borrowed_nested!` | `cq_relation_lowering::borrowed_nested::compile`: empty-index IX -> Rust containing borrowed Access and Native regions |
 
-The eager composition binds `result_indexes` as `choose_indexes` and
-`hash_materialized` as `choose_realization` in a local facade. Planner selection
+The eager composition binds `result_index_demands` as `choose_index_policy` and
+`materialized_hash_program` as `choose_relation_lowering` in a local facade. Planner selection
 does not also select eager execution. With ordinary crate bindings,
-`choose_indexes!` chooses an index policy and `choose_realization!` chooses a
+`choose_index_policy!` chooses an index policy and `choose_relation_lowering!` chooses a
 hash realization from the actual IX domain; both dispatch through caller aliases.
 
-The target Rust file has one local `pull_set!` expression per named RA
+The target Rust file has one local `access_to_set!` expression per named RA
 result. That continuation uses the existing pull and IteratorPipeline passes
 and collects a set. Materialized sets outside these expressions preserve
 shared DAG references. `build` performs the materialization; `query` traverses
@@ -275,10 +275,10 @@ join, filter or projection. The language requires a linear, single-consumer
 chain ending in `distinct`; canonical names and one final projection describe
 the supplied pull emitter, not every valid authored pipeline.
 
-`push_set!` is a separate Access execution implementation: it emits nested Rust
+`access_to_set_loops!` is a separate Access execution implementation: it emits nested Rust
 loops and one exact-set sink directly, with no Pipeline intermediate. It can
 replace a set-valued Access continuation under completed-set observations.
-It cannot replace the lazy `pull!` hole in this basic checkpoint without changing
+It cannot replace the lazy `access_to_distinct_iter!` hole in this basic checkpoint without changing
 the generated `query()` demand contract.
 
 Both logical RelationalPlan and physical IteratorPipeline spell an identity
@@ -313,7 +313,7 @@ operator nor an index or Rust execution choice.
 ### 2. Entire RelationalPlan program
 
 ```rust
-::mini_linq::choose_indexes! {
+::mini_linq::choose_index_policy! {
     pub struct TriangleProgram;
     relation R(c0: i32, c1: i32);
     relation S(c0: i32, c1: i32);
@@ -343,7 +343,7 @@ separate output metadata preserves the head name and tuple order.
 ### 3. Entire IndexRequirements program
 
 ```rust
-::mini_linq::hash_inputs! {
+::mini_linq::lower_base_hash! {
     pub struct TriangleProgram;
     relation R(c0: i32, c1: i32);
     relation S(c0: i32, c1: i32);
@@ -427,7 +427,7 @@ impl TriangleProgram {
 }
 impl TriangleProgramStorage {
     pub fn query(&self) -> impl ::std::iter::Iterator<Item = (i32, i32, i32)> + '_ {
-        ::mini_linq::pull! {
+        ::mini_linq::access_to_distinct_iter! {
             triangle(x, y, z) => (
                 (
                     ::core::clone::Clone::clone(x),
@@ -517,7 +517,7 @@ impl TriangleProgram {
 }
 impl TriangleProgramStorage {
     pub fn query(&self) -> impl ::std::iter::Iterator<Item = (i32, i32, i32)> + '_ {
-        ::mini_linq::iterator_pipeline! {
+        ::mini_linq::pipeline_to_distinct_iter! {
             iter0 = scan (x, y,) in (self.rows0.iter()) yield (x, y,);
             iter1 = join iter0 as (x, y,) with (z,) in (
                 self.index0.get(&(::core::clone::Clone::clone(y),)).into_iter().flatten()
@@ -757,7 +757,7 @@ the next item can actually wait on I/O or a channel.
 
 ### Final Rust expression
 
-- Pipeline endpoints share `cq_pipeline::operators` for Rust combinator emission.
+- Pipeline endpoints share `cq_pipeline_lowering::operators` for Rust combinator emission.
 - One Rust local corresponds to every IteratorPipeline definition.
 - The iterator endpoint returns a root-lazy resumable cursor. Support-stream,
   first-witness and collected-set endpoints have their own observation contracts.
@@ -766,8 +766,8 @@ the next item can actually wait on I/O or a channel.
 ## Homework boundary
 
 The basic assignments cover three typed edges, implemented in this checkout in
-`cq-plan/src/canonical/lower.rs`, `cq-index/src/input/mod.rs`, and
-`cq-realize/src/hash_inputs/mod.rs`
+`cq-query-lowering/src/written_order/lower.rs`, `cq-index-policy/src/base_demands/mod.rs`, and
+`cq-relation-lowering/src/base_hash/mod.rs`
 under `crates/`:
 
 1. Basic HW1 constructs the complete canonical RelationalPlan.
@@ -790,7 +790,7 @@ extended checkpoint continues to use `mini_linq!`.
 
 ```text
 cargo test -p cq-ir --test relational_plan
-cargo test -p cq-ir --test iterator_pipeline
+cargo test -p cq-ir --test pipeline_to_distinct_iter
 cargo test -p cq-compose --test pull_lowering
 cargo test -p cq-compose --test documented_triangle
 cargo test -p mini-linq --test endpoint

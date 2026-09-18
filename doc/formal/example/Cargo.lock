@@ -17,15 +17,15 @@ dependencies = [
 name = "cq-compose"
 version = "0.1.0"
 dependencies = [
- "cq-index",
+ "cq-index-policy",
  "cq-ir",
- "cq-plan",
- "cq-realize",
+ "cq-query-lowering",
+ "cq-relation-lowering",
  "syn 2.0.119",
 ]
 
 [[package]]
-name = "cq-execution"
+name = "cq-access-lowering"
 version = "0.1.0"
 dependencies = [
  "contracts",
@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-index"
+name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -55,7 +55,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-native"
+name = "cq-native-lowering"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -65,18 +65,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-pipeline"
-version = "0.1.0"
-dependencies = [
- "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-plan"
+name = "cq-pipeline-lowering"
 version = "0.1.0"
 dependencies = [
  "contracts",
@@ -87,7 +76,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-realize"
+name = "cq-query-lowering"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-relation-lowering"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -101,13 +101,13 @@ name = "mini-linq"
 version = "0.1.0"
 dependencies = [
  "cq-compose",
- "cq-execution",
- "cq-index",
+ "cq-access-lowering",
+ "cq-index-policy",
  "cq-ir",
- "cq-native",
- "cq-pipeline",
- "cq-plan",
- "cq-realize",
+ "cq-native-lowering",
+ "cq-pipeline-lowering",
+ "cq-query-lowering",
+ "cq-relation-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -119,12 +119,12 @@ name = "mini-linq-paper-overview"
 version = "0.0.0"
 dependencies = [
  "cq-compose",
- "cq-execution",
- "cq-index",
+ "cq-access-lowering",
+ "cq-index-policy",
  "cq-ir",
- "cq-pipeline",
- "cq-plan",
- "cq-realize",
+ "cq-pipeline-lowering",
+ "cq-query-lowering",
+ "cq-relation-lowering",
  "mini-linq",
  "prettyplease",
  "quote",

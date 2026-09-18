@@ -165,7 +165,7 @@ partial demand, not failed/divergent execution or Rust representation adequacy.
 \end{proof}
 
 \subsection{Access directly to an eager set}
-The alternative \code{push_set!} entry lowers the same checked Access syntax to
+The alternative \code{access_to_set_loops!} entry lowers the same checked Access syntax to
 nested Rust control flow and one HashSet sink $S$. Let $E_B(\bar a,h,S)$ compile
 remaining clauses $\bar a$, head $h$, and incoming ordered bindings $B$:
 write $L(\bar a,h)$ for conservative backwards liveness. It starts with the
@@ -196,7 +196,7 @@ or intermediate row collection. Under finite sources, total pure leaves and
 lawful silent clone/hash/equality, induction on clauses gives the same completed
 set as exhausted Access. This is an eager-set contract: partial iterator demand,
 evaluation timing and arbitrary destructor effects are not preserved by replacing
-an iterator-valued hole with \code{push_set!}.
+an iterator-valued hole with \code{access_to_set_loops!}.
 
 \subsection{Pipeline-to-Rust inference rules}
 One Rust local implements each definition in the existing order. Method
@@ -240,10 +240,12 @@ filter-map supplies owned bindings without adding a borrowed tuple layer.
  {\bar d;s=\mathsf{Distinct}(l);\mathsf{return}\ s\Downarrow_{\rm exists}
  \mathsf{next}(e).\mathsf{isSome}()}
 \end{mathpar}
-R-Block (\code{iterator_pipeline!}) delays construction until polling;
-R-Set (\code{collect_pipeline!}) eagerly collects the completed set, absorbing
+The \code{pipeline_to_distinct_iter!} endpoint implements R-Block, delaying
+construction until polling. R-Set (\code{pipeline_to_set!}) collects the completed set, absorbing
 terminal Distinct. It requires the finite set-observation contract,
-not an online cursor contract. R-Exists (\code{exists_pipeline!}) removes only
+not an online cursor contract.
+
+R-Exists (\code{pipeline_to_exists!}) removes only
 terminal Distinct and polls the ordinary prefix once. It preserves every prior
 operator, including projection, and stops at the first witness. Removing
 Distinct preserves nonemptiness and avoids adding Eq/Hash to an existential
@@ -300,22 +302,22 @@ The defaults below are compositions of caller-relative macro invocations;
 explicit implementation entries retain their declared domains.
 \begin{center}\small
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{lll}\toprule
+\begin{tabular}{>{\raggedright\arraybackslash}p{.38\linewidth}>{\raggedright\arraybackslash}p{.24\linewidth}>{\raggedright\arraybackslash}p{.30\linewidth}}\toprule
 Entry & Typed input / role & Emitted continuation \\\midrule
-\code{mini_linq} & CQ choice & \code{canonical_query} / \code{prefix_query} \\
-\code{optimized_query} & CQ choice & \code{graph_query} / \code{prefix_query} \\
-canonical / prefix / graph entries & CQ to RA & \code{choose_indexes} \\
-\code{choose_indexes} & RA choice & \code{input_indexes} / \code{result_indexes} \\
-input / result / no-index entries & RA to IX & \code{choose_realization} \\
-\code{choose_realization} & IX choice & admitted hash realization \\
-\code{hash_inputs} / \code{hash_prefix} & IX, lazy hash realization & Rust with Access \\
-\code{hash_materialized} & IX, eager hash realization & Rust with Access \\
-\code{borrowed_scans} & empty-index IX & Rust with Access and Native \\
-\code{hash_materialized_query} & same eager computation & callable Rust Expr \\
-\code{relation_program} / \code{relation_query} & configured RA realization & item / callable host \\
+\code{mini_linq} & CQ choice & \code{cq_to_ra_written_order} / \code{cq_to_ra_clause_prefix} \\
+\code{choose_graph_or_prefix} & CQ choice & \code{cq_to_ra_hypergraph} / \code{cq_to_ra_clause_prefix} \\
+canonical / prefix / graph entries & CQ to RA & \code{choose_index_policy} \\
+\code{choose_index_policy} & RA choice & \code{base_index_demands} / \code{result_index_demands} \\
+input / result / no-index entries & RA to IX & \code{choose_relation_lowering} \\
+\code{choose_relation_lowering} & IX choice & admitted hash realization \\
+\code{lower_base_hash} / \code{lower_prefix_hash} & IX, lazy hash realization & Rust with Access \\
+\code{materialized_hash_program} & IX, eager hash realization & Rust with Access \\
+\code{lower_borrowed_nested} & empty-index IX & Rust with Access and Native \\
+\code{materialized_hash_callable} & same eager computation & callable Rust Expr \\
+\code{configured_program} / \code{configured_callable} & configured RA realization & item / callable host \\
 observed relation entries & same realization & instrumented host \\
-\code{pull} / set / stream / exists entries & Access to Pipeline & chosen Pipeline endpoint \\
-\code{push_set} & Access to eager Rust & exact set expression \\
+\code{access_to_distinct_iter} / set / stream / exists entries & Access to Pipeline & chosen Pipeline endpoint \\
+\code{access_to_set_loops} & Access to eager Rust & exact set expression \\
 iterator / set / stream / exists endpoints & Pipeline to Rust & ToTokens \\\bottomrule
 \end{tabular}
 \end{center}
@@ -325,11 +327,11 @@ semijoins therefore reach a compatible default consumer. Choices emit no
 route tag into IX, and replacing a preceding alias does not silently bypass later
 aliases. The optimized CQ entry chooses a planner; it does not prescribe eager
 execution. A caller can instead compose an explicit eager recipe by binding
-\code{result_indexes} as \code{choose_indexes} and \code{hash_materialized} as
-\code{choose_realization}.
+\code{result_index_demands} as \code{choose_index_policy} and \code{materialized_hash_program} as
+\code{choose_relation_lowering}.
 
-Eager hash entries default to \code{mini_linq::pull_set}; lazy hash entries use
-\code{mini_linq::pull}. Eager entries accept an explicit Access continuation.
+Eager hash entries use \code{access_to_set} by default and accept an explicit
+Access continuation. The lazy hash continuation is \code{access_to_distinct_iter}.
 Typed realization APIs receive their continuation paths explicitly. Macro paths
 resolve relative to the invocation's \code{mini_linq} binding, whereas typed
 clients may supply absolute paths. Workload catalog generation with
@@ -357,7 +359,7 @@ representations and observations as formalized below.
 
 \paragraph{One computation in different Rust hosts.}
 Let $Q_M(P;\bar e)$ denote the native expression returned by
-\code{compile_materialized_query} for indexed plan $P$ and input expressions
+\code{compile_query} for indexed plan $P$ and input expressions
 $\bar e$ in declaration order. It evaluates $\bar e$ once, binds their values
 simultaneously, normalizes the finite inputs, performs ST-* and M-* with local
 set-valued Access holes, and returns a typed answer set. This notation names a
@@ -373,12 +375,12 @@ different instrumentation traces. The plain expression introduces no counters
 or host types. Its answer needs lawful clone/hash/equality, while the sorted
 standalone materializer additionally needs ordering.
 
-\code{compile_materialized_callable} places this checked expression in an
+\code{compile_callable} places this checked expression in an
 anonymous Rust closure. Input normalization constrains each accessed parameter
 to supply the declared tuple type through \code{IntoIterator}. The
-\code{hash_materialized_query!} entry exposes that adapter without extending the
+\code{materialized_hash_callable!} entry exposes that adapter without extending the
 indexed grammar: ordinary Rust calls provide full or delta input iterators.
-Aliasing this macro as \code{hash_materialized} changes the explicit eager recipe's host.
+Aliasing this macro as \code{materialized_hash_program} changes the explicit eager recipe's host.
 Each closure value has fixed inferred input types; captures and repeatability
 follow ordinary Rust. The adapter introduces no item binder that could shadow
 a host function, including one named by an opaque macro expansion. Independent

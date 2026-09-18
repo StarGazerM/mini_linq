@@ -73,8 +73,8 @@ source-to-emitted-code correspondence; selected provider laws and expanded Rust
 remain independent checking boundaries. Storage contains data structures and
 traits, without runtime relational operators.
 
-Compiler families group implementations by the boundary they own: `cq-plan`,
-`cq-index`, `cq-realize`, `cq-native`, `cq-execution` and `cq-pipeline` use shared
+Compiler families group implementations by the boundary they own: `cq-query-lowering`,
+`cq-index-policy`, `cq-relation-lowering`, `cq-native-lowering`, `cq-access-lowering` and `cq-pipeline-lowering` use shared
 languages from `cq-ir`. `cq-storage` holds runtime data structures; `cq-compose`
 and the macro frontend supply composition. Source-removal builds check selected
 modules independently. External macro probes also exercise renamed
@@ -85,7 +85,7 @@ records the distinct obligations.
 Explicit implementation entries check their own domains. The macro frontend
 chooses CQ, index and realization implementations through caller-relative macro
 invocations; `cq-compose` provides separate typed recipes. IX carries equality
-demands without a route tag. `optimized_query!` selects a planner; a facade can
+demands without a route tag. `choose_graph_or_prefix!` selects a planner; a facade can
 bind result indexes and eager realization explicitly. Compiled workloads follow
 the same macro bindings. The materialized computation can produce either an
 observed program or a plain callable query through a host macro alias. Both use
@@ -97,7 +97,7 @@ Complete pair fragments select hash, nested or sort/merge control before result
 rows enter the chosen provider's emission sink. Semijoin retains conservative
 candidates followed by exact membership on current relation versions.
 
-Pull Access execution lowers to Pipeline, while `push_set!` emits eager Rust
+Pull Access execution lowers to Pipeline, while `access_to_set_loops!` emits eager Rust
 loops directly. Pipeline permits arbitrary fresh stream names, tuple binding
 renaming, selective retention and early projections, while retaining a linear
 single-consumer chain and terminal Distinct. Eager-set, distinct-iterator and
@@ -142,7 +142,7 @@ cargo test -p cq-compose -p mini-linq --test reusable_query --locked
 
 | Experiment | Source and detailed instructions |
 | --- | --- |
-| GYO versus independent tree enumeration | [hypergraph.rs](../../crates/cq-plan/src/graph/hypergraph.rs) |
+| GYO versus independent tree enumeration | [structure.rs](../../crates/cq-query-lowering/src/hypergraph/structure.rs) |
 | 25 queries and independently authored RA plans | [Stage I verification](../PLANNING-VERIFICATION.md), [reference tests](../../crates/cq-compose/tests/relational_reference.rs) |
 | Four-policy compiled plans | [production tests](../../crates/cq-compose/tests/planned_execution.rs) |
 | Literal public-macro expansion and execution | [shape tests](../../crates/mini-linq/tests/planned_queries.rs) |

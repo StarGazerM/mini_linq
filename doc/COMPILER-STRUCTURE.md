@@ -15,12 +15,12 @@ links inference rules to implementation markers.
 | --- | --- | --- |
 | `cq-ir` | CQ, RA, equality demands, Access, Pipeline and Native syntax; local judgments and factual heading queries | None |
 | `cq-storage` | Data structures and minimal operation traits; block selections, summaries, demand replay and passive counters | None |
-| `cq-plan` | `canonical`, `prefix`, `graph`; logical scheduling and derivations | `cq-ir` |
-| `cq-index` | `input`, `result`, `none`; equality-demand policies | `cq-ir` |
-| `cq-realize` | `hash_inputs`, `hash_prefix`, `hash_materialized`, `relations`, `borrowed_scans`; physical realization and hosts | `cq-ir` |
-| `cq-native` | `rows`, `candidates`, `keys`, `witnesses`, `pairs`; local Native operation implementations | `cq-ir` |
-| `cq-execution` | `pull`, `push`; Access execution alternatives | `cq-ir` |
-| `cq-pipeline` | `iterator`, `collect`, `stream`, `exists`; Pipeline endpoints | `cq-ir` |
+| `cq-query-lowering` | `written_order`, `clause_prefix`, `hypergraph`; CQ-to-RA lowering, scheduling and derivations | `cq-ir` |
+| `cq-index-policy` | `base_demands`, `result_demands`, `no_demands`; equality-demand policies | `cq-ir` |
+| `cq-relation-lowering` | `base_hash`, `prefix_hash`, `materialized_hash`, `configured`, `borrowed_nested`; relation lowering and hosts | `cq-ir` |
+| `cq-native-lowering` | `rows`, `candidates`, `keys`, `witnesses`, `pairs`; local Native operation implementations | `cq-ir` |
+| `cq-access-lowering` | `to_pipeline`, `to_set_loops`; Access-to-Pipeline or Access-to-Rust lowering | `cq-ir` |
+| `cq-pipeline-lowering` | `distinct_iter`, `collect_set`, `support_iter`, `exists`; Pipeline-to-Rust endpoints | `cq-ir` |
 | `cq-compose` | Typed named compositions for tools and AST clients | Selected compiler families, `cq-ir` |
 | `mini-linq` | Procedural-macro entries, invocation-scoped continuations and administrative configuration | Selected families and optional composition |
 
@@ -31,35 +31,35 @@ Runtime storage never invokes a compiler and contains no semijoin interpreter.
 Generated Rust may use caller-selected storage paths without the emitting
 compiler library linking that storage crate.
 
-Combining row providers and access algorithms in `cq-native` reflects their
+Combining row providers and access algorithms in `cq-native-lowering` reflects their
 shared local-operation dialect. Their modules remain independent alternatives;
 block rows do not imply pruning, zone keys or pull. Combining pull and push in
-`cq-execution` makes their common Access input explicit without pretending their
+`cq-access-lowering` makes their common Access input explicit without pretending their
 results have identical demand contracts. These are the current package names;
 their exact input and output languages define the boundaries.
 
 ## Module ownership and features
 
 ```text
-cq-realize/src/                    cq-native/src/
-  hash_inputs/                      rows/{hash,sorted,block,tuple_hash,tuple_sorted}.rs
-  hash_prefix/                      candidates/{scan,prune}.rs
-  hash_materialized/                keys/{exact,zone}.rs
-  borrowed_scans/                    rows/replay.rs
+cq-relation-lowering/src/          cq-native-lowering/src/
+  base_hash/                        rows/{hash,sorted,block,tuple_hash,tuple_sorted}.rs
+  prefix_hash/                      candidates/{scan,prune}.rs
+  materialized_hash/                keys/{exact,zone}.rs
+  borrowed_nested/                  rows/replay.rs
     domain.rs                       (Native Build/Scan backed by storage traits)
     lower.rs
-  relations/                        witnesses/{hash,nested}.rs
+  configured/                       witnesses/{hash,nested}.rs
     layout.rs                       pairs/{hash,nested,merge}.rs
     expressions.rs
-    resources.rs                  cq-execution/src/
-    lower.rs                        pull/{mod,check}.rs
-    check.rs                        push.rs
+    resources.rs                  cq-access-lowering/src/
+    lower.rs                        to_pipeline/{mod,check}.rs
+    check.rs                        to_set_loops.rs
     hosts/{plain,observed}.rs
 ```
 
 Shared helpers express a common mechanism, not a global backend selector.
 Borrowed scan realization emits Access and Native fragments; iterator adapter
-emission remains shared in `cq-pipeline::operators`.
+emission remains shared in `cq-pipeline-lowering::operators`.
 For example, native set emission takes type and row representation syntax from
 its owning implementation. It does not inspect a provider name and choose a
 backend. Each realization checks its own index coverage; the IR describes facts
@@ -68,7 +68,7 @@ and validity, not preferred implementation decisions.
 Production dependencies cannot connect implementation families or point back
 at composition. Tests may compose families through development dependencies.
 Cargo features are independent additive implementation switches. Frontend
-`prune-rows` includes candidate pruning alone; its caller supplies row, key and
+`prune-block-candidates` includes candidate pruning alone; its caller supplies row, key and
 iterator implementations separately. A selected macro retains its meaning when
 another implementation is enabled.
 
@@ -83,13 +83,13 @@ its macro protocol need not change.
 The default route expands one caller-bound decision at a time:
 
 ```text
-mini_linq → canonical_query or prefix_query
-          → choose_indexes → input_indexes or result_indexes
-          → choose_realization → hash_inputs, hash_prefix or hash_materialized
-          → pull / pull_set → selected Pipeline endpoint
+mini_linq → cq_to_ra_written_order or cq_to_ra_clause_prefix
+          → choose_index_policy → base_index_demands or result_index_demands
+          → choose_relation_lowering → lower_base_hash, lower_prefix_hash or materialized_hash_program
+          → access_to_distinct_iter / access_to_set → selected Pipeline endpoint
 ```
 
-`optimized_query` chooses graph or prefix planning. It shares the same subsequent
+`choose_graph_or_prefix` chooses graph or prefix planning. It shares the same subsequent
 bindings. The graph planner's semijoin RA reaches a compatible realization under
 default wiring. Workload compilation enters this same macro route.
 
@@ -102,15 +102,15 @@ The separately configured relation entry accepts RA directly and emits the same
 embedded languages; it is an explicit alternative entry, not a continuation
 that discards an authored IX.
 
-The borrowed route binds `no_indexes as choose_indexes` and
-`borrowed_scans as choose_realization`. The first emits checked IX with an empty
-overlay; the second emits checked Access regions. `pull_stream`, `pull_exists`
-and `pull` invoke the same Access-to-Pipeline compiler with different endpoint
+The borrowed route binds `no_index_demands as choose_index_policy` and
+`lower_borrowed_nested as choose_relation_lowering`. The first emits checked IX with an empty
+overlay; the second emits checked Access regions. `access_to_support_iter`, `access_to_exists`
+and `access_to_distinct_iter` invoke the same Access-to-Pipeline compiler with different endpoint
 bindings. Source traversal, joins, filters and projections all use the shared
 Pipeline operator emitter. No physical pass quotes these adapters itself.
 
 Input relation names select Native macros in the facade's `inputs` module.
-`replay_rows` implements only Native Build and Scan: Build preserves a selected
+`replay_resource` implements only Native Build and Scan: Build preserves a selected
 Access producer; Scan uses `ReplayRead::cursor`. `cq-storage` privately owns the
 source, retained prefix and independent cursor positions through `BuildReplay`
 and `ReplayRead`. Storage contains no semijoin or RA evaluator. The physical pass
@@ -127,10 +127,10 @@ An eager recipe is a Rust facade:
 ```rust
 mod eager {
     pub use ::mini_linq::{
-        optimized_query, graph_query, prefix_query,
-        result_indexes as choose_indexes,
-        hash_materialized as choose_realization,
-        pull_set, collect_pipeline,
+        choose_graph_or_prefix, cq_to_ra_hypergraph, cq_to_ra_clause_prefix,
+        result_index_demands as choose_index_policy,
+        materialized_hash_program as choose_relation_lowering,
+        access_to_set, pipeline_to_set,
     };
 }
 ```

@@ -29,8 +29,8 @@ mod oracle;
 use cq_compose::check_cq_plan;
 use cq_compose::explain_cq_plan;
 use cq_ir::{cq, relational_plan as ra};
-use cq_plan::JoinPolicy as Strategy;
-use cq_plan::PlanningOptions as Options;
+use cq_query_lowering::JoinPolicy as Strategy;
+use cq_query_lowering::PlanningOptions as Options;
 use quote::{ToTokens, format_ident, quote};
 
 #[test]

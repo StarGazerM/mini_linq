@@ -16,26 +16,26 @@ fn size(n: usize) -> NonZeroUsize {
 // Every operation is still expanded by the existing stock block provider.
 macro_rules! alternate_blocks {
     ($($request:tt)*) => {
-        ::mini_linq::block_rows! {
+        ::mini_linq::array_block_rows! {
             storage crate::alternate; packing (crate::size(1)); $($request)*
         }
     };
 }
 macro_rules! stock_blocks {
-    ($($request:tt)*) => { ::mini_linq::block_rows! { storage ::cq_storage; $($request)* } };
+    ($($request:tt)*) => { ::mini_linq::array_block_rows! { storage ::cq_storage; $($request)* } };
 }
 macro_rules! alternate_zone {
     ($($request:tt)*) => {
-        ::mini_linq::zone_keys! {
-            storage crate::alternate; iterator ::mini_linq::pull_stream;
+        ::mini_linq::summarized_exact_keys! {
+            storage crate::alternate; access_iter ::mini_linq::access_to_support_iter;
             keys crate::alternate::OrderedKeys; $($request)*
         }
     };
 }
 macro_rules! coordinate_zone {
     ($($request:tt)*) => {
-        ::mini_linq::zone_keys! {
-            storage ::cq_storage; iterator ::mini_linq::pull_stream;
+        ::mini_linq::summarized_exact_keys! {
+            storage ::cq_storage; access_iter ::mini_linq::access_to_support_iter;
             keys crate::alternate::OrderedKeys; $($request)*
         }
     };
@@ -43,13 +43,13 @@ macro_rules! coordinate_zone {
 macro_rules! exact_keys {
     ($($request:tt)*) => {
         ::mini_linq::exact_keys! {
-            storage ::cq_storage; iterator ::mini_linq::pull_stream;
+            storage ::cq_storage; access_iter ::mini_linq::access_to_support_iter;
             keys crate::alternate::OrderedKeys; $($request)*
         }
     };
 }
 macro_rules! prune {
-    ($($request:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::pull_stream; $($request)* } };
+    ($($request:tt)*) => { ::mini_linq::prune_block_candidates! { access_iter ::mini_linq::access_to_support_iter; $($request)* } };
 }
 macro_rules! witnesses {
     ($($request:tt)*) => { ::mini_linq::hash_pairs! { $($request)* } };
@@ -60,22 +60,22 @@ pub(crate) use {
 
 macro_rules! mixed_plan {
     ($name:ident, $scan:path, $key_provider:path) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
-            materialize ::mini_linq::hash_rows;
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
+            result_rows ::mini_linq::array_hash_rows;
             inputs {
                 R => crate::alternate_blocks;
                 S => crate::stock_blocks;
-                T => ::mini_linq::hash_rows;
+                T => ::mini_linq::array_hash_rows;
             }
-            results {}
-            scan $scan;
-            scans { s1 => crate::prune; }
+            result_bindings {}
+            candidates $scan;
+            candidate_bindings { s1 => crate::prune; }
             keys $key_provider;
             key_sets { s1 => crate::coordinate_zone; }
-            join crate::witnesses;
-            joins {}
+            pairs crate::witnesses;
+            pair_bindings {}
             struct $name;
             relation R(k:i64,x:i64);
             relation S(k:i64,y:i64);
@@ -97,7 +97,7 @@ macro_rules! mixed_plan {
 }
 
 mixed_plan!(MixedZone, crate::prune, crate::alternate_zone);
-mixed_plan!(MixedExact, ::mini_linq::scan_rows, crate::exact_keys);
+mixed_plan!(MixedExact, ::mini_linq::scan_candidates, crate::exact_keys);
 
 #[test]
 fn sparse_coordinates_flat_payload_and_stock_blocks_coexist_in_one_query() {
@@ -135,18 +135,18 @@ fn sparse_coordinates_flat_payload_and_stock_blocks_coexist_in_one_query() {
 
 macro_rules! reduction_plan {
     ($name:ident, $scan:path, $key_provider:path) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
-            materialize ::mini_linq::hash_rows;
-            inputs { R => crate::alternate_blocks; S => ::mini_linq::hash_rows; }
-            results {}
-            scan $scan;
-            scans {  }
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
+            result_rows ::mini_linq::array_hash_rows;
+            inputs { R => crate::alternate_blocks; S => ::mini_linq::array_hash_rows; }
+            result_bindings {}
+            candidates $scan;
+            candidate_bindings {  }
             keys $key_provider;
             key_sets {  }
-            join crate::witnesses;
-            joins {}
+            pairs crate::witnesses;
+            pair_bindings {}
             struct $name;
             relation R(k:i64,x:i64);
             relation S(k:i64);
@@ -163,7 +163,11 @@ macro_rules! reduction_plan {
 }
 
 reduction_plan!(RejectedZone, crate::prune, crate::alternate_zone);
-reduction_plan!(RejectedExact, ::mini_linq::scan_rows, crate::exact_keys);
+reduction_plan!(
+    RejectedExact,
+    ::mini_linq::scan_candidates,
+    crate::exact_keys
+);
 
 #[test]
 fn rejected_metadata_never_opens_the_alternate_payload() {
@@ -181,18 +185,18 @@ fn rejected_metadata_never_opens_the_alternate_payload() {
 
 macro_rules! composite_plan {
     ($name:ident, $scan:path, $key_provider:path) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
-            materialize ::mini_linq::hash_rows;
-            inputs { R => crate::alternate_blocks; S => ::mini_linq::hash_rows; }
-            results {}
-            scan $scan;
-            scans {  }
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
+            result_rows ::mini_linq::array_hash_rows;
+            inputs { R => crate::alternate_blocks; S => ::mini_linq::array_hash_rows; }
+            result_bindings {}
+            candidates $scan;
+            candidate_bindings {  }
             keys $key_provider;
             key_sets {  }
-            join crate::witnesses;
-            joins {}
+            pairs crate::witnesses;
+            pair_bindings {}
             struct $name;
             relation R(a:i64,b:i64,x:i64);
             relation S(b:i64,a:i64);
@@ -241,22 +245,22 @@ fn a_different_summary_refines_pruning_without_changing_the_zone_recipe() {
     assert_eq!(coordinate_opens - correlated_opens, 1);
 }
 
-mini_linq::observed_relation_program! {
-    storage ::cq_storage;
-    access ::mini_linq::pull_stream;
-    materialize ::mini_linq::hash_rows;
+mini_linq::observed_configured_program! {
+    counter_storage ::cq_storage;
+    access ::mini_linq::access_to_support_iter;
+    result_rows ::mini_linq::array_hash_rows;
     inputs {
         R => crate::alternate_blocks;
-        S => ::mini_linq::hash_rows;
-        T => ::mini_linq::hash_rows;
+        S => ::mini_linq::array_hash_rows;
+        T => ::mini_linq::array_hash_rows;
     }
-    results {}
-    scan crate::prune;
-    scans {  }
+    result_bindings {}
+    candidates crate::prune;
+    candidate_bindings {  }
     keys crate::alternate_zone;
     key_sets {  }
-    join crate::witnesses;
-    joins {}
+    pairs crate::witnesses;
+    pair_bindings {}
     struct Versioned;
     relation R(k:i64,x:i64);
     relation S(k:i64);
@@ -289,18 +293,18 @@ fn the_sparse_selection_preserves_reductions_when_a_block_is_reopened() {
     assert_eq!(final_reduction.2.exact_probes, 1);
 }
 
-mini_linq::observed_relation_program! {
-    storage ::cq_storage;
-    access ::mini_linq::pull_stream;
-    materialize ::mini_linq::hash_rows;
-    inputs { R => ::mini_linq::sorted_rows; S => ::mini_linq::hash_rows; }
-    results { packed => crate::alternate_blocks; }
-    scan crate::prune;
-    scans {  }
+mini_linq::observed_configured_program! {
+    counter_storage ::cq_storage;
+    access ::mini_linq::access_to_support_iter;
+    result_rows ::mini_linq::array_hash_rows;
+    inputs { R => ::mini_linq::array_sorted_rows; S => ::mini_linq::array_hash_rows; }
+    result_bindings { packed => crate::alternate_blocks; }
+    candidates crate::prune;
+    candidate_bindings {  }
     keys crate::alternate_zone;
     key_sets {  }
-    join crate::witnesses;
-    joins {}
+    pairs crate::witnesses;
+    pair_bindings {}
     struct Materialized;
     relation R(k:i64,x:i64);
     relation S(k:i64);

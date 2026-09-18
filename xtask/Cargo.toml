@@ -15,9 +15,9 @@ oracle = ["dep:duckdb"]
 
 [dependencies]
 cq-compose = { path = "../crates/cq-compose" }
-cq-realize = { path = "../crates/cq-realize", default-features = false, features = ["hash-inputs", "hash-prefix"] }
-cq-execution = { path = "../crates/cq-execution", default-features = false, features = ["pull"] }
-cq-pipeline = { path = "../crates/cq-pipeline", default-features = false, features = ["iterator"] }
+cq-relation-lowering = { path = "../crates/cq-relation-lowering", default-features = false, features = ["base-hash", "prefix-hash"] }
+cq-access-lowering = { path = "../crates/cq-access-lowering", default-features = false, features = ["to-pipeline"] }
+cq-pipeline-lowering = { path = "../crates/cq-pipeline-lowering", default-features = false, features = ["distinct-iter"] }
 cq-ir = { path = "../crates/cq-ir" }
 cq-workloads = { path = "../workloads" }
 duckdb = { version = "~1.10505.0", features = ["bundled"], optional = true }

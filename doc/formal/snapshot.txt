@@ -1,91 +1,77 @@
 Compiler audit snapshot — 17 September 2026
 
-Scope
-The borrowed execution experiment now composes the existing stage APIs:
+Scope and baseline
+Commit f44744e saves the staged borrowed implementation before the naming change.
+The current revision renames six compiler crates, implementation modules,
+procedural macros, features and administrative configuration together. Callers,
+teaching extraction, tooling and the manuscript use the current names; no old
+API aliases are retained. doc/NAME-AUDIT.md inventories all 44 exported macros.
+
+The compiler boundaries remain:
 CQ -> RA -> IndexRequirements -> Rust[Access, Native] -> Rust[Pipeline, Native] -> Rust.
 Rust[...] denotes ordinary Rust containing macro invocations, not a new IR.
-The old direct relational-to-iterator/loop implementations and their test/document
-entry points were deleted without compatibility aliases. Existing hash and
-configured-relation implementations retain their declared domains and APIs.
+Configured relation lowering accepts RA directly; Access set-loop lowering emits
+Rust directly. These existing differences are explicit, not hidden by naming.
+The rename does not add a stage, planning feedback or a runtime interpreter.
+IR, runtime storage and workload implementation files are unchanged from f44744e.
 
-The no-index policy preserves checked RA and writes an empty overlay. Borrowed
-scan lowering consumes IX and rejects nonempty demands, Select, Extend and
-computed outputs. Each admitted RA definition becomes a checked Access region.
-Access now admits an empty body for Unit and a simple identifier for exactly
-one fresh variable. Intermediate support, existential consumption and final
-answers use the same Access-to-Pipeline compiler with separate endpoint choices.
+Borrowed lowering consumes IX with empty demands, rejects Select, Extend and
+computed outputs, and emits checked local Access regions. Support, existence
+and final answers select separate Pipeline endpoints. Shared/restarted results
+use Native Build/Scan and the BuildReplay/ReplayRead storage traits. Payloads
+remain borrowed. Construction performs no input scan or field read; existence
+stops at its first witness. Replay can retain full inputs, comparisons remain
+nested, and replay uses non-Send Rc state. These are finite stable pure-value
+contracts, not effect or performance claims.
 
-Shared/restarted definitions use Native Build/Scan. Replay privately owns one
-source, a demanded prefix and independent cursor positions. Generated code uses
-BuildReplay and ReplayRead; storage contains no relational operator or compiler
-dispatch. Field payloads remain borrowed. Construction performs no input scan
-or field read; existence stops at its first witness. Prefix retention can grow
-to full inputs, comparisons remain nested, and replay uses non-Send Rc state.
-These are finite stable pure-value guarantees, not effect or performance claims.
-
-Validation completed
-- Workspace tests with compiled workloads and all new borrowed-route features:
-  530 tests passed across 88 test/doc-test targets. Seven subsequently added
-  typed-domain/index-policy tests passed in focused selected-feature runs.
-  Log: target/staged-workspace-tests.log.
-- Strict workspace/all-target Clippy with the same route features passed.
-  The minimal borrowed-route all-target Clippy configuration also passed.
-  Logs: target/staged-workspace-clippy.log, target/staged-minimal-clippy.log.
-- All 11 staged semantic/demand regressions passed, including the 512-database
-  oracle, non-Clone output payloads, shared cursor interleaving, source/reduction
-  reuse and witness short circuit. Log: target/staged-execution-tests.log.
-- Standalone xtask: 18 tests passed. Log: target/staged-xtask.log.
-- Current-source YA extraction passed 59 foundation tests, both expected student
-  exercise failures, 81 reference-overlay tests and both examples. Both student
-  stubs were restored; 81 files were delivered to the temporary export.
-  Log: target/staged-ya-export.log.
+Validation completed after renaming
+- 537 workspace tests passed across 88 test/doc-test targets, with compiled
+  workloads and the borrowed-route features enabled. This includes the exact
+  documentation reproduction tests and all 11 staged demand/semantic regressions.
+  Log: target/rename-workspace-final.log.
+- Strict workspace/all-target Clippy passed with the same selected features.
+  Log: target/rename-workspace-clippy.log.
+- All 50 supported Cargo feature configurations passed in one uninterrupted run.
+  Log: target/rename-features.log.
+- Dependency isolation passed 34 source-removal builds, six combined compiler
+  families, 32 isolated frontend probes and 15 complete semantic consumers
+  (256 databases each plus duplicate-input cases). The borrowed route passed
+  with seven expected rejected variants. Dependency mutation checks and the
+  77-file sibling-import audit passed. Log: target/rename-dependencies.log.
+- YA teaching extraction passed 59 foundation tests, both intended student
+  exercise failures, 81 reference tests and both examples. Student stubs were
+  restored and 81 files delivered. Log: target/rename-ya-export.log.
+- Standalone xtask passed 18 tests, and the independent composition example ran.
+  Logs: target/rename-xtask.log, target/rename-composition-example.log.
 - All five paper examples passed, including the 264-case representation driver.
-  The finite model checked 98,415 current-view candidates and 1,280 witness
+  The finite model checked 98,415 current-view candidate cases and 1,280 witness
   cases plus its boundary/support/stale-version checks. This is bounded model
-  evidence, not a proof about generated Rust. Log: target/staged-paper-examples.log.
-- The formal inventory maps 179 named rules, including 22 native-refinement
-  rules. Added mappings cover empty index policy, borrowed Access lowering,
-  replay storage transitions and existential Pipeline consumption. Both PDFs
-  build without warnings. Fingerprints identify reviewed source, not proofs.
-- Full dependency isolation passed 34 source-removal builds, six combined
-  compiler-family builds, 32 isolated macro probes, 15 independent complete
-  query compositions (256 databases each plus duplicate-input checks), and
-  an accepted borrowed fixture with seven expected rejections. The isolated
-  existence endpoint also executed its emitted-Rust regression.
-  Log: target/staged-full-dependencies.log.
-- All 50 supported feature configurations passed across the initial matrix
-  and resumed run. A test-only HashSet import was too narrowly gated in the
-  initial run; it was corrected, and the failed/remaining cases plus affected
-  isolated features passed. The corrected pull/collect configuration also
-  passed strict Clippy. No query compiler change was needed for that failure.
-  Logs: target/staged-full-features.log, target/staged-full-features-resume.log,
-  target/staged-feature-verification.json, target/staged-import-clippy.log.
-- Workspace formatting and diff whitespace checks passed.
+  evidence, not a generated-Rust proof. Both PDFs built without warnings.
+  Log: target/rename-paper-gates.log.
+- The formal inventory maps 179 named rules, including 22 native refinements;
+  its 394 source fingerprints identify the reviewed files, not proof coverage.
+- The independent rename review preserved all 493 static test declarations,
+  with no ignored tests. Feature dependency closures and test gates match the
+  baseline after renaming. All four lockfiles differ only in workspace crate
+  names. Workspace and standalone-project formatting and diff checks passed.
 
 Actual expansion evidence
-The current capture is target/staged-execution-review. It records 58 actual
-procedural-macro input/output pairs for one Star query, with 699 copied source
-fingerprints unchanged during capture. The recorder returns original token
-streams without reparsing. The unchanged example compiles and runs against an
-independent oracle. Full inputs and immediate outputs are in steps.md; raw
-files, invocation index, command, instrumentation patch and verification are
-retained beside it. review.md annotates all 58 calls, with every non-root call
-matched to a direct invocation in its captured parent output. Declarative macros
-are traced in a separate compilation.
+The current capture is target/renamed-execution-review-final. It contains 58
+actual procedural-macro input/output pairs for one Star query, with 699 copied
+source fingerprints unchanged during capture. The recorder returns original
+TokenStreams without reparsing. The example compiles and runs against its
+independent oracle. steps.md contains complete immediate inputs and outputs;
+review.md annotates the calls and parents.json records direct expansion parents.
+Declarative macros are traced in a separate compilation.
+All 116 captured token streams match the pre-rename capture after identifier
+renaming, using token-tree comparison that preserves literals, delimiters and
+punctuation spacing. All 57 non-root calls also match direct invocations in their
+fresh parent outputs. rename-equivalence.json records this bounded comparison.
 
-The first three actual calls are graph_query, no_indexes and borrowed_scans.
-Later calls include ten pull_stream/stream_pipeline pairs, four
-pull_exists/exists_pipeline pairs, one pull/iterator_pipeline pair, fourteen
-replay operations and eleven input-provider operations. Only the physical pass
-resolves RA definitions; Access and Pipeline lowering remain real selected
-macro invocations. Invocation order is not runtime evaluation order.
-Older expansion directories are historical and do not describe this revision.
-
-Naming audit
-The post-implementation audit in doc/NAME-AUDIT.md covers crate responsibilities,
-implementation modules, all 44 exported procedural macros and caller-bound
-paths. It proposes names without renaming APIs. CQ planning is part of CQ-to-RA
-lowering; index demand selection is a policy; Access/Pipeline/Native libraries
-are compiler transformations; storage is runtime data. Existing RA/IX input
-asymmetry, push/pull targets, partial Native domains and absent planning feedback
-are recorded separately because naming changes cannot repair those contracts.
+The first three calls are cq_to_ra_hypergraph, no_index_demands and
+lower_borrowed_nested. Later calls include ten Access/support-Pipeline pairs,
+four Access/existence-Pipeline pairs, one Access/distinct-iterator pair,
+fourteen replay-resource operations and eleven input-provider operations.
+Invocation order is not runtime evaluation order. Only relation lowering resolves
+RA definitions; selected Access and Pipeline macros remain actual invocations.
+The older target/staged-execution-review capture describes the pre-rename baseline.

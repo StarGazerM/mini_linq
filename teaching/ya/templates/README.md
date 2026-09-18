@@ -11,10 +11,10 @@ Read these files in order:
    boundary at which its physical operator can be tested independently.
 2. `crates/cq-ir/src/relational_plan.rs`: named relation results and semijoin
    well-formedness. A semijoin preserves its left heading.
-3. `crates/cq-plan/src/graph/ya.rs`: implement the two sweeps.
+3. `crates/cq-query-lowering/src/hypergraph/ya.rs`: implement the two sweeps.
    `rules.rs` supplies checked `Up`, `Down`, and `Freeze` transitions;
-   `crates/cq-plan/src/proof.rs` supplies a checked join tree.
-4. `crates/cq-realize/src/hash_materialized/semijoin.rs`: implement the
+   `crates/cq-query-lowering/src/proof.rs` supplies a checked join tree.
+4. `crates/cq-relation-lowering/src/materialized_hash/semijoin.rs`: implement the
    physical operator. `rust_access_plan.rs` defines its target clauses.
 
 For a join-tree edge from parent `p` to child `c`, the upward sweep replaces
@@ -42,10 +42,11 @@ regions call a separate collection macro, which passes through the explicit
 Pipeline IR before Rust generation. There is no query interpreter in the
 runtime of the exported program.
 
-The export contains seven packages: `cq-ir`, `cq-plan`, `cq-index`,
-`cq-realize`, `cq-execution`, `cq-pipeline`, and `mini-linq`. Only the selected
-graph, named-result index, materialized, pull and collection implementation
-modules are present. Their public APIs have the same module paths as in the
+The export contains seven packages: `cq-ir`, `cq-query-lowering`, `cq-index-policy`,
+`cq-relation-lowering`, `cq-access-lowering`, `cq-pipeline-lowering`, and
+`mini-linq`. Only the selected `hypergraph`, `result_demands`, `materialized_hash`,
+`to_pipeline` and `collect_set` implementation modules are present. Their public
+APIs have the same module paths as in the
 parent compiler. The package roots and Cargo metadata include those modules;
 the implementation files and their independent checks are the production code.
 Unselected scheduling, indexing, physical and endpoint implementations are
@@ -67,7 +68,7 @@ cargo test -p cq-ir --locked
 Then run the two assignment suites independently:
 
 ```sh
-cargo test -p cq-plan --test ya_schedule --locked
+cargo test -p cq-query-lowering --test ya_schedule --locked
 cargo test -p mini-linq --test semijoin --locked
 ```
 

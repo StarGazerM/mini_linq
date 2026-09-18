@@ -1,4 +1,4 @@
-::mini_linq::hash_materialized! {
+::mini_linq::materialized_hash_program! {
     pub struct PlannedExample; relation R(a : i32, b : i32); relation S(b : i32, c :
     i32); answer(a) : - R(a, b), S(b, c), if (c > 0); relational { r0 = rename R { a - >
     a, b - > b }; r1 = rename S { b - > b, c - > c }; r2 = select r1 if (c > 0i32); r3 =

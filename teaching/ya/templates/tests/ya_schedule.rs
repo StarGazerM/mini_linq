@@ -1,7 +1,7 @@
 //! This suite invokes logical planning only; physical lowering is not needed.
-use cq_plan::graph::explain;
 use cq_ir::{cq, relational_plan as ra};
-use cq_plan::{JoinPolicy, PlanningOptions, Rule};
+use cq_query_lowering::hypergraph::explain;
+use cq_query_lowering::{JoinPolicy, PlanningOptions, Rule};
 use std::collections::BTreeSet;
 
 #[test]

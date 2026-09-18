@@ -10,14 +10,15 @@ struct Key(String);
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct Payload(String);
 
-mod pull {
+mod borrowed {
     use super::{Key, Payload};
     mod routing {
         pub use ::cq_storage as storage;
         pub use ::mini_linq::{
-            borrowed_scans as choose_realization, exists_pipeline, graph_query as query,
-            iterator_pipeline, no_indexes as choose_indexes, pull, pull_exists, pull_stream,
-            replay_rows, stream_pipeline,
+            access_to_distinct_iter, access_to_exists, access_to_support_iter,
+            cq_to_ra_hypergraph as query, lower_borrowed_nested as choose_relation_lowering,
+            no_index_demands as choose_index_policy, pipeline_to_distinct_iter, pipeline_to_exists,
+            pipeline_to_support_iter, replay_resource,
         };
         pub mod inputs {
             pub use ::mini_linq::{
@@ -74,7 +75,7 @@ fn ya_star_matches_oracle_with_borrowed_nonclone_inputs() {
                         })
                     })
                     .collect();
-                let pulled: Vec<_> = pull::Star::iter(&facts, &tags, &allowed).collect();
+                let pulled: Vec<_> = borrowed::Star::iter(&facts, &tags, &allowed).collect();
                 assert_eq!(pulled.len(), expected.len());
                 assert_eq!(pulled.into_iter().collect::<HashSet<_>>(), expected);
             }
@@ -125,8 +126,8 @@ fn measurements() -> (usize, usize, usize) {
 mod routing {
     pub use ::cq_storage as storage;
     pub use ::mini_linq::{
-        borrowed_scans, exists_pipeline, iterator_pipeline, pull, pull_exists, pull_stream,
-        replay_rows, stream_pipeline,
+        access_to_distinct_iter, access_to_exists, access_to_support_iter, lower_borrowed_nested,
+        pipeline_to_distinct_iter, pipeline_to_exists, pipeline_to_support_iter, replay_resource,
     };
     pub(super) mod inputs {
         pub(crate) use measured_rows as Measured;
@@ -158,7 +159,7 @@ macro_rules! shared_plan {
         }
     };
 }
-shared_plan!(mini_linq::borrowed_scans, SharedPull);
+shared_plan!(mini_linq::lower_borrowed_nested, SharedPull);
 
 #[test]
 fn projection_and_shared_dag_have_set_semantics() {
@@ -173,7 +174,7 @@ fn projection_and_shared_dag_have_set_semantics() {
     assert!(SharedPull::iter(&Vec::new()).next().is_none());
 }
 
-mini_linq::borrowed_scans! {
+mini_linq::lower_borrowed_nested! {
     struct Demand;
     relation Measured(key: i32);
     answer(key) :- Measured(key);
@@ -194,7 +195,7 @@ fn pull_does_no_traversal_until_demanded_and_stops_on_drop() {
     VISITS.with(|n| assert_eq!(n.get(), 3));
 }
 
-mini_linq::borrowed_scans! {
+mini_linq::lower_borrowed_nested! {
     struct JoinDemand;
     relation Measured(x: i32);
     relation OtherMeasured(x: i32, y: i32);
@@ -260,7 +261,7 @@ fn pull_consumers_execute_without_materializing_and_unused_branches_stay_unopene
     assert_eq!(measurements(), (1, 0, 0));
 }
 
-mini_linq::borrowed_scans! {
+mini_linq::lower_borrowed_nested! {
     struct SharedDemand;
     relation Measured(x: i32);
     answer(x) :- Measured(x);
@@ -286,7 +287,7 @@ fn shared_ra_uses_have_independent_cursors_over_one_lazy_source() {
     assert_eq!(output.next(), None);
 }
 
-mini_linq::borrowed_scans! {
+mini_linq::lower_borrowed_nested! {
     struct SharedJoinDemand;
     relation Measured(x: i32);
     answer(x) :- Measured(x);
@@ -376,9 +377,10 @@ mod counted_star {
     mod wiring {
         pub use ::cq_storage as storage;
         pub use ::mini_linq::{
-            borrowed_scans as choose_realization, exists_pipeline, graph_query as query,
-            iterator_pipeline, no_indexes as choose_indexes, pull, pull_exists, pull_stream,
-            replay_rows, stream_pipeline,
+            access_to_distinct_iter, access_to_exists, access_to_support_iter,
+            cq_to_ra_hypergraph as query, lower_borrowed_nested as choose_relation_lowering,
+            no_index_demands as choose_index_policy, pipeline_to_distinct_iter, pipeline_to_exists,
+            pipeline_to_support_iter, replay_resource,
         };
         pub(super) mod inputs {
             pub(crate) use counted_allowed as Allowed;
@@ -464,9 +466,9 @@ macro_rules! borrowed_output {
         }
     };
 }
-borrowed_output!(mini_linq::borrowed_scans, BorrowPull);
+borrowed_output!(mini_linq::lower_borrowed_nested, BorrowPull);
 
-mini_linq::borrowed_scans! {
+mini_linq::lower_borrowed_nested! {
     struct BorrowReplay;
     relation R(payload: Payload);
     answer(payload) :- R(payload);
@@ -506,7 +508,7 @@ macro_rules! existential_plan {
         }
     };
 }
-existential_plan!(mini_linq::borrowed_scans, ExistsPull);
+existential_plan!(mini_linq::lower_borrowed_nested, ExistsPull);
 
 #[test]
 fn semijoin_short_circuits_witnesses() {
@@ -539,7 +541,7 @@ macro_rules! disjoint_plan {
         }
     };
 }
-disjoint_plan!(mini_linq::borrowed_scans, DisjointPull);
+disjoint_plan!(mini_linq::lower_borrowed_nested, DisjointPull);
 
 #[test]
 fn disjoint_semijoin_is_existence_and_repeated_output_borrows() {

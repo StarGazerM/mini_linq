@@ -6,9 +6,9 @@ mod tests {
 
     use super::*;
     use cq_compose::compile_cq;
-    use cq_index::input::compile as compile_input_indexes;
+    use cq_index_policy::base_demands::compile as compile_input_indexes;
     use cq_ir::cq;
-    use cq_realize::hash_inputs::compile_input_indexed;
+    use cq_relation_lowering::base_hash::compile;
     use proc_macro2::TokenStream;
 
     fn index_signature(index: &index_requirements::IndexRequirement) -> IndexSignature {
@@ -72,7 +72,11 @@ mod tests {
             vec![("S".to_owned(), vec![1]), ("R".to_owned(), vec![1])]
         );
 
-        let file = compile_input_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull)).unwrap();
+        let file = compile(
+            &indexed,
+            &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+        )
+        .unwrap();
         #[derive(Default)]
         struct PullFinder {
             tokens: Option<TokenStream>,
@@ -83,7 +87,7 @@ mod tests {
                     .path
                     .segments
                     .last()
-                    .is_some_and(|segment| segment.ident == "pull")
+                    .is_some_and(|segment| segment.ident == "access_to_distinct_iter")
                 {
                     self.tokens = Some(node.tokens.clone());
                 }

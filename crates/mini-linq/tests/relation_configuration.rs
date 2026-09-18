@@ -1,12 +1,12 @@
 #![cfg(all(
-    feature = "relations",
+    feature = "configured",
     feature = "tuple-hash-rows",
     feature = "hash-pairs"
 ))]
 
 use std::collections::HashSet;
 
-mini_linq::relation_program! {
+mini_linq::configured_program! {
     inputs { R => mini_linq::tuple_hash_rows; }
     struct RenameOnly;
     relation R(name: String, value: i32);
@@ -17,10 +17,10 @@ mini_linq::relation_program! {
     }
 }
 
-mini_linq::relation_program! {
+mini_linq::configured_program! {
     inputs { R => mini_linq::tuple_hash_rows; S => mini_linq::tuple_hash_rows; }
-    results { joined => mini_linq::tuple_hash_rows; }
-    joins { joined => mini_linq::hash_pairs; }
+    result_bindings { joined => mini_linq::tuple_hash_rows; }
+    pair_bindings { joined => mini_linq::hash_pairs; }
     struct JoinOnly;
     relation R(name: String, value: i32);
     relation S(name: String);

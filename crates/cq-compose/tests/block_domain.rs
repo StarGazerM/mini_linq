@@ -1,8 +1,8 @@
 //! The direct RA edge and unsupported native access compositions.
 use cq_compose::compile_cq_planned;
 use cq_ir::{cq, relational_plan as ra};
-use cq_realize::relations::RelationOptions;
-use cq_realize::relations::compile_program;
+use cq_relation_lowering::configured::RelationOptions;
+use cq_relation_lowering::configured::compile_program;
 
 fn options(source: &ra::Module) -> RelationOptions {
     RelationOptions {
@@ -17,14 +17,14 @@ fn options(source: &ra::Module) -> RelationOptions {
                 )
             })
             .collect(),
-        materialize: Some(syn::parse_quote!(providers::rows)),
-        results: Default::default(),
-        scan: Some(syn::parse_quote!(accesses::scan)),
-        scans: Default::default(),
+        result_rows: Some(syn::parse_quote!(providers::rows)),
+        result_bindings: Default::default(),
+        candidates: Some(syn::parse_quote!(accesses::scan)),
+        candidate_bindings: Default::default(),
         keys: Some(syn::parse_quote!(accesses::keys)),
         key_sets: Default::default(),
-        join: Some(syn::parse_quote!(accesses::witnesses)),
-        joins: Default::default(),
+        pairs: Some(syn::parse_quote!(accesses::witnesses)),
+        pair_bindings: Default::default(),
     }
 }
 
@@ -40,7 +40,7 @@ fn typed_relations_and_rust_expressions_are_not_rejected_by_a_global_array_domai
         let source: cq::Module = syn::parse_str(text).unwrap();
         let ra = compile_cq_planned(&source).unwrap();
         let target = compile_program(&ra, &options(&ra)).unwrap();
-        cq_realize::relations::check_program(&ra, &target, &options(&ra)).unwrap();
+        cq_relation_lowering::configured::check_program(&ra, &target, &options(&ra)).unwrap();
     }
 }
 
@@ -54,7 +54,7 @@ fn direct_lowering_emits_existing_access_regions_and_native_operations() {
     let source = compile_cq_planned(&source).unwrap();
     let options = options(&source);
     let target = compile_program(&source, &options).unwrap();
-    cq_realize::relations::check_program(&source, &target, &options).unwrap();
+    cq_relation_lowering::configured::check_program(&source, &target, &options).unwrap();
     let rust = prettyplease::unparse(&target);
     for selected in [
         "user::access!",
@@ -130,10 +130,10 @@ fn each_binding_and_access_choice_keeps_its_own_macro_path() {
         ("T".into(), syn::parse_quote!(providers::sorted)),
     ]);
     options
-        .results
+        .result_bindings
         .insert("result".into(), syn::parse_quote!(providers::sorted));
     options
-        .scans
+        .candidate_bindings
         .insert("r1".into(), syn::parse_quote!(accesses::prune));
     options
         .key_sets
@@ -180,7 +180,7 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     // Independent target directory prevents nested Cargo from waiting on the
     // workspace test build that is executing this harness.
     let run_case = |provider: &str,
-                    scan: &str,
+                    candidates: &str,
                     resource: &str,
                     keys: &str,
                     with_keys: bool,
@@ -192,7 +192,7 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
                 (type ($($column:ty),* $(,)?)) => {{
                     ::std::collections::HashSet<::core::primitive::u64>
                 }};
-                ($($request:tt)*) => {{ ::mini_linq::hash_rows! {{ $($request)* }} }};
+                ($($request:tt)*) => {{ ::mini_linq::array_hash_rows! {{ $($request)* }} }};
             }}
             // Inherent method names alone do not establish exact membership.
             struct MethodOnlyKeys<T>(Vec<T>);
@@ -205,19 +205,19 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
                 fn contains(&self, key: &T) -> bool {{ self.0.contains(key) }}
             }}
             macro_rules! blocks {{
-                ($($op:tt)*) => {{ mini_linq::block_rows! {{ storage cq_storage; $($op)* }} }};
+                ($($op:tt)*) => {{ mini_linq::array_block_rows! {{ storage cq_storage; $($op)* }} }};
             }}
             macro_rules! prune {{
-                ($($op:tt)*) => {{ mini_linq::prune_rows! {{ iterator mini_linq::pull_stream; $($op)* }} }};
+                ($($op:tt)*) => {{ mini_linq::prune_block_candidates! {{ access_iter mini_linq::access_to_support_iter; $($op)* }} }};
             }}
             macro_rules! keys {{
-                ($($op:tt)*) => {{ {resource}! {{ storage cq_storage; iterator mini_linq::pull_stream; keys {keys}; $($op)* }} }};
+                ($($op:tt)*) => {{ {resource}! {{ storage cq_storage; access_iter mini_linq::access_to_support_iter; keys {keys}; $($op)* }} }};
             }}
-            mini_linq::relation_program! {{
-                access mini_linq::pull_stream;
-                inputs {{ R => {provider}; S => mini_linq::hash_rows; }}
-                materialize mini_linq::hash_rows;
-                scan {scan};
+            mini_linq::configured_program! {{
+                access mini_linq::access_to_support_iter;
+                inputs {{ R => {provider}; S => mini_linq::array_hash_rows; }}
+                result_rows mini_linq::array_hash_rows;
+                candidates {candidates};
                 {keys_binding}
                 struct P;
                 relation R(k:i64); relation S(k:i64);
@@ -260,8 +260,8 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     };
     // The same dependency graph and ordinary hash route compile successfully.
     run_case(
-        "mini_linq::hash_rows",
-        "mini_linq::scan_rows",
+        "mini_linq::array_hash_rows",
+        "mini_linq::scan_candidates",
         "mini_linq::exact_keys",
         "::std::collections::HashSet",
         true,
@@ -270,9 +270,9 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     // Explicitly selecting zone pruning on native row storage fails at its
     // requested operation. There is no capability-tag precheck or fallback.
     run_case(
-        "mini_linq::hash_rows",
+        "mini_linq::array_hash_rows",
         "prune",
-        "mini_linq::zone_keys",
+        "mini_linq::summarized_exact_keys",
         "::std::collections::HashSet",
         true,
         Some("no block descriptor lowering"),
@@ -290,7 +290,7 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     // the generated array access ill typed. rustc owns that diagnostic.
     run_case(
         "wrong_hash_rows",
-        "mini_linq::scan_rows",
+        "mini_linq::scan_candidates",
         "mini_linq::exact_keys",
         "::std::collections::HashSet",
         true,
@@ -299,8 +299,8 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     // A familiar method spelling does not silently stand in for the operation
     // trait and its stated exactness law.
     run_case(
-        "mini_linq::hash_rows",
-        "mini_linq::scan_rows",
+        "mini_linq::array_hash_rows",
+        "mini_linq::scan_candidates",
         "mini_linq::exact_keys",
         "MethodOnlyKeys",
         true,
@@ -309,8 +309,8 @@ fn actual_macro_composition_rejects_missing_access_and_incompatible_rust_types()
     // The real proc-macro boundary names the missing implementation at the
     // operation that needs it, instead of demanding all defaults up front.
     run_case(
-        "mini_linq::hash_rows",
-        "mini_linq::scan_rows",
+        "mini_linq::array_hash_rows",
+        "mini_linq::scan_candidates",
         "mini_linq::exact_keys",
         "::std::collections::HashSet",
         false,

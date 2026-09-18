@@ -1,5 +1,5 @@
 //! Minimal native macro protocols execute without unrelated configuration.
-#[cfg(feature = "scan-rows")]
+#[cfg(feature = "scan-candidates")]
 #[test]
 fn scan_discards_metadata_and_observer_without_configuration() {
     use std::cell::Cell;
@@ -10,7 +10,7 @@ fn scan_discards_metadata_and_observer_without_configuration() {
     }
     let values = [[1_i64], [2]];
     let calls = Cell::new(0);
-    let result = mini_linq::scan_rows! {
+    let result = mini_linq::scan_candidates! {
         work (compile_error!("scan must discard the observer"));
         candidates rows { { calls.set(calls.get() + 1); &values } }
             (compile_error!("scan must discard metadata-only syntax"))
@@ -19,12 +19,16 @@ fn scan_discards_metadata_and_observer_without_configuration() {
     assert_eq!(calls.get(), 1);
 }
 
-#[cfg(all(feature = "exact-keys", feature = "pull", feature = "stream-pipeline"))]
+#[cfg(all(
+    feature = "exact-keys",
+    feature = "access-to-pipeline",
+    feature = "pipeline-support-iter"
+))]
 #[test]
 fn key_build_uses_no_membership_trait() {
     use std::collections::HashSet;
     let keys = mini_linq::exact_keys! {
-        iterator mini_linq::pull_stream;
+        access_iter mini_linq::access_to_support_iter;
         keys ::std::collections::HashSet;
         build { out(k) => ([k]) :- Keys(k) => for (k,) in ([(1_i64,), (2,), (1,)]); }
     };
@@ -39,12 +43,12 @@ fn membership_uses_no_build_iterator() {
     assert!(!mini_linq::exact_keys! { storage cq_storage; contains (&keys) ([3]) });
 }
 
-#[cfg(feature = "hash-rows")]
+#[cfg(feature = "array-hash-rows")]
 #[test]
 fn hash_materialization_collects_support_streams_without_storage_options() {
     use std::{cell::Cell, collections::HashSet};
     let calls = Cell::new(0);
-    mini_linq::hash_rows! {
+    mini_linq::array_hash_rows! {
         work (compile_error!("materialization does not observe traversal"));
         materialize hash_owner hash_view ({ calls.set(calls.get() + 1); [[2_i64], [1], [2]].into_iter() })
     }
@@ -52,17 +56,17 @@ fn hash_materialization_collects_support_streams_without_storage_options() {
     assert_eq!(calls.get(), 1);
 }
 
-#[cfg(feature = "sorted-rows")]
+#[cfg(feature = "array-sorted-rows")]
 #[test]
 fn sorted_materialization_collects_support_streams_without_storage_options() {
     use std::collections::BTreeSet;
-    mini_linq::sorted_rows! {
+    mini_linq::array_sorted_rows! {
         materialize sorted_owner sorted_view ([[2_i64], [1], [2]].into_iter())
     }
     assert_eq!(sorted_view, &BTreeSet::from([[1], [2]]));
 }
 
-#[cfg(feature = "block-rows")]
+#[cfg(feature = "array-block-rows")]
 #[test]
 fn block_packing_is_bound_and_evaluates_once_per_construction() {
     use std::{cell::Cell, collections::HashSet};
@@ -70,7 +74,7 @@ fn block_packing_is_bound_and_evaluates_once_per_construction() {
     let size_calls = Cell::new(0);
     macro_rules! blocks {
         ($($op:tt)*) => {
-            mini_linq::block_rows! {
+            mini_linq::array_block_rows! {
                 storage cq_storage;
                 packing ({ size_calls.set(size_calls.get() + 1); std::num::NonZeroUsize::new(1).unwrap() });
                 $($op)*
@@ -87,7 +91,7 @@ fn block_packing_is_bound_and_evaluates_once_per_construction() {
     assert_eq!(size_calls.get(), 1);
 }
 
-#[cfg(feature = "block-rows")]
+#[cfg(feature = "array-block-rows")]
 #[test]
 fn packing_helper_does_not_shadow_direct_or_opaque_caller_expressions() {
     use std::{cell::RefCell, collections::HashSet, num::NonZeroUsize};
@@ -101,7 +105,7 @@ fn packing_helper_does_not_shadow_direct_or_opaque_caller_expressions() {
         };
     }
     let order = RefCell::new(Vec::new());
-    mini_linq::block_rows! {
+    mini_linq::array_block_rows! {
         storage cq_storage;
         packing (__cq_pack(&order));
         materialize direct_owner direct_view ({
@@ -109,7 +113,7 @@ fn packing_helper_does_not_shadow_direct_or_opaque_caller_expressions() {
             [[1_i64], [3]]
         })
     }
-    mini_linq::block_rows! {
+    mini_linq::array_block_rows! {
         storage cq_storage;
         packing (caller_packing!(&order));
         materialize opaque_owner opaque_view ({
@@ -119,7 +123,7 @@ fn packing_helper_does_not_shadow_direct_or_opaque_caller_expressions() {
     }
     assert_eq!(*order.borrow(), ["rows", "packing", "rows", "packing"]);
     for view in [&direct_view, &opaque_view] {
-        let rows = mini_linq::block_rows! { storage cq_storage; scan (view) };
+        let rows = mini_linq::array_block_rows! { storage cq_storage; scan (view) };
         assert_eq!(
             rows.copied().collect::<HashSet<_>>(),
             HashSet::from([[1], [3]])
@@ -128,10 +132,10 @@ fn packing_helper_does_not_shadow_direct_or_opaque_caller_expressions() {
 }
 
 #[cfg(all(
-    feature = "prune-rows",
-    feature = "block-rows",
-    feature = "pull",
-    feature = "stream-pipeline"
+    feature = "prune-block-candidates",
+    feature = "array-block-rows",
+    feature = "access-to-pipeline",
+    feature = "pipeline-support-iter"
 ))]
 #[test]
 fn predicate_helper_does_not_shadow_direct_or_opaque_caller_expressions() {
@@ -146,28 +150,28 @@ fn predicate_helper_does_not_shadow_direct_or_opaque_caller_expressions() {
         };
     }
     macro_rules! blocks {
-        ($($op:tt)*) => { mini_linq::block_rows! { storage cq_storage; $($op)* } };
+        ($($op:tt)*) => { mini_linq::array_block_rows! { storage cq_storage; $($op)* } };
     }
-    mini_linq::block_rows! {
+    mini_linq::array_block_rows! {
         storage cq_storage;
         packing (std::num::NonZeroUsize::new(1).unwrap());
         materialize owner view ([[1_i64], [3]])
     }
     let calls = Cell::new(0);
-    let direct = mini_linq::prune_rows! {
-        iterator mini_linq::pull_stream;
+    let direct = mini_linq::prune_block_candidates! {
+        access_iter mini_linq::access_to_support_iter;
         candidates blocks { &view } (__cq_bind_predicate(&calls))
     };
     assert_eq!(direct.map(|handle| *handle.3).collect::<Vec<_>>(), [[1]]);
-    let opaque = mini_linq::prune_rows! {
-        iterator mini_linq::pull_stream;
+    let opaque = mini_linq::prune_block_candidates! {
+        access_iter mini_linq::access_to_support_iter;
         candidates blocks { &view } (caller_predicate!(&calls))
     };
     assert_eq!(opaque.map(|handle| *handle.3).collect::<Vec<_>>(), [[1]]);
     assert_eq!(calls.get(), 2);
 }
 
-#[cfg(feature = "hash-rows")]
+#[cfg(feature = "array-hash-rows")]
 #[test]
 fn producer_private_accumulator_does_not_capture_body_names() {
     let __cq_output = 7_i64;
@@ -176,7 +180,7 @@ fn producer_private_accumulator_does_not_capture_body_names() {
             [__cq_output]
         };
     }
-    mini_linq::hash_rows! {
+    mini_linq::array_hash_rows! {
         produce owner view via emit {
             emit([__cq_output]);
             emit(caller_row!());
@@ -185,15 +189,15 @@ fn producer_private_accumulator_does_not_capture_body_names() {
     assert_eq!(view, &std::collections::HashSet::from([[7]]));
 }
 
-#[cfg(feature = "block-rows")]
+#[cfg(feature = "array-block-rows")]
 #[test]
 fn block_producer_private_accumulator_does_not_capture_body_names() {
     let __cq_output = 7_i64;
-    mini_linq::block_rows! {
+    mini_linq::array_block_rows! {
         storage cq_storage;
         packing (std::num::NonZeroUsize::new(1).unwrap());
         produce owner view via emit { emit([__cq_output]); }
     }
-    let rows = mini_linq::block_rows! { storage cq_storage; scan (&view) };
+    let rows = mini_linq::array_block_rows! { storage cq_storage; scan (&view) };
     assert_eq!(rows.copied().collect::<Vec<_>>(), [[7]]);
 }

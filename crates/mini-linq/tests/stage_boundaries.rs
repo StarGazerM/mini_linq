@@ -1,18 +1,19 @@
 mod wiring {
     #[allow(unused_imports)]
     pub use ::mini_linq::{
-        collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
-        pull_set,
+        access_to_distinct_iter, access_to_set, choose_graph_or_prefix, cq_to_ra_clause_prefix,
+        cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
     };
     pub use ::mini_linq::{
-        hash_materialized as choose_realization, result_indexes as choose_indexes,
+        materialized_hash_program as choose_relation_lowering,
+        result_index_demands as choose_index_policy,
     };
 }
-use mini_linq::{choose_indexes, optimized_query};
+use mini_linq::{choose_graph_or_prefix, choose_index_policy};
 use wiring as mini_linq;
 
 type Amount = i32;
-optimized_query! {
+choose_graph_or_prefix! {
     struct AliasedSelection;
     relation R(value: Amount);
     answer(x) :- R(x), if (x >= -2147483648), if (x != 0);
@@ -45,7 +46,7 @@ mod rust_boundary {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Key(usize);
-optimized_query! {
+choose_graph_or_prefix! {
     struct NonOrderedKeys;
     relation R(key:Key,payload:String);
     relation S(key:Key,rank:u8);
@@ -53,7 +54,7 @@ optimized_query! {
 }
 
 struct NotClone;
-optimized_query! {
+choose_graph_or_prefix! {
     struct UnusedInput;
     relation Used(value:i32);
     relation Unused(value:NotClone);
@@ -72,14 +73,14 @@ fn ordinary_rust_ownership_and_unused_inputs_are_preserved() {
     assert_eq!(UnusedInput::run([(1,), (1,)], unused), vec![(1,)]);
 }
 
-optimized_query! {
+choose_graph_or_prefix! {
     struct Selected;
     relation R(a: i32, b: i32);
     relation S(b: i32, c: i32);
     answer(c,a) :- R(a,b), S(b,c), if (c > 0), if (a < c);
 }
 
-choose_indexes! {
+choose_index_policy! {
     struct Direct;
     relation Input(key: String, payload: String);
     relation Guard(key: String);
@@ -110,7 +111,7 @@ fn quotation_can_enter_at_each_existing_language_boundary() {
         vec![("p".into(),)]
     );
     // A lower local IR needs no source program wrapper.
-    let unit = mini_linq::pull! { answer() => (()) :- unit() => if (true); };
+    let unit = mini_linq::access_to_distinct_iter! { answer() => (()) :- unit() => if (true); };
     assert_eq!(unit.collect::<Vec<_>>(), vec![()]);
 }
 

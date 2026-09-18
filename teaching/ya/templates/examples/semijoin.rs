@@ -1,13 +1,13 @@
 mod wiring {
     pub use ::mini_linq::{
-        pull_set, collect_pipeline, hash_materialized as choose_realization,
-        result_indexes as choose_indexes,
+        access_to_set, materialized_hash_program as choose_relation_lowering, pipeline_to_set,
+        result_index_demands as choose_index_policy,
     };
 }
 use wiring as mini_linq;
 
 // Enter below the YA scheduler to work on physical semijoin lowering alone.
-mini_linq::choose_indexes! {
+mini_linq::choose_index_policy! {
     struct Supported;
     relation Items(key:i32, payload:String); relation Keys(key:i32);
     answer(v) :- Items(k,v), Keys(k);

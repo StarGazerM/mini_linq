@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cq_execution::pull::compile as compile_pull;
-use cq_pipeline::iterator::compile as compile_iterator_pipeline;
+use cq_access_lowering::to_pipeline::compile as compile_pull;
+use cq_pipeline_lowering::distinct_iter::compile as compile_iterator_pipeline;
 use syn::visit_mut::{self, VisitMut};
 
 static TEMPORARY_NUMBER: AtomicU64 = AtomicU64::new(0);
@@ -185,7 +185,7 @@ impl VisitMut for PullExpander {
             visit_mut::visit_stmt_mut(self, statement);
             return;
         };
-        if !is_macro(&source.mac.path, "pull") {
+        if !is_macro(&source.mac.path, "access_to_distinct_iter") {
             visit_mut::visit_stmt_mut(self, statement);
             return;
         }
@@ -196,7 +196,7 @@ impl VisitMut for PullExpander {
         let lowered = compile_pull(&plan).unwrap();
         cq_ir::iterator_pipeline::contract::check(&lowered).unwrap();
         *statement = syn::parse2(quote::quote! {
-            ::mini_linq::iterator_pipeline! { #lowered }
+            ::mini_linq::pipeline_to_distinct_iter! { #lowered }
         })
         .unwrap();
     }
@@ -213,7 +213,7 @@ impl VisitMut for IteratorPipelineExpander {
             visit_mut::visit_stmt_mut(self, statement);
             return;
         };
-        if !is_macro(&source.mac.path, "iterator_pipeline") {
+        if !is_macro(&source.mac.path, "pipeline_to_distinct_iter") {
             visit_mut::visit_stmt_mut(self, statement);
             return;
         }

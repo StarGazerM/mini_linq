@@ -1,7 +1,8 @@
 mod wiring {
     pub use ::mini_linq::{
-        pull_set, collect_pipeline, graph_query as query, hash_materialized as choose_realization,
-        result_indexes as choose_indexes,
+        access_to_set, cq_to_ra_hypergraph as query,
+        materialized_hash_program as choose_relation_lowering, pipeline_to_set,
+        result_index_demands as choose_index_policy,
     };
 }
 use wiring as mini_linq;

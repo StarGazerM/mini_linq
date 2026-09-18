@@ -1,5 +1,5 @@
 use super::*;
-use cq_plan::Rule;
+use cq_query_lowering::Rule;
 use std::collections::BTreeSet;
 
 fn star() -> cq::Module {

@@ -6,8 +6,8 @@ Implement exactly three typed passes:
 CQ
   -- Basic HW1 --> RelationalPlan
   -- Basic HW2 --> IndexRequirements preserving the complete RelationalPlan
-  -- Basic HW3 --> complete staged Rust file with one pull! { RustAccessPlan }
-  -- supplied pull --> same file with iterator_pipeline! { IteratorPipeline }
+  -- Basic HW3 --> complete staged Rust file with one access_to_distinct_iter! { RustAccessPlan }
+  -- supplied pull --> same file with pipeline_to_distinct_iter! { IteratorPipeline }
   -- supplied Rust lowering --> final ordinary Rust file
 ```
 
@@ -24,19 +24,19 @@ provides the broader routes listed in the [IR boundary review](IR-STAGE-REVIEW.m
 The assignments follow three semantic compilation edges. Their implementations
 in this checkout live in separate implementation modules:
 
-- CQ lowering: `crates/cq-plan/src/canonical/lower.rs`;
-- input-index selection: `crates/cq-index/src/input/mod.rs`;
-- indexed physical lowering: `crates/cq-realize/src/hash_inputs/mod.rs`.
+- CQ lowering: `crates/cq-query-lowering/src/written_order/lower.rs`;
+- input-index selection: `crates/cq-index-policy/src/base_demands/mod.rs`;
+- indexed physical lowering: `crates/cq-relation-lowering/src/base_hash/mod.rs`.
 
 | Homework | Typed function | Successful result |
 |---|---|---|
-| Basic HW1 | `cq_plan::canonical::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` containing the unchanged source `Program` and a complete named relational plan |
-| Basic HW2 | `cq_index::input::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
-| Basic HW3 | `cq_realize::hash_inputs::compile_input_indexed(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete sequential `Program + Storage` API and exactly one expression-position `pull!` region |
+| Basic HW1 | `cq_query_lowering::written_order::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` containing the unchanged source `Program` and a complete named relational plan |
+| Basic HW2 | `cq_index_policy::base_demands::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
+| Basic HW3 | `cq_relation_lowering::base_hash::compile(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete sequential `Program + Storage` API and exactly one expression-position `access_to_distinct_iter!` region |
 
 Staff supplies the syntax definitions, parsers, local contracts, edge
-contracts, direct proc-macro entries, `cq_execution::pull::compile`,
-`cq_pipeline::iterator::compile`, fixtures, and the structural and runtime harness.
+contracts, direct proc-macro entries, `cq_access_lowering::to_pipeline::compile`,
+`cq_pipeline_lowering::distinct_iter::compile`, fixtures, and the structural and runtime harness.
 Do not add a second parser, a token-stream compiler API, a generic pass
 framework, or an expansion wrapper.
 
@@ -155,7 +155,7 @@ This pass consumes the indexed logical plan and returns a complete
 - each concrete Rust scan, lookup, membership condition, and output row;
 - eager `build`, lazy `query`, deterministic `materialize`, and convenience
   `run` methods; and
-- one local occurrence-annotated `pull! { rust_access_plan::Plan }` expression.
+- one local occurrence-annotated `access_to_distinct_iter! { rust_access_plan::Plan }` expression.
 
 Do not return a storage descriptor, builder plan, isolated RustAccessPlan, or
 token stream. At this boundary, the struct declarations and all build/query
@@ -204,7 +204,7 @@ normalizes inputs, builds row stores and indexes, and returns their owner.
 
 `Storage::query(&self) -> impl Iterator<Item = Row> + '_` returns one lazy
 iterator for the entire distinct result set. Its whole body is exactly one
-`pull!` expression. Creating the iterator reads no stored row; the first
+`access_to_distinct_iter!` expression. Creating the iterator reads no stored row; the first
 `next()` starts the root access.
 
 Consumers such as `next()`, `any()` and `count()` execute traversal without
@@ -254,7 +254,7 @@ side is a parameterized `map`, predicates become consuming `filter_map`, project
 
 An outer `once_with(move || { ... }).flatten()` defers even the root source
 expression until the first `next()`. This expression is the final concrete
-IR. The `iterator_pipeline!` proc macro only calls `ToTokens` on it; there is
+IR. The `pipeline_to_distinct_iter!` proc macro only calls `ToTokens` on it; there is
 no hidden code generator after this pass.
 
 ## Recommended implementation order
@@ -265,7 +265,7 @@ no hidden code generator after this pass.
 4. Implement the Basic HW3 storage schema and builders.
 5. Add the physical walk that translates the same logical operator chain into
    concrete Rust accesses.
-6. Emit the complete `syn::File` around the one local `pull!` expression.
+6. Emit the complete `syn::File` around the one local `access_to_distinct_iter!` expression.
 7. Run formatting, contracts, structural tests, rustc-backed tests, and the
    independent workload oracle.
 
@@ -310,8 +310,8 @@ transparently enable the optional oracle.
 
 The files appear under `target/mini-linq-explain/triangle/`. Artifact 04 is
 the **entire staged Rust file** whose one expression hole is
-`pull! { RustAccessPlan }`; artifact 05 is that entire file with the hole
-replaced by `iterator_pipeline! { IteratorPipeline }`. They are not isolated
+`access_to_distinct_iter! { RustAccessPlan }`; artifact 05 is that entire file with the hole
+replaced by `pipeline_to_distinct_iter! { IteratorPipeline }`. They are not isolated
 operator excerpts. The directory's `README.md` identifies the generated
 files. Because the trace lives under ignored `target/`, its `.rs` files are
 editor-readable syntax and diff snapshots rather than modules in the Cargo

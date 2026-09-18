@@ -4,20 +4,21 @@ mod eager_programs {
     mod wiring {
         #[allow(unused_imports)]
         pub use ::mini_linq::{
-            collect_pipeline, graph_query, iterator_pipeline, optimized_query, prefix_query, pull,
-            pull_set,
+            access_to_distinct_iter, access_to_set, choose_graph_or_prefix, cq_to_ra_clause_prefix,
+            cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
         };
         pub use ::mini_linq::{
-            hash_materialized as choose_realization, result_indexes as choose_indexes,
+            materialized_hash_program as choose_relation_lowering,
+            result_index_demands as choose_index_policy,
         };
     }
     use wiring as mini_linq;
-    mini_linq::optimized_query! {
+    mini_linq::choose_graph_or_prefix! {
         pub(super) struct Materialized;
         relation R(key: i32);
         answer(x) :- R(x), let () = tick(), let _ = tick();
     }
-    mini_linq::optimized_query! {
+    mini_linq::choose_graph_or_prefix! {
         pub(super) struct MaterializedRoot;
         relation R(key: i32);
         answer(x) :- let () = tick(), R(x);

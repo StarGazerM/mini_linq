@@ -10,58 +10,58 @@ oracles, reference fixtures, and reproducible checks.
 | Source | Pass | Target | Decision owned by this edge |
 |---|---|---|---|
 | `cq::Module` | `cq_compose::compile_cq_planned` | `relational_plan::Module` | Occurrence analysis, legal join order, semijoin reduction, selection and projection placement |
-| `relational_plan::Module` | `cq_index::result::compile` | `index_requirements::Module` | Exact first-use keys on named right operands; preserve the entire RA |
-| `index_requirements::Module` | `cq_realize::hash_materialized::compile_materialized` | staged `syn::File` with set-valued `pull_set!` holes | Tuple representation, hash storage, existence access, materialization and DAG sharing |
-| `rust_access_plan::Plan` | existing `cq_execution::pull::compile` | `iterator_pipeline::Pipeline` | Explicit local physical streams and binding flow |
-| `iterator_pipeline::Pipeline` | `cq_pipeline::iterator::compile` / `cq_pipeline::collect::compile` | `syn::Expr` | Iterator / owned-set realization |
+| `relational_plan::Module` | `cq_index_policy::result_demands::compile` | `index_requirements::Module` | Exact first-use keys on named right operands; preserve the entire RA |
+| `index_requirements::Module` | `cq_relation_lowering::materialized_hash::compile` | staged `syn::File` with set-valued `access_to_set!` holes | Tuple representation, hash storage, existence access, materialization and DAG sharing |
+| `rust_access_plan::Plan` | existing `cq_access_lowering::to_pipeline::compile` | `iterator_pipeline::Pipeline` | Explicit local physical streams and binding flow |
+| `iterator_pipeline::Pipeline` | `cq_pipeline_lowering::distinct_iter::compile` / `cq_pipeline_lowering::collect_set::compile` | `syn::Expr` | Iterator / owned-set realization |
 
 Explicit macro entries parse a source language and call its typed pass.
-`optimized_query!` chooses caller-bound `graph_query!` or `prefix_query!`; each
-emits RA to `choose_indexes!`. To select eager indexed execution explicitly,
+`choose_graph_or_prefix!` chooses caller-bound `cq_to_ra_hypergraph!` or `cq_to_ra_clause_prefix!`; each
+emits RA to `choose_index_policy!`. To select eager indexed execution explicitly,
 compose the following facade:
 
 ```rust
 mod wiring {
     pub use ::mini_linq::*;
     pub use ::mini_linq::{
-        result_indexes as choose_indexes,
-        hash_materialized as choose_realization,
+        result_index_demands as choose_index_policy,
+        materialized_hash_program as choose_relation_lowering,
     };
 }
 use wiring as mini_linq;
 ```
 
-Then invoke `mini_linq::optimized_query!` with a CQ. The result-index pass
-emits `choose_realization!`, which this facade binds to eager hash realization.
-Aliasing `hash_materialized_query` instead selects a callable over the same
+Then invoke `mini_linq::choose_graph_or_prefix!` with a CQ. The result-index pass
+emits `choose_relation_lowering!`, which this facade binds to eager hash realization.
+Aliasing `materialized_hash_callable` instead selects a callable over the same
 computation. With ordinary crate bindings, the index and realization choosers
 select compatible implementations from their source domains and still invoke
 the caller's aliases. No planner choice implies eager execution.
 
 Generated paths resolve through those Rust imports; an alias can select a
-continuation with the same contract. `hash_materialized!` also accepts
-`access path;` for its set-valued Access holes, including `push_set!` when only
+continuation with the same contract. `materialized_hash_program!` also accepts
+`access path;` for its set-valued Access holes, including `access_to_set_loops!` when only
 completed answers are observed. Each intermediate artifact can be quoted directly.
 
-The route selects implementation modules: `cq-plan::graph` and `cq-plan::prefix`
-produce RA; `cq-index::result` derives named demands; `cq-realize::hash_materialized`
-constructs indexed set computations and native hosts. `cq-realize::hash_prefix`
-owns the expression-aware lazy alternative. `cq-realize::relations` accepts
+The route selects implementation modules: `cq-query-lowering::hypergraph` and `cq-query-lowering::clause_prefix`
+produce RA; `cq-index-policy::result_demands` derives named demands; `cq-relation-lowering::materialized_hash`
+constructs indexed set computations and native hosts. `cq-relation-lowering::prefix_hash`
+owns the expression-aware lazy alternative. `cq-relation-lowering::configured` accepts
 configured RA directly and uses row, key, candidate and pair operations from
-`cq-native`, as specified
+`cq-native-lowering`, as specified
 in [Access refinement](ACCESS-REFINEMENT.md).
 
 Each implementation owns its checked public entries and independent target
 checks. `cq-compose` provides typed convenience recipes and checked report/replay
 dispatch; the macro frontend composes actual continuation calls.
-`cq-execution` owns pull and eager push alternatives; `cq-pipeline` owns the
+`cq-access-lowering` owns pull and eager push alternatives; `cq-pipeline-lowering` owns the
 iterator endpoints. `cq-ir` supplies language judgments and factual heading
 queries. Realization domains and index-coverage checks belong to their consumers.
 [Compiler structure](COMPILER-STRUCTURE.md) records the dependency graph.
 
-Within logical planning, `cq-plan/src/dependencies.rs` derives D-* judgments;
-`graph/hypergraph.rs` implements G-* reductions. `graph/ya.rs` schedules
-the two sweeps; `graph/rules.rs` implements P-* and Y-* transitions. `prefix/rules.rs`
+Within logical planning, `cq-query-lowering/src/dependencies.rs` derives D-* judgments;
+`hypergraph/structure.rs` implements G-* reductions. `hypergraph/ya.rs` schedules
+the two sweeps; `hypergraph/rules.rs` implements P-* and Y-* transitions. `clause_prefix/rules.rs`
 implements C-* transitions, with A-* argument judgments composing C-MATCH.
 Each implementation's `strategy.rs` chooses among its own legal candidates.
 Component paths are relative to `crates/`. The
@@ -148,7 +148,7 @@ The rule-to-code correspondence is explicit:
 
 | Formal operation | Administrative command and implementation |
 |---|---|
-| G-PRIVATE / G-ABSORB | `GyoRule::Private` / `Absorb`; `GyoState::remove_private` / `absorb` in [hypergraph.rs](../crates/cq-plan/src/graph/hypergraph.rs) |
+| G-PRIVATE / G-ABSORB | `GyoRule::Private` / `Absorb`; `GyoState::remove_private` / `absorb` in [structure.rs](../crates/cq-query-lowering/src/hypergraph/structure.rs) |
 | P-START | `Introduce`; `JoinState::introduce` |
 | P-SELECT | `Select`; `JoinState::select` |
 | P-BEGIN | `Begin`; `JoinState::begin` |
@@ -156,19 +156,19 @@ The rule-to-code correspondence is explicit:
 | Y-FREEZE | `Freeze`; `JoinState::freeze` |
 | P-COMBINE / P-TRIM | `Combine` / `Trim`; `JoinState::combine` / `trim`, using `retained_heading` for K(C,P) |
 | P-OUTPUT | `Output`; `JoinState::output` |
-| D-ATOM / D-GUARD / D-BIND / D-MOVE / D-GRAPH | `ClauseDependencies::analyze` and `ClauseFacts::atom` in [dependencies.rs](../crates/cq-plan/src/dependencies.rs) |
+| D-ATOM / D-GUARD / D-BIND / D-MOVE / D-GRAPH | `ClauseDependencies::analyze` and `ClauseFacts::atom` in [dependencies.rs](../crates/cq-query-lowering/src/dependencies.rs) |
 | C-READY | `ClauseState::require_ready`; `apply` checks normalization and matches the source clause |
 | C-CONSTANT | `Constant`; `ClauseState::normalize_constant` |
 | C-MATCH | `Match`; `ClauseState::match_clause`, composed from A-* in `AtomBindings::match_argument` |
 | C-GUARD / C-BIND | `Guard` / `Bind`; `ClauseState::guard_clause` / `bind_clause` |
 | C-FINISH | `Finish`; `ClauseState::finish` establishes the output |
 
-The graph transitions are in [rules.rs](../crates/cq-plan/src/graph/rules.rs);
-the prefix transitions are in [clause_rules.rs](../crates/cq-plan/src/prefix/rules.rs).
-The [graph strategy](../crates/cq-plan/src/graph/strategy.rs) selects frontier pairs;
-the [prefix strategy](../crates/cq-plan/src/prefix/strategy.rs) selects ready clauses.
-Their [graph](../crates/cq-plan/src/graph/check.rs) and
-[prefix](../crates/cq-plan/src/prefix/check/mod.rs) checkers consume actual emitted
+The graph transitions are in [rules.rs](../crates/cq-query-lowering/src/hypergraph/rules.rs);
+the prefix transitions are in [rules.rs](../crates/cq-query-lowering/src/clause_prefix/rules.rs).
+The [graph strategy](../crates/cq-query-lowering/src/hypergraph/strategy.rs) selects frontier pairs;
+the [prefix strategy](../crates/cq-query-lowering/src/clause_prefix/strategy.rs) selects ready clauses.
+Their [graph](../crates/cq-query-lowering/src/hypergraph/check.rs) and
+[prefix](../crates/cq-query-lowering/src/clause_prefix/check/mod.rs) checkers consume actual emitted
 definitions and reports. Downstream passes consume
 only their RA/index languages, with no dependency on graph state, policy, or reports.
 

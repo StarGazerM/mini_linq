@@ -299,7 +299,7 @@ and route or emit the returned type:
 mini_linq(TokenStream)
   -> parse cq::Module
   -> compile_cq(&cq::Module)
-  -> quote choose_indexes! { target }
+  -> quote choose_index_policy! { target }
 ```
 
 The same pattern repeats for RelationalPlan, IndexRequirements,
@@ -377,7 +377,7 @@ return iter3;
 ```
 
 That plan states the physical operator and dataflow structure, but not the
-host-language spelling. `cq_pipeline::iterator::compile` is the semantic lowering
+host-language spelling. `cq_pipeline_lowering::distinct_iter::compile` is the semantic lowering
 that maps it to `map`, `flat_map`, and `filter`. This keeps the final emitter
 honest: it does not invent a join or intermediate result while printing.
 

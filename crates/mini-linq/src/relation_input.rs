@@ -3,22 +3,22 @@
 use std::collections::BTreeMap;
 
 use cq_ir::{relational_plan as ra, symbol_name};
-use cq_realize::relations::{ObservedOptions, RelationOptions};
+use cq_relation_lowering::configured::{ObservedOptions, RelationOptions};
 use quote::ToTokens;
 use syn::{parse::Parse, token};
 
 mod kw {
-    syn::custom_keyword!(storage);
+    syn::custom_keyword!(counter_storage);
     syn::custom_keyword!(access);
-    syn::custom_keyword!(materialize);
-    syn::custom_keyword!(scan);
+    syn::custom_keyword!(result_rows);
+    syn::custom_keyword!(candidates);
     syn::custom_keyword!(keys);
-    syn::custom_keyword!(join);
+    syn::custom_keyword!(pairs);
     syn::custom_keyword!(inputs);
-    syn::custom_keyword!(results);
-    syn::custom_keyword!(scans);
+    syn::custom_keyword!(result_bindings);
+    syn::custom_keyword!(candidate_bindings);
     syn::custom_keyword!(key_sets);
-    syn::custom_keyword!(joins);
+    syn::custom_keyword!(pair_bindings);
 }
 
 /// Administrative choices for the direct RA-to-Access edge. Their contextual
@@ -32,28 +32,28 @@ pub struct RelationInput {
 
 #[derive(Clone, Debug, syn_derive::Parse, syn_derive::ToTokens)]
 enum Directive {
-    #[parse(peek = kw::storage)]
-    Storage(PathDirective<kw::storage>),
+    #[parse(peek = kw::counter_storage)]
+    CounterStorage(PathDirective<kw::counter_storage>),
     #[parse(peek = kw::access)]
     Access(PathDirective<kw::access>),
-    #[parse(peek = kw::materialize)]
-    Materialize(PathDirective<kw::materialize>),
-    #[parse(peek = kw::scan)]
-    Scan(PathDirective<kw::scan>),
+    #[parse(peek = kw::result_rows)]
+    ResultRows(PathDirective<kw::result_rows>),
+    #[parse(peek = kw::candidates)]
+    Candidates(PathDirective<kw::candidates>),
     #[parse(peek = kw::keys)]
     Keys(PathDirective<kw::keys>),
-    #[parse(peek = kw::join)]
-    Join(PathDirective<kw::join>),
+    #[parse(peek = kw::pairs)]
+    Pairs(PathDirective<kw::pairs>),
     #[parse(peek = kw::inputs)]
     Inputs(MapDirective<kw::inputs>),
-    #[parse(peek = kw::results)]
-    Results(MapDirective<kw::results>),
-    #[parse(peek = kw::scans)]
-    Scans(MapDirective<kw::scans>),
+    #[parse(peek = kw::result_bindings)]
+    ResultBindings(MapDirective<kw::result_bindings>),
+    #[parse(peek = kw::candidate_bindings)]
+    CandidateBindings(MapDirective<kw::candidate_bindings>),
     #[parse(peek = kw::key_sets)]
     KeySets(MapDirective<kw::key_sets>),
-    #[parse(peek = kw::joins)]
-    Joins(MapDirective<kw::joins>),
+    #[parse(peek = kw::pair_bindings)]
+    PairBindings(MapDirective<kw::pair_bindings>),
 }
 
 #[derive(Clone, Debug, syn_derive::Parse, syn_derive::ToTokens)]
@@ -82,36 +82,39 @@ struct Binding {
 
 impl RelationInput {
     pub fn options(&self) -> syn::Result<RelationOptions> {
-        let (options, storage) = self.configuration()?;
-        if let Some(storage) = storage {
+        let (options, counter_storage) = self.configuration()?;
+        if let Some(counter_storage) = counter_storage {
             return Err(syn::Error::new_spanned(
-                storage,
+                counter_storage,
                 "counter storage belongs to an observed physical host",
             ));
         }
         Ok(options)
     }
     pub fn observed_options(&self) -> syn::Result<ObservedOptions> {
-        let (relations, storage) = self.configuration()?;
-        let storage = storage.ok_or_else(|| {
+        let (relations, counter_storage) = self.configuration()?;
+        let counter_storage = counter_storage.ok_or_else(|| {
             syn::Error::new_spanned(
                 &self.source,
-                "observed physical host requires counter `storage`",
+                "observed physical host requires counter `counter_storage`",
             )
         })?;
-        Ok(ObservedOptions { relations, storage })
+        Ok(ObservedOptions {
+            relations,
+            counter_storage,
+        })
     }
     fn configuration(&self) -> syn::Result<(RelationOptions, Option<syn::Path>)> {
         let mut scalar = BTreeMap::new();
         let mut maps = BTreeMap::new();
         for directive in &self.directives {
             let scalar_entry = match directive {
-                Directive::Storage(value) => Some(("storage", &value.path)),
+                Directive::CounterStorage(value) => Some(("counter_storage", &value.path)),
                 Directive::Access(value) => Some(("access", &value.path)),
-                Directive::Materialize(value) => Some(("materialize", &value.path)),
-                Directive::Scan(value) => Some(("scan", &value.path)),
+                Directive::ResultRows(value) => Some(("result_rows", &value.path)),
+                Directive::Candidates(value) => Some(("candidates", &value.path)),
                 Directive::Keys(value) => Some(("keys", &value.path)),
-                Directive::Join(value) => Some(("join", &value.path)),
+                Directive::Pairs(value) => Some(("pairs", &value.path)),
                 _ => None,
             };
             if let Some((name, path)) = scalar_entry {
@@ -125,10 +128,10 @@ impl RelationInput {
             }
             let (name, bindings) = match directive {
                 Directive::Inputs(value) => ("inputs", &value.bindings),
-                Directive::Results(value) => ("results", &value.bindings),
-                Directive::Scans(value) => ("scans", &value.bindings),
+                Directive::ResultBindings(value) => ("result_bindings", &value.bindings),
+                Directive::CandidateBindings(value) => ("candidate_bindings", &value.bindings),
                 Directive::KeySets(value) => ("key_sets", &value.bindings),
-                Directive::Joins(value) => ("joins", &value.bindings),
+                Directive::PairBindings(value) => ("pair_bindings", &value.bindings),
                 _ => unreachable!("scalar directives handled above"),
             };
             if maps.contains_key(name) {
@@ -151,21 +154,21 @@ impl RelationInput {
             }
             maps.insert(name, entries);
         }
-        let storage = scalar.remove("storage");
+        let counter_storage = scalar.remove("counter_storage");
         Ok((
             RelationOptions {
                 access: scalar.remove("access"),
-                materialize: scalar.remove("materialize"),
-                scan: scalar.remove("scan"),
+                result_rows: scalar.remove("result_rows"),
+                candidates: scalar.remove("candidates"),
                 keys: scalar.remove("keys"),
-                join: scalar.remove("join"),
+                pairs: scalar.remove("pairs"),
                 inputs: maps.remove("inputs").unwrap_or_default(),
-                results: maps.remove("results").unwrap_or_default(),
-                scans: maps.remove("scans").unwrap_or_default(),
+                result_bindings: maps.remove("result_bindings").unwrap_or_default(),
+                candidate_bindings: maps.remove("candidate_bindings").unwrap_or_default(),
                 key_sets: maps.remove("key_sets").unwrap_or_default(),
-                joins: maps.remove("joins").unwrap_or_default(),
+                pair_bindings: maps.remove("pair_bindings").unwrap_or_default(),
             },
-            storage,
+            counter_storage,
         ))
     }
 }
@@ -190,10 +193,10 @@ mod tests {
     fn required() -> proc_macro2::TokenStream {
         quote! {
             access crate::access;
-            materialize crate::rows;
-            scan crate::reduce;
+            result_rows crate::rows;
+            candidates crate::reduce;
             keys crate::Keys;
-            join crate::pairs;
+            pairs crate::pairs;
         }
     }
 
@@ -202,12 +205,12 @@ mod tests {
         let source = source();
         let tokens = quote! {
             inputs { r#R => crate::rows; }
-            join crate::pairs;
-            results {}
+            pairs crate::pairs;
+            result_bindings {}
             keys crate::Keys;
             access crate::access;
-            materialize crate::rows;
-            scan crate::reduce;
+            result_rows crate::rows;
+            candidates crate::reduce;
             #source
         };
         let input: RelationInput = syn::parse2(tokens.clone()).unwrap();
@@ -221,10 +224,10 @@ mod tests {
         let input: RelationInput = syn::parse_quote!(#source);
         let options = input.options().unwrap();
         assert!(options.access.is_none());
-        assert!(options.materialize.is_none());
-        assert!(options.scan.is_none());
+        assert!(options.result_rows.is_none());
+        assert!(options.candidates.is_none());
         assert!(options.keys.is_none());
-        assert!(options.join.is_none());
+        assert!(options.pairs.is_none());
     }
 
     #[test]
@@ -237,7 +240,13 @@ mod tests {
         .unwrap_err();
         let diagnostic = error.to_string();
         assert!(diagnostic.contains("expected one of"), "{diagnostic}");
-        for keyword in ["storage", "inputs", "scans", "key_sets", "joins"] {
+        for keyword in [
+            "counter_storage",
+            "inputs",
+            "candidate_bindings",
+            "key_sets",
+            "pair_bindings",
+        ] {
             assert!(diagnostic.contains(keyword), "{diagnostic}");
         }
     }
@@ -249,7 +258,7 @@ mod tests {
         for duplicate in [
             quote!(access other::access;),
             quote!(inputs {} inputs {}),
-            quote!(joins {} joins {}),
+            quote!(pair_bindings {} pair_bindings {}),
         ] {
             let input: RelationInput = syn::parse2(quote!(#required #duplicate #source)).unwrap();
             let error = input.options().err().unwrap();
@@ -264,7 +273,8 @@ mod tests {
         let plain: RelationInput = syn::parse_quote!(#required #source);
         assert!(plain.options().is_ok());
         assert!(plain.observed_options().is_err());
-        let observed: RelationInput = syn::parse_quote!(storage crate::counters; #required #source);
+        let observed: RelationInput =
+            syn::parse_quote!(counter_storage crate::counters; #required #source);
         assert!(observed.options().is_err());
         assert!(observed.observed_options().is_ok());
     }
@@ -288,14 +298,14 @@ mod tests {
         let separate: RelationInput = syn::parse_quote! {
             #required
             inputs { R => a::rows; }
-            results { R => b::rows; }
+            result_bindings { R => b::rows; }
             #source
         };
         let options = separate.options().unwrap();
         assert!(options.inputs.contains_key("R"));
-        assert!(options.results.contains_key("R"));
-        assert!(options.scans.is_empty());
+        assert!(options.result_bindings.contains_key("R"));
+        assert!(options.candidate_bindings.is_empty());
         assert!(options.key_sets.is_empty());
-        assert!(options.joins.is_empty());
+        assert!(options.pair_bindings.is_empty());
     }
 }

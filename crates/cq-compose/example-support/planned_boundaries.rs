@@ -11,10 +11,10 @@ pub fn artifacts() -> Vec<(&'static str, syn::File)> {
         answer(a) :- R(a,b), S(b,c), if (c > 0);
     };
     let relational = cq_compose::compile_cq_planned(&source).unwrap();
-    let indexed = cq_index::result::compile(&relational).unwrap();
-    let staged = cq_realize::hash_materialized::compile_materialized(
+    let indexed = cq_index_policy::result_demands::compile(&relational).unwrap();
+    let staged = cq_relation_lowering::materialized_hash::compile(
         &indexed,
-        &syn::parse_quote!(::mini_linq::pull_set),
+        &syn::parse_quote!(::mini_linq::access_to_set),
     )
     .unwrap();
     let mut pipelines = staged.clone();
@@ -24,26 +24,26 @@ pub fn artifacts() -> Vec<(&'static str, syn::File)> {
     let wiring = quote! {
         mod wiring {
             #[allow(unused_imports)]
-        pub use ::mini_linq::{optimized_query, graph_query, prefix_query, pull_set, collect_pipeline, pull, iterator_pipeline};
-            pub use ::mini_linq::{result_indexes as choose_indexes, hash_materialized as choose_realization};
+        pub use ::mini_linq::{choose_graph_or_prefix, cq_to_ra_hypergraph, cq_to_ra_clause_prefix, access_to_set, pipeline_to_set, access_to_distinct_iter, pipeline_to_distinct_iter};
+            pub use ::mini_linq::{result_index_demands as choose_index_policy, materialized_hash_program as choose_relation_lowering};
         }
         use wiring as mini_linq;
     };
     vec![
         (
             "01-cq.rs",
-            syn::parse2(quote!(#wiring mini_linq::optimized_query! { #source })).unwrap(),
+            syn::parse2(quote!(#wiring mini_linq::choose_graph_or_prefix! { #source })).unwrap(),
         ),
         (
             "02-relational.rs",
             syn::parse2(quote!(
-                #wiring mini_linq::choose_indexes! { #relational }
+                #wiring mini_linq::choose_index_policy! { #relational }
             ))
             .unwrap(),
         ),
         (
             "03-indexes.rs",
-            syn::parse2(quote!(::mini_linq::hash_materialized! { #indexed })).unwrap(),
+            syn::parse2(quote!(::mini_linq::materialized_hash_program! { #indexed })).unwrap(),
         ),
         ("04-access.rs", staged),
         ("05-pipelines.rs", pipelines),
@@ -55,10 +55,10 @@ struct ExposePipelines;
 impl VisitMut for ExposePipelines {
     fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
         if let syn::Expr::Macro(m) = expr {
-            if m.mac.path.segments.last().unwrap().ident == "pull_set" {
+            if m.mac.path.segments.last().unwrap().ident == "access_to_set" {
                 let source: rust_access_plan::Plan = syn::parse2(m.mac.tokens.clone()).unwrap();
-                let target = cq_execution::pull::compile(&source).unwrap();
-                *expr = syn::parse_quote!(::mini_linq::collect_pipeline! { #target });
+                let target = cq_access_lowering::to_pipeline::compile(&source).unwrap();
+                *expr = syn::parse_quote!(::mini_linq::pipeline_to_set! { #target });
                 return;
             }
         }
@@ -70,10 +70,10 @@ struct LowerPipelines;
 impl VisitMut for LowerPipelines {
     fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
         if let syn::Expr::Macro(m) = expr {
-            if m.mac.path.segments.last().unwrap().ident == "collect_pipeline" {
+            if m.mac.path.segments.last().unwrap().ident == "pipeline_to_set" {
                 let source: iterator_pipeline::Pipeline =
                     syn::parse2(m.mac.tokens.clone()).unwrap();
-                *expr = cq_pipeline::collect::compile(&source).unwrap();
+                *expr = cq_pipeline_lowering::collect_set::compile(&source).unwrap();
                 return;
             }
         }

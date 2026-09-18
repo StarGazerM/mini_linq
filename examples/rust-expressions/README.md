@@ -37,7 +37,7 @@ examples use set inputs and return sorted, deduplicated results from `run`.
 | [guards.rs](guards.rs): `Matching`, `Conditional` | Rust `match` and Rust `if` expressions | `R`; evaluate condition | `[(1,), (2,), (4,)]` and `[(1,), (2,)]` |
 | [guards.rs](guards.rs): `Macro` | Opaque Rust macro condition | `R`; evaluate macro with its environment intact | `[(1,), (2,), (4,)]` |
 | [heads.rs](heads.rs): `ComputedHead`, `Wrapped` | Computed output, implicit format capture, DSL macro wrapper | Body first; head with original syntax contexts | `[("item-1",), ("item-2",)]` and `[("wrapped-1",)]` |
-| [heads.rs](heads.rs): `Witnesses` | Computed key/head evaluation counts | Key per `R` tuple; head per full join witness; distinct last | `[(1,)]`; 2 key calls, 4 head calls |
+| [heads.rs](heads.rs): `Witnesses` | Computed key/head evaluation counts | Key per `R` tuple; head per full pairs witness; distinct last | `[(1,)]`; 2 key calls, 4 head calls |
 | [lazy.rs](lazy.rs): `Lazy` | Deferred clauses, owned value across multiple matches | Build and cursor creation: 0 calls; first `next`: 1; fresh traversal: 2 | One `("item-1",)` per traversal |
 
 The head declaration names public result types; it is not another input to

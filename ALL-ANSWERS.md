@@ -11,8 +11,8 @@ actual default route selection and complete-program composition; callers import
 explicit implementations and planning types from their owning crates.
 
 The basic route is CQ → RelationalPlan → IndexRequirements → staged Rust.
-`cq-plan::canonical`, `cq-index::input` and `cq-realize::hash_inputs` supply its three
-transformations. `cq-execution` and `cq-pipeline` lower its embedded Access and
+`cq-query-lowering::canonical`, `cq-index-policy::input` and `cq-relation-lowering::lower_base_hash` supply its three
+transformations. `cq-access-lowering` and `cq-pipeline-lowering` lower its embedded Access and
 Pipeline regions to native Rust.
 
 The canonical bare-variable route begins with Rename and does not emit `Unit`.
@@ -83,12 +83,12 @@ constructing it reads no stored row, and its first `next()` enters the outer
 `once_with`. `Storage::materialize` drains that already-distinct cursor into a
 `Vec` and sorts it. No second raw-result cursor is generated.
 
-The supplied `cq_execution::pull::compile` lowering emits an
+The supplied `cq_access_lowering::to_pipeline::compile` lowering emits an
 IteratorPipeline: `scan`, left-deep binary `join`, `filter`, `project`, and
 explicit `distinct`, with one named `iterN` result and a complete intermediate
 binding tuple at every edge. The Pipeline language itself also admits fresh
 names, early projections and selected/reordered bindings while retaining linear
-single-consumer ownership. `cq_pipeline::iterator::compile` then chooses the
+single-consumer ownership. `cq_pipeline_lowering::distinct_iter::compile` then chooses the
 actual Rust `map`, `flat_map`, and `filter` adapters and emits one Rust local
 per `iterN`. Its returned `syn::Expr` is the final concrete IR; proc-macro
 `ToTokens` is pure emission.

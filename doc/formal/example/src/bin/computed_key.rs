@@ -4,11 +4,17 @@
 mod eager_programs {
     mod wiring {
         #[allow(unused_imports)]
-        pub use ::mini_linq::{optimized_query, graph_query, prefix_query, pull_set, collect_pipeline, pull, iterator_pipeline};
-        pub use ::mini_linq::{result_indexes as choose_indexes, hash_materialized as choose_realization};
+        pub use ::mini_linq::{
+            access_to_distinct_iter, access_to_set, choose_graph_or_prefix, cq_to_ra_clause_prefix,
+            cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
+        };
+        pub use ::mini_linq::{
+            materialized_hash_program as choose_relation_lowering,
+            result_index_demands as choose_index_policy,
+        };
     }
     use wiring as mini_linq;
-    mini_linq::optimized_query! {
+    mini_linq::choose_graph_or_prefix! {
         pub struct MaterializedOverview;
         relation R(a:i32,b:i32);
         relation S(a:i32,b:i32);
@@ -16,8 +22,8 @@ mod eager_programs {
         answer(x,*y+1) :- R(x,k), let next:i32 = *k+1, S(next,y), if y > 0;
     }
 }
-pub use eager_programs::MaterializedOverview;
 use cq_ir::{cq, iterator_pipeline, rust_access_plan};
+pub use eager_programs::MaterializedOverview;
 use quote::quote;
 use syn::visit_mut::VisitMut;
 
@@ -33,13 +39,13 @@ struct ExposePipelines;
 impl VisitMut for ExposePipelines {
     fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
         let next = match mac.path.segments.last().unwrap().ident.to_string().as_str() {
-            "pull" => syn::parse_quote!(::mini_linq::iterator_pipeline),
-            "pull_set" => syn::parse_quote!(::mini_linq::collect_pipeline),
+            "access_to_distinct_iter" => syn::parse_quote!(::mini_linq::pipeline_to_distinct_iter),
+            "access_to_set" => syn::parse_quote!(::mini_linq::pipeline_to_set),
             _ => return,
         };
         let access: rust_access_plan::Plan = syn::parse2(mac.tokens.clone()).unwrap();
         rust_access_plan::contract::check(&access).unwrap();
-        let target = cq_execution::pull::compile(&access).unwrap();
+        let target = cq_access_lowering::to_pipeline::compile(&access).unwrap();
         iterator_pipeline::contract::check(&target).unwrap();
         mac.path = next;
         mac.tokens = quote!(#target);
@@ -48,8 +54,8 @@ impl VisitMut for ExposePipelines {
 
 fn lower_pipeline(mac: &syn::Macro) -> Option<syn::Expr> {
     let lower = match mac.path.segments.last().unwrap().ident.to_string().as_str() {
-        "iterator_pipeline" => cq_pipeline::iterator::compile,
-        "collect_pipeline" => cq_pipeline::collect::compile,
+        "pipeline_to_distinct_iter" => cq_pipeline_lowering::distinct_iter::compile,
+        "pipeline_to_set" => cq_pipeline_lowering::collect_set::compile,
         _ => return None,
     };
     let pipeline: iterator_pipeline::Pipeline = syn::parse2(mac.tokens.clone()).unwrap();
@@ -93,41 +99,46 @@ fn boundaries(directory: &std::path::Path, prefix: &str, source: &cq::Module, pl
     }
     .unwrap();
     let ix = if planned {
-        cq_index::result::compile(&ra)
+        cq_index_policy::result_demands::compile(&ra)
     } else {
-        cq_index::result::compile(&ra)
+        cq_index_policy::result_demands::compile(&ra)
     }
     .unwrap();
     let staged = if planned {
-        cq_realize::hash_materialized::compile_materialized(
+        cq_relation_lowering::materialized_hash::compile(
             &ix,
-            &syn::parse_quote!(::mini_linq::pull_set),
+            &syn::parse_quote!(::mini_linq::access_to_set),
         )
     } else {
-        cq_realize::hash_prefix::compile_lazy_indexed(&ix, &syn::parse_quote!(::mini_linq::pull))
+        cq_relation_lowering::prefix_hash::compile(
+            &ix,
+            &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+        )
     }
     .unwrap();
     let wiring = if planned {
         quote! {
             mod wiring {
                 #[allow(unused_imports)]
-        pub use ::mini_linq::{optimized_query, graph_query, prefix_query, pull_set, collect_pipeline, pull, iterator_pipeline};
-                pub use ::mini_linq::{result_indexes as choose_indexes, hash_materialized as choose_realization};
+        pub use ::mini_linq::{choose_graph_or_prefix, cq_to_ra_hypergraph, cq_to_ra_clause_prefix, access_to_set, pipeline_to_set, access_to_distinct_iter, pipeline_to_distinct_iter};
+                pub use ::mini_linq::{result_index_demands as choose_index_policy, materialized_hash_program as choose_relation_lowering};
             }
             use wiring as mini_linq;
         }
-    } else { quote!() };
+    } else {
+        quote!()
+    };
     let (cq_macro, ra_macro, index_macro): (syn::Path, syn::Path, syn::Path) = if planned {
         (
-            syn::parse_quote!(mini_linq::optimized_query),
-            syn::parse_quote!(mini_linq::choose_indexes),
-            syn::parse_quote!(::mini_linq::hash_materialized),
+            syn::parse_quote!(mini_linq::choose_graph_or_prefix),
+            syn::parse_quote!(mini_linq::choose_index_policy),
+            syn::parse_quote!(::mini_linq::materialized_hash_program),
         )
     } else {
         (
             syn::parse_quote!(::mini_linq::mini_linq),
-            syn::parse_quote!(::mini_linq::choose_indexes),
-            syn::parse_quote!(::mini_linq::hash_prefix),
+            syn::parse_quote!(::mini_linq::choose_index_policy),
+            syn::parse_quote!(::mini_linq::lower_prefix_hash),
         )
     };
     write(
@@ -201,8 +212,8 @@ fn main() {
     };
     let (ra, report) = cq_compose::explain_cq_plan(
         &source,
-        cq_plan::PlanningOptions {
-            strategy: cq_plan::JoinPolicy::Auto,
+        cq_query_lowering::PlanningOptions {
+            strategy: cq_query_lowering::JoinPolicy::Auto,
             max_arity: None,
         },
     )

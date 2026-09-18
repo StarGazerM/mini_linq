@@ -15,7 +15,7 @@ mod rust;
 use compiled::compile_indexed;
 use cq_ir::{cq, relational_plan as ra};
 use cq_ir::{index_requirements as ir, symbol_name};
-use cq_plan::JoinPolicy as Strategy;
+use cq_query_lowering::JoinPolicy as Strategy;
 use databases::binary_database;
 use quote::{ToTokens, quote};
 use rust::run_rust;
@@ -36,7 +36,7 @@ fn indexes_preserve_algebra_and_name_complete_keys_of_actual_result_versions() {
             program: known.program,
         };
         let planned = cq_compose::compile_cq_planned(&source).unwrap();
-        let indexed = cq_index::result::compile(&planned).unwrap();
+        let indexed = cq_index_policy::result_demands::compile(&planned).unwrap();
         assert_eq!(indexed.relational_plan, planned);
         let interpreted = oracle::evaluate_ra(&planned, &binary_database(&source.program, 0));
         let mut seen = std::collections::BTreeSet::new();
@@ -82,7 +82,7 @@ fn indexes_preserve_algebra_and_name_complete_keys_of_actual_result_versions() {
 fn missing_wrong_version_and_incomplete_keys_are_controlled_errors() {
     let source = query();
     let ra = cq_compose::compile_cq_planned(&source).unwrap();
-    let indexed = cq_index::result::compile(&ra).unwrap();
+    let indexed = cq_index_policy::result_demands::compile(&ra).unwrap();
     for i in 0..indexed.indexes.len() {
         let mut missing = indexed.clone();
         missing.indexes = missing
@@ -94,9 +94,9 @@ fn missing_wrong_version_and_incomplete_keys_are_controlled_errors() {
             .collect();
         ir::contract::check(&missing).unwrap();
         assert!(
-            cq_realize::hash_materialized::compile_materialized(
+            cq_relation_lowering::materialized_hash::compile(
                 &missing,
-                &syn::parse_quote!(::mini_linq::pull_set)
+                &syn::parse_quote!(::mini_linq::access_to_set)
             )
             .is_err()
         );
@@ -114,9 +114,9 @@ fn missing_wrong_version_and_incomplete_keys_are_controlled_errors() {
     wrong.indexes.first_mut().unwrap().key_columns = std::iter::once(changed).collect();
     ir::contract::check(&wrong).unwrap();
     assert!(
-        cq_realize::hash_materialized::compile_materialized(
+        cq_relation_lowering::materialized_hash::compile(
             &wrong,
-            &syn::parse_quote!(::mini_linq::pull_set)
+            &syn::parse_quote!(::mini_linq::access_to_set)
         )
         .is_err()
     );
@@ -124,9 +124,9 @@ fn missing_wrong_version_and_incomplete_keys_are_controlled_errors() {
     wrong.indexes.first_mut().unwrap().relation = ra.plan.output.input.clone();
     ir::contract::check(&wrong).unwrap();
     assert!(
-        cq_realize::hash_materialized::compile_materialized(
+        cq_relation_lowering::materialized_hash::compile(
             &wrong,
-            &syn::parse_quote!(::mini_linq::pull_set)
+            &syn::parse_quote!(::mini_linq::access_to_set)
         )
         .is_err()
     );
@@ -144,12 +144,12 @@ fn missing_wrong_version_and_incomplete_keys_are_controlled_errors() {
 fn base_and_result_namespaces_are_distinct_and_input_route_rejects_result_indexes() {
     let source = query();
     let canonical = cq_compose::compile_cq(&source).unwrap();
-    let indexed = cq_index::result::compile(&canonical).unwrap();
+    let indexed = cq_index_policy::result_demands::compile(&canonical).unwrap();
     ir::contract::check(&indexed).unwrap();
     assert!(
-        cq_realize::hash_inputs::compile_input_indexed(
+        cq_relation_lowering::base_hash::compile(
             &indexed,
-            &syn::parse_quote!(::mini_linq::pull)
+            &syn::parse_quote!(::mini_linq::access_to_distinct_iter)
         )
         .is_err()
     );
@@ -159,9 +159,9 @@ fn base_and_result_namespaces_are_distinct_and_input_route_rejects_result_indexe
     k.relation = syn::parse_quote!(S);
     ir::contract::check(&base).unwrap();
     assert!(
-        cq_realize::hash_materialized::compile_materialized(
+        cq_relation_lowering::materialized_hash::compile(
             &base,
-            &syn::parse_quote!(::mini_linq::pull_set)
+            &syn::parse_quote!(::mini_linq::access_to_set)
         )
         .is_err()
     );
@@ -189,13 +189,13 @@ fn base_and_result_namespaces_are_distinct_and_input_route_rejects_result_indexe
 fn valid_extra_requirements_are_built_without_changing_the_plan() {
     let source = query();
     let ra = cq_compose::compile_cq_with_policy(&source, Strategy::Written).unwrap();
-    let mut indexed = cq_index::result::compile(&ra).unwrap();
+    let mut indexed = cq_index_policy::result_demands::compile(&ra).unwrap();
     indexed.indexes.push(syn::parse_quote!(R[0]));
     indexed.indexes.push(syn::parse_quote!(@r0[1]));
     ir::contract::check(&indexed).unwrap();
-    let staged = cq_realize::hash_materialized::compile_materialized(
+    let staged = cq_relation_lowering::materialized_hash::compile(
         &indexed,
-        &syn::parse_quote!(::mini_linq::pull_set),
+        &syn::parse_quote!(::mini_linq::access_to_set),
     )
     .unwrap();
     // The written extras are real concrete builders, not ignored annotations.

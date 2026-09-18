@@ -1,10 +1,9 @@
 //! The physical rules admit an extension with no fresh names: its existing
 //! Let-labelled singleton access still evaluates the Rust expression.
 use cq_compose::compile_cq;
-use cq_index::result::compile as compile_result_indexes;
+use cq_index_policy::result_demands::compile as compile_result_indexes;
 use cq_ir::{cq, relational_plan};
-use cq_realize::hash_materialized::compile_materialized;
-use cq_realize::hash_prefix::compile_lazy_indexed;
+use cq_relation_lowering::{materialized_hash, prefix_hash};
 
 #[test]
 fn an_empty_extension_is_supported_by_both_physical_routes() {
@@ -16,6 +15,10 @@ fn an_empty_extension_is_supported_by_both_physical_routes() {
     let logical = compile_cq(&source).unwrap();
     relational_plan::contract::check(&logical).unwrap();
     let indexed = compile_result_indexes(&logical).unwrap();
-    compile_materialized(&indexed, &syn::parse_quote!(::mini_linq::pull_set)).unwrap();
-    compile_lazy_indexed(&indexed, &syn::parse_quote!(::mini_linq::pull)).unwrap();
+    materialized_hash::compile(&indexed, &syn::parse_quote!(::mini_linq::access_to_set)).unwrap();
+    prefix_hash::compile(
+        &indexed,
+        &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
+    )
+    .unwrap();
 }

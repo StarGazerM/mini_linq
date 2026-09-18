@@ -5,20 +5,20 @@ use std::num::NonZeroUsize;
 
 // Bind leaf configuration where each operation protocol is selected.
 macro_rules! bound_block {
-    ($($op:tt)*) => { ::mini_linq::block_rows! { storage ::cq_storage; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::array_block_rows! { storage ::cq_storage; $($op)* } };
 }
 macro_rules! bound_scan {
-    (work ($work:expr); $($op:tt)*) => { ::mini_linq::scan_rows! { $($op)* } };
-    ($($op:tt)*) => { ::mini_linq::scan_rows! { $($op)* } };
+    (work ($work:expr); $($op:tt)*) => { ::mini_linq::scan_candidates! { $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::scan_candidates! { $($op)* } };
 }
 macro_rules! bound_prune {
-    ($($op:tt)*) => { ::mini_linq::prune_rows! { iterator ::mini_linq::pull_stream; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::prune_block_candidates! { access_iter ::mini_linq::access_to_support_iter; $($op)* } };
 }
 macro_rules! bound_exact {
-    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::HashSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::exact_keys! { storage ::cq_storage; access_iter ::mini_linq::access_to_support_iter; keys ::std::collections::HashSet; $($op)* } };
 }
 macro_rules! bound_zone {
-    ($($op:tt)*) => { ::mini_linq::zone_keys! { storage ::cq_storage; iterator ::mini_linq::pull_stream; keys ::std::collections::BTreeSet; $($op)* } };
+    ($($op:tt)*) => { ::mini_linq::summarized_exact_keys! { storage ::cq_storage; access_iter ::mini_linq::access_to_support_iter; keys ::std::collections::BTreeSet; $($op)* } };
 }
 macro_rules! bound_hash {
     ($($op:tt)*) => { ::mini_linq::hash_pairs! { $($op)* } };
@@ -29,22 +29,22 @@ pub(crate) use {bound_block, bound_exact, bound_hash, bound_prune, bound_scan, b
 // S and T remain native containers; only R offers block descriptors and bounds.
 macro_rules! configured {
     ($scan:path, $keys:path; $($ra:tt)*) => {
-        ::mini_linq::observed_relation_program! {
-            storage ::cq_storage;
-            access ::mini_linq::pull_stream;
-            materialize ::mini_linq::hash_rows;
+        ::mini_linq::observed_configured_program! {
+            counter_storage ::cq_storage;
+            access ::mini_linq::access_to_support_iter;
+            result_rows ::mini_linq::array_hash_rows;
             inputs {
                 R => crate::bound_block;
-                S => ::mini_linq::hash_rows;
-                T => ::mini_linq::sorted_rows;
+                S => ::mini_linq::array_hash_rows;
+                T => ::mini_linq::array_sorted_rows;
             }
-            results {}
-            scan crate::bound_scan;
-            scans { r1 => $scan; }
+            result_bindings {}
+            candidates crate::bound_scan;
+            candidate_bindings { r1 => $scan; }
             keys crate::bound_exact;
             key_sets { r1 => $keys; }
-            join crate::bound_hash;
-            joins {}
+            pairs crate::bound_hash;
+            pair_bindings {}
             $($ra)*
         }
     };
@@ -57,17 +57,17 @@ macro_rules! zone_rows {
 }
 pub(crate) use {exact_rows, zone_rows};
 mod exact_wiring {
-    pub(crate) use super::exact_rows as choose_indexes;
+    pub(crate) use super::exact_rows as choose_index_policy;
     pub use ::mini_linq::*;
 }
 mod zone_wiring {
-    pub(crate) use super::zone_rows as choose_indexes;
+    pub(crate) use super::zone_rows as choose_index_policy;
     pub use ::mini_linq::*;
 }
 
 macro_rules! chain {
     () => {
-        mini_linq::choose_indexes! {
+        mini_linq::choose_index_policy! {
             pub struct Query;
             relation R(k:i64, x:i64);
             relation S(z:i64, k:i64);
@@ -100,9 +100,9 @@ mod zone {
 }
 
 fn main() {
-    let block_rows = NonZeroUsize::new(1).unwrap();
+    let array_block_rows = NonZeroUsize::new(1).unwrap();
     // Only this constructor establishes block layout and zone metadata.
-    let r = BlockStore::from_rows([[1, 10], [2, 20], [50, 30], [60, 40]], block_rows);
+    let r = BlockStore::from_rows([[1, 10], [2, 20], [50, 30], [60, 40]], array_block_rows);
     let s = HashSet::from([[100, 1], [200, 2], [900, 90]]);
     let t = BTreeSet::from([[7, 100]]);
     let (answer, selected) = zone::Query::run(&r, &s, &t);

@@ -34,7 +34,7 @@ arguments are Rust expressions: `R(x), S(f(x))` matches the value of `f(x)`;
 Atom bindings borrow input fields. Let bindings carry their Rust values;
 ordinary Rust borrowing, ownership, and trait checks still apply.
 
-In configured `relation_program!` / `relation_query!` realization, expressions
+In configured `configured_program!` / `configured_callable!` realization, expressions
 read stored source and computed columns through borrows. Reading a computed
 column does not clone it; an expression that needs an owned value must explicitly
 copy or clone that value. Constructing owned result records is a separate step.
@@ -69,7 +69,7 @@ Lexical locals inside Rust expressions follow Rust scope. Define
 `uses(e, B) = free_variables(e).dependencies(B)`; for opaque syntax this is
 all of `B`. This is an availability judgment, not a purity judgment.
 
-[dependencies.rs](../crates/cq-plan/src/dependencies.rs)
+[dependencies.rs](../crates/cq-query-lowering/src/dependencies.rs)
 derives `ClauseFacts = (required, provided, reorderable, atom_arity,
 literal_arguments)`. `provided` includes every bare atom name, even an equality
 key already supplied by another atom; it does not mean every name is fresh.
@@ -93,7 +93,7 @@ not supply lowering rules for negation or aggregation.
 
 ## Prefix state and administrative transitions
 
-[clause_rules.rs](../crates/cq-plan/src/prefix/rules.rs)
+[rules.rs](../crates/cq-query-lowering/src/clause_prefix/rules.rs)
 implements `ClauseState = (D,P,B,U,K,O)`:
 
 - `D` is the sequence of immutable RA definitions.
@@ -153,12 +153,12 @@ computations use A-PREFIX or A-LOCAL and cannot be hoisted as literals.
 
 ### Policy and verification
 
-[prefix clause choice](../crates/cq-plan/src/prefix/strategy.rs)
+[prefix clause choice](../crates/cq-query-lowering/src/clause_prefix/strategy.rs)
 receives only C-READY candidates. Written chooses the first clause; other
 policies prefer ready guards/bindings, then connected atoms, then optional
 width ranking. The policy cannot emit RA or make an inapplicable rule legal.
 
-The [source-to-RA checker](../crates/cq-plan/src/prefix/check/clauses.rs)
+The [source-to-RA checker](../crates/cq-query-lowering/src/clause_prefix/check/clauses.rs)
 reads actual definitions and independently checks their operators, Rust
 expressions, bindings, equality constraints, projection, and output. Its
 schedule check shares dependency facts with the planner, so that part is not
@@ -170,7 +170,7 @@ The default execution route keeps one lazy pull region: `build()` prepares rows
 and indexes; clauses execute when the cursor is advanced. The explicit
 materialized route evaluates each named RA result during `build()`. Their supplied
 pull continuations lower through RustAccessPlan and IteratorPipeline; an eager
-set-valued hole can instead select `push_set!`, which emits Rust loops directly.
+set-valued hole can instead select `access_to_set_loops!`, which emits Rust loops directly.
 Negation and aggregation
 remain the separate optional exercise; they must reuse this expression grammar.
 

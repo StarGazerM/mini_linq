@@ -9,7 +9,7 @@ use syn::{Token, parse::Parse, parse::ParseStream, token};
 
 mod kw {
     syn::custom_keyword!(storage);
-    syn::custom_keyword!(iterator);
+    syn::custom_keyword!(access_iter);
     syn::custom_keyword!(keys);
     syn::custom_keyword!(work);
     syn::custom_keyword!(packing);
@@ -24,9 +24,9 @@ pub enum Input<S: Parse + ToTokens> {
         semi: token::Semi,
         rest: Box<Self>,
     },
-    #[parse(peek_func = is_iterator)]
-    Iterator {
-        keyword: kw::iterator,
+    #[parse(peek_func = is_access_iter)]
+    AccessIter {
+        keyword: kw::access_iter,
         path: syn::Path,
         semi: token::Semi,
         rest: Box<Self>,
@@ -62,13 +62,13 @@ pub enum Input<S: Parse + ToTokens> {
     Source { source: Box<S> },
 }
 
-// A source definition may itself be named `storage`, `iterator`, `keys`, or `work`.
+// A source definition may itself be named `storage`, `access_iter`, `keys`, or `work`.
 // Its equals sign distinguishes that name from an administrative directive.
 fn is_storage(input: ParseStream<'_>) -> bool {
     input.peek(kw::storage) && !input.peek2(Token![=])
 }
-fn is_iterator(input: ParseStream<'_>) -> bool {
-    input.peek(kw::iterator) && !input.peek2(Token![=])
+fn is_access_iter(input: ParseStream<'_>) -> bool {
+    input.peek(kw::access_iter) && !input.peek2(Token![=])
 }
 fn is_keys(input: ParseStream<'_>) -> bool {
     input.peek(kw::keys) && !input.peek2(Token![=])
@@ -84,7 +84,7 @@ fn is_packing(input: ParseStream<'_>) -> bool {
 #[derive(Default)]
 struct Configuration<'a> {
     storage: Option<&'a syn::Path>,
-    iterator: Option<&'a syn::Path>,
+    access_iter: Option<&'a syn::Path>,
     keys: Option<&'a syn::Path>,
     work: Option<&'a syn::Expr>,
     packing: Option<&'a syn::Expr>,
@@ -95,7 +95,7 @@ impl<S: Parse + ToTokens> Input<S> {
         match self {
             Self::Source { source } => source,
             Self::Storage { rest, .. }
-            | Self::Iterator { rest, .. }
+            | Self::AccessIter { rest, .. }
             | Self::Keys { rest, .. }
             | Self::Work { rest, .. }
             | Self::Packing { rest, .. } => rest.source(),
@@ -110,8 +110,8 @@ impl<S: Parse + ToTokens> Input<S> {
                 Self::Storage { path, rest, .. } => {
                     (configuration.storage.replace(path).is_some(), rest)
                 }
-                Self::Iterator { path, rest, .. } => {
-                    (configuration.iterator.replace(path).is_some(), rest)
+                Self::AccessIter { path, rest, .. } => {
+                    (configuration.access_iter.replace(path).is_some(), rest)
                 }
                 Self::Keys { path, rest, .. } => (configuration.keys.replace(path).is_some(), rest),
                 Self::Work { value, rest, .. } => {
@@ -132,7 +132,11 @@ impl<S: Parse + ToTokens> Input<S> {
         }
     }
 
-    #[cfg(any(feature = "prune-rows", feature = "zone-keys", feature = "block-rows"))]
+    #[cfg(any(
+        feature = "prune-block-candidates",
+        feature = "summarized-exact-keys",
+        feature = "array-block-rows"
+    ))]
     fn required(&self, value: Option<&syn::Path>, name: &str) -> syn::Result<syn::Path> {
         value.cloned().ok_or_else(|| {
             syn::Error::new_spanned(
@@ -146,7 +150,7 @@ impl<S: Parse + ToTokens> Input<S> {
         let configuration = self.configuration()?;
         for (name, present) in [
             ("storage", configuration.storage.is_some()),
-            ("iterator", configuration.iterator.is_some()),
+            ("access_iter", configuration.access_iter.is_some()),
             ("keys", configuration.keys.is_some()),
             ("work", configuration.work.is_some()),
             ("packing", configuration.packing.is_some()),
@@ -161,7 +165,7 @@ impl<S: Parse + ToTokens> Input<S> {
         Ok(configuration)
     }
 
-    #[cfg(feature = "scan-rows")]
+    #[cfg(feature = "scan-candidates")]
     pub fn scan_source(&self) -> syn::Result<&S> {
         // Observed hosts may supply a work expression. Scan performs no work
         // of its own and must leave this expression unexpanded and unevaluated.
@@ -169,42 +173,44 @@ impl<S: Parse + ToTokens> Input<S> {
         Ok(self.source())
     }
 
-    #[cfg(feature = "prune-rows")]
-    pub fn prune_options(&self) -> syn::Result<cq_native::candidates::prune::Options> {
-        let configuration = self.configured(&["iterator", "work"])?;
-        Ok(cq_native::candidates::prune::Options {
-            iterator: self.required(configuration.iterator, "iterator")?,
+    #[cfg(feature = "prune-block-candidates")]
+    pub fn prune_options(&self) -> syn::Result<cq_native_lowering::candidates::prune::Options> {
+        let configuration = self.configured(&["access_iter", "work"])?;
+        Ok(cq_native_lowering::candidates::prune::Options {
+            access_iter: self.required(configuration.access_iter, "access_iter")?,
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "exact-keys")]
-    pub fn exact_options(&self) -> syn::Result<cq_native::keys::exact::Options> {
-        let configuration = self.configured(&["storage", "iterator", "keys", "work"])?;
-        Ok(cq_native::keys::exact::Options {
+    pub fn exact_options(&self) -> syn::Result<cq_native_lowering::keys::exact::Options> {
+        let configuration = self.configured(&["storage", "access_iter", "keys", "work"])?;
+        Ok(cq_native_lowering::keys::exact::Options {
             storage: configuration.storage.cloned(),
-            iterator: configuration.iterator.cloned(),
+            access_iter: configuration.access_iter.cloned(),
             keys: configuration.keys.cloned(),
             work: configuration.work.cloned(),
         })
     }
 
-    #[cfg(feature = "zone-keys")]
-    pub fn zone_options(&self) -> syn::Result<cq_native::keys::zone::Options> {
-        let configuration = self.configured(&["storage", "iterator", "keys", "work"])?;
-        Ok(cq_native::keys::zone::Options {
+    #[cfg(feature = "summarized-exact-keys")]
+    pub fn zone_options(&self) -> syn::Result<cq_native_lowering::keys::zone::Options> {
+        let configuration = self.configured(&["storage", "access_iter", "keys", "work"])?;
+        Ok(cq_native_lowering::keys::zone::Options {
             storage: self.required(configuration.storage, "storage")?,
-            iterator: configuration.iterator.cloned(),
+            access_iter: configuration.access_iter.cloned(),
             keys: configuration.keys.cloned(),
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "hash-witnesses")]
-    pub fn hash_witness_options(&self) -> syn::Result<cq_native::witnesses::hash::Options> {
-        let configuration = self.configured(&["iterator", "work"])?;
-        Ok(cq_native::witnesses::hash::Options {
-            iterator: configuration.iterator.cloned(),
+    pub fn hash_witness_options(
+        &self,
+    ) -> syn::Result<cq_native_lowering::witnesses::hash::Options> {
+        let configuration = self.configured(&["access_iter", "work"])?;
+        Ok(cq_native_lowering::witnesses::hash::Options {
+            access_iter: configuration.access_iter.cloned(),
             work: configuration.work.cloned(),
         })
     }
@@ -214,73 +220,79 @@ impl<S: Parse + ToTokens> Input<S> {
         feature = "nested-pairs",
         feature = "sort-merge-pairs"
     ))]
-    pub fn pair_options(&self) -> syn::Result<cq_native::pairs::Options> {
+    pub fn pair_options(&self) -> syn::Result<cq_native_lowering::pairs::Options> {
         let configuration = self.configured(&["work"])?;
-        Ok(cq_native::pairs::Options {
+        Ok(cq_native_lowering::pairs::Options {
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "nested-witnesses")]
-    pub fn nested_witness_options(&self) -> syn::Result<cq_native::witnesses::nested::Options> {
-        let configuration = self.configured(&["iterator", "work"])?;
-        Ok(cq_native::witnesses::nested::Options {
-            iterator: configuration.iterator.cloned(),
+    pub fn nested_witness_options(
+        &self,
+    ) -> syn::Result<cq_native_lowering::witnesses::nested::Options> {
+        let configuration = self.configured(&["access_iter", "work"])?;
+        Ok(cq_native_lowering::witnesses::nested::Options {
+            access_iter: configuration.access_iter.cloned(),
             work: configuration.work.cloned(),
         })
     }
 
-    #[cfg(feature = "replay-rows")]
-    pub fn replay_options(&self) -> syn::Result<cq_native::rows::replay::Options> {
-        let configuration = self.configured(&["storage", "iterator"])?;
-        Ok(cq_native::rows::replay::Options {
+    #[cfg(feature = "replay-resource")]
+    pub fn replay_options(&self) -> syn::Result<cq_native_lowering::rows::replay::Options> {
+        let configuration = self.configured(&["storage", "access_iter"])?;
+        Ok(cq_native_lowering::rows::replay::Options {
             storage: configuration
                 .storage
                 .cloned()
                 .unwrap_or_else(|| syn::parse_quote!(mini_linq::storage)),
-            iterator: configuration
-                .iterator
+            access_iter: configuration
+                .access_iter
                 .cloned()
-                .unwrap_or_else(|| syn::parse_quote!(mini_linq::pull_stream)),
+                .unwrap_or_else(|| syn::parse_quote!(mini_linq::access_to_support_iter)),
         })
     }
 
-    #[cfg(feature = "hash-rows")]
-    pub fn hash_row_options(&self) -> syn::Result<cq_native::rows::hash::Options> {
+    #[cfg(feature = "array-hash-rows")]
+    pub fn hash_row_options(&self) -> syn::Result<cq_native_lowering::rows::hash::Options> {
         let configuration = self.configured(&["work"])?;
-        Ok(cq_native::rows::hash::Options {
+        Ok(cq_native_lowering::rows::hash::Options {
             work: configuration.work.cloned(),
         })
     }
 
-    #[cfg(feature = "sorted-rows")]
-    pub fn sorted_row_options(&self) -> syn::Result<cq_native::rows::sorted::Options> {
+    #[cfg(feature = "array-sorted-rows")]
+    pub fn sorted_row_options(&self) -> syn::Result<cq_native_lowering::rows::sorted::Options> {
         let configuration = self.configured(&["work"])?;
-        Ok(cq_native::rows::sorted::Options {
+        Ok(cq_native_lowering::rows::sorted::Options {
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "tuple-hash-rows")]
-    pub fn tuple_hash_row_options(&self) -> syn::Result<cq_native::rows::tuple_hash::Options> {
+    pub fn tuple_hash_row_options(
+        &self,
+    ) -> syn::Result<cq_native_lowering::rows::tuple_hash::Options> {
         let configuration = self.configured(&["work"])?;
-        Ok(cq_native::rows::tuple_hash::Options {
+        Ok(cq_native_lowering::rows::tuple_hash::Options {
             work: configuration.work.cloned(),
         })
     }
 
     #[cfg(feature = "tuple-sorted-rows")]
-    pub fn tuple_sorted_row_options(&self) -> syn::Result<cq_native::rows::tuple_sorted::Options> {
+    pub fn tuple_sorted_row_options(
+        &self,
+    ) -> syn::Result<cq_native_lowering::rows::tuple_sorted::Options> {
         let configuration = self.configured(&["work"])?;
-        Ok(cq_native::rows::tuple_sorted::Options {
+        Ok(cq_native_lowering::rows::tuple_sorted::Options {
             work: configuration.work.cloned(),
         })
     }
 
-    #[cfg(feature = "block-rows")]
-    pub fn block_options(&self) -> syn::Result<cq_native::rows::block::Options> {
+    #[cfg(feature = "array-block-rows")]
+    pub fn block_options(&self) -> syn::Result<cq_native_lowering::rows::block::Options> {
         let configuration = self.configured(&["storage", "packing", "work"])?;
-        Ok(cq_native::rows::block::Options {
+        Ok(cq_native_lowering::rows::block::Options {
             storage: self.required(configuration.storage, "storage")?,
             packing: configuration.packing.cloned(),
             work: configuration.work.cloned(),
@@ -295,10 +307,10 @@ mod tests {
     use quote::quote;
 
     #[cfg(all(
-        feature = "block-rows",
-        feature = "scan-rows",
+        feature = "array-block-rows",
+        feature = "scan-candidates",
         feature = "exact-keys",
-        feature = "hash-rows"
+        feature = "array-hash-rows"
     ))]
     #[test]
     fn only_implementation_owned_configuration_is_accepted() {
@@ -312,21 +324,21 @@ mod tests {
         input.block_options().unwrap();
         let input: Input<Operation> = syn::parse_quote!(storage crate::data; contains(&keys)([1]));
         let options = input.exact_options().unwrap();
-        assert!(options.iterator.is_none());
-        cq_native::keys::exact::compile(input.source(), &options).unwrap();
+        assert!(options.access_iter.is_none());
+        cq_native_lowering::keys::exact::compile(input.source(), &options).unwrap();
     }
 
     #[test]
     fn duplicate_directives_and_unknown_options_are_rejected() {
         for duplicate in [
             quote!(storage b;),
-            quote!(iterator b;),
+            quote!(access_iter b;),
             quote!(keys b;),
             quote!(work (b);),
             quote!(packing (b);),
         ] {
             let input: Input<Operation> = syn::parse2(quote! {
-                storage a; iterator a; keys a; work (a); packing (a); #duplicate rows(&rows)
+                storage a; access_iter a; keys a; work (a); packing (a); #duplicate rows(&rows)
             })
             .unwrap();
             assert!(
@@ -341,7 +353,7 @@ mod tests {
         assert!(syn::parse2::<Input<Operation>>(quote!(unknown a; rows(&rows))).is_err());
     }
 
-    #[cfg(feature = "block-rows")]
+    #[cfg(feature = "array-block-rows")]
     #[test]
     fn packing_is_administrative_and_round_trips_in_either_order() {
         let source: Operation = syn::parse_quote!(materialize owner value (rows));
@@ -356,7 +368,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "block-rows")]
+    #[cfg(feature = "array-block-rows")]
     #[test]
     fn directive_words_remain_available_as_source_definition_names() {
         #[derive(Clone, Debug, syn_derive::Parse, syn_derive::ToTokens)]
@@ -366,7 +378,7 @@ mod tests {
             value: syn::Expr,
             semi: Token![;],
         }
-        for name in ["storage", "iterator", "keys", "work", "packing"] {
+        for name in ["storage", "access_iter", "keys", "work", "packing"] {
             let name: syn::Ident = syn::parse_str(name).unwrap();
             let input: Input<Definition> =
                 syn::parse2(quote!(storage crate::data; #name = 1;)).unwrap();

@@ -1,8 +1,8 @@
 #![cfg(feature = "hw4")]
 
+use cq_access_lowering::to_pipeline::compile as compile_pull;
 use cq_compose::compile_cq;
-use cq_execution::pull::compile as compile_pull;
-use cq_index::input::compile as compile_input_indexes;
+use cq_index_policy::base_demands::compile as compile_input_indexes;
 use cq_ir::{cq, index_requirements, iterator_pipeline, relational_plan, rust_access_plan};
 use quote::quote;
 

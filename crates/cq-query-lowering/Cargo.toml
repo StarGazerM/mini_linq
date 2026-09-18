@@ -1,0 +1,31 @@
+[package]
+name = "cq-query-lowering"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+written-order = ["dep:contracts"]
+clause-prefix = []
+hypergraph = []
+
+[dependencies]
+cq-ir = { path = "../cq-ir" }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+contracts = { workspace = true, optional = true }
+
+[[test]]
+name = "written_order"
+required-features = ["written-order"]
+
+[[test]]
+name = "clause_prefix"
+required-features = ["clause-prefix"]
+
+[[test]]
+name = "hypergraph"
+required-features = ["hypergraph"]

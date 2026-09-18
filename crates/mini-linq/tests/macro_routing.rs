@@ -9,50 +9,50 @@ macro_rules! forbidden {
 }
 macro_rules! canonical {
     ($($source:tt)*) => {
-        const PLANNER: &str = "canonical";
-        ::mini_linq::canonical_query! { $($source)* }
+        const PLANNER: &str = "written-order";
+        ::mini_linq::cq_to_ra_written_order! { $($source)* }
     };
 }
 macro_rules! prefix {
     ($($source:tt)*) => {
-        const PLANNER: &str = "prefix";
-        ::mini_linq::prefix_query! { $($source)* }
+        const PLANNER: &str = "clause-prefix";
+        ::mini_linq::cq_to_ra_clause_prefix! { $($source)* }
     };
 }
 macro_rules! marked_input_indexes {
     ($($source:tt)*) => {
         const INDEX_POLICY: &str = "input";
-        ::mini_linq::input_indexes! { $($source)* }
+        ::mini_linq::base_index_demands! { $($source)* }
     };
 }
 macro_rules! marked_result_indexes {
     ($($source:tt)*) => {
         const INDEX_POLICY: &str = "result";
-        ::mini_linq::result_indexes! { $($source)* }
+        ::mini_linq::result_index_demands! { $($source)* }
     };
 }
 macro_rules! requirements {
     ($($source:tt)*) => {
         const DISPATCHED: &str = "indexes";
-        ::mini_linq::choose_realization! { $($source)* }
+        ::mini_linq::choose_relation_lowering! { $($source)* }
     };
 }
 macro_rules! input_backend {
     ($($source:tt)*) => {
         const REALIZATION: &str = "input";
-        ::mini_linq::hash_inputs! { $($source)* }
+        ::mini_linq::lower_base_hash! { $($source)* }
     };
 }
 macro_rules! lazy_backend {
     ($($source:tt)*) => {
         const REALIZATION: &str = "lazy";
-        ::mini_linq::hash_prefix! { $($source)* }
+        ::mini_linq::lower_prefix_hash! { $($source)* }
     };
 }
 macro_rules! materialized_backend {
     ($($source:tt)*) => {
         const REALIZATION: &str = "materialized";
-        ::mini_linq::hash_materialized! { $($source)* }
+        ::mini_linq::materialized_hash_program! { $($source)* }
     };
 }
 
@@ -60,14 +60,14 @@ mod basic {
     #[allow(unused_imports)]
     mod wiring {
         pub use ::mini_linq::*;
-        pub(super) use canonical as canonical_query;
-        pub(super) use forbidden as prefix_query;
-        pub(super) use forbidden as result_indexes;
-        pub(super) use forbidden as hash_prefix;
-        pub(super) use forbidden as hash_materialized;
-        pub(super) use input_backend as hash_inputs;
-        pub(super) use marked_input_indexes as input_indexes;
-        pub(super) use requirements as choose_realization;
+        pub(super) use canonical as cq_to_ra_written_order;
+        pub(super) use forbidden as cq_to_ra_clause_prefix;
+        pub(super) use forbidden as result_index_demands;
+        pub(super) use forbidden as lower_prefix_hash;
+        pub(super) use forbidden as materialized_hash_program;
+        pub(super) use input_backend as lower_base_hash;
+        pub(super) use marked_input_indexes as base_index_demands;
+        pub(super) use requirements as choose_relation_lowering;
     }
     use wiring as mini_linq;
     mini_linq::mini_linq! {
@@ -80,7 +80,7 @@ mod basic {
     fn all_default_boundaries_are_caller_resolved() {
         assert_eq!(
             (PLANNER, INDEX_POLICY, REALIZATION),
-            ("canonical", "input", "input")
+            ("written-order", "input", "input")
         );
         assert_eq!(DISPATCHED, "indexes");
         assert_eq!(Query::run([(1, 2), (3, 4)], [(2, 5), (9, 8)]), vec![(1, 5)]);
@@ -91,12 +91,12 @@ mod replaced_index_policy {
     #[allow(unused_imports)]
     mod wiring {
         pub use ::mini_linq::*;
-        pub(super) use canonical as canonical_query;
-        pub(super) use forbidden as hash_inputs;
-        pub(super) use forbidden as hash_materialized;
-        pub(super) use lazy_backend as hash_prefix;
-        pub(super) use marked_result_indexes as input_indexes;
-        pub(super) use requirements as choose_realization;
+        pub(super) use canonical as cq_to_ra_written_order;
+        pub(super) use forbidden as lower_base_hash;
+        pub(super) use forbidden as materialized_hash_program;
+        pub(super) use lazy_backend as lower_prefix_hash;
+        pub(super) use marked_result_indexes as base_index_demands;
+        pub(super) use requirements as choose_relation_lowering;
     }
     use wiring as mini_linq;
     mini_linq::mini_linq! {
@@ -109,7 +109,7 @@ mod replaced_index_policy {
     fn realization_uses_actual_indexes_after_a_policy_replacement() {
         assert_eq!(
             (PLANNER, INDEX_POLICY, REALIZATION),
-            ("canonical", "result", "lazy")
+            ("written-order", "result", "lazy")
         );
         assert_eq!(DISPATCHED, "indexes");
         assert_eq!(Query::run([(1, 2), (3, 4)], [(2, 5), (9, 8)]), vec![(1, 5)]);
@@ -126,14 +126,14 @@ mod expressions {
     #[allow(unused_imports)]
     mod wiring {
         pub use ::mini_linq::*;
-        pub(super) use forbidden as canonical_query;
-        pub(super) use forbidden as input_indexes;
-        pub(super) use forbidden as hash_inputs;
-        pub(super) use forbidden as hash_materialized;
-        pub(super) use lazy_backend as hash_prefix;
-        pub(super) use marked_result_indexes as result_indexes;
-        pub(super) use prefix as prefix_query;
-        pub(super) use requirements as choose_realization;
+        pub(super) use forbidden as cq_to_ra_written_order;
+        pub(super) use forbidden as base_index_demands;
+        pub(super) use forbidden as lower_base_hash;
+        pub(super) use forbidden as materialized_hash_program;
+        pub(super) use lazy_backend as lower_prefix_hash;
+        pub(super) use marked_result_indexes as result_index_demands;
+        pub(super) use prefix as cq_to_ra_clause_prefix;
+        pub(super) use requirements as choose_relation_lowering;
     }
     use wiring as mini_linq;
     mini_linq::mini_linq! {
@@ -146,7 +146,7 @@ mod expressions {
     fn expression_route_honors_aliases_without_making_evaluation_eager() {
         assert_eq!(
             (PLANNER, INDEX_POLICY, REALIZATION),
-            ("prefix", "result", "lazy")
+            ("clause-prefix", "result", "lazy")
         );
         assert_eq!(DISPATCHED, "indexes");
         CALLS.store(0, Ordering::Relaxed);
@@ -163,15 +163,15 @@ mod graph {
     #[allow(unused_imports)]
     mod wiring {
         pub use ::mini_linq::*;
-        pub(super) use forbidden as input_indexes;
-        pub(super) use forbidden as hash_inputs;
-        pub(super) use forbidden as hash_prefix;
-        pub(super) use marked_result_indexes as result_indexes;
-        pub(super) use materialized_backend as hash_materialized;
-        pub(super) use requirements as choose_realization;
+        pub(super) use forbidden as base_index_demands;
+        pub(super) use forbidden as lower_base_hash;
+        pub(super) use forbidden as lower_prefix_hash;
+        pub(super) use marked_result_indexes as result_index_demands;
+        pub(super) use materialized_backend as materialized_hash_program;
+        pub(super) use requirements as choose_relation_lowering;
     }
     use wiring as mini_linq;
-    mini_linq::graph_query! {
+    mini_linq::cq_to_ra_hypergraph! {
         struct Query;
         relation R(a:i32,b:i32); relation S(a:i32,b:i32);
         answer(x,z) :- R(x,y), S(y,z);
@@ -196,11 +196,11 @@ mod workload {
     #[allow(unused_imports)]
     mod wiring {
         pub use ::mini_linq::*;
-        pub(super) use canonical as canonical_query;
+        pub(super) use canonical as cq_to_ra_written_order;
         pub(super) use entry as mini_linq;
-        pub(super) use input_backend as hash_inputs;
-        pub(super) use marked_input_indexes as input_indexes;
-        pub(super) use requirements as choose_realization;
+        pub(super) use input_backend as lower_base_hash;
+        pub(super) use marked_input_indexes as base_index_demands;
+        pub(super) use requirements as choose_relation_lowering;
     }
     use wiring as mini_linq;
     mini_linq::workload_query! {
@@ -214,7 +214,7 @@ mod workload {
         assert_eq!((ENTERED, DISPATCHED), ("query", "indexes"));
         assert_eq!(
             (PLANNER, INDEX_POLICY, REALIZATION),
-            ("canonical", "input", "input")
+            ("written-order", "input", "input")
         );
         assert_eq!(Query::run([(2,), (1,), (2,)]), vec![(1,), (2,)]);
         assert_eq!(module().unwrap().program.name, "Query");

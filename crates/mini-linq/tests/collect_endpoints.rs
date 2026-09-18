@@ -4,7 +4,7 @@ use std::collections::HashSet;
 fn set_access_evaluates_all_candidates_and_deduplicates_projected_values() {
     let calls = std::cell::Cell::new(0);
     let observed = &calls;
-    let rows = mini_linq::pull_set! {
+    let rows = mini_linq::access_to_set! {
         out(x) => (x % 2) :-
         R(x) => for (x,) in ([(1,), (3,), (2,), (4,), (4,)]),
         Keep(x) => if ({ observed.set(observed.get() + 1); x < 4 });
@@ -12,10 +12,10 @@ fn set_access_evaluates_all_candidates_and_deduplicates_projected_values() {
     assert_eq!(calls.get(), 5);
     assert_eq!(rows, HashSet::from([0, 1]));
     assert_eq!(
-        mini_linq::pull_set! { out() => (()) :- Unit() => if (true); },
+        mini_linq::access_to_set! { out() => (()) :- Unit() => if (true); },
         HashSet::from([()]),
     );
-    assert!(mini_linq::pull_set! { out() => (()) :- Unit() => if (false); }.is_empty());
+    assert!(mini_linq::access_to_set! { out() => (()) :- Unit() => if (false); }.is_empty());
 }
 
 #[test]
@@ -23,7 +23,7 @@ fn set_pipeline_owns_projected_values_without_a_duplicate_clone_set() {
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct Value(i32);
 
-    let rows = mini_linq::collect_pipeline! {
+    let rows = mini_linq::pipeline_to_set! {
         iter0 = scan (value,) in ([(Value(1),), (Value(1),), (Value(2),)]) yield (value,);
         iter1 = project iter0 as (value,) yield (value);
         iter2 = distinct iter1;
@@ -39,18 +39,18 @@ mod composed {
     macro_rules! observed_set {
         ($($plan:tt)*) => {{
             CALLS.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed);
-            ::mini_linq::collect_pipeline! { $($plan)* }
+            ::mini_linq::pipeline_to_set! { $($plan)* }
         }};
     }
     pub(crate) use observed_set;
     mod wiring {
-        pub(crate) use super::observed_set as collect_pipeline;
+        pub(crate) use super::observed_set as pipeline_to_set;
         pub use ::mini_linq::*;
     }
     use wiring as mini_linq;
 
     pub(super) fn rows() -> std::collections::HashSet<i32> {
-        mini_linq::pull_set! {
+        mini_linq::access_to_set! {
             out(x) => (x) :- R(x) => for (x,) in ([(1,), (1,), (2,)]);
         }
     }

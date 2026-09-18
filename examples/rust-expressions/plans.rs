@@ -2,9 +2,9 @@
 use cq_compose::compile_cq_derivation;
 use cq_compose::explain_cq_plan;
 use cq_ir::{cq, relational_plan as ra, symbol_name};
-use cq_plan::JoinPolicy;
-use cq_plan::PlanningOptions;
-use cq_plan::Rule as JoinRule;
+use cq_query_lowering::JoinPolicy;
+use cq_query_lowering::PlanningOptions;
+use cq_query_lowering::Rule as JoinRule;
 
 pub fn run() {
     use JoinRule::{Bind, Constant, Finish, Guard, Match};

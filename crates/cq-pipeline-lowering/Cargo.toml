@@ -1,0 +1,20 @@
+[package]
+name = "cq-pipeline-lowering"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+distinct-iter = []
+collect-set = []
+support-iter = []
+exists = []
+
+[dependencies]
+cq-ir.workspace = true
+contracts.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true

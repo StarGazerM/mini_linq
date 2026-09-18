@@ -3,16 +3,16 @@
 //! another checked edge directly or bind its macro through a Rust module alias.
 use cq_ir::{cq, relational_plan as ra};
 mod indexed;
-use cq_plan::{
+use cq_query_lowering::{
     JoinPlanReport, JoinPolicy, PlanningOptions, Rule, dependencies::ClauseDependencies,
 };
 pub use indexed::{compile_indexed, select_indexes, use_input_indexes};
 
 pub fn compile_cq(source: &cq::Module) -> syn::Result<ra::Module> {
     if source.program.query.is_basic() {
-        cq_plan::canonical::compile(source)
+        cq_query_lowering::written_order::compile(source)
     } else {
-        cq_plan::prefix::compile(source)
+        cq_query_lowering::clause_prefix::compile(source)
     }
 }
 
@@ -38,9 +38,9 @@ pub fn explain_cq_plan(
     cq::contract::check(source)?;
     let facts = ClauseDependencies::analyze(source)?;
     let (target, report) = if facts.supports_graph_rules {
-        cq_plan::graph::explain(source, options)?
+        cq_query_lowering::hypergraph::explain(source, options)?
     } else {
-        cq_plan::prefix::explain(source, options)?
+        cq_query_lowering::clause_prefix::explain(source, options)?
     };
     Ok((target, report))
 }
@@ -54,9 +54,9 @@ pub fn check_cq_plan(
     // The existing derivation grammar identifies the proof being checked.
     // A graph-eligible source can also have a valid clause-prefix derivation.
     if report.derivation.last() == Some(&Rule::Finish) {
-        cq_plan::prefix::check(source, target, report)
+        cq_query_lowering::clause_prefix::check(source, target, report)
     } else {
-        cq_plan::graph::check(source, target, report)
+        cq_query_lowering::hypergraph::check(source, target, report)
     }
 }
 
@@ -66,9 +66,9 @@ pub fn compile_cq_derivation(
 ) -> syn::Result<ra::Module> {
     cq::contract::check(source)?;
     let target = if report.derivation.last() == Some(&Rule::Finish) {
-        cq_plan::prefix::replay(source, report)?
+        cq_query_lowering::clause_prefix::replay(source, report)?
     } else {
-        cq_plan::graph::replay(source, report)?
+        cq_query_lowering::hypergraph::replay(source, report)?
     };
     Ok(target)
 }

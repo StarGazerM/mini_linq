@@ -43,15 +43,15 @@ answers; standalone Rust harnesses assert fixed expected results for the
 same presentations. The default route provides the canonical non-Yannakakis
 comparison; the manuscript follows the planned route through its lower IRs.
 
-For each `lazy` and `hash_materialized` prefix, inspect:
+For each `lazy` and `materialized_hash_program` prefix, inspect:
 
 | File suffix | Actual artifact |
 | --- | --- |
 | `01-cq.rs` | Source wrapped in the selected public CQ macro |
 | `02-relational.rs` | Typed CQ pass output wrapped in the corresponding RA macro |
 | `03-indexes.rs` | Typed index pass output wrapped in the physical macro |
-| `04-access.rs` | The physical pass's ordinary `syn::File` containing iterator-valued `pull!` or set-valued `pull_set!` holes |
-| `05-pipeline.rs` | Each existing Access hole replaced using `cq_execution::pull::compile` |
+| `04-access.rs` | The physical pass's ordinary `syn::File` containing iterator-valued `access_to_distinct_iter!` or set-valued `access_to_set!` holes |
+| `05-pipeline.rs` | Each existing Access hole replaced using `cq_access_lowering::to_pipeline::compile` |
 | `06-rust.rs` | Each Pipeline hole replaced by its iterator/set Rust endpoint, plus an executable assertion harness |
 
 `report.txt` is the actual planned derivation. `validation.txt` records the
@@ -104,7 +104,7 @@ cargo run --manifest-path doc/formal/example/Cargo.toml --locked --release --bin
 five-relation query with two computed atom arguments, a dependent `let`, and
 two filters. Its three literal public entries compile the same source through
 the lazy and planned CQ routes, and an independently authored RA through
-`choose_indexes!`. The authored plan places filters at different
+`choose_index_policy!`. The authored plan places filters at different
 subtrees, computes a binding before a later join, prepares a semijoin-filtered
 right input, and prunes expression inputs after constructing a composite key.
 
@@ -126,7 +126,7 @@ cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin access_re
 ```
 
 [access_representations.rs](src/bin/access_representations.rs) uses the same
-`pull!` control shape over a native `HashSet` and an exact bounded `u64` bitmap.
+`access_to_distinct_iter!` control shape over a native `HashSet` and an exact bounded `u64` bitmap.
 Ordinary Rust selects a branch from the observed build-key range. Both macros
 expand at compile time; storage construction and selection execute at runtime.
 The representations need no common trait, and the compiler is unchanged.

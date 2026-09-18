@@ -23,7 +23,7 @@ fn indexed() -> ir::Module {
             output projected as answer(a,c);
         }
     };
-    cq_index::result::compile(&source).unwrap()
+    cq_index_policy::result_demands::compile(&source).unwrap()
 }
 
 fn lower_access(expression: &mut syn::Expr) {
@@ -31,10 +31,10 @@ fn lower_access(expression: &mut syn::Expr) {
     impl VisitMut for Lower {
         fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
             if let syn::Expr::Macro(m) = expr {
-                assert_eq!(m.mac.path.segments.last().unwrap().ident, "pull_set");
+                assert_eq!(m.mac.path.segments.last().unwrap().ident, "access_to_set");
                 let access = syn::parse2(m.mac.tokens.clone()).unwrap();
-                let pipeline = cq_execution::pull::compile(&access).unwrap();
-                *expr = cq_pipeline::collect::compile(&pipeline).unwrap();
+                let pipeline = cq_access_lowering::to_pipeline::compile(&access).unwrap();
+                *expr = cq_pipeline_lowering::collect_set::compile(&pipeline).unwrap();
             } else {
                 syn::visit_mut::visit_expr_mut(self, expr);
             }
@@ -47,8 +47,8 @@ fn lower_access(expression: &mut syn::Expr) {
 fn borrowed_repeated_calls_and_standalone_host_share_set_semantics() {
     let indexed = indexed();
     let standalone = compiled::compile_indexed(&indexed).unwrap();
-    let access = syn::parse_quote!(::mini_linq::pull_set);
-    let mut body = cq_realize::hash_materialized::compile_materialized_query(
+    let access = syn::parse_quote!(::mini_linq::access_to_set);
+    let mut body = cq_relation_lowering::materialized_hash::compile_query(
         &indexed,
         &access,
         &[
@@ -58,7 +58,7 @@ fn borrowed_repeated_calls_and_standalone_host_share_set_semantics() {
     )
     .unwrap();
     let mut function =
-        cq_realize::hash_materialized::compile_materialized_callable(&indexed, &access).unwrap();
+        cq_relation_lowering::materialized_hash::compile_callable(&indexed, &access).unwrap();
     let text = body.to_token_stream().to_string();
     for observation in [
         "__stats",
@@ -99,9 +99,9 @@ fn borrowed_repeated_calls_and_standalone_host_share_set_semantics() {
 #[test]
 fn input_expressions_evaluate_once_in_declaration_order_before_local_bindings() {
     let indexed = indexed();
-    let mut body = cq_realize::hash_materialized::compile_materialized_query(
+    let mut body = cq_relation_lowering::materialized_hash::compile_query(
         &indexed,
-        &syn::parse_quote!(::mini_linq::pull_set),
+        &syn::parse_quote!(::mini_linq::access_to_set),
         &[
             syn::parse_quote!({
                 calls.push(1);
@@ -139,10 +139,10 @@ fn plain_host_accepts_named_noncopy_rows_without_ordering() {
             output reduced as answer(x);
         }
     };
-    let indexed = cq_index::result::compile(&source).unwrap();
-    let mut function = cq_realize::hash_materialized::compile_materialized_callable(
+    let indexed = cq_index_policy::result_demands::compile(&source).unwrap();
+    let mut function = cq_relation_lowering::materialized_hash::compile_callable(
         &indexed,
-        &syn::parse_quote!(::mini_linq::pull_set),
+        &syn::parse_quote!(::mini_linq::access_to_set),
     )
     .unwrap();
     lower_access(&mut function);
@@ -161,13 +161,13 @@ fn plain_host_accepts_named_noncopy_rows_without_ordering() {
 #[test]
 fn embedding_checks_input_arity_and_index_coverage() {
     let mut source = indexed();
-    let access = syn::parse_quote!(::mini_linq::pull_set);
-    let error = cq_realize::hash_materialized::compile_materialized_query(&source, &access, &[])
-        .unwrap_err();
+    let access = syn::parse_quote!(::mini_linq::access_to_set);
+    let error =
+        cq_relation_lowering::materialized_hash::compile_query(&source, &access, &[]).unwrap_err();
     assert!(error.to_string().contains("expected 2 input expressions"));
     source.indexes.clear();
     assert!(
-        cq_realize::hash_materialized::compile_materialized_query(
+        cq_relation_lowering::materialized_hash::compile_query(
             &source,
             &access,
             &[syn::parse_quote!(left), syn::parse_quote!(right)]
@@ -199,14 +199,14 @@ fn empty_and_composite_semijoin_keys_preserve_exact_existence() {
             output projected as answer(p);
         }
     };
-    let access = syn::parse_quote!(::mini_linq::pull_set);
-    let mut empty_function = cq_realize::hash_materialized::compile_materialized_callable(
-        &cq_index::result::compile(&empty).unwrap(),
+    let access = syn::parse_quote!(::mini_linq::access_to_set);
+    let mut empty_function = cq_relation_lowering::materialized_hash::compile_callable(
+        &cq_index_policy::result_demands::compile(&empty).unwrap(),
         &access,
     )
     .unwrap();
-    let mut composite_function = cq_realize::hash_materialized::compile_materialized_callable(
-        &cq_index::result::compile(&composite).unwrap(),
+    let mut composite_function = cq_relation_lowering::materialized_hash::compile_callable(
+        &cq_index_policy::result_demands::compile(&composite).unwrap(),
         &access,
     )
     .unwrap();

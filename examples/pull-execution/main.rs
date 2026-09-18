@@ -1,9 +1,9 @@
 //! Execute an already-lowered physical access plan through the supplied
-//! `pull!` stage. This example starts below the three student compiler passes.
+//! `access_to_distinct_iter!` stage. This example starts below the three student compiler passes.
 
 #![allow(clippy::clone_on_copy)] // Preserve the shape required by non-Copy schemas.
 
-use mini_linq::pull;
+use mini_linq::access_to_distinct_iter;
 
 struct TriangleProgram;
 
@@ -52,7 +52,7 @@ impl TriangleStorage {
         // The first expansion exposes Scan, Join, Filter, Project, and Distinct
         // with their intermediate bindings; the next lowers them to one result
         // iterator. Nothing is scanned until its caller requests a row.
-        pull! {
+        access_to_distinct_iter! {
             triangle(x, y, z) => (((*x).clone(), (*y).clone(), (*z).clone())) :-
             R(x, y) => for (x, y) in (self.rows0.iter()),
             S(y, z) => for (z,) in (

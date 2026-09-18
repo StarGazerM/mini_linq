@@ -77,8 +77,8 @@ current-mask preservation, conservative bounds and exact membership are semantic
 laws of the selected implementations. Rust checks operations, types and
 lifetimes, not those mathematical laws.
 
-`scan_rows` ignores its unused metadata predicate and enumerates the current
-view. Thus exact-only keys work with scan. `prune_rows` expands the predicate and
+`scan_candidates` ignores its unused metadata predicate and enumerates the current
+view. Thus exact-only keys work with scan. `prune_block_candidates` expands the predicate and
 block operations: exact-only keys reject `may_match`, and hash/sorted providers
 reject block access. The compiler neither infers capabilities from names nor
 silently replaces an explicitly chosen representation.
@@ -129,9 +129,9 @@ Rust values and return owned answers.
 
 ## Execution observations
 
-`pull` returns a distinct iterator through Pipeline. `pull_set` selects eager
-collection; `pull_stream` preserves the pre-Distinct sequence for a consumer
-that owns uniqueness. `push_set` compiles Access directly to nested Rust loops
+`access_to_distinct_iter` returns a distinct iterator through Pipeline. `access_to_set` selects eager
+collection; `access_to_support_iter` preserves the pre-Distinct sequence for a consumer
+that owns uniqueness. `access_to_set_loops` compiles Access directly to nested Rust loops
 and an exact-set sink. It can replace a set-valued Access hole, but cannot satisfy
 a demand-sensitive iterator hole by merely accepting the same tokens.
 

@@ -113,8 +113,8 @@ current physical-lowering checkpoint contains one `mini-linq` proc-macro crate,
 Syn-backed CQ, RelationalPlan, IndexRequirements, `rust_access_plan::Plan`,
 `iterator_pipeline::Pipeline`, local language checks, and tests. Its basic
 route assigns three typed compilation edges. Their implementations live in
-`crates/cq-plan/src/canonical/lower.rs`, `crates/cq-index/src/input/mod.rs`, and
-`crates/cq-realize/src/hash_inputs/mod.rs`:
+`crates/cq-query-lowering/src/written_order/lower.rs`, `crates/cq-index-policy/src/base_demands/mod.rs`, and
+`crates/cq-relation-lowering/src/base_hash/mod.rs`:
 
 1. **Basic HW1:** CQ to a complete named RelationalPlan;
 2. **Basic HW2:** RelationalPlan to IndexRequirements, preserving that entire
@@ -126,7 +126,7 @@ The third lowering returns a complete `syn::File`: its visibility-matching
 collections, construction statements, names, patterns, access expressions,
 output row, eager `build`, zero-read lazy `query`, and explicit materializer
 are already Rust.
-One expression-position `pull!` region pairs each body occurrence with its
+One expression-position `access_to_distinct_iter!` region pairs each body occurrence with its
 concrete access and the head with its output expression. The supplied pull
 pass turns it into an IteratorPipeline with named `iterN` results: explicit
 `scan`, left-deep binary `join`, `filter`, `project`, and `distinct` operators
@@ -137,7 +137,7 @@ iterator items rather than collected relations;
 generated internal `for` loops do not implement this protocol. Rust may inline
 the iterator combinators later, but pull lowering does not require fusion.
 Logical `rN` names and physical lazy `iterN` names are intentionally
-different dataflow namespaces. `pull` names the lowering strategy and
+different dataflow namespaces. `access_to_distinct_iter` names the lowering strategy and
 IteratorPipeline is its target. A later
 execution-control checkpoint supplies the push target and asks students for
 the typed lowering in Stage 2; later releases add the remaining algorithmic
@@ -198,7 +198,7 @@ Optional HW4 cumulatively edits the production grammar and passes and
 continues to use `mini_linq!`; its `hw4` feature gates only optional test
 targets. A backend alternative gets an explicit macro and typed compiler
 function when it is implemented. Cargo features do not silently change the
-semantics of `mini_linq!`, `pull!`, or another baseline macro. Tracks whose
+semantics of `mini_linq!`, `access_to_distinct_iter!`, or another baseline macro. Tracks whose
 design decisions conflict are released on separate checkpoint branches unless
 staff provides a combined contract and test suite.
 
@@ -220,22 +220,22 @@ credit.
 The project uses Rust with a procedural-macro CQ frontend. Staff supplies the
 crate configuration and direct Syn syntax definitions, including derived
 parsing and token emission. Staff also supplies the direct `mini_linq`,
-`choose_indexes`, `input_indexes`, `hash_inputs`, `pull`, and `iterator_pipeline`
+`choose_index_policy`, `base_index_demands`, `lower_base_hash`, `access_to_distinct_iter`, and `pipeline_to_distinct_iter`
 proc-macro entries. Each
 entry parses one `TokenStream` into its typed source and calls the corresponding
 typed compiler function directly. Grammar failures become span-aware `syn::Error`
 diagnostics emitted as `compile_error!`. The typed compiler function checks
 source semantics and returns the same diagnostic type; the macro entry does
 not duplicate that check. Students implement only three typed functions.
-`cq_plan::canonical::compile(&cq::Module)` returns
+`cq_query_lowering::written_order::compile(&cq::Module)` returns
 `syn::Result<relational_plan::Module>` for CQ to the exact named logical plan.
-`cq_index::input::compile(&relational_plan::Module)` returns
+`cq_index_policy::base_demands::compile(&relational_plan::Module)` returns
 `syn::Result<index_requirements::Module>` preserving that full plan and adding
 the exact requirements.
-`cq_realize::hash_inputs::compile_input_indexed(&index_requirements::Module, &syn::Path)` returns
+`cq_relation_lowering::base_hash::compile(&index_requirements::Module, &syn::Path)` returns
 `syn::Result<syn::File>` containing the complete staged Rust program and one
 expression-position
-`pull! { rust_access_plan::Plan }` region. Inside each body they inspect
+`access_to_distinct_iter! { rust_access_plan::Plan }` region. Inside each body they inspect
 the borrowed source and construct the complete target with `quote!` and
 `syn::parse2`.
 
@@ -260,7 +260,7 @@ judgment. Every public typed compilation entry calls its source's diagnostic
 in debug and release builds. Macro entries do not repeat this check. Tests and
 tools may also call it directly. Debug postconditions check the transformation
 separately; they are not the source-validation gate.
-`cq_plan::canonical::compile`, `cq_index::input::compile`, and `cq_execution::pull::compile` own nominal target
+`cq_query_lowering::written_order::compile`, `cq_index_policy::base_demands::compile`, and `cq_access_lowering::to_pipeline::compile` own nominal target
 well-formedness in postconditions. The physical endpoints return typed Rust AST nodes, while each
 local proc-macro entry parses its embedded Plan before calling the matching
 typed function. Malformed grammar and invalid source semantics both produce
@@ -269,9 +269,9 @@ violated its specified transformation.
 Students do not write a parser, printer, procedural-macro entry point, or
 parallel Rust builder API. The third pass emits actual Rust collection
 construction and access expressions rather than another descriptor language.
-A supplied `cq_execution::pull::compile` pass consumes the occurrence-annotated
+A supplied `cq_access_lowering::to_pipeline::compile` pass consumes the occurrence-annotated
 `rust_access_plan::Plan` and produces `iterator_pipeline::Pipeline`; supplied
-`cq_pipeline::iterator::compile` returns one ordinary iterator expression. The plan
+`cq_pipeline_lowering::distinct_iter::compile` returns one ordinary iterator expression. The plan
 retains binary operator and intermediate-record boundaries, while the emitted
 combinators retain resumable state. Calling `next()` or a consumer such as
 `any()` executes query traversal; `Storage::materialize` drains the root into

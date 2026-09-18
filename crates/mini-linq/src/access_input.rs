@@ -15,7 +15,7 @@ impl<S: Parse> Parse for AccessInput<S> {
             input.parse::<syn::Token![;]>()?;
             path
         } else {
-            syn::parse_quote!(mini_linq::pull_set)
+            syn::parse_quote!(mini_linq::access_to_set)
         };
         Ok(Self {
             access,

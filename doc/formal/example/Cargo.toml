@@ -11,11 +11,11 @@ publish = false
 
 [dependencies]
 cq-compose = { path = "../../../crates/cq-compose" }
-cq-plan = { path = "../../../crates/cq-plan", default-features = false, features = ["prefix", "graph"] }
-cq-index = { path = "../../../crates/cq-index", default-features = false, features = ["result"] }
-cq-execution = { path = "../../../crates/cq-execution", default-features = false, features = ["pull"] }
-cq-pipeline = { path = "../../../crates/cq-pipeline", default-features = false, features = ["iterator", "collect", "stream"] }
-cq-realize = { path = "../../../crates/cq-realize", default-features = false, features = ["hash-materialized", "hash-prefix"] }
+cq-query-lowering = { path = "../../../crates/cq-query-lowering", default-features = false, features = ["clause-prefix", "hypergraph"] }
+cq-index-policy = { path = "../../../crates/cq-index-policy", default-features = false, features = ["result-demands"] }
+cq-access-lowering = { path = "../../../crates/cq-access-lowering", default-features = false, features = ["to-pipeline"] }
+cq-pipeline-lowering = { path = "../../../crates/cq-pipeline-lowering", default-features = false, features = ["distinct-iter", "collect-set", "support-iter"] }
+cq-relation-lowering = { path = "../../../crates/cq-relation-lowering", default-features = false, features = ["materialized-hash", "prefix-hash"] }
 cq-ir = { path = "../../../crates/cq-ir" }
 mini-linq = { path = "../../../crates/mini-linq" }
 quote = "1"
