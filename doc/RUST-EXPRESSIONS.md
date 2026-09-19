@@ -1,65 +1,44 @@
-# Rust expressions in CQ
+# Rust expressions in CQ and RA planning
 
-The [runnable gallery](../examples/rust-expressions/README.md) includes 24
-queries with inputs and asserted outputs, a lazy cursor walkthrough, and six
-join schedules. It covers each implemented feature below. The separate
-[negation/aggregation examples](../examples/negation-aggregation/README.md)
-specify the optional extension, which remains unimplemented.
+CQ stores atom arguments and `if` conditions as `syn::Expr`, and `let` bindings
+as `syn::Pat` plus `syn::Expr`. Syn handles calls, methods, blocks, closures,
+match expressions, macros and generic arguments. A comparison recognizer is
+an optimization premise, not the expression grammar.
 
-CQ stores atom arguments and `if` conditions as `syn::Expr`, and stores `let`
-bindings as `syn::Pat` plus `syn::Expr`. Parsing uses Rust's grammar, including
-calls, methods, blocks, closures, match expressions, macros, and generic
-arguments. The comparison recognizer is an optimization premise, not a grammar.
+This is a CQ syntax example accepted for logical planning, not a currently
+supported end-to-end physical query:
 
-```rust
-mini_linq! {
-    struct Labels;
-    relation R(key: i32, value: String);
-    relation answer(label: String);
-    answer(format!("{key}:{label}")) :-
-        R(key, value),
-        let label = value.to_uppercase(),
-        if *key > 0 && !label.is_empty();
-}
+```text
+struct Labels;
+relation R(key: i32, value: String);
+relation answer(label: String);
+answer(format!("{key}:{label}")) :-
+    R(key, value),
+    let label = value.to_uppercase(),
+    if *key > 0 && !label.is_empty();
 ```
 
-Every rule ends with `;`, including rules with only positive atoms. A period
-is not a rule terminator. Rust expressions are parsed directly by Syn.
+Every rule ends with `;`. Bare positive arguments introduce variables;
+already-bound arguments and repeats such as `R(x,x)` impose equality. `_`
+retains an anonymous witness. `R(x), S(f(x))` matches against a computed value;
+`R(x,f(x))` can depend on an earlier field in the same occurrence.
 
-Bare arguments of a positive atom introduce variables; already-bound variables
-are equality constraints. Repeated arguments such as `R(x, x)` constrain two
-columns to the same value. `_` matches a column without naming it. Computed
-arguments are Rust expressions: `R(x), S(f(x))` matches the value of `f(x)`;
-`R(x, f(x))` checks the second column using the first column's binding.
-Atom bindings borrow input fields. Let bindings carry their Rust values;
-ordinary Rust borrowing, ownership, and trait checks still apply.
+`let PAT = EXPR` introduces fresh logical names. Lexical locals inside the Rust
+expression can shadow normally; logical names must be available before use.
+Host functions, types and constants remain Rust's responsibility. Macros are
+opaque to dependency analysis, which conservatively retains all available
+logical names and preserves their original tokens/syntax contexts.
 
-In configured `configured_program!` / `configured_callable!` realization, expressions
-read stored source and computed columns through borrows. Reading a computed
-column does not clone it; an expression that needs an owned value must explicitly
-copy or clone that value. Constructing owned result records is a separate step.
+Computed heads require a result schema declaration; it is not an input.
+Bare head types come from input columns or explicitly typed bindings. The
+compiler does not infer Rust function return types. The chosen realization
+must establish actual field borrowing, ownership and collection requirements;
+logical planning does not grant ownership or insert a universal Clone bound.
 
-`let PAT = EXPR` introduces fresh pattern bindings; it cannot shadow an existing
-logical variable. Lexical locals inside expressions can shadow them normally.
-Known logical variables must be bound before use. Host functions, constants,
-paths, and types remain Rust's responsibility. Macros are opaque to this pass:
-liveness conservatively retains the complete available environment, and their
-original tokens and syntax contexts reach rustc.
-
-A head containing computed values needs a declaration of its result column
-types, as above. That declaration is excluded from `build`/`run` input arguments.
-Bare head variables obtain their types from input columns or a simple explicitly
-typed binding such as `let label: String = ...`. The macro does not infer Rust
-function return types. Intermediate inferred types stay local; public result
-types must be nameable. Stored rows and computed columns used in materialized
-sets need `Clone`, `Eq`, and `Hash`; sorted results additionally need `Ord`.
-
-A literal argument has the normalization equation
-`R(7, x) => let k: ColumnType = 7, R(k, x)`, with a fresh `k`.
-The current implementation records this as an explicit Constant rule and uses
-exactly the same binding lowering as a typed source let. This normalization
-currently lives inside CQ-to-RA; it is not a separate nominal IR/macro boundary.
-General `f(x)` arguments cannot be hoisted like literals.
+Literal normalization is `R(7,x) → let k: ColumnType = 7, R(k,x)` for a fresh
+`k`. C-CONSTANT uses the same binding construction as a typed source `let`.
+This occurs within CQ → RA, not through another public IR. General `f(x)`
+arguments cannot be hoisted under the literal rule.
 
 ## Dependency judgments and their code
 
@@ -166,30 +145,38 @@ an independent validation of D-ATOM/D-MOVE. Authored dependency fixtures and
 all 120 permutations of a five-clause query test those premises separately.
 Lower passes inspect their own IR inputs and do not reconstruct this schedule.
 
-The default execution route keeps one lazy pull region: `build()` prepares rows
-and indexes; clauses execute when the cursor is advanced. The explicit
-materialized route evaluates each named RA result during `build()`. Their supplied
-pull continuations lower through RustAccessPlan and IteratorPipeline; an eager
-set-valued hole can instead select `access_to_set_loops!`, which emits Rust loops directly.
-Negation and aggregation
-remain the separate optional exercise; they must reuse this expression grammar.
+## Current verification boundary
 
-## Verification
+The parser/helper tests cover round trips, lexical shadowing, opaque macros,
+Rust expression ASTs and logical forward-reference rejection. The moved planning
+suites are:
 
-Parser tests cover round trips, Rust AST forms, lexical shadowing, opaque macros,
-and invalid logical forward references. Contract mutation tests remove rules,
-change expressions, reorder guards, and prune required witnesses. Executable
-tests cover computed arguments and heads, repeated String arguments, wildcards,
-destructuring lets, Rust macro wrappers, and evaluation counts. The default
-route also checks that build and cursor construction execute no query clauses.
+- [expression_planning.rs](../crates/cq-query-lowering/tests/expression_planning.rs):
+  twelve authored expression shapes under four policies, expected join orders,
+  one handwritten RA plan, all 120 clause permutations of the dependency example,
+  literal normalization and width limits.
+- [rust_expression_contracts.rs](../crates/cq-query-lowering/tests/rust_expression_contracts.rs):
+  mutated expressions/equalities, guard ordering, retained witnesses and
+  derivation re-entry.
+- [composition.rs](../crates/cq-query-lowering/tests/composition.rs):
+  selected rule families and rejection of unsupported domains.
 
-Parser and lowering tests run by default. The expression execution fixtures
-use the `compiled-workloads` feature to compile the complete public macro route.
+These inspect RA and derivations. The old compiled-expression gallery,
+materialized/lazy host APIs, runtime evaluation-count matrix and
+`compiled-workloads` feature are removed; they are not verification of the
+current physical path. Physical execution of expression-rich and YA plans is
+still unported. The current borrowed slice/map realization has separate tests
+and [actual expansion captures](ix-physical/realization-trace/review.md)
+for its admitted domain. A separate [full-CQ trace](ix-physical/query-trace/review.md)
+covers an ordinary joined query with terminal projection; it contains none of
+the expression-rich Select/Extend operations discussed here.
 
-The production planning acceptance matrix additionally covers 12 expression
-patterns under four policies. It checks expected relation orders, one fully
-handwritten RA plan, actual compiled results on six datasets, and the numbers
-of key, guard, and head evaluations against independent source-order Rust
-loops. A literal-key fixture must also enumerate fewer join pairs than its
-written Cartesian prefix. This is dependency-aware binary planning; it does
-not claim a Yannakakis certificate for queries containing general Rust.
+```sh
+cargo test -p cq-query-lowering --all-features \
+  --test expression_planning --test rust_expression_contracts --test composition
+cargo test -p cq-ir --test rust_expressions --test free_variables --test expression_syntax
+```
+
+Negation and aggregation remain optional semantic work over the same Rust
+expression syntax. Dependency-aware binary planning does not supply a YA
+certificate for arbitrary Rust computations or establish their purity.

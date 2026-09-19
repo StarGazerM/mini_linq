@@ -48,12 +48,9 @@
             "options": [
                 "cq",
                 "relational-plan",
-                "index-requirements",
-                "rust-access-plan",
-                "iterator-pipeline",
-                "final-rust"
+                "index-requirements"
             ],
-            "default": "final-rust"
+            "default": "index-requirements"
         }
     ]
 }

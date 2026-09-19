@@ -9,185 +9,68 @@ license.workspace = true
 proc-macro = true
 
 [features]
-default = ["defaults", "written-order", "clause-prefix", "hypergraph", "base-index-demands", "result-index-demands", "base-hash", "prefix-hash", "materialized-hash", "configured", "scan-candidates", "prune-block-candidates", "exact-keys", "summarized-exact-keys", "hash-witnesses", "nested-witnesses", "hash-pairs", "nested-pairs", "sort-merge-pairs", "array-hash-rows", "array-sorted-rows", "tuple-hash-rows", "tuple-sorted-rows", "array-block-rows", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"]
-hw4 = []
-compiled-workloads = ["defaults"]
-defaults = ["dep:cq-compose", "written-order", "clause-prefix", "hypergraph", "base-index-demands", "result-index-demands", "base-hash", "prefix-hash", "materialized-hash", "access-to-pipeline", "pipeline-distinct-iter", "pipeline-set"]
+default = ["logical-selection", "written-order", "clause-prefix", "hypergraph", "index-demands", "physical-selection", "physical-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists"]
+logical-selection = ["written-order", "clause-prefix", "hypergraph"]
 written-order = ["dep:cq-query-lowering", "cq-query-lowering/written-order"]
 clause-prefix = ["dep:cq-query-lowering", "cq-query-lowering/clause-prefix"]
 hypergraph = ["dep:cq-query-lowering", "cq-query-lowering/hypergraph"]
-base-index-demands = ["dep:cq-index-policy", "cq-index-policy/base-demands"]
-result-index-demands = ["dep:cq-index-policy", "cq-index-policy/result-demands"]
-base-hash = ["dep:cq-relation-lowering", "cq-relation-lowering/base-hash"]
-prefix-hash = ["dep:cq-relation-lowering", "cq-relation-lowering/prefix-hash"]
-materialized-hash = ["dep:cq-relation-lowering", "cq-relation-lowering/materialized-hash"]
-configured = ["dep:cq-relation-lowering", "cq-relation-lowering/configured"]
-borrowed-nested = ["dep:cq-relation-lowering", "cq-relation-lowering/borrowed-nested"]
-no-index-demands = ["dep:cq-index-policy", "cq-index-policy/no-demands"]
-replay-resource = ["dep:cq-native-lowering", "cq-native-lowering/rows-replay"]
-pipeline-exists = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/exists"]
-scan-candidates = ["dep:cq-native-lowering", "cq-native-lowering/candidate-scan"]
-prune-block-candidates = ["dep:cq-native-lowering", "cq-native-lowering/candidate-prune"]
-exact-keys = ["dep:cq-native-lowering", "cq-native-lowering/keys-exact"]
-summarized-exact-keys = ["dep:cq-native-lowering", "cq-native-lowering/keys-zone"]
-hash-witnesses = ["dep:cq-native-lowering", "cq-native-lowering/witness-hash"]
-nested-witnesses = ["dep:cq-native-lowering", "cq-native-lowering/witness-nested"]
-hash-pairs = ["dep:cq-native-lowering", "cq-native-lowering/pairs-hash"]
-nested-pairs = ["dep:cq-native-lowering", "cq-native-lowering/pairs-nested"]
-sort-merge-pairs = ["dep:cq-native-lowering", "cq-native-lowering/pairs-merge"]
-array-hash-rows = ["dep:cq-native-lowering", "cq-native-lowering/rows-hash"]
-array-sorted-rows = ["dep:cq-native-lowering", "cq-native-lowering/rows-sorted"]
-array-block-rows = ["dep:cq-native-lowering", "cq-native-lowering/rows-block"]
-tuple-hash-rows = ["dep:cq-native-lowering", "cq-native-lowering/rows-tuple-hash"]
-tuple-sorted-rows = ["dep:cq-native-lowering", "cq-native-lowering/rows-tuple-sorted"]
+index-demands = ["dep:cq-index-policy"]
+physical-selection = ["dep:cq-physical-selection"]
+physical-realization = ["dep:cq-physical-lowering"]
 access-to-pipeline = ["dep:cq-access-lowering", "cq-access-lowering/to-pipeline"]
 access-to-set-loops = ["dep:cq-access-lowering", "cq-access-lowering/to-set-loops"]
 pipeline-distinct-iter = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/distinct-iter"]
 pipeline-set = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/collect-set"]
 pipeline-support-iter = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/support-iter"]
+pipeline-exists = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/exists"]
 
 [dependencies]
-syn_derive.workspace = true
 proc-macro2.workspace = true
 cq-ir.workspace = true
 quote.workspace = true
 syn.workspace = true
-cq-compose = { workspace = true, optional = true }
 cq-query-lowering = { workspace = true, optional = true }
 cq-index-policy = { workspace = true, optional = true }
-cq-relation-lowering = { workspace = true, optional = true }
-cq-native-lowering = { workspace = true, optional = true }
+cq-physical-selection = { workspace = true, optional = true }
+cq-physical-lowering = { workspace = true, optional = true }
 cq-access-lowering = { workspace = true, optional = true }
 cq-pipeline-lowering = { workspace = true, optional = true }
 
 [dev-dependencies]
-cq-storage.workspace = true
-cq-query-lowering = { workspace = true, features = ["clause-prefix", "hypergraph"] }
-
-[[example]]
-name = "blocked-ya"
-path = "../../examples/blocked-ya/main.rs"
-required-features = ["configured", "scan-candidates", "prune-block-candidates", "exact-keys", "summarized-exact-keys", "hash-pairs", "array-hash-rows", "array-sorted-rows", "array-block-rows", "access-to-pipeline", "pipeline-support-iter"]
-test = true
-harness = false
-
-[[example]]
-name = "ra-execution"
-path = "../../examples/ra-execution/main.rs"
-required-features = ["hypergraph", "no-index-demands", "borrowed-nested", "replay-resource", "access-to-pipeline", "pipeline-support-iter", "pipeline-exists", "pipeline-distinct-iter", "tuple-hash-rows", "tuple-sorted-rows"]
-test = true
-harness = false
-
-[[example]]
-name = "rust-expressions"
-path = "../../examples/rust-expressions/main.rs"
-required-features = ["compiled-workloads"]
-test = true
-harness = false
-
-[[example]]
-name = "rust-expressions-planned"
-path = "../../examples/rust-expressions/planned.rs"
-required-features = ["compiled-workloads"]
-test = true
-harness = false
-
-[[example]]
-name = "negation-aggregation"
-path = "../../examples/negation-aggregation/main.rs"
-required-features = ["hw4", "defaults"]
-
-# Multi-stage tests state their full macro composition. Native boundary tests
-# instead gate individual cases so selected implementations remain executable.
+cq-example-providers.workspace = true
 
 [[test]]
-name = "staged_execution"
-required-features = ["hypergraph", "no-index-demands", "borrowed-nested", "replay-resource", "access-to-pipeline", "pipeline-support-iter", "pipeline-exists", "pipeline-distinct-iter", "tuple-hash-rows", "tuple-sorted-rows"]
+name = "physical_selection"
+required-features = ["index-demands", "physical-selection"]
 
 [[test]]
-name = "access_refinement"
-required-features = ["configured", "scan-candidates", "prune-block-candidates", "exact-keys", "summarized-exact-keys", "hash-pairs", "hash-witnesses", "nested-witnesses", "array-hash-rows", "array-block-rows", "access-to-pipeline", "pipeline-set", "pipeline-support-iter"]
+name = "physical_realization"
+required-features = ["index-demands", "physical-selection", "physical-realization", "access-to-set-loops"]
 
 [[test]]
-name = "block_access"
-required-features = ["defaults", "configured", "scan-candidates", "prune-block-candidates", "exact-keys", "summarized-exact-keys", "hash-pairs", "array-block-rows", "pipeline-support-iter"]
+name = "physical_variants"
+required-features = ["index-demands", "physical-selection", "physical-realization", "access-to-set-loops"]
+
+[[test]]
+name = "physical_query"
+required-features = ["written-order", "index-demands", "physical-selection", "physical-realization", "access-to-set-loops"]
+
+[[test]]
+name = "physical_projection"
+required-features = ["written-order", "index-demands", "physical-selection", "physical-realization", "access-to-set-loops"]
+
+[[test]]
+name = "physical_pull"
+required-features = ["written-order", "index-demands", "physical-selection", "physical-realization", "access-to-pipeline", "pipeline-distinct-iter"]
 
 [[test]]
 name = "collect_endpoints"
 required-features = ["access-to-pipeline", "pipeline-set"]
 
 [[test]]
-name = "composition"
-required-features = ["defaults"]
-
-[[test]]
-name = "macro_routing"
-required-features = ["defaults"]
-
-[[test]]
-name = "empty_bindings"
-required-features = ["defaults"]
-
-[[test]]
 name = "endpoint"
 required-features = ["access-to-pipeline", "pipeline-distinct-iter"]
 
 [[test]]
-name = "formal_counterexamples"
-required-features = ["defaults"]
-
-[[test]]
-name = "heterogeneous"
-required-features = ["configured", "scan-candidates", "prune-block-candidates", "exact-keys", "summarized-exact-keys", "hash-pairs", "nested-pairs", "array-hash-rows", "array-sorted-rows", "array-block-rows", "access-to-pipeline", "pipeline-support-iter"]
-
-[[test]]
-name = "hw4_optional"
-required-features = ["hw4", "defaults"]
-
-[[test]]
-name = "planned_queries"
-required-features = ["defaults"]
-
-[[test]]
-name = "provider_provenance"
-required-features = ["array-block-rows", "array-hash-rows"]
-
-[[test]]
-name = "reference_hygiene"
-required-features = ["compiled-workloads"]
-
-[[test]]
-name = "reusable_query"
-required-features = ["defaults"]
-
-[[test]]
-name = "rust_expressions"
-required-features = ["defaults"]
-
-[[test]]
-name = "stage_boundaries"
-required-features = ["defaults"]
-
-[[test]]
-name = "storage_traits"
-required-features = ["configured", "scan-candidates", "prune-block-candidates", "exact-keys", "summarized-exact-keys", "hash-pairs", "array-hash-rows", "array-sorted-rows", "array-block-rows", "access-to-pipeline", "pipeline-support-iter"]
-
-[[test]]
-name = "typed_relations"
-required-features = ["compiled-workloads"]
-
-[[test]]
-name = "pair_algorithms"
-required-features = ["hash-pairs", "nested-pairs", "sort-merge-pairs", "array-hash-rows", "array-sorted-rows"]
-
-[[test]]
-name = "physical_typed"
-required-features = ["configured", "tuple-hash-rows", "tuple-sorted-rows", "array-block-rows", "hash-pairs", "scan-candidates", "exact-keys", "summarized-exact-keys", "prune-block-candidates", "access-to-pipeline", "pipeline-set", "pipeline-support-iter"]
-
-[[test]]
-name = "relation_configuration"
-required-features = ["configured", "tuple-hash-rows", "hash-pairs"]
-
-[[test]]
-name = "borrowed_reads"
-required-features = ["configured", "tuple-hash-rows", "tuple-sorted-rows", "scan-candidates", "exact-keys", "access-to-pipeline", "pipeline-support-iter", "hash-pairs", "nested-pairs", "sort-merge-pairs"]
+name = "execution_models"
+required-features = ["access-to-pipeline", "access-to-set-loops", "pipeline-set"]

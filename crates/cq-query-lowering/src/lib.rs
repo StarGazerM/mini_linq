@@ -8,6 +8,12 @@ pub mod hypergraph;
 #[cfg(feature = "written-order")]
 pub mod written_order;
 
+#[cfg(all(
+    feature = "clause-prefix",
+    any(feature = "written-order", feature = "hypergraph")
+))]
+pub mod composition;
+
 #[cfg(any(feature = "clause-prefix", feature = "hypergraph"))]
 pub mod dependencies;
 #[cfg(any(feature = "clause-prefix", feature = "hypergraph"))]

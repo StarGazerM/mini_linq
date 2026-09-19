@@ -29,3 +29,27 @@ required-features = ["clause-prefix"]
 [[test]]
 name = "hypergraph"
 required-features = ["hypergraph"]
+
+[[test]]
+name = "composition"
+required-features = ["written-order", "clause-prefix", "hypergraph"]
+
+[[test]]
+name = "expression_planning"
+required-features = ["clause-prefix", "hypergraph"]
+
+[[test]]
+name = "planned_derivations"
+required-features = ["written-order", "clause-prefix", "hypergraph"]
+
+[[test]]
+name = "planned_semantics"
+required-features = ["clause-prefix", "hypergraph"]
+
+[[test]]
+name = "relational_reference"
+required-features = ["written-order", "clause-prefix"]
+
+[[test]]
+name = "rust_expression_contracts"
+required-features = ["clause-prefix", "hypergraph"]

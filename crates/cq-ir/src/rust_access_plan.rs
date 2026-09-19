@@ -4,35 +4,36 @@ use syn::{Ident, Pat, Token};
 
 use crate::{CommaList, cq, symbol_name};
 
+pub mod kw {
+    syn::custom_keyword!(bind);
+}
+
 /// A local query region whose logical occurrences are paired with their
 /// selected Rust access or output expression.
 ///
 /// This is the residual query region embedded in the complete staged Rust
-/// file. The surrounding file already declares concrete collections,
-/// builders, and the public lazy-query API; expressions in this region refer
-/// to those ordinary Rust bindings. The pull pass exposes the corresponding
+/// expression. The surrounding Rust establishes concrete storage bindings;
+/// expressions in this region refer to those ordinary Rust values. A selected
+/// pull consumer exposes the corresponding
 /// binary operators and intermediate bindings as an `IteratorPipeline`; a
 /// separate lowering composes that plan into a concrete Rust expression.
 ///
 /// ```text
 /// triangle(x, y, z) => ((x.clone(), y.clone(), z.clone(),)) :-
-///     R(x, y) => for (x, y,) in (rows0.iter()),
-///     S(y, z) => for (z,) in
+///     R(x, y) => bind (x, y,) <- (rows0.iter()),
+///     S(y, z) => bind (z,) <-
 ///         (index0.get(&(y.clone(),)).into_iter().flatten()),
 ///     T(z, x) => if (index1.contains(&(z.clone(), x.clone(),)));
 /// ```
 ///
-/// The logical query shape plus one Rust annotation on every occurrence. The
-/// generated R1 physical sources yield references, so positive variables in
-/// those plans are borrowed; keys and the owned output row explicitly
-/// dereference those bindings. The Plan language itself still accepts an
-/// arbitrary Rust source expression.
-/// The materialized route uses several regions over named row sets or index
-/// key sets. Empty headings use existence guards; a logical comparison must
+/// The logical query shape plus one Rust annotation on every occurrence.
+/// Concrete source and output expressions determine borrowing and ownership;
+/// the language accepts arbitrary Rust source expressions. Empty headings use
+/// existence guards; a logical comparison must
 /// be paired with an `if` whose variables are already bound.
 ///
 /// An empty body denotes one empty binding, so it can realize Unit without a
-/// synthetic input or an existence predicate. A `for` pattern binds either a
+/// synthetic input or an existence predicate. A `bind` pattern binds either a
 /// tuple of fresh variables or one simple identifier when exactly one is fresh.
 ///
 /// ```text
@@ -83,24 +84,30 @@ pub struct Clause {
     pub access: RustAccess,
 }
 
-/// The already-selected Rust control shape and its Rust leaves.
+/// A dependent iterable binding or a guard, with concrete Rust leaves.
+///
+/// `bind p <- (e)` extends each incoming binding with an item from `e`.
+/// The source is scoped under preceding bindings, before `p` is introduced.
+/// This syntax chooses neither loops nor iterator combinators and performs no
+/// materialization. A pull consumer evaluates the source only on demand; an
+/// eager consumer traverses it when executing the region.
 ///
 /// No `scan`, `lookup`, `contains`, storage kind, or logical-operator
 /// descriptor is repeated here. Collection types and method calls are the
 /// concrete Rust syntax in `source` and `condition`.
 ///
 /// ```text
-/// RustAccess ::= "for" RustPat "in" "(" RustExpr ")"
+/// RustAccess ::= "bind" RustPat "<-" "(" RustExpr ")"
 ///              | "if" "(" RustExpr ")"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum RustAccess {
-    #[parse(peek = Token![for])]
-    For {
-        for_token: Token![for],
+    #[parse(peek = kw::bind)]
+    Bind {
+        bind_token: kw::bind,
         #[parse(Pat::parse_multi_with_leading_vert)]
         pattern: Pat,
-        in_token: Token![in],
+        arrow_token: Token![<-],
         #[syn(parenthesized)]
         source_paren: syn::token::Paren,
         #[syn(in = source_paren)]
@@ -118,15 +125,15 @@ pub enum RustAccess {
 
 // OPTIONAL HW4 BOUNDARY: do not add negation or aggregation variants here.
 // The physical pass lowers negation to an ordinary Rust predicate in `If` and
-// aggregation to an ordinary Rust iterator expression in `For`. The supplied
+// aggregation to an ordinary Rust iterator expression in `Bind`. The supplied
 // pull pass exposes those Rust leaves as iterator operators without needing to
 // rediscover the logical clauses they implement.
 
 /// The occurrence-to-access contract in diagnostic and predicate form.
 pub mod contract {
-    /// Check logical binding availability and the selected Rust control shape.
+    /// Check logical binding availability and the dependent binding or guard.
     ///
-    /// The checker owns source-order binding and the required Rust control shape.
+    /// The checker owns source-order binding and the binding and guard requirements.
     /// Logical label expressions use the supplied lexical dependency analysis.
     /// Rust itself checks types and names inside the concrete access leaves.
     pub fn check(plan: &super::Plan) -> syn::Result<()> {
@@ -157,7 +164,7 @@ fn check_plan(query: &Plan) -> syn::Result<()> {
     for (position, clause) in query.body.iter().enumerate() {
         // OPTIONAL HW4 — STUDENT 5/6 (ANNOTATION): extend this relation when
         // BodyItem gains Negation and Aggregate. Safe negation requires `If`
-        // and binds nothing; aggregation requires `For` with its simple result
+        // and binds nothing; aggregation requires `Bind` with its simple result
         // identifier pattern and binds only that result.
         match &clause.item {
             cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
@@ -196,10 +203,10 @@ fn check_plan(query: &Plan) -> syn::Result<()> {
                         "let expression requires bound logical variables",
                     ));
                 }
-                let RustAccess::For { pattern, .. } = &clause.access else {
+                let RustAccess::Bind { pattern, .. } = &clause.access else {
                     return Err(syn::Error::new_spanned(
                         clause,
-                        "let requires a singleton Rust for access",
+                        "let requires a singleton iterable binding",
                     ));
                 };
                 check_fresh_pattern(position, pattern, &variables.iter().collect::<Vec<_>>())?;
@@ -233,19 +240,19 @@ fn check_positive_clause(
         .collect::<Vec<_>>();
 
     match (fresh.is_empty(), access) {
-        (false, RustAccess::For { pattern, .. }) => {
+        (false, RustAccess::Bind { pattern, .. }) => {
             check_fresh_pattern(position, pattern, &fresh)?;
         }
         (false, RustAccess::If { .. }) => {
             return Err(syn::Error::new_spanned(
                 access,
                 format!(
-                    "body clause {} has fresh variables and therefore requires a Rust `for` access",
+                    "body clause {} has fresh variables and therefore requires a `bind` access",
                     position + 1
                 ),
             ));
         }
-        (true, RustAccess::For { .. }) => {
+        (true, RustAccess::Bind { .. }) => {
             return Err(syn::Error::new_spanned(
                 access,
                 format!(
@@ -299,7 +306,7 @@ fn fresh_pattern_error(position: usize, pattern: &Pat, expected: &[&Ident]) -> s
     syn::Error::new_spanned(
         pattern,
         format!(
-            "Rust `for` pattern at body clause {} must be the simple tuple pattern `({expected},)`{scalar} containing exactly its fresh variables in relation-column order",
+            "`bind` pattern at body clause {} must be the simple tuple pattern `({expected},)`{scalar} containing exactly its fresh variables in relation-column order",
             position + 1
         ),
     )

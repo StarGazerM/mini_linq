@@ -1,108 +1,70 @@
-\section{A Yannakakis compilation across the languages}
+\section{An authored expansion to review}
 \label{sec:overview}
-The graph-planned, eagerly materialized composition compiles the following query,
-with all columns declared \code{i32}. Its facade chooses named-result indexes
-and eager hash realization, then invokes \code{choose_graph_or_prefix!}. Complete inputs,
-generated artifacts and assertions are in \path{doc/formal/example/src/main.rs}.
-\begin{lstlisting}
-answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
-\end{lstlisting}
-Its occurrence hyperedges and certified join tree are
-\[
- \{x,k,\mathit{tag},\mathit{unused}\}
- \xleftrightarrow{\{k,\mathit{tag}\}}
- \{k,\mathit{tag},z\}
- \xleftrightarrow{\{z\}}\{z,y\}.
-\]
-The implementation roots the tree at $T$. The separator of $R,S$ is the
-complete composite key $(k,\mathit{tag})$; $k,\mathit{tag},z$ remain necessary
-join witnesses despite being absent from the head. Only $\mathit{unused}$
-has no remaining use. The guard is admitted by the primitive-\code{i32}
-movement judgment.
+\textbf{This is an expected expansion, not output captured from the current
+compiler.} It makes the boundary in Section~\ref{sec:ix-physical-redesign}
+concrete. The fixture is a local fragment with two consuming positions in a
+larger fixed RA plan; it does not prescribe a complete query schedule.
 
-\paragraph{CQ to named RA.}
-GYO deletes private attributes and absorbs $R$ into $S$, then $S$ into $T$;
-its parent vector is $[1,2,\bot]$. Deletion here changes the analysis
-hypergraph, not the executable columns. After checking running intersection
-on the original edges, the planner pushes the guard into $T$, runs both
-semijoin sweeps, then assembles from the root:
-\begin{lstlisting}
-r0 = rename R { a -> x, b -> k, c -> tag, d -> unused };
-r1 = rename S { a -> k, b -> tag, c -> z };
-r2 = rename T { a -> z, b -> y };
-r3 = select r2 if (y > 0i32);
-r4 = semijoin r1 with r0;       // upward: S supported by R
-r5 = semijoin r3 with r4;       // upward: T supported by S
-r6 = semijoin r4 with r5;       // downward: S supported by T
-r7 = semijoin r0 with r6;       // downward: R supported by S
-r8 = project r7 keep { k, tag, x };
-r9 = natural_join r5 with r6;
-r10 = project r9 keep { k, tag, y };
-r11 = natural_join r10 with r8;
-r12 = project r11 keep { x, y };
-output r12 as answer(x, y);
-\end{lstlisting}
-Up reduces each parent using its child; Down uses the latest reduced parent
-to reduce its child. Both sweeps remove rows on the example instance.
-The frozen family $(r_7,r_6,r_5)$ has cardinalities $(3,2,3)$, and every
-remaining tuple has a complete witness for the guarded body.
+\paragraph{1. Logical plan and IX.}
+Let $H(l)=[a]$, $H(r)=[a,b]$, $H(m)=[c]$, and $H(s)=[c,d]$.
+The two operators are $j_0=l\bowtie r$ and $j_1=m\bowtie s$.
+IX records the required index on each right operand and names every use.
+The exact local RA and IX programs are \code{input.ra} and
+\code{expected.ix} in \path{doc/ix-physical/}.
+The definition $i_0$ is reusable by another occurrence requiring $r$ on
+$[0]$; an access to a pruned version of $r$ would require its own descriptor.
+Physical lowering reads these references. It does not repeat intersection
+analysis to decide which index each occurrence uses.
 
-Projection $r_8$ removes $\mathit{unused}$ and merges two input witnesses.
-Projection $r_{10}$ removes $z$, whose equality is now internal, but retains
-$(k,\mathit{tag})$ for the final join. The answer is
-$\{(1,7),(1,8),(2,9)\}$. Weakening that composite join to $k$ admits
-$(1,9),(2,7),(2,8)$; omitting the guard admits $(3,-1)$.
-The peak intermediate arity is four, counting joins before pruning.
+\paragraph{2. Selection produces Physical.}
+The host supplies $r$ as a hash-indexed relation and $s$ as an ordered-indexed
+relation. The authored physical policy binds their exact versions, the two
+slice inputs, and the required indexes to external provider instances.
+It also selects the lowering for each of the two join definitions. The complete
+bound local program is \code{expected.physical}; it retains IX and appends
+the relation, index, and lowering bindings. No loop or index construction has
+been emitted at this boundary.
+The illustrated paths stand for external definitions, not implemented exports
+or cases hardcoded into the compiler.
+Their delivered declarations determine which representation and access rules
+apply. The wire slot \code{choose_physical!} invokes the selected policy
+implementation. Its expected immediate output is \code{expected.choose.rs}:
+a call to \code{realize_physical!} containing the bound Physical program.
+This call makes the completed selection inspectable before realization begins.
 
-\paragraph{RA to index requirements and staged Rust.}
-Physical tuple fields follow lexical attribute order. The index pass
-preserves the algebra and requests exact result versions:
-\begin{lstlisting}
-indexes { @r0[0,1]; @r4[2]; @r5[1];
-          @r6[0,1]; @r6[2]; @r8[0,1]; }
-\end{lstlisting}
-For example, $z$ is field 2 of $r_4$ but field 1 of $r_5$.
-The physical pass builds membership sets for semijoins and payload maps
-for joins. Thus the same $r_6$ supplies both a set of $(k,\mathit{tag})$
-keys and a map from $z$ to $(k,\mathit{tag})$ payloads. It emits an ordinary
-Rust file with one materialized set per named result and local Access
-quotations. Surrounding Rust owns storage and index construction. The physical
-design supplement revisits these same $r_0,\ldots,r_{12}$ with provider
-construction and survivor views, preserving the exact version/key mapping.
+\paragraph{3. Realization follows the bound program.}
+The host environment supplies borrowed slices for $l,m$, a borrowed hash map
+for $r$, and a borrowed ordered map for $s$, as written in
+\code{environment.txt}.
+The map entry $(a,[b_1,\ldots,b_n])$ represents rows
+$(a,b_1),\ldots,(a,b_n)$; the ordered map has the analogous meaning.
+The exact completed target is \code{expected.rs}, reproduced in
+Section~\ref{sec:ix-physical-redesign}. The wire slot
+\code{realize_physical!} dispatches the already selected lowerings and provider
+definitions; it receives no policy. Existing relation storage realizes both
+requested indexes, so preparation binds their views without rebuilding maps.
+The Access sources contain the concrete lookups supplied by those definitions.
+The Access heads yield \code{(a,b)} and \code{(c,d)}: tuples of references
+whose values decode to logical result rows. No owned composite row or payload
+clone is needed. The two map APIs happen to share lookup spelling; this does
+not make their declarations interchangeable. Auxiliary indexes over an existing
+row source remain a separate construction example.
 
-For $r_{11}$, the local Access quotation has the following shape. Names
-are explanatory aliases; \code{clone} abbreviates qualified clone calls,
-and instrumentation is omitted.
-\begin{lstlisting}
-output(k,tag,x,y) => ((clone(k),clone(tag),clone(x),clone(y))) :-
-rows(k,tag,y) => for (k,tag,y) in left.iter(),
-rows(k,tag,x) => for (x,) in
-  index.get(&(clone(k),clone(tag))).into_iter().flatten();
-\end{lstlisting}
-The second clause binds only $x$: the composite key is already available.
-By contrast, a semijoin quotation uses \code{if index.contains(key)} and
-binds no new field, retaining each supported left tuple once.
+Obtaining provider declarations may require administrative macro callbacks.
+Therefore the completed target is not asserted to be the output of one Rust
+macro expansion. A standalone callback fixture demonstrates that mechanism;
+it does not constitute an integrated compiler trace for this query.
 
-\paragraph{Access to Pipeline to Rust.}
-Access lowers the payload join to
-\[
- \mathsf{Scan}(k,\mathit{tag},y)
- \longrightarrow\mathsf{Join}(x)
- \longrightarrow\mathsf{Project}(k,\mathit{tag},x,y)
- \longrightarrow\mathsf{Distinct}.
-\]
-The prefix order is $(k,\mathit{tag},y,x)$; Project permutes it into the
-result layout. This local permutation is separate from RA's column pruning.
-Pipeline lowering implements Scan and Project with \code{map}, Join with
-\code{flat_map}, and terminal Distinct by the selected endpoint. Here
-\code{access_to_set!} selects eager set collection, absorbing Distinct into the
-result HashSet. The iterator endpoint instead uses a seen-set filter and
-\code{once_with(...).flatten()} to delay initialization until polling.
-\code{query()} later reads the answer materialized during \code{build()}.
+\paragraph{Meaning and acceptance.}
+For $r=\{(1,10),(1,11),(2,20)\}$, $s=\{(3,30),(3,31),(4,40)\}$,
+$l=\{1\}$, and $m=\{3\}$, the observations are
+$j_0=\{(1,10),(1,11)\}$ and $j_1=\{(3,30),(3,31)\}$.
+Every matching payload must remain available; retaining one representative
+per indexed-column tuple is incorrect.
 
-The driver checks the tree, reductions, exact RA/indexes and all intermediate
-arities/counts. Both public routes and their lowered Rust run on five input
-presentations, including duplicates and individually empty relations.
-Default \code{mini_linq!} uses written-order joins without YA; both routes
-share lower languages and agree on these pure answers. Module aliases,
-typed passes and direct quotations expose each boundary while preserving defaults.
+The proposed artifact stops at concrete physical preparation and Access
+quotations. Push/pull placement is deliberately unsettled. Acceptance
+requires the compiler's actual expansion to match the expected tokens,
+ignoring only whitespace and spans, as well as preserving these results.
+The current compiler fails the index-definition/use and Physical boundaries;
+its earlier runtime tests do not establish conformance to this redesign.

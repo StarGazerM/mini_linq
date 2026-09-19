@@ -277,17 +277,6 @@ pub struct RelationInfo {
     operands: Vec<String>,
 }
 
-/// Coordinates in the right result's sorted heading of attributes also present
-/// on the left. This describes the headings and does not prescribe an index.
-pub fn shared_columns(left: &RelationInfo, right: &RelationInfo) -> Vec<usize> {
-    right
-        .heading
-        .iter()
-        .enumerate()
-        .filter_map(|(column, attribute)| left.heading.contains(attribute).then_some(column))
-        .collect()
-}
-
 /// A proc macro cannot infer a Rust function's return type; A declared result
 /// schema supplies that public API boundary; simple projections inherit types.
 pub fn output_types(program: &cq::Program, input: &RelationInfo) -> syn::Result<Vec<syn::Type>> {

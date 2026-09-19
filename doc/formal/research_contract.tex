@@ -1,0 +1,70 @@
+\section{Pass contracts and acceptance}
+\label{sec:research-contract}
+Each language has syntax, a well-formedness judgment and a meaning independent
+of the pass producing it. For a selected implementation $f$, require
+\[
+ \mathsf{WF}_L(s)\land\mathsf{Domain}_f(s,\chi)
+ \quad\Longrightarrow\quad
+ f(s,\chi)=t\ \land\ \mathsf{WF}_M(t)
+ \ \land\ \alpha(\sem t_M)=\sem s_L.
+\]
+$\chi$ is explicit configuration and $\alpha$ relates the target observation
+to the source meaning. An unmet domain premise must be diagnosed. A pass must
+follow the stated boundary: physical expansion cannot replace IX's explicit
+use references with independently reconstructed index analysis.
+
+\paragraph{Open physical configuration.}
+$\Omega$ supplies external provider definitions and $\eta$ is the replaceable
+physical-selection policy. Selection produces Physical IR
+$P=(\mathrm{IX},\Phi,\Lambda)$, where $\Phi=(\Phi_R,\Phi_I)$ binds relation
+and index identities to provider instances and $\Lambda$ selects a lowering
+for every RA definition. External host inputs have relation bindings but no
+separate lowering entry. Realization receives $P$, dispatches its recorded
+choices and establishes the compiled relation/view environment $\Gamma$.
+It does not invoke $\eta$ or reselect a provider. No global provider alias or
+compiler-owned data-structure enumeration replaces these maps.
+
+The proposed macro API slots are \texttt{choose\_physical!} for
+IX $\to$ Physical and \texttt{realize\_physical!} for
+Physical $\to$ Rust[Access]. Import aliases select their implementations.
+The compatibility premises of a provider or lowering are domain obligations;
+Rust subsequently checks applicable types and lifetimes. This contract does
+not posit a generic decision procedure for arbitrary semantic laws.
+
+\paragraph{Residual syntax and ownership.}
+An expansion can return $C[h_1,\ldots,h_n]$, an ordinary Rust context containing
+lower-language quotations. Each hole records a remaining compilation task.
+A selected provider may emit concrete Rust construction and access expressions;
+a generic runtime relation-call layer is not mandatory. Provider instances
+must agree on storage, field interpretation, current views and ownership.
+Physical values may be borrowed rows, tuples of references or other supported
+representations. Provider callbacks pending during realization are
+administrative expansion steps, not another mandatory public IR stage. Any
+retained semantic provider dialect needs its own syntax and laws. Rust type
+checking alone does not establish the representation laws.
+
+\paragraph{Three independent checks.}
+Acceptance requires
+\[
+ \mathsf{RuleDerivation}(s,t)\ \land\
+ \mathsf{ExpectedExpansion}(s,t)\ \land\
+ \mathsf{SemanticAgreement}(s,t).
+\]
+The first checks compilation premises and conclusions. The second compares
+each actual macro output with its authored boundary fixture, ignoring only
+whitespace and source spans. The third checks representation laws and answers
+with independent oracles. Equal answers cannot compensate for global provider
+replacement, hardcoded dispatch, reselection during realization or an omitted
+boundary. Fixtures are revised
+through design review, never regenerated merely to bless changed output.
+
+\paragraph{Observation and status.}
+RA denotes sets. Physical enumeration may contain multiple witnesses; its
+consumer must implement the requested observation. Pure completed answers do
+not establish equal partial-consumption, callback or destructor traces. Host
+quotation requires binding, typing and lifetime preservation and the assumptions
+of Section~\ref{sec:scope}. Push/pull placement remains unspecified.
+Section~\ref{sec:ix-physical-redesign} specifies the implemented driver and its
+first exact-index domain. Current-source macro captures and independent answers
+validate that instance. Documentation checks alone do not establish arbitrary
+provider laws or admit the unported stored-intermediate and block/YA cases.

@@ -1,194 +1,63 @@
-# Borrowed execution through the existing compiler stages
+# Borrowed heterogeneous realization
 
-The `ra-execution` example compiles one `Star` query through the same stage APIs
-as the other indexed routes. It selects an empty index policy and a borrowed
-scan realization. All query iterator operators are emitted by the shared
-Pipeline compiler. Input access and replay storage remain Native operations.
+The current implementation realizes an open Rust expression through
+`RA → IX → Physical → Rust[Access]`. The
+[runnable composition example](../examples/composition/README.md) supplies the
+host function and immutable inputs. See the [design](IX-PHYSICAL-REDESIGN.md)
+and [provider protocol](PROVIDER-PROTOCOL.md) for the contracts.
 
-```text
-query!                      CQ → RA
-choose_index_policy!        RA → IX with indexes {}
-choose_relation_lowering!   IX → Rust containing Access and Native calls
-  replay_resource!          Native Build → storage construction around Access
-  access_to_support_iter!   Access → Pipeline → pipeline_to_support_iter! → support iterator
-  access_to_exists!         Access → Pipeline → pipeline_to_exists! → first-witness bool
-  access_to_distinct_iter!  Access → Pipeline → pipeline_to_distinct_iter! → distinct iterator
-```
+| Object | Concrete example |
+|---|---|
+| First input | `&[T]` with `slice_rows!` |
+| Second input/index | `&HashMap<K, Vec<V>>` with `hash_relation!` |
+| Third input/index | `&BTreeMap<K, Vec<V>>` with `sorted_relation!` |
+| Result carrier | `borrowed_fields!`, or a caller-defined Output macro |
+| Binary RA rule | `indexed_join!` selected independently for each result |
+| Terminal projection rule | `project!` delegates the projected carrier to the recorded result provider |
+| Access consumer | Explicit caller import, `access_to_set_loops!` in the runnable example |
 
-The indented entries are local macro invocations inside the physical output.
-They are not extra whole-query languages. Native Scan expands to an owning
-replay cursor; input Type, Scan and Field expand through each relation's provider.
+IX names the exact index for each join position. Physical records providers and
+rules before realization starts. The driver carries those choices through
+administrative callbacks without interpreting provider names. Direct Rename
+asks the selected result provider to establish a typed borrowed alias. Index
+realization reuses the existing map when its physical first column corresponds
+to the written IX columns.
 
-## API names and selected implementations
+Rows and Matches return Access fragments plus logical field expressions.
+Results retain references to caller-owned values; neither the driver nor the
+example providers require payload `Clone`. A previous left join result remains
+Access syntax and can be composed into the next join. It is not allocated as a
+runtime relation or implicitly collected. Indexing such an intermediate region
+is unsupported today and rejects.
 
-| Caller-facing binding | Selected implementation | Exact boundary |
-| --- | --- | --- |
-| `mini_linq::query` | `cq_to_ra_hypergraph` | CQ → planned named RA |
-| `mini_linq::choose_index_policy` | `no_index_demands` | RA → IX, preserving RA and writing no demands |
-| `mini_linq::choose_relation_lowering` | `lower_borrowed_nested` | IX → staged Rust with Access/Native holes |
-| `mini_linq::inputs::Facts`, `Tags` | `tuple_hash_rows` | Native Type/Scan/Field on caller-owned tuple sets |
-| `mini_linq::inputs::Allowed` | `tuple_sorted_rows` | Same operations on a caller-owned sorted set |
-| `mini_linq::access_to_support_iter` | `access_to_support_iter` | Access → Pipeline, selecting `pipeline_to_support_iter` |
-| `mini_linq::access_to_exists` | `access_to_exists` | Access → Pipeline, selecting `pipeline_to_exists` |
-| `mini_linq::access_to_distinct_iter` | `access_to_distinct_iter` | Access → Pipeline, selecting `pipeline_to_distinct_iter` |
-| `mini_linq::replay_resource` | `replay_resource` | Native Build/Scan → selected storage traits |
-| `mini_linq::storage` | `cq_storage` | `BuildReplay`, `ReplayRead`, `Replay` |
+The final region must expose the normalized logical heading in sorted order;
+current output metadata uses that same order. A caller-defined result provider
+can choose a nested carrier while preserving that field map. Borrowing and
+lifetimes remain checked by Rust.
 
-These bindings are ordinary Rust imports. The example and selected feature list
-are in [main.rs](../examples/ra-execution/main.rs) and
-[the frontend manifest](../crates/mini-linq/Cargo.toml). No helper macro changes a
-stage's input language. The planner's `choose_index_policy` continuation now invokes
-an actual RA-to-IX pass.
-
-The frontend's replay defaults are symbolic paths `mini_linq::storage` and
-`mini_linq::access_to_support_iter`. Existing Native administrative `storage`/`access_iter`
-options can override those paths. Typed compiler clients supply explicit macro
-paths in `borrowed_nested::Options`; the implementation never calls another
-compiler family directly.
-
-## Input domain and borrowed API
-
-`lower_borrowed_nested` admits a checked IX module with an empty overlay, and RA
-Unit, Rename, Project, NaturalJoin and Semijoin. Output arguments must be bound
-variables; reordering and repetition are allowed. Select, Extend, computed
-outputs, invalid provider bindings and nonempty index requirements are rejected.
-It does not erase written demands or silently choose a different representation.
-
-For the example, the generated API has borrowed input parameters and returns
-`impl Iterator<Item = (&String, &i32)>` tied to their lifetime. Input providers
-must implement Native Type, Scan and Field and expose stable fields in
-caller-owned storage. Rust rejects a field reference into temporary traversal
-state. Tuple hash/sorted providers satisfy this contract; choosing a container
-does not turn the selected nested matching into hash or merge join.
-
-The physical pass constructs internal logical rows as tuples of field
-references in sorted heading order. Projection, tuple retention and replay copy
-those references. They do not clone payloads. Matching shared fields requires
-equality, and the final distinct tuple requires `Eq` and `Hash` for its referenced
-values. Intermediate support streams add no payload `Clone`, `Eq` or `Hash`
-requirement beyond operations that actually inspect those fields. Input storage
-can impose its own separate requirements.
-
-## Operator-to-region rules
-
-The following table describes emitted Access regions; it is not a substitute
-for a captured macro expansion.
-
-| RA operator | Access region | Observation |
-| --- | --- | --- |
-| Unit | Empty body, output `()` | One empty binding |
-| Rename | One Native input scan, output borrowed fields in result order | Support stream |
-| Project | One predecessor scan, output selected reference coordinates | Support stream |
-| NaturalJoin | Two predecessor scans followed by shared-coordinate equality | Support stream of merged reference tuples |
-| Semijoin | Left scan and an `if` containing a right-side Access region | `access_to_exists` stops at the first compatible right row |
-| Output | One result scan and head-order projection | Distinct answer iterator |
-
-Each region is parsed as `cq_ir::rust_access_plan::Plan` and checked before
-emission. It then goes through `cq_access_lowering::to_pipeline::compile` to the existing
-linear `IteratorPipeline`. The shared operator emitter supplies all `map`,
-`flat_map`, filtering and projection code. The existence endpoint omits only the
-terminal Distinct, retains every preceding operator, and polls once for a witness.
-It returns a boolean rather than a stream or collected set.
-
-Two small changes belong to the existing Access contract:
-
-- The body can be empty: `out() => (()) :- ;` denotes one empty binding.
-- When a positive occurrence introduces exactly one fresh variable, `for row in
-  (...)` may use that identifier. Tuple patterns still bind exactly the fresh
-  variables in occurrence order. This avoids an artificial row-wrapping `map`.
-
-Both execution implementations and Pipeline already support the corresponding
-Unit and identifier-binding forms. The parser, validity rules, fixtures and
-teaching grammar now agree on them.
-
-## Sharing and storage
-
-Let `uses(r)` count direct operand occurrences plus the output occurrence. The
-physical implementation retains `r` when `uses(r) > 1` or `r` is a join/semijoin
-right operand. The latter can need many cursors even with one written use.
-Definitions are emitted once in checked topological order. Other streams move
-to their sole consumer.
-
-A retained definition emits Native `build { AccessPlan }`. `replay_resource` preserves
-the Access quotation and constructs storage through `BuildReplay::replay` after
-the selected Access/Pipeline stages have supplied its lazy iterator. Native
-`scan(value)` calls `ReplayRead::cursor(&value)`. This uses existing Native
-Build/Scan meanings; it does not repurpose Materialize or add an operation.
-
-The storage interface is deliberately small:
-
-```rust
-trait ReplayRead: Clone {
-    type Item: Copy;
-    type Cursor: Iterator<Item = Self::Item>;
-    fn cursor(&self) -> Self::Cursor;
-}
-trait BuildReplay<I>: ReplayRead<Item = I::Item>
-where
-    I: Iterator,
-    I::Item: Copy,
-{
-    fn replay(source: I) -> Self;
-}
-```
-
-The concrete data structure privately retains an optional source iterator and
-a produced prefix in shared `Rc<RefCell<_>>` state. Each cursor owns a share and
-an independent position. Handles clone the `Rc`, without cloning the source or
-payload. A cache hit returns a copied reference tuple; a frontier request polls
-the source once and appends its next item. First exhaustion drops the source
-and permanently stops its polling. Cached occurrences remain available.
-
-The invariant is: the cache is exactly the prefix produced by the one upstream
-enumeration, and each cursor has observed the prefix up to its own position.
-Hit, append and exhaustion preserve it. With stable finite input values and
-lawful comparisons, topological induction over the local Access regions gives
-the same relational support; final distinctness yields the RA answer set.
-This does not assert equality of scan counters or arbitrary side-effect traces.
-
-Dependencies point to earlier RA definitions. Owning handles therefore form no
-cycle, and a source poll cannot recursively borrow its own replay state. A
-returned item borrows caller storage, not the mutable cache. It remains valid
-after the cursor/cache is dropped while its input borrow remains valid.
-
-## Demand, costs and limits
-
-Constructing the query can allocate adapters and replay state, but evaluates no
-provider Scan/Field expression. The support and iterator endpoints defer their
-Access sources until a poll. `next`, `any` and `fold` execute query work without
-collecting final answers. Semijoin existence stops after its first witness;
-dropping a query schedules no further polls, although ordinary Rust destructors
-can run.
-
-Replay is incremental intermediate materialization. Prefixes can grow to full
-enumerations, preserve duplicate occurrences and remain retained for later
-cursors. The implementation performs no eviction and uses non-`Send` `Rc` state.
-Nested matching still repeats comparisons over cached tuples. These are explicit
-costs, not a claim of optimal YA execution, constant space or measured speedup.
-
-The configured relation route still provides block pruning, key resources,
-Select/Extend and complete pair algorithms. The hash routes still implement
-their admitted index demands. The borrowed scan implementation does not replace
-those distinct domains. Eager `access_to_set_loops` remains an alternative at a compatible
-set-valued Access hole; it is not a replacement for a lazy support contract.
-
-## Reproduction and expansion review
+The integrated tests exercise independent join oracles, non-Clone field pointer
+identity, empty/missing matches, mixed providers, reversed Rename ordinals,
+caller-defined macros, name hygiene and incompatible selections. Actual
+expansion checks distinguish the initial Physical call from its many provider
+callbacks and the completed Access result.
 
 ```sh
-cargo run -p mini-linq --no-default-features \
-  --features hypergraph,no-index-demands,borrowed-nested,replay-resource,access-to-pipeline,pipeline-support-iter,pipeline-exists,pipeline-distinct-iter,tuple-hash-rows,tuple-sorted-rows \
-  --example ra-execution --locked
-
-python3 tools/trace_macros.py --example ra-execution \
-  --features hypergraph,no-index-demands,borrowed-nested,replay-resource,access-to-pipeline,pipeline-support-iter,pipeline-exists,pipeline-distinct-iter,tuple-hash-rows,tuple-sorted-rows \
-  --out target/renamed-execution-review-final --declarative
+cargo test -p mini-linq --no-default-features \
+  --features index-demands,physical-selection,physical-realization,access-to-set-loops \
+  --test physical_realization --test physical_variants
 ```
 
-The capture records each actual macro input and immediate output, preserving
-Access and Pipeline invocations for inspection. Source fingerprints identify
-the compiled workspace. Expansion counts are static sites, not runtime visits.
-The generated local [annotated review](../target/renamed-execution-review-final/review.md)
-explains every captured call and its verified parent; [steps.md](../target/renamed-execution-review-final/steps.md)
-contains all complete inputs and immediate outputs for the single Star query.
-The [validation snapshot](formal/snapshot.txt) records the completed gates;
-the [formal rules](formal/staging.tex) describe replay and endpoint obligations.
+Shared replay/index storage still has independent tests in `cq-storage`, but
+this new provider family does not select it. Semijoin/YA, zone-map pruning,
+materialized intermediates, nonterminal projection, reordered/computed output
+metadata and generated host APIs
+remain migration work. Existing Access/Pipeline consumers retain their separate
+lazy/eager observation contracts; their placement in the redesigned compiler is
+not settled by this example.
+
+A separate [full-CQ trace](ix-physical/query-trace/review.md) starts at the
+written-order planner and includes its terminal projection.
+[Full-CQ tests](../crates/mini-linq/tests/physical_query.rs) compare projected
+results with independent relational enumeration over 256 input subsets;
+[stored-projection tests](../crates/mini-linq/tests/physical_projection.rs) cover
+the selected Rows request. Intermediate projection rejects explicitly.

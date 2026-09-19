@@ -1,0 +1,25 @@
+physical {
+    relations {
+        L = ::cq_example_providers::slice_rows;
+        R = ::cq_example_providers::hash_relation;
+        S = ::cq_example_providers::sorted_relation;
+        r0 = ::cq_example_providers::slice_rows;
+        r1 = ::cq_example_providers::hash_relation;
+        r2 = ::cq_example_providers::borrowed_fields;
+        r3 = ::cq_example_providers::sorted_relation;
+        r4 = ::cq_example_providers::borrowed_fields;
+        r5 = ::cq_example_providers::borrowed_fields;
+    }
+    indexes {
+        i0 = ::cq_example_providers::hash_relation;
+        i1 = ::cq_example_providers::sorted_relation;
+    }
+    lowerings {
+        r0 = ::cq_example_providers::rename;
+        r1 = ::cq_example_providers::rename;
+        r2 = ::cq_example_providers::indexed_join;
+        r3 = ::cq_example_providers::rename;
+        r4 = ::cq_example_providers::indexed_join;
+        r5 = ::cq_example_providers::project;
+    }
+}

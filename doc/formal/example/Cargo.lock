@@ -14,17 +14,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-compose"
-version = "0.1.0"
-dependencies = [
- "cq-index-policy",
- "cq-ir",
- "cq-query-lowering",
- "cq-relation-lowering",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-access-lowering"
 version = "0.1.0"
 dependencies = [
@@ -55,16 +44,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-native-lowering"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-pipeline-lowering"
 version = "0.1.0"
 dependencies = [
@@ -87,57 +66,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-relation-lowering"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
- "cq-compose",
  "cq-access-lowering",
- "cq-index-policy",
  "cq-ir",
- "cq-native-lowering",
  "cq-pipeline-lowering",
- "cq-query-lowering",
- "cq-relation-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "syn_derive",
 ]
 
 [[package]]
 name = "mini-linq-paper-overview"
 version = "0.0.0"
 dependencies = [
- "cq-compose",
- "cq-access-lowering",
  "cq-index-policy",
  "cq-ir",
- "cq-pipeline-lowering",
  "cq-query-lowering",
- "cq-relation-lowering",
  "mini-linq",
- "prettyplease",
  "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "prettyplease"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
-dependencies = [
- "proc-macro2",
  "syn 2.0.119",
 ]
 

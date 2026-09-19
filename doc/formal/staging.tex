@@ -1,455 +1,130 @@
-\section{Local cursor semantics and staged composition}
+\section{Access meaning and deferred scheduling}
 \label{sec:cursor}
-\subsection{Finite successful polls}
-Write $g\Downarrow_{ij}^{\alpha}(b,g')$ for
-$\langle g,\sigma_i\rangle\Downarrow_G(b,g',\sigma_j,\alpha)$;
-Similarly $e\Downarrow_{H,ij}^{\alpha}v$ abbreviates
-$\langle e,\sigma_i\rangle\Downarrow_H(v,\sigma_j,\alpha)$, and
-$z\Downarrow_{N,ij}^{\alpha}(b,z')$ abbreviates iterator next.
-Let $v^+$ mean Some($v$), and $\bot$ mean None. Clients stop at first None.
-For compactness, constructors Done, One, Source, Map, Filter, Distinct,
-FlatSeek, FlatRun, Delay are written respectively
-$D,O(v),S(z),M_f(g),F_p(g),X_U(g),Q_f(g),A_{f,z}(g),Z(e)$.
-Closures include their environments. These rules describe finite successful
-polls; missing derivations distinguish neither panic nor divergence.
-Constructing a delayed cursor is separate from these polls: it may initialize
-closure, adapter and bookkeeping state. A client can request one answer or stop
-at an existential witness without materializing a result collection. Draining
-the cursor and retaining its answers are separate observations; collection is
-one consumer, not a prerequisite for cursor execution. Nested cursor structure
-does not by itself imply eager traversal or memoization of shared RA results.
-\newcommand{\gp}[5]{#1\Downarrow_{#2}^{#3}(#4,#5)}
-\newcommand{\np}[5]{#1\Downarrow_{N,#2}^{#3}(#4,#5)}
-\newcommand{\hp}[4]{#1\Downarrow_{H,#2}^{#3}#4}
-\begin{mathpar}
+An Access region contains concrete source and lookup expressions after physical
+realization. Its meaning is dependent enumeration. Let $\nu$ be the current
+binding environment, $h$ the output expression, and $\bar a$ the remaining
+clauses. For finite pure host evaluations, define its output support by
+\[
+\begin{aligned}
+ \mathcal E(\emptyseq,h,\nu)
+   &=\{\sem h_\nu\},\\
+ \mathcal E((p\leftarrow e)\concat\bar a,h,\nu)
+   &=\bigcup_{v\in\sem e_\nu}
+       \mathcal E(\bar a,h,\nu[p\mapsto v]),\\
+ \mathcal E((\mathsf{if}\ e)\concat\bar a,h,\nu)
+   &=\begin{cases}
+       \mathcal E(\bar a,h,\nu),&\sem e_\nu=\mathsf{true},\\
+       \varnothing,&\sem e_\nu=\mathsf{false}.
+      \end{cases}
+\end{aligned}
+\]
+The $p\leftarrow e$ abbreviation denotes \code{bind p <- (e)}; its source may
+depend on earlier bindings. In the exact-map fixture a lookup depends on the
+left binding. A block realization can instead expose a descriptor, metadata
+guard, and surviving payload traversal. These are Access regions assembled by
+the selected lowering, not one universal row-loop template. A logical join has already been
+realized as dependent bindings at this boundary; the consumer must not reconstruct join columns or
+choose a different index.
 
-\Rule{G-Done}{}{\gp{D}{00}{\emptyseq}{\bot}{D}}
+\paragraph{What is deliberately undecided.}
+This support semantics does not choose lazy polling, eager loops, materialization,
+or the placement of a push transformation. A lazy implementation must additionally
+specify construction and polling observations: constructing a cursor need not
+read its source, and stopping after one answer need not exhaust it. An eager
+implementation must specify when it consumes inputs. Equal final sets alone do
+not equate those behaviors for partial consumers or observable effects.
+Likewise, support preservation alone cannot prove that a rejected block is
+never opened. A provider promising skipped payload reads must establish that
+operational observation and its required evaluation order separately.
+The IX physical contract stops at the concrete Access quotation. This document
+does not prescribe a canonical Access/Pipeline/push ordering while that design
+question is open.
 
-\Rule{G-One}{}{\gp{O(v)}{00}{\emptyseq}{v^+}{D}}
+The supplied pull implementation lowers each Access binding to a named Pipeline
+\code{scan} or dependent \code{join}; guards become \code{filter}. These are
+definitions of lazy streams, not calls nested into earlier stream expressions.
+Only Pipeline-to-Rust introduces query-composition adapters such as
+\code{flat_map}. A provider may still use adapters internally to decode one
+storage representation, such as the payload buckets of a map. That local
+enumeration does not compose query inputs or evaluate a later Access binding.
 
-\Rule{G-Source}{\np{z}{01}{\alpha}{v^+}{z'}}
- {\gp{S(z)}{01}{\alpha}{v^+}{S(z')}}
-
-\Rule{G-Map}{\gp{g}{01}{\alpha}{v^+}{g'}\quad\hp{f(v)}{12}{\beta}{w}}
- {\gp{M_f(g)}{02}{\alpha\concat\beta}{w^+}{M_f(g')}}
-
-\Rule{G-Keep}{\gp{g}{01}{\alpha}{v^+}{g'}\quad\hp{p(v)}{12}{\beta}{\mathsf{true}}}
- {\gp{F_p(g)}{02}{\alpha\concat\beta}{v^+}{F_p(g')}}
-
-\Rule{G-Skip}{\gp{g}{01}{\alpha}{v^+}{g'}\quad\hp{p(v)}{12}{\beta}{\mathsf{false}}\\
- \gp{F_p(g')}{23}{\gamma}{b}{h}}
- {\gp{F_p(g)}{03}{\alpha\concat\beta\concat\gamma}{b}{h}}
-
-\Rule{G-Enter}{\gp{g}{01}{\alpha}{v^+}{g'}\quad\hp{f(v)}{12}{\beta}{z}\\
- \gp{A_{f,z}(g')}{23}{\gamma}{b}{h}}
- {\gp{Q_f(g)}{03}{\alpha\concat\beta\concat\gamma}{b}{h}}
-
-\Rule{G-Inner}{\np{z}{01}{\alpha}{v^+}{z'}}
- {\gp{A_{f,z}(g)}{01}{\alpha}{v^+}{A_{f,z'}(g)}}
-
-\Rule{G-NextOuter}{\np{z}{01}{\alpha}{\bot}{z'}\quad\gp{Q_f(g)}{12}{\beta}{b}{h}}
- {\gp{A_{f,z}(g)}{02}{\alpha\concat\beta}{b}{h}}
-
-\Rule{G-Fresh}{\gp{g}{01}{\alpha}{v^+}{g'}\quad v\notin U}
- {\gp{X_U(g)}{01}{\alpha}{v^+}{X_{U\cup\{v\}}(g')}}
-
-\Rule{G-Seen}{\gp{g}{01}{\alpha}{v^+}{g'}\quad v\in U\quad\gp{X_U(g')}{12}{\beta}{b}{h}}
- {\gp{X_U(g)}{02}{\alpha\concat\beta}{b}{h}}
-
-\Rule{G-Stop}{\gp{g}{01}{\alpha}{\bot}{g'}\quad C\in\{M_f,F_p,X_U,Q_f\}}
- {\gp{C(g)}{01}{\alpha}{\bot}{D}}
-
-\Rule{G-SourceStop}{\np{z}{01}{\alpha}{\bot}{z'}}
- {\gp{S(z)}{01}{\alpha}{\bot}{D}}
-
-\Rule{G-Delay}{\hp{e}{01}{\alpha}{g}\quad\gp{g}{12}{\beta}{b}{g'}}
- {\gp{Z(e)}{02}{\alpha\concat\beta}{b}{g'}}
-\end{mathpar}
-Distinct's abstract set assumes silent lawful clone/hash/equality
-(Definition~\ref{def:host}). Delay constructs its cursor on first demand;
-dropping causes no further polls, while Rust destructors require host adequacy.
-Access denotes Delay of nested loops: first For gives Source/Map; first If
-gives One($()$)/Filter; later For uses FlatSeek and later If Filter. The head
-adds Map and final Distinct with empty seen set, independently of label truth.
-\subsection{Demand replay behind Native storage operations}
-The borrowed scan realization preserves the existing IX, Access and Pipeline
-boundaries. It emits each named RA definition once. Let $u(r)$ count direct
-operand and output occurrences, including both operands of a self-join. A
-result is retained iff $u(r)>1$ or it is a join/semijoin right operand; other
-streams move to their sole consumer. Retention emits Native Build containing
-an Access region. The selected native implementation invokes the selected
-Access continuation and constructs a replay resource through the
-\code{BuildReplay} trait. Native Scan uses \code{ReplayRead::cursor}.
-Thus producer control is lowered by Access and Pipeline, and private replay
-state belongs to a generic data structure rather than the physical compiler.
-
-A retained stream has state $h=(s,B)$, where $s$ is an optional upstream cursor
-and $B$ its finite produced prefix. Each consumer owns an independent offset
-$i$, initially zero, with $0\leq i\leq |B|$. Write
-$\operatorname{poll}(\mathsf{none})=(\bot,\mathsf{none})$; polling a present source
-delegates to its next operation and clears it at the first None. The shared
-state transition for one cursor is:
-\begin{mathpar}
-\Rule{RP-Hit}{i<|B|}
- {((s,B),i)\longrightarrow(B_i,((s,B),i+1))}
-
-\Rule{RP-Append}{i=|B|\quad\operatorname{poll}(s)=(v^+,s')}
- {((s,B),i)\longrightarrow(v,((s',B\concat[v]),i+1))}
-
-\Rule{RP-End}{i=|B|\quad\operatorname{poll}(s)=(\bot,\mathsf{none})}
- {((s,B),i)\longrightarrow(\bot,((\mathsf{none},B),i))}
-\end{mathpar}
-Other cursors' offsets do not change. RP-Hit performs no upstream poll;
-RP-Append retains exactly the next occurrence, including duplicates. RP-End
-releases upstream state and prevents subsequent polling. The concrete
-\code{Replay<I>} privately stores an optional source and a prefix using
-\code{Rc}/\code{RefCell}; \code{ReplayCursor<I>} owns its handle and position.
-The trait requires Copy items. In the borrowed route these are tuples of
-references into caller storage, so copying a tuple never clones its payload.
-
-\paragraph{Invariant and scope.}
-Induction on these transitions shows that $B$ is a prefix of the one upstream
-enumeration and every cursor observes that enumeration from its own offset.
-Under finite stable providers and pure lawful field equality, topological
-induction over the emitted Access regions preserves each RA operator's support.
-The final distinct Pipeline endpoint therefore returns the RA answer set.
-This is value correctness, not equality of instrumentation or effect traces.
-State dependencies point to earlier definitions, so they form no ownership
-cycle and a source poll cannot recursively borrow its own replay state.
-The selected stream/iterator endpoints defer source construction; replay
-construction itself performs no upstream poll. Existence stops at its first
-witness. Nested matching still repeats comparisons, retained prefixes can grow
-large, and \code{Rc} makes replay-bearing queries non-\code{Send}.
-
-\subsection{Access-to-Pipeline inference rules}
-State $(\bar B,s,D,n)$ records ordered bindings, stream, definitions, and next
-number; $s_n=\code{iter}n$. Tuple patterns/expressions use binding order.
-The rules preserve Rust leaves:
-\begin{mathpar}
-
-\Rule{IP-Root}{a_0=\ell\Rightarrow\mathsf{for}\ p\ \mathsf{in}\ e\quad\bar N=\binds(p)}
- {a_0\Downarrow_{\rm IP}(\bar N,s_0,[s_0=\mathsf{Scan}(p,e,(\bar N))],1)}
-
-\Rule{IP-Seed}{\bar a=\emptyseq\ \lor\ a_0\text{ is If}}
- {\operatorname{start}(\bar a)\Downarrow_{\rm IP}(\emptyseq,s_0,[s_0=\mathsf{Unit}(())],1)}
-
-\Rule{IP-Join}{a=\ell\Rightarrow\mathsf{for}\ q\ \mathsf{in}\ e\quad\bar N=\binds(q)}
- {(\bar B,s,D,n;a)\Rightarrow_{\rm IP}
- (\bar B\concat\bar N,s_n,D\concat[s_n=\mathsf{Join}(s,(\bar B),q,e,(\bar B\concat\bar N))],n+1)}
-
-\Rule{IP-Filter}{a=\ell\Rightarrow\mathsf{if}\ e}
- {(\bar B,s,D,n;a)\Rightarrow_{\rm IP}
- (\bar B,s_n,D\concat[s_n=\mathsf{Filter}(s,(\bar B),e)],n+1)}
-
-\Rule{IP-Output}{\text{all clauses consumed}}
- {(\bar B,s,D,n;e_h)\Rightarrow_{\rm IP}
- D\concat[s_n=\mathsf{Project}(s,(\bar B),e_h);
- s_{n+1}=\mathsf{Distinct}(s_n);\mathsf{return}\ s_{n+1}]}
-\end{mathpar}
-Root consumes first For; Seed consumes nothing before folding a first If.
-It also handles parsed empty-body plans, which denote one empty binding.
-\begin{theorem}[Access lowering]
-On well-formed Access plans, IP lowering preserves
-binding well-formedness and finite successful abstract poll derivations.
-\end{theorem}
-\begin{proof}
-Induct on clauses. AC-For/Bind gives distinct fresh names, including empty
-Bind; Root/Seed establishes stream 0. Join concatenates bindings, Filter
-preserves them, and each consumes the preceding stream. Output supplies the
-unique Project/Distinct. Relate each Access prefix to that pipeline stream:
-Root/Seed uses the same Source/Map or One, Join the same FlatSeek closure,
-and Filter the same predicate. Corresponding polls therefore have identical
-callbacks and related residual cursors. Output adds identical Map/Distinct;
-Delay postpones both constructions. This bisimulation covers finite successful
-partial demand, not failed/divergent execution or Rust representation adequacy.
-\end{proof}
-
-\subsection{Access directly to an eager set}
-The alternative \code{access_to_set_loops!} entry lowers the same checked Access syntax to
-nested Rust control flow and one HashSet sink $S$. Let $E_B(\bar a,h,S)$ compile
-remaining clauses $\bar a$, head $h$, and incoming ordered bindings $B$:
-write $L(\bar a,h)$ for conservative backwards liveness. It starts with the
-head's free query names; an If adds its predicate's dependencies, and a For
-removes its introduced names before adding its source dependencies. Opaque Rust
-expressions conservatively depend on the whole query binding environment.
-\begin{mathpar}
-\Rule{PS-Done}{}{E_B([],h,S)=\mathsf{S.insert}(h)}
-\and
-\Rule{PS-For}{N=\binds(p)\quad V=B\cap L(\bar a,h)}
- {E_B(\mathsf{for}\ p\ \mathsf{in}\ e;\bar a,h,S)=\\
- \mathsf{for}\ p\ \mathsf{in}\ e\ \{
- \operatorname{copies}(V);E_{B\concat N}(\bar a,h,S)\}}
-\and
-\Rule{PS-If}{}
- {E_B(\mathsf{if}\ e;\bar a,h,S)=
- \mathsf{if}\ e\ \{E_B(\bar a,h,S)\}}
-\and
-\Rule{PS-Set}{\operatorname{AccessWF}(A)\quad A=(h\mathbin{:-}\bar a)}
- {A\Downarrow_{\rm push}
- \{\mathsf{let\ mut}\ S=\mathsf{HashSet::new}();E_{[]}(\bar a,h,S);S\}}
-\end{mathpar}
-Here $\operatorname{copies}(V)$ clones only incoming bindings needed after the
-current source has been evaluated. A value used solely by that source needs no
-Clone implementation. The compiler records $B$ while walking clauses, then nests
-code and computes liveness in reverse order. It constructs no Pipeline
-or intermediate row collection. Under finite sources, total pure leaves and
-lawful silent clone/hash/equality, induction on clauses gives the same completed
-set as exhausted Access. This is an eager-set contract: partial iterator demand,
-evaluation timing and arbitrary destructor effects are not preserved by replacing
-an iterator-valued hole with \code{access_to_set_loops!}.
-
-\subsection{Pipeline-to-Rust inference rules}
-One Rust local implements each definition in the existing order. Method
-notation abbreviates fully qualified \code{core::iter} calls:
-\begin{mathpar}
-
-\Rule{R-Unit}{}{s=\mathsf{Unit}(b)\Downarrow_R\code{let s = once(b);}}
-
-\Rule{R-Scan}{}{s=\mathsf{Scan}(p,e,b)\Downarrow_R\\
- \code{let s = IntoIterator::into_iter(e).map(move |p| b);}}
-
-\Rule{R-Join}{}{s=\mathsf{Join}(l,p,q,e,b)\Downarrow_R\\
- \mathsf{let}\ s=l.\mathsf{flatMap}(\mathsf{move}\ |p|\,
- \mathsf{IntoIter}(e).\mathsf{map}(\mathsf{move}\ |q|\{\operatorname{copies}(p,b);b\}));}
-
-\Rule{R-Filter}{}{s=\mathsf{Filter}(l,p,e)\Downarrow_R\\
- \mathsf{let}\ s=l.\mathsf{filterMap}(\mathsf{move}\ |p|\,
- \mathsf{if}\ e\ \{\mathsf{Some}((\binds(p)))\}\ \mathsf{else}\ \{\mathsf{None}\});}
-
-\Rule{R-Project}{}{s=\mathsf{Project}(l,p,e)\Downarrow_R
- \code{let s = l.map(move |p| e);}}
-
-\Rule{R-Distinct}{}{s=\mathsf{Distinct}(l)\Downarrow_R\\
- \mathsf{let}\ s=\{\mathsf{let\ mut}\ seen=\mathsf{HashSet::new}();\\
- l.\mathsf{filter}(\mathsf{move}\ |row|\,seen.\mathsf{insert}(\mathsf{Clone}(row)))\};}
-\end{mathpar}
-$\operatorname{copies}(p,b)$ clones only incoming names retained in $b$, once
-per inner item. Dropped bindings need no Clone implementation. Consuming
-filter-map supplies owned bindings without adding a borrowed tuple layer.
-\begin{mathpar}
-\Rule{R-Block}{d_j\Downarrow_R t_j\quad(0\le j\le m)}
- {\bar d;\mathsf{return}\ s_m\Downarrow_R
- \mathsf{Iterator::flatten}(\mathsf{onceWith}(\mathsf{move}\ ||\{\bar t;s_m\}))}
-
-\Rule{R-Set}{\bar d\Downarrow_R\bar t}
- {\bar d;s=\mathsf{Distinct}(l);\mathsf{return}\ s\Downarrow_{\rm set}
- \{\bar t;\mathsf{let}\ s:\mathsf{HashSet}(\_) = l.\mathsf{collect}();s\}}
-
-\Rule{R-Exists}{\bar d\Downarrow_R\bar t\quad
- e=\mathsf{flatten}(\mathsf{onceWith}(\mathsf{move}\ ||\{\bar t;l\}))}
- {\bar d;s=\mathsf{Distinct}(l);\mathsf{return}\ s\Downarrow_{\rm exists}
- \mathsf{next}(e).\mathsf{isSome}()}
-\end{mathpar}
-The \code{pipeline_to_distinct_iter!} endpoint implements R-Block, delaying
-construction until polling. R-Set (\code{pipeline_to_set!}) collects the completed set, absorbing
-terminal Distinct. It requires the finite set-observation contract,
-not an online cursor contract.
-
-R-Exists (\code{pipeline_to_exists!}) removes only
-terminal Distinct and polls the ordinary prefix once. It preserves every prior
-operator, including projection, and stops at the first witness. Removing
-Distinct preserves nonemptiness and avoids adding Eq/Hash to an existential
-payload. It promises a first-witness boolean, not an iterator or collected set.
-Native adapter laws~\cite{iterator}, ownership and resolution remain premises.
-\begin{theorem}[Adapter adequacy, conditional]
-Assume the generated Rust type-checks; host callbacks and source iterators
-realize their specified host judgments; generated cloning/hashing/dropping
-are silent and representation-preserving; and clients stop after first None.
-Then R-lowering simulates every finite successful abstract pipeline poll,
-preserving its returned abstract values, callback trace, and exhaustion.
-\end{theorem}
-\begin{proof}
-Relate Source/Map/Filter to their native adapters, FlatSeek/Run to flat-map's
-outer/active-inner states, and Distinct to its HashSet. Map performs G-Map;
-consuming filter-map repeats G-Skip until G-Keep or stop. Flat-map performs
-G-Enter/Inner/NextOuter; prefix clones are silent by hypothesis. HashSet insert
-implements G-Fresh/Seen and preserves representation. Unit/source/stop follow
-their rules; once-with implements G-Delay. Induction on finite polls and client
-requests gives the simulation, conditional on the stated native semantics.
-\end{proof}
-
-\begin{obligation}[C-Effects: complete effectful cursor semantics]
-Prove simulations for divergent internal polling, panic/unwinding, iterator
-and capture destruction using small-step or coinductive semantics. An infinite
-source filtered by a terminating false predicate diverges inside a poll
-without any divergent callback; finite successful rules say nothing about it.
-\end{obligation}
-
-\section{Quotation, residual contexts, and substitution of passes}
+\section{Quotation and composition obligations}
 \label{sec:staging}
-$C[\square^L_\Gamma]$ is a Rust AST context with an $L$ hole and runtime
-bindings $\Gamma$. Its stores, types, borrows, and call sites are fixed;
-adequacy concerns the filled context, not an isolated fragment. Quote/parse
-must satisfy $\operatorname{parse}_L(\operatorname{quote}_L(s))\equiv s$
-up to delimiter/raw-name normalization while preserving leaf resolution.
-Spans and contexts matter: procedural macros are not automatically
-hygienic~\cite{macros}.
+Let $C[\square^L_\Gamma]$ be a Rust context containing a quotation in language
+$L$, with the runtime bindings supplied by $\Gamma$. A typed pass $f:L\to M$
+has the local expansion rule
 \begin{mathpar}
+\Rule{ST-Entry}{\operatorname{parse}_L(T)=s\quad f(s)=t}
+ {\mathsf{entry}_f\{T\}\longrightarrow\operatorname{quote}_M(t)}
 
-\Rule{ST-Entry}{\operatorname{parse}_L(T)=s\quad s\Downarrow_f t}
- {\mathsf{entry}_{f,k}\{T\}\longrightarrow\operatorname{quote}(k(t))}
-
-\Rule{ST-Hole}{\Gamma\vdash s:L\quad\Gamma\vdash s\Downarrow_f t:M}
+\Rule{ST-Hole}{\Gamma\vdash s:L\quad f(s)=t\quad\Gamma\vdash t:M}
  {C[\square^L_\Gamma(s)]\longrightarrow C[\square^M_\Gamma(t)]}
-
-\Rule{ST-Rust}{\Gamma\vdash p\Downarrow_R e:\mathsf{Expr}}
- {C[\square^{\mathsf{Pipeline}}_\Gamma(p)]\longrightarrow C[e]}
-
-\Rule{ST-Emit}{e:\mathsf{Expr}}{e\longrightarrow\operatorname{ToTokens}(e)}
 \end{mathpar}
-The entry fixes a relative \code{mini_linq::}$k$ path; a module alias binds it.
-The defaults below are compositions of caller-relative macro invocations;
-explicit implementation entries retain their declared domains.
-\begin{center}\small
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{>{\raggedright\arraybackslash}p{.38\linewidth}>{\raggedright\arraybackslash}p{.24\linewidth}>{\raggedright\arraybackslash}p{.30\linewidth}}\toprule
-Entry & Typed input / role & Emitted continuation \\\midrule
-\code{mini_linq} & CQ choice & \code{cq_to_ra_written_order} / \code{cq_to_ra_clause_prefix} \\
-\code{choose_graph_or_prefix} & CQ choice & \code{cq_to_ra_hypergraph} / \code{cq_to_ra_clause_prefix} \\
-canonical / prefix / graph entries & CQ to RA & \code{choose_index_policy} \\
-\code{choose_index_policy} & RA choice & \code{base_index_demands} / \code{result_index_demands} \\
-input / result / no-index entries & RA to IX & \code{choose_relation_lowering} \\
-\code{choose_relation_lowering} & IX choice & admitted hash realization \\
-\code{lower_base_hash} / \code{lower_prefix_hash} & IX, lazy hash realization & Rust with Access \\
-\code{materialized_hash_program} & IX, eager hash realization & Rust with Access \\
-\code{lower_borrowed_nested} & empty-index IX & Rust with Access and Native \\
-\code{materialized_hash_callable} & same eager computation & callable Rust Expr \\
-\code{configured_program} / \code{configured_callable} & configured RA realization & item / callable host \\
-observed relation entries & same realization & instrumented host \\
-\code{access_to_distinct_iter} / set / stream / exists entries & Access to Pipeline & chosen Pipeline endpoint \\
-\code{access_to_set_loops} & Access to eager Rust & exact set expression \\
-iterator / set / stream / exists endpoints & Pipeline to Rust & ToTokens \\\bottomrule
-\end{tabular}
-\end{center}
-The default IX chooser tries the two lazy hash domains, then delegates remaining
-plans to the eager hash entry, which checks its own domain. A graph plan's
-semijoins therefore reach a compatible default consumer. Choices emit no
-route tag into IX, and replacing a preceding alias does not silently bypass later
-aliases. The optimized CQ entry chooses a planner; it does not prescribe eager
-execution. A caller can instead compose an explicit eager recipe by binding
-\code{result_index_demands} as \code{choose_index_policy} and \code{materialized_hash_program} as
-\code{choose_relation_lowering}.
+These rules describe composition, not permission to insert a redundant language.
+The physical boundary now has two distinct judgments. Selection consumes IX,
+$\Omega$, $\eta$, and explicit host declarations and produces the bound program
+$P=(IX,\Phi,\Lambda)$. Realization consumes $P$, $\Omega$, and $\Gamma$;
+it has no $\eta$ parameter. It follows $\Lambda$ and $\Phi$, emitting concrete
+preparation and Access expressions, or rejects unmet premises. It cannot repair
+an invalid assignment by selecting another lowering.
 
-Eager hash entries use \code{access_to_set} by default and accept an explicit
-Access continuation. The lazy hash continuation is \code{access_to_distinct_iter}.
-Typed realization APIs receive their continuation paths explicitly. Macro paths
-resolve relative to the invocation's \code{mini_linq} binding, whereas typed
-clients may supply absolute paths. Workload catalog generation with
-\code{compiled-workloads} emits the ordinary CQ entry, so its compilation honors
-the same planner, index and realization aliases.
+\paragraph{Wire slots and immediate expansions.}
+The proposed API slots are \code{choose_physical!} and
+\code{realize_physical!}. The following illustrative imports select their
+implementations through aliases, without adding wrapper macros:
+\begin{lstlisting}
+use policies::given_bindings as choose_physical;
+use lowering::by_bindings as realize_physical;
+\end{lstlisting}
+The authored immediate output of \code{choose_physical!} is the next macro
+call containing the completed Physical program, as recorded in
+\path{doc/ix-physical/expected.choose.rs}. The compiler can stop at that boundary
+for inspection. These paths and wire slots are proposed interfaces, not claims
+about currently implemented exports.
 
-Configured relation entries accept RA directly and emit selected native operations
-and Access holes. Hash realizations are concrete algorithms: their storage and
-schedule are fixed before their Access holes expand. A later execution alias
-cannot undo those commitments. Per-relation provider selection belongs to the
-configured realization, including mixed tuple and block inputs; its pair hole
-owns a complete local join traversal. Whole-query materialization still belongs
-to the enclosing realization. Rust interpolation composes those pieces without
-serializing another relational language or forcing shared RA into one pipeline.
+A macro path resolves an external provider definition; the declaration it
+delivers supplies the physical rules and bindings. Generic dispatch consumes
+that declaration, rather than recognizing the path's spelling or guessing its
+meaning from Rust type inference. Substituting a path is sufficient only when
+the delivered definition satisfies the consuming boundary. Macro replaceability
+does not itself establish representation or version compatibility.
 
-\paragraph{Implementation and composition ownership.}
-An explicit implementation owns its domain, lowering and independent target
-checks. The frontend wires macro continuations; \code{cq-compose} offers typed
-recipes for typed clients. Implementations do not import that recipe selector.
-Neutral headings and equality-signature facts belong to the IR, while strategy
-analyses belong to their consumers. The macro chooser dispatches through actual
-caller bindings at every advertised choice. This source-level separation makes
-replacement observable, but still requires compatible domains, runtime
-representations and observations as formalized below.
+ST-Entry describes the immediate replacement produced by one entry expansion.
+A provider declaration request may produce a callback that resumes realization;
+therefore a completed realization can require several such steps,
+$\longrightarrow^{*}$. Its final \code{Rust[Access]} text must not be reported
+as a single immediate macro output. A standalone callback example establishes
+only that transport mechanism, not an integrated IX-to-Physical compiler trace.
 
-\paragraph{One computation in different Rust hosts.}
-Let $Q_M(P;\bar e)$ denote the native expression returned by
-\code{compile_query} for indexed plan $P$ and input expressions
-$\bar e$ in declaration order. It evaluates $\bar e$ once, binds their values
-simultaneously, normalizes the finite inputs, performs ST-* and M-* with local
-set-valued Access holes, and returns a typed answer set. This notation names a
-Rust AST fragment, not an intermediate language. The existing standalone build
-uses the same lowering with passive result/index/probe observations. If $I$ is
-the database supplied by those finite input iterators, under $\mathcal H_{\rm rel}$
-and exact set-valued Access continuations,
-\[
- Q_M(P;I)=\pi_{\rm answer}(\operatorname{Build}_M(P;I))=\sem P_I.
-\]
-Equality here observes completed answers; the counted and plain hosts have
-different instrumentation traces. The plain expression introduces no counters
-or host types. Its answer needs lawful clone/hash/equality, while the sorted
-standalone materializer additionally needs ordering.
+Provider quotations can remain locally inside Rust/Access while their selected
+definitions expand. The map fixture does not require a third whole-program
+provider-dialect IR. A future language retaining physical operations for another
+transformation would require its own syntax and semantics; naming a macro path
+does not by itself define that language.
 
-\code{compile_callable} places this checked expression in an
-anonymous Rust closure. Input normalization constrains each accessed parameter
-to supply the declared tuple type through \code{IntoIterator}. The
-\code{materialized_hash_callable!} entry exposes that adapter without extending the
-indexed grammar: ordinary Rust calls provide full or delta input iterators.
-Aliasing this macro as \code{materialized_hash_program} changes the explicit eager recipe's host.
-Each closure value has fixed inferred input types; captures and repeatability
-follow ordinary Rust. The adapter introduces no item binder that could shadow
-a host function, including one named by an opaque macro expansion. Independent
-checks inspect its parameters, result type and query body. Repeated borrowed
-calls and direct/opaque name resolution are tested against ordinary Rust;
-answer sets are compared with the standalone host and a pairwise oracle. They rebuild
-this realization's local stores and establish no recursive-program semantics.
+\paragraph{An edge contract.}
+Each compiler edge declares an admitted source domain, target well-formedness,
+a runtime representation relation, and an observation to preserve. A residual
+quotation additionally declares its required bindings and ownership lifetimes.
+The preceding edge must establish these requirements. The observation may be
+the completed answer set; a claim about lazy execution requires a stronger,
+explicit polling observation. No proof of one automatically proves the other.
 
-\subsection{The contract of a replaceable edge}
-Local validity belongs to an IR; compilability to a term/pass pair; preservation
-to their observations. A partial compiler $f:L\to M$ has an edge contract:
-\begin{enumerate}
-\item an admitted source domain $A_f\subseteq\mathsf{WF}_L$ and a
-runtime precondition $\mathsf{Pre}_f$ on input instances, host stores, types,
-and representations;
-\item termination with a result in $\mathsf{WF}_M$ for every $s\in A_f$;
-\item a representation relation between the source runtime environment and
-the environment realized by the target's generated declarations;
-\item a common observation projection $O$ and client class $\mathcal D$,
-with $f(s)\preceq_{O,\mathcal D}s$ under that representation relation,
-including the response-totality premise for the finite observation model;
-\item for a residual hole, an admissible class of closing Rust contexts and
-an adequacy statement permitting that refinement to be used in those contexts.
-\end{enumerate}
-$\mathsf{WF}_L$ denotes local validity and $\preceq_{O,\mathcal D}$ the
-behavior inclusion of Section~\ref{sec:scope}. Preconditions such as
-$\mathcal H_{\rm rel}$ need not be syntactically decidable. Totality applies
-to a declared domain, not one defined retrospectively by successful compilations.
-Representation is established at runtime: generated build code supplies the
-actual stores/borrows expected by residual Access. A local check cannot prove
-that context well-typed. Neither exhausted-set equality for a counter-reading
-partial client nor borrowed/owned binding mismatch licenses substitution;
-compatible observations and representations are compiler-linking
-requirements~\cite{paper-ccc}.
-\begin{theorem}[Conditional composition and pass replacement]
+\begin{theorem}[Conditional composition]
 \label{thm:composition}
-Let $f:L\to M$ and $g:M\to N$ satisfy the edge contracts above for a common
-$O,\mathcal D$. Suppose $f(A_f)\subseteq A_g$; the first edge establishes the
-second's runtime precondition; their environment relations compose through
-the same intermediate realization; and their closing contexts satisfy the
-stated adequacy clauses. Then $g\circ f$ is total from $A_f$ to
-$\mathsf{WF}_N$ and refines its source at $O,\mathcal D$.
-If both edges establish behavior equality, the composite establishes equality.
-An alternative $f'$ may replace $f$ on $A_f$ when it satisfies these same
-conditions, including $f'(A_f)\subseteq A_g$.
+Suppose $f:L\to M$ and $g:M\to N$ terminate on their declared domains,
+$f$ produces only inputs admitted by $g$, and $f$ establishes the representation
+and runtime preconditions required by $g$. If both preserve a common observation
+under compatible closing contexts, then $g\circ f$ preserves that observation.
 \end{theorem}
 \begin{proof}
-For $s\in A_f$, totality gives $t=f(s)\in A_g$ and then $u=g(t)\in\mathsf{WF}_N$.
-The precondition and environment premises make both edge theorems applicable
-to the same intermediate realization. For each admitted client, their
-abstracted behaviors satisfy
-\[
- O(\mathcal B_d(u,I,\sigma))\subseteq O(\mathcal B_d(t,I,\sigma))
- \subseteq O(\mathcal B_d(s,I,\sigma)),
-\]
-where $O$ acts pointwise. Context adequacy lifts the inclusions into enclosing
-Rust. Transitivity proves refinement, equality when both steps are equalities,
-and finite-chain composition by induction. The same premises give replacement
-by $f'$.
+The first pass establishes the intermediate representation relation; the second
+uses it to establish the final relation. Compose these relations and their
+observation equalities. Domain inclusion establishes that the second pass is
+defined. Closing-context adequacy permits the same argument for quotations.
 \end{proof}
 
-Distinct refinements need not be equivalent: sorted and arbitrary enumeration
-can both refine an unordered source while differing under $O_{\rm seq}$.
-Replacement preserves the contract; exact old behavior requires equality.
-A sorted source cannot refine to arbitrary order merely because sets agree.
-For relational compilation the common observation is the completed set under
-$\mathcal H_{\rm rel}$. Stronger local finite-poll preservation cannot strengthen
-that upper contract (Counterexample~\ref{cx:effects}). AC-Bind supplies IP
-freshness, including empty Extend, but cannot prove arbitrary-Rust typing or
-totality. Direct quotation still requires each boundary's environment/stage
-contract; contextual adequacy and configurable macro continuations remain
-unestablished (Section~\ref{sec:scope}).
+Semantic preservation and expansion conformance are independent obligations.
+A generated program that returns the expected answer still fails the present
+design if its macro boundaries, index identities, use references, or concrete
+access expressions differ from the authored expansion contract.

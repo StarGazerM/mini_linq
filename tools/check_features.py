@@ -17,8 +17,6 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "mini-linq"
-# This is a deliberately unfinished student exercise, not a supported compiler.
-UNFINISHED = {"hw4"}
 
 
 def feature_cases(package):
@@ -43,24 +41,20 @@ def feature_cases(package):
 
     def add(label, selected):
         active = closure(["default"] if selected is None else selected)
-        if active & UNFINISHED:
-            raise ValueError(f"supported case {label} enables unfinished features")
         if active not in covered:
             covered.add(active)
             cases.append((label, selected, active))
 
     add("no-default", [])
-    for feature in sorted(set(features) - UNFINISHED - {"default"}):
+    for feature in sorted(set(features) - {"default"}):
         add(feature, [feature])
     add("default", None)
-    add("completed", sorted(set(features) - UNFINISHED - {"default"}))
+    add("completed", sorted(set(features) - {"default"}))
     add("execution-alternatives", ["access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set"])
     for target in package["targets"]:
         if not set(target["kind"]) & {"test", "example"}:
             continue
         required = target.get("required-features", [])
-        if closure(required) & UNFINISHED:
-            continue
         add(f'{target["kind"][0]}-{target["name"]}', required)
     return cases
 
@@ -107,22 +101,12 @@ def main():
                    and set(t.get("required-features", [])) <= active]
         output = logpath.read_text()
         tested = sum(map(int, re.findall(r"test result: ok\. (\d+) passed", output)))
-        if label == "access-to-set-loops" and "push_moves_owned_outputs_and_preserves_outer_values_for_multiple_witnesses ... ok" not in output:
-            raise SystemExit(f"FAIL: access-to-set-loops did not execute its isolated runtime test; see {logpath}")
-        if any(t["name"] == "staged_execution" for t in targets):
-            for test in ("ya_star_matches_oracle_with_borrowed_nonclone_inputs",
-                         "projection_and_shared_dag_have_set_semantics",
-                         "pull_does_no_traversal_until_demanded_and_stops_on_drop",
-                         "pull_join_preserves_inner_cursor_and_replays_for_next_left",
-                         "pull_consumers_execute_without_materializing_and_unused_branches_stay_unopened",
-                         "shared_ra_uses_have_independent_cursors_over_one_lazy_source",
-                         "shared_join_cursors_can_alternate_between_cached_rows_and_the_frontier",
-                         "pull_ya_shares_reductions_and_reads_each_source_occurrence_once",
-                         "output_itself_can_be_nonclone",
-                         "semijoin_short_circuits_witnesses",
-                         "disjoint_semijoin_is_existence_and_repeated_output_borrows"):
-                if f"{test} ... ok" not in output:
-                    raise SystemExit(f"FAIL: {label} did not execute the staged query regression {test}; see {logpath}")
+        for target in targets:
+            if "test" not in target["kind"]:
+                continue
+            source = Path(target["src_path"]).relative_to(Path(package["manifest_path"]).parent)
+            if f"Running {source} (" not in output:
+                raise SystemExit(f"FAIL: {label} did not execute eligible test target {target['name']}; see {logpath}")
         print(f"PASS: {label} ({tested} tests executed; {len(targets)} eligible test/example targets)", flush=True)
     if not args.list:
         print(f"PASS: {len(cases)} Cargo feature cases; logs: {logdir}", flush=True)

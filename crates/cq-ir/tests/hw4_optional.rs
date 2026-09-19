@@ -195,7 +195,7 @@ fn extended_relational_plans_use_renames_inferred_correlation_and_one_global_uni
 fn extended_body_items_keep_their_occurrence_labels_until_pull_lowering() {
     let plan: rust_access_plan::Plan = syn::parse2(quote! {
         spend(person, total) => ((person.clone(), total,)) :-
-            Person(person) => for (person,) in (rows0.iter()),
+            Person(person) => bind (person,) <- (rows0.iter()),
             !Blocked(person, _) => if (!index0.contains_key(&(person.clone(),))),
             agg total = sum(amount) in Purchase(person, _, amount) =>
                 for total in (aggregate_totals(*person));
@@ -203,5 +203,5 @@ fn extended_body_items_keep_their_occurrence_labels_until_pull_lowering() {
     .expect("OPTIONAL HW4: RustAccessPlan must parse the extended BodyItem variants");
 
     rust_access_plan::contract::check(&plan)
-        .expect("OPTIONAL HW4: annotate negation with If and aggregation with For");
+        .expect("OPTIONAL HW4: annotate negation with If and aggregation with Bind");
 }

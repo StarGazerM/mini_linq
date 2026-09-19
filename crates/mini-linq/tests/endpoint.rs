@@ -50,8 +50,8 @@ impl AnnotatedTriangleStorage {
     pub fn query(&self) -> impl Iterator<Item = (i32, i32, i32)> + '_ {
         access_to_distinct_iter! {
             triangle(x, y, z) => (((*x).clone(), (*y).clone(), (*z).clone())) :-
-            R(x, y) => for (x, y) in (self.rows0.iter()),
-            S(y, z) => for (z,) in (
+            R(x, y) => bind (x, y) <- (self.rows0.iter()),
+            S(y, z) => bind (z,) <- (
                 self.index0
                     .get(&((*y).clone(),))
                     .into_iter()
@@ -76,7 +76,7 @@ impl ProjectionSet {
     fn query(&self) -> impl Iterator<Item = (i32,)> + '_ {
         access_to_distinct_iter! {
             project(x) => (((*x).clone(),)) :-
-            R(x, _y) => for (x, _y) in (self.rows0.iter());
+            R(x, _y) => bind (x, _y) <- (self.rows0.iter());
         }
     }
 }
@@ -90,7 +90,7 @@ impl LazyResultSet {
     fn query(&self) -> impl Iterator<Item = (i32,)> + '_ {
         access_to_distinct_iter! {
             answer(x) => (((*x).clone(),)) :-
-            R(x) => for (x,) in (
+            R(x) => bind (x,) <- (
                 self.rows0.iter().inspect(|_| {
                     self.rows_requested.set(self.rows_requested.get() + 1);
                 })
@@ -144,7 +144,7 @@ fn pull_defers_the_root_source_expression_until_first_next() {
 
     let mut rows = access_to_distinct_iter! {
         answer(x) => ((x,)) :-
-        R(x) => for (x,) in ({
+        R(x) => bind (x,) <- ({
             counter.set(counter.get() + 1);
             [(1,), (2,)].into_iter()
         });
@@ -167,8 +167,8 @@ fn generated_iter0_does_not_capture_a_user_leaf_named_iter0() {
 
     let result = access_to_distinct_iter! {
         answer(x, y) => ((x, y,)) :-
-        Seed(x) => for (x,) in (rows.into_iter()),
-        Edge(x, y) => for (y,) in (
+        Seed(x) => bind (x,) <- (rows.into_iter()),
+        Edge(x, y) => bind (y,) <- (
             iter0.get(&(x,)).cloned().unwrap_or_default().into_iter()
         );
     }
@@ -215,9 +215,9 @@ fn quoted_let_accesses_preserve_bindings_and_empty_binding_effects_on_demand() {
     };
     let mut rows = access_to_distinct_iter! {
         answer(x, y) => ((x, y)) :-
-            R(x) => for (x,) in ([(1,), (2,), (1,)]),
-            let y = compute(x) => for (y,) in (::std::iter::once((compute(x),))),
-            let () = record() => for () in ({ record(); ::std::iter::once(()) }),
+            R(x) => bind (x,) <- ([(1,), (2,), (1,)]),
+            let y = compute(x) => bind (y,) <- (::std::iter::once((compute(x),))),
+            let () = record() => bind () <- ({ record(); ::std::iter::once(()) }),
             if y > 11 => if (y > 11);
     };
 
@@ -226,4 +226,35 @@ fn quoted_let_accesses_preserve_bindings_and_empty_binding_effects_on_demand() {
     assert_eq!(evaluations.get(), (2, 2));
     assert_eq!(rows.next(), None);
     assert_eq!(evaluations.get(), (3, 3));
+}
+
+#[test]
+fn dependent_bind_sources_are_demanded_in_order_and_before_item_binding() {
+    let evaluations = Cell::new((0, 0));
+    let observed = &evaluations;
+    // This outer Rust name is deliberately also the first logical binder.
+    // Its iterable expression is evaluated before that binder is introduced.
+    let a = [1, 2, 3];
+    let mut rows = access_to_distinct_iter! {
+        answer(a, b) => ((a, b)) :-
+        R(a) => bind a <- ({
+            let (_, lookups) = observed.get();
+            observed.set((1, lookups));
+            a.into_iter()
+        }),
+        S(a, b) => bind b <- ({
+            let (sources, lookups) = observed.get();
+            observed.set((sources, lookups + 1));
+            [a * 10, a * 10 + 1]
+        });
+    };
+    assert_eq!(evaluations.get(), (0, 0));
+    assert_eq!(rows.next(), Some((1, 10)));
+    assert_eq!(evaluations.get(), (1, 1));
+    assert_eq!(rows.next(), Some((1, 11)));
+    assert_eq!(evaluations.get(), (1, 1));
+    assert_eq!(rows.next(), Some((2, 20)));
+    assert_eq!(evaluations.get(), (1, 2));
+    drop(rows);
+    assert_eq!(evaluations.get(), (1, 2));
 }

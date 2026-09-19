@@ -1,0 +1,3 @@
+answer(a, b, c) => ((a, b, c,)) : - l(a) => bind a <- ((__cq_store_l).iter()),
+r(a, b) => bind b <- ((__cq_index_i0).get(a).into_iter().flatten()), s(b, c)
+=> bind c <- ((__cq_index_i1).get(b).into_iter().flatten());

@@ -1,0 +1,595 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling syn_derive v0.2.0 (https://github.com/StarGazerM/syn_derive?rev=97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562#97bbe587)
+   Compiling contracts v0.6.10
+   Compiling cq-ir v0.1.0 (/tmp/mini-linq-bind-realization-20260919/workspace/crates/cq-ir)
+   Compiling cq-access-lowering v0.1.0 (/tmp/mini-linq-bind-realization-20260919/workspace/crates/cq-access-lowering)
+   Compiling cq-physical-lowering v0.1.0 (/tmp/mini-linq-bind-realization-20260919/workspace/crates/cq-physical-lowering)
+   Compiling cq-index-policy v0.1.0 (/tmp/mini-linq-bind-realization-20260919/workspace/crates/cq-index-policy)
+   Compiling cq-physical-selection v0.1.0 (/tmp/mini-linq-bind-realization-20260919/workspace/crates/cq-physical-selection)
+   Compiling cq-example-providers v0.1.0 (/tmp/mini-linq-bind-realization-20260919/workspace/crates/cq-example-providers)
+   Compiling mini-linq v0.1.0 (/tmp/mini-linq-bind-realization-20260919/workspace/crates/mini-linq)
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:14:5
+   |
+14 | /     assert!(
+15 | |         trace.join("verification.txt").is_file(),
+16 | |         "trace must finish its source-identity verification"
+17 | |     );
+   | |_____^
+   |
+   = note: expanding `panic_2021! { "trace must finish its source-identity verification" }`
+   = note: to `{
+               $crate :: panicking ::
+               panic_fmt($crate :: const_format_args!
+               ("trace must finish its source-identity verification"));
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:33:9
+   |
+33 |         assert_eq!(matches.len(), 1, "expected one captured {suffix}");
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `assert_eq! { matches.len(), 1, "expected one captured {suffix}" }`
+   = note: to `match (& matches.len(), & 1)
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option ::
+                       Some($crate :: format_args! ("expected one captured {suffix}")));
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:41:9
+   |
+41 |         assert_eq!(actual, expected);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `assert_eq! { actual, expected }`
+   = note: to `match (& actual, & expected)
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:48:5
+   |
+48 |     assert_eq!(indexed, expected_ix);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `assert_eq! { indexed, expected_ix }`
+   = note: to `match (& indexed, & expected_ix)
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:52:61
+   |
+52 |       let expected: cq_ir::physical::Module = syn::parse_str(&format!(
+   |  _____________________________________________________________^
+53 | |         "{}\n{}",
+54 | |         expected_ix_source, expected_selection_source
+55 | |     ))
+   | |_____^
+   |
+   = note: expanding `format! { "{}\n{}", expected_ix_source, expected_selection_source }`
+   = note: to `$crate :: __export ::
+           must_use({
+               $crate :: fmt ::
+               format($crate :: __export :: format_args!
+               ("{}\n{}", expected_ix_source, expected_selection_source))
+           })`
+
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:57:5
+   |
+57 | /     assert_eq!(
+58 | |         selected.to_token_stream().to_string(),
+59 | |         expected.to_token_stream().to_string()
+60 | |     );
+   | |_____^
+   |
+   = note: expanding `assert_eq! { selected.to_token_stream().to_string(), expected.to_token_stream().to_string() }`
+   = note: to `match
+           (& selected.to_token_stream().to_string(), &
+           expected.to_token_stream().to_string())
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:75:13
+   |
+75 | /             assert_eq!(
+76 | |                 request.plan.to_token_stream().to_string(),
+77 | |                 expected.to_token_stream().to_string()
+78 | |             );
+   | |_____________^
+   |
+   = note: expanding `assert_eq! { request.plan.to_token_stream().to_string(),
+           expected.to_token_stream().to_string() }`
+   = note: to `match
+           (& request.plan.to_token_stream().to_string(), &
+           expected.to_token_stream().to_string())
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:91:13
+   |
+91 |             matches!(expression, syn::Expr::Block(_)).then_some(expression)
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `matches! { expression, syn::Expr::Block(_) }`
+   = note: to `#[allow(non_exhaustive_omitted_patterns)] match expression
+           { syn::Expr::Block(_) => true, _ => false }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/support/trace.rs:94:5
+   |
+94 |     assert_eq!(realized.len(), 1, "one completed Physical realization");
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `assert_eq! { realized.len(), 1, "one completed Physical realization" }`
+   = note: to `match (& realized.len(), & 1)
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option ::
+                       Some($crate :: format_args!
+                       ("one completed Physical realization")));
+                   }
+               }
+           }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/support/trace.rs:101:13
+    |
+101 |             panic!("expected host block")
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `panic_2021! { "expected host block" }`
+    = note: to `{
+                $crate :: panicking ::
+                panic_fmt($crate :: const_format_args! ("expected host block"));
+            }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/support/trace.rs:106:18
+    |
+106 |             _ => panic!("expected final Access quotation"),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `panic_2021! { "expected final Access quotation" }`
+    = note: to `{
+                $crate :: panicking ::
+                panic_fmt($crate :: const_format_args!
+                ("expected final Access quotation"));
+            }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/support/trace.rs:112:5
+    |
+112 |     assert_eq!(normalize(realized[0].clone()), normalize(expected));
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `assert_eq! { normalize(realized[0].clone()), normalize(expected) }`
+    = note: to `match (& normalize(realized[0].clone()), & normalize(expected))
+            {
+                (left_val, right_val) =>
+                {
+                    if ! (* left_val == * right_val)
+                    {
+                        let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                        panicking ::
+                        assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                        :: Option :: None);
+                    }
+                }
+            }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/support/trace.rs:133:5
+    |
+133 |     assert_eq!(found.len(), 1, "one Access-to-Pipeline expansion");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `assert_eq! { found.len(), 1, "one Access-to-Pipeline expansion" }`
+    = note: to `match (& found.len(), & 1)
+            {
+                (left_val, right_val) =>
+                {
+                    if ! (* left_val == * right_val)
+                    {
+                        let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                        panicking ::
+                        assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                        :: Option ::
+                        Some($crate :: format_args!
+                        ("one Access-to-Pipeline expansion")));
+                    }
+                }
+            }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/support/trace.rs:139:5
+    |
+139 |     assert_eq!(actual, expected);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `assert_eq! { actual, expected }`
+    = note: to `match (& actual, & expected)
+            {
+                (left_val, right_val) =>
+                {
+                    if ! (* left_val == * right_val)
+                    {
+                        let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                        panicking ::
+                        assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                        :: Option :: None);
+                    }
+                }
+            }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/physical_realization.rs:57:5
+   |
+57 | /     ::mini_linq::index_demands! {
+58 | |         struct Heterogeneous;
+59 | |         relation L(a: Value);
+60 | |         relation R(a: Value, b: Value);
+...  |
+71 | |     }
+   | |_____^
+   |
+   = note: expanding `explicit_policy! { struct Heterogeneous; relation L(a : Value); relation R(a : Value, b : Value);
+           relation S(b : Value, c : Value); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+           relational
+           {
+               l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s = rename S
+               { b - > b, c - > c }; j0 = natural_join l with r; j1 = natural_join j0
+               with s; output j1 as answer(a, b, c);
+           } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+           { j0.right = i0; j1.right = i1; } }`
+   = note: to `:: mini_linq :: given_physical_bindings!
+           {
+               struct Heterogeneous; relation L(a : Value); relation
+               R(a : Value, b : Value); relation S(b : Value, c : Value); answer(a, b, c)
+               : - L(a), R(a, b), S(b, c); relational
+               {
+                   l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s =
+                   rename S { b - > b, c - > c }; j0 = natural_join l with r; j1 =
+                   natural_join j0 with s; output j1 as answer(a, b, c);
+               } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+               { j0.right = i0; j1.right = i1; } physical
+               {
+                   relations
+                   {
+                       L = :: cq_example_providers :: slice_rows; R = ::
+                       cq_example_providers :: hash_relation; S = :: cq_example_providers
+                       :: sorted_relation; l = :: cq_example_providers :: slice_rows; r =
+                       :: cq_example_providers :: hash_relation; s = ::
+                       cq_example_providers :: sorted_relation; j0 = ::
+                       cq_example_providers :: borrowed_fields; j1 = ::
+                       cq_example_providers :: borrowed_fields;
+                   } indexes
+                   {
+                       i0 = :: cq_example_providers :: hash_relation; i1 = ::
+                       cq_example_providers :: sorted_relation;
+                   } lowerings
+                   {
+                       l = :: cq_example_providers :: rename; r = :: cq_example_providers
+                       :: rename; s = :: cq_example_providers :: rename; j0 = ::
+                       cq_example_providers :: indexed_join; j1 = :: cq_example_providers
+                       :: indexed_join;
+                   }
+               }
+           }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:101:20
+    |
+101 |         (Value(1), vec![Value(10), Value(10), Value(11)]),
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(10), Value(10), Value(11) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(),
+            [Value(10), Value(10), Value(11)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:102:20
+    |
+102 |         (Value(2), vec![Value(20)]),
+    |                    ^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(20) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(), [Value(20)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:103:20
+    |
+103 |         (Value(3), vec![Value(30)]),
+    |                    ^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(30) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(), [Value(30)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:106:21
+    |
+106 |         (Value(10), vec![Value(100), Value(101), Value(101)]),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(100), Value(101), Value(101) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(),
+            [Value(100), Value(101), Value(101)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:107:21
+    |
+107 |         (Value(11), vec![]),
+    |                     ^^^^^^
+    |
+    = note: expanding `vec! {  }`
+    = note: to `$crate :: vec :: Vec :: new()`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:108:21
+    |
+108 |         (Value(20), vec![Value(200)]),
+    |                     ^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(200) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(), [Value(200)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:109:21
+    |
+109 |         (Value(99), vec![Value(999)]),
+    |                     ^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(999) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(), [Value(999)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:112:5
+    |
+112 |     assert_eq!(actual, oracle(&left, &middle, &right));
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `assert_eq! { actual, oracle(&left, &middle, &right) }`
+    = note: to `match (& actual, & oracle(&left, &middle, &right))
+            {
+                (left_val, right_val) =>
+                {
+                    if ! (* left_val == * right_val)
+                    {
+                        let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                        panicking ::
+                        assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                        :: Option :: None);
+                    }
+                }
+            }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:113:5
+    |
+113 |     assert_eq!(actual.len(), 3);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `assert_eq! { actual.len(), 3 }`
+    = note: to `match (& actual.len(), & 3)
+            {
+                (left_val, right_val) =>
+                {
+                    if ! (* left_val == * right_val)
+                    {
+                        let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                        panicking ::
+                        assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                        :: Option :: None);
+                    }
+                }
+            }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:124:44
+    |
+124 |     let middle = HashMap::from([(Value(1), vec![Value(10)])]);
+    |                                            ^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(10) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(), [Value(10)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:125:45
+    |
+125 |     let right = BTreeMap::from([(Value(10), vec![Value(100)])]);
+    |                                             ^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(100) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(), [Value(100)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:134:42
+    |
+134 |             &BTreeMap::from([(Value(11), vec![Value(100)])])
+    |                                          ^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `vec! { Value(100) }`
+    = note: to `$crate :: boxed ::
+            box_assume_init_into_vec_unsafe($crate :: intrinsics ::
+            write_box_via_move($crate :: boxed :: Box :: new_uninit(), [Value(100)]))`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:146:47
+    |
+146 |       let directory = std::env::temp_dir().join(format!(
+    |  _______________________________________________^
+147 | |         "mini-linq-physical-rejection-{}",
+148 | |         std::process::id()
+149 | |     ));
+    | |_____^
+    |
+    = note: expanding `format! { "mini-linq-physical-rejection-{}", std::process::id() }`
+    = note: to `$crate :: __export ::
+            must_use({
+                $crate :: fmt ::
+                format($crate :: __export :: format_args!
+                ("mini-linq-physical-rejection-{}", std::process::id()))
+            })`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:151:45
+    |
+151 |       fs::write(directory.join("Cargo.toml"), format!(r#"
+    |  _____________________________________________^
+152 | | [package]
+153 | | name = "physical-rejection-fixture"
+154 | | version = "0.0.0"
+...   |
+159 | | cq-example-providers = {{ path = {:?} }}
+160 | | "#, manifest, workspace.join("crates/cq-example-providers"))).unwrap();
+    | |____________________________________________________________^
+    |
+    = note: expanding `format! { r#"
+            [package]
+            name = "physical-rejection-fixture"
+            version = "0.0.0"
+            edition = "2024"
+            [workspace]
+            [dependencies]
+            mini-linq = {{ path = {:?}, default-features = false, features = ["index-demands", "physical-selection", "physical-realization", "access-to-set-loops"] }}
+            cq-example-providers = {{ path = {:?} }}
+            "#,
+            manifest, workspace.join("crates/cq-example-providers") }`
+    = note: to `$crate :: __export ::
+            must_use({
+                $crate :: fmt ::
+                format($crate :: __export :: format_args!
+                (r#"
+            [package]
+            name = "physical-rejection-fixture"
+            version = "0.0.0"
+            edition = "2024"
+            [workspace]
+            [dependencies]
+            mini-linq = {{ path = {:?}, default-features = false, features = ["index-demands", "physical-selection", "physical-realization", "access-to-set-loops"] }}
+            cq-example-providers = {{ path = {:?} }}
+            "#,
+                manifest, workspace.join("crates/cq-example-providers")))
+            })`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:202:21
+    |
+202 |             None => assert!(output.status.success(), "valid control failed: {stderr}"),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `panic_2021! { "valid control failed: {stderr}" }`
+    = note: to `{
+                $crate :: panicking ::
+                panic_fmt($crate :: const_format_args!
+                ("valid control failed: {stderr}"));
+            }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:204:17
+    |
+204 |                 assert!(!output.status.success(), "{name} unexpectedly compiled");
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: expanding `panic_2021! { "{name} unexpectedly compiled" }`
+    = note: to `{
+                $crate :: panicking ::
+                panic_fmt($crate :: const_format_args! ("{name} unexpectedly compiled"));
+            }`
+
+note: trace_macro
+   --> crates/mini-linq/tests/physical_realization.rs:205:17
+    |
+205 | /                 assert!(
+206 | |                     stderr.contains(message),
+207 | |                     "{name} rejected for the wrong reason: {stderr}"
+208 | |                 );
+    | |_________________^
+    |
+    = note: expanding `panic_2021! { "{name} rejected for the wrong reason: {stderr}" }`
+    = note: to `{
+                $crate :: panicking ::
+                panic_fmt($crate :: const_format_args!
+                ("{name} rejected for the wrong reason: {stderr}"));
+            }`
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.70s

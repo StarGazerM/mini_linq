@@ -3,7 +3,7 @@
 //! This crate deliberately has no DuckDB dependency. The isolated root `xtask`
 //! package owns heavyweight oracle execution. Query leaves use a direct
 //! procedural macro that exposes a typed CQ without executing student passes in
-//! the default build; `compiled-queries` opts into the completed compiler.
+//! the catalog build. Executable provider compositions are separate examples.
 
 pub mod catalog;
 pub mod dataset;

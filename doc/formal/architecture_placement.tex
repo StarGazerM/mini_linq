@@ -1,191 +1,71 @@
-\section{Locating choices at existing compiler boundaries}
+\section{Where each physical choice belongs}
 \label{sec:architecture-placement}
-The canonical stage graph is
-\[
- \mathsf{CQ}\longrightarrow\mathsf{RA}\longrightarrow\mathsf{IX}
- \longrightarrow\mathsf{Rust}[\mathsf{Access}]
- \longrightarrow\mathsf{Rust}[\mathsf{Pipeline}]\longrightarrow\mathsf{Rust}.
-\]
-The configured direct edge separately maps
-$\mathsf{RA}\xrightarrow{\Gamma}\mathsf{Rust}[\mathsf{Access},\mathsf{Native}]$.
-$\Gamma$ is compiler-local lowering information, not an intervening language.
-IX records written equality-index demands; the configured edge accepts RA and
-constructs local resources itself. The borrowed scan composition explicitly
-selects the empty-demand policy, then consumes IX through the same physical,
-Access and Pipeline APIs. That policy fixes no concrete index representation;
-its scan consumer rejects nonempty demands rather than ignoring them.
-
+Physical compilation first records its decisions in Physical IR, then realizes
+that fixed program. A macro alias selects a pass or policy; it does not replace
+every relation's implementation.
 \begin{center}\small
-\begin{tabular}{>{\raggedright\arraybackslash}p{.25\linewidth}>{\raggedright\arraybackslash}p{.31\linewidth}>{\raggedright\arraybackslash}p{.34\linewidth}}
+\begin{tabular}{>{\raggedright\arraybackslash}p{.22\linewidth}>{\raggedright\arraybackslash}p{.68\linewidth}}
 \toprule
-Boundary & Owns & Appropriate choice\\
+Boundary & Required decision or result \\
 \midrule
-CQ to RA & Logical scheduling and equivalence & Legal join order, YA reduction, expression placement\\
-RA/IX to Rust with Access/Native & Construction, layouts, lifetimes and local Access plans & Per-relation providers and resource sharing\\
-Native fragments & Row construction/access, resource operations and whole pair traversal & Tuple/array/block rows, exact/zone keys, scan/prune, hash/nested/merge pairs\\
-Access execution & Binding/control and observation contract & Pull to Pipeline, or eager push directly to a set\\
-Pipeline to Rust & Iterator/collection realization & Distinct iteration, set collection, support streaming or first-witness existence\\
+RA planning & Fix operator occurrences and their exact operand versions. \\
+IX construction & Define each required $(r,C)$ index and write its identity at
+each admitted use position. \\
+IX $\to$ Physical & A replaceable policy $\eta$ produces
+$P=(\mathrm{IX},\Phi,\Lambda)$: relation/index bindings and a selected lowering
+for every RA definition. \\
+Physical $\to$\newline Rust[Access] & Dispatch through the recorded bindings and lowerings;
+establish the compiled representations and views in $\Gamma$. \\
+Access consumption & Preserve the resulting computation's meaning; execution
+scheduling and push/pull placement remain open. \\
 \bottomrule
 \end{tabular}
 \end{center}
-Macro aliases replace selected continuations where generated paths actually name
-them. Caller-owned lexical bindings close over implementation-specific dependencies;
-semantic fragment arguments carry only their actual operands. The plain physical
-host invokes configured paths directly; its observed counterpart additionally
-supplies an optional observer expression to runtime operations. A macro replacement
-must establish the observation and ownership laws of its boundary. Expanded Rust
-checks whether the selected operations and types exist, without a compiler-wide
-enumeration of capabilities.
+The proposed API aliases are \texttt{choose\_physical!} and
+\texttt{realize\_physical!}. For example, imports can bind them to
+\texttt{policies::given\_bindings} and \texttt{lowering::by\_bindings}; these
+are direct aliases, not wrapper macros. Selection receives $\eta$;
+realization receives the fixed $P$ and never invokes $\eta$ again.
+The open environment $\Omega$ supplies provider and lowering definitions.
+Dispatch resolves their recorded paths, not a built-in data-structure enum.
 
-The direct pass lowers Semijoin once to candidate iteration followed by exact
-membership. Candidate expansion can produce local Access with Blocks, a metadata
-guard and current BlockRows. Key construction consumes an Access projection of
-the current RHS, and is independent of candidate scanning. NaturalJoin emits a
-Pairs fragment with two row traversals, derived key expressions and a result
-emission body. Hash, nested and sort/merge implementations therefore own their
-whole local schedule; the caller does not preselect build/probe control. These
-are native expression and statement fragments, not serialized RA operators with
-a physical environment. \code{cq-relation-lowering::configured} owns the enclosing RA
-realization; \code{cq-native-lowering} owns row, candidate, key, witness and pair expansion;
-\code{cq-access-lowering} owns Access execution alternatives; \code{cq-storage} holds
-minimal storage traits and data structures. Feature modules isolate implementations
-within those families. Shared language facts and private strategy analyses do not
-form a universal analysis registry.
+\paragraph{Representation and index compatibility.}
+$\Phi_R(r)$ establishes the representation of relation binding $r$;
+$\Phi_I(i)$ establishes the representation and access of index $i$.
+$\Lambda(x)$ names the lowering of the RA definition producing $x$, including
+\texttt{Rename}, \texttt{Unit} and other admitted definitions. External host
+inputs receive relation bindings but no lowering entry: they are not RA
+definitions. These choices must satisfy the selected definitions' construction
+and use premises.
+Two indexes may share one relation owner while using distinct index structures.
+Conversely, changing relation storage can invalidate an index's row handles or
+access assumptions, so these choices are checked together. $\Gamma$ records
+the resulting physical values, field interpretation and current views; it does
+not impose \texttt{\&Row} as the universal representation.
+Compatibility is a domain obligation of each rule, with applicable type and
+lifetime checks delegated to Rust; the generic compiler is not a semantic
+theorem prover.
 
+\paragraph{Heterogeneous queries.}
+A block-backed relation, a hash-indexed relation and a trie-backed relation
+must be able to retain distinct provider bindings in the same query.
+Zone-map pruning motivates block metadata and payload access; future WCOJ
+motivates trie traversal. These examples state an extensibility requirement,
+not implemented operators or a claim that the current binary fragment already
+expresses WCOJ. Each extension needs its own semantic and compilation rules.
 
-The borrowed scan implementation emits one checked Access region per named RA
-result. Repeated consumers use Native Build/Scan over a selected replay data
-structure; single-use iterators move into their consumers. Its semijoin guard
-contains a local Access quotation with an existential Pipeline endpoint. All
-query adapters still come from the common Pipeline emitter. The data structure
-retains demanded reference tuples and owns independent cursor positions; it
-contains no query operator or RA evaluator.
+The fixture in Section~\ref{sec:ix-physical-redesign} supplies a complete local
+Physical payload with external provider and lowering paths. Its concrete rules
+instantiate the boundary; they are not cases to add to the common compiler.
+Provider callbacks are administrative realization steps. Retaining a semantic
+provider operation as a dialect requires its own specification; no such extra
+public IR is compulsory. A runtime RA evaluator is not required.
 
-Storage and packing choices are bound in native macros. Materialize consumes an
-iterator; Produce offers an emission function so the selected pair algorithm can
-write directly into the chosen result representation. Type/Field/Record prevent
-array indexing from leaking into general RA rules. Block construction evaluates
-its configured packing expression once; its trait requires a unique-row iterable,
-not a particular collection. The query-level realization still owns materialization,
-resource sharing and lifetimes. Exposing a pair algorithm does not automatically
-expose arbitrary region fusion.
-
-Default CQ, index and realization choices each emit a caller-relative continuation,
-so replacing an earlier macro preserves later bindings. An explicit eager recipe
-is a facade binding the index and realization macros, rather than a duplicate
-planner or index language. Native leaf substitution and whole-query replacement
-remain different granularities with different proof obligations.
-
-\subsection{Reading the papers at the right granularity}
-The literature separates representation, scheduling and intermediate semantics.
-The right column below is our architectural placement judgment, not a claim
-that those systems use MiniLinq's macros.
-\begin{center}\small
-\begin{tabular}{>{\raggedright\arraybackslash}p{.24\linewidth}>{\raggedright\arraybackslash}p{.35\linewidth}>{\raggedright\arraybackslash}p{.31\linewidth}}
-\toprule
-Primary source & Mechanism reported & Placement in MiniLinq\\
-\midrule
-SQL Server, CIDR 2026, \S\S3.1,4.1~\cite{ya-sqlserver} & Optimizer decides whether filtering is worthwhile; hash-build execution chooses Bloom/exact bit vector and size from observed keys. & Keep static eligibility in the pass; emit runtime construction and branch selection in its Rust context.\\
-Predicate Transfer, CIDR 2024, \S3.2~\cite{ya-pt} & Prototype fixes Bloom representation and propagates filters between relations, rebuilding them when key columns change. & A complete transfer region needs its own schedule and candidate invariant; reuse local Access for legal row operations.\\
-Diamond Hardened Joins, PVLDB 2024, \S3.2~\cite{ya-dhj} & Separates exact Lookup from Expand, retaining handles to matching tuples so their enumeration can occur later. & Change operator sequencing and handle lifetime in the physical region; a membership-expression replacement alone does not implement it.\\
-YA in Column Stores, PVLDB 2025, \S\S3--4~\cite{ya-shredded} & Gives nested operators and a shredded realization with grouped references, while reusing applicable flat operators. & A backend-specific nested language may be useful; preserve compatible lower holes without forcing nested results into the current flat row-set contract.\\
-\bottomrule
-\end{tabular}
-\end{center}
-SQL Server's instance-optimality discussion assumes exact bitmap filtering;
-its practical Bloom choice does not automatically carry that bound. Likewise,
-nested/bag results do not inherit MiniLinq's set-projection laws. These are
-boundaries of the associated proofs, even when implementations share a method
-name or all return the same final query answer.
-
-\subsection{Replacing an expression, a context, or a compiler segment}
-For a represented exact key set $S$, a hash set and an injectively encoded
-bit vector can both provide an expression $e(k)$ satisfying
-$e(k)\iff k\in S$. This licenses substitution at a membership leaf when
-borrows, binding types, effects and termination match its surrounding context.
-A Bloom expression satisfies only $k\in S\Rightarrow e(k)$, so it cannot
-replace that exact leaf. It can precede an exact test, or participate in a
-whole-region conservative transfer whose final assembly is exact.
-
-The manuscript's ST-Hole rule keeps the surrounding Rust context fixed.
-Changing storage ownership, scheduling, publication barriers or access granularity
-therefore requires replacing the owning context as well. For example, a
-zone-map source must decide block rejection before reading the skipped payload.
-Installing a clever \code{for} source after the existing eager input
-\code{HashSet} normalization cannot save that earlier input read. A block-aware
-physical pass must emit the appropriate input/scan context; it may still reuse
-\code{access_to_distinct_iter!} for the local output loop.
-
-For a strategy $a$, write its compiler edge as
-\[
- f_a:L\longrightarrow\mathsf{Rust}[L_1,\ldots,L_m],\qquad
- f_a(s)=C_a[h_1,\ldots,h_m].
-\]
-Here $L$ is an existing input language, each $h_j$ an independently checked
-lower-language hole, and $C_a$ the generated runtime context. The strategy
-declares its representation relation $\gamma_a$ and admitted domain; it must
-preserve the observation $O$ and client class required by the replaced boundary.
-The manuscript's conditional composition theorem applies with all its premises:
-total compilation on the declared domain, valid targets admitted by subsequent
-passes, established runtime preconditions, compatible environment relations,
-and adequate closing contexts. There need be
-neither one common physical intermediate representation for all $a$ nor one
-trait shared by their storage objects. When two strategies need different
-intermediate meanings, their final observations can still agree through their
-separate representation relations and whole-region proofs.
-
-This yields a concrete implementation discipline: choose the smallest existing
-boundary that owns all changed semantics. Use a native expression for a lawful
-local replacement; replace the Rust context when construction or lifetime
-changes; replace a larger pure RA region when reduction or intermediate-result
-semantics changes. A new language needs a demonstrated missing distinction,
-formal semantics, local contracts and pass rules before IR implementation.
-Its edge must declare the actual source and target languages. The direct RA-to-Access
-edge has its own domain and proof; it does not erase index demands from the canonical
-route. Private token protocols do not substitute for a declared language boundary.
-
-\subsection{Static expansion can emit a runtime representation choice}
-Consider an exact semijoin whose build keys may occupy a compact integer range.
-A physical pass can emit two ordinary Rust branches, each containing an Access
-quotation with the same logical bindings but different concrete expressions:
-\begin{lstlisting}
-let answer = if observed_range_fits_bitmap(&build_keys) {
-    let bits = build_exact_bitmap(&build_keys);
-    mini_linq::access_to_distinct_iter! {
-        out(k) => ((k,)) :-
-        Probe(k) => for (k,) in (probe_rows.iter().copied()),
-        Build(k) => if (bitmap_contains(bits, k));
-    }.collect::<HashSet<_>>()
-} else {
-    let keys = build_exact_hash_set(&build_keys);
-    mini_linq::access_to_distinct_iter! {
-        out(k) => ((k,)) :-
-        Probe(k) => for (k,) in (probe_rows.iter().copied()),
-        Build(k) => if (keys.contains(&k));
-    }.collect::<HashSet<_>>()
-};
-\end{lstlisting}
-The compiled witness is \path{example/src/bin/access_representations.rs};
-this listing abbreviates its helpers. Both macro invocations expand
-at compile time. The generated Rust chooses one branch from input data during
-execution. Branch-local storage types need not unify: each branch returns the
-same declared answer type. A trait, enum or shared helper remains an optional
-implementation choice when it would reduce code or provide another useful
-interface. The witness's range cutoff is illustrative, not a measured optimizer.
-
-For correctness, let $E_b,E_h$ be the completed bitmap and hash branches,
-and $\chi(I)$ the runtime selector. Require
-\[
-\begin{aligned}
- \chi(I)&\Rightarrow \sem{E_b}_I=\sem{l\ltimes r}_I,\\
- \neg\chi(I)&\Rightarrow \sem{E_h}_I=\sem{l\ltimes r}_I.
-\end{aligned}
-\]
-The conditional then has that denotation regardless of the selector's
-profitability. The selector must be total and meet the host assumptions;
-its successful branch test must establish representation-specific conditions
-such as bounded arithmetic and injective bitmap addressing. This is ordinary
-conditional refinement and contextual adequacy, not a new meaning for RA.
-For a represented key set $S$ and Boolean filter $e$, exact-bit-vector and Bloom
-branches can both satisfy $k\in S\Rightarrow e(k)$, provided the caller performs
-the exact operation required by its own contract.
+\paragraph{Conformance status.}
+IX, structural selection and generic realization are implemented, with external
+borrowed slice/hash/sorted providers and exact indexed joins. Actual macro
+captures and independent runtime checks cover that admitted domain. General
+stored intermediates and block/YA realization remain migration gaps. The old
+global provider and whole-query routes have been removed. Authored local and
+auxiliary fixtures are still distinguished from the executable complete-query
+capture; fixture agreement is not proof of arbitrary external provider laws.

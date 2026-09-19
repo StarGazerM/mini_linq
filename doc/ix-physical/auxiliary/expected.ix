@@ -1,0 +1,10 @@
+j0 = natural_join l with r;
+j1 = natural_join m with r;
+indexes {
+    i0 = @r[0];
+    i1 = @r[1];
+}
+uses {
+    j0.right = i0;
+    j1.right = i1;
+}

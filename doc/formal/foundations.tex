@@ -76,7 +76,8 @@ input fields are borrowed, while computed bindings can be owned.
 
 \begin{definition}[Admissible relational host, $\mathcal H_{\rm rel}$]
 \label{def:host}
-On reachable inputs:
+For each expression, on every well-typed valuation of its logical inputs and
+related host bindings, including valuations introduced by a transformed plan:
 \begin{enumerate}
 \item Expressions and pattern matches terminate normally; let patterns are
 irrefutable at their elaborated types.
@@ -86,13 +87,18 @@ and irrelevant environment extensions, with no observable effects.
 \item Equality, hashing, cloning and dropping terminate silently. Rust equality
 agrees exactly with equality of represented values; equal values hash equally;
 clones preserve values. When used, sorting implements a consistent total order silently.
-\item Generated Rust resolves and type-checks, including ownership and
-captures, and implements the intended variable interpretation. Resource
-exhaustion is outside the finite-value model.
 \end{enumerate}
 \end{definition}
 These are theorem premises, not properties established by Syn or Rust trait
-bounds. They give $\sigma_eL=\{t\in L\mid\bar e(t)=\mathsf{true}\}$ and
+bounds. Resource exhaustion is outside the finite-value model. Correct Rust
+elaboration, resolution, ownership and captures are separate obligations of the
+selected expansion; they are not folded into source-host admissibility.
+Totality merely on tuples reached by the original plan is insufficient: with
+$A=\{x=0\}$, $B=\emptyset$ and $e=1/x$, moving Extend from $A\bowtie B$
+onto $A$ introduces a failing evaluation. The definition excludes that $e$ on
+this typed domain. A narrower admissible domain needs a preservation proof for
+every applied rewrite.
+The host premises give $\sigma_eL=\{t\in L\mid\bar e(t)=\mathsf{true}\}$ and
 $\operatorname{ext}_{N,e}L=\{t\cup\bar e(t)\mid t\in L\}$, where
 $\bar e(t):N$ is the named tuple of fresh pattern bindings.
 

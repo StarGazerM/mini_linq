@@ -5,12 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[features]
-# After all three basic passes are complete, compile every authored query through the
-# real user-facing procedural macro. The default remains starter-safe.
-compiled-queries = ["mini-linq/compiled-workloads"]
-
 [dependencies]
 cq-ir.workspace = true
-mini-linq.workspace = true
+mini-linq = { path = "../crates/mini-linq", default-features = false }
 syn.workspace = true

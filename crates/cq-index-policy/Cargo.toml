@@ -7,19 +7,8 @@ license.workspace = true
 
 [features]
 default = []
-no-demands = []
-base-demands = []
-result-demands = []
 
 [dependencies]
 cq-ir = { path = "../cq-ir" }
 quote.workspace = true
 syn.workspace = true
-
-[[test]]
-name = "base_demands"
-required-features = ["base-demands"]
-
-[[test]]
-name = "result_demands"
-required-features = ["result-demands"]

@@ -1,250 +1,8 @@
-//! Reproduce the paper's worked example using the actual typed pass APIs.
-//! All generated artifacts go beneath doc/formal/build/example by default.
-//! Also executes both public macro routes and compiles/runs both final Rust files.
-mod eager_programs {
-    mod wiring {
-        #[allow(unused_imports)]
-        pub use ::mini_linq::{
-            access_to_distinct_iter, access_to_set, choose_graph_or_prefix, cq_to_ra_clause_prefix,
-            cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
-        };
-        pub use ::mini_linq::{
-            materialized_hash_program as choose_relation_lowering,
-            result_index_demands as choose_index_policy,
-        };
-    }
-    use wiring as mini_linq;
-    mini_linq::choose_graph_or_prefix! {
-        pub struct MaterializedOverview;
-        relation R(a:i32,b:i32,c:i32,d:i32);
-        relation S(a:i32,b:i32,c:i32);
-        relation T(a:i32,b:i32);
-        relation answer(a:i32,b:i32);
-        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
-    }
-}
-use cq_ir::{cq, iterator_pipeline, relational_plan, rust_access_plan};
+//! The paper's YA example stops at verified RA and IX boundaries.
+use cq_ir::{cq, relational_plan};
 use cq_query_lowering::Rule as JoinRule;
-pub use eager_programs::MaterializedOverview;
-use quote::quote;
+use mini_linq_paper_overview::{boundaries, directory};
 use std::collections::BTreeSet;
-use syn::visit_mut::VisitMut;
-
-mini_linq::mini_linq! {
-    pub struct LazyOverview;
-    relation R(a:i32,b:i32,c:i32,d:i32);
-    relation S(a:i32,b:i32,c:i32);
-    relation T(a:i32,b:i32);
-    relation answer(a:i32,b:i32);
-    answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
-}
-
-struct ExposePipelines;
-impl VisitMut for ExposePipelines {
-    fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
-        let next = match mac.path.segments.last().unwrap().ident.to_string().as_str() {
-            "access_to_distinct_iter" => syn::parse_quote!(::mini_linq::pipeline_to_distinct_iter),
-            "access_to_set" => syn::parse_quote!(::mini_linq::pipeline_to_set),
-            _ => return,
-        };
-        let access: rust_access_plan::Plan = syn::parse2(mac.tokens.clone()).unwrap();
-        rust_access_plan::contract::check(&access).unwrap();
-        let target = cq_access_lowering::to_pipeline::compile(&access).unwrap();
-        iterator_pipeline::contract::check(&target).unwrap();
-        mac.path = next;
-        mac.tokens = quote!(#target);
-    }
-}
-
-fn lower_pipeline(mac: &syn::Macro) -> Option<syn::Expr> {
-    let lower = match mac.path.segments.last().unwrap().ident.to_string().as_str() {
-        "pipeline_to_distinct_iter" => cq_pipeline_lowering::distinct_iter::compile,
-        "pipeline_to_set" => cq_pipeline_lowering::collect_set::compile,
-        _ => return None,
-    };
-    let pipeline: iterator_pipeline::Pipeline = syn::parse2(mac.tokens.clone()).unwrap();
-    iterator_pipeline::contract::check(&pipeline).unwrap();
-    Some(lower(&pipeline).unwrap())
-}
-
-struct LowerPipelines;
-impl VisitMut for LowerPipelines {
-    fn visit_stmt_mut(&mut self, stmt: &mut syn::Stmt) {
-        if let syn::Stmt::Macro(m) = stmt {
-            if let Some(expr) = lower_pipeline(&m.mac) {
-                *stmt = syn::Stmt::Expr(expr, m.semi_token);
-                return;
-            }
-        }
-        syn::visit_mut::visit_stmt_mut(self, stmt);
-    }
-    fn visit_expr_mut(&mut self, expr: &mut syn::Expr) {
-        if let syn::Expr::Macro(m) = expr {
-            if let Some(target) = lower_pipeline(&m.mac) {
-                *expr = target;
-                return;
-            }
-        }
-        syn::visit_mut::visit_expr_mut(self, expr);
-    }
-}
-fn write(directory: &std::path::Path, name: &str, file: &syn::File) {
-    std::fs::write(
-        directory.join(format!("{name}.rs")),
-        prettyplease::unparse(file),
-    )
-    .unwrap();
-}
-fn boundaries(directory: &std::path::Path, prefix: &str, source: &cq::Module, planned: bool) {
-    let ra = if planned {
-        cq_compose::compile_cq_planned(source)
-    } else {
-        cq_compose::compile_cq(source)
-    }
-    .unwrap();
-    let ix = if planned {
-        cq_index_policy::result_demands::compile(&ra)
-    } else {
-        cq_index_policy::result_demands::compile(&ra)
-    }
-    .unwrap();
-    let indexes: Vec<_> = ix
-        .indexes
-        .iter()
-        .map(|index| {
-            assert!(index.result_token.is_some());
-            (
-                index.relation.to_string(),
-                index
-                    .key_columns
-                    .iter()
-                    .map(|column| column.index)
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect();
-    let expected = if planned {
-        vec![
-            ("r0", vec![0, 1]),
-            ("r4", vec![2]),
-            ("r5", vec![1]),
-            ("r6", vec![0, 1]),
-            ("r6", vec![2]),
-            ("r8", vec![0, 1]),
-        ]
-    } else {
-        vec![("r1", vec![0, 1]), ("r3", vec![1])]
-    };
-    assert_eq!(
-        indexes,
-        expected
-            .into_iter()
-            .map(|(name, key)| (name.to_owned(), key))
-            .collect::<Vec<_>>()
-    );
-    let staged = if planned {
-        cq_relation_lowering::materialized_hash::compile(
-            &ix,
-            &syn::parse_quote!(::mini_linq::access_to_set),
-        )
-    } else {
-        cq_relation_lowering::prefix_hash::compile(
-            &ix,
-            &syn::parse_quote!(::mini_linq::access_to_distinct_iter),
-        )
-    }
-    .unwrap();
-    let wiring = if planned {
-        quote! {
-            mod wiring {
-                #[allow(unused_imports)]
-        pub use ::mini_linq::{choose_graph_or_prefix, cq_to_ra_hypergraph, cq_to_ra_clause_prefix, access_to_set, pipeline_to_set, access_to_distinct_iter, pipeline_to_distinct_iter};
-                pub use ::mini_linq::{result_index_demands as choose_index_policy, materialized_hash_program as choose_relation_lowering};
-            }
-            use wiring as mini_linq;
-        }
-    } else {
-        quote!()
-    };
-    let (cq_macro, ra_macro, index_macro): (syn::Path, syn::Path, syn::Path) = if planned {
-        (
-            syn::parse_quote!(mini_linq::choose_graph_or_prefix),
-            syn::parse_quote!(mini_linq::choose_index_policy),
-            syn::parse_quote!(::mini_linq::materialized_hash_program),
-        )
-    } else {
-        (
-            syn::parse_quote!(::mini_linq::mini_linq),
-            syn::parse_quote!(::mini_linq::choose_index_policy),
-            syn::parse_quote!(::mini_linq::lower_prefix_hash),
-        )
-    };
-    write(
-        directory,
-        &format!("{prefix}-01-cq"),
-        &syn::parse2(quote!(#wiring #cq_macro! { #source })).unwrap(),
-    );
-    write(
-        directory,
-        &format!("{prefix}-02-relational"),
-        &syn::parse2(quote!(#wiring #ra_macro! { #ra })).unwrap(),
-    );
-    write(
-        directory,
-        &format!("{prefix}-03-indexes"),
-        &syn::parse2(quote!(#index_macro! { #ix })).unwrap(),
-    );
-    write(directory, &format!("{prefix}-04-access"), &staged);
-    let mut pipelines = staged;
-    ExposePipelines.visit_file_mut(&mut pipelines);
-    write(directory, &format!("{prefix}-05-pipeline"), &pipelines);
-    let mut rust = pipelines;
-    LowerPipelines.visit_file_mut(&mut rust);
-    let main: syn::Item = syn::parse_quote! {
-        fn main() {
-            let r = [(1,10,1,100),(1,10,1,101),(2,10,2,200),(3,20,1,300),(4,30,1,400),(5,40,1,500)];
-            let s = [(10,1,1000),(10,2,2000),(20,1,3000),(40,1,4000),(50,1,5000)];
-            let t = [(1000,7),(1000,8),(2000,9),(3000,-1),(5000,11),(6000,12)];
-            let expected = vec![(1,7),(1,8),(2,9)];
-            let actual = Overview::run(r,s,t);
-            assert_eq!(actual, expected);
-            assert_eq!(
-                Overview::run(
-                    r.into_iter().rev().chain(r),
-                    s.into_iter().rev().chain(s),
-                    t.into_iter().rev().chain(t),
-                ),
-                expected,
-            );
-            assert!(Overview::run([],s,t).is_empty());
-            assert!(Overview::run(r,[],t).is_empty());
-            assert!(Overview::run(r,s,[]).is_empty());
-        }
-    };
-    rust.items.push(main);
-    write(directory, &format!("{prefix}-06-rust"), &rust);
-    let source_file = directory.join(format!("{prefix}-06-rust.rs"));
-    let executable = directory.join(format!("{prefix}-run"));
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let build = std::process::Command::new(rustc)
-        .args(["--edition=2024", "-Awarnings"])
-        .arg(&source_file)
-        .arg("-o")
-        .arg(&executable)
-        .output()
-        .unwrap();
-    assert!(
-        build.status.success(),
-        "{}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    assert!(
-        std::process::Command::new(executable)
-            .status()
-            .unwrap()
-            .success()
-    );
-}
 
 fn oracle(r: &[(i32, i32, i32, i32)], s: &[(i32, i32, i32)], t: &[(i32, i32)]) -> Vec<(i32, i32)> {
     let mut answer = BTreeSet::new();
@@ -261,26 +19,8 @@ fn oracle(r: &[(i32, i32, i32, i32)], s: &[(i32, i32, i32)], t: &[(i32, i32)]) -
     answer.into_iter().collect()
 }
 
-fn check_input(r: &[(i32, i32, i32, i32)], s: &[(i32, i32, i32)], t: &[(i32, i32)]) {
-    let expected = oracle(r, s, t);
-    assert_eq!(
-        LazyOverview::run(r.iter().copied(), s.iter().copied(), t.iter().copied()),
-        expected
-    );
-    assert_eq!(
-        MaterializedOverview::run(r.iter().copied(), s.iter().copied(), t.iter().copied()),
-        expected
-    );
-}
-
 fn main() {
-    let directory = std::env::args_os()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../build/example")
-        });
-    std::fs::create_dir_all(&directory).unwrap();
+    let directory = directory("logical-overview");
     let source: cq::Module = syn::parse_quote! {
         pub struct Overview;
         relation R(a:i32,b:i32,c:i32,d:i32);
@@ -289,7 +29,7 @@ fn main() {
         relation answer(a:i32,b:i32);
         answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
     };
-    let (ra, report) = cq_compose::explain_cq_plan(
+    let (ra, report) = cq_query_lowering::composition::explain_cq_plan(
         &source,
         cq_query_lowering::PlanningOptions {
             strategy: cq_query_lowering::JoinPolicy::Auto,
@@ -298,7 +38,7 @@ fn main() {
     )
     .unwrap();
     std::fs::write(directory.join("report.txt"), format!("{report:#?}")).unwrap();
-    cq_compose::check_cq_plan(&source, &ra, &report).unwrap();
+    cq_query_lowering::composition::check_cq_plan(&source, &ra, &report).unwrap();
     assert_eq!(
         report.join_tree.as_ref().unwrap().parent,
         [Some(1), Some(2), None]
@@ -345,8 +85,39 @@ fn main() {
         output r12 as answer(x, y);
     };
     assert_eq!(ra.plan, expected_ra);
-    boundaries(&directory, "lazy", &source, false);
-    boundaries(&directory, "materialized", &source, true);
+    let planned = boundaries(&directory, "planned", &source, true);
+    let written = boundaries(&directory, "written", &source, false);
+    let descriptors = |ix: &cq_ir::index_requirements::Module| {
+        ix.indexes
+            .iter()
+            .map(|index| {
+                (
+                    index.requirement.relation.to_string(),
+                    index
+                        .requirement
+                        .columns
+                        .iter()
+                        .map(|column| column.index)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        descriptors(&planned),
+        vec![
+            ("r0".into(), vec![0, 1]),
+            ("r4".into(), vec![2]),
+            ("r5".into(), vec![1]),
+            ("r6".into(), vec![0, 1]),
+            ("r6".into(), vec![2]),
+            ("r8".into(), vec![0, 1])
+        ]
+    );
+    assert_eq!(
+        descriptors(&written),
+        vec![("r1".into(), vec![0, 1]), ("r3".into(), vec![1])]
+    );
     let r = [
         (1, 10, 1, 100),
         (1, 10, 1, 101),
@@ -372,47 +143,18 @@ fn main() {
     ];
     let expected = vec![(1, 7), (1, 8), (2, 9)];
     assert_eq!(oracle(&r, &s, &t), expected);
-    check_input(&r, &s, &t);
-    check_input(
-        &r.into_iter().rev().chain(r).collect::<Vec<_>>(),
-        &s.into_iter().rev().chain(s).collect::<Vec<_>>(),
-        &t.into_iter().rev().chain(t).collect::<Vec<_>>(),
-    );
-    check_input(&[], &s, &t);
-    check_input(&r, &[], &t);
-    check_input(&r, &s, &[]);
-    let (answer, stats) = MaterializedOverview::run_with_stats(r, s, t);
-    assert_eq!(answer, expected);
     assert_eq!(
-        stats.results,
-        [
-            ("r0", 4, 6),
-            ("r1", 3, 5),
-            ("r2", 2, 6),
-            ("r3", 2, 5),
-            ("r4", 3, 4),
-            ("r5", 2, 3),
-            ("r6", 3, 2),
-            ("r7", 4, 3),
-            ("r8", 3, 2),
-            ("r9", 4, 3),
-            ("r10", 3, 3),
-            ("r11", 4, 3),
-            ("r12", 2, 3),
-        ]
+        oracle(
+            &r.into_iter().rev().chain(r).collect::<Vec<_>>(),
+            &s.into_iter().rev().chain(s).collect::<Vec<_>>(),
+            &t.into_iter().rev().chain(t).collect::<Vec<_>>()
+        ),
+        expected
     );
-    assert_eq!(stats.index_rows, 19);
-    assert_eq!(stats.join_pairs, 6);
-    assert_eq!(stats.semijoin_probes, 20);
-    let evidence = format!(
-        "YA join tree R--S--T, rooted at T; separators {{k,tag}} and {{z}}.\n\
-         Up0, Up1, Down1, Down0 and complete expected RA/indexes verified.\n\
-         Answer {answer:?}\nResults: {:?}\n\
-         Index rows {}; join pairs {}; semijoin probes {}\n\
-         Two public routes and two fully lowered Rust executables pass five input presentations each.\n\
-         Presentations: original, reversed with duplicates, empty R, empty S, empty T.\n",
-        stats.results, stats.index_rows, stats.join_pairs, stats.semijoin_probes,
-    );
-    std::fs::write(directory.join("validation.txt"), &evidence).unwrap();
+    assert!(oracle(&[], &s, &t).is_empty());
+    assert!(oracle(&r, &[], &t).is_empty());
+    assert!(oracle(&r, &s, &[]).is_empty());
+    let evidence = "PASS: exact YA derivation, RA and IX descriptors; independent oracle checks five input presentations. No post-IX compiler or generated-query execution is exercised.\n";
+    std::fs::write(directory.join("validation.txt"), evidence).unwrap();
     print!("{evidence}");
 }

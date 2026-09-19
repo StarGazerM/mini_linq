@@ -17,9 +17,10 @@ fn index_tokens() -> TokenStream {
     quote! {
         #relational
         indexes {
-            S[0];
-            T[0, 1];
+            i0 = @r1[0];
+            i1 = @r3[0, 1];
         }
+        uses { r2.right = i0; r4.right = i1; }
     }
 }
 
@@ -42,8 +43,8 @@ fn relational_tokens() -> TokenStream {
 fn annotated_access_tokens() -> TokenStream {
     quote! {
         triangle(x, y, z) => ((x.clone(), y.clone(), z.clone(),)) :-
-            R(x, y) => for (x, y,) in (rows0.iter()),
-            S(y, z) => for (z,) in
+            R(x, y) => bind (x, y,) <- (rows0.iter()),
+            S(y, z) => bind (z,) <-
                 (index0.get(&(y.clone(),)).into_iter().flatten()),
             T(z, x) => if (index1.contains(&(z.clone(), x.clone(),)));
     }
@@ -184,34 +185,21 @@ fn relation_declarations_preserve_full_rust_column_types() {
 fn index_language_contract_is_local_and_separate_from_rust_physicalization() {
     let relational = relational_tokens();
 
-    // This remains locally meaningful even though it is not the canonical
-    // answer for the written triangle order.
-    let noncanonical: index_requirements::Module = syn::parse2(quote! {
-        #relational
-        indexes { R[1]; }
-    })
-    .unwrap();
-    index_requirements::contract::check(&noncanonical).unwrap();
+    // IX is physically neutral, but demands and use references are exact.
+    let indexed: index_requirements::Module = syn::parse2(index_tokens()).unwrap();
+    index_requirements::contract::check(&indexed).unwrap();
 
-    for invalid in [
-        quote! {
-            #relational
-            indexes { S[]; }
-        },
-        quote! {
-            #relational
-            indexes { S[1, 0]; }
-        },
-        quote! {
-            #relational
-            indexes { S[0]; S[0]; }
-        },
-        quote! {
-            #relational
-            indexes { S[2]; }
-        },
+    for indexes in [
+        quote! { i0 = @r1[]; i1 = @r3[0,1]; },
+        quote! { i0 = @r1[1,0]; i1 = @r3[0,1]; },
+        quote! { i0 = @r1[0]; i1 = @r1[0]; },
+        quote! { i0 = @r1[2]; i1 = @r3[0,1]; },
     ] {
-        let module: index_requirements::Module = syn::parse2(invalid).unwrap();
+        let module: index_requirements::Module = syn::parse2(quote! {
+            #relational indexes { #indexes }
+            uses { r2.right = i0; r4.right = i1; }
+        })
+        .unwrap();
         assert!(index_requirements::contract::check(&module).is_err());
         assert!(!index_requirements::contract::well_formed(&module));
     }

@@ -1,0 +1,64 @@
+reply_to(observe_reply)
+{
+    callback(:: mini_linq :: resume_physical) kind(0) state
+    {plan
+        {
+            struct PullChain; relation L(a : Value); relation
+            R(a : Value, b : Value); relation S(b : Value, c : Value);
+            answer(a, c) : - L(a), R(a, b), S(b, c); relational
+            {
+                r0 = rename L { a - > a }; r1 = rename R { a - > a, b - > b };
+                r2 = natural_join r0 with r1; r3 = rename S
+                { b - > b, c - > c }; r4 = natural_join r2 with r3; r5 =
+                project r4 keep { a, c }; output r5 as answer(a, c);
+            } indexes { i0 = @ r1 [0]; i1 = @ r3 [0]; } uses
+            { r2.right = i0; r4.right = i1; } physical
+            {
+                relations
+                {
+                    L = observed_slice; R = observed_hash; S = observed_sorted;
+                    r0 = observed_slice; r1 = observed_hash; r2 = ::
+                    cq_example_providers :: borrowed_fields; r3 =
+                    observed_sorted; r4 = :: cq_example_providers ::
+                    borrowed_fields; r5 = :: cq_example_providers ::
+                    borrowed_fields;
+                } indexes { i0 = observed_hash; i1 = observed_sorted; }
+                lowerings
+                {
+                    r0 = :: cq_example_providers :: rename; r1 = ::
+                    cq_example_providers :: rename; r2 = :: cq_example_providers
+                    :: indexed_join; r3 = :: cq_example_providers :: rename; r4
+                    = :: cq_example_providers :: indexed_join; r5 = ::
+                    cq_example_providers :: project;
+                }
+            }
+        } environment {} emitted {} pending { input L from(L) }
+        continuations(:: mini_linq :: resume_physical, mini_linq :: access)}
+} plan
+{struct PullChain; relation L(a : Value); relation R(a : Value, b : Value);
+    relation S(b : Value, c : Value); answer(a, c) : - L(a), R(a, b), S(b, c);
+    relational
+    {
+        r0 = rename L { a - > a }; r1 = rename R { a - > a, b - > b }; r2 =
+        natural_join r0 with r1; r3 = rename S { b - > b, c - > c }; r4 =
+        natural_join r2 with r3; r5 = project r4 keep { a, c }; output r5 as
+        answer(a, c);
+    } indexes { i0 = @ r1 [0]; i1 = @ r3 [0]; } uses
+    { r2.right = i0; r4.right = i1; } physical
+    {
+        relations
+        {
+            L = observed_slice; R = observed_hash; S = observed_sorted; r0 =
+            observed_slice; r1 = observed_hash; r2 = :: cq_example_providers
+            :: borrowed_fields; r3 = observed_sorted; r4 = ::
+            cq_example_providers :: borrowed_fields; r5 = ::
+            cq_example_providers :: borrowed_fields;
+        } indexes { i0 = observed_hash; i1 = observed_sorted; } lowerings
+        {
+            r0 = :: cq_example_providers :: rename; r1 = ::
+            cq_example_providers :: rename; r2 = :: cq_example_providers ::
+            indexed_join; r3 = :: cq_example_providers :: rename; r4 = ::
+            cq_example_providers :: indexed_join; r5 = :: cq_example_providers
+            :: project;
+        }
+    }} environment {} request {input L from(L)}

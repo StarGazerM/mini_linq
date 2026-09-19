@@ -39,7 +39,7 @@ pub fn compile(source: &rust_access_plan::Plan) -> syn::Result<syn::Expr> {
         .iter()
         .map(|clause| {
             let incoming = binding.clone();
-            if let RustAccess::For { pattern, .. } = &clause.access {
+            if let RustAccess::Bind { pattern, .. } = &clause.access {
                 binding.extend(cq_ir::cq::rust::bindings(pattern));
             }
             (&clause.access, incoming)
@@ -49,7 +49,7 @@ pub fn compile(source: &rust_access_plan::Plan) -> syn::Result<syn::Expr> {
     let mut live = rust::free_variables(output).dependencies(&environment);
     for (access, incoming) in clauses.into_iter().rev() {
         statement = match access {
-            RustAccess::For {
+            RustAccess::Bind {
                 pattern, source, ..
             } => {
                 let copies = incoming

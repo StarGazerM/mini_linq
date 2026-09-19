@@ -8,5 +8,6 @@ publish = false
 
 [dependencies]
 mini-linq = { path = "../../crates/mini-linq", default-features = false, features = [
-    "hypergraph", "result-index-demands", "materialized-hash", "access-to-pipeline", "pipeline-set",
+    "index-demands", "physical-selection", "physical-realization", "access-to-set-loops",
 ] }
+cq-example-providers = { path = "../../crates/cq-example-providers" }

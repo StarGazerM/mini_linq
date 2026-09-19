@@ -1,8 +1,6 @@
 mod explain;
 #[cfg(feature = "oracle")]
 mod oracle;
-#[cfg(feature = "oracle")]
-mod runner;
 
 use std::env;
 use std::error::Error;
@@ -45,17 +43,7 @@ fn run() -> Result<()> {
                 rerun_with_oracle("golden", &arguments)
             }
         }
-        "differential" => {
-            #[cfg(feature = "oracle")]
-            {
-                let options = CommandOptions::parse(arguments, false)?;
-                differential(options.selection, options.scale, options.scenarios)
-            }
-            #[cfg(not(feature = "oracle"))]
-            {
-                rerun_with_oracle("differential", &arguments)
-            }
-        }
+        "differential" => Err("differential execution is unavailable: the old whole-query Rust backend was removed; workload-specific Physical assignments and a host input/output contract are required before generated-query comparison can resume".into()),
         "explain" => explain::run(arguments, &repository_root()),
         "help" | "--help" | "-h" => {
             help();
@@ -162,38 +150,6 @@ fn golden(
                     expected.len()
                 );
             }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "oracle")]
-fn differential(selection: Selection, scale: Scale, scenarios: ScenarioSelection) -> Result<()> {
-    let allow_inapplicable = scenarios.allows_inapplicable();
-    for case in selection.cases() {
-        for scenario in scenarios.values() {
-            let config = generation_config(case, scenario, scale);
-            if !check_or_skip_scenario(case, scenario, allow_inapplicable)? {
-                reject_inapplicable_data(case, scenario, scale)?;
-                continue;
-            }
-            let generated = if scale == Scale::Tiny {
-                Some(cq_workloads::generate::generate(case, config)?)
-            } else {
-                None
-            };
-            let directory = data_directory(case, scenario, scale);
-            let (_, dataset) = read_generated(case, config, generated.as_ref())?;
-            let expected = oracle::evaluate(case, &dataset)?;
-            drop(dataset);
-            let actual = runner::compile_and_run(case, scale, &directory)?;
-            compare_rows(case, scenario, "MiniLinq", &actual, "DuckDB", &expected)?;
-            println!(
-                "match  {:<28} {:<11} {} rows",
-                case.name,
-                scenario.as_str(),
-                actual.len()
-            );
         }
     }
     Ok(())
@@ -563,13 +519,12 @@ MiniLinq workload tasks
 
 SCENARIO is coverage, empty-input, no-match, or all. It defaults to coverage.
 
-STAGE is cq, relational-plan, index-requirements, rust-access-plan,
-iterator-pipeline, or final-rust. It defaults to final-rust.
+STAGE is cq, relational-plan, or index-requirements. It defaults to index-requirements.
 
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
-mode that changes those answers. `differential` compiles the current homework
-passes, runs the generated Rust on the same imported data, and compares every
-raw result row with DuckDB."
+mode that changes those answers. `differential` is unavailable until workload
+Physical assignments and the new host input/output contract are supplied.
+`explain` records typed CQ, RA and IX payloads; it does not execute a backend."
     );
 }
 

@@ -27,7 +27,7 @@ pub fn compile(source: &rust_access_plan::Plan) -> syn::Result<iterator_pipeline
     let mut current_stream = match clauses.next() {
         Some(
             clause @ rust_access_plan::Clause {
-                access: rust_access_plan::RustAccess::For { .. },
+                access: rust_access_plan::RustAccess::Bind { .. },
                 ..
             },
         ) => {
@@ -88,11 +88,11 @@ fn lower_root_scan(
     stream: &syn::Ident,
     binding: &mut Vec<syn::Ident>,
 ) -> TokenStream {
-    let rust_access_plan::RustAccess::For {
+    let rust_access_plan::RustAccess::Bind {
         pattern, source, ..
     } = &clause.access
     else {
-        unreachable!("the root scan caller selected a Rust `for` access")
+        unreachable!("the root scan caller selected a `bind` access")
     };
     binding.extend(pattern_variables(pattern));
     let output = binding_expression(binding);
@@ -109,7 +109,7 @@ fn lower_operator(
 ) -> (syn::Ident, TokenStream) {
     let input = binding_pattern(binding);
     match &clause.access {
-        rust_access_plan::RustAccess::For {
+        rust_access_plan::RustAccess::Bind {
             pattern, source, ..
         } => {
             binding.extend(pattern_variables(pattern));

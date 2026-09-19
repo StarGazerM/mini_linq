@@ -11,7 +11,7 @@ fn semicolons_are_required_at_every_language_boundary() {
     }
     check::<cq::Module>("struct P; relation R(a:i32); answer(x) :- R(x);");
     check::<relational_plan::Plan>("r0 = unit; output r0 as answer();");
-    check::<rust_access_plan::Plan>("answer(x) => ((x,)) :- R(x) => for (x,) in (rows.iter());");
+    check::<rust_access_plan::Plan>("answer(x) => ((x,)) :- R(x) => bind (x,) <- (rows.iter());");
     check::<iterator_pipeline::Pipeline>("iter0 = unit yield (); return iter0;");
 }
 
@@ -51,7 +51,7 @@ fn nested_plans_reject_missing_output_and_tokens_after_output() {
         );
     }
     let source = format!(
-        "{prefix} relational {{ r0 = rename R {{a -> x}}; output r0 as answer(x); }} indexes {{}}"
+        "{prefix} relational {{ r0 = rename R {{a -> x}}; output r0 as answer(x); }} indexes {{}} uses {{}}"
     );
     syn::parse_str::<cq_ir::index_requirements::Module>(&source).unwrap();
 }

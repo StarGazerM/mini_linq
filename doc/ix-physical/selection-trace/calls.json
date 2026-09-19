@@ -1,0 +1,18 @@
+[
+  {
+    "process": 1567805,
+    "step": 1,
+    "macro": "index_demands",
+    "input": "raw/1567805/001-index_demands.input.tokens",
+    "output": "raw/1567805/001-index_demands.output.tokens",
+    "output_bytes": 505
+  },
+  {
+    "process": 1567805,
+    "step": 2,
+    "macro": "given_physical_bindings",
+    "input": "raw/1567805/002-given_physical_bindings.input.tokens",
+    "output": "raw/1567805/002-given_physical_bindings.output.tokens",
+    "output_bytes": 1159
+  }
+]

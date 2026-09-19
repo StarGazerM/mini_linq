@@ -1,158 +1,231 @@
+//! IX records exact index demands and the join positions that use them.
+//!
+//! The complete relational plan is retained unchanged. Index descriptors use
+//! sorted logical headings of named RA results; physical providers consume
+//! the recorded identities instead of deriving join columns again.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{Column, CommaList, SemicolonList, relational_plan, symbol_name};
 use syn::{Ident, Token, token};
 
-/// A relation and a possibly empty, optionally trailing-comma index key.
+mod joins;
+pub use joins::result_join_columns;
+
+pub mod kw {
+    syn::custom_keyword!(uses);
+    syn::custom_keyword!(right);
+}
+
+/// An exact RA result version and its ordered logical column ordinals.
 ///
 /// ```text
-/// IndexRequirement ::= ["@"] Ident "[" [Column ("," Column)* [","]] "]"
+/// IndexRequirement ::= "@" Ident "[" [Column ("," Column)* [","]] "]"
 /// ```
+///
+/// The empty list denotes indexing by the unit tuple, including a Cartesian
+/// join or a semijoin that tests whether its right relation is nonempty.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct IndexRequirement {
-    /// `@` selects the named RA-result namespace. Its columns are ordinals
-    /// in that result's sorted heading; absent `@` keeps input-column order.
-    pub result_token: Option<Token![@]>,
+    pub at_token: Token![@],
     pub relation: Ident,
     #[syn(bracketed)]
     pub bracket_token: token::Bracket,
     #[syn(in = bracket_token)]
     #[parse(CommaList::parse_terminated)]
-    pub key_columns: CommaList<Column>,
+    pub columns: CommaList<Column>,
 }
 
-/// Factual identity of a written requirement: result namespace, symbol and
-/// ordered key coordinates. This does not derive or require any access policy.
-pub type Signature = (bool, String, Vec<usize>);
+/// `i = @r[C]`, separated from other definitions by a semicolon.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct IndexDefinition {
+    pub name: Ident,
+    pub eq_token: Token![=],
+    pub requirement: IndexRequirement,
+}
+
+/// `j.right = i`, identifying the indexed operand of one binary RA operation.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct IndexUse {
+    pub result: Ident,
+    pub dot_token: Token![.],
+    pub right_token: kw::right,
+    pub eq_token: Token![=],
+    pub index: Ident,
+}
+
+/// Semantic identity of an index demand; index names form a separate namespace.
+pub type Signature = (String, Vec<usize>);
 
 pub fn signature(index: &IndexRequirement) -> Signature {
     (
-        index.result_token.is_some(),
         symbol_name(&index.relation),
         index
-            .key_columns
+            .columns
             .iter()
             .map(|column| column.index as usize)
             .collect(),
     )
 }
 
-/// A complete relational plan followed by a possibly empty index overlay.
+/// A complete RA program followed by named index definitions and use references.
 ///
 /// ```text
-/// struct TriangleProgram;
-/// relation R(c0: i32, c1: i32);
-/// relation S(c0: i32, c1: i32);
-/// relation T(c0: i32, c1: i32);
-/// triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
-/// relational {
-///     r0 = rename R {c0 -> x, c1 -> y};
-///     r1 = rename S {c0 -> y, c1 -> z};
-///     r2 = natural_join r0 with r1;
-///     r3 = rename T {c0 -> z, c1 -> x};
-///     r4 = natural_join r2 with r3;
-///     r5 = project r4 keep {x, y, z};
-///     output r5 as triangle(x, y, z);
-/// }
-/// indexes {
-///     S[0];
-///     T[0, 1];
-/// }
+/// Module ::= RA "indexes" "{" (IndexDefinition ";")* "}"
+///               "uses" "{" (IndexUse ";")* "}"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Module {
     pub relational_plan: relational_plan::Module,
     pub indexes_token: crate::kw::indexes,
     #[syn(braced)]
-    pub indexes_brace: syn::token::Brace,
+    pub indexes_brace: token::Brace,
     #[syn(in = indexes_brace)]
     #[parse(SemicolonList::parse_terminated)]
-    pub indexes: SemicolonList<IndexRequirement>,
+    pub indexes: SemicolonList<IndexDefinition>,
+    pub uses_token: kw::uses,
+    #[syn(braced)]
+    pub uses_brace: token::Brace,
+    #[syn(in = uses_brace)]
+    #[parse(SemicolonList::parse_terminated)]
+    pub uses: SemicolonList<IndexUse>,
 }
 
-/// The IndexRequirements contract in diagnostic and predicate form.
 pub mod contract {
-    /// Check the IndexRequirements language contract with precise diagnostics.
+    /// Check RA, unique descriptors, exact join-use coverage, and no unused index.
     pub fn check(module: &super::Module) -> syn::Result<()> {
         super::relational_plan::contract::check(&module.relational_plan)?;
         super::check_indexes(module)
     }
 
-    /// Whether a parsed module satisfies the IndexRequirements contract.
     pub fn well_formed(module: &super::Module) -> bool {
         check(module).is_ok()
     }
 }
 
 fn check_indexes(module: &Module) -> syn::Result<()> {
-    let schema = module
-        .relational_plan
-        .program
-        .inputs()
-        .map(|input| (symbol_name(&input.name), input.arity()))
-        .collect::<BTreeMap<_, _>>();
-    let mut seen = BTreeSet::new();
-    let results = relational_plan::check_in(
-        module.relational_plan.program.inputs(),
-        &module.relational_plan.plan,
-    )?;
-
+    if !module.indexes.is_empty() && !module.indexes.trailing_punct() {
+        return Err(syn::Error::new_spanned(
+            module.indexes.last().unwrap(),
+            "index definitions must end with a semicolon",
+        ));
+    }
+    if !module.uses.is_empty() && !module.uses.trailing_punct() {
+        return Err(syn::Error::new_spanned(
+            module.uses.last().unwrap(),
+            "index uses must end with a semicolon",
+        ));
+    }
+    let plan = &module.relational_plan;
+    let results = relational_plan::check_in(plan.program.inputs(), &plan.plan)?;
+    let mut indexes = BTreeMap::new();
+    let mut descriptors = BTreeSet::new();
     for index in &module.indexes {
-        let arity = if index.result_token.is_some() {
-            results
-                .get(&symbol_name(&index.relation))
-                .map(|r| r.heading.len())
-        } else {
-            schema.get(&symbol_name(&index.relation)).copied()
-        };
-        let Some(arity) = arity else {
+        let requirement = &index.requirement;
+        let (relation, columns) = signature(requirement);
+        let Some(info) = results.get(&relation) else {
             return Err(syn::Error::new_spanned(
-                index,
-                format!(
-                    "index requirement names undeclared relation `{}`",
-                    index.relation
-                ),
+                requirement,
+                format!("index source `@{relation}` must name an exact RA result"),
             ));
         };
-        if index.key_columns.is_empty() {
+        if let Some(column) = columns.iter().find(|&&column| column >= info.heading.len()) {
             return Err(syn::Error::new_spanned(
-                index,
+                requirement,
                 format!(
-                    "index requirement `{}` has an empty key; an empty bound key requires no index entry",
-                    index.relation
+                    "index column {column} exceeds heading arity {} of `@{relation}`",
+                    info.heading.len()
                 ),
             ));
         }
-        let key = signature(index);
-        let columns = &key.2;
-        if let Some(column) = columns.iter().copied().find(|column| *column >= arity) {
+        if columns.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(syn::Error::new_spanned(
-                index,
-                format!(
-                    "index requirement `{}[{column}]` exceeds relation arity {arity}",
-                    index.relation
-                ),
+                requirement,
+                "index columns must be strictly increasing logical heading ordinals",
             ));
         }
-        if columns.windows(2).any(|columns| columns[0] >= columns[1]) {
+        if indexes.insert(symbol_name(&index.name), index).is_some() {
             return Err(syn::Error::new_spanned(
-                index,
-                format!(
-                    "index key columns for `{}` must be strictly increasing",
-                    index.relation
-                ),
+                &index.name,
+                "duplicate index identity",
             ));
         }
-        if !seen.insert(key) {
+        if !descriptors.insert((relation, columns)) {
             return Err(syn::Error::new_spanned(
-                index,
-                format!(
-                    "index requirement for `{}` on columns {:?} is duplicated",
-                    index.relation, index.key_columns
-                ),
+                requirement,
+                "duplicate index descriptor: uses of the same version and columns must share one index identity",
             ));
         }
     }
 
+    let mut expected = BTreeMap::new();
+    for definition in &plan.plan.definitions {
+        let (left, right) = match &definition.operator {
+            relational_plan::Operator::NaturalJoin(join) => (&join.left, &join.right),
+            relational_plan::Operator::Semijoin(join) => (&join.left, &join.right),
+            relational_plan::Operator::Unit(_)
+            | relational_plan::Operator::Rename(_)
+            | relational_plan::Operator::Project(_)
+            | relational_plan::Operator::Select(_)
+            | relational_plan::Operator::Extend(_) => continue,
+        };
+        let columns =
+            result_join_columns(&results[&symbol_name(left)], &results[&symbol_name(right)]);
+        expected.insert(
+            symbol_name(&definition.result),
+            (symbol_name(right), columns),
+        );
+    }
+
+    let mut positions = BTreeSet::new();
+    let mut referenced = BTreeSet::new();
+    for index_use in &module.uses {
+        let result = symbol_name(&index_use.result);
+        if !positions.insert(result.clone()) {
+            return Err(syn::Error::new_spanned(
+                index_use,
+                "duplicate indexed operand use",
+            ));
+        }
+        let Some(required) = expected.get(&result) else {
+            return Err(syn::Error::new_spanned(
+                &index_use.result,
+                "index use must name a NaturalJoin or Semijoin result",
+            ));
+        };
+        let name = symbol_name(&index_use.index);
+        let Some(index) = indexes.get(&name) else {
+            return Err(syn::Error::new_spanned(
+                &index_use.index,
+                "index use names an undefined index",
+            ));
+        };
+        if signature(&index.requirement) != *required {
+            return Err(syn::Error::new_spanned(
+                index_use,
+                format!(
+                    "`{result}.right` requires the exact RHS version @{} on logical columns {:?}",
+                    required.0, required.1,
+                ),
+            ));
+        }
+        referenced.insert(name);
+    }
+    for result in expected.keys() {
+        if !positions.contains(result) {
+            return Err(syn::Error::new_spanned(
+                module,
+                format!("missing index use `{result}.right`"),
+            ));
+        }
+    }
+    for (name, index) in indexes {
+        if !referenced.contains(&name) {
+            return Err(syn::Error::new_spanned(
+                &index.name,
+                "unused index definition",
+            ));
+        }
+    }
     Ok(())
 }

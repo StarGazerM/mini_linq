@@ -1,138 +1,94 @@
-# Private all-answers branch
+# Private research and teaching reference
 
-This branch is a self-contained, editor-facing checkout of the completed basic
-query-lowering checkpoint. It is private staff material and must not be pushed
-to the student repository or distributed before the release policy permits it.
+This is private staff material. It must not be pushed to the student repository
+or distributed before the release policy permits it. The current checkout is a
+compiler redesign in progress, not a completed answer release for every query.
 
-The private reference groups compiler implementations by macro boundary. The
-[compiler ownership map](doc/COMPILER-STRUCTURE.md) records family crates and
-independently selectable implementation modules. `cq-compose` owns only
-actual default route selection and complete-program composition; callers import
-explicit implementations and planning types from their owning crates.
-
-The basic route is CQ → RelationalPlan → IndexRequirements → staged Rust.
-`cq-query-lowering::canonical`, `cq-index-policy::input` and `cq-relation-lowering::lower_base_hash` supply its three
-transformations. `cq-access-lowering` and `cq-pipeline-lowering` lower its embedded Access and
-Pipeline regions to native Rust.
-
-The canonical bare-variable route begins with Rename and does not emit `Unit`.
-The implemented Rust-expression route can seed a prefix with the empty-heading
-`Unit` relation; the materialized and direct physical routes also support it.
-These extensions do not implement Optional HW4. See the
-[current IR boundaries](doc/IR-STAGE-REVIEW.md) for each route's domain.
-
-## Inspect every layer in VS Code
-
-The repository-owned stepper is the authoritative way to inspect intermediate
-compiler results. From the repository root, either run:
+The compiler boundaries are:
 
 ```text
-cargo xtask explain triangle
+CQ → RA → IX → Physical → Rust[Access]
+```
+
+`cq-query-lowering` owns logical planners, scheduling, derivations, and CQ-only
+composition helpers. `cq-index-policy` records exact-version index demands and
+join-use references. `cq-physical-selection` records supplied relation/index
+providers and operation lowerings. `cq-physical-lowering` invokes those external
+macros without choosing a replacement backend. `cq-example-providers` supplies
+the current concrete examples. `cq-access-lowering` and `cq-pipeline-lowering`
+provide execution consumers; `cq-storage` contains data structures and operation
+traits. `mini-linq` exports procedural entry points. The
+[design and implementation domain](doc/IX-PHYSICAL-REDESIGN.md) are authoritative.
+
+The executable [composition example](examples/composition/README.md) combines a
+borrowed slice, a hash map, and a sorted map. It reuses existing indexes and
+returns borrowed non-`Clone` fields. The caller supplies the Rust function and
+selects the Access consumer. Its admitted physical operators are input Rename
+and indexed NaturalJoin; this does not establish general physical coverage of
+the logical RA language.
+
+## Inspect actual expansions
+
+Capture the current integration query at every real procedural macro invocation,
+including external provider and lowering callbacks:
+
+```sh
+python3 tools/trace_macros.py --test physical_realization \
+  --features index-demands,physical-selection,physical-realization,access-to-set-loops \
+  --macro-package cq-example-providers --out /tmp/mini-linq-physical-trace
+```
+
+The output directory must be new. `steps.md` contains the actual inputs and
+outputs; `calls.json` identifies their packages and invocation sequence. The tool
+instruments an isolated copy, returns the original TokenStreams, and verifies
+that the source checkout stayed unchanged. A callback is part of Physical
+realization; it is not another query-planning stage.
+
+For the workload catalog's typed logical prefix, use:
+
+```sh
 cargo xtask explain triangle --through index-requirements
 ```
 
-Alternatively, choose **Tasks: Run Task** and **MiniLinq: Explain query** in
-VS Code.
-The task prompts for a catalog case and one of the six stopping stages. The
-command prints clickable absolute paths under
-`target/mini-linq-explain/<case>/`:
+The VS Code **MiniLinq: Explain query** task offers the same three stops:
+`cq`, `relational-plan`, and `index-requirements`. Their complete payloads are
+`01-cq.tokens`, `02-relational-plan.tokens`, and `03-index-requirements.tokens`
+under `target/mini-linq-explain/<case>/`. These are typed pass outputs, not
+captured macro calls. Physical choices and a host contract must be supplied
+before the workload can be realized. `workload_query!` captures catalog metadata
+and CQ factories; it does not generate an executable query API.
 
-```text
-01-cq.rs
-02-relational-plan.rs
-03-index-requirements.rs
-04-rust-access-plan.rs
-05-iterator-pipeline.rs
-06-final-rust.rs
-README.md
-```
+## Active verification
 
-`explain` uses the lightweight tool build and does not compile DuckDB. The
-oracle is enabled automatically only for `golden` and `differential`.
-
-Every `.rs` file is the complete query program or staged Rust residual at that
-boundary. Select adjacent files in the Explorer with **Select for Compare**
-and **Compare with Selected**. If a pass fails, the stepper preserves the
-successful earlier files from that run, removes stale later files, and writes
-`ERROR.md` at the failed edge. The trace files live outside the Cargo crate
-graph and are intended for syntax inspection and diffs; Rust Analyzer does not
-type-check them as workspace modules.
-
-Rust Analyzer can still show the final generated code in its call-site
-context. Open a query such as
-`workloads/src/queries/classic/triangle.rs`, put the caret on
-`workload_query!`, and choose **rust-analyzer: Expand macro recursively at
-caret**. After switching between the student and all-answers branches in an
-open window, first run **rust-analyzer: Reload workspace** so cached
-proc-macro artifacts are replaced.
-
-The branch-local `.vscode/settings.json` enables
-`cq-workloads/compiled-queries`. That feature forwards
-`mini-linq/compiled-workloads`, so every direct `workload_query!` invocation
-emits its typed-CQ catalog factory and an ordinary caller-bound `mini_linq!`
-invocation. Planner, index-policy and realization aliases therefore affect
-workloads just as they affect authored queries.
-
-Rust Analyzer's recursive expansion still returns final ordinary Rust; it is
-not a layer stepper. Use `cargo xtask explain` to retain all six intermediate
-artifacts rather than trying to expand the virtual `[EXPANSION].rs` again.
-
-`Program::build` performs one-time input normalization and all physical
-construction. `Storage::query` returns one lazy, distinct result cursor;
-constructing it reads no stored row, and its first `next()` enters the outer
-`once_with`. `Storage::materialize` drains that already-distinct cursor into a
-`Vec` and sorts it. No second raw-result cursor is generated.
-
-The supplied `cq_access_lowering::to_pipeline::compile` lowering emits an
-IteratorPipeline: `scan`, left-deep binary `join`, `filter`, `project`, and
-explicit `distinct`, with one named `iterN` result and a complete intermediate
-binding tuple at every edge. The Pipeline language itself also admits fresh
-names, early projections and selected/reordered bindings while retaining linear
-single-consumer ownership. `cq_pipeline_lowering::distinct_iter::compile` then chooses the
-actual Rust `map`, `flat_map`, and `filter` adapters and emits one Rust local
-per `iterN`. Its returned `syn::Expr` is the final concrete IR; proc-macro
-`ToTokens` is pure emission.
-
-Generated query access borrows physical tuples: row scans use `.iter()` and
-proper-index payload traversal uses `.flatten()` without `.cloned()`. Bound
-positive variables are references, so lookup keys, membership tests, and
-projection clone only the fields needed to construct owned tuples. Lazy
-distinctness retains one clone of each first-seen owned result. An additional
-build-time representation likewise borrows the normalized relation and clones
-only the key and complement fields that new representation must own before the
-normalized relation's final move.
-
-Rust Analyzer does not provide MiniLinq-specific completion inside a custom
-token tree; the typed syntax, contracts, stepper artifacts, and focused tests
-own those diagnostics.
-
-## Verify the answer branch
-
-Check all authored queries through the same proc-macro route used by the
-editor:
-
-```text
-cargo check -p cq-workloads --features compiled-queries --locked
-```
-
-Run the complete baseline suite and its focused pass edges:
-
-```text
+```sh
 cargo test --workspace --locked
-cargo test -p cq-compose --test edge_contracts cq_to_relational_plan_contract
-cargo test -p cq-compose --test edge_contracts relational_plan_to_index_requirements_contract
-cargo test -p cq-compose --test edge_contracts index_requirements_to_staged_rust_contract
-cargo test -p cq-compose --test documented_triangle
+cargo test -p cq-query-lowering --all-features --locked
+cargo test -p cq-index-policy --locked
+cargo test -p cq-physical-selection --locked
+cargo test -p cq-physical-lowering --locked
+cargo test -p mini-linq --test physical_realization --test physical_variants --locked
+cargo run --manifest-path examples/composition/Cargo.toml --locked
+python3 tools/check_dependencies.py --isolate --consumers
+python3 tools/check_features.py
+python3 doc/formal/check.py
 ```
 
-Run all generated programs against the independent DuckDB oracle:
+Dependency/source isolation, individual macro boundary probes, and semantic
+integration tests are separate checks. Package-wide `--all-features` is used only
+for supported implementation components: the optional `cq-ir/hw4` exercise is
+unfinished and is not part of ordinary workspace acceptance. Default workspace
+checks, macro tracing, and logical explanation do not build DuckDB.
 
-```text
-cargo xtask differential all tiny --scenario all
-```
+## Remaining migration work
 
-Optional Homework 4 is intentionally not implied by the completed basic
-answers. Its `hw4` feature gates only its optional test targets. On an HW4
-answer checkpoint, students cumulatively extend the production CQ,
-RelationalPlan, index, and physical passes while continuing to use
-`mini_linq!`; Cargo does not silently replace the baseline macro semantics.
+General input schemas and index construction, stored intermediates, physical YA
+semijoins, block pruning, and the former generated `build/query/run` host API
+have not been ported. Logical YA planning and its independent oracle tests are
+retained. Push/pull placement in the broader physical design remains open.
+
+The workload data, SQL, and golden answers are retained, but generated-query
+`cargo xtask differential` execution is unavailable until workload-specific
+Physical assignments and a host input/output contract are supplied. The old
+standalone YA exporter has been retired; the
+[teaching foundation](teaching/ya/README.md) records what remains reusable and
+what a new release must implement.

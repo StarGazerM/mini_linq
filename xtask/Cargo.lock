@@ -341,28 +341,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "cq-access-lowering"
-version = "0.1.0"
-dependencies = [
- "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-compose"
-version = "0.1.0"
-dependencies = [
- "cq-index-policy",
- "cq-ir",
- "cq-query-lowering",
- "cq-relation-lowering",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -382,41 +360,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-native-lowering"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-pipeline-lowering"
-version = "0.1.0"
-dependencies = [
- "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-query-lowering"
 version = "0.1.0"
 dependencies = [
  "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-relation-lowering"
-version = "0.1.0"
-dependencies = [
  "cq-ir",
  "proc-macro2",
  "quote",
@@ -436,15 +383,11 @@ dependencies = [
 name = "cq-xtask"
 version = "0.1.0"
 dependencies = [
- "cq-access-lowering",
- "cq-compose",
+ "cq-index-policy",
  "cq-ir",
- "cq-pipeline-lowering",
- "cq-relation-lowering",
+ "cq-query-lowering",
  "cq-workloads",
  "duckdb",
- "prettyplease",
- "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
@@ -875,18 +818,10 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
- "cq-access-lowering",
- "cq-compose",
- "cq-index-policy",
  "cq-ir",
- "cq-native-lowering",
- "cq-pipeline-lowering",
- "cq-query-lowering",
- "cq-relation-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "syn_derive",
 ]
 
 [[package]]
@@ -983,16 +918,6 @@ name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
-
-[[package]]
-name = "prettyplease"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
-dependencies = [
- "proc-macro2",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "proc-macro2"

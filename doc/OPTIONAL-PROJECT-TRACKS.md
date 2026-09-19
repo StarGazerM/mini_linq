@@ -443,7 +443,7 @@ Plan ::= "accumulator" Ident "=" "(" RustExpr ")" ";"
          Sink ":-" Driver ("," Clause)* ";"
 
 Driver ::= BodyItem "=>" "fold" RustPat "in" "(" RustExpr ")"
-Clause ::= BodyItem "=>" "for" RustPat "in" "(" RustExpr ")"
+Clause ::= BodyItem "=>" "bind" RustPat "<-" "(" RustExpr ")"
          | BodyItem "=>" "if" "(" RustExpr ")"
 Sink ::= Atom "=>" RustBlock
 ```
@@ -467,7 +467,7 @@ The triangle residual makes the parallel ownership decision visible:
         ::core::clone::Clone::clone(z),
     )); } :-
         R(x, y) => fold (x, y,) in (rows0.par_iter()),
-        S(y, z) => for (z,) in (
+        S(y, z) => bind (z,) <- (
             index0
                 .get(&(::core::clone::Clone::clone(y),))
                 .into_iter()

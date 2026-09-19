@@ -1,0 +1,17 @@
+physical {
+    relations {
+        l = ext::slice_rows;
+        m = ext::slice_rows;
+        r = ext::array_rows;
+        j0 = ext::borrowed_row;
+        j1 = ext::borrowed_row;
+    }
+    indexes {
+        i0 = ext::hash_buckets;
+        i1 = ext::sorted_buckets;
+    }
+    lowerings {
+        j0 = ext::indexed_join;
+        j1 = ext::indexed_join;
+    }
+}

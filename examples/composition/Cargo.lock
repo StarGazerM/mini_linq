@@ -25,6 +25,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-example-providers"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -44,18 +55,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-pipeline-lowering"
-version = "0.1.0"
-dependencies = [
- "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-query-lowering"
+name = "cq-physical-lowering"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
@@ -65,12 +65,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-relation-lowering"
+name = "cq-physical-selection"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
- "proc-macro2",
- "quote",
  "syn 2.0.119",
 ]
 
@@ -81,19 +79,18 @@ dependencies = [
  "cq-access-lowering",
  "cq-index-policy",
  "cq-ir",
- "cq-pipeline-lowering",
- "cq-query-lowering",
- "cq-relation-lowering",
+ "cq-physical-lowering",
+ "cq-physical-selection",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "syn_derive",
 ]
 
 [[package]]
 name = "mini-linq-composition-example"
 version = "0.0.0"
 dependencies = [
+ "cq-example-providers",
  "mini-linq",
 ]
 

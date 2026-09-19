@@ -1,0 +1,377 @@
+# Actual proc-macro boundaries
+
+These calls were captured during rustc expansion of the unchanged target.
+Raw token files are authoritative. Formatted Rust is a reading aid only.
+Sequence numbers are invocation order within each compiler process, not runtime order.
+See command.json, compile.log, source-hashes.json and instrumentation.patch.
+
+[Print all procedural steps](steps.md)
+
+[Declarative macro input/output trace](declarative.log) was captured in a
+second compilation of the same source with target-local `-Ztrace-macros`.
+The two logs are separate observations, not one merged event timeline.
+
+
+## 1567805/001-index_demands
+
+[Raw input](raw/1567805/001-index_demands.input.tokens) · [Raw output](raw/1567805/001-index_demands.output.tokens)
+
+Actual input:
+
+```rust
+struct Heterogeneous; relation L(a: i32); relation R(a: i32, b: i32); relation
+S(b: i32, c: i32); answer(a, b, c) :- L(a), R(a, b), S(b, c); relational
+{
+    l = rename L {a -> a}; r = rename R {a -> a, b -> b}; s = rename S
+    {b -> b, c -> c}; j0 = natural_join l with r; j1 = natural_join j0 with s;
+    output j1 as answer(a, b, c);
+}
+```
+
+Actual output (formatted where Rust syntax permits):
+
+```rust
+mini_linq::choose_physical! {
+    struct Heterogeneous; relation L(a : i32); relation R(a : i32, b : i32);
+    relation S(b : i32, c : i32); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+    relational
+    {
+        l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s =
+        rename S { b - > b, c - > c }; j0 = natural_join l with r; j1 =
+        natural_join j0 with s; output j1 as answer(a, b, c);
+    } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+    { j0.right = i0; j1.right = i1; }
+}
+
+```
+
+---
+
+## 1567805/002-given_physical_bindings
+
+[Raw input](raw/1567805/002-given_physical_bindings.input.tokens) · [Raw output](raw/1567805/002-given_physical_bindings.output.tokens)
+
+Actual input:
+
+```rust
+struct Heterogeneous; relation L(a : i32); relation R(a : i32, b : i32);
+relation S(b : i32, c : i32); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+relational
+{
+    l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s = rename S
+    { b - > b, c - > c }; j0 = natural_join l with r; j1 = natural_join j0
+    with s; output j1 as answer(a, b, c);
+} indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+{ j0.right = i0; j1.right = i1; } physical
+{
+    relations
+    {
+        L = external :: slice_rows; R = external :: hash_relation; S =
+        external :: sorted_relation; l = external :: slice_rows; r = external
+        :: hash_relation; s = external :: sorted_relation; j0 = external ::
+        borrowed_pairs; j1 = external :: borrowed_triples;
+    } indexes
+    { i0 = external :: hash_relation; i1 = external :: sorted_relation; }
+    lowerings
+    {
+        l = external :: rename; r = external :: rename; s = external ::
+        rename; j0 = external :: indexed_join; j1 = external :: indexed_join;
+    }
+}
+```
+
+Actual output (formatted where Rust syntax permits):
+
+```rust
+mini_linq::realize_physical! {
+    struct Heterogeneous; relation L(a : i32); relation R(a : i32, b : i32);
+    relation S(b : i32, c : i32); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+    relational
+    {
+        l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s =
+        rename S { b - > b, c - > c }; j0 = natural_join l with r; j1 =
+        natural_join j0 with s; output j1 as answer(a, b, c);
+    } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+    { j0.right = i0; j1.right = i1; } physical
+    {
+        relations
+        {
+            L = external :: slice_rows; R = external :: hash_relation; S =
+            external :: sorted_relation; l = external :: slice_rows; r =
+            external :: hash_relation; s = external :: sorted_relation; j0 =
+            external :: borrowed_pairs; j1 = external :: borrowed_triples;
+        } indexes
+        { i0 = external :: hash_relation; i1 = external :: sorted_relation; }
+        lowerings
+        {
+            l = external :: rename; r = external :: rename; s = external ::
+            rename; j0 = external :: indexed_join; j1 = external ::
+            indexed_join;
+        }
+    }
+}
+
+```
+
+---
+
+## Declarative macros: separate compiler trace
+
+```text
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling syn v3.0.3
+   Compiling syn v2.0.119
+   Compiling syn_derive v0.2.0 (https://github.com/StarGazerM/syn_derive?rev=97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562#97bbe587)
+   Compiling cq-ir v0.1.0 (/tmp/mini-linq-physical-selection-final-20260918/workspace/crates/cq-ir)
+   Compiling cq-physical-selection v0.1.0 (/tmp/mini-linq-physical-selection-final-20260918/workspace/crates/cq-physical-selection)
+   Compiling cq-index-policy v0.1.0 (/tmp/mini-linq-physical-selection-final-20260918/workspace/crates/cq-index-policy)
+   Compiling cq-query-lowering v0.1.0 (/tmp/mini-linq-physical-selection-final-20260918/workspace/crates/cq-query-lowering)
+   Compiling mini-linq v0.1.0 (/tmp/mini-linq-physical-selection-final-20260918/workspace/crates/mini-linq)
+note: trace_macro
+  --> crates/mini-linq/tests/physical_selection.rs:49:1
+   |
+49 | / ::mini_linq::index_demands! {
+50 | |     struct Heterogeneous;
+51 | |     relation L(a: i32);
+52 | |     relation R(a: i32, b: i32);
+...  |
+63 | | }
+   | |_^
+   |
+   = note: expanding `explicit_policy! { struct Heterogeneous; relation L(a : i32); relation R(a : i32, b : i32);
+           relation S(b : i32, c : i32); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+           relational
+           {
+               l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s = rename S
+               { b - > b, c - > c }; j0 = natural_join l with r; j1 = natural_join j0
+               with s; output j1 as answer(a, b, c);
+           } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+           { j0.right = i0; j1.right = i1; } }`
+   = note: to `const ACTUAL_IX : & str = stringify!
+           (struct Heterogeneous; relation L(a : i32); relation R(a : i32, b : i32);
+           relation S(b : i32, c : i32); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+           relational
+           {
+               l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s = rename S
+               { b - > b, c - > c }; j0 = natural_join l with r; j1 = natural_join j0
+               with s; output j1 as answer(a, b, c);
+           } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+           { j0.right = i0; j1.right = i1; }); :: mini_linq :: given_physical_bindings!
+           {
+               struct Heterogeneous; relation L(a : i32); relation R(a : i32, b : i32);
+               relation S(b : i32, c : i32); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+               relational
+               {
+                   l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s =
+                   rename S { b - > b, c - > c }; j0 = natural_join l with r; j1 =
+                   natural_join j0 with s; output j1 as answer(a, b, c);
+               } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+               { j0.right = i0; j1.right = i1; } physical
+               {
+                   relations
+                   {
+                       L = external :: slice_rows; R = external :: hash_relation; S =
+                       external :: sorted_relation; l = external :: slice_rows; r =
+                       external :: hash_relation; s = external :: sorted_relation; j0 =
+                       external :: borrowed_pairs; j1 = external :: borrowed_triples;
+                   } indexes
+                   { i0 = external :: hash_relation; i1 = external :: sorted_relation; }
+                   lowerings
+                   {
+                       l = external :: rename; r = external :: rename; s = external ::
+                       rename; j0 = external :: indexed_join; j1 = external ::
+                       indexed_join;
+                   }
+               }
+           }`
+   = note: expanding `capture_physical! { struct Heterogeneous; relation L(a : i32); relation R(a : i32, b : i32);
+           relation S(b : i32, c : i32); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+           relational
+           {
+               l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s = rename S
+               { b - > b, c - > c }; j0 = natural_join l with r; j1 = natural_join j0
+               with s; output j1 as answer(a, b, c);
+           } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+           { j0.right = i0; j1.right = i1; } physical
+           {
+               relations
+               {
+                   L = external :: slice_rows; R = external :: hash_relation; S =
+                   external :: sorted_relation; l = external :: slice_rows; r = external
+                   :: hash_relation; s = external :: sorted_relation; j0 = external ::
+                   borrowed_pairs; j1 = external :: borrowed_triples;
+               } indexes
+               { i0 = external :: hash_relation; i1 = external :: sorted_relation; }
+               lowerings
+               {
+                   l = external :: rename; r = external :: rename; s = external ::
+                   rename; j0 = external :: indexed_join; j1 = external :: indexed_join;
+               }
+           } }`
+   = note: to `const ACTUAL_PHYSICAL : & str = stringify!
+           (struct Heterogeneous; relation L(a : i32); relation R(a : i32, b : i32);
+           relation S(b : i32, c : i32); answer(a, b, c) : - L(a), R(a, b), S(b, c);
+           relational
+           {
+               l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s = rename S
+               { b - > b, c - > c }; j0 = natural_join l with r; j1 = natural_join j0
+               with s; output j1 as answer(a, b, c);
+           } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+           { j0.right = i0; j1.right = i1; } physical
+           {
+               relations
+               {
+                   L = external :: slice_rows; R = external :: hash_relation; S =
+                   external :: sorted_relation; l = external :: slice_rows; r = external
+                   :: hash_relation; s = external :: sorted_relation; j0 = external ::
+                   borrowed_pairs; j1 = external :: borrowed_triples;
+               } indexes
+               { i0 = external :: hash_relation; i1 = external :: sorted_relation; }
+               lowerings
+               {
+                   l = external :: rename; r = external :: rename; s = external ::
+                   rename; j0 = external :: indexed_join; j1 = external :: indexed_join;
+               }
+           });`
+
+note: trace_macro
+  --> crates/mini-linq/tests/physical_selection.rs:71:5
+   |
+71 | /     assert_eq!(
+72 | |         indexed.to_token_stream().to_string(),
+73 | |         expected_ix.to_token_stream().to_string()
+74 | |     );
+   | |_____^
+   |
+   = note: expanding `assert_eq! { indexed.to_token_stream().to_string(),
+           expected_ix.to_token_stream().to_string() }`
+   = note: to `match
+           (& indexed.to_token_stream().to_string(), &
+           expected_ix.to_token_stream().to_string())
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/physical_selection.rs:82:5
+   |
+82 | /     assert_eq!(
+83 | |         selected.to_token_stream().to_string(),
+84 | |         expected.to_token_stream().to_string()
+85 | |     );
+   | |_____^
+   |
+   = note: expanding `assert_eq! { selected.to_token_stream().to_string(), expected.to_token_stream().to_string() }`
+   = note: to `match
+           (& selected.to_token_stream().to_string(), &
+           expected.to_token_stream().to_string())
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/physical_selection.rs:86:5
+   |
+86 |     assert_eq!(selected.index_requirements, indexed);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `assert_eq! { selected.index_requirements, indexed }`
+   = note: to `match (& selected.index_requirements, & indexed)
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/physical_selection.rs:94:5
+   |
+94 |     assert_eq!(selected.assignments.relations.len(), 8);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `assert_eq! { selected.assignments.relations.len(), 8 }`
+   = note: to `match (& selected.assignments.relations.len(), & 8)
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/physical_selection.rs:95:5
+   |
+95 |     assert_eq!(selected.assignments.indexes.len(), 2);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `assert_eq! { selected.assignments.indexes.len(), 2 }`
+   = note: to `match (& selected.assignments.indexes.len(), & 2)
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+note: trace_macro
+  --> crates/mini-linq/tests/physical_selection.rs:96:5
+   |
+96 |     assert_eq!(selected.assignments.lowerings.len(), 5);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: expanding `assert_eq! { selected.assignments.lowerings.len(), 5 }`
+   = note: to `match (& selected.assignments.lowerings.len(), & 5)
+           {
+               (left_val, right_val) =>
+               {
+                   if ! (* left_val == * right_val)
+                   {
+                       let kind = $crate :: panicking :: AssertKind :: Eq; $crate ::
+                       panicking ::
+                       assert_failed(kind, & * left_val, & * right_val, $crate :: option
+                       :: Option :: None);
+                   }
+               }
+           }`
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.91s
+
+```

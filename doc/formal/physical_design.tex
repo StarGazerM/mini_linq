@@ -1,31 +1,21 @@
 \input{common}
-\title{MiniLinq: Physical Choices Through Access Refinement}
-\author{Administrative rules, algorithms, and compiler correspondence}
-\date{15 September 2026}
+\title{MiniLinq: Physical Selection and Realization}
+\author{Syntax, semantic laws, and algorithmic compilation rules}
+\date{18 September 2026}
 \begin{document}
 \maketitle
 \begin{abstract}
-Physical representation and traversal choices refine an existing compiler edge
-from named relational algebra to Rust containing local Access plans. The compiler
-keeps layouts, current relation versions and shared key resources in an ordinary
-lowering environment. Native operations independently select typed row
-representations, exact keys and optional coordinate summaries, current-row or
-block-pruned candidates, and complete hash, nested or sort/merge pair algorithms.
-Producer and consumer fragments keep algorithm scheduling separate from result
-construction. Exact residuals preserve semijoin semantics after conservative
-metadata rejection. This supplement gives the operation syntax, representation
-laws, implementation-linked rules, algorithms and conditional preservation argument.
-No additional whole-program IR or runtime relational interpreter is required.
+IX identifies required indexes and the index used at each relation-access
+position. Selection produces Physical IR with external relation/index providers
+and a lowering for each RA definition. Realization follows that fixed program
+to Rust[Access], without selecting again. Hash and sorted maps are example
+providers, not cases built into the proposed common compiler.
+This note gives syntax, semantics, compilation rules, a mixed
+relation fixture, and obligations for future zone-map pruning and trie access.
+The driver and a borrowed exact-index instance are implemented; general stored
+intermediates and block/YA realization are not. Push/pull placement remains open.
 \end{abstract}
-\noindent Companion to \href{compiler.pdf}{\emph{Administrative Query Compilation
-Across Embedded Languages}}.
-
-\noindent Source: \code{access_refinement.tex}; mapping: \code{physical_rules.tsv};
-model: \code{physical_model.py}.
+\input{ix_physical_contract}
 \input{architecture_placement}
 \input{access_refinement}
-\begin{thebibliography}{99}
-\raggedright
-\input{ya_references}
-\end{thebibliography}
 \end{document}

@@ -1,9 +1,16 @@
-\section{CQ-to-RA administrative algorithms}
+\section{Current CQ-to-RA administrative algorithms}
 \label{sec:planning}
 D-analysis chooses graph or prefix transitions. Incidence and a GYO join tree
 constrain command selection; commands emit RA and witness binary assembly order.
 \textsc{Apply} checks a command before updating state and appending its trace
 entry. A failed command or nested check aborts the enclosing algorithm.
+These judgments certify the specified strategy families. Eager selection,
+exact trimming and phase order restrict those families beyond semantic
+preservation: a pure plan may legally retain columns or defer a filter.
+The research architecture separates denotation-preserving transformations,
+decidable evidence for their premises, and policy selection. The P/C rules below
+provide concrete restricted instances, rather than a complete calculus of that
+larger design space.
 
 \subsection{Dependencies and graph extraction}
 \label{sec:graph-extraction}
@@ -34,6 +41,9 @@ a single-identifier let with literal RHS, no reference or subpattern modifier;
 or a recognized variable/integer comparison whose variables have syntactically
 primitive i32 type at every occurrence/binding. Type accumulation precedes
 guard classification; aliases are not resolved. Set $m_i=M(c_i)$.
+This whitelist is sufficient movement evidence for the supplied planner. Failure
+of $M$ is not a semantic proof that a pure expression cannot move; stronger
+host-law evidence can justify additional placements in another planner.
 \begin{mathpar}
 
 \Rule{D-Move}{M(c)}{\Sigma\vdash c:\mathsf{movable}}

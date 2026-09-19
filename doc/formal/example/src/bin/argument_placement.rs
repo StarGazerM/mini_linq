@@ -1,60 +1,56 @@
-//! Observe A-Prefix versus A-Local placement using both public macro routes.
-//! This asserts the generated schedule, not Rust function-argument semantics.
-mod eager_programs {
-    use super::{f, g};
-    mod wiring {
-        #[allow(unused_imports)]
-        pub use ::mini_linq::{
-            access_to_distinct_iter, access_to_set, choose_graph_or_prefix, cq_to_ra_clause_prefix,
-            cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
-        };
-        pub use ::mini_linq::{
-            materialized_hash_program as choose_relation_lowering,
-            result_index_demands as choose_index_policy,
-        };
-    }
-    use wiring as mini_linq;
-    mini_linq::choose_graph_or_prefix! {
-        pub(super) struct Materialized;
-        relation R(a:i32,b:i32,c:i32);
-        answer(x) :- R(x, f(x), g());
-    }
-}
-use eager_programs::Materialized;
-use std::cell::RefCell;
-
-thread_local! {
-    static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-}
-
-fn f(x: &i32) -> i32 {
-    EVENTS.with(|events| events.borrow_mut().push(format!("f({x})")));
-    *x
-}
-
-fn g() -> i32 {
-    EVENTS.with(|events| events.borrow_mut().push("g()".to_owned()));
-    100
-}
-
-mini_linq::mini_linq! {
-    struct Lazy;
-    relation R(a:i32,b:i32,c:i32);
-    answer(x) :- R(x, f(x), g());
-}
-
-fn check_observation(route: &str, rows: Vec<(i32,)>) {
-    assert_eq!(rows, [(1,), (2,)]);
-    let events = EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
-    assert_eq!(events.first().map(String::as_str), Some("g()"));
-    let mut after_g = events[1..].to_vec();
-    after_g.sort();
-    assert_eq!(after_g, ["f(1)", "f(2)"]);
-    println!("{route}: answer={rows:?}, observed events={events:?}");
-}
+//! Inspect A-Prefix versus A-Local in the actual logical derivation.
+//! This is a planning check, not an observation of generated Rust execution.
+use cq_ir::{cq, relational_plan::Operator};
+use cq_query_lowering::{JoinPolicy, PlanningOptions, Rule, composition};
+use mini_linq_paper_overview::{boundaries, directory};
+use quote::ToTokens;
 
 fn main() {
-    let rows = [(1, 1, 100), (2, 2, 100)];
-    check_observation("lazy", Lazy::run(rows));
-    check_observation("materialized", Materialized::run(rows));
+    let source: cq::Module = syn::parse_quote! {
+        struct Placement;
+        relation R(a:i32,b:i32,c:i32);
+        answer(x) :- R(x, f(x), g());
+    };
+    let (ra, report) = composition::explain_cq_plan(
+        &source,
+        PlanningOptions {
+            strategy: JoinPolicy::Auto,
+            max_arity: None,
+        },
+    )
+    .unwrap();
+    composition::check_cq_plan(&source, &ra, &report).unwrap();
+    assert!(
+        report
+            .derivation
+            .iter()
+            .any(|rule| matches!(rule, Rule::Match { clause: 0 }))
+    );
+    let g = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| match &d.operator {
+            Operator::Extend(e) => e.value.to_token_stream().to_string().contains("g ()"),
+            _ => false,
+        })
+        .unwrap();
+    let r = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, Operator::Rename(_)))
+        .unwrap();
+    let f = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| d.operator.to_token_stream().to_string().contains("f (x)"))
+        .unwrap();
+    assert!(g < r && r < f);
+    let directory = directory("logical-argument-placement");
+    boundaries(&directory, "planned", &source, true);
+    println!(
+        "PASS: g() is planned before input matching, f(x) after x is bound; no runtime call-count claim."
+    );
 }

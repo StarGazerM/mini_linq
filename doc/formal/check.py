@@ -4,7 +4,10 @@ from pathlib import Path
 import csv
 import hashlib
 import re
-import ast
+import argparse
+import subprocess
+import json
+import os
 
 BASE = Path(__file__).resolve().parent
 ROOT = BASE.parent.parent
@@ -75,54 +78,85 @@ def check_rule_inventory():
     }
     assert variants == set(paired), "administrative enum inventory changed"
     assert set(paired.values()) <= set(labels)
-    # Every implemented Access refinement rule has a source and algorithm link.
-    physical = (BASE / "access_refinement.tex").read_text()
-    physical_labels = set(re.findall(r"\\Rule\{([^}]+)\}", physical))
+    proposed = {entry["rule"] for entry in entries if entry["status"].startswith("PROPOSED:")}
     with (BASE / "physical_rules.tsv").open() as manifest:
-        physical_entries = list(csv.DictReader(manifest, delimiter="\t"))
-    physical_names = [entry["rule"] for entry in physical_entries]
-    assert len(physical_names) == len(set(physical_names))
-    assert set(physical_names) == physical_labels, "physical rule mapping mismatch"
-    algorithms = dict(re.findall(
-        r"\\begin\{algorithm\}.*?\\label\{([^}]+)\}(.*?)\\end\{algorithm\}",
-        physical, re.S))
-    model_ast = ast.parse((BASE / "physical_model.py").read_text())
-    functions = {node.name for node in model_ast.body
-        if isinstance(node, ast.FunctionDef)}
-    declared_model_links = next(ast.literal_eval(node.value)
-        for node in model_ast.body if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "PHYSICAL_MODEL_RULES"
-                for target in node.targets))
-    assert declared_model_links == {
-        entry["rule"]: entry["model_marker"] for entry in physical_entries
-        if entry["model_marker"] != "-"}, "model rule/function mapping drift"
-    general_entries = {entry["rule"]: entry for entry in entries}
-    for entry in physical_entries:
-        assert entry["scope"], entry
-        assert entry["algorithm"] in algorithms, entry
-        assert entry["rule"] in algorithms[entry["algorithm"]], entry
-        assert entry["model_marker"] == "-" or entry["model_marker"] in functions, entry
-        general = general_entries[entry["rule"]]
-        assert general["kind"] == "implementation", entry
-        assert (general["path"], general["marker"]) == (entry["path"], entry["marker"]), entry
-    return len(labels), len(physical_labels)
+        physical = list(csv.DictReader(manifest, delimiter="\t"))
+    assert len(physical) == len({entry["rule"] for entry in physical})
+    assert {entry["rule"] for entry in physical} == proposed
+    locations = dict(occurrences)
+    for entry in physical:
+        assert entry["specification"] == locations[entry["rule"]], entry
+        assert entry["status"].startswith("PROPOSED:"), entry
+    return len(labels), len(proposed)
 
 
-def check_source_identity():
-    fingerprints = (BASE / "sources.sha256").read_text().splitlines()
-    for line in fingerprints:
-        expected, path = line.split("  ", 1)
-        actual = hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-        assert actual == expected, f"source drift: {path}; re-audit before refreshing snapshot"
-    return len(fingerprints)
+def check_implementation(trace, target):
+    """Verify current sources and actual boundaries of the documented fixture."""
+    trace = trace.resolve()
+    assert (trace / "verification.txt").is_file(), "trace did not complete its source-identity check"
+    hashes = json.loads((trace / "source-hashes.json").read_text())
+    for name, expected in hashes.items():
+        source = ROOT / name
+        assert source.is_file(), f"captured source was removed: {name}"
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == expected, f"stale capture: {name}; capture current sources again"
+    env = os.environ.copy()
+    env["CQ_REALIZATION_TRACE"] = str(trace)
+    features = "written-order,index-demands,physical-selection,physical-realization,access-to-set-loops"
+    test = "captured_boundaries_equal_authored_ix_physical_and_access"
+    if target == "physical_pull":
+        features = "written-order,index-demands,physical-selection,physical-realization,access-to-pipeline,pipeline-distinct-iter"
+        test = "captured_boundaries_equal_authored_ix_physical_access_and_pipeline"
+    result = subprocess.run([
+        "cargo", "test", "-p", "mini-linq", "--offline", "--locked", "--no-default-features",
+        "--features", features,
+        "--test", target, test, "--", "--ignored", "--exact",
+    ], cwd=ROOT, env=env, check=True, text=True, stdout=subprocess.PIPE)
+    print(result.stdout, end="")
+    assert "test result: ok. 1 passed;" in result.stdout, f"boundary test was not executed: {target}::{test}"
+    print(f"PASS: current-source boundary agreement for {target}.")
+    print("This does not admit stored intermediates, block/YA, or arbitrary external providers.")
+
+
+def check_stage_fixtures():
+    """Check authored document assembly, not parsing or compiler conformance."""
+    for directory in ["", "auxiliary"]:
+        fixtures = BASE.parent / "ix-physical" / directory
+        names = [
+            "input.ra", "environment.txt", "expected.indexes", "expected.ix",
+            "expected.selection", "expected.physical", "expected.choose.rs", "expected.rs",
+        ]
+        for name in names:
+            assert (fixtures / name).is_file(), fixtures / name
+        read = lambda name: (fixtures / name).read_text()
+        ix = read("input.ra").rstrip() + "\n" + read("expected.indexes")
+        assert read("expected.ix") == ix, f"IX must preserve RA: {fixtures}"
+        physical = ix + read("expected.selection")
+        assert read("expected.physical") == physical, f"Physical must preserve IX: {fixtures}"
+        call = "realize_physical! {\n" + "".join(
+            "    " + line + "\n" for line in physical.splitlines()
+        ) + "}\n"
+        assert read("expected.choose.rs") == call, f"selection must deliver Physical: {fixtures}"
+    contract = (BASE / "ix_physical_contract.tex").read_text()
+    for fixture in ["input.ra", "expected.ix", "expected.choose.rs", "expected.rs"]:
+        assert "\\lstinputlisting{../ix-physical/" + fixture + "}" in contract, fixture
 
 
 def main():
-    rules, physical_rules = check_rule_inventory()
-    fingerprints = check_source_identity()
-    print(f"Checked {rules} named rule links and {fingerprints} source fingerprints.")
-    print(f"Includes {physical_rules} Access refinement rules with source/algorithm/model links.")
-    print("This checks coverage and source identity; it does not check proofs or semantics.")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--implementation", action="store_true", help="check actual boundaries for the documented implemented domain")
+    parser.add_argument("--trace", type=Path, default=BASE.parent / "ix-physical/realization-trace", help="current real proc-macro capture used by --implementation")
+    parser.add_argument("--query-trace", type=Path, default=BASE.parent / "ix-physical/query-trace", help="separate full-CQ capture used by --implementation")
+    parser.add_argument("--pull-trace", type=Path, default=BASE.parent / "ix-physical/pull-trace", help="full-CQ pull capture including named Pipeline, used by --implementation")
+    args = parser.parse_args()
+    rules, proposed = check_rule_inventory()
+    check_stage_fixtures()
+    print(f"Documentation inventory: {rules} rules, including {proposed} proposed/unimplemented rules.")
+    print("The papers share authored fixture files. This does not establish compiler conformance.")
+    print("Both local stage sequences preserve their inputs and deliver the exact Physical payload.")
+    if args.implementation:
+        check_implementation(args.trace, "physical_realization")
+        check_implementation(args.query_trace, "physical_query")
+        check_implementation(args.pull_trace, "physical_pull")
 
 
 if __name__ == "__main__":

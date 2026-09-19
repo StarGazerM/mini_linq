@@ -16,14 +16,6 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         }
     };
 
-    #[cfg(feature = "compiled-workloads")]
-    {
-        quote!(#catalog mini_linq::mini_linq! { #source }).into()
-    }
-
-    #[cfg(not(feature = "compiled-workloads"))]
-    {
-        let _ = source;
-        catalog.into()
-    }
+    let _ = source;
+    catalog.into()
 }

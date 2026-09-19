@@ -18,19 +18,17 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Verify component dependency boundaries
         run: python3 tools/check_dependencies.py --isolate
-      - name: Execute independently assembled query routes
+      - name: Test IX and Physical composition
         run: python3 tools/check_dependencies.py --consumers
       - name: Test package feature configurations
         run: python3 tools/check_features.py
       - name: Test completed workspace
-        run: cargo test --workspace --features cq-workloads/compiled-queries,mini-linq/compiled-workloads --locked
+        run: cargo test --workspace --locked
       - name: Check Clippy
-        run: cargo clippy --workspace --all-targets --features cq-workloads/compiled-queries,mini-linq/compiled-workloads --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test teaching tool
         run: cargo test --manifest-path xtask/Cargo.toml --locked
-      - name: Run selectively assembled compiler
+      - name: Run heterogeneous provider composition
         run: cargo run --manifest-path examples/composition/Cargo.toml --locked
-      - name: Verify standalone YA release
-        run: python3 tools/export_ya.py "$RUNNER_TEMP/mini-linq-ya" --verify
       - name: Check formal source correspondence
         run: python3 doc/formal/check.py

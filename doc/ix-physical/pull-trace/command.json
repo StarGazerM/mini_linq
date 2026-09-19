@@ -1,0 +1,48 @@
+{
+  "cwd": "/tmp/mini-linq-bind-pull-20260919/workspace",
+  "command": [
+    "cargo",
+    "test",
+    "--manifest-path",
+    "Cargo.toml",
+    "-p",
+    "mini-linq",
+    "--no-default-features",
+    "--features",
+    "written-order,index-demands,physical-selection,physical-realization,access-to-pipeline,pipeline-distinct-iter",
+    "--test",
+    "physical_pull",
+    "--locked",
+    "--",
+    "full_cq_pull_defers_every_source_and_short_circuits_each_provider"
+  ],
+  "env": {
+    "CARGO_TARGET_DIR": "/tmp/mini-linq-bind-pull-20260919/build",
+    "MINI_LINQ_TRACE_DIR": "/tmp/mini-linq-bind-pull-20260919/raw"
+  },
+  "declarative": {
+    "command": [
+      "cargo",
+      "rustc",
+      "--manifest-path",
+      "Cargo.toml",
+      "-p",
+      "mini-linq",
+      "--no-default-features",
+      "--features",
+      "written-order,index-demands,physical-selection,physical-realization,access-to-pipeline,pipeline-distinct-iter",
+      "--test",
+      "physical_pull",
+      "--locked",
+      "--",
+      "-Ztrace-macros"
+    ],
+    "env": {
+      "CARGO_TARGET_DIR": "/tmp/mini-linq-bind-pull-20260919/build",
+      "RUSTC_BOOTSTRAP": "1"
+    },
+    "unset_env": [
+      "MINI_LINQ_TRACE_DIR"
+    ]
+  }
+}

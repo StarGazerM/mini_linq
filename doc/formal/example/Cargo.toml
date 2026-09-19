@@ -10,14 +10,9 @@ publish = false
 [workspace]
 
 [dependencies]
-cq-compose = { path = "../../../crates/cq-compose" }
-cq-query-lowering = { path = "../../../crates/cq-query-lowering", default-features = false, features = ["clause-prefix", "hypergraph"] }
-cq-index-policy = { path = "../../../crates/cq-index-policy", default-features = false, features = ["result-demands"] }
-cq-access-lowering = { path = "../../../crates/cq-access-lowering", default-features = false, features = ["to-pipeline"] }
-cq-pipeline-lowering = { path = "../../../crates/cq-pipeline-lowering", default-features = false, features = ["distinct-iter", "collect-set", "support-iter"] }
-cq-relation-lowering = { path = "../../../crates/cq-relation-lowering", default-features = false, features = ["materialized-hash", "prefix-hash"] }
+cq-query-lowering = { path = "../../../crates/cq-query-lowering", default-features = false, features = ["written-order", "clause-prefix", "hypergraph"] }
+cq-index-policy = { path = "../../../crates/cq-index-policy" }
 cq-ir = { path = "../../../crates/cq-ir" }
-mini-linq = { path = "../../../crates/mini-linq" }
+mini-linq = { path = "../../../crates/mini-linq", default-features = false, features = ["access-to-pipeline", "pipeline-distinct-iter"] }
 quote = "1"
-syn = { version = "2", features = ["full", "visit-mut"] }
-prettyplease = "0.2"
+syn = { version = "2", features = ["full"] }

@@ -1,73 +1,52 @@
-\section{Replacing compiler components}
+\section{Replacement boundaries}
 \label{sec:extensibility}
-Replacements satisfy the source judgment, domain, target and preservation
-contracts of Theorem~\ref{thm:composition}. A replaceable implementation owns its
-admitted domain, lowering, configuration and independent source-to-target checks.
-A resource implementation owns construction and all operations interpreting that
-representation. Multiple macro aliases can select the same implementation with
-different continuations; they need not introduce separate packages.
-A checker never calls its emitter. \code{cq-compose} owns default selection;
-explicit implementations do not import that selector.
+The provider environment $\Omega$ is open. Extending it with a fresh provider
+path must not require adding a data-structure case to the common compiler.
+That compiler dispatches through $\Phi_R$, $\Phi_I$ and $\Lambda$; a replaceable
+policy $\eta$ records their choices in Physical IR from IX demands and
+available representations. Realization consumes that fixed program without
+invoking the selection policy again.
+An explicit configuration is one possible policy input. This document does
+not prescribe a cost model or infer semantic laws from an opaque Rust type.
 
-Compiler families are isolated by semantic boundary: planning, equality demands,
-whole-query realization, native operation expansion, Access execution and Pipeline
-endpoints. Implementations depend on shared syntax without calling a universal
-strategy dispatcher. Storage contains data structures and minimal operation traits;
-composition and the procedural-macro frontend wire implementations together.
-Route-specific analysis stays with its consumer. Feature-closure and source-removal
-probes test actual build dependencies, while external macro consumers test lexical
-replacement. Ordinary package tests cover supported feature selections and target
-prerequisites. Neither package isolation nor successful feature resolution proves
-semantic substitution; the source snapshot records which gates completed.
+\paragraph{Two scopes of wiring.}
+An import alias binds \texttt{choose\_physical!} to the physical-selection macro
+used for a query; another binds \texttt{realize\_physical!} to the realizer.
+The policy chooses individual provider instances and definition lowerings.
+These are
+different scopes: changing one index's provider must not silently change every
+relation or index. The policy may deliberately choose one provider throughout,
+but uniformity is its decision rather than a limitation of the interface.
 
-\paragraph{Representations and algorithms.}
-Ascent BYODS formalizes custom representations through DLDS and
-concretization into facts~\cite{paper-byods}. Here a represented relation
-$\gamma(s)$ must also satisfy the operations required by its chosen pass.
-For key sort $K\subseteq U$ and key tuple $u$, exact lookup requires
-\[
- \set(\operatorname{lookup}_K(s,u))
- =\{t\restrict(U\setminus K):t\in\gamma(s),\ t\restrict K=u\}.
-\]
-Membership agrees with nonemptiness; scans enumerate $\gamma(s)$.
-Induction over the finite plan then preserves its completed pure answer
-when providers satisfy these laws and the host assumptions. Sorted access
-additionally needs order and seek laws. Rust trait signatures alone do not
-establish these premises, and changing input meaning, such as adding an
-equivalence closure, changes the source contract.
+\paragraph{A provider owns its interpretation.}
+A provider definition supplies the applicable construction and access
+expansions together with their representation laws. Each use is dispatched
+through the binding that constructed its representation; each RA definition
+uses its recorded lowering. Their rules state compatibility premises against
+the corresponding relation version and representation in $\Gamma$.
+Unsupported domains must be rejected; applicable Rust type checks occur after
+expansion. No generic semantic proof procedure is assumed.
+The hash/sorted rules in Section~\ref{sec:ix-physical-redesign} are provider
+instances, not an exhaustive syntax of physical choices. A block or trie
+provider need not pretend to implement the identical lookup interface: it must
+establish the laws required by the physical rules that consume its operations.
 
-\paragraph{Push and multiway execution.}
-The implemented \code{access_to_set_loops!} lowers Access directly to nested loops and one
-result set (PS-*), without a Pipeline intermediate. It can replace a set-valued
-Access continuation when completed-set observations agree. A public lazy Iterator
-requires an implementation preserving its demand and stopping contract
-(Section~\ref{sec:scope})~\cite{paper-pushpull}.
-A WCOJ pass must retain a complete positive join region before committing
-to binary intermediates, then supply variable-prefix restriction and
-intersection operations. Current index requirements describe equality keys,
-not trie order or seek; using Leapfrog Triejoin would require those
-additional laws and its own complexity argument~\cite{paper-lftj}.
-Neither replacing a hash table alone nor treating a host function as an
-enumerable relation establishes that algorithm.
+\paragraph{Provider declarations and algorithms.}
+A BYODS-like declaration DSL could generate macro dispatch, argument binding
+and Rust trait adapters from a provider definition. Such convenience syntax
+must preserve independent provider bindings and cannot establish semantic laws
+merely by declaring a capability tag. Its concrete syntax remains unspecified.
+A storage provider exposes storage operations; a compiler rule composes them
+to implement an RA operation. Selecting a trie does not itself select or
+implement WCOJ. Provider callbacks are administrative steps within realization;
+they do not require a separate complete compiler pipeline for each structure.
+An explicit provider dialect is justified only with a specified semantic
+boundary. Algorithm extensions must respect the admitted IX and Physical
+boundaries; multiway lowering and push/pull placement remain future work.
 
-\paragraph{Staging and quotation.}
-Compilation specializes query structure; rows and host values remain residual.
-Direct RA/Index/Access/Pipeline entries and local quotations retain binding,
-typing and context contracts without reconstructing CQ
-(Section~\ref{sec:constraint-planning}). The physical supplement gives rules and
-algorithms for direct RA-to-Access lowering, with independent key, candidate-scan
-and complete pair-production operations. Row providers own construction and access;
-lexical macros select
-local refinements. Generated operations use ordinary Rust data types and traits.
-
-\paragraph{Extractable teaching implementations.}
-The YA release profile selects graph planning, named-result indexes, exact
-materialized access, pull and collection. Its generated inventory separates the
-two-sweep scheduler from semijoin-to-Access lowering; independent administrative
-and target checks remain supplied. Verification checks the foundation with both
-exercise algorithms absent and each expected failure separately, then compiles
-and executes the temporary reference implementations. The delivered files have
-the student stubs restored and their inventory hashes checked. Unselected native,
-block, prefix and configured-relation implementations are physically absent.
-This exercises an actual source boundary without establishing arbitrary provider
-laws. Triejoin and recursive program semantics remain separate design obligations.
+\paragraph{Implementation organization.}
+Provider crates may depend on their own storage implementations. The common
+compiler should not import every concrete provider in order to dispatch.
+Feature and dependency tests should demonstrate this extension boundary;
+representation arguments establish correctness. Storage contains data
+structures and their minimal access APIs, not a runtime RA interpreter.

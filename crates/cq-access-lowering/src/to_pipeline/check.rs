@@ -7,15 +7,17 @@ use quote::format_ident;
 /// `source`.
 ///
 /// This is an independent pass relation: it compares the two typed values
-/// directly and never invokes the lowering under test. Besides requiring the
-/// target's local contract, it preserves source order, every Rust pattern and
+/// directly and never invokes the lowering under test. It requires both local
+/// contracts and preserves source order, every Rust pattern and
 /// leaf expression, the complete intermediate binding at each boundary, and
 /// the head output expression.
 pub fn iterator_pipeline_is_exact(
     source: &rust_access_plan::Plan,
     target: &iterator_pipeline::Pipeline,
 ) -> bool {
-    if !iterator_pipeline::contract::well_formed(target) {
+    if !rust_access_plan::contract::well_formed(source)
+        || !iterator_pipeline::contract::well_formed(target)
+    {
         return false;
     }
 
@@ -32,7 +34,7 @@ pub fn iterator_pipeline_is_exact(
     let first = source.body.first();
     let access_offset = match (first.map(|clause| &clause.access), first_definition) {
         (
-            Some(rust_access_plan::RustAccess::For {
+            Some(rust_access_plan::RustAccess::Bind {
                 pattern,
                 source: rust_source,
                 ..
@@ -76,7 +78,7 @@ pub fn iterator_pipeline_is_exact(
         expected_stream_number += 1;
         match (&clause.access, &definition.operator) {
             (
-                rust_access_plan::RustAccess::For {
+                rust_access_plan::RustAccess::Bind {
                     pattern,
                     source: rust_source,
                     ..

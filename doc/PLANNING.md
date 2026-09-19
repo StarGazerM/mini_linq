@@ -1,126 +1,75 @@
-# Planned joins through the existing compiler languages
+# Logical planning and its compiler boundary
 
-This guide maps the implemented planned CQ route to its compiler modules and
-contracts. The formal rules and algorithms are in [planning.tex](formal/planning.tex);
-[the verification guide](PLANNING-VERIFICATION.md) describes the independent
-oracles, reference fixtures, and reproducible checks.
+The logical planners produce RA. They do not choose providers or an execution
+model. The [verification guide](PLANNING-VERIFICATION.md) describes independent
+logical oracles and authored plans. Post-IX compilation follows the separate
+[IX/Physical design](IX-PHYSICAL-REDESIGN.md).
 
-## Pass boundaries and ownership
+## Ownership and composition
 
-| Source | Pass | Target | Decision owned by this edge |
-|---|---|---|---|
-| `cq::Module` | `cq_compose::compile_cq_planned` | `relational_plan::Module` | Occurrence analysis, legal join order, semijoin reduction, selection and projection placement |
-| `relational_plan::Module` | `cq_index_policy::result_demands::compile` | `index_requirements::Module` | Exact first-use keys on named right operands; preserve the entire RA |
-| `index_requirements::Module` | `cq_relation_lowering::materialized_hash::compile` | staged `syn::File` with set-valued `access_to_set!` holes | Tuple representation, hash storage, existence access, materialization and DAG sharing |
-| `rust_access_plan::Plan` | existing `cq_access_lowering::to_pipeline::compile` | `iterator_pipeline::Pipeline` | Explicit local physical streams and binding flow |
-| `iterator_pipeline::Pipeline` | `cq_pipeline_lowering::distinct_iter::compile` / `cq_pipeline_lowering::collect_set::compile` | `syn::Expr` | Iterator / owned-set realization |
+| Operation | Implementation |
+|---|---|
+| Written-order CQ → RA | `cq_query_lowering::written_order::compile` |
+| Dependency-aware clause-prefix CQ → RA | `cq_query_lowering::clause_prefix::compile` |
+| Graph-planned CQ → RA, including YA | `cq_query_lowering::hypergraph::compile` |
+| Typed planner selection/report/replay | `cq_query_lowering::composition` |
+| RA → named index demands and uses | `cq_index_policy::compile` |
+| IX plus explicit assignments → Physical | `cq_physical_selection::given_bindings` |
+| Physical realization | `cq_physical_lowering::{begin,resume}` plus selected external providers/rules |
 
-Explicit macro entries parse a source language and call its typed pass.
-`choose_graph_or_prefix!` chooses caller-bound `cq_to_ra_hypergraph!` or `cq_to_ra_clause_prefix!`; each
-emits RA to `choose_index_policy!`. To select eager indexed execution explicitly,
-compose the following facade:
+`choose_graph_or_prefix!` dispatches through caller-bound
+`cq_to_ra_hypergraph!` or `cq_to_ra_clause_prefix!`. Each planner passes its RA to
+`mini_linq::choose_index_policy!`; a caller can import `index_demands` under that
+name. IX then goes to the caller's `choose_physical!` policy. The Physical table
+records each relation/index provider and every operation's lowering separately.
+There is no default whole-query hash backend.
 
-```rust
-mod wiring {
-    pub use ::mini_linq::*;
-    pub use ::mini_linq::{
-        result_index_demands as choose_index_policy,
-        materialized_hash_program as choose_relation_lowering,
-    };
-}
-use wiring as mini_linq;
-```
+Planning can be tested through the typed API without any physical provider.
+The current borrowed slice/map implementation admits direct input Rename,
+indexed NaturalJoin and terminal Project. The
+[full-CQ trace](ix-physical/query-trace/review.md) follows the written-order
+planner through that supported domain. Select, Extend, YA Semijoin and
+nonterminal projection do not yet have migrated physical rules. The
+[runnable composition example](../examples/composition/README.md) starts from
+explicit RA; its [trace](ix-physical/realization-trace/review.md) is reported
+separately from the full-CQ query.
 
-Then invoke `mini_linq::choose_graph_or_prefix!` with a CQ. The result-index pass
-emits `choose_relation_lowering!`, which this facade binds to eager hash realization.
-Aliasing `materialized_hash_callable` instead selects a callable over the same
-computation. With ordinary crate bindings, the index and realization choosers
-select compatible implementations from their source domains and still invoke
-the caller's aliases. No planner choice implies eager execution.
+The policies are Written, Connected, GreedyWidth and Auto. They use source order,
+connectivity or heading arity; they do not estimate cardinalities or perform
+global cost search. Auto uses GYO and a join tree for alpha-acyclic bodies,
+performs YA reduction, then assembles the result; cyclic bodies use binary
+planning. YA is a reduction schedule, not a claim of cost-based join ordering.
 
-Generated paths resolve through those Rust imports; an alias can select a
-continuation with the same contract. `materialized_hash_program!` also accepts
-`access path;` for its set-valued Access holes, including `access_to_set_loops!` when only
-completed answers are observed. Each intermediate artifact can be quoted directly.
+Within `cq-query-lowering`, `dependencies.rs` derives D-* judgments;
+`hypergraph/structure.rs` implements G-* reductions; `hypergraph/ya.rs`
+schedules the two sweeps; `hypergraph/rules.rs` implements P-* and Y-* rules.
+`clause_prefix/rules.rs` implements C-* rules and the A-* argument judgments.
+Each `strategy.rs` chooses among applicable commands. The
+[expression specification](RUST-EXPRESSIONS.md) states dependency and movement
+premises and the graph planner's admitted domain.
 
-The route selects implementation modules: `cq-query-lowering::hypergraph` and `cq-query-lowering::clause_prefix`
-produce RA; `cq-index-policy::result_demands` derives named demands; `cq-relation-lowering::materialized_hash`
-constructs indexed set computations and native hosts. `cq-relation-lowering::prefix_hash`
-owns the expression-aware lazy alternative. `cq-relation-lowering::configured` accepts
-configured RA directly and uses row, key, candidate and pair operations from
-`cq-native-lowering`, as specified
-in [Access refinement](ACCESS-REFINEMENT.md).
+The checkers inspect actual emitted RA separately from emission. Expression
+checking shares dependency analysis, so authored dependency facts and legal
+orders test that analysis separately. Rust lexical scope remains in
+`cq::rust::free_variables`; type ascriptions belong to `Let::binding_types`.
+RA retains its source program annotation, but downstream passes consume the
+written algebra instead of rebuilding a plan from that annotation.
 
-Each implementation owns its checked public entries and independent target
-checks. `cq-compose` provides typed convenience recipes and checked report/replay
-dispatch; the macro frontend composes actual continuation calls.
-`cq-access-lowering` owns pull and eager push alternatives; `cq-pipeline-lowering` owns the
-iterator endpoints. `cq-ir` supplies language judgments and factual heading
-queries. Realization domains and index-coverage checks belong to their consumers.
-[Compiler structure](COMPILER-STRUCTURE.md) records the dependency graph.
+## Languages used by planning
 
-Within logical planning, `cq-query-lowering/src/dependencies.rs` derives D-* judgments;
-`hypergraph/structure.rs` implements G-* reductions. `hypergraph/ya.rs` schedules
-the two sweeps; `hypergraph/rules.rs` implements P-* and Y-* transitions. `clause_prefix/rules.rs`
-implements C-* transitions, with A-* argument judgments composing C-MATCH.
-Each implementation's `strategy.rs` chooses among its own legal candidates.
-Component paths are relative to `crates/`. The
-[expression rule specification](RUST-EXPRESSIONS.md#dependency-judgments-and-their-code)
-pairs the judgments with code and states the graph planner's admitted domain.
-
-The expression checker reads the actual RA separately from emission. It shares
-clause dependency analysis, which is tested against authored facts and legal
-orders; sharing that analysis is not an independent proof of its correctness.
-
-Rust lexical scope remains in `cq::rust::free_variables`. Clause type
-ascriptions belong to `Let::binding_types`; the basic language fragment is
-recognized by `Query::is_basic`. Whole-query planning and generated CQ names
-are owned by their logical implementation modules.
-
-The RA module retains its program annotation. Lowering consumes the written
-algebra; it does not reconstruct a plan from that annotation.
-
-## Language forms used by planning
-
-1. RA `semijoin left with right` records an existence operation, including
-   composite and empty separators. Its meaning is join then left projection;
-   this materialized backend implements it with an existence test.
-2. CQ arguments, `if`, and `let` retain native Rust expressions; RA uses
-   `select` and `extend` for their computations. A bounded comparison
-   recognizer admits i32 variables/literals and six comparisons for movement.
-   Every occurrence of a comparison variable must have a syntactically known
-   primitive type. Arbitrary Rust calls and arithmetic preserve evaluation
-   boundaries. Physical comparison lowering also anchors operands to i32.
-3. `IndexRequirement` has an explicit result namespace: `@r[0, 2]` refers
-   to attributes at those ordinals in the sorted heading of named result `r`.
-   `R[0]` means declared input-column positions. The `@`
-   prevents a result and an input with equal spellings from being confused.
-   Empty keys have no index entry. Indexes carry requirements, not containers.
-4. RustAccessPlan checks a logical comparison label paired with an existing
-   Rust `if` access, and permits empty local headings for Unit, projection to
-   `{}`, and empty-separator existence guards. Empty occurrences require `if`,
-   not `for`. Pull maps these accesses to existing Pipeline operators.
-
-## Why existing local physical IRs suffice
-
-This indexed backend materializes each named set result. A staged Rust file
-therefore has several local cursor holes, one per RA definition, separated by
-ordinary Rust bindings and index builders. Each hole uses at most a scan and
-a join/guard, then projection and distinct. This obeys the existing linear
-IteratorPipeline contract; a shared RA result is computed once and borrowed
-by subsequent regions. The RA DAG is represented by those bindings and local
-regions; it is not flattened into one linear pipeline.
-
-For `l = rename R ...; r = rename S ...; f = semijoin l with r`, the index
-pass writes an index on **r**, and the physical pass emits an existence test
-against that index inside f's local access plan. If r is already reduced,
-the index is built from that reduced result after its definition. Projection
-changes the actual stored tuple type at its own materialization boundary.
-
-The generated API provides `build`, `query`, `materialize`, and `run`: build
-performs the specified blocking work; query traverses the stored answer;
-materialize sorts distinct output tuples. Work counters report result arities
-and counts, index construction, join matches, and semijoin probes.
+- RA Semijoin denotes a natural join followed by projection to the left heading,
+  including composite and empty separators. Logical YA preserves exact relation
+  versions through both sweeps; physical pruning is a separate choice.
+- CQ atom arguments, `if`, and `let` preserve Rust syntax. Select and Extend
+  retain the corresponding computations. The movable comparison fragment uses
+  primitive-i32 operands and six comparisons; arbitrary Rust calls/arithmetic
+  remain barriers.
+- IX names indexes on exact RA versions: `i = @r[0,2]` uses ordinals in `r`'s
+  sorted logical heading, and `j.right = i` records consumption. Empty shared
+  headings still require an explicit `[]` demand. No provider is chosen by IX.
+- Access associates logical occurrences with already-selected concrete Rust
+  leaves. Its existing execution endpoints do not participate in logical join
+  planning. Push/pull placement in the redesigned compiler remains unresolved.
 
 ## Administrative rules and contracts
 
@@ -172,22 +121,16 @@ Their [graph](../crates/cq-query-lowering/src/hypergraph/check.rs) and
 definitions and reports. Downstream passes consume
 only their RA/index languages, with no dependency on graph state, policy, or reports.
 
-The [complete CQ artifact](planned-example/01-cq.rs) expands through
-[RA](planned-example/02-relational.rs), [indexes](planned-example/03-indexes.rs),
-[local access plans](planned-example/04-access.rs),
-[pipelines](planned-example/05-pipelines.rs), and [Rust](planned-example/06-rust.rs).
-The boundary tests compare these files to actual pass output and compile each
-entry separately.
+## Scope and evidence
 
-## Scope and verification
+Logical width is heading arity, not cardinality, bytes, treewidth or fractional
+hypertree width. The greedy policy makes no global optimality claim. WCOJ,
+cardinality estimation, general Rust purity analysis and projected-output-linear
+YA complexity are outside the implemented planning claims.
 
-The materialized backend supports at most twelve attributes per named result,
-matching its Rust tuple set representation. Movable comparisons use the
-recognized primitive-i32 fragment. Planning supports graph and prefix routes;
-WCOJ, cardinality estimation, general Rust purity analysis, and
-projected-output-linear Yannakakis bounds are outside this implementation.
-
-[PLANNING-VERIFICATION.md](PLANNING-VERIFICATION.md) records fixture coverage,
-independent semantic comparisons, mutation checks, and commands for both typed
-pass and public-macro verification. The [IR boundary review](IR-STAGE-REVIEW.md)
-separates this indexed route from the direct configurable physical edge.
+The current [planning tests](PLANNING-VERIFICATION.md) cover independent
+valuation/RA equality, intermediate YA support, derivation mutation and expression
+scheduling. They do not certify generated execution for expression-rich or YA
+programs after removal of the old physical backends. Physical realization has
+its own narrower integration tests and
+[actual expansion trace](ix-physical/realization-trace/review.md).

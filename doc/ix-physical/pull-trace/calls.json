@@ -1,0 +1,389 @@
+[
+  {
+    "process": 2172007,
+    "step": 1,
+    "macro": "cq_to_ra_written_order",
+    "package": "mini-linq",
+    "input": "raw/2172007/001-cq_to_ra_written_order.input.tokens",
+    "output": "raw/2172007/001-cq_to_ra_written_order.output.tokens",
+    "output_bytes": 471
+  },
+  {
+    "process": 2172007,
+    "step": 2,
+    "macro": "index_demands",
+    "package": "mini-linq",
+    "input": "raw/2172007/002-index_demands.input.tokens",
+    "output": "raw/2172007/002-index_demands.output.tokens",
+    "output_bytes": 552
+  },
+  {
+    "process": 2172007,
+    "step": 3,
+    "macro": "given_physical_bindings",
+    "package": "mini-linq",
+    "input": "raw/2172007/003-given_physical_bindings.input.tokens",
+    "output": "raw/2172007/003-given_physical_bindings.output.tokens",
+    "output_bytes": 1339
+  },
+  {
+    "process": 2172007,
+    "step": 4,
+    "macro": "realize_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/004-realize_physical.input.tokens",
+    "output": "raw/2172007/004-realize_physical.output.tokens",
+    "output_bytes": 3270
+  },
+  {
+    "process": 2172007,
+    "step": 5,
+    "macro": "cq-example-providers::slice_rows",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/005-cq-example-providers::slice_rows.input.tokens",
+    "output": "raw/2172007/005-cq-example-providers::slice_rows.output.tokens",
+    "output_bytes": 2102
+  },
+  {
+    "process": 2172007,
+    "step": 6,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/006-resume_physical.input.tokens",
+    "output": "raw/2172007/006-resume_physical.output.tokens",
+    "output_bytes": 3430
+  },
+  {
+    "process": 2172007,
+    "step": 7,
+    "macro": "cq-example-providers::hash_relation",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/007-cq-example-providers::hash_relation.input.tokens",
+    "output": "raw/2172007/007-cq-example-providers::hash_relation.output.tokens",
+    "output_bytes": 2299
+  },
+  {
+    "process": 2172007,
+    "step": 8,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/008-resume_physical.input.tokens",
+    "output": "raw/2172007/008-resume_physical.output.tokens",
+    "output_bytes": 3731
+  },
+  {
+    "process": 2172007,
+    "step": 9,
+    "macro": "cq-example-providers::sorted_relation",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/009-cq-example-providers::sorted_relation.input.tokens",
+    "output": "raw/2172007/009-cq-example-providers::sorted_relation.output.tokens",
+    "output_bytes": 2558
+  },
+  {
+    "process": 2172007,
+    "step": 10,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/010-resume_physical.input.tokens",
+    "output": "raw/2172007/010-resume_physical.output.tokens",
+    "output_bytes": 3975
+  },
+  {
+    "process": 2172007,
+    "step": 11,
+    "macro": "cq-example-providers::rename",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/011-cq-example-providers::rename.input.tokens",
+    "output": "raw/2172007/011-cq-example-providers::rename.output.tokens",
+    "output_bytes": 3975
+  },
+  {
+    "process": 2172007,
+    "step": 12,
+    "macro": "cq-example-providers::slice_rows",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/012-cq-example-providers::slice_rows.input.tokens",
+    "output": "raw/2172007/012-cq-example-providers::slice_rows.output.tokens",
+    "output_bytes": 2664
+  },
+  {
+    "process": 2172007,
+    "step": 13,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/013-resume_physical.input.tokens",
+    "output": "raw/2172007/013-resume_physical.output.tokens",
+    "output_bytes": 4161
+  },
+  {
+    "process": 2172007,
+    "step": 14,
+    "macro": "cq-example-providers::rename",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/014-cq-example-providers::rename.input.tokens",
+    "output": "raw/2172007/014-cq-example-providers::rename.output.tokens",
+    "output_bytes": 4160
+  },
+  {
+    "process": 2172007,
+    "step": 15,
+    "macro": "cq-example-providers::hash_relation",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/015-cq-example-providers::hash_relation.input.tokens",
+    "output": "raw/2172007/015-cq-example-providers::hash_relation.output.tokens",
+    "output_bytes": 2881
+  },
+  {
+    "process": 2172007,
+    "step": 16,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/016-resume_physical.input.tokens",
+    "output": "raw/2172007/016-resume_physical.output.tokens",
+    "output_bytes": 4396
+  },
+  {
+    "process": 2172007,
+    "step": 17,
+    "macro": "cq-example-providers::hash_relation",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/017-cq-example-providers::hash_relation.input.tokens",
+    "output": "raw/2172007/017-cq-example-providers::hash_relation.output.tokens",
+    "output_bytes": 3097
+  },
+  {
+    "process": 2172007,
+    "step": 18,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/018-resume_physical.input.tokens",
+    "output": "raw/2172007/018-resume_physical.output.tokens",
+    "output_bytes": 4676
+  },
+  {
+    "process": 2172007,
+    "step": 19,
+    "macro": "cq-example-providers::indexed_join",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/019-cq-example-providers::indexed_join.input.tokens",
+    "output": "raw/2172007/019-cq-example-providers::indexed_join.output.tokens",
+    "output_bytes": 6989
+  },
+  {
+    "process": 2172007,
+    "step": 20,
+    "macro": "cq-example-providers::slice_rows",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/020-cq-example-providers::slice_rows.input.tokens",
+    "output": "raw/2172007/020-cq-example-providers::slice_rows.output.tokens",
+    "output_bytes": 5668
+  },
+  {
+    "process": 2172007,
+    "step": 21,
+    "macro": "cq-example-providers::indexed_join_rows",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/021-cq-example-providers::indexed_join_rows.input.tokens",
+    "output": "raw/2172007/021-cq-example-providers::indexed_join_rows.output.tokens",
+    "output_bytes": 7537
+  },
+  {
+    "process": 2172007,
+    "step": 22,
+    "macro": "cq-example-providers::hash_relation",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/022-cq-example-providers::hash_relation.input.tokens",
+    "output": "raw/2172007/022-cq-example-providers::hash_relation.output.tokens",
+    "output_bytes": 6274
+  },
+  {
+    "process": 2172007,
+    "step": 23,
+    "macro": "cq-example-providers::indexed_join_matches",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/023-cq-example-providers::indexed_join_matches.input.tokens",
+    "output": "raw/2172007/023-cq-example-providers::indexed_join_matches.output.tokens",
+    "output_bytes": 7766
+  },
+  {
+    "process": 2172007,
+    "step": 24,
+    "macro": "cq-example-providers::borrowed_fields",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/024-cq-example-providers::borrowed_fields.input.tokens",
+    "output": "raw/2172007/024-cq-example-providers::borrowed_fields.output.tokens",
+    "output_bytes": 5852
+  },
+  {
+    "process": 2172007,
+    "step": 25,
+    "macro": "cq-example-providers::indexed_join_output",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/025-cq-example-providers::indexed_join_output.input.tokens",
+    "output": "raw/2172007/025-cq-example-providers::indexed_join_output.output.tokens",
+    "output_bytes": 3070
+  },
+  {
+    "process": 2172007,
+    "step": 26,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/026-resume_physical.input.tokens",
+    "output": "raw/2172007/026-resume_physical.output.tokens",
+    "output_bytes": 5152
+  },
+  {
+    "process": 2172007,
+    "step": 27,
+    "macro": "cq-example-providers::rename",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/027-cq-example-providers::rename.input.tokens",
+    "output": "raw/2172007/027-cq-example-providers::rename.output.tokens",
+    "output_bytes": 5153
+  },
+  {
+    "process": 2172007,
+    "step": 28,
+    "macro": "cq-example-providers::sorted_relation",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/028-cq-example-providers::sorted_relation.input.tokens",
+    "output": "raw/2172007/028-cq-example-providers::sorted_relation.output.tokens",
+    "output_bytes": 3585
+  },
+  {
+    "process": 2172007,
+    "step": 29,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/029-resume_physical.input.tokens",
+    "output": "raw/2172007/029-resume_physical.output.tokens",
+    "output_bytes": 5382
+  },
+  {
+    "process": 2172007,
+    "step": 30,
+    "macro": "cq-example-providers::sorted_relation",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/030-cq-example-providers::sorted_relation.input.tokens",
+    "output": "raw/2172007/030-cq-example-providers::sorted_relation.output.tokens",
+    "output_bytes": 3788
+  },
+  {
+    "process": 2172007,
+    "step": 31,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/031-resume_physical.input.tokens",
+    "output": "raw/2172007/031-resume_physical.output.tokens",
+    "output_bytes": 5677
+  },
+  {
+    "process": 2172007,
+    "step": 32,
+    "macro": "cq-example-providers::indexed_join",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/032-cq-example-providers::indexed_join.input.tokens",
+    "output": "raw/2172007/032-cq-example-providers::indexed_join.output.tokens",
+    "output_bytes": 9159
+  },
+  {
+    "process": 2172007,
+    "step": 33,
+    "macro": "cq-example-providers::sorted_relation",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/033-cq-example-providers::sorted_relation.input.tokens",
+    "output": "raw/2172007/033-cq-example-providers::sorted_relation.output.tokens",
+    "output_bytes": 7612
+  },
+  {
+    "process": 2172007,
+    "step": 34,
+    "macro": "cq-example-providers::indexed_join_matches",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/034-cq-example-providers::indexed_join_matches.input.tokens",
+    "output": "raw/2172007/034-cq-example-providers::indexed_join_matches.output.tokens",
+    "output_bytes": 9381
+  },
+  {
+    "process": 2172007,
+    "step": 35,
+    "macro": "cq-example-providers::borrowed_fields",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/035-cq-example-providers::borrowed_fields.input.tokens",
+    "output": "raw/2172007/035-cq-example-providers::borrowed_fields.output.tokens",
+    "output_bytes": 7114
+  },
+  {
+    "process": 2172007,
+    "step": 36,
+    "macro": "cq-example-providers::indexed_join_output",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/036-cq-example-providers::indexed_join_output.input.tokens",
+    "output": "raw/2172007/036-cq-example-providers::indexed_join_output.output.tokens",
+    "output_bytes": 3833
+  },
+  {
+    "process": 2172007,
+    "step": 37,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/037-resume_physical.input.tokens",
+    "output": "raw/2172007/037-resume_physical.output.tokens",
+    "output_bytes": 6386
+  },
+  {
+    "process": 2172007,
+    "step": 38,
+    "macro": "cq-example-providers::project",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/038-cq-example-providers::project.input.tokens",
+    "output": "raw/2172007/038-cq-example-providers::project.output.tokens",
+    "output_bytes": 10551
+  },
+  {
+    "process": 2172007,
+    "step": 39,
+    "macro": "cq-example-providers::borrowed_fields",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/039-cq-example-providers::borrowed_fields.input.tokens",
+    "output": "raw/2172007/039-cq-example-providers::borrowed_fields.output.tokens",
+    "output_bytes": 7971
+  },
+  {
+    "process": 2172007,
+    "step": 40,
+    "macro": "cq-example-providers::project_output",
+    "package": "cq-example-providers",
+    "input": "raw/2172007/040-cq-example-providers::project_output.input.tokens",
+    "output": "raw/2172007/040-cq-example-providers::project_output.output.tokens",
+    "output_bytes": 4198
+  },
+  {
+    "process": 2172007,
+    "step": 41,
+    "macro": "resume_physical",
+    "package": "mini-linq",
+    "input": "raw/2172007/041-resume_physical.input.tokens",
+    "output": "raw/2172007/041-resume_physical.output.tokens",
+    "output_bytes": 1110
+  },
+  {
+    "process": 2172007,
+    "step": 42,
+    "macro": "access_to_distinct_iter",
+    "package": "mini-linq",
+    "input": "raw/2172007/042-access_to_distinct_iter.input.tokens",
+    "output": "raw/2172007/042-access_to_distinct_iter.output.tokens",
+    "output_bytes": 457
+  },
+  {
+    "process": 2172007,
+    "step": 43,
+    "macro": "pipeline_to_distinct_iter",
+    "package": "mini-linq",
+    "input": "raw/2172007/043-pipeline_to_distinct_iter.input.tokens",
+    "output": "raw/2172007/043-pipeline_to_distinct_iter.output.tokens",
+    "output_bytes": 1377
+  }
+]

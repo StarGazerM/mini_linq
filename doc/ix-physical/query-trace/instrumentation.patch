@@ -1,0 +1,444 @@
+--- crates/mini-linq/src/lib.rs
++++ instrumented/crates/mini-linq/src/lib.rs
+@@ -28,13 +28,17 @@
+ /// Capture a typed CQ for the workload catalog without compiling a host API.
+ #[proc_macro]
+ pub fn workload_query(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("workload_query", input, |input| {
+     workload::expand(input)
++
++    })
+ }
+ 
+ /// Select a logical planner without bypassing its caller-resolved macro binding.
+ #[cfg(feature = "logical-selection")]
+ #[proc_macro]
+ pub fn mini_linq(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("mini_linq", input, |input| {
+     entry::stage(input, None, |source: &cq_ir::cq::Module| {
+         cq_ir::cq::contract::check(source)?;
+         Ok(if source.program.query.is_basic() {
+@@ -43,39 +47,50 @@
+             quote::quote!(mini_linq::cq_to_ra_clause_prefix! { #source })
+         })
+     })
++
++    })
+ }
+ 
+ /// Canonical CQ-to-RA rules for variable-only conjunctive queries.
+ #[cfg(feature = "written-order")]
+ #[proc_macro]
+ pub fn cq_to_ra_written_order(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("cq_to_ra_written_order", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::choose_index_policy)),
+         cq_query_lowering::written_order::compile,
+     )
++
++    })
+ }
+ 
+ /// Source-order clause-prefix CQ lowering, selected independently of source shape.
+ #[cfg(feature = "clause-prefix")]
+ #[proc_macro]
+ pub fn cq_to_ra_clause_prefix(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("cq_to_ra_clause_prefix", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::choose_index_policy)),
+         cq_query_lowering::clause_prefix::compile,
+     )
++
++    })
+ }
+ 
+ /// Graph planning, including YA reduction when the query is acyclic.
+ #[cfg(feature = "hypergraph")]
+ #[proc_macro]
+ pub fn cq_to_ra_hypergraph(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("cq_to_ra_hypergraph", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::choose_index_policy)),
+         cq_query_lowering::hypergraph::compile,
+     )
++
++    })
+ }
+ 
+ /// Select graph or expression-preserving prefix planning through caller bindings.
+@@ -83,6 +98,7 @@
+ #[cfg(feature = "logical-selection")]
+ #[proc_macro]
+ pub fn choose_graph_or_prefix(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("choose_graph_or_prefix", input, |input| {
+     entry::stage(input, None, |source: &cq_ir::cq::Module| {
+         cq_ir::cq::contract::check(source)?;
+         let facts = cq_query_lowering::dependencies::ClauseDependencies::analyze(source)?;
+@@ -92,17 +108,22 @@
+             quote::quote!(mini_linq::cq_to_ra_clause_prefix! { #source })
+         })
+     })
++
++    })
+ }
+ 
+ /// Construct exact-version index definitions and references from every join use.
+ #[cfg(feature = "index-demands")]
+ #[proc_macro]
+ pub fn index_demands(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("index_demands", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::choose_physical)),
+         cq_index_policy::compile,
+     )
++
++    })
+ }
+ 
+ /// Attach the explicit policy's complete provider and lowering assignments.
+@@ -112,6 +133,7 @@
+ #[cfg(feature = "physical-selection")]
+ #[proc_macro]
+ pub fn given_physical_bindings(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("given_physical_bindings", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::realize_physical)),
+@@ -122,6 +144,8 @@
+             )
+         },
+     )
++
++    })
+ }
+ 
+ /// Realize the recorded Physical program inside the caller's Rust expression context.
+@@ -131,6 +155,7 @@
+ #[cfg(feature = "physical-realization")]
+ #[proc_macro]
+ pub fn realize_physical(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("realize_physical", input, |input| {
+     entry::stage(input, None, |source: &cq_ir::physical::Module| {
+         cq_physical_lowering::begin(
+             source.clone(),
+@@ -138,14 +163,19 @@
+             syn::parse_quote!(mini_linq::access),
+         )
+     })
++
++    })
+ }
+ 
+ /// Resume a selected external provider's compile-time reply.
+ #[cfg(feature = "physical-realization")]
+ #[proc_macro]
+ pub fn resume_physical(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("resume_physical", input, |input| {
+     entry::stage(input, None, |reply: &cq_ir::provider_protocol::Reply| {
+         cq_physical_lowering::resume(reply.clone())
++    })
++
+     })
+ }
+ 
+@@ -154,7 +184,10 @@
+ #[cfg(feature = "access-to-set-loops")]
+ #[proc_macro]
+ pub fn access_to_set_loops(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("access_to_set_loops", input, |input| {
+     entry::stage(input, None, cq_access_lowering::to_set_loops::compile)
++
++    })
+ }
+ 
+ /// Expose the left-deep iterator operators of an annotated Rust access plan.
+@@ -174,11 +207,14 @@
+ #[cfg(feature = "access-to-pipeline")]
+ #[proc_macro]
+ pub fn access_to_distinct_iter(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("access_to_distinct_iter", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::pipeline_to_distinct_iter)),
+         cq_access_lowering::to_pipeline::compile,
+     )
++
++    })
+ }
+ 
+ /// Consume an Access plan into an exact `HashSet` through the existing access_to_distinct_iter
+@@ -186,11 +222,14 @@
+ #[cfg(feature = "access-to-pipeline")]
+ #[proc_macro]
+ pub fn access_to_set(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("access_to_set", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::pipeline_to_set)),
+         cq_access_lowering::to_pipeline::compile,
+     )
++
++    })
+ }
+ 
+ /// Consume a named pipeline into its exact `HashSet`, folding terminal
+@@ -198,7 +237,10 @@
+ #[cfg(feature = "pipeline-set")]
+ #[proc_macro]
+ pub fn pipeline_to_set(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("pipeline_to_set", input, |input| {
+     entry::stage(input, None, cq_pipeline_lowering::collect_set::compile)
++
++    })
+ }
+ 
+ /// Lower an explicit named physical plan to its actual ordinary-Rust AST.
+@@ -209,41 +251,58 @@
+ #[cfg(feature = "pipeline-distinct-iter")]
+ #[proc_macro]
+ pub fn pipeline_to_distinct_iter(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("pipeline_to_distinct_iter", input, |input| {
+     entry::stage(input, None, cq_pipeline_lowering::distinct_iter::compile)
++
++    })
+ }
+ 
+ /// The Access-to-Pipeline edge with a support-stream continuation.
+ #[cfg(feature = "access-to-pipeline")]
+ #[proc_macro]
+ pub fn access_to_support_iter(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("access_to_support_iter", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::pipeline_to_support_iter)),
+         cq_access_lowering::to_pipeline::compile,
+     )
++
++    })
+ }
+ 
+ /// Enumerate Pipeline support; the enclosing consumer owns distinctness.
+ #[cfg(feature = "pipeline-support-iter")]
+ #[proc_macro]
+ pub fn pipeline_to_support_iter(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("pipeline_to_support_iter", input, |input| {
+     entry::stage(input, None, cq_pipeline_lowering::support_iter::compile)
++
++    })
+ }
+ 
+ /// Lower Access through Pipeline to an existential consumer.
+ #[cfg(feature = "access-to-pipeline")]
+ #[proc_macro]
+ pub fn access_to_exists(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("access_to_exists", input, |input| {
+     entry::stage(
+         input,
+         Some(syn::parse_quote!(mini_linq::pipeline_to_exists)),
+         cq_access_lowering::to_pipeline::compile,
+     )
++
++    })
+ }
+ 
+ /// Consume a checked Pipeline only until its first witness.
+ #[cfg(feature = "pipeline-exists")]
+ #[proc_macro]
+ pub fn pipeline_to_exists(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("pipeline_to_exists", input, |input| {
+     entry::stage(input, None, cq_pipeline_lowering::exists::compile)
+-}
++
++    })
++}
++
++mod __cq_trace;
+--- crates/mini-linq/src/__cq_trace.rs
++++ instrumented/crates/mini-linq/src/__cq_trace.rs
+@@ -0,0 +1,36 @@
++
++use proc_macro::TokenStream;
++use std::{fs, io::ErrorKind, path::PathBuf, sync::atomic::{AtomicUsize, Ordering}};
++static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
++
++pub(crate) fn expand(
++    name: &str,
++    input: TokenStream,
++    compile: impl FnOnce(TokenStream) -> TokenStream,
++) -> TokenStream {
++    let Some(directory) = std::env::var_os("MINI_LINQ_TRACE_DIR") else {
++        return compile(input);
++    };
++    let directory = PathBuf::from(directory).join(std::process::id().to_string());
++    fs::create_dir_all(&directory).unwrap();
++    // Proc-macro crates have independent statics. Atomically creating a shared
++    // marker orders invocation starts across every instrumented crate in rustc.
++    let number = loop {
++        let number = SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
++        match fs::OpenOptions::new().write(true).create_new(true)
++            .open(directory.join(format!("{number:03}.invocation"))) {
++            Ok(_) => break number,
++            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
++            Err(error) => panic!("cannot reserve macro invocation: {error}"),
++        }
++    };
++    let package = env!("CARGO_PKG_NAME");
++    let label = if package == "mini-linq" { name.to_owned() }
++                else { format!("{package}::{name}") };
++    let base = format!("{number:03}-{label}");
++    fs::write(directory.join(format!("{base}.input.tokens")), input.to_string()).unwrap();
++    fs::write(directory.join(format!("{base}.package")), package).unwrap();
++    let output = compile(input);
++    fs::write(directory.join(format!("{base}.output.tokens")), output.to_string()).unwrap();
++    output
++}
+--- crates/cq-example-providers/src/lib.rs
++++ instrumented/crates/cq-example-providers/src/lib.rs
+@@ -28,66 +28,104 @@
+ 
+ #[proc_macro]
+ pub fn slice_rows(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("slice_rows", input, |input| {
+     expand(input, storage::slice)
++
++    })
+ }
+ 
+ #[proc_macro]
+ pub fn hash_relation(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("hash_relation", input, |input| {
+     expand(input, storage::hash)
++
++    })
+ }
+ 
+ #[proc_macro]
+ pub fn sorted_relation(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("sorted_relation", input, |input| {
+     expand(input, storage::sorted)
++
++    })
+ }
+ 
+ #[proc_macro]
+ pub fn borrowed_fields(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("borrowed_fields", input, |input| {
+     expand(input, exact::borrowed_fields)
++
++    })
+ }
+ 
+ #[proc_macro]
+ pub fn rename(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("rename", input, |input| {
+     expand(input, rules::rename)
++
++    })
+ }
+ 
+ #[proc_macro]
+ pub fn indexed_join(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("indexed_join", input, |input| {
+     expand(input, rules::indexed_join)
++
++    })
+ }
+ 
+ /// Project logical columns through the explicitly selected output provider.
+ #[proc_macro]
+ pub fn project(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("project", input, |input| {
+     expand(input, project::lower)
++
++    })
+ }
+ 
+ #[doc(hidden)]
+ #[proc_macro]
+ pub fn project_rows(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("project_rows", input, |input| {
+     expand(input, project::rows)
++
++    })
+ }
+ 
+ #[doc(hidden)]
+ #[proc_macro]
+ pub fn project_output(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("project_output", input, |input| {
+     expand(input, project::output)
++
++    })
+ }
+ 
+ #[doc(hidden)]
+ #[proc_macro]
+ pub fn indexed_join_rows(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("indexed_join_rows", input, |input| {
+     expand(input, rules::indexed_join_rows)
++
++    })
+ }
+ 
+ #[doc(hidden)]
+ #[proc_macro]
+ pub fn indexed_join_matches(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("indexed_join_matches", input, |input| {
+     expand(input, rules::indexed_join_matches)
++
++    })
+ }
+ 
+ #[doc(hidden)]
+ #[proc_macro]
+ pub fn indexed_join_output(input: TokenStream) -> TokenStream {
++    crate::__cq_trace::expand("indexed_join_output", input, |input| {
+     expand(input, rules::indexed_join_output)
++
++    })
+ }
++
++mod __cq_trace;
+--- crates/cq-example-providers/src/__cq_trace.rs
++++ instrumented/crates/cq-example-providers/src/__cq_trace.rs
+@@ -0,0 +1,36 @@
++
++use proc_macro::TokenStream;
++use std::{fs, io::ErrorKind, path::PathBuf, sync::atomic::{AtomicUsize, Ordering}};
++static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
++
++pub(crate) fn expand(
++    name: &str,
++    input: TokenStream,
++    compile: impl FnOnce(TokenStream) -> TokenStream,
++) -> TokenStream {
++    let Some(directory) = std::env::var_os("MINI_LINQ_TRACE_DIR") else {
++        return compile(input);
++    };
++    let directory = PathBuf::from(directory).join(std::process::id().to_string());
++    fs::create_dir_all(&directory).unwrap();
++    // Proc-macro crates have independent statics. Atomically creating a shared
++    // marker orders invocation starts across every instrumented crate in rustc.
++    let number = loop {
++        let number = SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
++        match fs::OpenOptions::new().write(true).create_new(true)
++            .open(directory.join(format!("{number:03}.invocation"))) {
++            Ok(_) => break number,
++            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
++            Err(error) => panic!("cannot reserve macro invocation: {error}"),
++        }
++    };
++    let package = env!("CARGO_PKG_NAME");
++    let label = if package == "mini-linq" { name.to_owned() }
++                else { format!("{package}::{name}") };
++    let base = format!("{number:03}-{label}");
++    fs::write(directory.join(format!("{base}.input.tokens")), input.to_string()).unwrap();
++    fs::write(directory.join(format!("{base}.package")), package).unwrap();
++    let output = compile(input);
++    fs::write(directory.join(format!("{base}.output.tokens")), output.to_string()).unwrap();
++    output
++}

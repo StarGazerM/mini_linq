@@ -1,86 +1,7 @@
-//! Compare an extended query with an independently authored optimized RA plan.
-//! The current planner is not claimed to discover the authored plan.
-mod eager_programs {
-    use super::{combine, left_key, permitted, right_key};
-    mod wiring {
-        #[allow(unused_imports)]
-        pub use ::mini_linq::{
-            access_to_distinct_iter, access_to_set, choose_graph_or_prefix, cq_to_ra_clause_prefix,
-            cq_to_ra_hypergraph, pipeline_to_distinct_iter, pipeline_to_set,
-        };
-        pub use ::mini_linq::{
-            materialized_hash_program as choose_relation_lowering,
-            result_index_demands as choose_index_policy,
-        };
-    }
-    use wiring as mini_linq;
-    mini_linq::choose_graph_or_prefix! {
-        pub(super) struct Planned;
-        relation R(a:i32,b:i32); relation S(a:i32,b:i32);
-        relation T(a:i32,b:i32); relation U(a:i32,b:i32,c:i32);
-        relation V(a:i32); relation answer(a:i32,b:i32);
-        answer(a,w) :- R(a,x), S(a,y), T(y,z),
-            let k:i32 = combine(*x,*y),
-            U(left_key(k,*y),right_key(*x,*z),w),
-            if *x > 0, if permitted(k,*z), V(w);
-    }
-    mini_linq::choose_index_policy! {
-        pub(super) struct Authored;
-        relation R(a:i32,b:i32); relation S(a:i32,b:i32);
-        relation T(a:i32,b:i32); relation U(a:i32,b:i32,c:i32);
-        relation V(a:i32); relation answer(a:i32,b:i32);
-        answer(a,w) :- R(a,x), S(a,y), T(y,z),
-            let k:i32 = combine(*x,*y),
-            U(left_key(k,*y),right_key(*x,*z),w),
-            if *x > 0, if permitted(k,*z), V(w);
-        relational {
-            r_r = rename R {a -> a, b -> x};
-            r_a = select r_r if (*x > 0);
-            r_s = rename S {a -> a, b -> y};
-            r_rs = natural_join r_a with r_s;
-            r_b = extend r_rs with {k:i32} value ((combine(*x,*y),));
-            r_t = rename T {a -> y, b -> z};
-            r_bt = natural_join r_b with r_t;
-            r_c = select r_bt if (permitted(k,*z));
-            r_keys = extend r_c with {p:i32,q:i32}
-                value ((left_key(k,*y),right_key(*x,*z)));
-            r_d = project r_keys keep {a,p,q};
-            r_u = rename U {a -> p, b -> q, c -> w};
-            r_v = rename V {a -> w};
-            r_uv = semijoin r_u with r_v;
-            r_join = natural_join r_d with r_uv;
-            r_out = project r_join keep {a,w};
-            output r_out as answer(a,w);
-        }
-    }
-}
-use eager_programs::Authored;
-use eager_programs::Planned;
+//! Logical planning and an independently authored RA; no physical execution.
+use cq_ir::{cq, relational_plan};
+use mini_linq_paper_overview::{boundaries, directory, write};
 use std::collections::BTreeSet;
-
-fn combine(x: i32, y: i32) -> i32 {
-    x.wrapping_add(y)
-}
-fn left_key(k: i32, y: i32) -> i32 {
-    k.wrapping_add(y)
-}
-fn right_key(x: i32, z: i32) -> i32 {
-    x.wrapping_add(z)
-}
-fn permitted(k: i32, z: i32) -> bool {
-    k <= z
-}
-
-mini_linq::mini_linq! {
-    struct Lazy;
-    relation R(a:i32,b:i32); relation S(a:i32,b:i32);
-    relation T(a:i32,b:i32); relation U(a:i32,b:i32,c:i32);
-    relation V(a:i32); relation answer(a:i32,b:i32);
-    answer(a,w) :- R(a,x), S(a,y), T(y,z),
-        let k:i32 = combine(*x,*y),
-        U(left_key(k,*y),right_key(*x,*z),w),
-        if *x > 0, if permitted(k,*z), V(w);
-}
 
 #[derive(Clone, Default)]
 struct Input {
@@ -117,45 +38,48 @@ fn oracle(input: &Input) -> Vec<(i32, i32)> {
     answer.into_iter().collect()
 }
 
-fn check(input: &Input) {
-    let expected = oracle(input);
-    assert_eq!(
-        Lazy::run(
-            input.r.iter().copied(),
-            input.s.iter().copied(),
-            input.t.iter().copied(),
-            input.u.iter().copied(),
-            input.v.iter().copied()
-        ),
-        expected
-    );
-    assert_eq!(
-        Planned::run(
-            input.r.iter().copied(),
-            input.s.iter().copied(),
-            input.t.iter().copied(),
-            input.u.iter().copied(),
-            input.v.iter().copied()
-        ),
-        expected
-    );
-    assert_eq!(
-        Authored::run(
-            input.r.iter().copied(),
-            input.s.iter().copied(),
-            input.t.iter().copied(),
-            input.u.iter().copied(),
-            input.v.iter().copied()
-        ),
-        expected
-    );
-}
-
-fn reversed_duplicates<T: Clone>(rows: &[T]) -> Vec<T> {
-    rows.iter().rev().chain(rows).cloned().collect()
-}
-
 fn main() {
+    let authored: relational_plan::Module = syn::parse_quote! {
+
+        struct Authored;
+        relation R(a:i32,b:i32); relation S(a:i32,b:i32);
+        relation T(a:i32,b:i32); relation U(a:i32,b:i32,c:i32);
+        relation V(a:i32); relation answer(a:i32,b:i32);
+        answer(a,w) :- R(a,x), S(a,y), T(y,z),
+            let k:i32 = combine(*x,*y),
+            U(left_key(k,*y),right_key(*x,*z),w),
+            if *x > 0, if permitted(k,*z), V(w);
+        relational {
+            r_r = rename R {a -> a, b -> x};
+            r_a = select r_r if (*x > 0);
+            r_s = rename S {a -> a, b -> y};
+            r_rs = natural_join r_a with r_s;
+            r_b = extend r_rs with {k:i32} value ((combine(*x,*y),));
+            r_t = rename T {a -> y, b -> z};
+            r_bt = natural_join r_b with r_t;
+            r_c = select r_bt if (permitted(k,*z));
+            r_keys = extend r_c with {p:i32,q:i32}
+                value ((left_key(k,*y),right_key(*x,*z)));
+            r_d = project r_keys keep {a,p,q};
+            r_u = rename U {a -> p, b -> q, c -> w};
+            r_v = rename V {a -> w};
+            r_uv = semijoin r_u with r_v;
+            r_join = natural_join r_d with r_uv;
+            r_out = project r_join keep {a,w};
+            output r_out as answer(a,w);
+        }
+    };
+    relational_plan::contract::check(&authored).unwrap();
+    let ix = cq_index_policy::compile(&authored).unwrap();
+    cq_ir::index_requirements::contract::check(&ix).unwrap();
+    let source = cq::Module {
+        program: authored.program.clone(),
+    };
+    let directory = directory("logical-constraint-planning");
+    boundaries(&directory, "written", &source, false);
+    boundaries(&directory, "planned", &source, true);
+    write(&directory, "authored-02-relational.tokens", &authored);
+    write(&directory, "authored-03-indexes.tokens", &ix);
     let input = Input {
         r: vec![(1, 1), (1, 2), (2, -1), (3, 3)],
         s: vec![(1, 2), (2, 1), (3, 2)],
@@ -172,29 +96,15 @@ fn main() {
         v: vec![(10,), (12,), (13,), (14,), (15,), (16,)],
     };
     assert_eq!(oracle(&input), [(1, 10), (1, 12), (3, 13)]);
-    let (_, stats) = Authored::run_with_stats(
-        input.r.iter().copied(),
-        input.s.iter().copied(),
-        input.t.iter().copied(),
-        input.u.iter().copied(),
-        input.v.iter().copied(),
-    );
-    for expected in [
-        ("r_a", 2, 3),
-        ("r_b", 4, 3),
-        ("r_bt", 5, 6),
-        ("r_c", 5, 3),
-        ("r_d", 3, 3),
-        ("r_uv", 3, 6),
-        ("r_out", 2, 3),
-    ] {
-        assert!(
-            stats.results.contains(&expected),
-            "missing {expected:?}: {:?}",
-            stats.results
-        );
-    }
-    let mut cases = vec![input.clone(), Input::default()];
+    let duplicate = Input {
+        r: input.r.iter().rev().chain(&input.r).copied().collect(),
+        s: input.s.iter().rev().chain(&input.s).copied().collect(),
+        t: input.t.iter().rev().chain(&input.t).copied().collect(),
+        u: input.u.iter().rev().chain(&input.u).copied().collect(),
+        v: input.v.iter().rev().chain(&input.v).copied().collect(),
+    };
+    assert_eq!(oracle(&duplicate), oracle(&input));
+    assert!(oracle(&Input::default()).is_empty());
     for empty in 0..5 {
         let mut case = input.clone();
         match empty {
@@ -205,20 +115,9 @@ fn main() {
             4 => case.v.clear(),
             _ => unreachable!(),
         }
-        cases.push(case);
+        assert!(oracle(&case).is_empty());
     }
-    for case in &cases {
-        check(case);
-        check(&Input {
-            r: reversed_duplicates(&case.r),
-            s: reversed_duplicates(&case.s),
-            t: reversed_duplicates(&case.t),
-            u: reversed_duplicates(&case.u),
-            v: reversed_duplicates(&case.v),
-        });
-    }
-    println!("Three public compilation routes agree on 14 input presentations (42 executions).");
     println!(
-        "Authored input answer: [(1,10),(1,12),(3,13)]; selected intermediate arities/counts verified."
+        "PASS: automatic and authored RA/IX contracts; independent whole-tuple oracle and duplicate/empty fixtures. No generated-query equivalence or intermediate runtime counts are claimed."
     );
 }

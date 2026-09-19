@@ -9,8 +9,8 @@ fn annotated_query() -> rust_access_plan::Plan {
             ::core::clone::Clone::clone(x),
             ::core::clone::Clone::clone(y),
         )) :-
-            Left(x) => for (x,) in (left.iter()),
-            Right(x, y) => for (y,) in
+            Left(x) => bind (x,) <- (left.iter()),
+            Right(x, y) => bind (y,) <-
                 (right.get(&(::core::clone::Clone::clone(x),)).into_iter().flatten()),
             Different(x, y) => if (*x != *y);
     })
@@ -61,11 +61,37 @@ fn access_checks_fresh_bindings_before_pipeline_construction() {
 }
 
 #[test]
+fn correspondence_requires_a_valid_access_source() {
+    let source: rust_access_plan::Plan = syn::parse_quote! {
+        answer() => (()) :- ;
+    };
+    let invalid_source: rust_access_plan::Plan = syn::parse_quote! {
+        answer(missing) => (()) :- ;
+    };
+    let target: iterator_pipeline::Pipeline = syn::parse_quote! {
+        iter0 = unit yield ();
+        iter1 = project iter0 as () yield (());
+        iter2 = distinct iter1;
+        return iter2;
+    };
+
+    assert!(rust_access_plan::contract::well_formed(&source));
+    assert!(!rust_access_plan::contract::well_formed(&invalid_source));
+    assert!(iterator_pipeline::contract::well_formed(&target));
+    assert!(cq_access_lowering::to_pipeline::check(&source, &target));
+    rejects(|| compile_pull(&invalid_source), "not bound");
+    assert!(!cq_access_lowering::to_pipeline::check(
+        &invalid_source,
+        &target,
+    ));
+}
+
+#[test]
 fn scalar_items_and_empty_bodies_lower_through_the_existing_pull_pass() {
     let scalar: rust_access_plan::Plan = syn::parse_quote! {
         answer(row, field) => ((row, field)) :-
-        Rows(row) => for row in (opaque_rows),
-        Fields(row, field) => for field in (fields(row));
+        Rows(row) => bind row <- (opaque_rows),
+        Fields(row, field) => bind field <- (fields(row));
     };
     let pipeline = compile_pull(&scalar).unwrap();
     assert!(cq_access_lowering::to_pipeline::check(&scalar, &pipeline));

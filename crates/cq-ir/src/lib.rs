@@ -1,9 +1,11 @@
 //! MiniLinq's nominal query languages and Rust-shaped physical representations.
 //!
-//! CQ, [`relational_plan::Module`], and IndexRequirements each have one public
-//! parser and local language contract. The relational plan gives every set
-//! operator a named DAG result before indexes or Rust storage are chosen.
-//! [`native`] declares native Access fragments.
+//! CQ, [`relational_plan::Module`], and [`index_requirements::Module`] each have
+//! one public parser and local language contract. IX names required indexes and
+//! records their join uses. [`physical::Module`] records explicit provider and
+//! lowering assignments; its checker establishes structure, not external
+//! provider admission. The relational plan gives every set operator a named
+//! DAG result before indexes or Rust storage are chosen.
 //! [`rust_access_plan::Plan`] then associates every logical occurrence with
 //! its concrete Rust access or output expression. The pull strategy lowers
 //! those annotations to an explicit
@@ -17,7 +19,8 @@ use syn::{Ident, Index, Token};
 pub mod cq;
 pub mod index_requirements;
 pub mod iterator_pipeline;
-pub mod native;
+pub mod physical;
+pub mod provider_protocol;
 pub mod relational_plan;
 pub mod rust_access_plan;
 

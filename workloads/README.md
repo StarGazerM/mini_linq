@@ -9,27 +9,25 @@ count by making progressively larger cliques.
 Each leaf under `src/queries/{classic,retail}/*.rs` is authored Rust source and
 the only source of truth for that query's syntax and semantics. Every leaf
 directly invokes `::mini_linq::workload_query!` exactly once. That procedural
-macro always emits the typed CQ factory used by the catalog. The optional
-`compiled-queries` feature forwards `mini-linq/compiled-workloads`, making the
-same invocation additionally run the three canonical compilation edges and emit their
-generated `Program`. There is no `macro_rules!` transport wrapper, nested
-`mini_linq!` invocation, or `include_str!` copy. The catalog retains stable
+macro emits the typed CQ factory used by the catalog; it does not select physical
+providers or generate an executable query API. The catalog retains stable
 ordering and teaching metadata; it does not carry a second copy of the query.
 Generated data, oracle SQL, and golden results are derived artifacts.
 Generation reads the typed CQ factory but never rewrites a query module.
 
 `workload_query!` is not another query language or IR parser. Its input is the
 same `cq::Module` grammar accepted by `mini_linq!`; its workload-only role is to
-emit catalog metadata in the default build and optionally invoke the three
-canonical typed compilation edges.
+emit catalog metadata. Logical compilation is inspected separately through
+`cargo xtask explain`.
 
 The workload tools generate deterministic headerless `i32` CSV inputs,
 mechanically translate each authored CQ to visible SQL, evaluate that SQL in
 an independent in-memory DuckDB engine, and compare the canonical result with
-the Rust program produced by the current MiniLinq passes. The corpus oracle is
-confined to the separate root `xtask` workspace. Ordinary workspace builds do
-not compile DuckDB; the small project-level comparison enables it only through
-the explicit `duckdb-example` feature. The corpus implementation uses DuckDB's
+tracked golden CSVs. Generated-query differential execution is unavailable
+until workload-specific Physical assignments and a host input/output contract
+are supplied. The corpus oracle is confined to the separate root `xtask`
+workspace. Ordinary workspace builds do not compile DuckDB. The corpus
+implementation uses DuckDB's
 [Rust client][duckdb-rust] and [Appender API][duckdb-appender] for bulk input.
 
 ## The ten classic queries
@@ -161,18 +159,16 @@ seed cannot silently become the checked-in test. Medium and large primarily
 stress import, normalization, and index construction; their deliberately
 bounded outputs are not a selectivity study.
 
-The raw relation CSV files retain duplicates. Set semantics are applied in two
-independent ways:
+The raw relation CSV files retain duplicates. The SQL oracle gives each raw
+DuckDB table its own `SELECT DISTINCT` CTE, uses one alias per body occurrence,
+equality predicates for shared variables, a final `SELECT DISTINCT`, and an
+explicit `ORDER BY` in head-column order. Golden CSVs are therefore strictly
+lexicographically ordered, distinct materialized result sets.
 
-- generated MiniLinq Rust normalizes every input before building indexes;
-- the SQL oracle wraps every raw DuckDB table in its own `SELECT DISTINCT` CTE.
-
-The SQL then uses one alias per body occurrence, equality predicates for shared
-variables, a final `SELECT DISTINCT`, and an explicit `ORDER BY` in head-column
-order. Golden CSVs are therefore strictly lexicographically ordered, distinct
-materialized result sets. The differential harness compares the MiniLinq and
-DuckDB vectors exactly as returned; it does not sort or deduplicate either side
-after execution, because doing so would hide ordering or set-semantics bugs.
+Future workload execution must preserve the CQ's set semantics through its
+selected physical representations and explicit output consumer. The retired
+backend's input-normalization and sorted-vector API are not imposed on the new
+Physical contract. No generated-query comparison currently runs for this corpus.
 
 Files are organized as follows:
 
@@ -235,55 +231,44 @@ operation:
 cargo xtask golden all tiny --scenario all --write
 ```
 
-The default feature set invokes the catalog path of `workload_query!`: it
-emits typed CQ factories without running the compilation passes.
-`compiled-queries` forwards `mini-linq/compiled-workloads`, so the same 20
-invocations additionally emit their programs. The passes are complete on the
-staff answer branch; a student starter must implement them first:
-
-```text
-cargo check -p cq-workloads --features compiled-queries --locked
-```
-
-Inspect any authored catalog case one compiler layer at a time with:
+`workload_query!` emits catalog metadata and typed CQ factories. Inspect any
+authored catalog case at the currently supported logical boundaries with:
 
 ```text
 cargo xtask explain triangle --through index-requirements
 cargo xtask explain retail_h21_positive
 ```
 
-The stepper writes complete artifacts under
-`target/mini-linq-explain/<case>/`, preserves successful earlier artifacts
-when a later pass fails, and reports that edge in `ERROR.md`. The checked-in VS
-Code task **MiniLinq: Explain query** provides prompts for the same command.
-These ignored trace files are syntax/diff snapshots outside the Cargo crate
-graph, not Rust Analyzer type-checked workspace modules.
+`--through` accepts `cq`, `relational-plan`, or `index-requirements`; its default
+is `index-requirements`. The command calls the typed CQ → RA → IX passes and
+checks their local contracts. IX records named demands and explicit references
+from each indexed join position.
 
-With `compiled-queries` enabled, Rust Analyzer can also recursively
-expand the direct `workload_query!` call, but that command shows final Rust
-rather than stopping at compiler boundaries. `workload_query!` directly calls
-the first three typed passes, so their intermediate results are not nested
-macro invocations. Do not try to re-expand the virtual `[EXPANSION].rs` view.
-Rust Analyzer does not provide MiniLinq-specific completion or semantic
-intelligence inside the query token tree itself.
+Complete typed payloads are written under `target/mini-linq-explain/<case>/`:
 
-Then compile the current typed passes, expand the supplied `access_to_distinct_iter` lowering,
-compile the resulting standalone Rust, run it on the same CSV directory, and
-compare every ordered result row with DuckDB:
+| File | Boundary |
+|---|---|
+| `01-cq.tokens` | Authored CQ module. |
+| `02-relational-plan.tokens` | Planned named RA module. |
+| `03-index-requirements.tokens` | RA plus index definitions and use references. |
 
-```text
-cargo xtask differential all tiny --scenario all
-cargo xtask differential retail_h21_positive medium --scenario no-match
-```
+These files are typed pass outputs, not captured individual macro expansions or
+Rust Analyzer type-checked workspace modules. A new run clears stale later
+artifacts. If a pass fails, successful earlier files remain and `ERROR.md`
+identifies the failing boundary. Post-IX stage requests reject with a diagnostic
+explaining the missing physical choices and host contract.
+
+`cargo xtask differential` is currently unavailable. It immediately reports that
+the old whole-query backend was removed and that workload-specific Physical
+assignments and the new host input/output contract are required. It does not
+compile DuckDB or execute a substitute backend.
 
 `generate` and the DuckDB-only `golden` check use the query catalog without
-invoking compilation. `differential` compiles through canonical CQ lowering,
-index selection and physical realization before executing the generated Rust.
-`explain`, `list`, and `generate` use the lightweight default tool build and do
-not compile DuckDB. `golden` and `differential` print that they are enabling
-the oracle and transparently re-run Cargo with the optional `oracle` feature;
-users do not add a feature flag, though the first oracle command may take
-longer while bundled DuckDB builds.
+invoking compilation. `explain`, `list`, and `generate` use the lightweight
+default tool build and do not compile DuckDB. `golden` prints that it is enabling
+the oracle and re-runs Cargo with the optional `oracle` feature; users do not
+add a feature flag, though the first oracle command may take longer while
+bundled DuckDB builds.
 
 [duckdb-rust]: https://duckdb.org/docs/current/clients/rust
 [duckdb-appender]: https://duckdb.org/docs/current/data/appender

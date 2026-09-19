@@ -12,6 +12,7 @@
 
 mod block_access;
 mod blocks;
+mod hash_index;
 mod mask;
 mod membership;
 mod metrics;
@@ -21,6 +22,7 @@ mod summary;
 
 pub use block_access::{BlockDescriptor, BlockRead, BuildBlocks, CoordinateBounds};
 pub use blocks::{Block, BlockStore};
+pub use hash_index::{BucketCursor, BuildIndex, HashIndex, IndexRead};
 pub use mask::BlockMask;
 pub use membership::ExactMembership;
 pub use metrics::{Counters, Work};

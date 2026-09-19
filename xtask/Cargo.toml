@@ -14,14 +14,10 @@ default = []
 oracle = ["dep:duckdb"]
 
 [dependencies]
-cq-compose = { path = "../crates/cq-compose" }
-cq-relation-lowering = { path = "../crates/cq-relation-lowering", default-features = false, features = ["base-hash", "prefix-hash"] }
-cq-access-lowering = { path = "../crates/cq-access-lowering", default-features = false, features = ["to-pipeline"] }
-cq-pipeline-lowering = { path = "../crates/cq-pipeline-lowering", default-features = false, features = ["distinct-iter"] }
+cq-query-lowering = { path = "../crates/cq-query-lowering", default-features = false, features = ["written-order", "clause-prefix", "hypergraph"] }
+cq-index-policy = { path = "../crates/cq-index-policy" }
 cq-ir = { path = "../crates/cq-ir" }
 cq-workloads = { path = "../workloads" }
 duckdb = { version = "~1.10505.0", features = ["bundled"], optional = true }
-proc-macro2 = "1"
-prettyplease = "0.2"
 quote = "1"
-syn = { version = "2", features = ["extra-traits", "full", "visit-mut"] }
+syn = { version = "2", features = ["extra-traits", "full"] }

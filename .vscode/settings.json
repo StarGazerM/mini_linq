@@ -1,6 +1,3 @@
 {
-    "rust-analyzer.cargo.features": [
-        "cq-workloads/compiled-queries"
-    ],
     "rust-analyzer.procMacro.enable": true
 }

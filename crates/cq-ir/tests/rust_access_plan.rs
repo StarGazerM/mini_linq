@@ -8,7 +8,7 @@ fn empty_headings_use_existence_guards_and_preserve_empty_tuple_output() {
     };
     rust_access_plan::contract::check(&plan).unwrap();
     let invalid: rust_access_plan::Plan = syn::parse_quote! {
-        answer() => (()) :- key() => for () in (rows.iter());
+        answer() => (()) :- key() => bind () <- (rows.iter());
     };
     assert!(rust_access_plan::contract::check(&invalid).is_err());
 }
@@ -34,8 +34,8 @@ fn an_empty_access_body_is_unit_and_cannot_bind_output_variables() {
 fn one_fresh_variable_can_bind_an_opaque_item_without_a_tuple_adapter() {
     let valid: rust_access_plan::Plan = syn::parse_quote! {
         answer(row, value) => ((row, value)) :-
-        Rows(row) => for r#row in (opaque_rows),
-        Fields(row, value) => for value in (fields(row));
+        Rows(row) => bind r#row <- (opaque_rows),
+        Fields(row, value) => bind value <- (fields(row));
     };
     rust_access_plan::contract::check(&valid).unwrap();
     assert_eq!(
@@ -49,12 +49,12 @@ fn one_fresh_variable_can_bind_an_opaque_item_without_a_tuple_adapter() {
         quote!(row @ _),
     ] {
         let invalid: rust_access_plan::Plan = syn::parse_quote! {
-            answer(row) => ((row,)) :- Rows(row) => for #pattern in (opaque_rows);
+            answer(row) => ((row,)) :- Rows(row) => bind #pattern <- (opaque_rows);
         };
         assert!(rust_access_plan::contract::check(&invalid).is_err());
     }
     let missing: rust_access_plan::Plan = syn::parse_quote! {
-        answer(x, y) => ((x, y)) :- Pair(x, y) => for x in (pairs);
+        answer(x, y) => ((x, y)) :- Pair(x, y) => bind x <- (pairs);
     };
     assert!(rust_access_plan::contract::check(&missing).is_err());
 }
@@ -62,14 +62,14 @@ fn one_fresh_variable_can_bind_an_opaque_item_without_a_tuple_adapter() {
 #[test]
 fn selection_annotations_require_bound_variables_and_an_if_access() {
     let valid: rust_access_plan::Plan = syn::parse_quote! {
-        answer(x) => ((x.clone(),)) :- R(x) => for (x,) in (rows.iter()),
+        answer(x) => ((x.clone(),)) :- R(x) => bind (x,) <- (rows.iter()),
             if (x > 0) => if (*x > 0);
     };
     rust_access_plan::contract::check(&valid).unwrap();
     let unbound: rust_access_plan::Plan = syn::parse_quote! {
-        answer(x) => ((x.clone(),)) :- R(x) => for (x,) in (rows.iter()),
+        answer(x) => ((x.clone(),)) :- R(x) => bind (x,) <- (rows.iter()),
             if (y > 0) => if (*x > 0),
-            S(y) => for (y,) in (other.iter());
+            S(y) => bind (y,) <- (other.iter());
     };
     assert!(rust_access_plan::contract::check(&unbound).is_err());
 }
@@ -77,8 +77,8 @@ fn selection_annotations_require_bound_variables_and_an_if_access() {
 fn triangle_plan_tokens() -> proc_macro2::TokenStream {
     quote! {
         triangle(x, y, z) => ((x.clone(), y.clone(), z.clone(),)) :-
-            R(x, y) => for (x, y,) in (rows0.iter()),
-            S(y, z) => for (z,) in
+            R(x, y) => bind (x, y,) <- (rows0.iter()),
+            S(y, z) => bind (z,) <-
                 (index0.get(&(y.clone(),)).into_iter().flatten()),
             T(z, x) => if (index1.contains(&(z.clone(), x.clone(),)));
     }
@@ -105,12 +105,12 @@ fn output_is_one_rust_expression_for_the_lazy_result_iterator() {
 }
 
 #[test]
-fn access_shape_and_for_pattern_follow_source_order_bindings() {
+fn access_shape_and_bind_pattern_follow_source_order_bindings() {
     let invalid = [
         // Array/slice patterns belonged to the old homogeneous-row backend.
         quote! {
             answer(x) => ((x.clone(),)) :-
-                Seed(x) => for [x] in (rows0.iter());
+                Seed(x) => bind [x] <- (rows0.iter());
         },
         // A clause with fresh variables enumerates; it cannot be a predicate.
         quote! {
@@ -120,25 +120,25 @@ fn access_shape_and_for_pattern_follow_source_order_bindings() {
         // A fully bound occurrence is a predicate; it cannot bind again.
         quote! {
             answer(x) => ((x.clone(),)) :-
-                Seed(x) => for (x,) in (rows0.iter()),
-                Keep(x) => for () in (index0.get(&(x.clone(),)).into_iter());
+                Seed(x) => bind (x,) <- (rows0.iter()),
+                Keep(x) => bind () <- (index0.get(&(x.clone(),)).into_iter());
         },
         // The binding pattern follows fresh relation columns, not an arbitrary
         // variable ordering.
         quote! {
             answer(x, y) => ((x.clone(), y.clone(),)) :-
-                Pair(x, y) => for (y, x,) in (rows0.iter());
+                Pair(x, y) => bind (y, x,) <- (rows0.iter());
         },
         // Bound key variables are not returned by a proper-key lookup.
         quote! {
             answer(x, z) => ((x.clone(), z.clone(),)) :-
-                Seed(x) => for (x,) in (rows0.iter()),
-                Edge(x, z) => for (x, z,) in (index0.get(&(x.clone(),)).into_iter());
+                Seed(x) => bind (x,) <- (rows0.iter()),
+                Edge(x, z) => bind (x, z,) <- (index0.get(&(x.clone(),)).into_iter());
         },
         // The output atom cannot mention a variable that no access bound.
         quote! {
             answer(y) => ((y.clone(),)) :-
-                Seed(x) => for (x,) in (rows0.iter());
+                Seed(x) => bind (x,) <- (rows0.iter());
         },
     ];
 
@@ -153,8 +153,8 @@ fn access_shape_and_for_pattern_follow_source_order_bindings() {
 fn raw_identifiers_compare_as_logical_symbols_in_binding_patterns() {
     let plan: rust_access_plan::Plan = syn::parse2(quote! {
         answer(r#x, z) => ((r#x.clone(), z.clone(),)) :-
-            Seed(x) => for (r#x,) in (rows0.iter()),
-            Edge(r#x, z) => for (z,) in (index0.get(&(r#x.clone(),)).into_iter());
+            Seed(x) => bind (r#x,) <- (rows0.iter()),
+            Edge(r#x, z) => bind (z,) <- (index0.get(&(r#x.clone(),)).into_iter());
     })
     .unwrap();
 
@@ -166,18 +166,18 @@ fn let_accesses_require_fresh_names_including_raw_and_tuple_bindings() {
     let invalid = [
         quote! {
             answer(x) => ((x,)) :-
-                R(x) => for (x,) in ([(1,)]),
-                let x = 2 => for (x,) in ([(2,)]);
+                R(x) => bind (x,) <- ([(1,)]),
+                let x = 2 => bind (x,) <- ([(2,)]);
         },
         quote! {
             answer(x) => ((x,)) :-
-                let x = 1 => for (x,) in ([(1,)]),
-                let r#x = 2 => for (r#x,) in ([(2,)]);
+                let x = 1 => bind (x,) <- ([(1,)]),
+                let r#x = 2 => bind (r#x,) <- ([(2,)]);
         },
         quote! {
             answer(x, y) => ((x, y)) :-
-                R(x) => for (x,) in ([(1,)]),
-                let (y, x) = (2, 3) => for (y, x) in ([(2, 3)]);
+                R(x) => bind (x,) <- ([(1,)]),
+                let (y, x) = (2, 3) => bind (y, x) <- ([(2, 3)]);
         },
     ];
     for tokens in invalid {
@@ -192,8 +192,8 @@ fn let_accesses_require_fresh_names_including_raw_and_tuple_bindings() {
 fn let_rhs_uses_the_preceding_logical_environment() {
     let invalid: rust_access_plan::Plan = syn::parse_quote! {
         answer(y) => ((y,)) :-
-            let y = x + 1 => for (y,) in ([(2,)]),
-            R(x) => for (x,) in ([(1,)]);
+            let y = x + 1 => bind (y,) <- ([(2,)]),
+            R(x) => bind (x,) <- ([(1,)]);
     };
     let error = rust_access_plan::contract::check(&invalid).unwrap_err();
     assert!(
@@ -203,14 +203,22 @@ fn let_rhs_uses_the_preceding_logical_environment() {
 
     let valid: rust_access_plan::Plan = syn::parse_quote! {
         answer(x, y) => ((x, y)) :-
-            let () = () => for () in ([()]),
-            let y = { let x = 1; x + 1 } => for (y,) in ([(2,)]),
-            R(x) => for (x,) in ([(1,)]),
-            let () = record!(x, y) => for () in ([record!(x, y)]);
+            let () = () => bind () <- ([()]),
+            let y = { let x = 1; x + 1 } => bind (y,) <- ([(2,)]),
+            R(x) => bind (x,) <- ([(1,)]),
+            let () = record!(x, y) => bind () <- ([record!(x, y)]);
     };
     rust_access_plan::contract::check(&valid).unwrap();
     assert_eq!(
         syn::parse2::<rust_access_plan::Plan>(valid.to_token_stream()).unwrap(),
         valid,
+    );
+}
+
+#[test]
+fn old_for_clause_is_not_an_access_binding() {
+    assert!(
+        syn::parse_str::<rust_access_plan::Plan>("answer(a) => ((a,)) :- R(a) => for a in (rows);")
+            .is_err()
     );
 }

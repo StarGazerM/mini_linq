@@ -6,7 +6,7 @@ fn set_access_evaluates_all_candidates_and_deduplicates_projected_values() {
     let observed = &calls;
     let rows = mini_linq::access_to_set! {
         out(x) => (x % 2) :-
-        R(x) => for (x,) in ([(1,), (3,), (2,), (4,), (4,)]),
+        R(x) => bind (x,) <- ([(1,), (3,), (2,), (4,), (4,)]),
         Keep(x) => if ({ observed.set(observed.get() + 1); x < 4 });
     };
     assert_eq!(calls.get(), 5);
@@ -51,7 +51,7 @@ mod composed {
 
     pub(super) fn rows() -> std::collections::HashSet<i32> {
         mini_linq::access_to_set! {
-            out(x) => (x) :- R(x) => for (x,) in ([(1,), (1,), (2,)]);
+            out(x) => (x) :- R(x) => bind (x,) <- ([(1,), (1,), (2,)]);
         }
     }
 }
@@ -63,4 +63,18 @@ fn set_continuation_is_selected_by_an_ordinary_module_alias() {
         composed::CALLS.load(std::sync::atomic::Ordering::Relaxed),
         1
     );
+}
+
+#[cfg(feature = "pipeline-support-iter")]
+#[test]
+fn streaming_access_preserves_support_without_allocating_a_distinct_set() {
+    let stream: Vec<_> = mini_linq::access_to_support_iter! {
+        out(k) => ([k]) :- R(k,_v) => bind (k,_v) <- ([(1_i64,10), (1,11), (2,20)]);
+    }
+    .collect();
+    let support: HashSet<_> = mini_linq::access_to_set! {
+        out(k) => ([k]) :- R(k,_v) => bind (k,_v) <- ([(1_i64,10), (1,11), (2,20)]);
+    };
+    assert_eq!(stream, vec![[1], [1], [2]]);
+    assert_eq!(stream.into_iter().collect::<HashSet<_>>(), support);
 }

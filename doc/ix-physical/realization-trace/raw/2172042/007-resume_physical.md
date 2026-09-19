@@ -1,0 +1,156 @@
+## 2172042/007-resume_physical
+
+[Raw input](007-resume_physical.input.tokens) · [Raw output](007-resume_physical.output.tokens)
+
+Actual input:
+
+```rust
+resume
+{
+    plan
+    {
+        struct Heterogeneous; relation L(a : Value); relation
+        R(a : Value, b : Value); relation S(b : Value, c : Value);
+        answer(a, b, c) : - L(a), R(a, b), S(b, c); relational
+        {
+            l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s =
+            rename S { b - > b, c - > c }; j0 = natural_join l with r; j1 =
+            natural_join j0 with s; output j1 as answer(a, b, c);
+        } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+        { j0.right = i0; j1.right = i1; } physical
+        {
+            relations
+            {
+                L = :: cq_example_providers :: slice_rows; R = ::
+                cq_example_providers :: hash_relation; S = ::
+                cq_example_providers :: sorted_relation; l = ::
+                cq_example_providers :: slice_rows; r = ::
+                cq_example_providers :: hash_relation; s = ::
+                cq_example_providers :: sorted_relation; j0 = ::
+                cq_example_providers :: borrowed_fields; j1 = ::
+                cq_example_providers :: borrowed_fields;
+            } indexes
+            {
+                i0 = :: cq_example_providers :: hash_relation; i1 = ::
+                cq_example_providers :: sorted_relation;
+            } lowerings
+            {
+                l = :: cq_example_providers :: rename; r = ::
+                cq_example_providers :: rename; s = :: cq_example_providers ::
+                rename; j0 = :: cq_example_providers :: indexed_join; j1 = ::
+                cq_example_providers :: indexed_join;
+            }
+        }
+    } environment
+    {
+        stored L at(__cq_store_L) operations :: cq_example_providers ::
+        slice_rows
+    } emitted { let __cq_store_L : & [Value] = L; } pending
+    { input R from(R) }
+    continuations(:: mini_linq :: resume_physical, mini_linq :: access)
+} emitted
+{
+    let __cq_store_R : & :: std :: collections :: HashMap < Value, :: std ::
+    vec :: Vec < Value >> = R;
+} result
+{
+    stored R at(__cq_store_R) operations :: cq_example_providers ::
+    hash_relation
+}
+```
+
+Actual output (formatted where Rust syntax permits):
+
+```rust
+::cq_example_providers::sorted_relation! {
+    reply_to(:: mini_linq :: resume_physical)
+    {
+        plan
+        {
+            struct Heterogeneous; relation L(a : Value); relation
+            R(a : Value, b : Value); relation S(b : Value, c : Value);
+            answer(a, b, c) : - L(a), R(a, b), S(b, c); relational
+            {
+                l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s
+                = rename S { b - > b, c - > c }; j0 = natural_join l with r;
+                j1 = natural_join j0 with s; output j1 as answer(a, b, c);
+            } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+            { j0.right = i0; j1.right = i1; } physical
+            {
+                relations
+                {
+                    L = :: cq_example_providers :: slice_rows; R = ::
+                    cq_example_providers :: hash_relation; S = ::
+                    cq_example_providers :: sorted_relation; l = ::
+                    cq_example_providers :: slice_rows; r = ::
+                    cq_example_providers :: hash_relation; s = ::
+                    cq_example_providers :: sorted_relation; j0 = ::
+                    cq_example_providers :: borrowed_fields; j1 = ::
+                    cq_example_providers :: borrowed_fields;
+                } indexes
+                {
+                    i0 = :: cq_example_providers :: hash_relation; i1 = ::
+                    cq_example_providers :: sorted_relation;
+                } lowerings
+                {
+                    l = :: cq_example_providers :: rename; r = ::
+                    cq_example_providers :: rename; s = :: cq_example_providers
+                    :: rename; j0 = :: cq_example_providers :: indexed_join; j1
+                    = :: cq_example_providers :: indexed_join;
+                }
+            }
+        } environment
+        {
+            stored L at(__cq_store_L) operations :: cq_example_providers ::
+            slice_rows stored R at(__cq_store_R) operations ::
+            cq_example_providers :: hash_relation
+        } emitted
+        {
+            let __cq_store_L : & [Value] = L; let __cq_store_R : & :: std ::
+            collections :: HashMap < Value, :: std :: vec :: Vec < Value > > =
+            R;
+        } pending { input S from(S) }
+        continuations(:: mini_linq :: resume_physical, mini_linq :: access)
+    } plan
+    {
+        struct Heterogeneous; relation L(a : Value); relation
+        R(a : Value, b : Value); relation S(b : Value, c : Value);
+        answer(a, b, c) : - L(a), R(a, b), S(b, c); relational
+        {
+            l = rename L { a - > a }; r = rename R { a - > a, b - > b }; s =
+            rename S { b - > b, c - > c }; j0 = natural_join l with r; j1 =
+            natural_join j0 with s; output j1 as answer(a, b, c);
+        } indexes { i0 = @ r [0]; i1 = @ s [0]; } uses
+        { j0.right = i0; j1.right = i1; } physical
+        {
+            relations
+            {
+                L = :: cq_example_providers :: slice_rows; R = ::
+                cq_example_providers :: hash_relation; S = ::
+                cq_example_providers :: sorted_relation; l = ::
+                cq_example_providers :: slice_rows; r = ::
+                cq_example_providers :: hash_relation; s = ::
+                cq_example_providers :: sorted_relation; j0 = ::
+                cq_example_providers :: borrowed_fields; j1 = ::
+                cq_example_providers :: borrowed_fields;
+            } indexes
+            {
+                i0 = :: cq_example_providers :: hash_relation; i1 = ::
+                cq_example_providers :: sorted_relation;
+            } lowerings
+            {
+                l = :: cq_example_providers :: rename; r = ::
+                cq_example_providers :: rename; s = :: cq_example_providers ::
+                rename; j0 = :: cq_example_providers :: indexed_join; j1 = ::
+                cq_example_providers :: indexed_join;
+            }
+        }
+    } environment
+    {
+        stored L at(__cq_store_L) operations :: cq_example_providers ::
+        slice_rows stored R at(__cq_store_R) operations ::
+        cq_example_providers :: hash_relation
+    } request { input S from(S) }
+}
+
+```

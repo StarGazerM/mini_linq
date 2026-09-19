@@ -1,36 +1,32 @@
 \input{common}
-\title{MiniLinq: Administrative Query Compilation\\Across Embedded Languages}
-\author{Extended research manuscript}
-\date{17 September 2026}
+\title{MiniLinq: Relational Planning and Open Physical Providers}
+\author{Syntax, semantics, compilation rules, and expansion expectations}
+\date{18 September 2026}
 \begin{document}
 \maketitle
 \begin{abstract}
-MiniLinq compiles conjunctive queries with native Rust expressions through
-independently usable relational, index, access and iterator languages.
-We specify each boundary by administrative rules and give explicit algorithms
-for GYO recognition, Yannakakis reduction and dependency-constrained planning.
-A worked query follows composite keys, filter pushdown and column pruning
-through every IR. Computed arguments and let clauses expose additional
-directional requirements; an authored lower plan demonstrates a legal
-optimization beyond the current planner's search.
-The specification relates these algorithms to the Rust implementation and
-states the contracts needed to replace a pass or quote a lower language.
-A borrowed scan realization reuses the same index, Access and Pipeline
-boundaries, with storage-owned demand replay and an existential endpoint.
-Preservation arguments assume an admissible relational host; a compiled
-effect counterexample rules out unrestricted equivalence of lazy and
-materialized execution. Independent valuation and graph oracles, mutation
-checks and compiled tests provide bounded implementation evidence. A companion
-supplement specifies the implemented direct RA-to-Access edge, with independent
-row representation, key, candidate and complete pair-algorithm choices, exact
-residuals after zone rejection, and eager push execution at set-valued Access holes.
+MiniLinq compiles conjunctive queries through named relational algebra and IX,
+which records both required indexes and explicit references from relation-access
+positions. A replaceable policy produces Physical IR, recording individual
+relation/index providers and the lowering of each RA definition. Realization
+follows these fixed choices without rerunning selection. The proposed common
+compiler has no closed catalogue of data structures or global relation-implementation
+switch. We specify both boundaries with syntax, semantics, algorithmic inference
+rules and authored expectations for heterogeneous relation access.
+The generic driver and a borrowed exact-index instance are implemented and
+checked against real macro expansion. General stored intermediates and
+block/YA realization remain outside the implemented domain.
+The relational planning theory is retained; the placement of push/pull and
+lazy-to-eager transformations remains open.
 \end{abstract}
 \input{introduction}
+\input{research_contract}
 \input{overview}
 \input{foundations}
-\input{constraint_planning}
 \input{languages}
+\input{constraint_planning}
 \input{planning}
+\input{ix_physical_contract}
 \input{physical}
 \input{staging}
 \input{extensibility}

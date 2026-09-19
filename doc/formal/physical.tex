@@ -1,314 +1,94 @@
-\section{Index selection and physical realization}
+\section{Representation and correctness of physical realization}
 \label{sec:physical}
-\subsection{Exact index-selection judgments}
-For sorts $V=\Delta(l).V$ and $W=\Delta(r).V$, define
+Section~\ref{sec:ix-physical-redesign} defines selection into Physical and
+realization of that bound program.
+This section states its representation and ownership obligations; it introduces
+no alternative index analysis or post-IX route.
+
+\paragraph{Selected program.}
+Selection produces $P=(IX,\Phi,\Lambda)$ and preserves denotation by erasure
+to IX. Realization must establish the representation claims of this particular
+program. Every RA definition, including structural definitions, has its selected
+rule in $\Lambda$; free host inputs are supplied by their relation bindings.
+The realizing pass receives no policy. A selected rule that does not accept
+the supplied representations causes a compilation failure, not a second choice.
+
+\paragraph{Representation.}
+For an exact RA version $r$, let $R=\sem r_{RA}$. The environment $\Gamma$
+records a physical representation and its decoding relation to $R$.
+Its carriers may be row references, tuples of references, or stable handles;
+they need not be references to separately stored complete rows. A current view
+denotes exactly its selected rows even when it shares immutable storage with
+an earlier version. The selected instances $\Phi_R(r)$ and $\Phi_I(i)$ must
+agree on that version and on their shared owners.
+
+For $D(i)=(r,C)$, write $I_i\simeq_{r,C}R$ when
 \[
-\begin{aligned}
-\operatorname{reskey}(l,r)&=\langle j\mid\ord(W)_j\in V\rangle,\\
-\operatorname{basekey}(l,R,m)&=\langle j\mid m(\Sigma(R)_j.a)\in V\rangle.
-\end{aligned}
+ \forall k,\quad
+ \set\{\operatorname{decode}_i(k,w)\mid
+       w\in\operatorname{lookup}_{I_i}(\rho_i(k))\}
+ =\{t\in R\mid\pi_C(t)=k\}.
 \]
-Keys follow increasing ordinals. $K\oplus\kappa$ appends a nonempty unseen
-signature, preserving first-use order. Fold definitions using:
-\begin{mathpar}
+Here $k$ is a logical tuple of indexed-column values and $\rho_i$ gives its
+chosen physical representation. Decoding may use both the lookup tuple and
+the returned witness. For a relation stored as a map from $a$ to a vector of
+$b$ values, a witness is a borrowed $b$ and decoding gives $(a,b)$.
+The descriptor refers to the exact source version. Reusing an index built over
+an earlier, unreduced version does not satisfy this relation in general.
+Neither index identity nor the access-use association is inferred again here:
+physical lowering reads the written $D$ and $U$.
 
-\Rule{IX-Result}{o=l\bowtie r\ \lor\ o=l\ltimes r\quad
- \kappa=(\mathsf{result},r,\operatorname{reskey}(l,r))}
- {(r_0=o,K)\Rightarrow_{\rm ix}K\oplus\kappa}
+\paragraph{Preparation and reuse.}
+Physical preparation follows the provider instances already written in $\Phi$,
+and each RA definition dispatches through its written $\Lambda$ entry. In the primary
+fixture the input maps already realize the required indexes, so preparation
+only binds their existing views. It need not allocate or scan the relation.
+For an auxiliary map built over rows, a separate construction proof maintains
+that each bucket contains precisely the matching carriers from the processed
+prefix. The empty map and one-carrier insertion establish this invariant;
+source exhaustion establishes the exact-index law. Equality and hashing, or
+ordering, must agree with logical equality. These are example provider proofs,
+not compiler-core cases that enumerate every storage family.
 
-\Rule{IX-Other}{o\notin\{\text{Join},\text{Semijoin}\}}
- {(r_0=o,K)\Rightarrow_{\rm ix}K}
+\paragraph{Lifetimes and placement.}
+Each required index is bound to a valid realization after its exact source
+version becomes available and before its first use. An existing index can be
+reused; a constructed index is prepared once for that binding. Several indexes
+may share one owner, while remaining distinct IX definitions. No provider may
+invalidate another instance's handles by silently replacing shared storage.
+Source and index owners must outlive the references that escape their uses.
+A tuple of borrowed fields does not require an owned tuple of payload values.
+Unmet representation, trait, or lifetime premises reject compilation; hidden
+payload clones or unrequested conversions are not a repair rule.
 
-\Rule{IX-Base}{o=l\bowtie r\quad D(r)=\delta_m(R)\quad
- \kappa=(\mathsf{base},R,\operatorname{basekey}(l,R,m))}
- {(r_0=o,K)\Rightarrow_{\rm base}K\oplus\kappa}
-
-\Rule{IX-Module}{\Sigma;\Delta\vdash(D,\emptyseq)\Rightarrow_{\rm ix}K}
- {\Sigma\vdash D\Downarrow_{\rm result}(D,K)}
-
-\Rule{IX-None}{\Sigma;\Delta\vdash D:\ok}
- {\Sigma\vdash D\Downarrow_{\rm none}(D,\emptyseq)}
-\end{mathpar}
-IX-Base folds actual join order on a root Rename, left-deep joins with direct
-right Renames, and final Project. Both algorithms preserve every definition.
-The default chooser selects base indexes only within their declared domain and
-uses named-result indexes otherwise, including extended linear plans and general
-DAGs. Selection returns the stable required list; an independently authored IX may
-contain valid extras that an explicit realization must admit or reject. Coverage requires the exact
-right result version, including reduced/projected versions.
-\begin{theorem}[Index selection]
-All selection algorithms preserve the entire RA and hence its denotation.
-The base/result policies satisfy IX-WF and contain exactly one signature for
-each nonempty key required in their respective domains, ordered by first use.
-The explicit no-index policy returns the valid empty overlay. Its consumer
-must support scans without equality-index demands; it does not claim hash-index
-coverage or erase demands from an already authored IX input.
-\end{theorem}
-\begin{proof}
-Induct on definitions. Checked layouts give increasing in-range ordinals;
-each binary step appends its nonempty unseen signature, preserving uniqueness
-and first use. Every consumer is visited and $D$ is copied unchanged.
-\end{proof}
-
-\subsection{Borrowed scans through Access and Pipeline}
-The \code{lower_borrowed_nested} realization accepts checked IX $(D,\emptyseq)$ with
-Unit, Rename, Project, Join and Semijoin and variable-only output. It rejects
-Select, Extend, computed outputs and nonempty index demands. Let $\Gamma(r)$
-be its earlier Rust binding and $S_r$ an Access source: a single-use iterator
-moves directly, while a retained resource is captured by an owning handle and
-scanned through its Native provider. Let $P_R$ select an input provider;
-$\beta_m(x)$ borrows its logical fields in result-heading order. Define
-$\mathsf{row}(x,S)$ as the checked Access clause
-$\mathsf{Rows}(x)\Rightarrow\mathsf{for}\ x\ \mathsf{in}\ S$,
-$E(x,y)$ as equality of shared coordinates, and $x\oplus y$ as the merged
-reference tuple in heading order. These abbreviate existing Access syntax.
-\begin{mathpar}
-\Rule{BS-Unit}{}
- {\mathcal A(\mathbf1)=(\mathsf{out}()\Rightarrow()\mathbin{:-}\emptyseq)}
-
-\Rule{BS-Rename}{}
- {\mathcal A(\delta_m R)=(\mathsf{out}(x)\Rightarrow\beta_m(x)
- \mathbin{:-}\mathsf{row}(x,P_R.\mathsf{scan}(R)))}
-
-\Rule{BS-Project}{}
- {\mathcal A(\pi_U r)=(\mathsf{out}(x)\Rightarrow x|_U
- \mathbin{:-}\mathsf{row}(x,S_r))}
-
-\Rule{BS-Join}{}
- {\mathcal A(r\bowtie s)=(\mathsf{out}(x,y)\Rightarrow x\oplus y
- \mathbin{:-}\mathsf{row}(x,S_r),\mathsf{row}(y,S_s),\mathsf{if}(E(x,y)))}
-
-\Rule{BS-Semi}{A_x=(\mathsf{out}(y)\Rightarrow()
- \mathbin{:-}\mathsf{row}(y,S_s),\mathsf{if}(E(x,y)))}
- {\mathcal A(r\ltimes s)=(\mathsf{out}(x)\Rightarrow x
- \mathbin{:-}\mathsf{row}(x,S_r),\mathsf{if}(\mathsf{Exists}\{A_x\}))}
-\end{mathpar}
-Here Exists is a caller-bound Access invocation, lowered by the same pull pass
-to Pipeline and then by R-Exists. It is not a quoted iterator predicate or a
-runtime semijoin operation. Each generated region is independently checked.
-Let $\operatorname{reuse}(r)$ hold when direct uses exceed one or $r$ is a
-join/semijoin RHS; count both operand occurrences of a self-join.
-\begin{mathpar}
-\Rule{BS-Retain}{r=o\quad\operatorname{reuse}(r)\quad A=\mathcal A(o)}
- {\Gamma\Rightarrow\Gamma[r\mapsto\mathsf{Replay}.\mathsf{build}\{A\}]}
-
-\Rule{BS-Stream}{r=o\quad\neg\operatorname{reuse}(r)\quad A=\mathcal A(o)}
- {\Gamma\Rightarrow\Gamma[r\mapsto\mathsf{Stream}\{A\}]}
-
-\Rule{BS-Output}{A_h=(\mathsf{out}(x)\Rightarrow h(x)
- \mathbin{:-}\mathsf{row}(x,S_r))}
- {\mathsf{output}\ r\ \mathsf{as}\ h\Downarrow\mathsf{Iterator}\{A_h\}}
-\end{mathpar}
-Stream, Exists and Iterator denote three Access continuations selecting
-support, existential and distinct Pipeline endpoints. Replay Build delegates
-its Access body to the selected support continuation, then invokes
-\code{BuildReplay::replay}; Scan invokes \code{ReplayRead::cursor}. The public
-traits expose no cache layout or relational operations. Reusable bindings own
-shared source state; copied handles do not clone payload or source iterators.
-Intermediates retain reference tuples, while only final answers require the
-Eq/Hash obligations of distinctness. Intermediate support may repeat occurrences.
-
-Under finite stable inputs, lawful common-field equality and output Eq/Hash,
-induction over these local regions preserves relational support. Replay's
-prefix invariant (Section~\ref{sec:cursor}) preserves that support across
-independent consumers. Source evaluation is delayed by the selected Pipeline
-endpoints; first-witness consumption does not drain its source. This composition
-adds no IR or execution bypass. It retains demanded prefixes and still performs
-nested matching; arbitrary effect traces and optimal YA complexity are not claimed.
-
-\subsection{Storage representation relation}
-Let $\operatorname{row}_V(t)=\langle t(x)\mid x\in\ord(V)\rangle$.
-For base rows use schema order instead. A Rust row set $S\simeq_V L$ means
-its abstract rows are exactly $\{\operatorname{row}_V(t)\mid t\in L\}$.
-For key positions $k$ and complementary positions $p$, an index is either
-\[
- \operatorname{KeySet}_k(L)=\{\operatorname{row}(t)|_k\mid t\in L\},
- \quad
- \operatorname{Buckets}_k(L)[u]
- =\langle\operatorname{row}(t)|_p\mid t\in L,\operatorname{row}(t)|_k=u\rangle.
-\]
-Each represented row contributes its complementary payload once, in fixed
-construction order; missing keys give empty buckets. KeySet is a HashSet;
-Buckets a HashMap to payload vectors. Complements retain layout order;
-singleton Rust tuples retain commas and the empty tuple is $()$.
-\begin{mathpar}
-
-\Rule{ST-Key}{S\simeq_V L}
- {\mathsf{collectSet}(\mathsf{map}(\operatorname{cloneKey}_k,S))
- \simeq\operatorname{KeySet}_k(L)}
-
-\Rule{ST-Bucket}{S\simeq_V L}
- {\mathsf{foldPush}(S,k,p)\simeq\operatorname{Buckets}_k(L)}
-\end{mathpar}
-foldPush visits stored rows once, appending each complement at its key.
-Induction on those visits proves ST-* under lawful cloning/equality.
-Materialized indexes need payload iff a natural-join consumer adds a fresh
-right attribute; other consumers use membership, sharing Buckets if necessary.
-Lazy proper keys always use Buckets; full keys use KeySet.
-\subsection{Access constructors, defined independently of the emitters}
-Abbreviate Access fragments by $\mathsf{for}_N(e)$ and $\mathsf{if}(e)$,
-retaining their positive/binding and guard labels. For represented $S:V$,
-$\operatorname{scan}(S,V)$ is $\mathsf{for}_{\ord V}(S.\mathsf{iter}())$
-when $V\ne\emptyset$, otherwise $\mathsf{if}(\neg S.\mathsf{isEmpty}())$.
-Lookup uses $S.\mathsf{iter}()$ for empty keys, otherwise
-$\mathsf{Buckets}_k(S).\mathsf{get}(u).\mathsf{intoIter}().\mathsf{flatten}()$.
-Existence is nonemptiness for empty keys, KeySet contains for key sets, and
-Buckets contains-key otherwise. Lookup binds complement columns; left bindings
-form keys in right-key order. Output uses result-sort order.
-\begin{lemma}[Lookup and membership adequacy]
-For $t:V$, $L:W$, and $K=V\cap W$, exists returns true iff $t$ has a compatible
-witness in $L$. If $W\setminus V\ne\emptyset$, lookup enumerates exactly the
-complementary tuples of those witnesses, each once.
+\begin{lemma}[Indexed join and semijoin]
+Suppose $I_i\simeq_{r,C}\sem r_{RA}$, $U(j.\mathsf{right})=i$, and $C$
+is the written IX descriptor for $j$. An exact indexed realization that
+enumerates matching witnesses for join, or tests their existence for semijoin,
+preserves the corresponding set denotation.
 \end{lemma}
 \begin{proof}
-Empty keys admit all rows. Otherwise key equality is agreement on $V\cap W$.
-ST-Key decides existence; ST-Bucket enumerates exactly its witnesses' payloads.
-Key and complement reconstruct each row uniquely, including the fully-bound
-case with at most one compatible tuple.
+For a left row $x$, the lookup law gives exactly the right rows agreeing with
+$x$ on the written join columns. Merging each such row therefore gives exactly
+its natural-join witnesses. Nonemptiness gives precisely the semijoin predicate.
+Taking output support removes repeated occurrences without changing either set.
 \end{proof}
 
-\subsection{Materialized IndexedRA to staged Rust}
-Write $s_r=\operatorname{scan}(\mathcal S(r),\Delta(r).V)$,
-$h_V=\mathsf{out}_V$, and $e_V=\operatorname{host}_V(e)$
-(Section~\ref{sec:host-elab}); these abbreviate existing Access syntax.
-Outputs clone/bind values in $\ord(V)$. With implicit checked environments
-$\Sigma;\Delta;\mathcal S$, the operator rules are:
-\begin{mathpar}
-\Rule{M-Unit}{}{\mathbf1\Downarrow_M[\mathsf{unit}()\Rightarrow\mathsf{if}\ \mathsf{true};h_\emptyset]}
-
-\Rule{M-Rename}{\Sigma(R)=\bar a:\bar\tau\quad m(\bar a)=\bar x}
- {\delta_m(R)\Downarrow_M[\operatorname{scan}(\mathcal S(R),\bar x);h_{\set(\bar x)}]}
-
-\Rule{M-Project}{V=\Delta(r).V\quad U\subseteq V}
- {\pi_Ur\Downarrow_M[s_r;h_U]}
-
-\Rule{M-Select}{V=\Delta(r).V}
- {\sigma_er\Downarrow_M[s_r;\mathsf{if}(e_V);h_V]}
-
-\Rule{M-Extend}{V=\Delta(r).V\quad N\cap V=\emptyset}
- {\operatorname{ext}_{N,e}r\Downarrow_M[s_r;\mathsf{for}_N(\mathsf{once}(e_V));h_{V\cup N}]}
-\end{mathpar}
-Rename scans schema order and outputs result order. Extend owns new fields,
-cloning old ones as needed; its Let label uses AC-Bind even for empty $N$,
-evaluating $e$ once per input tuple. For binary operators let
-$V=\Delta(l).V$, $W=\Delta(r).V$, $K=V\cap W$, $N=W\setminus V$,
-$u=\operatorname{row}_K(t)$, $J=\operatorname{lookup}(\mathcal S(r),K,u)$,
-and $E=\operatorname{exists}(\mathcal S(r),K,u)$:
-\begin{mathpar}
-\Rule{M-JoinFor}{N\ne\emptyset}
- {l\bowtie r\Downarrow_M[s_l;\mathsf{for}_N(J);h_{V\cup W}]}
-
-\Rule{M-JoinIf}{N=\emptyset}
- {l\bowtie r\Downarrow_M[s_l;\mathsf{if}(E);h_V]}
-
-\Rule{M-Semi}{}{l\ltimes r\Downarrow_M[s_l;\mathsf{if}(E);h_V]}
-\end{mathpar}
-Pull adds Project/Distinct; the set endpoint fuses Distinct into collection. Sources and clones
-are already Rust. Join-output/semijoin-probe statistics are excluded from set
-observations. File state $(S,\mathcal S)$ contains statements and store names.
-Normalize inputs and build extra base indexes first. Let $t_r(A)$ be
-$\mathsf{let}\ S_r:\mathsf{HashSet}(\operatorname{Row}_{\Delta(r).V})
-=\mathsf{collectAccess}\{A\}$, followed by buildIndexes($r$).
-\[
-\Rule{M-Def}{\Sigma;\Delta;\mathcal S\vdash o\Downarrow_M A\quad r\text{ fresh in }\mathcal S}
- {(S,\mathcal S,r=o)\Rightarrow_M(S\concat t_r(A),\mathcal S[r\mapsto S_r])}.
-\]
-buildIndexes applies ST-* to requirements targeting $r$ after $S_r$ exists.
-Shared results are defined once. Build finally maps the head into an answer
-HashSet; query clones its rows, materialize collects/sorts, and run composes
-build/materialize. None re-plans CQ.
-The domain requires IX-WF, required-key coverage, at most twelve attributes
-per result, and nameable outputs; successful Rust elaboration is additional.
-\begin{theorem}[Materialized representation preservation]
-Under $\mathcal H_{\rm rel}$ and adequate host expression elaboration, the
-abstract M-rules produce a store representing every named RA result and an
-answer representing the RA output.
-\end{theorem}
-\begin{proof}
-Induct on definitions. Normalized inputs represent $I$. Unit yields the empty
-tuple singleton; Rename relabels; Project/Distinct implements restriction; Select/Extend applies the
-specified host function. Lookup adequacy proves both join cases and Semi.
-Cursor preservation (Section~\ref{sec:cursor}) and collection establish each
-result set; ST-* establishes its indexes. Earlier operands, including shared
-versions, remain available without recomputation. Final head mapping and set
-collection give the RA output.
-\end{proof}
-
-\paragraph{A direct physical realization.}
-The supplement, \href{physical_design.pdf}{\emph{Physical Choices Through Access
-Refinement}}, specifies an implemented alternative edge from RA to Rust with
-Access plans. A compiler-local environment records layouts, current relation
-versions and selected providers. Semijoin lowers to candidate traversal followed
-by exact membership; local Access refinement can reject blocks by conservative
-metadata before opening current selected payload. Exact key construction and
-candidate scanning are independent choices. A complete pair-production fragment
-selects hash, repeated nested traversal or sort/merge, while a row provider owns
-field access and row construction. Resource reuse requires the same current RHS,
-separator and configured key provider. Typed tuple and integer-array/block
-representations can coexist when the selected operations type-check. The supplement
-gives corresponding rules, algorithms and conditional preservation; it adds no
-whole-program IR or runtime relational interpreter.
-
-\subsection{Lazy linear lowering and the basic storage algorithm}
-The lazy domain follows RA dataflow: Unit/Rename starts current $p$; other
-Renames become pending. Join consumes $p$ and a pending direct Rename;
-Select/Extend consumes $p$; final Project consumes $p$ after all pending
-Renames. Semijoin, bushy operands, internal Project, and later operations are
-excluded. Requirements target direct Renames; empty Extend uses AC-Bind.
-Build stores renamed rows in lexical attribute order and builds indexes,
-without evaluating Select/Extend/head leaves. Query folds:
-\begin{mathpar}
-
-\Rule{L-Root}{p=\bot\quad o=\delta_m(R)}{(p,A,o)\Rightarrow_L(r,[\operatorname{scan}(S_r,V_r)])}
-
-\Rule{L-Unit}{p=\bot\quad o=\mathbf1}{(p,A,o)\Rightarrow_L(r,[\mathsf{unit}()\Rightarrow\mathsf{if}\ \mathsf{true}])}
-
-\Rule{L-Join}{o=p\bowtie r\quad r\text{ pending direct Rename}}
- {(p,A,o)\Rightarrow_L(r_0,A\concat\operatorname{joinAccess}(p,r))}
-
-\Rule{L-Select}{o=\sigma_ep}{(p,A,o)\Rightarrow_L(r_0,A\concat[\mathsf{if}(\operatorname{host}(e))])}
-
-\Rule{L-Extend}{o=\operatorname{ext}_{N,e}p}
- {(p,A,o)\Rightarrow_L(r_0,A\concat[\mathsf{for}_N(\mathsf{once}(\operatorname{host}(e)))])}
-
-\Rule{L-Output}{o=\pi_Up\text{ is final}\quad\text{all pending Renames consumed}}
- {(p,A,o)\Rightarrow_L[\mathsf{head}_U\Rightarrow\operatorname{host}(\bar e);A]}
-\end{mathpar}
-$r_0$ names the current definition. Nonroot Renames only update pending.
-joinAccess uses M-JoinFor/If against stored inputs without materialization;
-Output adds one head map and Distinct.
-\begin{lemma}[Pure fusion]
-On this linear domain under $\mathcal H_{\rm rel}$, the lazy rule result set
-equals the materialized RA result set.
-\end{lemma}
-\begin{proof}
-Scans and Unit have unique tuples. Equal Join unions have equal left/right
-restrictions, hence arise from the same pair. Select cannot duplicate; Extend
-retains the input, so cannot identify distinct bindings. Induction gives the
-same complete relation before final Project. Since pure heads depend only on
-kept attributes, deduplication before or after head mapping yields the same
-set. Stateful interleavings need not agree (Counterexample~\ref{cx:effects}).
-\end{proof}
-
-Input-indexed physical lowering uses the same access cases over schema-ordered
-base rows and base indexes.
-Inputs are normalized to HashSets. Empty-key scans reuse a full-key set or a
-first-use-numbered row vector; proper indexes store complementary vectors.
-One final consumer owns each normalized input: a full index, else a needed
-row vector, else the last proper index. Other builders borrow/clone first.
-ST-* proves the representations; Rust must validate this ownership schedule.
-\subsection{Host expression elaboration}
+\subsection{Host expressions}
 \label{sec:host-elab}
-$\operatorname{host}_V(e)$ makes primitive comparisons explicit (reference
-comparisons for lazy execution). General expressions alias scanned values to
-borrowed fields and computed values to owned clones. Simple paths retain their
-identifiers/contexts; opaque macros get aliases for retained names at their
-path span. Other Rust expression and macro subtrees are preserved.
-\begin{obligation}[Host adequacy, not proved by FV]
-For every claimed admissible expression and related stored binding, the
-elaborated expression resolves to the intended logical environment, has the
-promised Rust type, and yields a representation of $\bar e$.
-The comparison-recognition case and the alias-introduction case both require
-this obligation. Lexical liveness and successful AST parsing alone do not
-establish it; macro hygiene and ownership are not erased from the obligation.
+The representation in $\Gamma$ translates logical columns to concrete access
+expressions over the selected carrier.
+Rust expressions embedded in an Access clause retain their lexical environment.
+Reading a borrowed field does not imply ownership of its payload. Producing a
+new owned output is a separate, explicit representation decision.
+\begin{obligation}[Host adequacy]
+For every admitted host expression and represented binding, elaboration resolves
+the intended logical names, preserves the declared value, and satisfies the
+chosen Rust type and ownership requirements. Parsing, free-variable analysis,
+and successful macro expansion alone do not establish this obligation.
 \end{obligation}
+
+The current compiler does not yet implement the complete $(A,D,U)$ contract
+or the separate Physical selection and realization boundaries.
+These conditional results specify what a replacement must establish; they are
+not a correctness claim for the existing post-IX implementation.

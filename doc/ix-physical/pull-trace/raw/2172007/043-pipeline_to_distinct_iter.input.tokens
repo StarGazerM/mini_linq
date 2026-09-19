@@ -1,0 +1,7 @@
+iter0 = scan a in (observe(0, (__cq_store_r0).iter())) yield (a,); iter1 =
+join iter0 as (a,) with b in
+(observe(1, (__cq_index_i0).get(a).into_iter().flatten())) yield (a, b,);
+iter2 = join iter1 as (a, b,) with c in
+(observe(2, (__cq_index_i1).get(b).into_iter().flatten())) yield (a, b, c,);
+iter3 = project iter2 as (a, b, c,) yield ((a, c,)); iter4 = distinct iter3;
+return iter4;

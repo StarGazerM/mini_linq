@@ -1,123 +1,48 @@
 # MiniLinq
 
-MiniLinq is a Rust query compiler and teaching project built from replaceable
-macro boundaries. Logical planning, equality-demand selection, whole-query
-realization, native storage operations and Access execution are separate choices.
-The completed implementation and its tests live in implementation modules;
-[teaching extraction](teaching/ya/README.md) selects a smaller foundation and
-student exercises without maintaining a second compiler.
+MiniLinq is a Rust query compiler with replaceable macro boundaries:
 
 ```text
-CQ → RA → IndexRequirements → Rust[Access, Native] → Rust[Pipeline, Native] → Rust
-     RA ── configured relation realization ──→ Rust[Access, Native]
-                                Access ── push to set ──→ Rust
+CQ → RA → IX → Physical → Rust[Access]
 ```
 
-The enclosing Rust file is a residual program containing local macro calls.
-There is no contextual relational IR, runtime relation interpreter or capability
-registry. [The boundary specification](doc/IR-STAGE-REVIEW.md) lists the macro
-families and their semantic obligations; [compiler structure](doc/COMPILER-STRUCTURE.md)
-explains crate/module ownership.
+IX names the indexes required by the fixed RA plan and records their uses.
+Physical records a provider for each relation version and index, and a lowering
+rule for each RA definition. Realization invokes those recorded external macros.
+The common compiler contains no hash/sorted/block dispatch or fallback backend.
 
-The opt-in [staged borrowed route](doc/STAGED-BORROWED-EXECUTION.md) uses the same
-index, Access and Pipeline boundaries. An explicit empty index policy selects
-borrowed scan realization; local Access regions become support streams,
-first-witness booleans or a distinct answer iterator. Selected replay storage
-retains demanded prefixes of shared results, with independent cursors and no
-payload cloning. `next()` or `any()` executes traversal; `collect()` additionally
-stores outputs. Prefix storage and nested comparisons remain explicit costs.
+Read the [design and current domain](doc/IX-PHYSICAL-REDESIGN.md), the
+[short paper](doc/formal/build/physical_design.pdf), or the
+[executable composition](examples/composition/README.md).
 
-## Choose a composition
+The implemented example combines a borrowed slice, `HashMap`, and `BTreeMap` in
+one query. Its output borrows non-`Clone` values. Tests cover independent provider
+rebinding, renamed index columns, external result providers, exact answers,
+incompatible assignments, and actual macro expansion. A separate full-CQ test includes terminal projection. The caller writes the Rust
+host function and chooses the Access consumer. Existing Access/Pipeline consumers
+remain independently usable; their placement in the general physical design is
+still open.
 
-`mini_linq!` chooses canonical or source-prefix planning. `choose_graph_or_prefix!`
-chooses graph or prefix planning. Their generated stage calls resolve through
-the caller's `mini_linq` binding, including compiled workload queries.
-
-An explicit eager composition is an ordinary Rust facade:
-
-```rust
-mod eager {
-    pub use ::mini_linq::{
-        choose_graph_or_prefix, cq_to_ra_hypergraph, cq_to_ra_clause_prefix,
-        result_index_demands as choose_index_policy,
-        materialized_hash_program as choose_relation_lowering,
-        access_to_set, pipeline_to_set,
-    };
-}
-use eager as mini_linq;
-
-mini_linq::choose_graph_or_prefix! {
-    pub struct Query;
-    relation R(a:i32,b:i32);
-    relation S(b:i32,c:i32);
-    answer(a,c) :- R(a,b), S(b,c);
-}
-```
-
-The explicit hash realizations are `lower_base_hash!`, `lower_prefix_hash!` and
-`materialized_hash_program!`. Their storage and materialization commitments are part of
-the selected implementation. Changing a later Access macro changes execution
-within that already chosen representation.
-
-`configured_program!` and `configured_callable!` instead lower configured RA with
-per-input/result row providers and per-operation algorithms. One query can
-combine block storage, heterogeneous tuple hash storage and tuple sorted results.
-Its native pair boundary supports hash, nested-loop and sort-merge joins. Its
-candidate boundary supports scans or block metadata rejection followed by exact
-membership. Unsupported storage operations fail during macro expansion or Rust
-type checking. See [native access](doc/ACCESS-REFINEMENT.md).
-
-`access_to_distinct_iter!`, `access_to_set!` and `access_to_support_iter!` share Access-to-Pipeline lowering with
-different consumers. `access_to_set_loops!` emits nested Rust loops directly into an exact
-set. A set-producing implementation can replace a set hole; it does not thereby
-satisfy an iterator's demand contract. Host-expression effects make this
-restriction observable and are covered by executable counterexamples.
-
-## Inspect and run
+The old whole-query hash/configured/Native routes have been removed. Stored
+intermediates, block/YA realization, general schemas/index construction, and the
+old generated `build/query/run` API have **not** been ported. Logical YA planning
+and its independent relational oracle tests remain. See the explicit
+[migration coverage](doc/IX-PHYSICAL-REDESIGN.md#implementation-domain).
 
 ```sh
+cargo run --manifest-path examples/composition/Cargo.toml --offline
 cargo run --example cq-inspection
 cargo run --example pull-execution
 cargo run --example free-variables
-cargo run -p mini-linq --example blocked-ya --locked
-cargo run -p mini-linq --example rust-expressions --features compiled-workloads
-cargo xtask list
-cargo xtask explain triangle
+cargo test --workspace --offline
+python3 tools/check_dependencies.py
+make -C doc/formal pdf
 ```
 
-`cargo xtask explain` writes complete, formatted intermediate artifacts under
-`target/mini-linq-explain/<case>/`. The [boundary artifacts](doc/planned-example/01-cq.rs)
-are compiled as tests. The [expression gallery](examples/rust-expressions/README.md)
-shows scope, computed bindings, query results and evaluation counts.
+The [workload catalog](workloads/README.md) keeps authored queries, deterministic
+datasets, and SQL oracles independently of executable provider composition.
+`cargo xtask explain` inspects the logical/IX prefix; it does not invent missing
+Physical assignments. Ordinary workspace checks do not build DuckDB.
 
-The [workload catalog](workloads/README.md) contains authored queries, deterministic
-datasets and SQL oracles. Catalog factories work independently of completed
-compiler passes; `compiled-queries` enables the same caller-bound macro route.
-
-```sh
-cargo test --workspace
-cargo check -p cq-workloads --features compiled-queries --locked
-python3 tools/check_dependencies.py --isolate
-python3 tools/check_features.py
-make -C doc/formal
-```
-
-Feature and source-removal gates check actual selected implementations, native
-operations and end-to-end consumers. The [formal snapshot](doc/formal/snapshot.txt)
-records completed validation and source identity. The [manuscript](doc/formal/README.md)
-maps named semantic rules to code and separates proved conditional laws from
-remaining obligations. Passing source correspondence does not prove arbitrary
-user replacements correct.
-
-## Teaching and scope
-
-Start with the [documentation map](doc/README.md), [CQ-to-RA handout](doc/HW1-START-HERE.md)
-and [language contract](doc/DSL.md). Course labels identify exercises; compiler
-modules are grouped by semantic responsibility. The optional `hw4` exercise
-remains unfinished and is excluded from the supported feature matrix.
-
-Current implementations use finite in-memory set semantics. Configured relation
-realization has explicit materialization boundaries; it does not automatically
-search costs or fuse arbitrary regions. Rust types, ownership, captures and
-provider laws remain part of composition correctness. The
-[expression contract](doc/RUST-EXPRESSIONS.md) describes those limits.
+The [documentation map](doc/README.md) separates the current compiler design
+from teaching tasks and research proposals.

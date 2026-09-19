@@ -5,9 +5,9 @@ use quote::ToTokens;
 fn push_preserves_control_scope_and_uses_one_exact_set() {
     let source: rust_access_plan::Plan = syn::parse_quote! {
         out(x, y) => ((x, y)) :-
-        R(x) => for (x,) in (rows),
+        R(x) => bind (x,) <- (rows),
         Keep(x) => if (keep(&x)),
-        S(x, y) => for (y,) in (lookup(&x));
+        S(x, y) => bind (y,) <- (lookup(&x));
     };
     let output = cq_access_lowering::to_set_loops::compile(&source).unwrap();
     let expected: syn::Expr = syn::parse_quote! {{

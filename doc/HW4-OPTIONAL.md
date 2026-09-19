@@ -390,12 +390,12 @@ focuses on the new occurrence-to-access relation:
         ::core::clone::Clone::clone(person),
         total,
     )) :-
-        Person(person) => for (person,) in (self.rows0.iter()),
+        Person(person) => bind (person,) <- (self.rows0.iter()),
         !Blocked(person, _) => if (!self.index0.contains_key(&(
             ::core::clone::Clone::clone(person),
         ))),
         agg total = sum(amount) in Purchase(person, _, amount)
-            => for total in (::std::iter::once_with(move || {
+            => bind total <- (::std::iter::once_with(move || {
                 let wide_total = self.index1
                     .get(&(::core::clone::Clone::clone(person),))
                     .into_iter()
@@ -410,8 +410,8 @@ focuses on the new occurrence-to-access relation:
 ```
 
 Extend `rust_access_plan::contract::check(&Plan)` so safe negation requires `If` and
-binds nothing. Aggregation requires `For` with a simple scalar identifier
-pattern exactly equal to its fresh output—`for total`, not `for (total,)`—and
+binds nothing. Aggregation requires `Bind` with a simple scalar identifier
+pattern exactly equal to its fresh output—`bind total`, not `bind (total,)`—and
 binds only that result. The checker must not inspect the Rust expressions to
 rediscover correlation or aggregation semantics.
 
@@ -428,7 +428,7 @@ the fold; requesting its one row does. The mapped amounts accumulate in `i128`
 and convert to `i32` only once. Do not fold directly in `i32`: `relationN` is a
 `HashSet`, so iteration order is unspecified, and `MAX + 1 - 1` must not
 sometimes overflow before the cancellation is seen. The aggregate result is
-then bound by the `For` pattern.
+then bound by the `Bind` pattern.
 
 The physical choice follows the already-derived key shape:
 
@@ -478,7 +478,7 @@ a borrowed field across physical `scan` and `filter`, while the aggregate
 source produces the owned scalar `total` at the binary `join`. These names
 must not be confused with the logical `rN` DAG references. More generally:
 
-- a positive relation or aggregate result already supplies a `For` pattern and
+- a positive relation or aggregate result already supplies a `Bind` pattern and
   source expression, which becomes `scan` or binary `join`;
 - negation already supplies an `If` condition, which becomes `filter`;
 - the Plan head already supplies the output expression, which becomes

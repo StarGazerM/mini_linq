@@ -22,8 +22,8 @@ fn push_and_fully_consumed_pull_agree_on_correlated_join_results_and_effect_orde
         ($execution:ident) => {
             mini_linq::$execution! {
                 out(x, y) => ({ observed.borrow_mut().push((2, x, y)); (x % 2, y) }) :-
-                R(x) => for (x,) in ([(1,), (1,), (2,), (3,)]),
-                S(x, y) => for (y,) in ({
+                R(x) => bind (x,) <- ([(1,), (1,), (2,), (3,)]),
+                S(x, y) => bind (y,) <- ({
                     observed.borrow_mut().push((0, x, 0));
                     (0..x).map(|y| (y,))
                 }),
@@ -51,7 +51,7 @@ fn eager_push_and_partial_pull_have_different_observation_contracts() {
     let observed = &calls;
     let mut pulled = mini_linq::access_to_distinct_iter! {
         out(x) => (x) :-
-        R(x) => for (x,) in ([(1,), (2,), (3,)]),
+        R(x) => bind (x,) <- ([(1,), (2,), (3,)]),
         Keep(x) => if ({ observed.set(observed.get() + 1); true });
     };
     assert_eq!(calls.get(), 0);
@@ -61,7 +61,7 @@ fn eager_push_and_partial_pull_have_different_observation_contracts() {
     calls.set(0);
     let pushed = mini_linq::access_to_set_loops! {
         out(x) => (x) :-
-        R(x) => for (x,) in ([(1,), (2,), (3,)]),
+        R(x) => bind (x,) <- ([(1,), (2,), (3,)]),
         Keep(x) => if ({ observed.set(observed.get() + 1); true });
     };
     assert_eq!(calls.get(), 3);
@@ -75,8 +75,8 @@ fn push_moves_owned_outputs_and_preserves_outer_values_for_multiple_witnesses() 
     struct Output(String, i32);
     let pushed = mini_linq::access_to_set_loops! {
         out(x, y) => (Output(x, y)) :-
-        R(x) => for (x,) in ([(String::from("a"),)]),
-        S(x, y) => for (y,) in ([(1,), (1,), (2,)]);
+        R(x) => bind (x,) <- ([(String::from("a"),)]),
+        S(x, y) => bind (y,) <- ([(1,), (1,), (2,)]);
     };
     assert_eq!(
         pushed,
@@ -130,8 +130,8 @@ fn push_does_not_clone_an_outer_value_used_only_to_select_inner_rows() {
     struct NonClone(i32);
     let rows = mini_linq::access_to_set_loops! {
         out(y) => (y) :-
-        R(x) => for (x,) in ([(NonClone(4),)]),
-        S(x, y) => for (y,) in ([(x.0 + 1,), (x.0 + 2,)]);
+        R(x) => bind (x,) <- ([(NonClone(4),)]),
+        S(x, y) => bind (y,) <- ([(x.0 + 1,), (x.0 + 2,)]);
     };
     assert_eq!(rows, HashSet::from([5, 6]));
 }

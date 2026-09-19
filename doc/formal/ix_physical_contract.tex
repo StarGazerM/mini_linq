@@ -1,0 +1,484 @@
+\section{IX, Physical, and provider realization}
+\label{sec:ix-physical-redesign}
+\textbf{Implemented first domain; overall migration is incomplete.}
+The new common realizer contains no hash/sorted/zone/trie enumeration.
+Physical compilation selects external provider instances separately for relations
+and their required indexes. A global macro alias may select the compilation
+policy; it must not replace every relation's representation. IX construction
+and derived parsers for IX and Physical now exist. The explicit-binding policy
+checks assignment structure. An executable callback realizer and external
+slice/hash-map/B-tree-map examples now implement the host-expression domain
+specified below. Provider laws remain obligations; the legacy routes have been retired. The contract separates physical
+selection from realization with an explicit Physical boundary:
+\[
+ \mathrm{RA}\longrightarrow\mathrm{IX}
+ \xrightarrow{\mathrm{selection}}\mathrm{Physical}
+ \xrightarrow{\mathrm{realization}}\mathrm{Rust[Access]}.
+\]
+Push/pull placement is not decided here.
+
+\paragraph{Boundary syntax.}
+Let $r,l$ name exact RA versions, $j$ an operator occurrence, $i$ an index,
+and $C$ an ordered list of logical column ordinals. For the present binary
+fragment, $p=j.\mathsf{right}$ is the indexed operand of $j=l\bowtie r$ or
+$j=l\ltimes r$.
+\begin{lstlisting}
+IX       ::= RA indexes { Def* } uses { Use* }
+Def      ::= i = @r[C];
+Use      ::= j.right = i;
+Physical ::= IX physical {
+               relations { (r = RustPath;)* }
+               indexes   { (i = RustPath;)* }
+               lowerings { (r = RustPath;)* }
+             }
+Access ::= out(Binders) => (RustExpr) :- ClauseList;
+Clause ::= R(Binders) => bind Pattern <- (RustExpr)
+         | if RustExpr => if (RustExpr)
+\end{lstlisting}
+Physical retains IX unchanged and records every selected provider and lowering.
+Each path names an external instance whose implementation choices are fixed;
+its spelling conveys no semantics. Configuration is fixed in that definition;
+a parameterized extension must serialize its arguments before realization.
+Deterministic specialization by written columns, schema and Rust type/lifetime
+parameters remains possible; it cannot introduce a new implementation choice.
+The listing is the fragment used below, not the complete Access grammar.
+A future provider-definition DSL may generate these external definitions and
+macro plumbing; it cannot silently add query operations.
+
+\paragraph{IX meaning and construction.}
+Write IX as $(A,D,U)$, with $D:i\mapsto(r,C)$ and $U:p\mapsto i$.
+Well-formedness requires well-formed RA, unique descriptors, valid ordered
+columns, and exactly one use reference for every admitted indexed position.
+Each use names its exact operand version and RA join columns; there are no unused
+index definitions. Erasure preserves meaning:
+$\sem{A,D,U}_{IX}=\sem A_{RA}$.
+Traverse the fixed RA definitions in order, starting with empty $D,U$:
+\begin{mathpar}
+\Rule{IX-Reuse}{D(i)=(r,C)}{D\vdash(r,C)\Downarrow(i,D)}
+
+\Rule{IX-New}{(r,C)\notin\operatorname{ran}D\quad i=i_{|D|}}
+ {D\vdash(r,C)\Downarrow(i,D[i\mapsto(r,C)])}
+
+\Rule{IX-Join}{o\in\{\bowtie,\ltimes\}\quad
+ C=[c\mid 0\leq c<|H(r)|,\ H(r)_c\in H(l)]_{\rm increasing}\\
+ D\vdash(r,C)\Downarrow(i,D')}
+ {(D,U)\vdash j=l\mathbin{o}r\Downarrow(D',U[j.\mathsf{right}\mapsto i])}
+
+\Rule{IX-Other}{d\in\{\mathsf{Unit,Rename,Project,Select,Extend}\}}
+ {(D,U)\vdash d\Downarrow(D,U)}
+\end{mathpar}
+Fresh $i_n$ prints as \code{i0}, \code{i1}, etc. Unknown operators reject.
+$C=[]$ is the unit tuple for the admitted Cartesian case. Physical providers
+consume written $D,U$; they do not repeat this analysis. This binary fragment
+does not yet specify the index demands or planning of WCOJ.
+
+\paragraph{Physical meaning and well-formedness.}
+Let $\Omega$ map external paths to explicit provider and lowering definitions.
+It is an open compile-time environment, not a runtime registry or inferred Rust
+type information. A replaceable selection policy $\eta$ produces
+\[
+ P=(\mathrm{IX},\Phi,\Lambda),\qquad \Phi=(\Phi_R,\Phi_I),
+ \quad\Phi_R:r\mapsto q_r,\quad\Phi_I:i\mapsto q_i,
+ \quad\Lambda:r\mapsto\kappa_r.
+\]
+Let $\mathsf{In}(A)$ be the free host relation bindings, and $\mathsf{Out}(A)$
+the result identifiers of all RA definitions, including Rename and Unit.
+Physical is well-formed when IX is well-formed and
+\[
+ \dom\Phi_R=\mathsf{In}(A)\cup\mathsf{Out}(A),\qquad
+ \dom\Phi_I=\dom D,\qquad\dom\Lambda=\mathsf{Out}(A),
+\]
+with each selected definition admitting its operation, operands, written index
+uses and result representation. All paths resolve in $\Omega$, and all choices
+are fixed. Free host inputs have no $\Lambda$ entry. Its meaning is by erasure:
+$\sem P_{\rm Physical}=\sem{\operatorname{erase}(P)}_{IX}=\sem A_{RA}$.
+The representation laws below justify implementing that meaning.
+
+The main fixture supplies an explicit policy table. Other policies may use
+declared information; no automatic cost search or inference from path names is
+claimed. $\Lambda$ is necessary because providers alone do not determine the
+physical algorithm: the same block source and exact RHS index may admit both
+full traversal and metadata-pruned semijoin traversal. Realization must not make
+that choice. We record a lowering even for deterministic operations to obtain
+a uniform resolved dispatch table; this is not a claim of minimum token count.
+Relation and index bindings are chosen compatibly: multiple indexes may share one
+relation owner, but an index provider cannot silently replace that owner's layout.
+An existing physical index can discharge a demand without reconstruction.
+
+Let $\Gamma(r)$ record the established storage/view and its decoding law;
+$\Gamma(i)$ records the realized index and its association with that exact version.
+A physical value can be a reference, tuple of references, or stable handle.
+There is no universal requirement that every source produce \code{&Row}, and
+$\Gamma$ is compiler reasoning state, not a runtime relation wrapper.
+The relation law is $\gamma_r(\Gamma(r))=\sem r_{RA}$.
+For providers implementing exact indexed matching, require
+\[
+ \{\operatorname{dec}_i(k,w)\mid
+       w\in\operatorname{lookup}_i(\rho_i(k))\}
+   =\{t\in\sem r_{RA}\mid\pi_C(t)=k\},\qquad D(i)=(r,C).
+\]
+The decoding may use the lookup tuple $k$ because buckets can store only remaining
+columns. Encoding $\rho_i$, payload interpretation, and equality must agree.
+This is a law of the exact-matching family, not a mandatory iterator API for every
+provider. Bounds alone are conservative evidence and do not satisfy this law.
+Borrowed storage must outlive its uses; selected views must not restore removed rows.
+
+\paragraph{Selection and realization rules.}
+The following requests are
+metanotation for compiler calls, not additional query IR productions.
+A provider definition supplies its admitted domain, a deterministic expansion
+procedure, and the semantic obligation of that procedure.
+\begin{mathpar}
+\Rule{Phy-Select}{\eta(\Omega,\mathrm{IX},\mathsf{host})=(\Phi,\Lambda)\\
+ P=(\mathrm{IX},\Phi,\Lambda)\quad\mathsf{WF}_{\Omega,\mathsf{host}}(P)}
+ {\Omega;\eta\vdash\mathrm{IX},\mathsf{host}\Downarrow P}
+
+\Rule{Phy-Relation}{\Phi_R(r)=q\quad
+ \Omega(q).\mathsf{relation}(r,\mathsf{host}_r,P)=(c,g)}
+ {\Omega;P;\Gamma\vdash\mathsf{input}(r)\Downarrow
+       c,\Gamma[r\mapsto g]}
+
+\Rule{Phy-Index}{D(i)=(r,C)\quad\Phi_I(i)=q\\
+ \Omega(q).\mathsf{index}(i,r,C,\Gamma(r),P)=(c,g)}
+ {\Omega;P;\Gamma\vdash i\Downarrow c,\Gamma[i\mapsto g]}
+
+\Rule{Phy-Use}{U(p)=i\quad\Phi_I(i)=q\\
+ \Omega(q).\mathsf{access}(p,\mathsf{args},D(i),\Gamma(i),P)=e}
+ {\Omega;P;\Gamma\vdash p(\mathsf{args})\Downarrow e}
+
+\Rule{Phy-Region}{\Lambda(r)=\kappa\\
+ \Omega(\kappa).\mathsf{lower}(d,P,\Gamma)=(c,g)\\
+ \mathsf{Rep}_{\Omega(\Phi_R(r))}(g,\sem d_{RA})}
+ {\Omega;P;\Gamma\vdash r=d\Downarrow c,\Gamma[r\mapsto g]}
+\end{mathpar}
+Selection only writes $P$: it preserves $A,D,U$ and emits no runtime index
+construction or traversal. Realization has no policy parameter $\eta$.
+Establish inputs, then visit RA definitions in dependency order. Realize each
+written index once its exact source version is available and before its first
+use; the provider may reuse existing storage. Apply the selected region rule,
+which uses explicit $U$ references and records the result representation. Temporary
+summaries and selections belong to that rule's declared construction scope.
+Unsupported or ambiguous selection rejects. Incompatible realization rejects
+the recorded plan; it cannot silently select a different provider or lowering.
+Concrete Rust checks emitted types and lifetimes. Compatibility means that these actual definition premises agree,
+not a list of booleans such as \code{supports_zone=true}.
+These rules state the semantic obligations of the driver and selected external
+procedures. The supplied selection policy checks assignment structure; successful
+selection alone does not discharge the semantic premises of Phy-Select.
+Realization checks the structural protocol and instantiates selected definitions;
+it is not a general compatibility solver or a proof of arbitrary generated Rust.
+Provider laws remain explicit proof and validation obligations.
+
+Here $P$ supplies its $A,D,U,\Phi,\Lambda$ components to the rules. In particular,
+relation preparation can see the selected block-pruning rule, rather than
+guessing metadata requirements from the RHS index descriptors alone. Given providers
+and lowerings satisfying their laws, dependency-order induction establishes
+that each recorded result decodes to its RA definition and that the completed
+Access region preserves the selected observation. This is a conditional
+correctness argument, not a proof of arbitrary provider templates.
+
+The common rules contain no provider-name cases. The policy may name a particular
+provider, and that provider may emit its own concrete types. Region rules receive
+both operand representations, so physical access is not universally fixed to
+row enumeration followed by a point lookup. Relational meaning is preserved by
+each instantiated rule. Conforming routes must pass through IX, Physical and
+Access; this requirement does not claim that all existing routes now conform.
+
+\paragraph{Macro API and individual expansion steps.}
+The integration example wires the selection slot to its explicit policy and
+imports the common realization implementation:
+\begin{lstlisting}
+use explicit_policy as choose_physical;
+use ::mini_linq::realize_physical;
+\end{lstlisting}
+Here \code{explicit_policy} is the example's macro containing its physical
+assignments. Its expansion supplies those declarations to
+\code{given_physical_bindings!}; this step performs policy work, not merely
+renaming another implementation.
+With \code{->} denoting one macro expansion and \code{->*} its finite
+iteration, the implemented boundary sequence has this shape:
+\begin{lstlisting}
+choose_physical! { IX }
+  -> given_physical_bindings! { IX Assignments }
+  -> realize_physical! { Physical }
+  ->* Rust[Access]
+\end{lstlisting}
+IX, Assignments and Physical stand for their complete typed payloads here; this
+is a boundary equation, not a captured expansion. The first step supplies
+declarations; the second checks and records the complete boundary. A different
+policy may take more administrative expansions; its completed output must still
+be explicit Physical. One compiler stage need not equal one macro call.
+
+Selecting a pass by import alias and binding individual relations are different
+operations. Expansion resolves each $\Phi_R(r)$ or $\Phi_I(i)$ separately.
+A path does not let a procedural macro inspect another macro's definition or
+inferred Rust types. The implemented protocol therefore invokes selected
+executable macros. Each returns statements and an established binding to a
+continuation; the common driver does not interpret a DSL of Rust templates.
+The typed administrative syntax is in \path{crates/cq-ir/src/provider_protocol.rs}:
+\begin{lstlisting}
+Request<T> ::= reply_to (MacroPath) { state }
+               plan { Physical }
+               environment { Result* }
+               request { T }
+Task   ::= input r from (RustExpr) | index i | lower r
+Reply  ::= resume { state } emitted { RustStmt* }
+           result { Result }
+Result ::= stored r at (RustExpr) operations MacroPath
+         | indexed i at (RustExpr) operations MacroPath
+         | region r { Access }
+\end{lstlisting}
+The operations path is an executable macro supplying the established
+representation's access operations. It is opaque to the core. A provider owes
+the association between that path, its emitted value, and its representation
+law. External families use \code{Request<T>} with their own typed tasks;
+only Input, Index and Lower are generic driver tasks.
+
+\paragraph{Administrative state and checks.}
+Let $\sigma(P)$ list used host inputs in first-Rename-occurrence order, then RA
+definitions in their existing dependency order. Insert each demanded index
+immediately before its first written use; reuse its established binding at later
+uses. Index columns are read from $D$, never rediscovered. The target function is
+\[
+ \mathsf{target}_P(\mathsf{input}\ r)=\Phi_R(r),\quad
+ \mathsf{target}_P(\mathsf{index}\ i)=\Phi_I(i),\quad
+ \mathsf{target}_P(\mathsf{lower}\ r)=\Lambda(r).
+\]
+An environment is an ordered prefix of completed bindings, with separate
+relation and index namespaces. Continuation state stores
+$S=(P,\Gamma,c,t,k_r,k_a)$: unchanged Physical, completed bindings, emitted
+statements, pending task, resume macro and Access consumer macro. Provider-family
+continuations remain opaque until their owner resumes them.
+\begin{mathpar}
+\Rule{Realize-Dispatch}{n=|\Gamma|<|\sigma(P)|\quad
+ t=\sigma(P)_n\quad q=\mathsf{target}_P(t)\\
+ \mathsf{Prefix}_P(\Gamma)\quad\mathsf{Ready}_P(\Gamma,t)}
+ {(P,\Gamma,c,k_r,k_a)\Longrightarrow
+     q!\{\mathsf{request}(k_r,S,P,\Gamma,t)\}}
+
+\Rule{Realize-Resume}{S=(P,\Gamma,c,t,k_r,k_a)\quad
+ t=\sigma(P)_{|\Gamma|}\\
+ \mathsf{Prefix}_P(\Gamma)\quad\mathsf{Reply}_P(t,g)\quad
+ c'\text{ contains statements}}
+ {k_r!\{\mathsf{resume}(S,c',g)\}\Longrightarrow
+     \mathsf{advance}(P,\Gamma\cdot g,c\cdot c',k_r,k_a)}
+
+\Rule{Realize-Finish}{|\Gamma|=|\sigma(P)|\quad
+ \Gamma(\mathsf{output}(P))=\mathsf{region}(B)\\
+ \mathsf{OutputLayout}_P(B)}
+ {\mathsf{advance}(P,\Gamma,c,k_r,k_a)\Longrightarrow
+     \{c;\ k_a!\{\mathsf{outputName}_P(B)\}\}}
+\end{mathpar}
+These are rules for macro evaluation within realization, not another public
+query IR. $\mathsf{Prefix}$ checks the completed identities and kinds against
+$\sigma(P)$. $\mathsf{Ready}$ requires an index source to be stored; indexing an
+Access region rejects. $\mathsf{Reply}$ requires the requested identity and a
+Stored input, Indexed index, or Stored/Region RA result. Every Region satisfies
+Access's binding contract and exposes its exact normalized RA heading in logical
+column order. Emitted code cannot contain an unterminated value expression;
+the driver never inserts a semicolon or moves an access expression out of its
+row scope. These checks establish structural provenance, not authentication or
+semantic correctness of external macros. Rust checks their concrete types and
+borrowing.
+
+$\mathsf{OutputLayout}$ requires the declared final output to have that same
+normalized heading order. The current entry requires a final Region and rejects
+a final Stored value; it does not insert a scan. Only the predicate name is
+changed to the declared output name. The Access consumer $k_a$ is explicitly
+supplied by composition, so these rules do not settle push/pull placement.
+
+\paragraph{Implemented exact-family messages and host domain.}
+The supplied external examples use this optional family:
+\begin{lstlisting}
+Task ::= rows r
+       | matches i values [(RustExpr), ...]
+       | output r fields { (c = (RustExpr);)* }
+                  whole { (source = (RustExpr);)* }
+IteratorReply ::= resume { state }
+    source (RustExpr) item (RustPat)
+    witness { row (RustExpr)
+              fields { (c = (RustExpr);)* } }
+WitnessReply ::= resume { state }
+    witness { row (RustExpr)
+              fields { (c = (RustExpr);)* } }
+\end{lstlisting}
+Rows and Matches return IteratorReply; Output returns WitnessReply.
+The selected RA rule owns the logical occurrence and constructs its
+\code{bind} clause from the supplied source and item pattern. A provider reply
+contains no Access clauses or runtime query continuation. Witness fields map logical
+ordinals to Rust expressions. A map lookup may return
+only a payload; its decoder also uses the lookup column expression. Whole
+witnesses are optional inputs to the selected output provider. The supplied
+\code{borrowed_fields} provider constructs a tuple of the supplied borrowed
+fields; it establishes no reusable collection. Witness row expressions are
+metadata and are evaluated only where emitted Rust uses them. The generic driver
+neither inspects nor requires this family. Block pruning and trie traversal still
+need their own admitted operations and laws.
+Access binding is dependent enumeration, not an eager loop. A later pull
+consumer defers source evaluation until demand; a loop consumer traverses the
+same sources eagerly. Query-level iterator composition remains in named Pipeline
+definitions until the final Rust lowering. Local adapters decoding one storage
+value do not constitute a query join.
+
+The implemented entry consumes a complete Physical module in a Rust expression
+scope. Used host relation identifiers already name caller-provided values; it
+does not generate a struct or public run method. The external examples admit a
+unary borrowed slice, two-column borrowed hash/B-tree maps, direct Rename of
+those host inputs, NaturalJoin through explicit IX uses, and terminal Project.
+The selected Project rule keeps source clauses, restricts the logical witness
+fields and requests its recorded output carrier. For Stored input it first
+requests Rows. Intermediate Project is rejected: discarded logical variables
+remain bound inside an inlined Access body and must not constrain a later
+reintroduction. Supporting that case needs a separate scope argument. A map provider
+reuses only its first physical-column index, translated through Rename into the
+logical heading; different demands reject. A join can extend its left Access
+region while its right index refers to stored input. Unit, intermediate Project, Select,
+Extend, Semijoin, reusable intermediate construction, zone pruning and WCOJ are
+not implemented by this example package.
+
+For the integrated slice/hash/B-tree chain, the generic tasks are
+\begin{lstlisting}
+input L, input R, input S,
+lower l, lower r, lower s,
+index i0, lower j0,
+index i1, lower j1
+\end{lstlisting}
+This is the task order, not a claim that each task takes one macro expansion.
+Rename requests the selected result provider. The first join requests Rows,
+Matches and Output with separate callbacks; the second extends the existing
+left region and requests Matches and Output. The completed output is ordinary
+Rust statements followed by the chosen Access invocation.
+The provider-definition DSL and any retained physical-operation dialect still
+require a separate syntax and semantics review before implementation.
+
+\paragraph{Heterogeneous authored fixture.}
+The same judgments apply to an open RA region $d_1;\ldots;d_n$ under supplied
+input headings and host declarations, extending that environment with the
+defined results. For this fixture the observations are both $j_0$ and $j_1$;
+these and the initial environment are fixed in \code{environment.txt}.
+The listings are complete local payloads under that context, not standalone
+full-query modules accepted by the current parser. A full-module application
+retains its schema and output metadata unchanged across selection.
+The local RA input is:
+\lstinputlisting{../ix-physical/input.ra}
+The host supplies:
+\begin{lstlisting}
+l: &[i32]; m: &[i32];
+r: &std::collections::HashMap<i32, Vec<i32>>;
+s: &std::collections::BTreeMap<i32, Vec<i32>>;
+\end{lstlisting}
+Their logical headings are
+$[a]$, $[c]$, $[a,b]$, and $[c,d]$, respectively.
+Each map represents the pairs of a map column value and each bucket payload.
+The two external example providers admit column $0$ as an already-existing index;
+other demands require another supplied rule or fail. They share no common
+compiler case based on their names.
+The result provider \code{ext::borrowed_pairs} specifies a pair-of-references
+carrier and componentwise decoding for the Access support region. It chooses
+neither a result container nor a push/pull consumer. Its assignment appears
+explicitly for both result versions.
+\par\noindent\begin{minipage}{\linewidth}
+\lstinputlisting{../ix-physical/expected.ix}
+\end{minipage}\par
+For the explicit-binding policy, the immediate expected selection output is
+the following complete local Physical payload, delivered to realization:
+\par\noindent\begin{minipage}{\linewidth}
+\lstinputlisting{../ix-physical/expected.choose.rs}
+\end{minipage}\par
+For this exact-map example only, each provider's index rule returns its borrowed
+input and its matching template emits \code{get(...).into_iter().flatten()}.
+The selected binary-join rule combines the supplied column with each returned
+payload and satisfies the selected result carrier. The completed expected
+realization, after provider expansion, is:
+\par\noindent\begin{minipage}{\linewidth}
+\lstinputlisting{../ix-physical/expected.rs}
+\end{minipage}\par
+This is authored expected text, not a compiler capture. Outputs are pairs of
+references; no stored composite row or payload clone is needed. The separate
+\path{doc/ix-physical/auxiliary/} fixture retains construction of hash and sorted
+indexes on different columns of one borrowed row source. Both cases are required:
+heterogeneous relations and multiple index implementations over one relation.
+The physical output stops at \code{access!}; its consumer remains unspecified.
+
+\paragraph{Captured complete-module realization.}
+For the implemented exact family, define
+$b(r,g,p,e)=r(g_0,\ldots,g_{|H(r)|-1})\Rightarrow
+\mathsf{bind}\ p\leftarrow e$, using the witness's ordered logical fields.
+This is construction notation for one existing Access clause, not provider
+reply syntax. The selected RA rule checks its binding contract.
+Write $(B,g)=\mathsf{read}(r)$ for an existing Region's clauses/witness.
+For Stored input, a Rows reply $(e,p,g)$ instead yields
+$\mathsf{read}(r)=([b(r,g,p,e)],g)$.
+Let $g|_H$ retain fields in logical heading $H$, and $g_l\sqcup g_r$ merge
+equal shared columns. The selected output provider returns only carrier/field
+witness $g_o$. Its representation law is a premise of both rules:
+\begin{mathpar}
+\Rule{Exact-Join}{d_r=l\bowtie s\quad U(r.\mathsf{right})=i\quad D(i)=(s,C)\\
+ (B_l,g_l)=\mathsf{read}(l)\quad
+ (e_i,p_i,g_i)=\Omega(\Phi_I(i)).\mathsf{matches}(i,g_l|_{H(s)_C})\\
+ g_o=\Omega(\Phi_R(r)).\mathsf{output}
+       (r,(g_l\sqcup g_i)|_{H(r)})}
+ {\Omega;P;\Gamma\vdash\mathsf{indexedJoin}(r)\Downarrow
+       \mathsf{Region}(B_l\cdot[b(s,g_i,p_i,e_i)],g_o)}
+
+\Rule{Exact-Project}{d_r=\pi_{H(r)}s\quad r=\mathsf{lastDef}(P)=\mathsf{output}(P)\\
+ (B_s,g_s)=\mathsf{read}(s)\quad
+ g_o=\Omega(\Phi_R(r)).\mathsf{output}(r,g_s|_{H(r)})}
+ {\Omega;P;\Gamma\vdash\mathsf{terminalProject}(r)\Downarrow
+       \mathsf{Region}(B_s,g_o)}
+\end{mathpar}
+The external join and projection implementations are \code{rules.rs} and
+\code{project.rs}. The generic driver contains neither case.
+Output requests also carry available whole operand witnesses.
+Projection changes the final carrier and logical heading, preserving source
+clauses; the chosen set consumer supplies distinctness. No storage or
+materialization is inferred from the word Region.
+
+The implemented entry has a separate three-input query with
+\code{L(a)}, \code{R(a,b)} and \code{S(b,c)}. The host binds a borrowed unary
+slice, a borrowed hash map and a borrowed B-tree map; \code{Value} has no
+\code{Clone} implementation. Its actual macro invocation 036 completes
+realization with the following Rust[Access], before its caller-selected set
+consumer expands:
+\lstinputlisting{../ix-physical/realization-trace/completed.rs}
+The complete report in \path{doc/ix-physical/realization-trace/review.md}
+explains all 37 actual procedural invocations, including the provider callbacks.
+RA-to-IX, Physical selection and completed realization are compared with
+independently authored token fixtures. This captured complete-module query is
+distinct from the local two-output expectation above. A separate full-CQ query
+selects terminal projection after the same join chain; all of its CQ, RA, IX,
+Physical and Access boundaries are in
+\path{doc/ix-physical/query-trace/review.md}. Its answers are checked across
+256 input subsets, with non-\code{Clone} borrowed output fields.
+
+The separate full-CQ pull capture emits this actual named Pipeline at call 042.
+The next call lowers it to Rust, introducing query-level \code{flat_map}:
+
+\lstinputlisting{../ix-physical/pull-trace/pipeline.rs}
+Each source is demanded under preceding bindings. The test instruments the
+source expressions: construction and unpolled drop observe no source evaluation;
+the first successful poll reads one row from each source; the next poll resumes
+within the current innermost bucket. The complete 43-call report is in
+\path{doc/ix-physical/pull-trace/review.md}. These observations validate this
+existing consumer, without settling general push/pull placement.
+
+\paragraph{Acceptance and failure conditions.}
+Actual macro outputs must match authored token fixtures, ignoring only whitespace
+and spans. Also check dispatch: an external provider must be addable without
+editing the common compiler; rebinding one relation/index must not rewrite unrelated
+bindings. Check independent relational results, version correctness, ownership,
+and provider-specific operational obligations. Neither correct answers nor the
+final presence of a \code{HashMap} proves that per-binding dispatch occurred.
+IX now serializes and checks $D,U$. A complete-module integration test captures
+actual RA-to-IX and explicit-binding-to-Physical macro outputs and compares them
+with authored fixtures; see \path{doc/ix-physical/selection-trace/steps.md}.
+That test stops at Physical. Its unresolved external paths establish no provider
+admission or representation law. The separate integrated host-expression tests
+exercise the executable realizer with non-Clone/non-Copy fields, compare results
+with independent relational enumeration, check source addresses, and reject
+incompatible relation/index assignments and unsupported index columns.
+The local two-output fixtures above remain authored expectations, not captures
+of that complete-module single-output entry. Generic driver tests check reply
+identity/kind/order and rejection of unsupported region indexing. These checks
+validate the stated first domain; they do not establish arbitrary provider laws
+or migrate every existing route. Overall migration remains incomplete.

@@ -9,7 +9,7 @@ type Answer = BTreeSet<(i32,)>;
 fn hash_access(probe: &[i32], keys: &HashSet<i32>) -> Answer {
     access_to_distinct_iter! {
         answer(x) => ((x,)) :-
-        P(x) => for (x,) in (probe.iter().copied().map(|x| (x,))),
+        P(x) => bind (x,) <- (probe.iter().copied().map(|x| (x,))),
         S(x) => if (keys.contains(&x));
     }
     .collect()
@@ -18,7 +18,7 @@ fn hash_access(probe: &[i32], keys: &HashSet<i32>) -> Answer {
 fn bitmap_access(probe: &[i32], base: i32, bits: u64) -> Answer {
     access_to_distinct_iter! {
         answer(x) => ((x,)) :-
-        P(x) => for (x,) in (probe.iter().copied().map(|x| (x,))),
+        P(x) => bind (x,) <- (probe.iter().copied().map(|x| (x,))),
         S(x) => if ({
             let offset = i64::from(x) - i64::from(base);
             (0..64).contains(&offset) && bits & (1u64 << offset as u32) != 0
@@ -60,7 +60,7 @@ fn prefiltered_access(probe: &[i32], keys: &HashSet<i32>, coarse: u64) -> Answer
     // MayS denotes its candidate keys; the separate S guard establishes matches.
     access_to_distinct_iter! {
         answer(x) => ((x,)) :-
-        P(x) => for (x,) in (probe.iter().copied().map(|x| (x,))),
+        P(x) => bind (x,) <- (probe.iter().copied().map(|x| (x,))),
         MayS(x) => if (coarse & coarse_bit(x) != 0),
         S(x) => if (keys.contains(&x));
     }

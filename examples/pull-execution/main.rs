@@ -54,8 +54,8 @@ impl TriangleStorage {
         // iterator. Nothing is scanned until its caller requests a row.
         access_to_distinct_iter! {
             triangle(x, y, z) => (((*x).clone(), (*y).clone(), (*z).clone())) :-
-            R(x, y) => for (x, y) in (self.rows0.iter()),
-            S(y, z) => for (z,) in (
+            R(x, y) => bind (x, y) <- (self.rows0.iter()),
+            S(y, z) => bind (z,) <- (
                 self.index0
                     .get(&((*y).clone(),))
                     .into_iter()
