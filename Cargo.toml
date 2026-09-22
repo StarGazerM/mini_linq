@@ -65,3 +65,6 @@ path = "examples/pull-execution/main.rs"
 [[example]]
 name = "free-variables"
 path = "examples/free-variables/main.rs"
+
+[dev-dependencies]
+cq-example-providers.workspace = true

@@ -1,8 +1,10 @@
-//! Administrative macro messages during Physical realization.
+//! Macro protocols for physical realization and execution-state providers.
 //!
-//! These are continuations within a pass, not another retained query language.
+//! Driver messages are continuations within a pass, not another retained query
+//! language. State requests expand directly to Rust expressions.
 //! External operation families may use `Request<T>` with their own typed task.
-//! The common driver handles only Input, Index, and Lower.
+//! The common driver handles only Input, Index, and Lower. The separate `state`
+//! protocol supplies expression operations to selected execution endpoints.
 
 use proc_macro2::TokenStream;
 use syn::{Expr, Ident, Pat, Path, Stmt, Token, token};
@@ -346,3 +348,6 @@ pub mod exact {
         pub witness: Witness,
     }
 }
+
+/// State operations used by selected execution endpoints.
+pub mod state;

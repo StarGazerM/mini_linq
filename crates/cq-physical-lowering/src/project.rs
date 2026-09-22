@@ -16,9 +16,10 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Ident;
 
+use cq_ir::physical::lookup as layout;
+
 use crate::{
     composition::{self, field_values},
-    layout,
     syntax::AccessState,
 };
 
@@ -61,7 +62,7 @@ pub fn lower(tokens: TokenStream) -> syn::Result<TokenStream> {
             let plan = &request.plan;
             let environment = &request.environment;
             Ok(quote! { #operations! {
-                reply_to (::cq_example_providers::project_rows) { #request }
+                reply_to (::mini_linq::project_rows) { #request }
                 plan { #plan }
                 environment { #environment }
                 request { rows #input }
@@ -116,7 +117,7 @@ fn request_output(
     let input = &project.input;
     let row = &witness.row;
     Ok(quote! { #provider! {
-        reply_to (::cq_example_providers::project_output) {
+        reply_to (::mini_linq::project_output) {
             request { #request }
             access { #clauses }
             witness { #witness }

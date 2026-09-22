@@ -5,10 +5,9 @@ pub use check::check;
 
 /// Lower the named physical operators to the actual ordinary-Rust expression.
 ///
-/// This is the final semantic lowering: it selects standard iterator adapters
-/// and writes one Rust local per named operator. The returned [`syn::Expr`] is
-/// already the target representation, so proc-macro emission is only
-/// `ToTokens`; there is no later code generator that reconstructs the plan.
+/// Select standard iterator adapters and write one Rust local per operator.
+/// Distinct state remains explicit caller-resolved provider macro expressions;
+/// their expansion supplies representation code without reconstructing this plan.
 #[contracts::contract(
     debug_ensures(
         iterator_pipeline::contract::well_formed(source) -> ret.as_ref()

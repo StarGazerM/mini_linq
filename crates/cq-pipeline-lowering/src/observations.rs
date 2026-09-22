@@ -77,10 +77,10 @@ pub(crate) fn expected_rust_local(
             let input_stream = &operator.input_stream;
             quote! {
                 let #stream = {
-                    let mut seen = ::std::collections::HashSet::new();
+                    let mut seen = mini_linq::distinct_state! { operator #stream; new };
                     ::core::iter::Iterator::filter(
                         #input_stream,
-                        move |row| seen.insert(::core::clone::Clone::clone(row)),
+                        move |row| mini_linq::distinct_state! { operator #stream; insert(seen, row) },
                     )
                 };
             }

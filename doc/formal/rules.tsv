@@ -13,7 +13,7 @@ IX-Other	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source 
 Phy-Select	implementation	crates/cq-physical-selection/src/lib.rs	pub fn given_bindings	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
 Phy-Relation	implementation	crates/cq-physical-lowering/src/lib.rs	fn advance(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
 Phy-Index	implementation	crates/cq-physical-lowering/src/lib.rs	fn advance(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
-Phy-Use	implementation	crates/cq-example-providers/src/rules.rs	fn matches_request(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
+Phy-Use	implementation	crates/cq-physical-lowering/src/indexed_join.rs	fn matches_request(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
 Phy-Region	implementation	crates/cq-physical-lowering/src/lib.rs	fn check_reply(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
 FV-Name	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Bound	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
@@ -94,5 +94,5 @@ ST-Hole	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy
 Realize-Dispatch	implementation	crates/cq-physical-lowering/src/lib.rs	fn advance(	Implemented administrative state rule; validated by driver tests and actual expansion.
 Realize-Resume	implementation	crates/cq-physical-lowering/src/lib.rs	pub fn resume(	Implemented administrative state rule; validated by driver tests and actual expansion.
 Realize-Finish	implementation	crates/cq-physical-lowering/src/lib.rs	fn finish(	Implemented administrative state rule; validated by driver tests and actual expansion.
-Exact-Join	implementation	crates/cq-example-providers/src/rules.rs	pub fn indexed_join(tokens:	Selected external exact-family rule; witnessed by actual expansion and independent answers.
-Exact-Project	implementation	crates/cq-example-providers/src/project.rs	pub fn lower(tokens:	Selected external terminal projection; intermediate projection explicitly rejects.
+Exact-Join	implementation	crates/cq-physical-lowering/src/indexed_join.rs	pub fn compile(tokens:	Selected external exact-family rule; witnessed by actual expansion and independent answers.
+Exact-Project	implementation	crates/cq-physical-lowering/src/project.rs	pub fn lower(tokens:	Selected external terminal projection; intermediate projection explicitly rejects.

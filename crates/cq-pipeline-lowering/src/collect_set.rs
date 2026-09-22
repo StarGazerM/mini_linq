@@ -6,7 +6,7 @@ pub use check::check;
 
 /// Consume a pipeline into its exact result set.
 ///
-/// The terminal `Distinct` and the `HashSet` sink establish the same uniqueness
+/// The terminal `Distinct` and the selected exact-set sink establish the same uniqueness
 /// guarantee, so this endpoint implements both with one set. All preceding
 /// operators retain their usual lowering; the iterator endpoint is unchanged.
 #[contracts::contract(
@@ -29,7 +29,10 @@ pub fn compile(source: &iterator_pipeline::Pipeline) -> syn::Result<syn::Expr> {
     let result = &last.stream;
     syn::parse2(quote! {{
         #(#locals)*
-        let #result: ::std::collections::HashSet<_> = ::core::iter::Iterator::collect(#input);
-        #result
+        let mut #result = mini_linq::set_sink! { operator #result; new };
+        for __cq_row in #input {
+            mini_linq::set_sink! { operator #result; insert(#result, __cq_row) };
+        }
+        mini_linq::set_sink! { operator #result; finish(#result) }
     }})
 }

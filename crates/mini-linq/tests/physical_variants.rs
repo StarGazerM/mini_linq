@@ -1,4 +1,6 @@
 //! Heterogeneous provider choices, noncanonical layouts, and outside providers.
+//! Requires general physical selection. Do not supply a table of query-local
+//! relation, index, or operator names to make this acceptance test pass.
 #![recursion_limit = "512"]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -29,40 +31,6 @@ macro_rules! nested_output {
 }
 pub(crate) use nested_output as nested_provider;
 
-// Only two Physical slots vary across these two complete query modules: the
-// S-family provider and the final result representation. Every join still goes
-// through the same IX and Physical boundaries.
-macro_rules! chain_policy {
-    (($provider:path) ($result:path) { $($ix:tt)* }) => {
-        ::mini_linq::given_physical_bindings! {
-            $($ix)*
-            physical {
-                relations {
-                    L = ::cq_example_providers::slice_rows;
-                    R = ::cq_example_providers::hash_relation;
-                    S = $provider;
-                    l = ::cq_example_providers::slice_rows;
-                    r = ::cq_example_providers::hash_relation;
-                    s = $provider;
-                    j0 = ::cq_example_providers::borrowed_fields;
-                    j1 = $result;
-                }
-                indexes {
-                    i0 = ::cq_example_providers::hash_relation;
-                    i1 = $provider;
-                }
-                lowerings {
-                    l = ::cq_example_providers::rename;
-                    r = ::cq_example_providers::rename;
-                    s = ::cq_example_providers::rename;
-                    j0 = ::cq_example_providers::indexed_join;
-                    j1 = ::cq_example_providers::indexed_join;
-                }
-            }
-        }
-    };
-}
-
 macro_rules! chain_ra {
     ($l:ident, $r:ident, $s:ident) => {
         ::mini_linq::index_demands! {
@@ -86,19 +54,12 @@ macro_rules! chain_ra {
 mod hash_last {
     use super::*;
 
-    macro_rules! explicit_policy {
-        ($($ix:tt)*) => {
-            chain_policy! {
-                (::cq_example_providers::hash_relation)
-                (::cq_example_providers::borrowed_fields)
-                { $($ix)* }
-            }
-        };
-    }
-    pub(crate) use explicit_policy as choose_physical;
     mod wiring {
-        pub(crate) use super::choose_physical;
         pub(crate) use ::mini_linq::{access_to_set_loops as access, realize_physical};
+        #[allow(unused_imports)]
+        pub(crate) use cq_example_providers::{
+            hash_distinct as distinct_state, hash_set_sink as set_sink,
+        };
     }
     use wiring as mini_linq;
 
@@ -115,19 +76,12 @@ mod hash_last {
 mod nested_result {
     use super::*;
 
-    macro_rules! explicit_policy {
-        ($($ix:tt)*) => {
-            chain_policy! {
-                (::cq_example_providers::sorted_relation)
-                (crate::nested_provider)
-                { $($ix)* }
-            }
-        };
-    }
-    pub(crate) use explicit_policy as choose_physical;
     mod wiring {
-        pub(crate) use super::choose_physical;
         pub(crate) use ::mini_linq::{access_to_set_loops as access, realize_physical};
+        #[allow(unused_imports)]
+        pub(crate) use cq_example_providers::{
+            hash_distinct as distinct_state, hash_set_sink as set_sink,
+        };
     }
     use wiring as mini_linq;
 
@@ -144,32 +98,12 @@ mod nested_result {
 mod reversed_layout {
     use super::*;
 
-    macro_rules! explicit_policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::given_physical_bindings! {
-                $($ix)*
-                physical {
-                    relations {
-                        L = ::cq_example_providers::hash_relation;
-                        R = ::cq_example_providers::sorted_relation;
-                        l = ::cq_example_providers::hash_relation;
-                        r = ::cq_example_providers::sorted_relation;
-                        j = ::cq_example_providers::borrowed_fields;
-                    }
-                    indexes { i0 = ::cq_example_providers::sorted_relation; }
-                    lowerings {
-                        l = ::cq_example_providers::rename;
-                        r = ::cq_example_providers::rename;
-                        j = ::cq_example_providers::indexed_join;
-                    }
-                }
-            }
-        };
-    }
-    pub(crate) use explicit_policy as choose_physical;
     mod wiring {
-        pub(crate) use super::choose_physical;
         pub(crate) use ::mini_linq::{access_to_set_loops as access, realize_physical};
+        #[allow(unused_imports)]
+        pub(crate) use cq_example_providers::{
+            hash_distinct as distinct_state, hash_set_sink as set_sink,
+        };
     }
     use wiring as mini_linq;
 
@@ -196,32 +130,12 @@ mod reversed_layout {
 mod name_collision {
     use super::*;
 
-    macro_rules! explicit_policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::given_physical_bindings! {
-                $($ix)*
-                physical {
-                    relations {
-                        L = ::cq_example_providers::slice_rows;
-                        R = ::cq_example_providers::hash_relation;
-                        l = ::cq_example_providers::slice_rows;
-                        r = ::cq_example_providers::hash_relation;
-                        j = ::cq_example_providers::borrowed_fields;
-                    }
-                    indexes { i0 = ::cq_example_providers::hash_relation; }
-                    lowerings {
-                        l = ::cq_example_providers::rename;
-                        r = ::cq_example_providers::rename;
-                        j = ::cq_example_providers::indexed_join;
-                    }
-                }
-            }
-        };
-    }
-    pub(crate) use explicit_policy as choose_physical;
     mod wiring {
-        pub(crate) use super::choose_physical;
         pub(crate) use ::mini_linq::{access_to_set_loops as access, realize_physical};
+        #[allow(unused_imports)]
+        pub(crate) use cq_example_providers::{
+            hash_distinct as distinct_state, hash_set_sink as set_sink,
+        };
     }
     use wiring as mini_linq;
 

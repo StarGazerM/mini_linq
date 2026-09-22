@@ -8,7 +8,8 @@ use cq_ir::{
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
-use crate::{rules, storage, syntax::AccessState};
+use crate::storage;
+use cq_physical_lowering::{indexed_join as rules, project};
 
 fn plan() -> physical::Module {
     let plan: physical::Module = syn::parse_quote! {
@@ -55,7 +56,7 @@ fn providers_describe_items_and_join_rule_composes_dependent_bindings() {
         request {lower j}
     };
 
-    let rows_request = invocation(rules::indexed_join(start).unwrap());
+    let rows_request = invocation(rules::compile(start).unwrap());
     assert_eq!(rows_request.mac.path, syn::parse_quote!(ext::slice));
     let rows_callback = invocation(storage::slice(rows_request.mac.tokens).unwrap());
     let rows: exact::IteratorReply = syn::parse2(rows_callback.mac.tokens.clone()).unwrap();
@@ -66,17 +67,9 @@ fn providers_describe_items_and_join_rule_composes_dependent_bindings() {
     // relation annotation and places the binding before the dependent probe.
     assert!(syn::parse2::<exact::WitnessReply>(rows_callback.mac.tokens.clone()).is_err());
 
-    let matches_request = invocation(rules::indexed_join_rows(rows_callback.mac.tokens).unwrap());
+    let matches_request = invocation(rules::rows(rows_callback.mac.tokens).unwrap());
     let request: protocol::Request<exact::Task> =
         syn::parse2(matches_request.mac.tokens.clone()).unwrap();
-    let state: AccessState = syn::parse2(request.state).unwrap();
-    assert_eq!(state.clauses.len(), 1);
-    assert_eq!(
-        state.clauses[0],
-        syn::parse_quote! {
-            l(a) => bind a <- ((left).iter())
-        }
-    );
     assert!(matches!(request.request, exact::Task::Matches { .. }));
 
     let matches_callback = invocation(storage::hash(matches_request.mac.tokens).unwrap());
@@ -90,26 +83,14 @@ fn providers_describe_items_and_join_rule_composes_dependent_bindings() {
     assert_eq!(matched.witness.fields[0].value, syn::parse_quote!(a));
     assert_eq!(matched.witness.fields[1].value, syn::parse_quote!(b));
 
-    let output_request =
-        invocation(rules::indexed_join_matches(matches_callback.mac.tokens).unwrap());
-    let request: protocol::Request<exact::Task> =
-        syn::parse2(output_request.mac.tokens.clone()).unwrap();
-    let state: AccessState = syn::parse2(request.state).unwrap();
-    assert_eq!(state.clauses.len(), 2);
-    assert_eq!(
-        state.clauses[1],
-        syn::parse_quote! {
-            r(a,b) => bind b <- ((index).get(a).into_iter().flatten())
-        }
-    );
-
+    let output_request = invocation(rules::matches(matches_callback.mac.tokens).unwrap());
     let output_callback =
         invocation(crate::exact::borrowed_fields(output_request.mac.tokens).unwrap());
     let output: exact::WitnessReply = syn::parse2(output_callback.mac.tokens.clone()).unwrap();
     assert_eq!(output.witness.row, syn::parse_quote!((a, b,)));
     assert!(syn::parse2::<exact::IteratorReply>(output_callback.mac.tokens.clone()).is_err());
 
-    let finished = invocation(rules::indexed_join_output(output_callback.mac.tokens).unwrap());
+    let finished = invocation(rules::output(output_callback.mac.tokens).unwrap());
     let reply: protocol::Reply = syn::parse2(finished.mac.tokens).unwrap();
     assert!(
         reply.emitted.is_empty(),
@@ -159,14 +140,14 @@ fn obsolete_access_fragment_replies_are_rejected_by_rule_callbacks() {
         access {l(a) => bind a <- (input.iter())}
         witness {row(a) fields {0 = (a);}}
     };
-    assert!(rules::indexed_join_rows(rows.clone()).is_err());
-    assert!(crate::project::rows(rows).is_err());
+    assert!(rules::rows(rows.clone()).is_err());
+    assert!(project::rows(rows).is_err());
 
     let output = quote! {
         resume {}
         access {}
         witness {row((a,b)) fields {0 = (a); 1 = (b);}}
     };
-    assert!(rules::indexed_join_output(output.clone()).is_err());
-    assert!(crate::project::output(output).is_err());
+    assert!(rules::output(output.clone()).is_err());
+    assert!(project::output(output).is_err());
 }

@@ -516,27 +516,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn options_stop_at_ix_and_reject_retired_backend_stages() {
-        assert_eq!(
-            Options::parse(vec!["triangle".into()]).unwrap().through,
-            Stage::IndexRequirements
-        );
-        for stage in [
-            "physical",
-            "rust-access-plan",
-            "iterator-pipeline",
-            "final-rust",
-        ] {
-            let error = Options::parse(vec!["triangle".into(), "--through".into(), stage.into()])
-                .err()
-                .unwrap();
-            assert!(error.to_string().contains("provider assignments"));
-        }
-        assert!(Options::parse(Vec::new()).is_err());
-        assert!(Options::parse(vec!["triangle".into(), "extra".into()]).is_err());
-    }
-
-    #[test]
     fn every_catalog_case_reaches_ix_and_each_payload_roundtrips() {
         for case in cq_workloads::catalog::all() {
             let source = case.module().unwrap();
@@ -594,3 +573,7 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "explain_regressions.rs"]
+mod regressions;

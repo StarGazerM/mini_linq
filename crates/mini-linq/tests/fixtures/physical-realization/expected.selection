@@ -14,10 +14,10 @@ physical {
         i1 = ::cq_example_providers::sorted_relation;
     }
     lowerings {
-        l = ::cq_example_providers::rename;
-        r = ::cq_example_providers::rename;
-        s = ::cq_example_providers::rename;
-        j0 = ::cq_example_providers::indexed_join;
-        j1 = ::cq_example_providers::indexed_join;
+        l = ::mini_linq::rename;
+        r = ::mini_linq::rename;
+        s = ::mini_linq::rename;
+        j0 = ::mini_linq::indexed_join;
+        j1 = ::mini_linq::indexed_join;
     }
 }

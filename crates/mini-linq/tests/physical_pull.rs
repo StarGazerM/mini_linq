@@ -1,4 +1,6 @@
 //! The real CQ chain reaches the existing lazy Pipeline endpoint.
+//! Requires general physical selection. Do not supply a table of query-local
+//! relation, index, or operator names to make this acceptance test pass.
 #![recursion_limit = "1024"]
 
 #[path = "support/trace.rs"]
@@ -79,41 +81,14 @@ macro_rules! observed_sorted {
     };
 }
 
-macro_rules! explicit_policy {
-    ($($ix:tt)*) => {
-        ::mini_linq::given_physical_bindings! {
-            $($ix)*
-            physical {
-                relations {
-                    L = observed_slice;
-                    R = observed_hash;
-                    S = observed_sorted;
-                    r0 = observed_slice;
-                    r1 = observed_hash;
-                    r2 = ::cq_example_providers::borrowed_fields;
-                    r3 = observed_sorted;
-                    r4 = ::cq_example_providers::borrowed_fields;
-                    r5 = ::cq_example_providers::borrowed_fields;
-                }
-                indexes { i0 = observed_hash; i1 = observed_sorted; }
-                lowerings {
-                    r0 = ::cq_example_providers::rename;
-                    r1 = ::cq_example_providers::rename;
-                    r2 = ::cq_example_providers::indexed_join;
-                    r3 = ::cq_example_providers::rename;
-                    r4 = ::cq_example_providers::indexed_join;
-                    r5 = ::cq_example_providers::project;
-                }
-            }
-        }
-    };
-}
-use explicit_policy as choose_physical;
 mod wiring {
-    pub(crate) use super::choose_physical;
     pub(crate) use ::mini_linq::{
         access_to_distinct_iter as access, index_demands as choose_index_policy,
         pipeline_to_distinct_iter, realize_physical,
+    };
+    #[allow(unused_imports)]
+    pub(crate) use cq_example_providers::{
+        hash_distinct as distinct_state, hash_set_sink as set_sink,
     };
 }
 use wiring as mini_linq;

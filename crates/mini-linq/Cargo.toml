@@ -37,6 +37,11 @@ cq-access-lowering = { workspace = true, optional = true }
 cq-pipeline-lowering = { workspace = true, optional = true }
 
 [dev-dependencies]
+syn_derive.workspace = true
+cq-storage.workspace = true
+contracts.workspace = true
+prettyplease.workspace = true
+syn = { workspace = true, features = ["visit-mut"] }
 cq-example-providers.workspace = true
 
 [[test]]
@@ -74,3 +79,115 @@ required-features = ["access-to-pipeline", "pipeline-distinct-iter"]
 [[test]]
 name = "execution_models"
 required-features = ["access-to-pipeline", "access-to-set-loops", "pipeline-set"]
+
+[[test]]
+name = "state_providers"
+required-features = ["pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists", "access-to-set-loops"]
+
+[[test]]
+name = "compose_block_domain"
+path = "../cq-compose/tests/block_domain.rs"
+
+[[test]]
+name = "compose_component_composition"
+path = "../cq-compose/tests/component_composition.rs"
+
+[[test]]
+name = "compose_composition"
+path = "../cq-compose/tests/composition.rs"
+
+[[test]]
+name = "compose_documented_triangle"
+path = "../cq-compose/tests/documented_triangle.rs"
+
+[[test]]
+name = "compose_edge_contracts"
+path = "../cq-compose/tests/edge_contracts.rs"
+
+[[test]]
+name = "compose_expression_planning"
+path = "../cq-compose/tests/expression_planning.rs"
+
+[[test]]
+name = "compose_formal_domains"
+path = "../cq-compose/tests/formal_domains.rs"
+
+[[test]]
+name = "compose_hw4_optional"
+path = "../cq-compose/tests/hw4_optional.rs"
+
+[[test]]
+name = "compose_input_correspondence"
+path = "../cq-compose/tests/input_correspondence.rs"
+
+[[test]]
+name = "compose_physical_correspondence"
+path = "../cq-compose/tests/physical_correspondence.rs"
+
+[[test]]
+name = "compose_planned_execution"
+path = "../cq-compose/tests/planned_execution.rs"
+
+[[test]]
+name = "compose_public_boundaries"
+path = "../cq-compose/tests/public_boundaries.rs"
+
+[[test]]
+name = "compose_pull_lowering"
+path = "../cq-compose/tests/pull_lowering.rs"
+
+[[test]]
+name = "compose_relational_reference"
+path = "../cq-compose/tests/relational_reference.rs"
+
+[[test]]
+name = "compose_result_indexes"
+path = "../cq-compose/tests/result_indexes.rs"
+
+[[test]]
+name = "compose_reusable_query"
+path = "../cq-compose/tests/reusable_query.rs"
+
+[[test]]
+name = "compose_rust_expression_contracts"
+path = "../cq-compose/tests/rust_expression_contracts.rs"
+
+[[test]]
+name = "teaching_hosts"
+path = "../../teaching/ya/templates/tests/hosts.rs"
+
+[[test]]
+name = "teaching_semijoin"
+path = "../../teaching/ya/templates/tests/semijoin.rs"
+
+[[test]]
+name = "teaching_ya_execution"
+path = "../../teaching/ya/templates/tests/ya_execution.rs"
+
+[[test]]
+name = "teaching_ya_schedule"
+path = "../../teaching/ya/templates/tests/ya_schedule.rs"
+
+[[example]]
+name = "blocked-ya"
+path = "../../examples/blocked-ya/main.rs"
+test = true
+harness = false
+
+[[example]]
+name = "ra-execution"
+path = "../../examples/ra-execution/main.rs"
+test = true
+harness = false
+
+[[example]]
+name = "rust-expressions"
+path = "../../examples/rust-expressions/main.rs"
+test = true
+harness = false
+
+[[example]]
+name = "rust-expressions-planned"
+path = "../../examples/rust-expressions/planned.rs"
+test = true
+harness = false

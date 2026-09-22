@@ -9,7 +9,7 @@ use cq_ir::{physical, provider_protocol::exact, rust_access_plan, symbol_name};
 use quote::quote;
 use syn::{Expr, Ident};
 
-use crate::layout;
+use cq_ir::physical::lookup as layout;
 
 pub(crate) fn bind(
     plan: &physical::Module,

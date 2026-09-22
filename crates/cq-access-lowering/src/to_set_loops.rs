@@ -22,12 +22,14 @@ use proc_macro2::Span;
 use quote::quote;
 use std::collections::BTreeSet;
 
-/// Compile a checked Access region into nested loops and one `HashSet` sink.
+/// Compile a checked Access region into nested loops and one explicitly selected exact-set sink.
 pub fn compile(source: &rust_access_plan::Plan) -> syn::Result<syn::Expr> {
     rust_access_plan::contract::check(source)?;
     let result = syn::Ident::new("__cq_output", Span::mixed_site());
     let output = &source.head.output;
-    let mut statement = quote! { #result.insert(#output); };
+    let operator = &source.head.atom.relation;
+    let mut statement =
+        quote! { mini_linq::set_sink! { operator #operator; insert(#result, #output) }; };
 
     // Record each clause's incoming binding before nesting scopes backwards.
     // Clone only bindings used after the inner source has been evaluated.
@@ -77,8 +79,8 @@ pub fn compile(source: &rust_access_plan::Plan) -> syn::Result<syn::Expr> {
         };
     }
     syn::parse2(quote! {{
-        let mut #result = ::std::collections::HashSet::new();
+        let mut #result = mini_linq::set_sink! { operator #operator; new };
         #statement
-        #result
+        mini_linq::set_sink! { operator #operator; finish(#result) }
     }})
 }

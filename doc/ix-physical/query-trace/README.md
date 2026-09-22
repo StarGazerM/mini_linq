@@ -1,5 +1,10 @@
 # Actual proc-macro boundaries
 
+Historical capture from before operator-rule extraction. Its `cq_example_providers`
+operator paths describe that revision. Current operator entry points are in
+`mini_linq`; current storage adapters remain in `cq_example_providers`.
+
+
 These calls were captured during rustc expansion of the unchanged target.
 Raw token files are authoritative. Formatted Rust is a reading aid only.
 Sequence numbers are invocation order within each compiler process, not runtime order.

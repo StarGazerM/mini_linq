@@ -1,9 +1,16 @@
 //! Realize a fully selected Physical program through external macro callbacks.
 //!
-//! This crate knows no provider names, storage algorithms, or exact-access
-//! family. It schedules Input/Index/Lower requests and validates their replies.
+//! The driver knows no concrete provider names or storage algorithms.
+//! It schedules Input/Index/Lower requests and validates their replies.
+//! Separately selected exact operator rules live in rename, indexed_join and project.
 //! Physical choices are immutable. Unsupported representations fail instead of
 //! acquiring an implicit collection, clone, or alternate provider.
+
+mod composition;
+pub mod indexed_join;
+pub mod project;
+pub mod rename;
+mod syntax;
 
 use cq_ir::{
     physical, provider_protocol as protocol, relational_plan, rust_access_plan, symbol_name,

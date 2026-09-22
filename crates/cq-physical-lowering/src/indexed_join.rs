@@ -10,41 +10,12 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Ident;
 
+use cq_ir::physical::lookup as layout;
+
 use crate::{
     composition::{self, field_values},
-    layout,
     syntax::AccessState,
 };
-
-pub fn rename(tokens: TokenStream) -> syn::Result<TokenStream> {
-    let request: protocol::Request = syn::parse2(tokens)?;
-    let protocol::Task::Lower { name, .. } = &request.request else {
-        return Err(syn::Error::new_spanned(
-            &request.request,
-            "rename is an RA lowering rule",
-        ));
-    };
-    let Operator::Rename(rename) = &layout::definition(&request.plan, name)?.operator else {
-        return Err(syn::Error::new_spanned(
-            name,
-            "selected rename rule requires a Rename definition",
-        ));
-    };
-    let (source, _) = layout::stored(&request.environment, &rename.relation)?;
-    let provider = layout::relation_provider(&request.plan, name)?;
-    let callback = &request.reply_to;
-    let state = &request.state;
-    let plan = &request.plan;
-    let environment = &request.environment;
-    // The result provider re-establishes its declared representation. Merely
-    // copying the source operations would ignore Φ_R(result).
-    Ok(quote! { #provider! {
-        reply_to (#callback) { #state }
-        plan { #plan }
-        environment { #environment }
-        request { input #name from (#source) }
-    } })
-}
 
 fn join(
     request: &protocol::Request,
@@ -64,7 +35,7 @@ fn join(
     }
 }
 
-pub fn indexed_join(tokens: TokenStream) -> syn::Result<TokenStream> {
+pub fn compile(tokens: TokenStream) -> syn::Result<TokenStream> {
     let request: protocol::Request = syn::parse2(tokens)?;
     let (_, join) = join(&request)?;
     let left = &join.left;
@@ -73,7 +44,7 @@ pub fn indexed_join(tokens: TokenStream) -> syn::Result<TokenStream> {
             let plan = &request.plan;
             let environment = &request.environment;
             Ok(quote! { #operations! {
-                reply_to (::cq_example_providers::indexed_join_rows) { #request }
+                reply_to (::mini_linq::indexed_join_rows) { #request }
                 plan { #plan }
                 environment { #environment }
                 request { rows #left }
@@ -95,7 +66,7 @@ pub fn indexed_join(tokens: TokenStream) -> syn::Result<TokenStream> {
     }
 }
 
-pub fn indexed_join_rows(tokens: TokenStream) -> syn::Result<TokenStream> {
+pub fn rows(tokens: TokenStream) -> syn::Result<TokenStream> {
     let reply: exact::IteratorReply = syn::parse2(tokens)?;
     let request: protocol::Request = syn::parse2(reply.resume.clone())?;
     let (_, join) = join(&request)?;
@@ -160,7 +131,7 @@ fn matches_request(
     let plan = &request.plan;
     let environment = &request.environment;
     Ok(quote! { #operations! {
-        reply_to (::cq_example_providers::indexed_join_matches) {
+        reply_to (::mini_linq::indexed_join_matches) {
             request { #request }
             access { #clauses }
             witness { #left }
@@ -171,7 +142,7 @@ fn matches_request(
     } })
 }
 
-pub fn indexed_join_matches(tokens: TokenStream) -> syn::Result<TokenStream> {
+pub fn matches(tokens: TokenStream) -> syn::Result<TokenStream> {
     let reply: exact::IteratorReply = syn::parse2(tokens)?;
     let mut state: AccessState = syn::parse2(reply.resume.clone())?;
     let request = &state.request;
@@ -206,7 +177,7 @@ pub fn indexed_join_matches(tokens: TokenStream) -> syn::Result<TokenStream> {
     let plan = &request.plan;
     let environment = &request.environment;
     Ok(quote! { #provider! {
-        reply_to (::cq_example_providers::indexed_join_output) {
+        reply_to (::mini_linq::indexed_join_output) {
             request { #request }
             access { #clauses }
             witness { #witness }
@@ -219,7 +190,7 @@ pub fn indexed_join_matches(tokens: TokenStream) -> syn::Result<TokenStream> {
     } })
 }
 
-pub fn indexed_join_output(tokens: TokenStream) -> syn::Result<TokenStream> {
+pub fn output(tokens: TokenStream) -> syn::Result<TokenStream> {
     let reply: exact::WitnessReply = syn::parse2(tokens)?;
     let state: AccessState = syn::parse2(reply.resume)?;
     let (name, _) = join(&state.request)?;

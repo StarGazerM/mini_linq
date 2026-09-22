@@ -1,4 +1,4 @@
-//! External exact-index providers and binary-join lowering rules.
+//! External exact-index and output-representation providers.
 //!
 //! This package is a client of the physical realization protocol. The common
 //! realizer does not depend on it or interpret the names exported here.
@@ -6,11 +6,9 @@
 
 use proc_macro::TokenStream;
 
-mod composition;
 mod exact;
 mod layout;
-mod project;
-mod rules;
+mod state;
 mod storage;
 mod syntax;
 
@@ -47,47 +45,21 @@ pub fn borrowed_fields(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
-pub fn rename(input: TokenStream) -> TokenStream {
-    expand(input, rules::rename)
+pub fn hash_distinct(input: TokenStream) -> TokenStream {
+    expand(input, state::hash_distinct)
 }
 
 #[proc_macro]
-pub fn indexed_join(input: TokenStream) -> TokenStream {
-    expand(input, rules::indexed_join)
+pub fn ordered_distinct(input: TokenStream) -> TokenStream {
+    expand(input, state::ordered_distinct)
 }
 
-/// Project logical columns through the explicitly selected output provider.
 #[proc_macro]
-pub fn project(input: TokenStream) -> TokenStream {
-    expand(input, project::lower)
+pub fn hash_set_sink(input: TokenStream) -> TokenStream {
+    expand(input, state::hash_set_sink)
 }
 
-#[doc(hidden)]
 #[proc_macro]
-pub fn project_rows(input: TokenStream) -> TokenStream {
-    expand(input, project::rows)
-}
-
-#[doc(hidden)]
-#[proc_macro]
-pub fn project_output(input: TokenStream) -> TokenStream {
-    expand(input, project::output)
-}
-
-#[doc(hidden)]
-#[proc_macro]
-pub fn indexed_join_rows(input: TokenStream) -> TokenStream {
-    expand(input, rules::indexed_join_rows)
-}
-
-#[doc(hidden)]
-#[proc_macro]
-pub fn indexed_join_matches(input: TokenStream) -> TokenStream {
-    expand(input, rules::indexed_join_matches)
-}
-
-#[doc(hidden)]
-#[proc_macro]
-pub fn indexed_join_output(input: TokenStream) -> TokenStream {
-    expand(input, rules::indexed_join_output)
+pub fn ordered_set_sink(input: TokenStream) -> TokenStream {
+    expand(input, state::ordered_set_sink)
 }

@@ -19,8 +19,11 @@ pub fn check(source: &iterator_pipeline::Pipeline, target: &syn::Expr) -> bool {
     let result = &source.return_stream.stream;
     let expected: syn::Expr = syn::parse_quote! {{
         #(#locals)*
-        let #result: ::std::collections::HashSet<_> = ::core::iter::Iterator::collect(#input);
-        #result
+        let mut #result = mini_linq::set_sink! { operator #result; new };
+        for __cq_row in #input {
+            mini_linq::set_sink! { operator #result; insert(#result, __cq_row) };
+        }
+        mini_linq::set_sink! { operator #result; finish(#result) }
     }};
     target == &expected
 }

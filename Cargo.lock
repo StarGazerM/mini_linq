@@ -29,6 +29,7 @@ name = "cq-example-providers"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
+ "cq-physical-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -62,6 +63,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+ "syn_derive",
 ]
 
 [[package]]
@@ -112,6 +114,7 @@ dependencies = [
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "contracts",
  "cq-access-lowering",
  "cq-example-providers",
  "cq-index-policy",
@@ -120,18 +123,32 @@ dependencies = [
  "cq-physical-selection",
  "cq-pipeline-lowering",
  "cq-query-lowering",
+ "cq-storage",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+ "syn_derive",
 ]
 
 [[package]]
 name = "mini-linq-course"
 version = "0.1.0"
 dependencies = [
+ "cq-example-providers",
  "cq-ir",
  "mini-linq",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "prettyplease"
+version = "0.2.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
+dependencies = [
+ "proc-macro2",
  "syn 2.0.119",
 ]
 

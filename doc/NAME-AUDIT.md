@@ -42,6 +42,18 @@ All entries below are defined in `crates/mini-linq/src/lib.rs`.
 stage or another public query notation. The `access_to_*` names are existing
 execution endpoints, not storage-selection or join-planning macros.
 
+These selected physical rules are also exported by `mini-linq`, under
+`physical-realization`; their callbacks are hidden implementation entries.
+
+| Exports | Implementation module | Admitted role |
+|---|---|---|
+| `rename!` | `cq-physical-lowering::rename::compile` | Selected direct-input Rename rule; asks the result provider to establish its representation |
+| `indexed_join!` | `cq-physical-lowering::indexed_join::compile` | Selected exact binary NaturalJoin rule; consumes IX and operand operations |
+| `project!` | `cq-physical-lowering::project::lower` | Selected terminal Project rule; retains clauses and asks the recorded result provider for Output |
+| `project_rows!`, `project_output!` | `cq-physical-lowering::project::{rows,output}` | Internal callbacks of terminal projection |
+| `indexed_join_rows!`, `indexed_join_matches!`, `indexed_join_output!` | `cq-physical-lowering::indexed_join::{rows,matches,output}` | Internal callbacks of that selected rule |
+
+
 ## `cq-example-providers` procedural macros
 
 All exports are defined in `crates/cq-example-providers/src/lib.rs`.
@@ -52,15 +64,16 @@ All exports are defined in `crates/cq-example-providers/src/lib.rs`.
 | `hash_relation!` | `storage::hash`, `exact` | Borrow a two-column HashMap relation; reuse its index; Rows/Matches |
 | `sorted_relation!` | `storage::sorted`, `exact` | Borrow a two-column BTreeMap relation; reuse its index; Rows/Matches |
 | `borrowed_fields!` | `exact::borrowed_fields` | Construct a tuple of interpreted borrowed fields for Output |
-| `rename!` | `rules::rename` | Selected direct-input Rename rule; asks the result provider to establish its representation |
-| `indexed_join!` | `rules::indexed_join` | Selected exact binary NaturalJoin rule; consumes IX and operand operations |
-| `project!` | `project::lower` | Selected terminal Project rule; retains clauses and asks the recorded result provider for Output |
-| `project_rows!`, `project_output!` | `project::{rows,output}` | Internal callbacks of terminal projection |
-| `indexed_join_rows!`, `indexed_join_matches!`, `indexed_join_output!` | Matching functions in `rules` | Internal callbacks of that selected rule |
+
+The same provider crate also exports `hash_distinct!`, `ordered_distinct!`,
+`hash_set_sink!`, and `ordered_set_sink!`, implemented in `state`. Callers bind
+them to the `distinct_state` or `set_sink` slot. Their typed expression requests
+are defined in `cq-ir::provider_protocol::state`.
 
 The shared envelope and exact-operation family are typed in
-`cq-ir::provider_protocol`; provider-local continuation records are in
-`cq-example-providers::syntax`. `RustPath` in the paper means a Rust module/name
+`cq-ir::provider_protocol`; operator continuation records are private to
+`cq-physical-lowering::syntax`; `cq-example-providers::syntax` parses only
+representation requests. `RustPath` in the paper means a Rust module/name
 path to an external macro. It is neither a provider tag nor an enum case.
 
 The former whole-query hash/configured lowerers, Native macros, and `cq-compose`

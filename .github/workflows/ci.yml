@@ -18,12 +18,14 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Verify component dependency boundaries
         run: python3 tools/check_dependencies.py --isolate
+      - name: Test restored compiler regressions
+        run: bash tools/test_regressions.sh
       - name: Test IX and Physical composition
         run: python3 tools/check_dependencies.py --consumers
       - name: Test package feature configurations
         run: python3 tools/check_features.py
-      - name: Test completed workspace
-        run: cargo test --workspace --locked
+      - name: Test workspace
+        run: cargo test --workspace --locked --no-fail-fast
       - name: Check Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test teaching tool
@@ -32,3 +34,9 @@ jobs:
         run: cargo run --manifest-path examples/composition/Cargo.toml --locked
       - name: Check formal source correspondence
         run: python3 doc/formal/check.py
+      - name: Upload regression diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-diagnostics
+          path: target/regression-logs/

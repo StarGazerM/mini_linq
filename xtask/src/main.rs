@@ -43,7 +43,7 @@ fn run() -> Result<()> {
                 rerun_with_oracle("golden", &arguments)
             }
         }
-        "differential" => Err("differential execution is unavailable: the old whole-query Rust backend was removed; workload-specific Physical assignments and a host input/output contract are required before generated-query comparison can resume".into()),
+        "differential" => Err("differential execution is unavailable: the old whole-query Rust backend was removed; general physical selection and a host input/output contract are required before generated-query comparison can resume".into()),
         "explain" => explain::run(arguments, &repository_root()),
         "help" | "--help" | "-h" => {
             help();
@@ -522,8 +522,8 @@ SCENARIO is coverage, empty-input, no-match, or all. It defaults to coverage.
 STAGE is cq, relational-plan, or index-requirements. It defaults to index-requirements.
 
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
-mode that changes those answers. `differential` is unavailable until workload
-Physical assignments and the new host input/output contract are supplied.
+mode that changes those answers. `differential` is unavailable until general
+physical selection and the new host input/output contract are implemented.
 `explain` records typed CQ, RA and IX payloads; it does not execute a backend."
     );
 }
@@ -599,3 +599,6 @@ mod tests {
         assert!(!check_or_skip_scenario(case, Scenario::NoMatch, true).unwrap());
     }
 }
+
+#[cfg(test)]
+mod runner_regressions;

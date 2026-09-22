@@ -13,8 +13,8 @@ post-IX domain is an open Rust expression over caller-owned inputs. See the
 | `cq-query-lowering` | CQ planning and RA construction | `written_order`, `clause_prefix`, `hypergraph`; each exports `compile`; `dependencies`, `model`, `proof` support planning |
 | `cq-index-policy` | RA → IX; derive required join-column indexes and their uses | `compile` in `lib.rs`; `correspondence` checks the edge |
 | `cq-physical-selection` | IX plus explicit choices → Physical | `given_bindings` in `lib.rs`; no provider-name dispatch |
-| `cq-physical-lowering` | Follow Physical assignments and schedule external macro calls | `begin`, `resume` in `lib.rs`; no concrete provider dependency |
-| `cq-example-providers` | External representation implementations and selected RA rules | `storage` establishes slice/maps; `exact` emits Rows/Matches/Output fragments; `rules` lowers Rename and indexed NaturalJoin; `project` lowers terminal Project; `layout` maps declared/logical fields; `syntax` owns callback state |
+| `cq-physical-lowering` | Realization driver and independently selected operator rules | `begin`, `resume` schedule calls; `rename`, `indexed_join`, `project` lower operators through selected providers; no concrete provider dependency |
+| `cq-example-providers` | External storage, output and execution-state adapters | `storage` establishes slice/maps; `exact` emits Rows/Matches/Output fragments; `layout` decodes declared fields; `state` implements hash/ordered distinct state and exact-set sinks; no operator lowering |
 | `cq-access-lowering` | Existing Access execution implementations | `to_pipeline`, `to_set_loops` |
 | `cq-pipeline-lowering` | Existing Pipeline → Rust endpoints | `distinct_iter`, `collect_set`, `support_iter`, `exists`; shared `operators` emits adapters |
 | `cq-storage` | Runtime data structures and operation traits | Blocks, selections, summaries, hash indexes, replay and counters; no RA interpreter or provider policy |
@@ -25,7 +25,14 @@ crates are ordinary Rust libraries with typed APIs; an individual pass does not
 need its own proc-macro crate. The realizer and concrete providers both depend
 on the protocol in `cq-ir`; the realizer does not depend on the provider crate.
 The provider is a development dependency of the facade for integration tests,
-not a production dependency that selects a backend.
+not a production dependency that selects a backend. Provider protocol tests use
+the physical-lowering library as a test-only dependency. Shared read-only AST
+lookups live in `cq-ir::physical::lookup`; concrete field decoding stays in providers.
+
+The `mini-linq` facade exports `rename!`, `indexed_join!`, `project!` and their
+callbacks under `physical-realization`. Their implementations live in
+`cq-physical-lowering`. They are explicitly selected rules, not driver defaults;
+other rules can still be supplied by external macro paths.
 
 `mini-linq-course` is the workspace/example root, and `cq-workloads` is a typed
 query/data catalog. Neither is a compilation stage. The separate `xtask`
@@ -78,3 +85,17 @@ The [full-CQ test](../crates/mini-linq/tests/physical_query.rs) exercises the
 written-order planner through its terminal Project; its
 [query trace](ix-physical/query-trace/review.md) is separate from the
 [direct-RA trace](ix-physical/realization-trace/review.md).
+
+## Execution state selection
+
+Distinct and output collection use caller-bound `mini_linq::distinct_state!` and
+`mini_linq::set_sink!` slots. There is no HashSet fallback in Access/Pipeline
+lowering. Each request carries its local operator name; a caller policy can
+choose separately for each occurrence. The semantic Pipeline is unchanged.
+State provider syntax and laws live in `cq-ir::provider_protocol::state`.
+
+`cq-example-providers` supplies hash and ordered implementations. Distinct
+providers own retained copies; set sinks consume values and need no Clone.
+The execution lowerer owns polling and loop order. Support/existence omit the
+terminal Distinct and need neither slot. Existing dependent-join binding clones
+remain an independent execution-strategy choice.

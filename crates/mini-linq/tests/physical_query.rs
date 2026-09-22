@@ -1,4 +1,6 @@
 //! Start at the real CQ macro and cross every boundary through projection.
+//! Requires general physical selection. Do not supply a table of query-local
+//! relation, index, or operator names to make this acceptance test pass.
 #![recursion_limit = "768"]
 
 #[path = "support/trace.rs"]
@@ -9,43 +11,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct Value(i32);
 
-macro_rules! explicit_policy {
-    ($($ix:tt)*) => {
-        ::mini_linq::given_physical_bindings! {
-            $($ix)*
-            physical {
-                relations {
-                    L = ::cq_example_providers::slice_rows;
-                    R = ::cq_example_providers::hash_relation;
-                    S = ::cq_example_providers::sorted_relation;
-                    r0 = ::cq_example_providers::slice_rows;
-                    r1 = ::cq_example_providers::hash_relation;
-                    r2 = ::cq_example_providers::borrowed_fields;
-                    r3 = ::cq_example_providers::sorted_relation;
-                    r4 = ::cq_example_providers::borrowed_fields;
-                    r5 = ::cq_example_providers::borrowed_fields;
-                }
-                indexes {
-                    i0 = ::cq_example_providers::hash_relation;
-                    i1 = ::cq_example_providers::sorted_relation;
-                }
-                lowerings {
-                    r0 = ::cq_example_providers::rename;
-                    r1 = ::cq_example_providers::rename;
-                    r2 = ::cq_example_providers::indexed_join;
-                    r3 = ::cq_example_providers::rename;
-                    r4 = ::cq_example_providers::indexed_join;
-                    r5 = ::cq_example_providers::project;
-                }
-            }
-        }
-    };
-}
-use explicit_policy as choose_physical;
 mod wiring {
-    pub(crate) use super::choose_physical;
     pub(crate) use ::mini_linq::{
         access_to_set_loops as access, index_demands as choose_index_policy, realize_physical,
+    };
+    #[allow(unused_imports)]
+    pub(crate) use cq_example_providers::{
+        hash_distinct as distinct_state, hash_set_sink as set_sink,
     };
 }
 use wiring as mini_linq;

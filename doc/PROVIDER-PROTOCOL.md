@@ -152,17 +152,24 @@ The first external package, `cq-example-providers`, supplies:
 | `slice_rows!` | A borrowed unary slice `&[T]`. |
 | `hash_relation!` | A borrowed two-column `HashMap<K, Vec<V>>`. |
 | `sorted_relation!` | A borrowed two-column `BTreeMap<K, Vec<V>>`. |
+| `borrowed_fields!` | The selected output carrier, a tuple of borrowed logical fields. |
+
+The selected operator rules are exported by `mini-linq` and implemented in
+`cq-physical-lowering`. They consume the provider protocol but contain no
+concrete collection implementation:
+
+| Macro | Admitted rule |
+|---|---|
 | `rename!` | A direct Rename of a declared host input; asks the selected result provider to establish its representation. |
 | `indexed_join!` | NaturalJoin with an explicit IX use, an exact matching RHS index, and a stored or normalized Access-region LHS. |
 | `project!` | Terminal Project preserving source bindings and selecting only its output fields. |
-| `borrowed_fields!` | The selected output carrier, a tuple of borrowed logical fields. |
 
 The map index providers reuse their existing first physical column index. They
 translate that position through Rename into the result's logical heading and
 check it against the already recorded IX demand. They do not discover join
 columns, create another index, or fall back to scanning. Another indexed column,
 a composite/empty demand, or a mismatched concrete map representation rejects.
-The supplied package admits terminal Project but does not implement Unit,
+The supplied operator family admits terminal Project but does not implement Unit,
 intermediate Project, Select, Extend,
 Semijoin, reusable intermediate construction, zone pruning, or WCOJ.
 
@@ -211,3 +218,59 @@ external providers or all remaining compilation routes.
 The local two-output fixtures
 in `doc/ix-physical/` remain authored design expectations; the implemented entry
 consumes a complete module with one declared final output.
+
+## Distinct state and exact-set sinks
+
+Execution endpoints require explicit caller bindings, independently of input
+relation providers:
+
+```rust
+mod wiring {
+    pub use ::mini_linq::*;
+    pub use cq_example_providers::{
+        ordered_distinct as distinct_state,
+        ordered_set_sink as set_sink,
+    };
+}
+use wiring as mini_linq;
+```
+
+`Distinct` remains a semantic Pipeline operator. Its lowering emits:
+
+```rust
+let mut seen = mini_linq::distinct_state! { operator unique; new };
+// Inside the lazy filter; row is borrowed, then yielded unchanged if accepted:
+mini_linq::distinct_state! { operator unique; insert(seen, row) }
+```
+
+The `insert` result must be true exactly on the first occurrence of an equal
+value. The provider owns retained representation and copying. It must not consume
+the candidate, poll future input, or change value equality. `new` is deferred
+until the first iterator poll. An ordered set implementation still emits first
+occurrences in input order; it does not sort the stream.
+
+Set endpoints use `set_sink!` with `new`, `insert(state, value)`, and
+`finish(state)`. Insert consumes a value; finish consumes the state and returns
+an exact set of supplied values. This law authorizes folding terminal Distinct
+into the sink. A bag sink is not admissible. No collection type or Clone bound
+is imposed by the sink lowering. Hash and ordered examples choose HashSet and
+BTreeSet; callers can supply other lawful implementations.
+
+Every request begins `operator name;`. For Pipeline it is the Distinct result
+stream name; for direct Access set loops it is the output relation name. These
+names are local to an invocation. An alias selects one family for that scope;
+a caller-written routing macro can select different providers by operator name.
+Missing bindings fail macro resolution. Support and existence endpoints omit
+terminal distinct state entirely. Provider laws remain obligations; choosing a
+macro path does not mechanically prove equality or set semantics.
+
+| Supplied provider | Retained representation | Value requirements |
+|---|---|---|
+| `hash_distinct!` | HashSet of cloned values | Clone + Eq + Hash |
+| `ordered_distinct!` | BTreeSet of cloned values | Clone + Ord |
+| `hash_set_sink!` | HashSet of owned values | Eq + Hash |
+| `ordered_set_sink!` | BTreeSet of owned values | Ord |
+
+These requirements belong to those implementations. The integration tests also
+use an external distinct provider retaining only injective integer keys for
+non-Clone payloads, and a vector-backed sink returning a boxed custom result.

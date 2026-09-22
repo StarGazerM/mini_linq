@@ -15,11 +15,11 @@ physical {
         i1 = observed_sorted;
     }
     lowerings {
-        r0 = ::cq_example_providers::rename;
-        r1 = ::cq_example_providers::rename;
-        r2 = ::cq_example_providers::indexed_join;
-        r3 = ::cq_example_providers::rename;
-        r4 = ::cq_example_providers::indexed_join;
-        r5 = ::cq_example_providers::project;
+        r0 = ::mini_linq::rename;
+        r1 = ::mini_linq::rename;
+        r2 = ::mini_linq::indexed_join;
+        r3 = ::mini_linq::rename;
+        r4 = ::mini_linq::indexed_join;
+        r5 = ::mini_linq::project;
     }
 }

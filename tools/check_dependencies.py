@@ -28,6 +28,7 @@ FAMILIES = {name: {"cq-ir"} for name in (
     "cq-query-lowering", "cq-index-policy", "cq-physical-selection",
     "cq-physical-lowering", "cq-access-lowering", "cq-pipeline-lowering")}
 PROVIDERS = {"cq-example-providers": {"cq-ir"}}
+TEST_DEPENDENCIES = {"cq-example-providers": {"cq-physical-lowering"}}
 ALLOWED = FOUNDATIONS | FAMILIES | PROVIDERS | {"mini-linq": {"cq-ir", *FAMILIES}}
 FRONTEND = {
     "written-order": ("cq-query-lowering", "written-order"),
@@ -71,6 +72,7 @@ IMPLEMENTATIONS = {
 }
 MODULE_WIRING = {}
 CONSUMERS = {
+    "state_providers": ["pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists", "access-to-set-loops"],
     "physical_selection": ["index-demands", "physical-selection"],
     "physical_realization": ["index-demands", "physical-selection", "physical-realization", "access-to-set-loops"],
     "physical_variants": ["index-demands", "physical-selection", "physical-realization", "access-to-set-loops"],
@@ -295,7 +297,7 @@ def isolate(packages, only=()):
         if only and label not in only and name not in only: continue
         with tempfile.TemporaryDirectory(prefix=f"mini-linq-{label}-") as temporary:
             destination = Path(temporary)
-            selected = {name} | ALLOWED[name]
+            selected = {name} | ALLOWED[name] | TEST_DEPENDENCIES.get(name, set())
             write_workspace(destination, selected)
             for package in selected: copy_selected(destination, package, [feature] if package == name and feature else [])
             env = os.environ.copy(); env["CARGO_TARGET_DIR"] = str(ROOT / "target/component-isolation"); env["CARGO_TERM_COLOR"] = "never"
@@ -317,6 +319,23 @@ PHYSICAL = IX + ''' physical {
 ACCESS = 'answer(x) => ((x,)) :- R(x) => bind (x,) <- ([(1i32,), (2,)]);'
 PIPELINE = 'iter0 = scan (x,) in ([(1i32,), (1,), (2,)]) yield (x,); iter1 = project iter0 as (x,) yield ((x,)); iter2 = distinct iter1; return iter2;'
 
+
+STATE_BINDINGS = r"""
+macro_rules! distinct_state {
+    (operator $id:ident; new) => { ::std::collections::HashSet::new() };
+    (operator $id:ident; insert($state:expr, $row:expr)) => { $state.insert(Clone::clone($row)) };
+}
+macro_rules! set_sink {
+    (operator $id:ident; new) => { ::std::collections::HashSet::new() };
+    (operator $id:ident; insert($state:expr, $row:expr)) => {{ $state.insert($row); }};
+    (operator $id:ident; finish($state:expr)) => { $state };
+}
+#[allow(unused_imports)]
+pub(crate) use {distinct_state, set_sink};
+#[allow(unused_imports)]
+mod wiring { pub(crate) use super::{distinct_state, set_sink}; }
+use wiring as mini_linq;
+"""
 
 def frontend_source(feature):
     """Valid, small calls: boundary captures are not end-to-end acceptance."""
@@ -362,13 +381,13 @@ fn main() {{
 }}
 '''
     if feature == "access-to-set-loops":
-        return f'fn main() {{ assert_eq!(raw::{implementation}! {{ {ACCESS} }}, std::collections::HashSet::from([(1,), (2,)])); }}'
+        return STATE_BINDINGS + f'fn main() {{ assert_eq!(raw::{implementation}! {{ {ACCESS} }}, std::collections::HashSet::from([(1,), (2,)])); }}'
     if feature == "pipeline-exists":
         return f'fn main() {{ assert!(raw::{implementation}! {{ {PIPELINE} }}); }}'
     if feature == "pipeline-set":
-        return f'fn main() {{ assert_eq!(raw::{implementation}! {{ {PIPELINE} }}, std::collections::HashSet::from([(1,), (2,)])); }}'
+        return STATE_BINDINGS + f'fn main() {{ assert_eq!(raw::{implementation}! {{ {PIPELINE} }}, std::collections::HashSet::from([(1,), (2,)])); }}'
     expected = 'vec![(1,), (1,), (2,)]' if feature == "pipeline-support-iter" else 'vec![(1,), (2,)]'
-    return f'fn main() {{ assert_eq!(raw::{implementation}! {{ {PIPELINE} }}.collect::<Vec<_>>(), {expected}); }}'
+    return ('' if feature == 'pipeline-support-iter' else STATE_BINDINGS) + f'fn main() {{ assert_eq!(raw::{implementation}! {{ {PIPELINE} }}.collect::<Vec<_>>(), {expected}); }}'
 
 
 def all_feature_checks(only=()):

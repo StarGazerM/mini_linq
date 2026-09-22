@@ -149,6 +149,78 @@ pub fn resume_physical(input: TokenStream) -> TokenStream {
     })
 }
 
+/// Lower Rename using its selected representation.
+#[cfg(feature = "physical-realization")]
+#[proc_macro]
+pub fn rename(input: TokenStream) -> TokenStream {
+    cq_physical_lowering::rename::compile(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Lower NaturalJoin through exact Rows/Matches/Output operations.
+#[cfg(feature = "physical-realization")]
+#[proc_macro]
+pub fn indexed_join(input: TokenStream) -> TokenStream {
+    cq_physical_lowering::indexed_join::compile(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Lower terminal Project using its selected output representation.
+#[cfg(feature = "physical-realization")]
+#[proc_macro]
+pub fn project(input: TokenStream) -> TokenStream {
+    cq_physical_lowering::project::lower(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[doc(hidden)]
+#[cfg(feature = "physical-realization")]
+#[proc_macro]
+pub fn indexed_join_rows(input: TokenStream) -> TokenStream {
+    cq_physical_lowering::indexed_join::rows(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[doc(hidden)]
+#[cfg(feature = "physical-realization")]
+#[proc_macro]
+pub fn indexed_join_matches(input: TokenStream) -> TokenStream {
+    cq_physical_lowering::indexed_join::matches(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[doc(hidden)]
+#[cfg(feature = "physical-realization")]
+#[proc_macro]
+pub fn indexed_join_output(input: TokenStream) -> TokenStream {
+    cq_physical_lowering::indexed_join::output(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[doc(hidden)]
+#[cfg(feature = "physical-realization")]
+#[proc_macro]
+pub fn project_rows(input: TokenStream) -> TokenStream {
+    cq_physical_lowering::project::rows(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[doc(hidden)]
+#[cfg(feature = "physical-realization")]
+#[proc_macro]
+pub fn project_output(input: TokenStream) -> TokenStream {
+    cq_physical_lowering::project::output(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// Execute an Access plan with eager nested loops and an exact-set sink.
 /// This execution implementation does not pass through IteratorPipeline.
 #[cfg(feature = "access-to-set-loops")]
@@ -181,7 +253,7 @@ pub fn access_to_distinct_iter(input: TokenStream) -> TokenStream {
     )
 }
 
-/// Consume an Access plan into an exact `HashSet` through the existing access_to_distinct_iter
+/// Consume an Access plan into the selected exact-set sink through access_to_distinct_iter
 /// compiler and the independently selectable `pipeline_to_set` continuation.
 #[cfg(feature = "access-to-pipeline")]
 #[proc_macro]
@@ -193,8 +265,18 @@ pub fn access_to_set(input: TokenStream) -> TokenStream {
     )
 }
 
-/// Consume a named pipeline into its exact `HashSet`, folding terminal
+/// Consume a named pipeline into its selected exact-set sink, folding terminal
 /// distinctness into the set sink. The source language is IteratorPipeline.
+/// Requires an explicit `mini_linq::set_sink!` binding satisfying the exact-set law.
+/// An otherwise valid program without that binding fails:
+///
+/// ```compile_fail
+/// let _ = mini_linq::pipeline_to_set! {
+///     a = scan x in ([1, 1]) yield (x,);
+///     b = distinct a;
+///     return b;
+/// };
+/// ```
 #[cfg(feature = "pipeline-set")]
 #[proc_macro]
 pub fn pipeline_to_set(input: TokenStream) -> TokenStream {
@@ -204,8 +286,16 @@ pub fn pipeline_to_set(input: TokenStream) -> TokenStream {
 /// Lower an explicit named physical plan to its actual ordinary-Rust AST.
 ///
 /// The compiler writes one standard iterator-adapter local per named operator.
-/// This proc-macro performs no further code generation: quoting the returned
-/// [`syn::Expr`] is its direct `ToTokens` representation.
+/// The expression contains caller-resolved `mini_linq::distinct_state!` requests.
+/// The selected provider expands state operations; there is no default.
+///
+/// ```compile_fail
+/// let _ = mini_linq::pipeline_to_distinct_iter! {
+///     a = scan x in ([1, 1]) yield (x,);
+///     b = distinct a;
+///     return b;
+/// };
+/// ```
 #[cfg(feature = "pipeline-distinct-iter")]
 #[proc_macro]
 pub fn pipeline_to_distinct_iter(input: TokenStream) -> TokenStream {
@@ -247,3 +337,9 @@ pub fn access_to_exists(input: TokenStream) -> TokenStream {
 pub fn pipeline_to_exists(input: TokenStream) -> TokenStream {
     entry::stage(input, None, cq_pipeline_lowering::exists::compile)
 }
+
+#[cfg(test)]
+mod native_input_tests;
+
+#[cfg(test)]
+mod relation_input_tests;

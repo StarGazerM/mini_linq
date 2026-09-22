@@ -1,4 +1,6 @@
 //! Executable composition through IX, Physical, and provider-owned Access.
+//! Requires general physical selection. Do not supply a table of query-local
+//! relation, index, or operator names to make this acceptance test pass.
 #![recursion_limit = "512"]
 
 #[cfg(test)]
@@ -11,40 +13,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct Value(i32);
 
-macro_rules! explicit_policy {
-    ($($ix:tt)*) => {
-        ::mini_linq::given_physical_bindings! {
-            $($ix)*
-            physical {
-                relations {
-                    L = ::cq_example_providers::slice_rows;
-                    R = ::cq_example_providers::hash_relation;
-                    S = ::cq_example_providers::sorted_relation;
-                    l = ::cq_example_providers::slice_rows;
-                    r = ::cq_example_providers::hash_relation;
-                    s = ::cq_example_providers::sorted_relation;
-                    j0 = ::cq_example_providers::borrowed_fields;
-                    j1 = ::cq_example_providers::borrowed_fields;
-                }
-                indexes {
-                    i0 = ::cq_example_providers::hash_relation;
-                    i1 = ::cq_example_providers::sorted_relation;
-                }
-                lowerings {
-                    l = ::cq_example_providers::rename;
-                    r = ::cq_example_providers::rename;
-                    s = ::cq_example_providers::rename;
-                    j0 = ::cq_example_providers::indexed_join;
-                    j1 = ::cq_example_providers::indexed_join;
-                }
-            }
-        }
-    };
-}
-use explicit_policy as choose_physical;
 mod wiring {
-    pub(crate) use super::choose_physical;
     pub(crate) use ::mini_linq::{access_to_set_loops as access, realize_physical};
+    #[allow(unused_imports)]
+    pub(crate) use cq_example_providers::{
+        hash_distinct as distinct_state, hash_set_sink as set_sink,
+    };
 }
 use wiring as mini_linq;
 

@@ -41,7 +41,7 @@ fn support_stream_omits_only_the_returned_terminal_distinct() {
 }
 
 #[test]
-fn set_sink_contract_checks_the_terminal_stream_and_collection_type() {
+fn set_sink_contract_checks_the_terminal_stream_and_provider_requests() {
     let source: iterator_pipeline::Pipeline = syn::parse_quote! {
         iter0 = scan (x,) in (rows) yield (x,);
         iter1 = filter iter0 as (x,) if (keep(x));
@@ -66,8 +66,11 @@ fn set_sink_contract_checks_the_terminal_stream_and_collection_type() {
             iter1,
             move |#[allow(unused_variables)] (x,)| x % 2,
         );
-        let iter3: ::std::collections::HashSet<_> = ::core::iter::Iterator::collect(iter2);
-        iter3
+        let mut iter3 = mini_linq::set_sink! { operator iter3; new };
+        for __cq_row in iter2 {
+            mini_linq::set_sink! { operator iter3; insert(iter3, __cq_row) };
+        }
+        mini_linq::set_sink! { operator iter3; finish(iter3) }
     }};
     assert_eq!(actual, expected);
     assert!(collect_set::check(&source, &actual));

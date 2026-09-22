@@ -9,6 +9,8 @@
 //! distinct names. RA itself permits a collision; this physical domain rejects
 //! it rather than conflating two different representation assignments.
 
+pub mod lookup;
+
 use std::collections::BTreeSet;
 
 use syn::{Ident, Path, Token, token};

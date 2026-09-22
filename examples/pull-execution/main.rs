@@ -3,6 +3,11 @@
 
 #![allow(clippy::clone_on_copy)] // Preserve the shape required by non-Copy schemas.
 
+mod execution {
+    pub use ::mini_linq::*;
+    pub use cq_example_providers::hash_distinct as distinct_state;
+}
+use execution as mini_linq;
 use mini_linq::access_to_distinct_iter;
 
 struct TriangleProgram;

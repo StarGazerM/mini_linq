@@ -1,4 +1,6 @@
 //! Final Project from selected stored input, as a separate query trace target.
+//! Requires general physical selection. Do not supply a table of query-local
+//! relation, index, or operator names to make this acceptance test pass.
 #![recursion_limit = "512"]
 
 use std::collections::{HashMap, HashSet};
@@ -6,30 +8,13 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 struct Value(i32);
 
-macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::given_physical_bindings! {
-                $($ix)*
-                physical {
-                    relations {
-                        R = ::cq_example_providers::hash_relation;
-                        r0 = ::cq_example_providers::hash_relation;
-                        r1 = ::cq_example_providers::borrowed_fields;
-                    }
-                    indexes {}
-                    lowerings {
-                        r0 = ::cq_example_providers::rename;
-                        r1 = ::cq_example_providers::project;
-                    }
-                }
-            }
-        };
-    }
-pub(crate) use policy as choose_physical;
 mod wiring {
-    pub(crate) use super::choose_physical;
     pub(crate) use ::mini_linq::{
         access_to_set_loops as access, index_demands as choose_index_policy, realize_physical,
+    };
+    #[allow(unused_imports)]
+    pub(crate) use cq_example_providers::{
+        hash_distinct as distinct_state, hash_set_sink as set_sink,
     };
 }
 use wiring as mini_linq;

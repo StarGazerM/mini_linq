@@ -48,10 +48,10 @@ fn aggregate_style_identifier_items_remain_an_explicit_join_boundary() {
                     ),
                 );
                 let iter3 = {
-                    let mut seen = ::std::collections::HashSet::new();
+                    let mut seen = mini_linq::distinct_state! { operator iter3; new };
                     ::core::iter::Iterator::filter(
                         iter2,
-                        move |row| seen.insert(::core::clone::Clone::clone(row)),
+                        move |row| mini_linq::distinct_state! { operator iter3; insert(seen, row) },
                     )
                 };
                 iter3

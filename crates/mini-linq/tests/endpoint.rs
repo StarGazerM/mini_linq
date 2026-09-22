@@ -1,5 +1,12 @@
 #![allow(clippy::clone_on_copy)] // Preserve the shape required by non-Copy schemas.
 
+#[allow(unused_imports)]
+mod execution {
+    pub use ::mini_linq::*;
+    pub use cq_example_providers::{hash_distinct as distinct_state, hash_set_sink as set_sink};
+}
+use execution as mini_linq;
+
 use std::cell::Cell;
 
 use mini_linq::{access_to_distinct_iter, pipeline_to_distinct_iter};
