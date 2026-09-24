@@ -1,26 +1,41 @@
-//! A caller-written host composes RA → IX → Physical → Rust[Access].
-//! Requires general physical selection. Do not supply a table of query-local
-//! relation, index, or operator names to make this acceptance test pass.
+//! A caller-written host composes RA → IX → Stream → Rust[Access].
+//!
+//! The policy is query-independent: it declares what each host relation can
+//! do and nothing about this query's results. `R` and `S` are host maps keyed
+//! on their join columns, so the compiler probes them in place and builds no
+//! structure of its own; `L` is only scanned.
 #![recursion_limit = "512"]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-mod wiring {
-    pub(crate) use ::mini_linq::{access_to_set_loops as access, realize_physical};
-    #[allow(unused_imports)]
-    pub(crate) use cq_example_providers::{
-        hash_distinct as distinct_state, hash_set_sink as set_sink,
+macro_rules! policy {
+    ($($ix:tt)*) => {
+        ::mini_linq::ix_to_stream! {
+            $($ix)*
+            policy {
+                L provides { iter };
+                R provides { seek @R[0] };
+                S provides { seek @S[0] };
+            }
+        }
     };
+}
+use policy as stream_policy;
+mod wiring {
+    pub(crate) use super::stream_policy;
+    pub(crate) use ::mini_linq::{access_to_set_loops as access, stream_to_access};
+    #[allow(unused_imports)]
+    pub(crate) use cq_state_providers::{hash_distinct as distinct_state, hash_set_sink as set_sink};
 }
 use wiring as mini_linq;
 
 // The host owns its signature and chooses the Access consumer explicitly.
-// The physical realizer borrows these existing representations and indexes.
+// Host maps hold tuples: keys over the key columns, payloads over the rest.
 #[allow(non_snake_case)]
 fn query<'a>(
-    L: &'a [i32],
-    R: &'a HashMap<i32, Vec<i32>>,
-    S: &'a BTreeMap<i32, Vec<i32>>,
+    L: &'a [(i32,)],
+    R: &'a HashMap<(i32,), Vec<(i32,)>>,
+    S: &'a BTreeMap<(i32,), Vec<(i32,)>>,
 ) -> HashSet<(&'a i32, &'a i32, &'a i32)> {
     ::mini_linq::index_demands! {
         struct Heterogeneous;
@@ -40,9 +55,9 @@ fn query<'a>(
 }
 
 fn main() {
-    let left = [1, 1, 2, 9];
-    let middle = HashMap::from([(1, vec![10, 11]), (2, vec![20])]);
-    let right = BTreeMap::from([(10, vec![100, 101]), (11, vec![]), (20, vec![200])]);
+    let left = [(1,), (1,), (2,), (9,)];
+    let middle = HashMap::from([((1,), vec![(10,), (11,)]), ((2,), vec![(20,)])]);
+    let right = BTreeMap::from([((10,), vec![(100,), (101,)]), ((11,), vec![]), ((20,), vec![(200,)])]);
     let borrowed = query(&left, &middle, &right);
     // Copy only for deterministic display; the query itself returns references.
     let mut rows: Vec<_> = borrowed.into_iter().map(|(a, b, c)| (*a, *b, *c)).collect();

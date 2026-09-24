@@ -53,7 +53,7 @@ fn hash_chain_builds_two_indexes_and_one_flat_region() {
     let statements: Vec<String> = realized.statements.iter().map(text).collect();
     assert_eq!(statements.len(), 2);
     let expected_r: syn::Stmt = syn::parse_quote! {
-        let __cq_r_seek_0 = <::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
+        let __cq_r_seek_0 = &<::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
             ::core::iter::Iterator::map(
                 mini_linq::access_to_support_iter! { r(a, b) => ((a, b,)) :- R(a, b) => bind (a, b,) <- (R.iter()); },
                 |(a, b,)| ((a,), (b,))

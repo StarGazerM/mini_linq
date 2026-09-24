@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 mini-linq = { path = "../../crates/mini-linq", default-features = false, features = [
-    "index-demands", "physical-selection", "physical-realization", "access-to-set-loops",
+    "index-demands", "stream-lowering", "stream-realization", "access-to-set-loops",
 ] }
-cq-example-providers = { path = "../../crates/cq-example-providers" }
+cq-state-providers = { path = "../../crates/cq-state-providers" }
+cq-storage = { path = "../../crates/cq-storage" }

@@ -21,23 +21,15 @@ pub trait OrderedCursor: Iterator<Item = (Self::Key, Self::Value)> {
 }
 
 /// A representation whose pairs can be read in key order from any bound.
+///
+/// Implementations are on borrowed collections so a cursor lives as long as
+/// the borrow it was created from, not as long as the handle it was called on.
 pub trait OrderedRead {
     type Cursor<'a>: OrderedCursor
     where
         Self: 'a;
 
     fn ordered(&self) -> Self::Cursor<'_>;
-}
-
-impl<T: OrderedRead> OrderedRead for &T {
-    type Cursor<'a>
-        = T::Cursor<'a>
-    where
-        Self: 'a;
-
-    fn ordered(&self) -> Self::Cursor<'_> {
-        T::ordered(self)
-    }
 }
 
 /// Ordered cursor over `BTreeMap<K, Vec<V>>`: every value under a key shares it.
@@ -77,11 +69,11 @@ impl<'a, K: Ord, V> OrderedCursor for GroupedCursor<'a, K, V> {
     }
 }
 
-impl<K: Ord, V> OrderedRead for BTreeMap<K, Vec<V>> {
-    type Cursor<'a>
+impl<'a, K: Ord, V> OrderedRead for &'a BTreeMap<K, Vec<V>> {
+    type Cursor<'b>
         = GroupedCursor<'a, K, V>
     where
-        Self: 'a;
+        Self: 'b;
 
     fn ordered(&self) -> Self::Cursor<'_> {
         GroupedCursor {
@@ -115,11 +107,11 @@ impl<'a, K: Ord> OrderedCursor for KeyCursor<'a, K> {
     }
 }
 
-impl<K: Ord> OrderedRead for BTreeSet<K> {
-    type Cursor<'a>
+impl<'a, K: Ord> OrderedRead for &'a BTreeSet<K> {
+    type Cursor<'b>
         = KeyCursor<'a, K>
     where
-        Self: 'a;
+        Self: 'b;
 
     fn ordered(&self) -> Self::Cursor<'_> {
         KeyCursor {
@@ -251,7 +243,7 @@ mod tests {
 
     #[test]
     fn ordered_cursor_enumerates_in_key_order_and_seek_discards_below_bound() {
-        let map = grouped(&[(3, 'c'), (1, 'a'), (1, 'b'), (5, 'e')]);
+        let map = &grouped(&[(3, 'c'), (1, 'a'), (1, 'b'), (5, 'e')]);
         let pairs: Vec<_> = map.ordered().map(|(k, v)| (*k, *v)).collect();
         assert_eq!(pairs, [(1, 'a'), (1, 'b'), (3, 'c'), (5, 'e')]);
         for bound in 0..=6 {
@@ -269,7 +261,7 @@ mod tests {
         cursor.seek(&&4);
         assert_eq!(cursor.next().map(|(k, v)| (*k, *v)), Some((5, 'e')));
 
-        let set = BTreeSet::from([2, 4, 6]);
+        let set = &BTreeSet::from([2, 4, 6]);
         let mut keys = set.ordered();
         keys.seek(&&3);
         assert_eq!(keys.map(|(k, ())| *k).collect::<Vec<_>>(), [4, 6]);
@@ -297,7 +289,7 @@ mod tests {
                             .map(move |&(_, b)| (k, a, b))
                     })
                     .collect();
-                let (l, r) = (grouped(&left), grouped(&right));
+                let (l, r) = (&grouped(&left), &grouped(&right));
                 let actual: Vec<_> = merge(l.ordered(), r.ordered())
                     .map(|(k, a, b)| (*k, *a, *b))
                     .collect();
@@ -308,8 +300,8 @@ mod tests {
 
     #[test]
     fn merge_over_key_sets_intersects() {
-        let left = BTreeSet::from([1, 2, 3, 5, 8]);
-        let right = BTreeSet::from([2, 3, 4, 8, 9]);
+        let left = &BTreeSet::from([1, 2, 3, 5, 8]);
+        let right = &BTreeSet::from([2, 3, 4, 8, 9]);
         let keys: Vec<_> = merge(left.ordered(), right.ordered())
             .map(|(k, (), ())| *k)
             .collect();

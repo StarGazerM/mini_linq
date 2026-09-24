@@ -8,6 +8,10 @@
 //! is chosen here from the capabilities alone, and the host's own types are
 //! fixed by the host through monomorphization.
 //!
+//! Every structure is bound by reference for the enclosing block, so pull
+//! endpoints capture `&T` and the region is consumed where it is built; a
+//! lazy iterator escaping the block must be over host-owned structures.
+//!
 //! Layout conventions this pass owns:
 //! - Host values hold tuples in declared column order: rows `(c0, c1, ..)`,
 //!   map keys `(k, ..)` over the key columns in declared order, payloads
@@ -258,7 +262,7 @@ impl Realizer<'_> {
         let source: TokenStream = if needs_rows {
             let rows = format_ident!("__cq_{}_rows", name);
             statements.push(syn::parse_quote! {
-                let #rows: ::std::vec::Vec<_> = ::core::iter::Iterator::collect(#iterator);
+                let #rows: &::std::vec::Vec<_> = &::core::iter::Iterator::collect(#iterator);
             });
             built.rows = Some(rows.clone());
             quote!(::core::iter::Iterator::copied(#rows.iter()))
@@ -289,7 +293,7 @@ impl Realizer<'_> {
                 stream::Operation::Seek(_) => {
                     let structure = format_ident!("__cq_{}_seek_{}", name, suffix);
                     statements.push(syn::parse_quote! {
-                        let #structure = <::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
+                        let #structure = &<::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
                             ::core::iter::Iterator::map(#source, |#row| ((#(#key,)*), (#(#payload,)*)))
                         );
                     });
@@ -298,7 +302,7 @@ impl Realizer<'_> {
                 stream::Operation::Contains(_) => {
                     let structure = format_ident!("__cq_{}_contains_{}", name, suffix);
                     statements.push(syn::parse_quote! {
-                        let #structure: ::std::collections::HashSet<_> = ::core::iter::Iterator::collect(
+                        let #structure: &::std::collections::HashSet<_> = &::core::iter::Iterator::collect(
                             ::core::iter::Iterator::map(#source, |#row| (#(#key,)*))
                         );
                     });
@@ -307,7 +311,7 @@ impl Realizer<'_> {
                 stream::Operation::Ordered(_) => {
                     let structure = format_ident!("__cq_{}_ordered_{}", name, suffix);
                     statements.push(syn::parse_quote! {
-                        let #structure = {
+                        let #structure = &{
                             let mut __cq_map = ::std::collections::BTreeMap::<_, ::std::vec::Vec<_>>::new();
                             for #row in #source {
                                 __cq_map.entry((#(#key,)*)).or_default().push((#(#payload,)*));

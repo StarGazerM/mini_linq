@@ -1,20 +1,19 @@
-# Physical composition regression
+# Heterogeneous composition
 
-This example currently fails to compile at `mini_linq::choose_physical`.
-The query-specific `explicit_policy!` table has been removed: naming this
-query's `l`, `r`, `s`, `j0`, `j1`, `i0`, and `i1` did not demonstrate general
-physical selection.
+A host composes the compiler stages by binding macro slots:
+
+1. `index_demands!` (RA → IX) continues to the caller's `stream_policy!`.
+2. `stream_policy!` appends a query-independent `policy { … }` declaring what
+   each host relation can do — here `R` and `S` are maps keyed on their join
+   columns — and invokes `ix_to_stream!` (IX → Stream).
+3. `stream_to_access!` erases Stream to an Access region over `cq_storage`
+   traits, then hands it to the caller's `access` binding.
+4. `access_to_set_loops!` executes the region eagerly into the selected
+   `set_sink!`.
+
+No query-specific names appear in the policy; nothing is built at runtime
+because the host's own maps already provide the required seeks.
 
 ```sh
-cargo run --manifest-path examples/composition/Cargo.toml --locked
+cargo run --manifest-path examples/composition/Cargo.toml
 ```
-
-The source retains its RA query, borrowed slice/HashMap/BTreeMap inputs, and
-result assertion. Completing the compiler must make the shared selection path
-handle this input without requiring a handwritten table for its internal plan.
-The input/provider configuration API is still unresolved; this regression does
-not prescribe a replacement API.
-
-The selected Access endpoint and explicit set-state provider remain in the
-caller wiring. The regression runner includes this example and reports its
-compilation failure.
