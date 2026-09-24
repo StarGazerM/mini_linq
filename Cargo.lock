@@ -102,6 +102,18 @@ name = "cq-storage"
 version = "0.1.0"
 
 [[package]]
+name = "cq-stream-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-index-policy",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
 name = "cq-workloads"
 version = "0.1.0"
 dependencies = [
