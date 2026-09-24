@@ -1,8 +1,8 @@
 //! Procedural entry points at the compiler's explicit language boundaries.
 //!
 //! CQ planning produces RA; IX records index demands and uses; Structures
-//! binds every demand to a runtime catalogue entry under a caller-supplied,
-//! query-independent policy; Stream realizes every result as a typed stream
+//! binds every demand to a Rust type implementing the runtime traits, under
+//! a caller-supplied, query-independent policy and per-relation advice; Stream realizes every result as a typed stream
 //! program directed by those structures; realization erases Stream to Access
 //! over the runtime's traits. Caller import aliases bind policy and execution slots.
 //! No global storage default or fallback whole-query backend is supplied.
@@ -112,10 +112,11 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
 
 /// Bind every IX demand to a runtime structure under the appended policy.
 ///
-/// Input is `IX policy { … }`. Hosts are declared by the policy; joins get
-/// `hash` (or `ordered` under `join = merge`, on both operands), semijoins
-/// `key_set`, unless a host already serves the demand through the rename.
-/// The policy is re-appended for [`structures_to_stream!`].
+/// Input is `IX policy { … }`. Hosts are declared by the policy. Each demand
+/// no host serves gets a structure: the type a relation's `#[index(…)]`
+/// advice names, else `cq_storage::HashIndex` for joins, `HashSet` for
+/// semijoins, `BTreeMap` (both operands) under `join = merge`. The policy is
+/// re-appended for [`structures_to_stream!`].
 #[cfg(feature = "structure-selection")]
 #[proc_macro]
 pub fn select_structures(input: TokenStream) -> TokenStream {

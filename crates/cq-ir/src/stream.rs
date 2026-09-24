@@ -479,7 +479,7 @@ impl<'a> Checker<'a> {
             if !seen.insert(operation.clone()) {
                 return error(provides, "duplicate capability");
             }
-            if *operation != Operation::Iter && !chosen.iter().any(|c| c.satisfies(operation)) {
+            if *operation != Operation::Iter && !chosen.contains(operation) {
                 return error(
                     provides,
                     format!("no structure chosen on `{name}` provides {operation:?}"),
@@ -746,7 +746,7 @@ impl<'a> Checker<'a> {
             let required = Operation::Contains(columns.clone());
             let discharged = self.analysis.required[&consumer]
                 .get(&relation)
-                .is_some_and(|ops| ops.iter().any(|op| op.satisfies(&required)));
+                .is_some_and(|ops| ops.iter().any(|op| op.discharges(&required)));
             if !discharged {
                 return error(
                     index_use,
@@ -866,7 +866,7 @@ impl Scope<'_, '_> {
             }
             _ => self.checker.analysis.provided[&name].clone(),
         };
-        if !provided.iter().any(|p| p.satisfies(&operation)) {
+        if !provided.contains(&operation) {
             return error(relation, format!("`{name}` does not provide {operation:?}"));
         }
         self.reads.push(name.clone());

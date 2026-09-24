@@ -54,7 +54,7 @@ fn hash_chain_builds_two_indexes_and_one_flat_region() {
     let statements: Vec<String> = realized.statements.iter().map(text).collect();
     assert_eq!(statements.len(), 2);
     let expected_r: syn::Stmt = syn::parse_quote! {
-        let __cq_r_hash_0 = &<::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
+        let __cq_r_on_0 = &<::cq_storage::HashIndex<_, _> as ::cq_storage::Build<_>>::build(
             ::core::iter::Iterator::map(
                 mini_linq::access_to_support_iter! { r(a, b) => ((a, b,)) :- R(a, b) => bind (a, b,) <- (R.iter()); },
                 |(a, b,)| ((a,), (b,))
@@ -65,8 +65,8 @@ fn hash_chain_builds_two_indexes_and_one_flat_region() {
     let expected: cq_ir::rust_access_plan::Plan = syn::parse_quote! {
         answer(a, c) => ((a, c,)) :-
             L(a) => bind (a,) <- (L.iter()),
-            r(a, b) => bind (b,) <- (::cq_storage::IndexRead::lookup(&__cq_r_hash_0, &(a,))),
-            s(b, c) => bind (c,) <- (::cq_storage::IndexRead::lookup(&__cq_s_hash_0, &(b,)));
+            r(a, b) => bind (b,) <- (::cq_storage::IndexRead::lookup(&__cq_r_on_0, &(a,))),
+            s(b, c) => bind (c,) <- (::cq_storage::IndexRead::lookup(&__cq_s_on_0, &(b,)));
     };
     assert_eq!(text(&realized.access), text(&expected));
 }
@@ -120,12 +120,7 @@ fn merge_policy_realizes_co_iteration_over_built_ordered_maps() {
         .collect();
     assert_eq!(
         names,
-        [
-            "__cq_l_ordered_0",
-            "__cq_r_ordered_0",
-            "__cq_s_ordered_0",
-            "__cq_j0_ordered_1"
-        ]
+        ["__cq_l_on_0", "__cq_r_on_0", "__cq_s_on_0", "__cq_j0_on_1"]
     );
     let access = text(&realized.access);
     assert!(access.contains(":: cq_storage :: merge ("), "{access}");

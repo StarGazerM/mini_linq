@@ -67,13 +67,15 @@ pub struct ColumnDecl {
 ///
 /// CQ atom arguments remain positional against this declaration order.
 ///
-/// An `#[index(kind)]` attribute is advice for structure selection: whichever
-/// structures a later pass builds over this relation use catalogue entry
-/// `kind`. It is not part of the query's meaning and names no columns — which
-/// columns get indexed is a planner decision the query cannot see.
+/// An `#[index(…)]` attribute is advice for structure selection: whichever
+/// structures a later pass builds over this relation use the Rust type it
+/// names, with the operations it claims. It is not part of the query's
+/// meaning and names no columns — which columns get indexed is a planner
+/// decision the query cannot see. CQ checks only that the attribute is a
+/// well-formed `index(…)` list; its argument belongs to the pass that reads it.
 ///
 /// ```text
-/// RelationDecl ::= ["#" "[" "index" "(" Ident ")" "]"]
+/// RelationDecl ::= ["#" "[" "index" "(" … ")" "]"]
 ///                  "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -97,25 +99,26 @@ impl RelationDecl {
         self.columns.len()
     }
 
-    /// The catalogue kind advised for structures built over this relation.
-    /// Shape is the CQ contract's concern; the kind's existence is checked by
-    /// the pass that consults it.
-    pub fn index_advice(&self) -> syn::Result<Option<Ident>> {
+    /// The structure advice attached to this relation, if any. Shape is the
+    /// CQ contract's concern; the argument is read by the pass that consults
+    /// it.
+    pub fn index_advice(&self) -> syn::Result<Option<&syn::Attribute>> {
         let mut advice = None;
         for attr in &self.attrs {
             if !attr.path().is_ident("index") {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "relation declarations accept only `#[index(kind)]`",
+                    "relation declarations accept only `#[index(…)]`",
                 ));
             }
+            attr.meta.require_list()?;
             if advice.is_some() {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    format!("relation `{}` advises an index kind twice", self.name),
+                    format!("relation `{}` advises an index twice", self.name),
                 ));
             }
-            advice = Some(attr.parse_args::<Ident>()?);
+            advice = Some(attr);
         }
         Ok(advice)
     }

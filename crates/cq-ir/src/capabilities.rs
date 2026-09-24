@@ -2,7 +2,10 @@
 //!
 //! An operation is a claim with a law against the relation's abstraction
 //! function: `seek @r[C](k) = σ_{C=k}`, `contains` its nonemptiness,
-//! `ordered` a key-ordered `seek`, `iter` enumeration of the support.
+//! `ordered` enumeration in key order from any bound, `iter` enumeration of
+//! the support. Each is one runtime trait (`IndexRead`, `ExactMembership`,
+//! `OrderedRead`), so claims are exact: a representation provides an
+//! operation iff it implements that trait, and no claim implies another.
 
 use syn::{Ident, Token, token};
 
@@ -71,7 +74,47 @@ impl Columns {
     }
 }
 
-/// A required or provided cursor operation, ordered by strength.
+/// `provides { seek, contains }`: the operations a built structure claims on
+/// its own key columns. Bare names, since the key is the entry's.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Claims {
+    pub provides_token: kw::provides,
+    #[syn(braced)]
+    pub brace: token::Brace,
+    #[syn(in = brace)]
+    #[parse(CommaList::parse_terminated)]
+    pub claims: CommaList<Claim>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum Claim {
+    #[parse(peek = kw::seek)]
+    Seek(kw::seek),
+    #[parse(peek = kw::contains)]
+    Contains(kw::contains),
+    #[parse(peek = kw::ordered)]
+    Ordered(kw::ordered),
+}
+
+impl Claim {
+    pub fn name(self) -> &'static str {
+        match self {
+            Claim::Seek(_) => "seek",
+            Claim::Contains(_) => "contains",
+            Claim::Ordered(_) => "ordered",
+        }
+    }
+
+    pub fn operation(self, columns: Vec<usize>) -> Operation {
+        match self {
+            Claim::Seek(_) => Operation::Seek(columns),
+            Claim::Contains(_) => Operation::Contains(columns),
+            Claim::Ordered(_) => Operation::Ordered(columns),
+        }
+    }
+}
+
+/// A required or provided cursor operation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Operation {
     Iter,
@@ -81,16 +124,19 @@ pub enum Operation {
 }
 
 impl Operation {
-    /// `ordered ⊒ seek ⊒ contains` on the same columns; `iter` is separate.
-    pub fn satisfies(&self, required: &Operation) -> bool {
+    /// Whether performing this access proves the demand `required`: an exact
+    /// `seek` or an `ordered` seek on the same columns witnesses
+    /// membership. This is about accesses, not claims — a structure
+    /// provides exactly what it claims.
+    pub fn discharges(&self, required: &Operation) -> bool {
         match (self, required) {
-            (Operation::Iter, Operation::Iter) => true,
             (
-                Operation::Ordered(p),
-                Operation::Ordered(r) | Operation::Seek(r) | Operation::Contains(r),
+                Operation::Ordered(p) | Operation::Seek(p) | Operation::Contains(p),
+                Operation::Contains(r),
             )
-            | (Operation::Seek(p), Operation::Seek(r) | Operation::Contains(r))
-            | (Operation::Contains(p), Operation::Contains(r)) => p == r,
+            | (Operation::Ordered(p) | Operation::Seek(p), Operation::Seek(r)) => p == r,
+            (Operation::Ordered(p), Operation::Ordered(r)) => p == r,
+            (Operation::Iter, Operation::Iter) => true,
             _ => false,
         }
     }

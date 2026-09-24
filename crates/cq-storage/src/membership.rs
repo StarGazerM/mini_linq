@@ -1,7 +1,7 @@
 //! Exact immutable key lookup, distinct from conservative summaries.
 
 use std::borrow::Borrow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::hash::{BuildHasher, Hash};
 
 /// Exact membership in the collection's represented key set.
@@ -34,6 +34,17 @@ where
 {
     fn contains(&self, key: &Q) -> bool {
         BTreeSet::contains(self, key)
+    }
+}
+
+/// A grouped ordered map represents the key set of its groups.
+impl<K, Q: ?Sized, V> ExactMembership<Q> for BTreeMap<K, V>
+where
+    K: Borrow<Q> + Ord,
+    Q: Ord,
+{
+    fn contains(&self, key: &Q) -> bool {
+        BTreeMap::contains_key(self, key)
     }
 }
 

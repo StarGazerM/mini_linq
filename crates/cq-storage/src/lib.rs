@@ -25,7 +25,9 @@
 //!   `α = α(S)`, `empty` has `α = ∅`, `insert(c)` adds exactly `row(c)`.
 //! - `α(index) = bag of (key, item)`; `build(I)` has `α = bag(I)` and
 //!   `lookup(k)` enumerates exactly the items paired with `k`, with
-//!   multiplicity and in source order.
+//!   multiplicity and in source order. [`Build`] is the one construction
+//!   protocol compiled programs use; a user type implementing it plus the
+//!   access traits it claims is a first-class index structure.
 //! - `α(membership) = key set`; `contains(k) ⇔ k ∈ α`.
 //! - `α(replay) = the source sequence`; every cursor enumerates it.
 //! - A range summary is internal to a representation's `next`: `may_match`
@@ -47,7 +49,7 @@ mod summary;
 pub use algorithms::{pruned_rows, selected_rows};
 pub use block_access::{BlockDescriptor, BlockRead, BuildBlocks, CoordinateBounds};
 pub use blocks::{Block, BlockStore};
-pub use hash_index::{BucketCursor, BuildIndex, HashIndex, IndexRead};
+pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
 pub use mask::BlockMask;
 pub use membership::ExactMembership;
 pub use metrics::{Counters, Work};

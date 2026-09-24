@@ -55,7 +55,7 @@ pub fn compile(source: &structures::Module, policy: &Policy) -> syn::Result<stre
             .map(Vec::as_slice)
             .unwrap_or(&[])
     };
-    let serves = |name: &str, op: &Operation| provided(name).iter().any(|p| p.satisfies(op));
+    let serves = |name: &str, op: &Operation| provided(name).contains(op);
 
     let mut results: BTreeMap<String, Result_> = plan
         .definitions
@@ -227,13 +227,11 @@ fn mode(result: &Result_) -> TokenStream {
         return quote!(pipe);
     }
     let name = ident(&result.name);
-    // Keep only the strongest operation per column set: `ordered ⊒ seek ⊒ contains`.
+    // Exactly the operations readers perform, each claimed by a structure.
     let mut provided = BTreeSet::new();
     for (_, operation) in &result.needs {
         provided.insert(operation.clone());
     }
-    let all: Vec<Operation> = provided.iter().cloned().collect();
-    provided.retain(|op| !all.iter().any(|other| other != op && other.satisfies(op)));
     let capabilities = provided.iter().map(|op| match op {
         Operation::Iter => quote!(iter),
         Operation::Contains(c) => {

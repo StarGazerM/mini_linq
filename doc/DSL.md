@@ -64,13 +64,19 @@ the query head supplies result types and is not an input. Variable-only heads
 infer types from input/typed bindings; computed heads require a declared result
 schema. There is no fact-insertion syntax.
 
-`#[index(kind)]` on a declaration is storage advice, not meaning: the query
-denotes the same set with or without it. It names the runtime catalogue entry
-(`hash`, `key_set`, `ordered`) that structure selection uses for whatever it
-builds over that relation. It names no columns — which columns are indexed is
-a planner decision the query cannot see — and it is never a fallback: a kind
-that cannot serve a demand (a `key_set` where a join must `seek`, a `hash`
-under `join = merge`) is a compile error at the demanding definition.
+`#[index(Type provides { … })]` on a declaration is storage advice, not
+meaning: the query denotes the same set with or without it. `Type` is any
+Rust type — from any crate — implementing `cq_storage::Build` and the traits
+it claims (`seek`: `IndexRead`, `contains`: `ExactMembership`, `ordered`:
+`OrderedRead`); structure selection builds it over whatever the plan indexes
+on that relation, and the generated program uses it only through those
+traits, so rustc checks the claims. Inference holes stand for the key and
+payload tuples (`my::Trie<_, _>`). It names no columns — which columns are
+indexed is a planner decision the query cannot see — and it is never a
+fallback: a type whose claims do not cover what the plan needs (no `seek`
+where a join probes, no `ordered` under `join = merge`) is a compile error at
+the demanding definition. Without advice the defaults are `HashIndex` for
+joins, `HashSet` for semijoins, `BTreeMap` under `merge`.
 
 CQ validity and expression scheduling preserve these facts:
 

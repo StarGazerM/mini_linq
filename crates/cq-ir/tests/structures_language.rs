@@ -35,22 +35,46 @@ fn demands_are_served_by_chosen_structures_or_translated_host_capabilities() {
         L = host provides { iter, contains @L[0] };
         R = host provides { seek @R[0] };
         S = host provides { iter };
-        s = hash [0];
+        s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
     });
     let analysis = structures::contract::check(&ok).unwrap();
     assert_eq!(analysis.provided["r"], [Operation::Seek(vec![0])]);
-    assert_eq!(analysis.provided["s"], [Operation::Seek(vec![0])]);
+    // Exactly the claims, in claim order: nothing is inferred from `seek`.
+    assert_eq!(
+        analysis.provided["s"],
+        [Operation::Seek(vec![0]), Operation::Contains(vec![0])]
+    );
     assert_eq!(analysis.aliases["r"], "R");
     assert!(!analysis.aliases.contains_key("s"));
 
-    let cases: [(&str, proc_macro2::TokenStream, &str); 5] = [
+    let cases: [(&str, proc_macro2::TokenStream, &str); 7] = [
+        (
+            "a structure claims nothing",
+            quote! {
+                L = host provides { iter, contains @L[0] };
+                R = host provides { seek @R[0] };
+                S = host provides { iter };
+                s = my::Index<_, _> [0] provides { };
+            },
+            "must claim an operation",
+        ),
+        (
+            "duplicate claim",
+            quote! {
+                L = host provides { iter, contains @L[0] };
+                R = host provides { seek @R[0] };
+                S = host provides { iter };
+                s = my::Index<_, _> [0] provides { seek, seek };
+            },
+            "duplicate claim",
+        ),
         (
             "unserved join demand",
             quote! {
                 L = host provides { iter, contains @L[0] };
                 R = host provides { iter };
                 S = host provides { iter };
-                s = hash [0];
+                s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
             },
             "no structure on `r` serves Seek([0])",
         ),
@@ -60,7 +84,7 @@ fn demands_are_served_by_chosen_structures_or_translated_host_capabilities() {
                 L = host provides { iter, contains @L[0] };
                 R = host provides { seek @R[0] };
                 S = host provides { iter };
-                s = key_set [0];
+                s = ::std::collections::HashSet<_> [0] provides { contains };
             },
             "no structure on `s` serves Seek([0])",
         ),
@@ -69,7 +93,7 @@ fn demands_are_served_by_chosen_structures_or_translated_host_capabilities() {
             quote! {
                 L = host provides { iter, contains @L[0] };
                 R = host provides { seek @R[0] };
-                s = hash [0];
+                s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
             },
             "`S` has no `host provides`",
         ),
@@ -78,8 +102,8 @@ fn demands_are_served_by_chosen_structures_or_translated_host_capabilities() {
             quote! {
                 L = host provides { iter, contains @L[0] };
                 R = host provides { seek @R[0] };
-                S = hash [0];
-                s = hash [0];
+                S = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
+                s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
             },
             "represented by its host value",
         ),
@@ -89,7 +113,7 @@ fn demands_are_served_by_chosen_structures_or_translated_host_capabilities() {
                 L = host provides { iter, contains @L[0] };
                 R = host provides { seek @R[0] };
                 S = host provides { iter };
-                s = hash [2];
+                s = ::cq_storage::HashIndex<_, _> [2] provides { seek, contains };
             },
             "exceeds heading arity",
         ),

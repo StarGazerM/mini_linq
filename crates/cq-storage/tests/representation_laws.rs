@@ -3,7 +3,7 @@
 //! traits and check the squares exhaustively over small universes.
 
 use cq_storage::{
-    BlockDescriptor, BlockMask, BlockRead, BlockSelection, BlockStore, BuildBlocks, BuildIndex,
+    BlockDescriptor, BlockMask, BlockRead, BlockSelection, BlockStore, Build, BuildBlocks,
     BuildReplay, CoordinateBounds, HashIndex, IndexRead, MakeSelection, Replay, ReplayRead,
 };
 use std::collections::{BTreeMap, BTreeSet};

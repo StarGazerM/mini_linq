@@ -176,11 +176,46 @@ fn compiler_built_indexes_feed_the_lazy_pull_endpoint() {
     assert_eq!(built::run(&doubled, &r, &s).len(), oracle(&l, &r, &s).len());
 }
 
-/// `#[index(kind)]` on a declaration fixes the kind of whatever the compiler
-/// builds over that relation: `S` becomes an ordered index, probed by seek;
-/// `R`, unadvised, keeps the hash default.
+/// `#[index(Type provides { … })]` on a declaration makes the compiler build
+/// that Rust type — here one defined in this test, unknown to `cq-storage` —
+/// over the relation, using only the traits it claims. `R`, unadvised, keeps
+/// the default hash index.
 mod advised {
     use super::*;
+
+    /// A user-defined index: rows sorted by key, probed by binary search.
+    pub struct SortedIndex<K, V>(Vec<(K, V)>);
+
+    impl<K: Ord, V, I: Iterator<Item = (K, V)>> cq_storage::Build<I> for SortedIndex<K, V> {
+        fn build(source: I) -> Self {
+            let mut rows: Vec<(K, V)> = source.collect();
+            rows.sort_by(|a, b| a.0.cmp(&b.0));
+            SortedIndex(rows)
+        }
+    }
+
+    impl<K: Ord, V> SortedIndex<K, V> {
+        fn run(&self, key: &K) -> &[(K, V)] {
+            let low = self.0.partition_point(|(k, _)| k < key);
+            let high = self.0.partition_point(|(k, _)| k <= key);
+            &self.0[low..high]
+        }
+    }
+
+    impl<'a, K: Ord, V: Copy> cq_storage::IndexRead for &'a SortedIndex<K, V> {
+        type Key = K;
+        type Item = V;
+        type Cursor = std::iter::Map<std::slice::Iter<'a, (K, V)>, fn(&'a (K, V)) -> V>;
+        fn lookup(&self, key: &K) -> Self::Cursor {
+            self.run(key).iter().map(|(_, v)| *v)
+        }
+    }
+
+    impl<K: Ord, V> cq_storage::ExactMembership<K> for SortedIndex<K, V> {
+        fn contains(&self, key: &K) -> bool {
+            !self.run(key).is_empty()
+        }
+    }
 
     macro_rules! policy {
         ($($ix:tt)*) => {
@@ -222,7 +257,7 @@ mod advised {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
-            #[index(ordered)]
+            #[index(SortedIndex<_, _> provides { seek, contains })]
             relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
         }
@@ -230,7 +265,7 @@ mod advised {
 }
 
 #[test]
-fn index_advice_selects_the_built_structure_without_changing_answers() {
+fn a_user_defined_index_type_is_built_and_probed_through_the_runtime_traits() {
     let (l, r, s) = fixture();
     let actual: HashSet<_> = advised::run(&l, &r, &s).into_iter().collect();
     assert_eq!(actual, oracle(&l, &r, &s));

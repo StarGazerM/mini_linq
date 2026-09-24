@@ -8,32 +8,35 @@
 //! materialized rows) are not chosen here: they follow from result use counts
 //! and belong to Stream.
 //!
-//! Denotation: each entry has an abstraction function `α` from the runtime
-//! catalogue and provides the operations listed in [`Kind::provides`]; the
-//! relation it represents is the RA set. Contract: every IX demand is served
-//! by an entry on its relation providing `contains` (semijoin) or `seek`
-//! (join) on the demanded columns, host capabilities translating through the
-//! rename; columns are valid heading ordinals; no entry is duplicated.
+//! Denotation: a built entry names a Rust type — any type, from any crate —
+//! constructed through `cq_storage::Build` from `(key, payload)` pairs, whose
+//! abstraction function is the RA set; it provides exactly the operations it
+//! claims, each a runtime trait the type must implement (`seek`:
+//! `IndexRead`, `contains`: `ExactMembership`, `ordered`: `OrderedRead`).
+//! The compiler never inspects the type; rustc checks the claims where the
+//! generated program uses them. Contract: every IX demand is served by an
+//! entry on its relation claiming, on the demanded columns, `contains`
+//! (semijoin) or `seek` or `ordered` (join: exact probe or co-iteration),
+//! host capabilities translating through the rename;
+//! columns are valid heading ordinals; claims are nonempty and distinct; no
+//! entry is duplicated.
 //!
 //! ```text
 //! Module ::= IX "structures" "{" (Entry ";")* "}"
 //! Entry  ::= Ident "=" "host" Provides
-//!          | Ident "=" ("hash" | "key_set" | "ordered") "[" Column,* "]"
+//!          | Ident "=" RustType "[" Column,* "]" Claims
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Ident, Token, token};
 
-use crate::capabilities::{Operation, Provides, operations};
+use crate::capabilities::{Claims, Operation, Provides, operations};
 use crate::{Column, CommaList, index_requirements as ix, relational_plan as ra, symbol_name};
 
 pub mod kw {
     syn::custom_keyword!(structures);
     syn::custom_keyword!(host);
-    syn::custom_keyword!(hash);
-    syn::custom_keyword!(key_set);
-    syn::custom_keyword!(ordered);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -71,46 +74,39 @@ pub enum Structure {
         host_token: kw::host,
         provides: Provides,
     },
-    Keyed(Keyed),
+    Keyed(Box<Keyed>),
 }
 
+/// A structure built over an RA result: a Rust type keyed on `columns`
+/// (payload = the remaining heading columns) that claims `provides`.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Keyed {
-    pub kind: Kind,
+    pub ty: syn::Type,
     #[syn(bracketed)]
     pub bracket: token::Bracket,
     #[syn(in = bracket)]
     #[parse(CommaList::parse_terminated)]
     pub columns: CommaList<Column>,
+    pub claims: Claims,
 }
 
 impl Keyed {
     pub fn ordinals(&self) -> Vec<usize> {
         self.columns.iter().map(|c| c.index as usize).collect()
     }
-}
 
-/// A runtime catalogue entry and the operations it provides on its key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub enum Kind {
-    /// `cq_storage::HashIndex`: exact lookup preserving every occurrence.
-    #[parse(peek = kw::hash)]
-    Hash(kw::hash),
-    /// `HashSet` of keys: exact membership only.
-    #[parse(peek = kw::key_set)]
-    KeySet(kw::key_set),
-    /// `BTreeMap` of keys to payloads: key order, seek, and membership.
-    #[parse(peek = kw::ordered)]
-    Ordered(kw::ordered),
-}
+    /// The operations claimed, on this entry's key columns.
+    pub fn provides(&self) -> Vec<Operation> {
+        self.claims
+            .claims
+            .iter()
+            .map(|claim| claim.operation(self.ordinals()))
+            .collect()
+    }
 
-impl Kind {
-    pub fn provides(self, columns: Vec<usize>) -> Operation {
-        match self {
-            Kind::Hash(_) => Operation::Seek(columns),
-            Kind::KeySet(_) => Operation::Contains(columns),
-            Kind::Ordered(_) => Operation::Ordered(columns),
-        }
+    /// Claimed operation names, deduplicated.
+    pub fn claim_set(&self) -> BTreeSet<&'static str> {
+        self.claims.claims.iter().map(|c| c.name()).collect()
     }
 }
 
@@ -172,7 +168,7 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                 "structure must name a host relation or an RA result",
             );
         };
-        let operation = match &entry.structure {
+        let provided = match &entry.structure {
             Structure::Host { provides, .. } => {
                 if !declared.contains(&name) {
                     return error(
@@ -208,10 +204,16 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                 if !seen.insert((name.clone(), Some(columns.clone()))) {
                     return error(&entry.name, "duplicate structure on these columns");
                 }
-                keyed.kind.provides(columns)
+                if keyed.claims.claims.is_empty() {
+                    return error(&keyed.claims, "a structure must claim an operation");
+                }
+                if keyed.claim_set().len() != keyed.claims.claims.len() {
+                    return error(&keyed.claims, "duplicate claim");
+                }
+                keyed.provides()
             }
         };
-        analysis.provided.entry(name).or_default().push(operation);
+        analysis.provided.entry(name).or_default().extend(provided);
     }
     if let Some(missing) = declared
         .iter()
@@ -285,15 +287,21 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
             .find(|d| symbol_name(&d.result) == consumer)
             .map(|d| &d.operator)
             .expect("IX use names a definition");
-        let required = match operator {
-            ra::Operator::NaturalJoin(_) => Operation::Seek(columns.clone()),
-            ra::Operator::Semijoin(_) => Operation::Contains(columns.clone()),
+        // A join is answered by exact seek or by co-iteration in key order;
+        // a semijoin only by membership.
+        let serving: &[Operation] = match operator {
+            ra::Operator::NaturalJoin(_) => &[
+                Operation::Seek(columns.clone()),
+                Operation::Ordered(columns.clone()),
+            ],
+            ra::Operator::Semijoin(_) => &[Operation::Contains(columns.clone())],
             _ => unreachable!("IX uses name binary operators"),
         };
+        let required = &serving[0];
         let served = analysis
             .provided
             .get(&relation)
-            .is_some_and(|ops| ops.iter().any(|op| op.satisfies(&required)));
+            .is_some_and(|ops| ops.iter().any(|op| serving.contains(op)));
         if !served {
             return error(
                 index_use,

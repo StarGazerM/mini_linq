@@ -38,6 +38,21 @@ fn entries(policy: proc_macro2::TokenStream) -> (String, bool) {
     (text, check(&source, &target, &policy))
 }
 
+/// The expected entries, spelled as the IR spells them.
+fn text(entries: proc_macro2::TokenStream) -> String {
+    let module: cq_ir::structures::Module = syn::parse2({
+        let source = cq_index_policy::compile(&chain()).unwrap();
+        quote! { #source structures { #entries } }
+    })
+    .unwrap();
+    module
+        .entries
+        .iter()
+        .map(|e| e.to_token_stream().to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[test]
 fn defaults_preserve_constant_time_access_and_skip_host_served_demands() {
     // R keyed on `a` (host sorted column 0) serves r's join demand; nothing
@@ -48,7 +63,11 @@ fn defaults_preserve_constant_time_access_and_skip_host_served_demands() {
     assert!(ok);
     assert_eq!(
         text,
-        "L = host provides { iter } ; R = host provides { seek @ R [0] } ; S = host provides { iter } ; l = key_set [0] ; s = hash [0] ;"
+        self::text(quote! {
+            L = host provides { iter }; R = host provides { seek @R[0] }; S = host provides { iter };
+            l = ::std::collections::HashSet<_> [0] provides { contains };
+            s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
+        })
     );
 }
 
@@ -62,7 +81,13 @@ fn merge_orders_both_join_operands_and_the_strongest_kind_wins() {
     // one ordered structure serves both.
     assert_eq!(
         text,
-        "L = host provides { iter } ; R = host provides { iter } ; S = host provides { iter } ; l = ordered [0] ; r = ordered [0] ; s = ordered [0] ; j0 = ordered [1] ;"
+        self::text(quote! {
+            L = host provides { iter }; R = host provides { iter }; S = host provides { iter };
+            l = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0] provides { ordered, seek, contains };
+            r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0] provides { ordered, seek, contains };
+            s = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0] provides { ordered, seek, contains };
+            j0 = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [1] provides { ordered, seek, contains };
+        })
     );
 }
 
@@ -102,27 +127,40 @@ fn advised(
 }
 
 #[test]
-fn index_advice_on_a_relation_fixes_the_kind_of_structures_built_over_its_rename() {
+fn index_advice_names_any_rust_type_and_must_claim_what_the_plan_needs() {
     let hosts =
         quote! { policy { L provides { iter }; R provides { iter }; S provides { iter }; } };
+    // Any type: the compiler emits `Build` and the claimed traits, nothing else.
     assert_eq!(
-        advised(quote! { #[index(ordered)] }, hosts.clone()).unwrap(),
-        "l = key_set [0] ; r = ordered [0] ; s = hash [0] ;"
+        advised(
+            quote! { #[index(my_crate::Trie<_, _> provides { seek })] },
+            hosts.clone()
+        )
+        .unwrap(),
+        text(quote! {
+            l = ::std::collections::HashSet<_> [0] provides { contains };
+            r = my_crate::Trie<_, _> [0] provides { seek };
+            s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
+        })
     );
-    // Advice that cannot serve the demand is an error, not a replacement.
-    let err = advised(quote! { #[index(key_set)] }, hosts).unwrap_err();
+    // A type that does not claim what the plan needs is an error, never replaced.
+    let err = advised(
+        quote! { #[index(my_crate::KeySet<_> provides { contains })] },
+        hosts,
+    )
+    .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "relation `R` advises `key_set` indexes, but `r` needs `hash` on [0]"
+        "relation `R` advises a structure that does not claim seek needed by `r` on [0]"
     );
     // Nor does advice override a merge strategy's need for order.
     let err = advised(
-        quote! { #[index(hash)] },
+        quote! { #[index(my_crate::Trie<_, _> provides { seek })] },
         quote! { policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; } },
     )
     .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "relation `R` advises `hash` indexes, but `r` needs `ordered` on [0]"
+        "relation `R` advises a structure that does not claim ordered needed by `r` on [0]"
     );
 }

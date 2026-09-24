@@ -1,10 +1,12 @@
 //! Deferred hash buckets with independently owned lookup cursors.
 use std::{
     cell::{OnceCell, RefCell},
-    collections::HashMap,
+    collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
     rc::Rc,
 };
+
+use crate::ExactMembership;
 
 /// Exact lookup preserves every stored occurrence. The cursor owns its bucket
 /// and remains valid after the index handle is dropped.
@@ -25,13 +27,31 @@ impl<T: IndexRead> IndexRead for &T {
     }
 }
 
-/// Construction retains the source without polling it. The first lookup builds
-/// all buckets once; subsequent lookups never poll or scan the source again.
-pub trait BuildIndex<I>: IndexRead
-where
-    I: Iterator<Item = (Self::Key, Self::Item)>,
-{
+/// The one construction protocol for compiled structures: a value built from
+/// `(key, item)` pairs, with `α(build(I)) = bag(I)` projected to whatever the
+/// structure represents (a key set keeps only the keys). Any type with this
+/// impl and the access traits it claims is a usable index structure; the
+/// compiler names it, never inspects it.
+pub trait Build<I: Iterator>: Sized {
     fn build(source: I) -> Self;
+}
+
+impl<K: Eq + Hash, V, S: Default + std::hash::BuildHasher, I: Iterator<Item = (K, V)>> Build<I>
+    for HashSet<K, S>
+{
+    fn build(source: I) -> Self {
+        source.map(|(key, _)| key).collect()
+    }
+}
+
+impl<K: Ord, V, I: Iterator<Item = (K, V)>> Build<I> for BTreeMap<K, Vec<V>> {
+    fn build(source: I) -> Self {
+        let mut map = BTreeMap::new();
+        for (key, value) in source {
+            map.entry(key).or_insert_with(Vec::new).push(value);
+        }
+        map
+    }
 }
 
 pub struct HashIndex<'a, K, V> {
@@ -51,7 +71,7 @@ impl<K, V> Clone for HashIndex<'_, K, V> {
         }
     }
 }
-impl<'a, K: Eq + Hash + 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> BuildIndex<I>
+impl<'a, K: Eq + Hash + 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build<I>
     for HashIndex<'a, K, V>
 {
     fn build(source: I) -> Self {
@@ -106,6 +126,13 @@ impl<V: Copy> Iterator for BucketCursor<V> {
     }
 }
 impl<V: Copy> std::iter::FusedIterator for BucketCursor<V> {}
+
+/// A hash index answers membership by the nonemptiness of its bucket.
+impl<K: Eq + Hash, V: Copy> ExactMembership<K> for HashIndex<'_, K, V> {
+    fn contains(&self, key: &K) -> bool {
+        self.lookup(key).next().is_some()
+    }
+}
 
 #[cfg(test)]
 mod tests {

@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 
+use cq_ir::capabilities::Operation;
 use cq_ir::{cq, rust_access_plan as access, stream, structures, symbol_name};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -59,12 +60,22 @@ struct HostLayout {
     declared_position: Vec<usize>,
 }
 
+/// The materialized rows of a result and the structures built over them,
+/// each bound by reference, with the operations it claims on its key.
 #[derive(Default)]
 struct Built {
     rows: Option<Ident>,
-    seek: BTreeMap<Vec<usize>, Ident>,
-    contains: BTreeMap<Vec<usize>, Ident>,
-    ordered: BTreeMap<Vec<usize>, Ident>,
+    structures: Vec<(Vec<usize>, Ident, Vec<Operation>)>,
+}
+
+impl Built {
+    /// The structure on `columns` claiming `operation`.
+    fn claiming(&self, columns: &[usize], operation: &Operation) -> Option<&Ident> {
+        self.structures
+            .iter()
+            .find(|(c, _, claims)| c == columns && claims.contains(operation))
+            .map(|(_, structure, _)| structure)
+    }
 }
 
 /// A realized body: Access clauses plus the variables it emits.
@@ -102,14 +113,14 @@ pub fn compile(module: &stream::Module, endpoints: &Endpoints) -> syn::Result<Re
         .relational_plan
         .plan
         .definitions;
-    // The structures chosen for every name, as the catalogue kinds to build.
-    let mut chosen: BTreeMap<String, Vec<(structures::Kind, Vec<usize>)>> = BTreeMap::new();
+    // The structures chosen for every name: the types to build.
+    let mut chosen: BTreeMap<String, Vec<&structures::Keyed>> = BTreeMap::new();
     for entry in &module.structures.entries {
         if let structures::Structure::Keyed(keyed) = &entry.structure {
             chosen
                 .entry(symbol_name(&entry.name))
                 .or_default()
-                .push((keyed.kind, keyed.ordinals()));
+                .push(keyed.as_ref());
         }
     }
     let mut statements = Vec::new();
@@ -220,7 +231,7 @@ pub fn compile(module: &stream::Module, endpoints: &Endpoints) -> syn::Result<Re
 
 struct Realizer<'a> {
     analysis: &'a stream::Analysis,
-    chosen: BTreeMap<String, Vec<(structures::Kind, Vec<usize>)>>,
+    chosen: BTreeMap<String, Vec<&'a structures::Keyed>>,
     reprs: BTreeMap<String, Repr>,
     endpoints: &'a Endpoints,
 }
@@ -288,7 +299,8 @@ impl Realizer<'_> {
         } else {
             iterator
         };
-        for (kind, columns) in &entries {
+        for keyed in &entries {
+            let columns = keyed.ordinals();
             let key: Vec<&Ident> = columns.iter().map(|&i| &heading[i]).collect();
             let payload: Vec<&Ident> = heading
                 .iter()
@@ -302,39 +314,17 @@ impl Realizer<'_> {
                 .collect::<Vec<_>>()
                 .join("_");
             let row = quote!((#(#heading,)*));
-            match kind {
-                structures::Kind::Hash(_) => {
-                    let structure = format_ident!("__cq_{}_hash_{}", name, suffix);
-                    statements.push(syn::parse_quote! {
-                        let #structure = &<::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
-                            ::core::iter::Iterator::map(#source, |#row| ((#(#key,)*), (#(#payload,)*)))
-                        );
-                    });
-                    built.seek.insert(columns.clone(), structure);
-                }
-                structures::Kind::KeySet(_) => {
-                    let structure = format_ident!("__cq_{}_key_set_{}", name, suffix);
-                    statements.push(syn::parse_quote! {
-                        let #structure: &::std::collections::HashSet<_> = &::core::iter::Iterator::collect(
-                            ::core::iter::Iterator::map(#source, |#row| (#(#key,)*))
-                        );
-                    });
-                    built.contains.insert(columns.clone(), structure);
-                }
-                structures::Kind::Ordered(_) => {
-                    let structure = format_ident!("__cq_{}_ordered_{}", name, suffix);
-                    statements.push(syn::parse_quote! {
-                        let #structure = &{
-                            let mut __cq_map = ::std::collections::BTreeMap::<_, ::std::vec::Vec<_>>::new();
-                            for #row in #source {
-                                __cq_map.entry((#(#key,)*)).or_default().push((#(#payload,)*));
-                            }
-                            __cq_map
-                        };
-                    });
-                    built.ordered.insert(columns.clone(), structure);
-                }
-            }
+            // The one construction protocol; the type is whatever was chosen.
+            let structure = format_ident!("__cq_{}_on_{}", name, suffix);
+            let ty = &keyed.ty;
+            statements.push(syn::parse_quote! {
+                let #structure = &<#ty as ::cq_storage::Build<_>>::build(
+                    ::core::iter::Iterator::map(#source, |#row| ((#(#key,)*), (#(#payload,)*)))
+                );
+            });
+            built
+                .structures
+                .push((columns, structure, keyed.provides()));
         }
         Ok(built)
     }
@@ -618,14 +608,11 @@ impl Realizer<'_> {
                 Ok(())
             }
             Repr::Built(built) => {
-                let structure = built
-                    .seek
-                    .get(columns)
-                    .or_else(|| built.ordered.get(columns));
-                let Some(structure) = structure else {
+                let Some(structure) = built.claiming(columns, &Operation::Seek(columns.to_vec()))
+                else {
                     return Err(syn::Error::new_spanned(
                         relation,
-                        "no structure serves this seek",
+                        "no structure claims `seek` on these columns",
                     ));
                 };
                 let mut all: Vec<Option<Ident>> = vec![None; arity];
@@ -639,14 +626,7 @@ impl Realizer<'_> {
                 }
                 let all: Vec<Ident> = all.into_iter().map(Option::unwrap).collect();
                 let atom = atom(relation, &all);
-                let source = if built.seek.contains_key(columns) {
-                    quote!(::cq_storage::IndexRead::lookup(&#structure, &(#(#keys,)*)))
-                } else {
-                    // An ordered map answers seek by exact key too.
-                    quote!(::core::iter::Iterator::copied(::core::iter::IntoIterator::into_iter(
-                        ::core::option::Option::map_or(#structure.get(&(#(#keys,)*)), &[][..], |v| v.as_slice())
-                    )))
-                };
+                let source = quote!(::cq_storage::IndexRead::lookup(&#structure, &(#(#keys,)*)));
                 fragment.clauses.push(seek_clause(atom, payload, source));
                 Ok(())
             }
@@ -671,23 +651,17 @@ impl Realizer<'_> {
                 })
             }
             Repr::Built(built) => {
-                if let Some(structure) = built.contains.get(columns) {
-                    return Ok(syn::parse_quote! {
-                        ::cq_storage::ExactMembership::contains(&#structure, &(#(#keys,)*))
-                    });
-                }
-                if let Some(structure) = built.seek.get(columns) {
-                    return Ok(syn::parse_quote! {
-                        ::core::iter::Iterator::next(&mut ::cq_storage::IndexRead::lookup(&#structure, &(#(#keys,)*))).is_some()
-                    });
-                }
-                if let Some(structure) = built.ordered.get(columns) {
-                    return Ok(syn::parse_quote! { #structure.contains_key(&(#(#keys,)*)) });
-                }
-                Err(syn::Error::new_spanned(
-                    relation,
-                    "no structure serves this membership test",
-                ))
+                let Some(structure) =
+                    built.claiming(columns, &Operation::Contains(columns.to_vec()))
+                else {
+                    return Err(syn::Error::new_spanned(
+                        relation,
+                        "no structure claims `contains` on these columns",
+                    ));
+                };
+                Ok(syn::parse_quote! {
+                    ::cq_storage::ExactMembership::contains(&#structure, &(#(#keys,)*))
+                })
             }
             Repr::Pipe(_) => Err(syn::Error::new_spanned(relation, "a pipe cannot be tested")),
         }
@@ -750,10 +724,12 @@ impl Realizer<'_> {
                     payload_reads.push(quote!(#(&#side.#fields,)*));
                 }
                 Repr::Built(built) => {
-                    let Some(structure) = built.ordered.get(columns) else {
+                    let Some(structure) =
+                        built.claiming(columns, &Operation::Ordered(columns.to_vec()))
+                    else {
                         return Err(syn::Error::new_spanned(
                             relation,
-                            "no ordered structure serves this co-iteration",
+                            "no structure claims `ordered` on these columns",
                         ));
                     };
                     cursors.push(quote!(::cq_storage::OrderedRead::ordered(&#structure)));
