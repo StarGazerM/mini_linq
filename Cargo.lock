@@ -114,6 +114,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-stream-realization"
+version = "0.1.0"
+dependencies = [
+ "cq-access-lowering",
+ "cq-index-policy",
+ "cq-ir",
+ "cq-stream-lowering",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-workloads"
 version = "0.1.0"
 dependencies = [
