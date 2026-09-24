@@ -23,6 +23,7 @@ pub mod physical;
 pub mod provider_protocol;
 pub mod relational_plan;
 pub mod rust_access_plan;
+pub mod stream;
 
 pub mod kw {
     syn::custom_keyword!(agg);
