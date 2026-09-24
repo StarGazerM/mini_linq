@@ -21,9 +21,18 @@ pub struct Program {
     pub struct_token: Token![struct],
     pub name: Ident,
     pub declaration_semi: Token![;],
-    #[syn(repeat, peek = kw::relation, nonempty)]
+    #[parse(parse_declarations)]
+    #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<RelationDecl>,
     pub query: Query,
+}
+
+fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<RelationDecl>> {
+    let mut declarations = vec![input.parse()?];
+    while input.peek(Token![#]) || input.peek(kw::relation) {
+        declarations.push(input.parse()?);
+    }
+    Ok(declarations)
 }
 
 impl Program {
@@ -58,11 +67,20 @@ pub struct ColumnDecl {
 ///
 /// CQ atom arguments remain positional against this declaration order.
 ///
+/// An `#[index(kind)]` attribute is advice for structure selection: whichever
+/// structures a later pass builds over this relation use catalogue entry
+/// `kind`. It is not part of the query's meaning and names no columns — which
+/// columns get indexed is a planner decision the query cannot see.
+///
 /// ```text
-/// RelationDecl ::= "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
+/// RelationDecl ::= ["#" "[" "index" "(" Ident ")" "]"]
+///                  "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct RelationDecl {
+    #[parse(syn::Attribute::parse_outer)]
+    #[to_tokens(|tokens, attrs| quote::TokenStreamExt::append_all(tokens, attrs))]
+    pub attrs: Vec<syn::Attribute>,
     pub relation_token: kw::relation,
     pub name: Ident,
     #[syn(parenthesized)]
@@ -77,6 +95,29 @@ impl RelationDecl {
     /// The relation arity derived from its declared columns.
     pub fn arity(&self) -> usize {
         self.columns.len()
+    }
+
+    /// The catalogue kind advised for structures built over this relation.
+    /// Shape is the CQ contract's concern; the kind's existence is checked by
+    /// the pass that consults it.
+    pub fn index_advice(&self) -> syn::Result<Option<Ident>> {
+        let mut advice = None;
+        for attr in &self.attrs {
+            if !attr.path().is_ident("index") {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "relation declarations accept only `#[index(kind)]`",
+                ));
+            }
+            if advice.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    format!("relation `{}` advises an index kind twice", self.name),
+                ));
+            }
+            advice = Some(attr.parse_args::<Ident>()?);
+        }
+        Ok(advice)
     }
 }
 
@@ -351,6 +392,7 @@ pub(crate) fn check_input_declarations<'a>(
 ) -> syn::Result<BTreeMap<String, &'a RelationDecl>> {
     let mut schema = BTreeMap::new();
     for input in inputs {
+        input.index_advice()?;
         if input.columns.is_empty() {
             return Err(syn::Error::new_spanned(
                 input,

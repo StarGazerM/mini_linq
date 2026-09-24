@@ -176,6 +176,66 @@ fn compiler_built_indexes_feed_the_lazy_pull_endpoint() {
     assert_eq!(built::run(&doubled, &r, &s).len(), oracle(&l, &r, &s).len());
 }
 
+/// `#[index(kind)]` on a declaration fixes the kind of whatever the compiler
+/// builds over that relation: `S` becomes an ordered index, probed by seek;
+/// `R`, unadvised, keeps the hash default.
+mod advised {
+    use super::*;
+
+    macro_rules! policy {
+        ($($ix:tt)*) => {
+            ::mini_linq::select_structures! {
+                $($ix)*
+                policy { L provides { iter }; R provides { iter }; S provides { iter }; }
+            }
+        };
+    }
+    pub(crate) use policy as stream_policy;
+    macro_rules! collect_pull {
+        ($($access:tt)*) => {
+            ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(
+                ::mini_linq::access_to_distinct_iter! { $($access)* }
+            )
+        };
+    }
+    pub(crate) use collect_pull as access;
+    mod wiring {
+        pub(crate) use super::{access, stream_policy};
+        pub(crate) use ::mini_linq::{
+            index_demands as choose_index_policy, pipeline_to_distinct_iter,
+            pipeline_to_support_iter, stream_to_access, structures_to_stream,
+        };
+        #[allow(unused_imports)]
+        pub(crate) use cq_state_providers::{
+            hash_distinct as distinct_state, hash_set_sink as set_sink,
+        };
+    }
+    use wiring as mini_linq;
+
+    #[allow(non_snake_case)]
+    pub(super) fn run<'a>(
+        L: &'a [(Value,)],
+        R: &'a [(Value, Value)],
+        S: &'a [(Value, Value)],
+    ) -> Vec<(&'a Value, &'a Value)> {
+        ::mini_linq::cq_to_ra_written_order! {
+            struct Chain;
+            relation L(a: Value);
+            relation R(a: Value, b: Value);
+            #[index(ordered)]
+            relation S(b: Value, c: Value);
+            answer(a, c) :- L(a), R(a, b), S(b, c);
+        }
+    }
+}
+
+#[test]
+fn index_advice_selects_the_built_structure_without_changing_answers() {
+    let (l, r, s) = fixture();
+    let actual: HashSet<_> = advised::run(&l, &r, &s).into_iter().collect();
+    assert_eq!(actual, oracle(&l, &r, &s));
+}
+
 /// Merge joins: every operand is materialized ordered and co-iterated.
 mod merged {
     use super::*;

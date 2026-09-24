@@ -11,11 +11,14 @@
 //!    `ordered` structure (O(log n)) is chosen only where a rule needs key
 //!    order — the `merge` strategy, which also orders the left operand on the
 //!    shared columns so that co-iteration is admissible.
-//! 3. Advice. The policy supplies host capabilities and the join strategy.
-//!    Query-specific choices are authored directly in the Structures module.
+//! 3. Advice. The policy supplies host capabilities and the join strategy. A
+//!    relation declared `#[index(kind)]` fixes the kind of every structure
+//!    built over it (through renames); a kind that cannot serve a demand is
+//!    an error, never silently replaced. Query-specific choices for derived
+//!    results are authored directly in the Structures module.
 //!
-//! One structure per (name, columns): the strongest requested kind wins,
-//! since `ordered ⊒ seek ⊒ contains`.
+//! One structure per (name, columns): without advice the strongest requested
+//! kind wins, since `ordered ⊒ seek ⊒ contains`.
 
 use std::collections::BTreeMap;
 
@@ -31,6 +34,36 @@ enum Kind {
     KeySet,
     Hash,
     Ordered,
+}
+
+impl Kind {
+    fn required(self, columns: &[usize]) -> Operation {
+        match self {
+            Kind::KeySet => Operation::Contains(columns.to_vec()),
+            Kind::Hash => Operation::Seek(columns.to_vec()),
+            Kind::Ordered => Operation::Ordered(columns.to_vec()),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Kind::KeySet => "key_set",
+            Kind::Hash => "hash",
+            Kind::Ordered => "ordered",
+        }
+    }
+
+    fn advised(ident: &Ident) -> syn::Result<Kind> {
+        match symbol_name(ident).as_str() {
+            "key_set" => Ok(Kind::KeySet),
+            "hash" => Ok(Kind::Hash),
+            "ordered" => Ok(Kind::Ordered),
+            other => Err(syn::Error::new_spanned(
+                ident,
+                format!("`{other}` is not a catalogue kind (`hash`, `key_set`, `ordered`)"),
+            )),
+        }
+    }
 }
 
 pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::Module> {
@@ -133,18 +166,43 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
             .collect()
     };
 
-    let mut chosen: BTreeMap<(String, Vec<usize>), Kind> = BTreeMap::new();
-    let mut choose = |name: &str, columns: Vec<usize>, kind: Kind| {
-        let required = match kind {
-            Kind::KeySet => Operation::Contains(columns.clone()),
-            Kind::Hash => Operation::Seek(columns.clone()),
-            Kind::Ordered => Operation::Ordered(columns.clone()),
-        };
-        if inherited(name).iter().any(|p| p.satisfies(&required)) {
-            return;
+    // Advice declared on the host relation applies to its renames.
+    let mut advice: BTreeMap<String, Kind> = BTreeMap::new();
+    for input in ra_module.program.inputs() {
+        if let Some(kind) = input.index_advice()? {
+            advice.insert(symbol_name(&input.name), Kind::advised(&kind)?);
         }
+    }
+    let advised = |name: &str| -> Option<Kind> {
+        renames
+            .get(name)
+            .and_then(|rename| advice.get(&symbol_name(&rename.relation)).copied())
+    };
+
+    let mut chosen: BTreeMap<(String, Vec<usize>), Kind> = BTreeMap::new();
+    let mut choose = |name: &str, columns: Vec<usize>, kind: Kind, site: &Ident| {
+        let required = kind.required(&columns);
+        if inherited(name).iter().any(|p| p.satisfies(&required)) {
+            return Ok(());
+        }
+        let kind = match advised(name) {
+            Some(advised) if advised.required(&columns).satisfies(&required) => advised,
+            Some(advised) => {
+                return Err(syn::Error::new_spanned(
+                    site,
+                    format!(
+                        "relation `{}` advises `{}` indexes, but `{name}` needs `{}` on {columns:?}",
+                        renames[name].relation,
+                        advised.name(),
+                        kind.name(),
+                    ),
+                ));
+            }
+            None => kind,
+        };
         let slot = chosen.entry((name.to_string(), columns)).or_insert(kind);
         *slot = (*slot).max(kind);
+        Ok(())
     };
     for definition in &plan.definitions {
         let (left, right) = match &definition.operator {
@@ -164,13 +222,18 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
                 .map(|a| headings[name].iter().position(|h| h == a).unwrap())
                 .collect()
         };
+        let site = &definition.result;
         match &definition.operator {
             ra::Operator::NaturalJoin(_) if policy.merge_joins() => {
-                choose(&left_name, ordinals(&left_name), Kind::Ordered);
-                choose(&right_name, ordinals(&right_name), Kind::Ordered);
+                choose(&left_name, ordinals(&left_name), Kind::Ordered, site)?;
+                choose(&right_name, ordinals(&right_name), Kind::Ordered, site)?;
             }
-            ra::Operator::NaturalJoin(_) => choose(&right_name, ordinals(&right_name), Kind::Hash),
-            ra::Operator::Semijoin(_) => choose(&right_name, ordinals(&right_name), Kind::KeySet),
+            ra::Operator::NaturalJoin(_) => {
+                choose(&right_name, ordinals(&right_name), Kind::Hash, site)?
+            }
+            ra::Operator::Semijoin(_) => {
+                choose(&right_name, ordinals(&right_name), Kind::KeySet, site)?
+            }
             _ => unreachable!(),
         }
     }
@@ -180,12 +243,7 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
         let name = symbol_name(&definition.result);
         let ident = &definition.result;
         for ((_, columns), kind) in chosen.iter().filter(|((n, _), _)| *n == name) {
-            let kind: Ident = syn::parse_str(match kind {
-                Kind::KeySet => "key_set",
-                Kind::Hash => "hash",
-                Kind::Ordered => "ordered",
-            })
-            .unwrap();
+            let kind: Ident = syn::parse_str(kind.name()).unwrap();
             let columns = columns.iter().map(|&c| syn::Index::from(c));
             entries.extend(quote! { #ident = #kind [#(#columns),*]; });
         }
