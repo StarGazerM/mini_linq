@@ -34,6 +34,7 @@
 mod block_access;
 mod blocks;
 mod hash_index;
+mod host;
 mod mask;
 mod membership;
 mod metrics;
