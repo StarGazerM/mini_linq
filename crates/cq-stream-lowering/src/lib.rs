@@ -523,10 +523,13 @@ fn mode(result: &Result_) -> TokenStream {
         return quote!(pipe);
     }
     let name = ident(&result.name);
+    // Keep only the strongest operation per column set: `ordered ⊒ seek ⊒ contains`.
     let mut provided = BTreeSet::new();
     for (_, operation) in &result.needs {
         provided.insert(operation.clone());
     }
+    let all: Vec<stream::Operation> = provided.iter().cloned().collect();
+    provided.retain(|op| !all.iter().any(|other| other != op && other.satisfies(op)));
     let capabilities = provided.iter().map(|op| match op {
         stream::Operation::Iter => quote!(iter),
         stream::Operation::Contains(c) => {
