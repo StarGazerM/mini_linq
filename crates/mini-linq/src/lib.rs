@@ -1,10 +1,10 @@
 //! Procedural entry points at the compiler's explicit language boundaries.
 //!
-//! CQ planning produces RA; IX records index definitions and uses; Physical
-//! records per-relation/index providers and per-operation lowering rules.
-//! Realization invokes those external definitions and returns Rust[Access].
-//! Caller import aliases bind policy and execution slots. No global storage
-//! default or fallback whole-query backend is supplied.
+//! CQ planning produces RA; IX records index demands and uses; Stream realizes
+//! every result as a typed stream program under a caller-supplied,
+//! query-independent policy; realization erases Stream to Access over the
+//! runtime's traits. Caller import aliases bind policy and execution slots.
+//! No global storage default or fallback whole-query backend is supplied.
 
 use proc_macro::TokenStream;
 #[cfg(any(
@@ -13,8 +13,8 @@ use proc_macro::TokenStream;
     feature = "clause-prefix",
     feature = "hypergraph",
     feature = "index-demands",
-    feature = "physical-selection",
-    feature = "physical-realization",
+    feature = "stream-lowering",
+    feature = "stream-realization",
     feature = "access-to-pipeline",
     feature = "access-to-set-loops",
     feature = "pipeline-distinct-iter",
@@ -95,130 +95,53 @@ pub fn choose_graph_or_prefix(input: TokenStream) -> TokenStream {
 }
 
 /// Construct exact-version index definitions and references from every join use.
+///
+/// The caller binds `mini_linq::stream_policy` to a macro that appends its
+/// query-independent `policy { … }` block and invokes [`ix_to_stream!`].
 #[cfg(feature = "index-demands")]
 #[proc_macro]
 pub fn index_demands(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
-        Some(syn::parse_quote!(mini_linq::choose_physical)),
+        Some(syn::parse_quote!(mini_linq::stream_policy)),
         cq_index_policy::compile,
     )
 }
 
-/// Attach the explicit policy's complete provider and lowering assignments.
+/// Realize IX as a Stream program under the appended policy.
 ///
-/// The parsed table is supplied policy configuration. This entry checks its
-/// structure before exposing Physical; external provider admission is separate.
-#[cfg(feature = "physical-selection")]
+/// Input is `IX policy { … }`. Each RA result becomes a typed stream
+/// definition; modes and capabilities follow from use and the policy's
+/// declared host capabilities. The result continues to [`stream_to_access!`].
+#[cfg(feature = "stream-lowering")]
 #[proc_macro]
-pub fn given_physical_bindings(input: TokenStream) -> TokenStream {
+pub fn ix_to_stream(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
-        Some(syn::parse_quote!(mini_linq::realize_physical)),
-        |source: &cq_ir::physical::Module| {
-            cq_physical_selection::given_bindings(
-                source.index_requirements.clone(),
-                source.assignments.clone(),
-            )
+        Some(syn::parse_quote!(mini_linq::stream_to_access)),
+        |source: &entry::Policed<cq_ir::index_requirements::Module, cq_stream_lowering::Policy>| {
+            cq_stream_lowering::compile(&source.language, &source.policy)
         },
     )
 }
 
-/// Realize the recorded Physical program inside the caller's Rust expression context.
+/// Erase a Stream program to structure statements and one Access region.
 ///
-/// Input identifiers refer to host bindings in that context. The caller binds
-/// `mini_linq::access` to the consumer of the completed Access quotation.
-#[cfg(feature = "physical-realization")]
+/// Materialized results become `let` bindings of `cq_storage` structures;
+/// the returned result becomes an Access region passed to the caller's
+/// `mini_linq::access` binding, inside a block that owns the structures.
+#[cfg(feature = "stream-realization")]
 #[proc_macro]
-pub fn realize_physical(input: TokenStream) -> TokenStream {
-    entry::stage(input, None, |source: &cq_ir::physical::Module| {
-        cq_physical_lowering::begin(
-            source.clone(),
-            syn::parse_quote!(::mini_linq::resume_physical),
-            syn::parse_quote!(mini_linq::access),
-        )
+pub fn stream_to_access(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |source: &cq_ir::stream::Module| {
+        let endpoints = cq_stream_realization::Endpoints {
+            support_iter: syn::parse_quote!(::mini_linq::access_to_support_iter),
+        };
+        let realized = cq_stream_realization::compile(source, &endpoints)?;
+        let statements = &realized.statements;
+        let access = &realized.access;
+        Ok(quote::quote! { { #(#statements)* mini_linq::access! { #access } } })
     })
-}
-
-/// Resume a selected external provider's compile-time reply.
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn resume_physical(input: TokenStream) -> TokenStream {
-    entry::stage(input, None, |reply: &cq_ir::provider_protocol::Reply| {
-        cq_physical_lowering::resume(reply.clone())
-    })
-}
-
-/// Lower Rename using its selected representation.
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn rename(input: TokenStream) -> TokenStream {
-    cq_physical_lowering::rename::compile(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-/// Lower NaturalJoin through exact Rows/Matches/Output operations.
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn indexed_join(input: TokenStream) -> TokenStream {
-    cq_physical_lowering::indexed_join::compile(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-/// Lower terminal Project using its selected output representation.
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn project(input: TokenStream) -> TokenStream {
-    cq_physical_lowering::project::lower(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-#[doc(hidden)]
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn indexed_join_rows(input: TokenStream) -> TokenStream {
-    cq_physical_lowering::indexed_join::rows(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-#[doc(hidden)]
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn indexed_join_matches(input: TokenStream) -> TokenStream {
-    cq_physical_lowering::indexed_join::matches(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-#[doc(hidden)]
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn indexed_join_output(input: TokenStream) -> TokenStream {
-    cq_physical_lowering::indexed_join::output(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-#[doc(hidden)]
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn project_rows(input: TokenStream) -> TokenStream {
-    cq_physical_lowering::project::rows(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-#[doc(hidden)]
-#[cfg(feature = "physical-realization")]
-#[proc_macro]
-pub fn project_output(input: TokenStream) -> TokenStream {
-    cq_physical_lowering::project::output(input.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
 }
 
 /// Execute an Access plan with eager nested loops and an exact-set sink.
@@ -337,9 +260,3 @@ pub fn access_to_exists(input: TokenStream) -> TokenStream {
 pub fn pipeline_to_exists(input: TokenStream) -> TokenStream {
     entry::stage(input, None, cq_pipeline_lowering::exists::compile)
 }
-
-#[cfg(test)]
-mod native_input_tests;
-
-#[cfg(test)]
-mod relation_input_tests;

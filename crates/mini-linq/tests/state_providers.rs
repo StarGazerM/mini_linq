@@ -3,7 +3,7 @@
 mod ordered {
     mod wiring {
         pub use ::mini_linq::*;
-        pub use cq_example_providers::{
+        pub use cq_state_providers::{
             ordered_distinct as distinct_state, ordered_set_sink as set_sink,
         };
     }
@@ -60,7 +60,7 @@ mod custom {
             if $state.contains(&key) { false } else { $state.push(key); true }
         }};
         (operator ordered_unique; $($task:tt)*) => {
-            ::cq_example_providers::ordered_distinct! { operator ordered_unique; $($task)* }
+            ::cq_state_providers::ordered_distinct! { operator ordered_unique; $($task)* }
         };
     }
     pub(crate) use select_distinct;

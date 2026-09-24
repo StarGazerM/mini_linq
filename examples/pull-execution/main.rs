@@ -5,7 +5,7 @@
 
 mod execution {
     pub use ::mini_linq::*;
-    pub use cq_example_providers::hash_distinct as distinct_state;
+    pub use cq_state_providers::hash_distinct as distinct_state;
 }
 use execution as mini_linq;
 use mini_linq::access_to_distinct_iter;

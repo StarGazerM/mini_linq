@@ -16,3 +16,18 @@ pub(crate) fn stage<S: Parse, T: ToTokens>(
         Err(error) => error.into_compile_error().into(),
     }
 }
+
+/// A language payload followed by the caller's appended policy block.
+pub(crate) struct Policed<L, P> {
+    pub language: L,
+    pub policy: P,
+}
+
+impl<L: Parse, P: Parse> Parse for Policed<L, P> {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        Ok(Self {
+            language: input.parse()?,
+            policy: input.parse()?,
+        })
+    }
+}

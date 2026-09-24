@@ -25,18 +25,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-example-providers"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "cq-physical-lowering",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "syn_derive",
-]
-
-[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -56,26 +44,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-physical-lowering"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "syn_derive",
-]
-
-[[package]]
-name = "cq-physical-selection"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-pipeline-lowering"
 version = "0.1.0"
 dependencies = [
@@ -91,6 +59,16 @@ name = "cq-query-lowering"
 version = "0.1.0"
 dependencies = [
  "contracts",
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-state-providers"
+version = "0.1.0"
+dependencies = [
  "cq-ir",
  "proc-macro2",
  "quote",
@@ -141,14 +119,14 @@ version = "0.1.0"
 dependencies = [
  "contracts",
  "cq-access-lowering",
- "cq-example-providers",
  "cq-index-policy",
  "cq-ir",
- "cq-physical-lowering",
- "cq-physical-selection",
  "cq-pipeline-lowering",
  "cq-query-lowering",
+ "cq-state-providers",
  "cq-storage",
+ "cq-stream-lowering",
+ "cq-stream-realization",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -160,8 +138,9 @@ dependencies = [
 name = "mini-linq-course"
 version = "0.1.0"
 dependencies = [
- "cq-example-providers",
  "cq-ir",
+ "cq-state-providers",
+ "cq-storage",
  "mini-linq",
  "quote",
  "syn 2.0.119",

@@ -3,7 +3,7 @@
 #[allow(unused_imports)]
 mod execution {
     pub use ::mini_linq::*;
-    pub use cq_example_providers::{hash_distinct as distinct_state, hash_set_sink as set_sink};
+    pub use cq_state_providers::{hash_distinct as distinct_state, hash_set_sink as set_sink};
 }
 use execution as mini_linq;
 

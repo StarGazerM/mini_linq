@@ -1,6 +1,6 @@
 //! Concrete equality-state and output-set representations.
 
-use cq_ir::provider_protocol::state::{Request, Task};
+use cq_ir::state_protocol::{Request, Task};
 use proc_macro2::TokenStream;
 use quote::quote;
 

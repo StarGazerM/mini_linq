@@ -1,2 +1,0 @@
-indexes { i0 = @r1[0]; i1 = @r3[0]; }
-uses { r2.right = i0; r4.right = i1; }

@@ -1,17 +1,15 @@
-//! MiniLinq's nominal query languages and Rust-shaped physical representations.
+//! MiniLinq's nominal query languages, from CQ down to the Access region.
 //!
-//! CQ, [`relational_plan::Module`], and [`index_requirements::Module`] each have
-//! one public parser and local language contract. IX names required indexes and
-//! records their join uses. [`physical::Module`] records explicit provider and
-//! lowering assignments; its checker establishes structure, not external
-//! provider admission. The relational plan gives every set operator a named
-//! DAG result before indexes or Rust storage are chosen.
-//! [`rust_access_plan::Plan`] then associates every logical occurrence with
-//! its concrete Rust access or output expression. The pull strategy lowers
-//! those annotations to an explicit
-//! [`iterator_pipeline::Pipeline`]; the next pass returns the actual ordinary
-//! Rust expression for one lazy result-set iterator. There is no parallel
-//! object-builder or storage-descriptor hierarchy.
+//! CQ, [`relational_plan::Module`], [`index_requirements::Module`], and
+//! [`stream::Module`] each have one public parser and a local language
+//! contract. RA gives every set operator a named DAG result; IX names the
+//! attribute-keyed access each binary operator demands; Stream realizes every
+//! result as a typed indexed-stream program whose modes and capabilities are
+//! the first representation facts in the pipeline. Below Stream,
+//! [`rust_access_plan::Plan`] is the erased, flattened region whose leaves are
+//! Rust expressions over the runtime's traits, and the pull strategy lowers it
+//! to an explicit [`iterator_pipeline::Pipeline`]. [`state_protocol`] is the
+//! one runtime-call shape execution endpoints use for distinct and sink state.
 
 use syn::ext::IdentExt;
 use syn::{Ident, Index, Token};
@@ -19,10 +17,9 @@ use syn::{Ident, Index, Token};
 pub mod cq;
 pub mod index_requirements;
 pub mod iterator_pipeline;
-pub mod physical;
-pub mod provider_protocol;
 pub mod relational_plan;
 pub mod rust_access_plan;
+pub mod state_protocol;
 pub mod stream;
 
 pub mod kw {
