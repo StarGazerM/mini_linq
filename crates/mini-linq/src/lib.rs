@@ -1,9 +1,10 @@
 //! Procedural entry points at the compiler's explicit language boundaries.
 //!
-//! CQ planning produces RA; IX records index demands and uses; Stream realizes
-//! every result as a typed stream program under a caller-supplied,
-//! query-independent policy; realization erases Stream to Access over the
-//! runtime's traits. Caller import aliases bind policy and execution slots.
+//! CQ planning produces RA; IX records index demands and uses; Structures
+//! binds every demand to a runtime catalogue entry under a caller-supplied,
+//! query-independent policy; Stream realizes every result as a typed stream
+//! program directed by those structures; realization erases Stream to Access
+//! over the runtime's traits. Caller import aliases bind policy and execution slots.
 //! No global storage default or fallback whole-query backend is supplied.
 
 use proc_macro::TokenStream;
@@ -13,6 +14,7 @@ use proc_macro::TokenStream;
     feature = "clause-prefix",
     feature = "hypergraph",
     feature = "index-demands",
+    feature = "structure-selection",
     feature = "stream-lowering",
     feature = "stream-realization",
     feature = "access-to-pipeline",
@@ -97,7 +99,7 @@ pub fn choose_graph_or_prefix(input: TokenStream) -> TokenStream {
 /// Construct exact-version index definitions and references from every join use.
 ///
 /// The caller binds `mini_linq::stream_policy` to a macro that appends its
-/// query-independent `policy { … }` block and invokes [`ix_to_stream!`].
+/// query-independent `policy { … }` block and invokes [`select_structures!`].
 #[cfg(feature = "index-demands")]
 #[proc_macro]
 pub fn index_demands(input: TokenStream) -> TokenStream {
@@ -108,18 +110,38 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
     )
 }
 
-/// Realize IX as a Stream program under the appended policy.
+/// Bind every IX demand to a runtime structure under the appended policy.
 ///
-/// Input is `IX policy { … }`. Each RA result becomes a typed stream
-/// definition; modes and capabilities follow from use and the policy's
-/// declared host capabilities. The result continues to [`stream_to_access!`].
+/// Input is `IX policy { … }`. Hosts are declared by the policy; joins get
+/// `hash` (or `ordered` under `join = merge`, on both operands), semijoins
+/// `key_set`, unless a host already serves the demand through the rename.
+/// The policy is re-appended for [`structures_to_stream!`].
+#[cfg(feature = "structure-selection")]
+#[proc_macro]
+pub fn select_structures(input: TokenStream) -> TokenStream {
+    entry::stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::structures_to_stream)),
+        |source: &entry::Policed<cq_ir::index_requirements::Module, cq_ir::policy::Policy>| {
+            let target = cq_structure_selection::compile(&source.language, &source.policy)?;
+            let policy = &source.policy;
+            Ok(quote::quote! { #target #policy })
+        },
+    )
+}
+
+/// Realize Structures as a Stream program.
+///
+/// Input is `Structures policy { … }`. Each RA result becomes a typed stream
+/// definition whose access rule follows from the chosen structures; modes
+/// follow from use. The result continues to [`stream_to_access!`].
 #[cfg(feature = "stream-lowering")]
 #[proc_macro]
-pub fn ix_to_stream(input: TokenStream) -> TokenStream {
+pub fn structures_to_stream(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::stream_to_access)),
-        |source: &entry::Policed<cq_ir::index_requirements::Module, cq_stream_lowering::Policy>| {
+        |source: &entry::Policed<cq_ir::structures::Module, cq_ir::policy::Policy>| {
             cq_stream_lowering::compile(&source.language, &source.policy)
         },
     )

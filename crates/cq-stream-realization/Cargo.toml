@@ -17,3 +17,4 @@ syn = { workspace = true, features = ["visit-mut"] }
 [dev-dependencies]
 cq-index-policy = { path = "../cq-index-policy" }
 cq-stream-lowering = { path = "../cq-stream-lowering" }
+cq-structure-selection = { path = "../cq-structure-selection" }

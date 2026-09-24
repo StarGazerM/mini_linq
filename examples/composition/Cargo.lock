@@ -79,6 +79,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-structure-selection"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
@@ -87,6 +97,7 @@ dependencies = [
  "cq-ir",
  "cq-stream-lowering",
  "cq-stream-realization",
+ "cq-structure-selection",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

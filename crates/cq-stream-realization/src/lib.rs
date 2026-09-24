@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use cq_ir::{cq, rust_access_plan as access, stream, symbol_name};
+use cq_ir::{cq, rust_access_plan as access, stream, structures, symbol_name};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::visit_mut::VisitMut;
@@ -78,7 +78,7 @@ struct Fragment {
 
 pub fn compile(module: &stream::Module, endpoints: &Endpoints) -> syn::Result<Realized> {
     let analysis = stream::contract::check(module)?;
-    let program = &module.index_requirements.relational_plan.program;
+    let program = &module.structures.index_requirements.relational_plan.program;
     let mut reprs: BTreeMap<String, Repr> = BTreeMap::new();
     for input in program.inputs() {
         let name = symbol_name(&input.name);
@@ -96,10 +96,26 @@ pub fn compile(module: &stream::Module, endpoints: &Endpoints) -> syn::Result<Re
             }),
         );
     }
-    let ra_definitions = &module.index_requirements.relational_plan.plan.definitions;
+    let ra_definitions = &module
+        .structures
+        .index_requirements
+        .relational_plan
+        .plan
+        .definitions;
+    // The structures chosen for every name, as the catalogue kinds to build.
+    let mut chosen: BTreeMap<String, Vec<(structures::Kind, Vec<usize>)>> = BTreeMap::new();
+    for entry in &module.structures.entries {
+        if let structures::Structure::Keyed(keyed) = &entry.structure {
+            chosen
+                .entry(symbol_name(&entry.name))
+                .or_default()
+                .push((keyed.kind, keyed.ordinals()));
+        }
+    }
     let mut statements = Vec::new();
     let mut realizer = Realizer {
         analysis: &analysis,
+        chosen,
         reprs,
         endpoints,
     };
@@ -186,6 +202,7 @@ pub fn compile(module: &stream::Module, endpoints: &Endpoints) -> syn::Result<Re
         None => unreachable!("return names a definition"),
     };
     let head_relation = &module
+        .structures
         .index_requirements
         .relational_plan
         .plan
@@ -203,6 +220,7 @@ pub fn compile(module: &stream::Module, endpoints: &Endpoints) -> syn::Result<Re
 
 struct Realizer<'a> {
     analysis: &'a stream::Analysis,
+    chosen: BTreeMap<String, Vec<(structures::Kind, Vec<usize>)>>,
     reprs: BTreeMap<String, Repr>,
     endpoints: &'a Endpoints,
 }
@@ -258,7 +276,8 @@ impl Realizer<'_> {
         let iterator = quote! { #endpoint! { #plan } };
 
         let mut built = Built::default();
-        let needs_rows = provided.contains(&stream::Operation::Iter) || provided.len() > 1;
+        let entries = self.chosen.get(name).cloned().unwrap_or_default();
+        let needs_rows = provided.contains(&stream::Operation::Iter) || entries.len() > 1;
         let source: TokenStream = if needs_rows {
             let rows = format_ident!("__cq_{}_rows", name);
             statements.push(syn::parse_quote! {
@@ -269,13 +288,7 @@ impl Realizer<'_> {
         } else {
             iterator
         };
-        for operation in provided {
-            let columns = match operation {
-                stream::Operation::Iter => continue,
-                stream::Operation::Contains(c)
-                | stream::Operation::Seek(c)
-                | stream::Operation::Ordered(c) => c,
-            };
+        for (kind, columns) in &entries {
             let key: Vec<&Ident> = columns.iter().map(|&i| &heading[i]).collect();
             let payload: Vec<&Ident> = heading
                 .iter()
@@ -289,9 +302,9 @@ impl Realizer<'_> {
                 .collect::<Vec<_>>()
                 .join("_");
             let row = quote!((#(#heading,)*));
-            match operation {
-                stream::Operation::Seek(_) => {
-                    let structure = format_ident!("__cq_{}_seek_{}", name, suffix);
+            match kind {
+                structures::Kind::Hash(_) => {
+                    let structure = format_ident!("__cq_{}_hash_{}", name, suffix);
                     statements.push(syn::parse_quote! {
                         let #structure = &<::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
                             ::core::iter::Iterator::map(#source, |#row| ((#(#key,)*), (#(#payload,)*)))
@@ -299,8 +312,8 @@ impl Realizer<'_> {
                     });
                     built.seek.insert(columns.clone(), structure);
                 }
-                stream::Operation::Contains(_) => {
-                    let structure = format_ident!("__cq_{}_contains_{}", name, suffix);
+                structures::Kind::KeySet(_) => {
+                    let structure = format_ident!("__cq_{}_key_set_{}", name, suffix);
                     statements.push(syn::parse_quote! {
                         let #structure: &::std::collections::HashSet<_> = &::core::iter::Iterator::collect(
                             ::core::iter::Iterator::map(#source, |#row| (#(#key,)*))
@@ -308,7 +321,7 @@ impl Realizer<'_> {
                     });
                     built.contains.insert(columns.clone(), structure);
                 }
-                stream::Operation::Ordered(_) => {
+                structures::Kind::Ordered(_) => {
                     let structure = format_ident!("__cq_{}_ordered_{}", name, suffix);
                     statements.push(syn::parse_quote! {
                         let #structure = &{
@@ -321,7 +334,6 @@ impl Realizer<'_> {
                     });
                     built.ordered.insert(columns.clone(), structure);
                 }
-                stream::Operation::Iter => unreachable!(),
             }
         }
         Ok(built)

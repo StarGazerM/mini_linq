@@ -14,6 +14,7 @@ members = [
     "crates/cq-storage",
     "crates/cq-query-lowering",
     "crates/cq-index-policy",
+    "crates/cq-structure-selection",
     "crates/cq-stream-lowering",
     "crates/cq-stream-realization",
     "crates/cq-state-providers",
@@ -36,6 +37,7 @@ cq-ir = { path = "crates/cq-ir" }
 cq-storage = { path = "crates/cq-storage" }
 cq-query-lowering = { path = "crates/cq-query-lowering", default-features = false }
 cq-index-policy = { path = "crates/cq-index-policy", default-features = false }
+cq-structure-selection = { path = "crates/cq-structure-selection", default-features = false }
 cq-stream-lowering = { path = "crates/cq-stream-lowering", default-features = false }
 cq-stream-realization = { path = "crates/cq-stream-realization", default-features = false }
 cq-state-providers = { path = "crates/cq-state-providers" }

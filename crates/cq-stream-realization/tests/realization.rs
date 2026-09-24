@@ -16,8 +16,9 @@ fn endpoints() -> Endpoints {
 
 fn stream_of(plan: &ra::Module, policy: proc_macro2::TokenStream) -> stream::Module {
     let source = cq_index_policy::compile(plan).unwrap();
-    let policy: cq_stream_lowering::Policy = syn::parse2(policy).unwrap();
-    cq_stream_lowering::compile(&source, &policy).unwrap()
+    let policy: cq_ir::policy::Policy = syn::parse2(policy).unwrap();
+    let structures = cq_structure_selection::compile(&source, &policy).unwrap();
+    cq_stream_lowering::compile(&structures, &policy).unwrap()
 }
 
 fn chain() -> ra::Module {
@@ -53,7 +54,7 @@ fn hash_chain_builds_two_indexes_and_one_flat_region() {
     let statements: Vec<String> = realized.statements.iter().map(text).collect();
     assert_eq!(statements.len(), 2);
     let expected_r: syn::Stmt = syn::parse_quote! {
-        let __cq_r_seek_0 = &<::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
+        let __cq_r_hash_0 = &<::cq_storage::HashIndex<_, _> as ::cq_storage::BuildIndex<_>>::build(
             ::core::iter::Iterator::map(
                 mini_linq::access_to_support_iter! { r(a, b) => ((a, b,)) :- R(a, b) => bind (a, b,) <- (R.iter()); },
                 |(a, b,)| ((a,), (b,))
@@ -64,8 +65,8 @@ fn hash_chain_builds_two_indexes_and_one_flat_region() {
     let expected: cq_ir::rust_access_plan::Plan = syn::parse_quote! {
         answer(a, c) => ((a, c,)) :-
             L(a) => bind (a,) <- (L.iter()),
-            r(a, b) => bind (b,) <- (::cq_storage::IndexRead::lookup(&__cq_r_seek_0, &(a,))),
-            s(b, c) => bind (c,) <- (::cq_storage::IndexRead::lookup(&__cq_s_seek_0, &(b,)));
+            r(a, b) => bind (b,) <- (::cq_storage::IndexRead::lookup(&__cq_r_hash_0, &(a,))),
+            s(b, c) => bind (c,) <- (::cq_storage::IndexRead::lookup(&__cq_s_hash_0, &(b,)));
     };
     assert_eq!(text(&realized.access), text(&expected));
 }

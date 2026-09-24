@@ -10,7 +10,7 @@ fn streamed(definition: &mut stream::Definition) -> &mut stream::Streamed {
     }
 }
 
-fn chain(stream: proc_macro2::TokenStream) -> stream::Module {
+fn chain(structures: proc_macro2::TokenStream, stream: proc_macro2::TokenStream) -> stream::Module {
     syn::parse_quote! {
         struct Chain;
         relation L(a: i32);
@@ -28,23 +28,33 @@ fn chain(stream: proc_macro2::TokenStream) -> stream::Module {
         }
         indexes { i0 = @r[0]; i1 = @s[0]; }
         uses { j0.right = i0; j1.right = i1; }
+        structures { #structures }
         stream { #stream }
     }
 }
 
+fn hosts_iter() -> proc_macro2::TokenStream {
+    quote! {
+        L = host provides { iter };
+        R = host provides { iter };
+        S = host provides { iter };
+    }
+}
+
 fn hash_chain() -> stream::Module {
-    chain(quote! {
-        open L provides { iter };
-        open R provides { iter };
-        open S provides { iter };
-        l = pipe for (a) in scan L { emit (a) };
-        r = let provides { seek @r[0] } for (a, b) in scan R { emit (a, b) };
-        s = let provides { seek @s[0] } for (b, c) in scan S { emit (b, c) };
-        j0 = pipe for (a) in scan l { for (b) in seek r[0](a) { emit (a, b) } };
-        j1 = pipe for (a, b) in scan j0 { for (c) in seek s[0](b) { emit (a, b, c) } };
-        p = pipe for (a, b, c) in scan j1 { support { emit (a, c) } };
-        return p;
-    })
+    let hosts = hosts_iter();
+    chain(
+        quote! { #hosts r = hash [0]; s = hash [0]; },
+        quote! {
+            l = pipe for (a) in scan L { emit (a) };
+            r = let provides { seek @r[0] } for (a, b) in scan R { emit (a, b) };
+            s = let provides { seek @s[0] } for (b, c) in scan S { emit (b, c) };
+            j0 = pipe for (a) in scan l { for (b) in seek r[0](a) { emit (a, b) } };
+            j1 = pipe for (a, b) in scan j0 { for (c) in seek s[0](b) { emit (a, b, c) } };
+            p = pipe for (a, b, c) in scan j1 { support { emit (a, c) } };
+            return p;
+        },
+    )
 }
 
 #[test]
@@ -70,18 +80,19 @@ fn hash_chain_round_trips_and_exports_analysis() {
 fn merge_join_uses_co_iteration_on_ordered_operands() {
     // Sorted L and R: the join on `a` co-iterates instead of seeking, and an
     // ordered capability discharges the IX seek demand by subsumption.
-    let module = chain(quote! {
-        open L provides { iter };
-        open R provides { iter };
-        open S provides { iter };
-        l = let provides { ordered @l[0] } for (a) in scan L { emit (a) };
-        r = let provides { ordered @r[0] } for (a, b) in scan R { emit (a, b) };
-        s = let provides { seek @s[0] } for (b, c) in scan S { emit (b, c) };
-        j0 = pipe co (() in order l[0], (b) in order r[0]) on (a) { emit (a, b) };
-        j1 = pipe for (a, b) in scan j0 { for (c) in seek s[0](b) { emit (a, b, c) } };
-        p = pipe for (a, b, c) in scan j1 { support { emit (a, c) } };
-        return p;
-    });
+    let hosts = hosts_iter();
+    let module = chain(
+        quote! { #hosts l = ordered [0]; r = ordered [0]; s = hash [0]; },
+        quote! {
+            l = let provides { ordered @l[0] } for (a) in scan L { emit (a) };
+            r = let provides { ordered @r[0] } for (a, b) in scan R { emit (a, b) };
+            s = let provides { seek @s[0] } for (b, c) in scan S { emit (b, c) };
+            j0 = pipe co (() in order l[0], (b) in order r[0]) on (a) { emit (a, b) };
+            j1 = pipe for (a, b) in scan j0 { for (c) in seek s[0](b) { emit (a, b, c) } };
+            p = pipe for (a, b, c) in scan j1 { support { emit (a, c) } };
+            return p;
+        },
+    );
     let analysis = stream::contract::check(&module).unwrap();
     assert_eq!(
         analysis.required["j0"]["l"].iter().next(),
@@ -89,7 +100,7 @@ fn merge_join_uses_co_iteration_on_ordered_operands() {
     );
 }
 
-fn ya(stream: proc_macro2::TokenStream) -> stream::Module {
+fn ya(structures: proc_macro2::TokenStream, stream: proc_macro2::TokenStream) -> stream::Module {
     syn::parse_quote! {
         struct YaDelivery;
         relation D(driver_id: i32, depot_id: i32);
@@ -112,6 +123,7 @@ fn ya(stream: proc_macro2::TokenStream) -> stream::Module {
         }
         indexes { i0 = @d0[0]; i1 = @n0[0]; i2 = @s2[0]; i3 = @s2[1]; i4 = @n1[0]; i5 = @d1[0]; }
         uses { s1.right = i0; s2.right = i1; d1.right = i2; n1.right = i3; sn.right = i4; all_rows.right = i5; }
+        structures { #structures }
         stream { #stream }
     }
 }
@@ -119,11 +131,21 @@ fn ya(stream: proc_macro2::TokenStream) -> stream::Module {
 // Headings (sorted): d0 {depot, driver}; s0 {depot, item}; n0 {item, job};
 // s2 {depot, item}; n1 {item, job}; sn {depot, item, job}; live {depot, job};
 // d1 {depot, driver}; all_rows {depot, driver, job}; result {driver, job}.
+fn ya_structures() -> proc_macro2::TokenStream {
+    quote! {
+        D = host provides { iter };
+        S = host provides { iter };
+        N = host provides { iter };
+        d0 = hash [0];
+        n0 = hash [0];
+        s2 = key_set [0]; s2 = key_set [1];
+        d1 = hash [0];
+        n1 = hash [0];
+    }
+}
+
 fn ya_eager() -> proc_macro2::TokenStream {
     quote! {
-        open D provides { iter };
-        open S provides { iter };
-        open N provides { iter };
         d0 = let provides { iter, contains @d0[0], seek @d0[0] } for (driver, depot) in scan D { emit (depot, driver) };
         s0 = let provides { iter } for (depot, item) in scan S { emit (depot, item) };
         n0 = let provides { iter, contains @n0[0], seek @n0[0] } for (job, item) in scan N { emit (item, job) };
@@ -141,7 +163,7 @@ fn ya_eager() -> proc_macro2::TokenStream {
 
 #[test]
 fn yannakakis_reduction_is_eager_semijoins_over_contains() {
-    let module = ya(ya_eager());
+    let module = ya(ya_structures(), ya_eager());
     let analysis = stream::contract::check(&module).unwrap();
     assert_eq!(analysis.readers["s2"], ["d1", "n1", "sn"]);
     assert!(!analysis.unique.contains_key("s2"));
@@ -151,7 +173,7 @@ fn yannakakis_reduction_is_eager_semijoins_over_contains() {
 #[test]
 fn contract_rejects_each_ill_formed_program() {
     type Mutation = fn(&mut stream::Module);
-    let cases: [(&str, Mutation, &str); 9] = [
+    let cases: [(&str, Mutation, &str); 10] = [
         (
             "missing capability",
             |m| {
@@ -220,11 +242,19 @@ fn contract_rejects_each_ill_formed_program() {
             "only to semijoin",
         ),
         (
-            "unopened input",
+            "unchosen structure",
             |m| {
-                m.program.inputs.remove(0);
+                m.structures.entries.retain(|e| e.name != "r");
             },
-            "not opened",
+            "no structure on `r` serves",
+        ),
+        (
+            "let claims unchosen capability",
+            |m| {
+                streamed(&mut m.program.definitions[1]).mode =
+                    syn::parse_quote!(let provides { seek @r[0], ordered @r[0] });
+            },
+            "no structure chosen on `r` provides Ordered",
         ),
     ];
     for (name, mutate, expected) in cases {
@@ -240,8 +270,7 @@ fn contract_rejects_each_ill_formed_program() {
 #[test]
 fn lazy_semijoin_requires_its_consumer_to_retest_the_reducer() {
     // TreeTracker-style: s1 stays a pipe and its consumer must read d0 again.
-    let mut tokens = ya_eager();
-    let module = ya(std::mem::take(&mut tokens));
+    let module = ya(ya_structures(), ya_eager());
     let mut lazy = module.clone();
     streamed(&mut lazy.program.definitions[3]).lazy = Some(Default::default());
     let error = stream::contract::check(&lazy).unwrap_err().to_string();
@@ -272,9 +301,11 @@ fn alias_inherits_host_capabilities_translated_through_the_rename() {
         }
         indexes { i0 = @r[1]; }
         uses { j.right = i0; }
+        structures {
+            L = host provides { iter };
+            R = host provides { seek @R[1] };
+        }
         stream {
-            open L provides { iter };
-            open R provides { seek @R[1] };
             l = pipe for (y) in scan L { emit (y) };
             r = alias R;
             j = pipe for (y) in scan l { for (x) in seek r[1](y) { emit (x, y) } };
@@ -312,8 +343,8 @@ fn bounded_scans_require_ordered_capability_on_the_window_column() {
             output s as answer(a, b);
         }
         indexes {} uses {}
+        structures { R = host provides { ordered @R[0] }; }
         stream {
-            open R provides { ordered @R[0] };
             r = alias R;
             s = pipe for (a, b) in scan r within [0]((2), _) { emit (a, b) };
             return s;
@@ -325,7 +356,7 @@ fn bounded_scans_require_ordered_capability_on_the_window_column() {
         Some(&Operation::Ordered(vec![0]))
     );
     let mut unordered = module.clone();
-    unordered.program.inputs[0].provides = syn::parse_quote!(provides { iter });
+    unordered.structures.entries[0].structure = syn::parse_quote!(host provides { iter });
     let error = stream::contract::check(&unordered).unwrap_err().to_string();
     assert!(error.contains("does not provide Ordered"), "{error}");
 }

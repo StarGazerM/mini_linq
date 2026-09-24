@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 macro_rules! policy {
     ($($ix:tt)*) => {
-        ::mini_linq::ix_to_stream! {
+        ::mini_linq::select_structures! {
             $($ix)*
             policy {
                 L provides { iter };
@@ -23,7 +23,7 @@ macro_rules! policy {
 use policy as stream_policy;
 mod wiring {
     pub(crate) use super::stream_policy;
-    pub(crate) use ::mini_linq::{access_to_set_loops as access, stream_to_access};
+    pub(crate) use ::mini_linq::{access_to_set_loops as access, stream_to_access, structures_to_stream};
     #[allow(unused_imports)]
     pub(crate) use cq_state_providers::{hash_distinct as distinct_state, hash_set_sink as set_sink};
 }

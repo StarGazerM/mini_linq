@@ -85,6 +85,7 @@ version = "0.1.0"
 dependencies = [
  "cq-index-policy",
  "cq-ir",
+ "cq-structure-selection",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -98,6 +99,18 @@ dependencies = [
  "cq-index-policy",
  "cq-ir",
  "cq-stream-lowering",
+ "cq-structure-selection",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-structure-selection"
+version = "0.1.0"
+dependencies = [
+ "cq-index-policy",
+ "cq-ir",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -126,6 +139,7 @@ dependencies = [
  "cq-storage",
  "cq-stream-lowering",
  "cq-stream-realization",
+ "cq-structure-selection",
  "prettyplease",
  "proc-macro2",
  "quote",

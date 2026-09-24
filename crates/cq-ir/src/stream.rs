@@ -15,7 +15,6 @@
 //!
 //! ```text
 //! stream {
-//!     open R provides { iter, seek @R[0] };
 //!     r  = let provides { seek @r[0] } for (a, b) in scan R { emit (a, b) };
 //!     j  = pipe for (a) in scan l { for (b) in seek r[0](a) { emit (a, b) } };
 //!     p  = pipe for (a, b) in scan j { support { emit (a) } };
@@ -24,8 +23,7 @@
 //! ```
 //!
 //! ```text
-//! Module     ::= IX "stream" "{" Input* Definition* Return "}"
-//! Input      ::= "open" Ident "provides" "{" [Cap ("," Cap)* [","]] "}" ";"
+//! Module     ::= Structures "stream" "{" Definition* Return "}"
 //! Definition ::= Ident "=" Realization ";"
 //! Realization ::= "alias" Ident | ["lazy"] Mode Body
 //! Mode       ::= "pipe" | "let" "provides" "{" [Cap ("," Cap)* [","]] "}"
@@ -49,19 +47,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Expr, Ident, Pat, Token, token};
 
-use crate::{Column, CommaList, cq, index_requirements as ix, relational_plan as ra, symbol_name};
+pub use crate::capabilities::{Capability, Columns, Descriptor, Operation, Provides, operations};
+use crate::{Column, CommaList, cq, relational_plan as ra, structures, symbol_name};
 
 pub mod kw {
     syn::custom_keyword!(stream);
-    syn::custom_keyword!(open);
-    syn::custom_keyword!(provides);
+    pub use crate::capabilities::kw::provides;
     syn::custom_keyword!(pipe);
     syn::custom_keyword!(lazy);
     syn::custom_keyword!(alias);
-    syn::custom_keyword!(iter);
-    syn::custom_keyword!(seek);
-    syn::custom_keyword!(contains);
-    syn::custom_keyword!(ordered);
+    pub use crate::capabilities::kw::{contains, iter, ordered, seek};
     syn::custom_keyword!(co);
     syn::custom_keyword!(on);
     syn::custom_keyword!(scan);
@@ -74,7 +69,7 @@ pub mod kw {
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Module {
-    pub index_requirements: ix::Module,
+    pub structures: structures::Module,
     pub stream_token: kw::stream,
     #[syn(braced)]
     pub stream_brace: token::Brace,
@@ -84,84 +79,9 @@ pub struct Module {
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Program {
-    #[parse(parse_inputs)]
-    #[to_tokens(|tokens, inputs| quote::TokenStreamExt::append_all(tokens, inputs))]
-    pub inputs: Vec<Input>,
     #[syn(repeat, until = Token![return])]
     pub definitions: Vec<Definition>,
     pub return_: Return,
-}
-
-fn parse_inputs(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Input>> {
-    let mut inputs = Vec::new();
-    while input.peek(kw::open) {
-        inputs.push(input.parse()?);
-    }
-    Ok(inputs)
-}
-
-/// A host relation and the capabilities its host value is declared to admit.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Input {
-    pub open_token: kw::open,
-    pub name: Ident,
-    pub provides: Provides,
-    pub semi_token: Token![;],
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Provides {
-    pub provides_token: kw::provides,
-    #[syn(braced)]
-    pub brace: token::Brace,
-    #[syn(in = brace)]
-    #[parse(CommaList::parse_terminated)]
-    pub capabilities: CommaList<Capability>,
-}
-
-/// One admitted cursor operation over a named relation.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub enum Capability {
-    #[parse(peek = kw::iter)]
-    Iter { iter_token: kw::iter },
-    #[parse(peek = kw::seek)]
-    Seek {
-        seek_token: kw::seek,
-        descriptor: Descriptor,
-    },
-    #[parse(peek = kw::contains)]
-    Contains {
-        contains_token: kw::contains,
-        descriptor: Descriptor,
-    },
-    #[parse(peek = kw::ordered)]
-    Ordered {
-        ordered_token: kw::ordered,
-        descriptor: Descriptor,
-    },
-}
-
-/// `@r[C]`: the IX index-requirement syntax, reused for capability keys.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Descriptor {
-    pub at_token: Token![@],
-    pub relation: Ident,
-    pub columns: Columns,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Columns {
-    #[syn(bracketed)]
-    pub bracket: token::Bracket,
-    #[syn(in = bracket)]
-    #[parse(CommaList::parse_terminated)]
-    pub columns: CommaList<Column>,
-}
-
-impl Columns {
-    pub fn ordinals(&self) -> Vec<usize> {
-        self.columns.iter().map(|c| c.index as usize).collect()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -428,40 +348,16 @@ pub struct Return {
 
 /// The Stream language contract in diagnostic and predicate form.
 pub mod contract {
-    /// Check IX, then Stream's own well-formedness: names, scope, capability
-    /// discharge, affine use of pipes, the support obligation, and strategy.
+    /// Check Structures, then Stream's own well-formedness: names, scope,
+    /// capability discharge against the chosen structures, affine use of
+    /// pipes, the support obligation, and strategy.
     pub fn check(module: &super::Module) -> syn::Result<super::Analysis> {
-        super::ix::contract::check(&module.index_requirements)?;
-        super::analyze(module)
+        let structures = super::structures::contract::check(&module.structures)?;
+        super::analyze(module, structures)
     }
 
     pub fn well_formed(module: &super::Module) -> bool {
         check(module).is_ok()
-    }
-}
-
-/// A required or provided cursor operation, ordered by strength.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Operation {
-    Iter,
-    Contains(Vec<usize>),
-    Seek(Vec<usize>),
-    Ordered(Vec<usize>),
-}
-
-impl Operation {
-    /// `ordered ⊒ seek ⊒ contains` on the same columns; `iter` is separate.
-    pub fn satisfies(&self, required: &Operation) -> bool {
-        match (self, required) {
-            (Operation::Iter, Operation::Iter) => true,
-            (
-                Operation::Ordered(p),
-                Operation::Ordered(r) | Operation::Seek(r) | Operation::Contains(r),
-            )
-            | (Operation::Seek(p), Operation::Seek(r) | Operation::Contains(r))
-            | (Operation::Contains(p), Operation::Contains(r)) => p == r,
-            _ => false,
-        }
     }
 }
 
@@ -473,7 +369,7 @@ pub const RETURN: &str = "return";
 pub struct Analysis {
     /// Sorted RA heading of every input and definition.
     pub headings: BTreeMap<String, Vec<String>>,
-    /// Operations declared by every `open` or `let`.
+    /// Operations every host, alias, or `let` provides.
     pub provided: BTreeMap<String, Vec<Operation>>,
     /// Operations each definition requires of each name it reads.
     pub required: BTreeMap<String, BTreeMap<String, BTreeSet<Operation>>>,
@@ -488,23 +384,6 @@ pub struct Analysis {
 
 fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> syn::Result<T> {
     Err(syn::Error::new_spanned(spanned, message))
-}
-
-fn operations(provides: &Provides) -> Vec<Operation> {
-    provides
-        .capabilities
-        .iter()
-        .map(|c| match c {
-            Capability::Iter { .. } => Operation::Iter,
-            Capability::Contains { descriptor, .. } => {
-                Operation::Contains(descriptor.columns.ordinals())
-            }
-            Capability::Seek { descriptor, .. } => Operation::Seek(descriptor.columns.ordinals()),
-            Capability::Ordered { descriptor, .. } => {
-                Operation::Ordered(descriptor.columns.ordinals())
-            }
-        })
-        .collect()
 }
 
 fn check_columns(
@@ -527,36 +406,34 @@ fn check_columns(
 struct Checker<'a> {
     module: &'a Module,
     analysis: Analysis,
+    structures: structures::Analysis,
     operators: BTreeMap<String, &'a ra::Operator>,
     modes: BTreeMap<String, bool>,
     set_valued: BTreeMap<String, bool>,
 }
 
-fn analyze(module: &Module) -> syn::Result<Analysis> {
-    let ra_module = &module.index_requirements.relational_plan;
-    let infos = ra::check_in(ra_module.program.inputs(), &ra_module.plan)?;
+fn analyze(module: &Module, structures: structures::Analysis) -> syn::Result<Analysis> {
+    let ra_module = &module.structures.index_requirements.relational_plan;
     let mut checker = Checker {
         module,
-        analysis: Analysis::default(),
+        analysis: Analysis {
+            headings: structures.headings.clone(),
+            ..Analysis::default()
+        },
+        structures,
         operators: BTreeMap::new(),
         modes: BTreeMap::new(),
         set_valued: BTreeMap::new(),
     };
-    for input in ra_module.program.inputs() {
-        let mut heading: Vec<_> = input.columns.iter().map(|c| symbol_name(&c.name)).collect();
-        heading.sort();
-        checker
-            .analysis
-            .headings
-            .insert(symbol_name(&input.name), heading);
-    }
     for definition in &ra_module.plan.definitions {
         let name = symbol_name(&definition.result);
-        let heading = infos[&name].heading.iter().cloned().collect();
-        checker.analysis.headings.insert(name.clone(), heading);
         checker.operators.insert(name, &definition.operator);
     }
-    checker.check_inputs()?;
+    for input in ra_module.program.inputs() {
+        let name = symbol_name(&input.name);
+        let provided = checker.structures.provided[&name].clone();
+        checker.analysis.provided.insert(name, provided);
+    }
     checker.check_definitions()?;
     checker.check_return()?;
     Ok(checker.analysis)
@@ -575,6 +452,8 @@ impl<'a> Checker<'a> {
             .ok_or_else(|| syn::Error::new_spanned(name, "unknown relation name"))
     }
 
+    /// A `let` may claim only operations some chosen structure on the name
+    /// provides (`iter` is materialized rows and always available).
     fn check_provides(&self, name: &Ident, provides: &Provides) -> syn::Result<Vec<Operation>> {
         let arity = self.arity(name)?;
         for capability in &provides.capabilities {
@@ -590,47 +469,30 @@ impl<'a> Checker<'a> {
         }
         let operations = operations(provides);
         let mut seen = BTreeSet::new();
+        let chosen = self
+            .structures
+            .provided
+            .get(&symbol_name(name))
+            .cloned()
+            .unwrap_or_default();
         for operation in &operations {
             if !seen.insert(operation.clone()) {
                 return error(provides, "duplicate capability");
+            }
+            if *operation != Operation::Iter && !chosen.iter().any(|c| c.satisfies(operation)) {
+                return error(
+                    provides,
+                    format!("no structure chosen on `{name}` provides {operation:?}"),
+                );
             }
         }
         Ok(operations)
     }
 
-    fn check_inputs(&mut self) -> syn::Result<()> {
-        let declared: BTreeSet<_> = self
-            .module
-            .index_requirements
-            .relational_plan
-            .program
-            .inputs()
-            .map(|d| symbol_name(&d.name))
-            .collect();
-        let mut opened = BTreeSet::new();
-        for input in &self.program().inputs {
-            let name = symbol_name(&input.name);
-            if !declared.contains(&name) {
-                return error(&input.name, "open must name a declared host relation");
-            }
-            if !opened.insert(name.clone()) {
-                return error(&input.name, "host relation opened twice");
-            }
-            let operations = self.check_provides(&input.name, &input.provides)?;
-            self.analysis.provided.insert(name, operations);
-        }
-        if let Some(missing) = declared.difference(&opened).next() {
-            return error(
-                &self.module.stream_token,
-                format!("host relation `{missing}` is declared but not opened"),
-            );
-        }
-        Ok(())
-    }
-
     fn check_definitions(&mut self) -> syn::Result<()> {
         let ra_definitions = &self
             .module
+            .structures
             .index_requirements
             .relational_plan
             .plan
@@ -653,7 +515,7 @@ impl<'a> Checker<'a> {
                     ),
                 );
             }
-            let streamed = match &definition.realization {
+            let streamed: &Streamed = match &definition.realization {
                 Realization::Alias { alias_token, host } => {
                     self.check_alias(&name, alias_token, host, &ra_definition.operator)?;
                     continue;
@@ -872,14 +734,14 @@ impl<'a> Checker<'a> {
     }
 
     fn check_ix_discharged(&self) -> syn::Result<()> {
-        let ix = &self.module.index_requirements;
+        let ix = &self.module.structures.index_requirements;
         for index_use in &ix.uses {
             let index = ix
                 .indexes
                 .iter()
                 .find(|i| symbol_name(&i.name) == symbol_name(&index_use.index))
                 .expect("IX contract validated uses");
-            let (relation, columns) = ix::signature(&index.requirement);
+            let (relation, columns) = crate::index_requirements::signature(&index.requirement);
             let consumer = symbol_name(&index_use.result);
             let required = Operation::Contains(columns.clone());
             let discharged = self.analysis.required[&consumer]
@@ -896,7 +758,13 @@ impl<'a> Checker<'a> {
     }
 
     fn check_return(&self) -> syn::Result<()> {
-        let output = &self.module.index_requirements.relational_plan.plan.output;
+        let output = &self
+            .module
+            .structures
+            .index_requirements
+            .relational_plan
+            .plan
+            .output;
         let name = symbol_name(&self.program().return_.name);
         if name != symbol_name(&output.input) {
             return error(

@@ -1,120 +1,36 @@
-//! IX → Stream: realize every RA result as a typed stream program under a
-//! query-independent policy.
+//! Structures → Stream: realize every RA result as a typed stream program.
 //!
-//! The kernel owns one rule per RA operator. The policy supplies only what
-//! the query cannot determine: the capabilities each host relation admits,
-//! and which admissible rule to prefer where more than one applies. Modes
-//! follow from use: a result read once through `scan` is a pipe; a result
-//! read more than once, or read through `seek`/`contains`/`order`, is
-//! materialized with exactly the capabilities its readers require.
+//! The kernel owns one rule per RA operator and is structure-directed: which
+//! rule applies follows from the operations the operands' chosen structures
+//! provide. Both operands ordered on the shared columns → co-iteration; the
+//! right operand seekable → probe; a reducer with membership → guard; a
+//! comparison on a column the host keeps ordered → bounded scan. Nothing is
+//! chosen here that Structures did not make admissible, and nothing falls
+//! back: an operator no structure serves is an error.
 //!
-//! ```text
-//! Policy ::= "policy" "{" (Ident "provides" "{" Cap,* "}" ";")*
-//!            ["join" "=" ("seek" | "merge") ";"]
-//!            ["semijoin" "=" ("eager" | "prefer_lazy") ";"] "}"
-//! ```
+//! Modes follow from use: a result read once through `scan` is a pipe; a
+//! result read more than once, or through `seek`/`contains`/`order`, is
+//! materialized with exactly the operations its readers require. The policy
+//! contributes only the semijoin strategy.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_ir::{index_requirements as ix, relational_plan as ra, stream, symbol_name};
+use cq_ir::capabilities::Operation;
+use cq_ir::policy::Policy;
+use cq_ir::{relational_plan as ra, stream, structures, symbol_name};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
-use syn::{Ident, Token, token};
+use syn::Ident;
 
-pub mod kw {
-    syn::custom_keyword!(policy);
-    syn::custom_keyword!(join);
-    syn::custom_keyword!(semijoin);
-    syn::custom_keyword!(seek);
-    syn::custom_keyword!(merge);
-    syn::custom_keyword!(eager);
-    syn::custom_keyword!(prefer_lazy);
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Policy {
-    pub policy_token: kw::policy,
-    #[syn(braced)]
-    pub brace: token::Brace,
-    #[syn(in = brace)]
-    #[parse(parse_hosts)]
-    #[to_tokens(|tokens, hosts| quote::TokenStreamExt::append_all(tokens, hosts))]
-    pub hosts: Vec<Host>,
-    #[syn(in = brace)]
-    #[syn(optional, peek = kw::join)]
-    pub join: Option<JoinChoice>,
-    #[syn(in = brace)]
-    #[syn(optional, peek = kw::semijoin)]
-    pub semijoin: Option<SemijoinChoice>,
-}
-
-fn parse_hosts(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Host>> {
-    let mut hosts = Vec::new();
-    while input.peek(Ident) && !input.peek(kw::join) && !input.peek(kw::semijoin) {
-        hosts.push(input.parse()?);
-    }
-    Ok(hosts)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Host {
-    pub name: Ident,
-    pub provides: stream::Provides,
-    pub semi_token: Token![;],
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct JoinChoice {
-    pub join_token: kw::join,
-    pub eq_token: Token![=],
-    pub rule: JoinRule,
-    pub semi_token: Token![;],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub enum JoinRule {
-    #[parse(peek = kw::seek)]
-    Seek(kw::seek),
-    #[parse(peek = kw::merge)]
-    Merge(kw::merge),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct SemijoinChoice {
-    pub semijoin_token: kw::semijoin,
-    pub eq_token: Token![=],
-    pub rule: SemijoinRule,
-    pub semi_token: Token![;],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub enum SemijoinRule {
-    #[parse(peek = kw::eager)]
-    Eager(kw::eager),
-    #[parse(peek = kw::prefer_lazy)]
-    PreferLazy(kw::prefer_lazy),
-}
-
-impl Policy {
-    fn merge_joins(&self) -> bool {
-        matches!(
-            self.join,
-            Some(JoinChoice {
-                rule: JoinRule::Merge(_),
-                ..
-            })
-        )
-    }
-
-    fn prefer_lazy(&self) -> bool {
-        matches!(
-            self.semijoin,
-            Some(SemijoinChoice {
-                rule: SemijoinRule::PreferLazy(_),
-                ..
-            })
-        )
-    }
+/// The access rule the kernel derived for one binary operator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Rule {
+    /// `for t in l { for u in seek r[C](t.C) … }`
+    Seek,
+    /// `co (t in order l[Cl], u in order r[Cr]) on C …`
+    Merge,
+    /// `for t in l { if contains r[C](t.C) … }`
+    Contains,
 }
 
 /// Facts about one RA result used to choose its mode and body.
@@ -122,43 +38,25 @@ struct Result_ {
     name: String,
     heading: Vec<String>,
     /// Readers in RA order, each with the operation it needs on this result.
-    needs: Vec<(String, stream::Operation)>,
+    needs: Vec<(String, Operation)>,
     bag: bool,
 }
 
-/// Lower IX to Stream under `policy`, then check the Stream contract.
-pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Module> {
-    ix::contract::check(source)?;
-    let ra_module = &source.relational_plan;
+/// Lower Structures to Stream, then check the Stream contract.
+pub fn compile(source: &structures::Module, policy: &Policy) -> syn::Result<stream::Module> {
+    let analysis = structures::contract::check(source)?;
+    let ra_module = &source.index_requirements.relational_plan;
     let plan = &ra_module.plan;
-    let infos = ra::check_in(ra_module.program.inputs(), plan)?;
-    let mut headings: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for input in ra_module.program.inputs() {
-        let mut heading: Vec<_> = input.columns.iter().map(|c| symbol_name(&c.name)).collect();
-        heading.sort();
-        headings.insert(symbol_name(&input.name), heading);
-    }
-    for definition in &plan.definitions {
-        let name = symbol_name(&definition.result);
-        headings.insert(name.clone(), infos[&name].heading.iter().cloned().collect());
-    }
+    let headings = &analysis.headings;
+    let provided = |name: &str| -> &[Operation] {
+        analysis
+            .provided
+            .get(name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    };
+    let serves = |name: &str, op: &Operation| provided(name).iter().any(|p| p.satisfies(op));
 
-    // Host capabilities in each host's sorted column ordinals.
-    let host_operations: BTreeMap<String, Vec<stream::Operation>> = policy
-        .hosts
-        .iter()
-        .map(|host| (symbol_name(&host.name), operations(&host.provides)))
-        .collect();
-    let renames: BTreeMap<String, &ra::Rename> = plan
-        .definitions
-        .iter()
-        .filter_map(|d| match &d.operator {
-            ra::Operator::Rename(r) => Some((symbol_name(&d.result), &**r)),
-            _ => None,
-        })
-        .collect();
-
-    // Requirements each result places on its operands.
     let mut results: BTreeMap<String, Result_> = plan
         .definitions
         .iter()
@@ -175,75 +73,76 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
             )
         })
         .collect();
+    let mut rules: BTreeMap<String, Rule> = BTreeMap::new();
+    let mut windows: BTreeMap<String, Window> = BTreeMap::new();
     let ordinals = |relation: &str, attributes: &[String]| -> Vec<usize> {
-        let heading = &headings[relation];
-        attributes
-            .iter()
-            .map(|a| {
-                heading
-                    .iter()
-                    .position(|h| h == a)
-                    .expect("attribute in heading")
-            })
-            .collect()
+        ordinals_of(&headings[relation], attributes)
     };
+
     for definition in &plan.definitions {
         let reader = symbol_name(&definition.result);
-        let mut need = |operand: &Ident, operation: stream::Operation| {
-            results
-                .get_mut(&symbol_name(operand))
-                .expect("RA operands are results")
-                .needs
-                .push((reader.clone(), operation));
+        let mut need = |operand: &Ident, operation: Operation| {
+            let name = symbol_name(operand);
+            if let Some(result) = results.get_mut(&name) {
+                result.needs.push((reader.clone(), operation));
+            }
         };
         match &definition.operator {
             ra::Operator::Unit(_) | ra::Operator::Rename(_) => {}
             ra::Operator::NaturalJoin(join) => {
-                let shared = shared_attributes(&headings, &join.left, &join.right);
-                if policy.merge_joins() {
-                    need(
-                        &join.left,
-                        stream::Operation::Ordered(ordinals(&symbol_name(&join.left), &shared)),
-                    );
-                    need(
-                        &join.right,
-                        stream::Operation::Ordered(ordinals(&symbol_name(&join.right), &shared)),
-                    );
+                let (l, r) = (symbol_name(&join.left), symbol_name(&join.right));
+                let shared = shared_attributes(headings, &l, &r);
+                let (cl, cr) = (ordinals(&l, &shared), ordinals(&r, &shared));
+                if serves(&l, &Operation::Ordered(cl.clone()))
+                    && serves(&r, &Operation::Ordered(cr.clone()))
+                {
+                    need(&join.left, Operation::Ordered(cl));
+                    need(&join.right, Operation::Ordered(cr));
+                    rules.insert(reader.clone(), Rule::Merge);
+                } else if serves(&r, &Operation::Seek(cr.clone())) {
+                    need(&join.left, Operation::Iter);
+                    need(&join.right, Operation::Seek(cr));
+                    rules.insert(reader.clone(), Rule::Seek);
                 } else {
-                    need(&join.left, stream::Operation::Iter);
-                    need(
-                        &join.right,
-                        stream::Operation::Seek(ordinals(&symbol_name(&join.right), &shared)),
-                    );
+                    return Err(syn::Error::new_spanned(
+                        &definition.result,
+                        format!(
+                            "no chosen structure serves the join `{reader}`: `{r}` needs seek or both operands ordered on {shared:?}"
+                        ),
+                    ));
                 }
             }
             ra::Operator::Semijoin(join) => {
-                let shared = shared_attributes(&headings, &join.left, &join.right);
-                need(&join.left, stream::Operation::Iter);
-                need(
-                    &join.right,
-                    stream::Operation::Contains(ordinals(&symbol_name(&join.right), &shared)),
-                );
+                let (l, r) = (symbol_name(&join.left), symbol_name(&join.right));
+                let shared = shared_attributes(headings, &l, &r);
+                let cr = ordinals(&r, &shared);
+                if !serves(&r, &Operation::Contains(cr.clone())) {
+                    return Err(syn::Error::new_spanned(
+                        &definition.result,
+                        format!(
+                            "no chosen structure serves the semijoin `{reader}`: `{r}` needs membership on {shared:?}"
+                        ),
+                    ));
+                }
+                need(&join.left, Operation::Iter);
+                need(&join.right, Operation::Contains(cr));
+                rules.insert(reader.clone(), Rule::Contains);
             }
-            ra::Operator::Project(p) => need(&p.input, stream::Operation::Iter),
-            ra::Operator::Select(s) => {
-                let input = symbol_name(&s.input);
-                match bounded_scan(&s.condition, &headings[&input]) {
+            ra::Operator::Select(select) => {
+                let input = symbol_name(&select.input);
+                match bounded_scan(&select.condition, &headings[&input]) {
                     Some(window)
-                        if renames.get(&input).is_some_and(|rename| {
-                            host_provides(rename, &headings[&input], &headings, &host_operations)
-                                .iter()
-                                .any(|p| {
-                                    p.satisfies(&stream::Operation::Ordered(vec![window.column]))
-                                })
-                        }) =>
+                        if analysis.aliases.contains_key(&input)
+                            && serves(&input, &Operation::Ordered(vec![window.column])) =>
                     {
-                        need(&s.input, stream::Operation::Ordered(vec![window.column]));
+                        need(&select.input, Operation::Ordered(vec![window.column]));
+                        windows.insert(reader.clone(), window);
                     }
-                    _ => need(&s.input, stream::Operation::Iter),
+                    _ => need(&select.input, Operation::Iter),
                 }
             }
-            ra::Operator::Extend(e) => need(&e.input, stream::Operation::Iter),
+            ra::Operator::Project(p) => need(&p.input, Operation::Iter),
+            ra::Operator::Extend(e) => need(&e.input, Operation::Iter),
         }
     }
     let output = symbol_name(&plan.output.input);
@@ -251,7 +150,7 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
         .get_mut(&output)
         .expect("output names a result")
         .needs
-        .push((stream::RETURN.to_string(), stream::Operation::Iter));
+        .push((stream::RETURN.to_string(), Operation::Iter));
 
     // Bag-ness: projection introduces multiplicity; everything else preserves it.
     for definition in &plan.definitions {
@@ -269,61 +168,29 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
         results.get_mut(&name).unwrap().bag = bag;
     }
 
-    // Host inputs from the policy.
-    let declared: BTreeSet<_> = ra_module
-        .program
-        .inputs()
-        .map(|d| symbol_name(&d.name))
-        .collect();
-    let mut inputs = TokenStream::new();
-    let mut seen = BTreeSet::new();
-    for host in &policy.hosts {
-        let name = symbol_name(&host.name);
-        if !declared.contains(&name) {
-            return Err(syn::Error::new_spanned(
-                &host.name,
-                "policy names an undeclared host relation",
-            ));
-        }
-        if !seen.insert(name) {
-            return Err(syn::Error::new_spanned(
-                &host.name,
-                "host relation configured twice",
-            ));
-        }
-        let host_name = &host.name;
-        let provides = &host.provides;
-        inputs.extend(quote! { open #host_name #provides; });
-    }
-    if let Some(missing) = declared.difference(&seen).next() {
-        return Err(syn::Error::new_spanned(
-            policy,
-            format!("policy must declare capabilities for host relation `{missing}`"),
-        ));
-    }
-
     let mut definitions = TokenStream::new();
     for definition in &plan.definitions {
         let name = symbol_name(&definition.result);
         let result = &results[&name];
         let ident = &definition.result;
-        if let ra::Operator::Rename(rename) = &definition.operator {
-            if host_serves(rename, result, &headings, &host_operations) {
-                let host = &rename.relation;
-                definitions.extend(quote! { #ident = alias #host; });
-                continue;
+        if let (ra::Operator::Rename(rename), Some(host)) =
+            (&definition.operator, analysis.aliases.get(&name))
+        {
+            // No structure of its own: the host value stands for the rename.
+            let unserved = result.needs.iter().find(|(_, need)| !serves(&name, need));
+            if let Some((reader, need)) = unserved {
+                return Err(syn::Error::new_spanned(
+                    &rename.relation,
+                    format!("host `{host}` must provide {need:?} for `{reader}` to read `{name}`"),
+                ));
             }
+            let host = &rename.relation;
+            definitions.extend(quote! { #ident = alias #host; });
+            continue;
         }
         let mode = mode(result);
         let lazy = lazy(policy, definition, result, plan);
-        let body = body(
-            definition,
-            &headings,
-            &results,
-            policy,
-            &renames,
-            &host_operations,
-        );
+        let body = body(definition, &results, rules.get(&name), windows.get(&name));
         let body = if name == output && result.bag {
             quote! { support { #body } }
         } else {
@@ -334,84 +201,55 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
     let return_name = &plan.output.input;
     let target: stream::Module = syn::parse2(quote! {
         #source
-        stream { #inputs #definitions return #return_name; }
+        stream { #definitions return #return_name; }
     })?;
     stream::contract::check(&target)?;
     Ok(target)
 }
 
-fn operations(provides: &stream::Provides) -> Vec<stream::Operation> {
-    provides
-        .capabilities
+fn shared_attributes(
+    headings: &BTreeMap<String, Vec<String>>,
+    left: &str,
+    right: &str,
+) -> Vec<String> {
+    let left = &headings[left];
+    headings[right]
         .iter()
-        .map(|c| match c {
-            stream::Capability::Iter { .. } => stream::Operation::Iter,
-            stream::Capability::Contains { descriptor, .. } => {
-                stream::Operation::Contains(descriptor.columns.ordinals())
-            }
-            stream::Capability::Seek { descriptor, .. } => {
-                stream::Operation::Seek(descriptor.columns.ordinals())
-            }
-            stream::Capability::Ordered { descriptor, .. } => {
-                stream::Operation::Ordered(descriptor.columns.ordinals())
-            }
-        })
+        .filter(|a| left.contains(a))
+        .cloned()
         .collect()
 }
 
-/// A rename needs no realization of its own when the host, read through the
-/// rename's column translation, already provides every operation required.
-fn host_serves(
-    rename: &ra::Rename,
-    result: &Result_,
-    headings: &BTreeMap<String, Vec<String>>,
-    host_operations: &BTreeMap<String, Vec<stream::Operation>>,
-) -> bool {
-    let provided = host_provides(rename, &result.heading, headings, host_operations);
-    result
-        .needs
-        .iter()
-        .all(|(_, need)| provided.iter().any(|p| p.satisfies(need)))
-}
-
-/// The host's declared operations, read through the rename's column
-/// translation into the renamed result's sorted heading ordinals.
-fn host_provides(
-    rename: &ra::Rename,
-    heading: &[String],
-    headings: &BTreeMap<String, Vec<String>>,
-    host_operations: &BTreeMap<String, Vec<stream::Operation>>,
-) -> Vec<stream::Operation> {
-    let host = symbol_name(&rename.relation);
-    let host_heading = &headings[&host];
-    let translate = |ordinals: &[usize]| -> Vec<usize> {
-        let mut translated: Vec<usize> = ordinals
-            .iter()
-            .map(|&column| {
-                let target = rename
-                    .mapping
-                    .iter()
-                    .find(|m| symbol_name(&m.source) == host_heading[column])
-                    .map(|m| symbol_name(&m.target))
-                    .expect("complete rename");
-                heading
-                    .iter()
-                    .position(|h| *h == target)
-                    .expect("target in heading")
-            })
-            .collect();
-        translated.sort_unstable();
-        translated
-    };
-    host_operations[&host]
-        .iter()
-        .map(|op| match op {
-            stream::Operation::Iter => stream::Operation::Iter,
-            stream::Operation::Contains(c) => stream::Operation::Contains(translate(c)),
-            stream::Operation::Seek(c) => stream::Operation::Seek(translate(c)),
-            stream::Operation::Ordered(c) => stream::Operation::Ordered(translate(c)),
-        })
-        .collect()
+fn mode(result: &Result_) -> TokenStream {
+    let materialized =
+        result.needs.len() > 1 || result.needs.iter().any(|(_, op)| *op != Operation::Iter);
+    if !materialized {
+        return quote!(pipe);
+    }
+    let name = ident(&result.name);
+    // Keep only the strongest operation per column set: `ordered ⊒ seek ⊒ contains`.
+    let mut provided = BTreeSet::new();
+    for (_, operation) in &result.needs {
+        provided.insert(operation.clone());
+    }
+    let all: Vec<Operation> = provided.iter().cloned().collect();
+    provided.retain(|op| !all.iter().any(|other| other != op && other.satisfies(op)));
+    let capabilities = provided.iter().map(|op| match op {
+        Operation::Iter => quote!(iter),
+        Operation::Contains(c) => {
+            let c = c.iter().map(|&i| syn::Index::from(i));
+            quote!(contains @#name[#(#c),*])
+        }
+        Operation::Seek(c) => {
+            let c = c.iter().map(|&i| syn::Index::from(i));
+            quote!(seek @#name[#(#c),*])
+        }
+        Operation::Ordered(c) => {
+            let c = c.iter().map(|&i| syn::Index::from(i));
+            quote!(ordered @#name[#(#c),*])
+        }
+    });
+    quote!(let provides { #(#capabilities),* })
 }
 
 /// A comparison chain on one attribute against integer literals, as a key
@@ -500,54 +338,6 @@ fn bounded_scan(condition: &syn::Expr, heading: &[String]) -> Option<Window> {
     (window.low.is_some() || window.high.is_some()).then_some(window)
 }
 
-fn shared_attributes(
-    headings: &BTreeMap<String, Vec<String>>,
-    left: &Ident,
-    right: &Ident,
-) -> Vec<String> {
-    let left = &headings[&symbol_name(left)];
-    headings[&symbol_name(right)]
-        .iter()
-        .filter(|a| left.contains(a))
-        .cloned()
-        .collect()
-}
-
-fn mode(result: &Result_) -> TokenStream {
-    let materialized = result.needs.len() > 1
-        || result
-            .needs
-            .iter()
-            .any(|(_, op)| *op != stream::Operation::Iter);
-    if !materialized {
-        return quote!(pipe);
-    }
-    let name = ident(&result.name);
-    // Keep only the strongest operation per column set: `ordered ⊒ seek ⊒ contains`.
-    let mut provided = BTreeSet::new();
-    for (_, operation) in &result.needs {
-        provided.insert(operation.clone());
-    }
-    let all: Vec<stream::Operation> = provided.iter().cloned().collect();
-    provided.retain(|op| !all.iter().any(|other| other != op && other.satisfies(op)));
-    let capabilities = provided.iter().map(|op| match op {
-        stream::Operation::Iter => quote!(iter),
-        stream::Operation::Contains(c) => {
-            let c = c.iter().map(|&i| syn::Index::from(i));
-            quote!(contains @#name[#(#c),*])
-        }
-        stream::Operation::Seek(c) => {
-            let c = c.iter().map(|&i| syn::Index::from(i));
-            quote!(seek @#name[#(#c),*])
-        }
-        stream::Operation::Ordered(c) => {
-            let c = c.iter().map(|&i| syn::Index::from(i));
-            quote!(ordered @#name[#(#c),*])
-        }
-    });
-    quote!(let provides { #(#capabilities),* })
-}
-
 /// A semijoin may be lazy when its single consumer also reads the reducer.
 fn lazy(
     policy: &Policy,
@@ -608,47 +398,42 @@ fn columns(ordinals: &[usize]) -> TokenStream {
 
 fn body(
     definition: &ra::Definition,
-    headings: &BTreeMap<String, Vec<String>>,
     results: &BTreeMap<String, Result_>,
-    policy: &Policy,
-    renames: &BTreeMap<String, &ra::Rename>,
-    host_operations: &BTreeMap<String, Vec<stream::Operation>>,
+    rule: Option<&Rule>,
+    window: Option<&Window>,
 ) -> TokenStream {
     let name = symbol_name(&definition.result);
     let heading = &results[&name].heading;
     let emit = tuple(heading);
+    let heading_of = |input: &Ident| -> Vec<String> {
+        results
+            .get(&symbol_name(input))
+            .map(|r| r.heading.clone())
+            .expect("operands are results")
+    };
     match &definition.operator {
         ra::Operator::Unit(_) => quote! { unit { emit () } },
         ra::Operator::Rename(rename) => {
-            // Bind each source column, in the host's sorted column order, to
-            // the query variable it renames to; emit in result heading order.
+            // A rename with a structure of its own scans the host, binding
+            // each source column (host sorted order) to its query variable.
             let source = &rename.relation;
             let mapping: BTreeMap<String, String> = rename
                 .mapping
                 .iter()
                 .map(|m| (symbol_name(&m.source), symbol_name(&m.target)))
                 .collect();
-            let pattern: Vec<String> = headings[&symbol_name(source)]
-                .iter()
-                .map(|column| mapping[column].clone())
-                .collect();
+            let mut source_columns: Vec<String> = mapping.keys().cloned().collect();
+            source_columns.sort();
+            let pattern: Vec<String> = source_columns.iter().map(|c| mapping[c].clone()).collect();
             let pattern = tuple(&pattern);
             quote! { for #pattern in scan #source { emit #emit } }
         }
         ra::Operator::Select(select) => {
             let input = &select.input;
-            let input_heading = &results[&symbol_name(input)].heading;
-            let pattern = tuple(input_heading);
+            let pattern = tuple(&heading_of(input));
             let condition = &select.condition;
-            let ordered = |window: &Window| {
-                renames.get(&symbol_name(input)).is_some_and(|rename| {
-                    host_provides(rename, input_heading, headings, host_operations)
-                        .iter()
-                        .any(|p| p.satisfies(&stream::Operation::Ordered(vec![window.column])))
-                })
-            };
-            match bounded_scan(condition, input_heading) {
-                Some(window) if ordered(&window) => {
+            match window {
+                Some(window) => {
                     let column = syn::Index::from(window.column);
                     let limit = |value: Option<i32>| match value {
                         Some(v) => quote!((#v)),
@@ -663,39 +448,37 @@ fn body(
                     };
                     quote! { for #pattern in scan #input within [#column](#low, #high) { #guarded } }
                 }
-                _ => quote! { for #pattern in scan #input { if (#condition) { emit #emit } } },
+                None => quote! { for #pattern in scan #input { if (#condition) { emit #emit } } },
             }
         }
         ra::Operator::Extend(extend) => {
             let input = &extend.input;
-            let pattern = tuple(&results[&symbol_name(input)].heading);
+            let pattern = tuple(&heading_of(input));
             let fresh: Vec<_> = extend.columns.iter().map(|c| &c.name).collect();
             let value = &extend.value;
             quote! { for #pattern in scan #input { let (#(#fresh,)*) = #value; emit #emit } }
         }
         ra::Operator::Project(project) => {
             let input = &project.input;
-            let pattern = tuple(&results[&symbol_name(input)].heading);
+            let pattern = tuple(&heading_of(input));
             quote! { for #pattern in scan #input { emit #emit } }
         }
         ra::Operator::Semijoin(join) => {
             let (left, right) = (&join.left, &join.right);
-            let left_heading = &results[&symbol_name(left)].heading;
-            let right_heading = &results[&symbol_name(right)].heading;
+            let (left_heading, right_heading) = (heading_of(left), heading_of(right));
             let shared: Vec<String> = right_heading
                 .iter()
                 .filter(|a| left_heading.contains(a))
                 .cloned()
                 .collect();
-            let right_columns = columns(&ordinals_of(right_heading, &shared));
-            let pattern = tuple(left_heading);
+            let right_columns = columns(&ordinals_of(&right_heading, &shared));
+            let pattern = tuple(&left_heading);
             let keys = tuple(&shared);
             quote! { for #pattern in scan #left { if contains #right #right_columns #keys { emit #emit } } }
         }
         ra::Operator::NaturalJoin(join) => {
             let (left, right) = (&join.left, &join.right);
-            let left_heading = &results[&symbol_name(left)].heading;
-            let right_heading = &results[&symbol_name(right)].heading;
+            let (left_heading, right_heading) = (heading_of(left), heading_of(right));
             let shared: Vec<String> = right_heading
                 .iter()
                 .filter(|a| left_heading.contains(a))
@@ -706,21 +489,26 @@ fn body(
                 .filter(|a| !shared.contains(a))
                 .cloned()
                 .collect();
-            if policy.merge_joins() {
-                let left_payload: Vec<String> = left_heading
-                    .iter()
-                    .filter(|a| !shared.contains(a))
-                    .cloned()
-                    .collect();
-                let left_columns = columns(&ordinals_of(left_heading, &shared));
-                let right_columns = columns(&ordinals_of(right_heading, &shared));
-                let (lp, rp, key) = (tuple(&left_payload), tuple(&right_payload), tuple(&shared));
-                quote! { co (#lp in order #left #left_columns, #rp in order #right #right_columns) on #key { emit #emit } }
-            } else {
-                let right_columns = columns(&ordinals_of(right_heading, &shared));
-                let (pattern, payload, keys) =
-                    (tuple(left_heading), tuple(&right_payload), tuple(&shared));
-                quote! { for #pattern in scan #left { for #payload in seek #right #right_columns #keys { emit #emit } } }
+            match rule.expect("joins have a derived rule") {
+                Rule::Merge => {
+                    let left_payload: Vec<String> = left_heading
+                        .iter()
+                        .filter(|a| !shared.contains(a))
+                        .cloned()
+                        .collect();
+                    let left_columns = columns(&ordinals_of(&left_heading, &shared));
+                    let right_columns = columns(&ordinals_of(&right_heading, &shared));
+                    let (lp, rp, key) =
+                        (tuple(&left_payload), tuple(&right_payload), tuple(&shared));
+                    quote! { co (#lp in order #left #left_columns, #rp in order #right #right_columns) on #key { emit #emit } }
+                }
+                Rule::Seek => {
+                    let right_columns = columns(&ordinals_of(&right_heading, &shared));
+                    let (pattern, payload, keys) =
+                        (tuple(&left_heading), tuple(&right_payload), tuple(&shared));
+                    quote! { for #pattern in scan #left { for #payload in seek #right #right_columns #keys { emit #emit } } }
+                }
+                Rule::Contains => unreachable!("joins are not membership rules"),
             }
         }
     }
@@ -738,10 +526,10 @@ fn ordinals_of(heading: &[String], attributes: &[String]) -> Vec<usize> {
         .collect()
 }
 
-/// IX → Stream correspondence: IX preserved, the Stream contract holds, and
-/// the program is exactly the kernel's realization under `policy`.
-pub fn check(source: &ix::Module, target: &stream::Module, policy: &Policy) -> bool {
-    target.index_requirements == *source
+/// Structures → Stream correspondence: Structures preserved, the Stream
+/// contract holds, and the program is exactly the kernel's realization.
+pub fn check(source: &structures::Module, target: &stream::Module, policy: &Policy) -> bool {
+    target.structures == *source
         && stream::contract::well_formed(target)
         && compile(source, policy).is_ok_and(|expected| expected == *target)
 }

@@ -20,7 +20,7 @@ pub struct Evaluation {
 
 pub fn evaluate(module: &stream::Module, database: &Database) -> Evaluation {
     let analysis = stream::contract::check(module).expect("stream contract");
-    let program = &module.index_requirements.relational_plan.program;
+    let program = &module.structures.index_requirements.relational_plan.program;
     let mut relations: BTreeMap<String, Vec<Row>> = BTreeMap::new();
     for input in program.inputs() {
         let name = symbol_name(&input.name);
@@ -46,6 +46,7 @@ pub fn evaluate(module: &stream::Module, database: &Database) -> Evaluation {
                 let host_heading = &analysis.headings[&symbol_name(host)];
                 let heading = &analysis.headings[&name];
                 let rename = module
+                    .structures
                     .index_requirements
                     .relational_plan
                     .plan
@@ -85,6 +86,7 @@ pub fn evaluate(module: &stream::Module, database: &Database) -> Evaluation {
     let returned = symbol_name(&module.program.return_.name);
     let heading = &analysis.headings[&returned];
     let head: Vec<_> = module
+        .structures
         .index_requirements
         .relational_plan
         .plan

@@ -9,12 +9,13 @@ license.workspace = true
 proc-macro = true
 
 [features]
-default = ["logical-selection", "written-order", "clause-prefix", "hypergraph", "index-demands", "stream-lowering", "stream-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists"]
+default = ["logical-selection", "written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "stream-lowering", "stream-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists"]
 logical-selection = ["written-order", "clause-prefix", "hypergraph"]
 written-order = ["dep:cq-query-lowering", "cq-query-lowering/written-order"]
 clause-prefix = ["dep:cq-query-lowering", "cq-query-lowering/clause-prefix"]
 hypergraph = ["dep:cq-query-lowering", "cq-query-lowering/hypergraph"]
 index-demands = ["dep:cq-index-policy"]
+structure-selection = ["dep:cq-structure-selection"]
 stream-lowering = ["dep:cq-stream-lowering"]
 stream-realization = ["dep:cq-stream-realization"]
 access-to-pipeline = ["dep:cq-access-lowering", "cq-access-lowering/to-pipeline"]
@@ -31,6 +32,7 @@ quote.workspace = true
 syn.workspace = true
 cq-query-lowering = { workspace = true, optional = true }
 cq-index-policy = { workspace = true, optional = true }
+cq-structure-selection = { workspace = true, optional = true }
 cq-stream-lowering = { workspace = true, optional = true }
 cq-stream-realization = { workspace = true, optional = true }
 cq-access-lowering = { workspace = true, optional = true }
@@ -62,4 +64,4 @@ required-features = ["pipeline-distinct-iter", "pipeline-set", "pipeline-support
 
 [[test]]
 name = "stream_query"
-required-features = ["written-order", "clause-prefix", "hypergraph", "index-demands", "stream-lowering", "stream-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"]
+required-features = ["written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "stream-lowering", "stream-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"]

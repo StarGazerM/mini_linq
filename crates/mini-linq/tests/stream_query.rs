@@ -66,7 +66,7 @@ mod hosted {
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::ix_to_stream! {
+            ::mini_linq::select_structures! {
                 $($ix)*
                 policy {
                     L provides { iter };
@@ -81,6 +81,7 @@ mod hosted {
         pub(crate) use super::stream_policy;
         pub(crate) use ::mini_linq::{
             access_to_set_loops as access, index_demands as choose_index_policy, stream_to_access,
+            structures_to_stream,
         };
         #[allow(unused_imports)]
         pub(crate) use cq_state_providers::{
@@ -121,7 +122,7 @@ mod built {
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::ix_to_stream! {
+            ::mini_linq::select_structures! {
                 $($ix)*
                 policy { L provides { iter }; R provides { iter }; S provides { iter }; }
             }
@@ -140,7 +141,7 @@ mod built {
         pub(crate) use super::{access, stream_policy};
         pub(crate) use ::mini_linq::{
             index_demands as choose_index_policy, pipeline_to_distinct_iter,
-            pipeline_to_support_iter, stream_to_access,
+            pipeline_to_support_iter, stream_to_access, structures_to_stream,
         };
         #[allow(unused_imports)]
         pub(crate) use cq_state_providers::{
@@ -181,7 +182,7 @@ mod merged {
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::ix_to_stream! {
+            ::mini_linq::select_structures! {
                 $($ix)*
                 policy {
                     L provides { iter }; R provides { iter }; S provides { iter };
@@ -195,7 +196,7 @@ mod merged {
         pub(crate) use super::stream_policy;
         pub(crate) use ::mini_linq::{
             access_to_set as access, index_demands as choose_index_policy, pipeline_to_set,
-            pipeline_to_support_iter, stream_to_access,
+            pipeline_to_support_iter, stream_to_access, structures_to_stream,
         };
         #[allow(unused_imports)]
         pub(crate) use cq_state_providers::{
@@ -234,7 +235,7 @@ mod reduced {
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::ix_to_stream! {
+            ::mini_linq::select_structures! {
                 $($ix)*
                 policy { L provides { iter }; R provides { iter }; S provides { iter }; }
             }
@@ -245,7 +246,7 @@ mod reduced {
         pub(crate) use super::stream_policy;
         pub(crate) use ::mini_linq::{
             access_to_set_loops as access, index_demands as choose_index_policy,
-            pipeline_to_support_iter, stream_to_access,
+            pipeline_to_support_iter, stream_to_access, structures_to_stream,
         };
         #[allow(unused_imports)]
         pub(crate) use cq_state_providers::{
@@ -282,7 +283,7 @@ fn yannakakis_plan_executes_through_semijoin_membership() {
 mod windowed {
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::ix_to_stream! {
+            ::mini_linq::select_structures! {
                 $($ix)*
                 policy { R provides { ordered @R[0] }; }
             }
@@ -293,6 +294,7 @@ mod windowed {
         pub(crate) use super::stream_policy;
         pub(crate) use ::mini_linq::{
             access_to_set_loops as access, index_demands as choose_index_policy, stream_to_access,
+            structures_to_stream,
         };
         #[allow(unused_imports)]
         pub(crate) use cq_state_providers::{

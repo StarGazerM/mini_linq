@@ -10,13 +10,18 @@ mod oracle;
 #[path = "../../../test-support/relational/stream_semantics.rs"]
 mod stream_oracle;
 
-use cq_ir::{index_requirements as ix, relational_plan as ra, stream};
-use cq_stream_lowering::{Policy, check, compile};
+use cq_ir::policy::Policy;
+use cq_ir::{index_requirements as ix, relational_plan as ra, stream, structures};
+use cq_stream_lowering::{check, compile};
 use quote::{ToTokens, quote};
 use stream::Realization;
 
 fn parse_policy(tokens: proc_macro2::TokenStream) -> Policy {
     syn::parse2(tokens).unwrap()
+}
+
+fn select(source: &ix::Module, policy: &Policy) -> structures::Module {
+    cq_structure_selection::compile(source, policy).unwrap()
 }
 
 fn chain_ix() -> ix::Module {
@@ -45,13 +50,11 @@ fn seek_policy_realizes_the_authored_hash_chain() {
     let policy = parse_policy(quote! {
         policy { L provides { iter }; R provides { iter }; S provides { iter }; }
     });
+    let source = select(&source, &policy);
     let target = compile(&source, &policy).unwrap();
     let expected: stream::Module = syn::parse_quote! {
         #source
         stream {
-            open L provides { iter };
-            open R provides { iter };
-            open S provides { iter };
             l = alias L;
             r = let provides { seek @r[0] } for (a, b,) in scan R { emit (a, b,) };
             s = let provides { seek @s[0] } for (b, c,) in scan S { emit (b, c,) };
@@ -66,12 +69,13 @@ fn seek_policy_realizes_the_authored_hash_chain() {
         expected.to_token_stream().to_string()
     );
     assert!(check(&source, &target, &policy));
+    let merge = parse_policy(quote! {
+        policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; }
+    });
     assert!(!check(
-        &source,
+        &select(&source.index_requirements, &merge),
         &expected,
-        &parse_policy(quote! {
-            policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; }
-        })
+        &merge
     ));
 }
 
@@ -81,7 +85,7 @@ fn merge_policy_materializes_both_operands_ordered_and_co_iterates() {
     let policy = parse_policy(quote! {
         policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; }
     });
-    let target = compile(&source, &policy).unwrap();
+    let target = compile(&select(&source, &policy), &policy).unwrap();
     let text = target.program.to_token_stream().to_string();
     assert!(
         text.contains("l = let provides { ordered @ l [0] }"),
@@ -106,7 +110,7 @@ fn policy_must_configure_exactly_the_declared_hosts() {
     let source = chain_ix();
     let missing = parse_policy(quote! { policy { L provides { iter }; R provides { iter }; } });
     assert!(
-        compile(&source, &missing)
+        cq_structure_selection::compile(&source, &missing)
             .unwrap_err()
             .to_string()
             .contains("`S`")
@@ -115,7 +119,7 @@ fn policy_must_configure_exactly_the_declared_hosts() {
         policy { L provides { iter }; R provides { iter }; S provides { iter }; T provides { iter }; }
     });
     assert!(
-        compile(&source, &extra)
+        cq_structure_selection::compile(&source, &extra)
             .unwrap_err()
             .to_string()
             .contains("undeclared")
@@ -141,14 +145,14 @@ fn prefer_lazy_marks_only_semijoins_whose_consumer_retests_the_reducer() {
     let policy = parse_policy(quote! {
         policy { R provides { iter }; S provides { iter }; semijoin = prefer_lazy; }
     });
-    let target = compile(&source, &policy).unwrap();
+    let target = compile(&select(&source, &policy), &policy).unwrap();
     let Realization::Stream(streamed) = &target.program.definitions[2].realization else {
         panic!("semijoin is streamed")
     };
     assert!(streamed.lazy.is_some());
     // The same plan whose join no longer reads `s` cannot be lazy.
     let eager = parse_policy(quote! { policy { R provides { iter }; S provides { iter }; } });
-    let eager = compile(&source, &eager).unwrap();
+    let eager = compile(&select(&source, &eager), &eager).unwrap();
     let Realization::Stream(streamed) = &eager.program.definitions[2].realization else {
         panic!("semijoin is streamed")
     };
@@ -178,8 +182,10 @@ fn every_shared_case_denotes_the_relational_oracle_under_both_join_rules() {
         let hosts: proc_macro2::TokenStream = hosts.collect();
         for join in [quote!(), quote!(join = merge;)] {
             let policy = parse_policy(quote! { policy { #hosts #join } });
-            let target = compile(&source, &policy).unwrap_or_else(|e| panic!("{}: {e}", case.name));
-            assert!(check(&source, &target, &policy), "{}", case.name);
+            let structures = select(&source, &policy);
+            let target =
+                compile(&structures, &policy).unwrap_or_else(|e| panic!("{}: {e}", case.name));
+            assert!(check(&structures, &target, &policy), "{}", case.name);
             let actual = stream_oracle::evaluate(&target, &database).output;
             assert_eq!(actual, expected, "{} under {join}", case.name);
         }
@@ -192,7 +198,7 @@ fn renames_served_by_the_host_become_aliases_and_still_denote_the_oracle() {
     let policy = parse_policy(quote! {
         policy { L provides { iter }; R provides { seek @R[0] }; S provides { seek @S[0] }; }
     });
-    let target = compile(&source, &policy).unwrap();
+    let target = compile(&select(&source, &policy), &policy).unwrap();
     let text = target.program.to_token_stream().to_string();
     assert!(text.contains("r = alias R ;"), "{text}");
     assert!(text.contains("s = alias S ;"), "{text}");
@@ -232,7 +238,7 @@ fn comparisons_on_an_ordered_host_column_become_bounded_scans_with_residual_guar
     };
     let source = cq_index_policy::compile(&plan).unwrap();
     let ordered = parse_policy(quote! { policy { R provides { iter, ordered @R[0] }; } });
-    let target = compile(&source, &ordered).unwrap();
+    let target = compile(&select(&source, &ordered), &ordered).unwrap();
     let text = target.program.to_token_stream().to_string();
     assert!(text.contains("s = pipe for (a , b ,) in scan r within [0] ((2i32) , (8i32)) { if (b != 5) { emit (a , b ,) } }"), "{text}");
     // A select whose operand is not a host rename keeps its guard.
@@ -241,7 +247,7 @@ fn comparisons_on_an_ordered_host_column_become_bounded_scans_with_residual_guar
         "{text}"
     );
     let unordered = parse_policy(quote! { policy { R provides { iter }; } });
-    let plain = compile(&source, &unordered).unwrap();
+    let plain = compile(&select(&source, &unordered), &unordered).unwrap();
     assert!(
         plain
             .program
