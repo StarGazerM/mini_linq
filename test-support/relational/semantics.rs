@@ -256,6 +256,16 @@ pub fn evaluate_plan<'a>(
 }
 
 pub fn evaluate_predicate(expr: &syn::Expr, row: &Binding) -> bool {
+    // Conjunctions of the total comparison fragment; nothing else is modeled.
+    if let syn::Expr::Binary(syn::ExprBinary {
+        op: syn::BinOp::And(_),
+        left,
+        right,
+        ..
+    }) = cq::rust::unparen(expr)
+    {
+        return evaluate_predicate(left, row) && evaluate_predicate(right, row);
+    }
     let predicate = cq::Predicate::from_expr(expr).expect("integer comparison oracle domain");
     use cq::{Comparison, Term};
     let value = |term: &Term| match term {

@@ -76,7 +76,7 @@ IMPLEMENTATIONS = {
 MODULE_WIRING = {}
 CONSUMERS = {
     "state_providers": ["pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists", "access-to-set-loops"],
-    "stream_query": ["written-order", "hypergraph", "index-demands", "stream-lowering", "stream-realization",
+    "stream_query": ["written-order", "clause-prefix", "hypergraph", "index-demands", "stream-lowering", "stream-realization",
                      "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"],
 }
 

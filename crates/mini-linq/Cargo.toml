@@ -62,4 +62,4 @@ required-features = ["pipeline-distinct-iter", "pipeline-set", "pipeline-support
 
 [[test]]
 name = "stream_query"
-required-features = ["written-order", "hypergraph", "index-demands", "stream-lowering", "stream-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"]
+required-features = ["written-order", "clause-prefix", "hypergraph", "index-demands", "stream-lowering", "stream-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"]

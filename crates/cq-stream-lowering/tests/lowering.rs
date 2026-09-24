@@ -216,3 +216,49 @@ fn renames_served_by_the_host_become_aliases_and_still_denote_the_oracle() {
     let expected = oracle::evaluate_ra(ra_module, &database).output;
     assert_eq!(stream_oracle::evaluate(&target, &database).output, expected);
 }
+
+#[test]
+fn comparisons_on_an_ordered_host_column_become_bounded_scans_with_residual_guards() {
+    let plan: ra::Module = syn::parse_quote! {
+        struct Windowed;
+        relation R(a: i32, b: i32);
+        answer(a, b) :- R(a, b), if a >= 2, if a < 9, if b != 5;
+        relational {
+            r = rename R {a -> a, b -> b};
+            s = select r if (a >= 2 && 9 > a && b != 5);
+            t = select s if (b >= 0);
+            output t as answer(a, b);
+        }
+    };
+    let source = cq_index_policy::compile(&plan).unwrap();
+    let ordered = parse_policy(quote! { policy { R provides { iter, ordered @R[0] }; } });
+    let target = compile(&source, &ordered).unwrap();
+    let text = target.program.to_token_stream().to_string();
+    assert!(text.contains("s = pipe for (a , b ,) in scan r within [0] ((2i32) , (8i32)) { if (b != 5) { emit (a , b ,) } }"), "{text}");
+    // A select whose operand is not a host rename keeps its guard.
+    assert!(
+        text.contains("t = pipe for (a , b ,) in scan s { if (b >= 0) { emit (a , b ,) } }"),
+        "{text}"
+    );
+    let unordered = parse_policy(quote! { policy { R provides { iter }; } });
+    let plain = compile(&source, &unordered).unwrap();
+    assert!(
+        plain
+            .program
+            .to_token_stream()
+            .to_string()
+            .contains("scan r { if (a >= 2 && 9 > a && b != 5)")
+    );
+
+    // Both denote the RA oracle on a database around the window edges.
+    let rows: std::collections::BTreeSet<Vec<i32>> =
+        [(1, 0), (2, 5), (2, 6), (8, 1), (9, 1), (3, 5)]
+            .map(|(a, b)| vec![a, b])
+            .into_iter()
+            .collect();
+    let database: oracle::Database = [("R".to_owned(), rows)].into_iter().collect();
+    let expected = oracle::evaluate_ra(&plan, &database).output;
+    assert_eq!(expected, [vec![2, 6], vec![8, 1]].into_iter().collect());
+    assert_eq!(stream_oracle::evaluate(&target, &database).output, expected);
+    assert_eq!(stream_oracle::evaluate(&plain, &database).output, expected);
+}

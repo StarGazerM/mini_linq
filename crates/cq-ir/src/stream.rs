@@ -38,7 +38,8 @@
 //!              | "unit" "{" Body "}"
 //!              | "emit" "(" [Ident ("," Ident)* [","]] ")"
 //! Guard      ::= "(" Expr ")" | "contains" Ident "[" Column,* "]" "(" Ident,* ")"
-//! Cursor     ::= "scan" Ident
+//! Cursor     ::= "scan" Ident ["within" "[" Column "]" "(" Limit "," Limit ")"]
+//! Limit      ::= "_" | "(" Expr ")"
 //!              | "seek" Ident "[" Column,* "]" "(" Ident,* ")"
 //!              | "order" Ident "[" Column,* "]"
 //! Return     ::= "return" Ident ";"
@@ -64,6 +65,7 @@ pub mod kw {
     syn::custom_keyword!(co);
     syn::custom_keyword!(on);
     syn::custom_keyword!(scan);
+    syn::custom_keyword!(within);
     syn::custom_keyword!(order);
     syn::custom_keyword!(support);
     syn::custom_keyword!(unit);
@@ -353,6 +355,8 @@ pub enum Cursor {
     Scan {
         scan_token: kw::scan,
         relation: Ident,
+        #[syn(optional, peek = kw::within)]
+        within: Option<Box<Within>>,
     },
     #[parse(peek = kw::seek)]
     Seek {
@@ -367,6 +371,42 @@ pub enum Cursor {
         relation: Ident,
         columns: Columns,
     },
+}
+
+/// A key-bounded scan: `seek(lo)` then every pair while `key <= hi`. Its
+/// premise is `ordered` on the column; an open bound is written `_`.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Within {
+    pub within_token: kw::within,
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    pub column: Column,
+    #[syn(parenthesized)]
+    pub paren: token::Paren,
+    #[syn(in = paren)]
+    pub low: Limit,
+    #[syn(in = paren)]
+    pub comma: Token![,],
+    #[syn(in = paren)]
+    pub high: Limit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum Limit {
+    #[parse(peek = Token![_])]
+    Open(Token![_]),
+    #[parse(peek = token::Paren)]
+    Value(Parenthesized),
+}
+
+impl Limit {
+    pub fn value(&self) -> Option<&Expr> {
+        match self {
+            Limit::Open(_) => None,
+            Limit::Value(p) => Some(&p.expr),
+        }
+    }
 }
 
 impl Cursor {
@@ -1026,9 +1066,24 @@ impl Scope<'_, '_> {
             Body::For(f) => {
                 let relation = f.cursor.relation().clone();
                 let payload = match &f.cursor {
-                    Cursor::Scan { .. } => {
+                    Cursor::Scan { within: None, .. } => {
                         self.require(&relation, Operation::Iter)?;
                         self.checker.arity(&relation)?
+                    }
+                    Cursor::Scan {
+                        within: Some(within),
+                        ..
+                    } => {
+                        let arity = self.checker.arity(&relation)?;
+                        let column = within.column.index as usize;
+                        check_columns(&[column], arity, &within.column)?;
+                        for bound in [&within.low, &within.high] {
+                            if let Some(expr) = bound.value() {
+                                self.free_bound(expr, bound)?;
+                            }
+                        }
+                        self.require(&relation, Operation::Ordered(vec![column]))?;
+                        arity
                     }
                     Cursor::Seek {
                         relation: r,

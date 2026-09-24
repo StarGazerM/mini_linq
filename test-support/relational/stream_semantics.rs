@@ -142,8 +142,25 @@ fn body(
 ) {
     match body {
         stream::Body::For(f) => match &f.cursor {
-            stream::Cursor::Scan { relation, .. } => {
+            stream::Cursor::Scan {
+                relation, within, ..
+            } => {
+                let bound = |b: &stream::Limit| -> Option<i32> {
+                    b.value().map(|expr| match cq::Term::from_expr(expr) {
+                        Some(cq::Term::Integer(v)) => v,
+                        _ => panic!("oracle bounds are integer literals"),
+                    })
+                };
+                let window = within
+                    .as_ref()
+                    .map(|w| (w.column.index as usize, bound(&w.low), bound(&w.high)));
                 for row in &relations[&symbol_name(relation)] {
+                    if let Some((column, low, high)) = window {
+                        let key = row[column];
+                        if low.is_some_and(|lo| key < lo) || high.is_some_and(|hi| key > hi) {
+                            continue;
+                        }
+                    }
                     let mut env = env.clone();
                     bind(&mut env, &f.pattern, row);
                     self::body(&f.body, &env, relations, out, support);

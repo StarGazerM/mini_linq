@@ -143,6 +143,21 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
         headings.insert(name.clone(), infos[&name].heading.iter().cloned().collect());
     }
 
+    // Host capabilities in each host's sorted column ordinals.
+    let host_operations: BTreeMap<String, Vec<stream::Operation>> = policy
+        .hosts
+        .iter()
+        .map(|host| (symbol_name(&host.name), operations(&host.provides)))
+        .collect();
+    let renames: BTreeMap<String, &ra::Rename> = plan
+        .definitions
+        .iter()
+        .filter_map(|d| match &d.operator {
+            ra::Operator::Rename(r) => Some((symbol_name(&d.result), &**r)),
+            _ => None,
+        })
+        .collect();
+
     // Requirements each result places on its operands.
     let mut results: BTreeMap<String, Result_> = plan
         .definitions
@@ -211,7 +226,23 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
                 );
             }
             ra::Operator::Project(p) => need(&p.input, stream::Operation::Iter),
-            ra::Operator::Select(s) => need(&s.input, stream::Operation::Iter),
+            ra::Operator::Select(s) => {
+                let input = symbol_name(&s.input);
+                match bounded_scan(&s.condition, &headings[&input]) {
+                    Some(window)
+                        if renames.get(&input).is_some_and(|rename| {
+                            host_provides(rename, &headings[&input], &headings, &host_operations)
+                                .iter()
+                                .any(|p| {
+                                    p.satisfies(&stream::Operation::Ordered(vec![window.column]))
+                                })
+                        }) =>
+                    {
+                        need(&s.input, stream::Operation::Ordered(vec![window.column]));
+                    }
+                    _ => need(&s.input, stream::Operation::Iter),
+                }
+            }
             ra::Operator::Extend(e) => need(&e.input, stream::Operation::Iter),
         }
     }
@@ -271,13 +302,6 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
         ));
     }
 
-    // Host capabilities in each host's sorted column ordinals.
-    let host_operations: BTreeMap<String, Vec<stream::Operation>> = policy
-        .hosts
-        .iter()
-        .map(|host| (symbol_name(&host.name), operations(&host.provides)))
-        .collect();
-
     let mut definitions = TokenStream::new();
     for definition in &plan.definitions {
         let name = symbol_name(&definition.result);
@@ -292,7 +316,14 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
         }
         let mode = mode(result);
         let lazy = lazy(policy, definition, result, plan);
-        let body = body(definition, &headings, &results, policy);
+        let body = body(
+            definition,
+            &headings,
+            &results,
+            policy,
+            &renames,
+            &host_operations,
+        );
         let body = if name == output && result.bag {
             quote! { support { #body } }
         } else {
@@ -336,6 +367,21 @@ fn host_serves(
     headings: &BTreeMap<String, Vec<String>>,
     host_operations: &BTreeMap<String, Vec<stream::Operation>>,
 ) -> bool {
+    let provided = host_provides(rename, &result.heading, headings, host_operations);
+    result
+        .needs
+        .iter()
+        .all(|(_, need)| provided.iter().any(|p| p.satisfies(need)))
+}
+
+/// The host's declared operations, read through the rename's column
+/// translation into the renamed result's sorted heading ordinals.
+fn host_provides(
+    rename: &ra::Rename,
+    heading: &[String],
+    headings: &BTreeMap<String, Vec<String>>,
+    host_operations: &BTreeMap<String, Vec<stream::Operation>>,
+) -> Vec<stream::Operation> {
     let host = symbol_name(&rename.relation);
     let host_heading = &headings[&host];
     let translate = |ordinals: &[usize]| -> Vec<usize> {
@@ -348,8 +394,7 @@ fn host_serves(
                     .find(|m| symbol_name(&m.source) == host_heading[column])
                     .map(|m| symbol_name(&m.target))
                     .expect("complete rename");
-                result
-                    .heading
+                heading
                     .iter()
                     .position(|h| *h == target)
                     .expect("target in heading")
@@ -358,7 +403,7 @@ fn host_serves(
         translated.sort_unstable();
         translated
     };
-    let provided: Vec<stream::Operation> = host_operations[&host]
+    host_operations[&host]
         .iter()
         .map(|op| match op {
             stream::Operation::Iter => stream::Operation::Iter,
@@ -366,11 +411,93 @@ fn host_serves(
             stream::Operation::Seek(c) => stream::Operation::Seek(translate(c)),
             stream::Operation::Ordered(c) => stream::Operation::Ordered(translate(c)),
         })
-        .collect();
-    result
-        .needs
-        .iter()
-        .all(|(_, need)| provided.iter().any(|p| p.satisfies(need)))
+        .collect()
+}
+
+/// A comparison chain on one attribute against integer literals, as a key
+/// window plus the conjuncts it does not cover.
+struct Window {
+    column: usize,
+    low: Option<i32>,
+    high: Option<i32>,
+    residual: Vec<syn::Expr>,
+}
+
+fn conjuncts(expr: &syn::Expr) -> Vec<&syn::Expr> {
+    match cq_ir::cq::rust::unparen(expr) {
+        syn::Expr::Binary(syn::ExprBinary {
+            op: syn::BinOp::And(_),
+            left,
+            right,
+            ..
+        }) => {
+            let mut all = conjuncts(left);
+            all.extend(conjuncts(right));
+            all
+        }
+        other => vec![other],
+    }
+}
+
+fn bounded_scan(condition: &syn::Expr, heading: &[String]) -> Option<Window> {
+    use cq_ir::cq::{Comparison, Predicate, Term};
+    let parts = conjuncts(condition);
+    // The window attribute is the first one compared against a literal.
+    let attribute = parts.iter().find_map(|part| {
+        let predicate = Predicate::from_expr(part)?;
+        match (&predicate.left, &predicate.right) {
+            (Term::Variable(v), Term::Integer(_)) | (Term::Integer(_), Term::Variable(v)) => {
+                Some(symbol_name(v))
+            }
+            _ => None,
+        }
+    })?;
+    let column = heading.iter().position(|h| *h == attribute)?;
+    let mut window = Window {
+        column,
+        low: None,
+        high: None,
+        residual: Vec::new(),
+    };
+    let tighten_low = |low: &mut Option<i32>, v: i32| *low = Some(low.map_or(v, |l| l.max(v)));
+    let tighten_high = |high: &mut Option<i32>, v: i32| *high = Some(high.map_or(v, |h| h.min(v)));
+    for part in parts {
+        let covered = Predicate::from_expr(part).and_then(|predicate| {
+            // Normalize to `attribute cmp literal`.
+            let (comparison, literal) = match (&predicate.left, &predicate.right) {
+                (Term::Variable(v), Term::Integer(k)) if symbol_name(v) == attribute => {
+                    (predicate.comparison, *k)
+                }
+                (Term::Integer(k), Term::Variable(v)) if symbol_name(v) == attribute => {
+                    let flipped = match predicate.comparison {
+                        Comparison::Lt(t) => Comparison::Gt(syn::Token![>](t.span)),
+                        Comparison::Le(t) => Comparison::Ge(syn::Token![>=](t.spans[0])),
+                        Comparison::Gt(t) => Comparison::Lt(syn::Token![<](t.span)),
+                        Comparison::Ge(t) => Comparison::Le(syn::Token![<=](t.spans[0])),
+                        same => same,
+                    };
+                    (flipped, *k)
+                }
+                _ => return None,
+            };
+            match comparison {
+                Comparison::Eq(_) => {
+                    tighten_low(&mut window.low, literal);
+                    tighten_high(&mut window.high, literal);
+                }
+                Comparison::Ge(_) => tighten_low(&mut window.low, literal),
+                Comparison::Gt(_) => tighten_low(&mut window.low, literal.checked_add(1)?),
+                Comparison::Le(_) => tighten_high(&mut window.high, literal),
+                Comparison::Lt(_) => tighten_high(&mut window.high, literal.checked_sub(1)?),
+                Comparison::Ne(_) => return None,
+            }
+            Some(())
+        });
+        if covered.is_none() {
+            window.residual.push(part.clone());
+        }
+    }
+    (window.low.is_some() || window.high.is_some()).then_some(window)
 }
 
 fn shared_attributes(
@@ -481,6 +608,8 @@ fn body(
     headings: &BTreeMap<String, Vec<String>>,
     results: &BTreeMap<String, Result_>,
     policy: &Policy,
+    renames: &BTreeMap<String, &ra::Rename>,
+    host_operations: &BTreeMap<String, Vec<stream::Operation>>,
 ) -> TokenStream {
     let name = symbol_name(&definition.result);
     let heading = &results[&name].heading;
@@ -505,9 +634,34 @@ fn body(
         }
         ra::Operator::Select(select) => {
             let input = &select.input;
-            let pattern = tuple(&results[&symbol_name(input)].heading);
+            let input_heading = &results[&symbol_name(input)].heading;
+            let pattern = tuple(input_heading);
             let condition = &select.condition;
-            quote! { for #pattern in scan #input { if (#condition) { emit #emit } } }
+            let ordered = |window: &Window| {
+                renames.get(&symbol_name(input)).is_some_and(|rename| {
+                    host_provides(rename, input_heading, headings, host_operations)
+                        .iter()
+                        .any(|p| p.satisfies(&stream::Operation::Ordered(vec![window.column])))
+                })
+            };
+            match bounded_scan(condition, input_heading) {
+                Some(window) if ordered(&window) => {
+                    let column = syn::Index::from(window.column);
+                    let limit = |value: Option<i32>| match value {
+                        Some(v) => quote!((#v)),
+                        None => quote!(_),
+                    };
+                    let (low, high) = (limit(window.low), limit(window.high));
+                    let residual = &window.residual;
+                    let guarded = if residual.is_empty() {
+                        quote! { emit #emit }
+                    } else {
+                        quote! { if (#(#residual)&&*) { emit #emit } }
+                    };
+                    quote! { for #pattern in scan #input within [#column](#low, #high) { #guarded } }
+                }
+                _ => quote! { for #pattern in scan #input { if (#condition) { emit #emit } } },
+            }
         }
         ra::Operator::Extend(extend) => {
             let input = &extend.input;

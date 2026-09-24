@@ -299,3 +299,33 @@ fn alias_inherits_host_capabilities_translated_through_the_rename() {
         .to_string();
     assert!(error.contains("only a rename"), "{error}");
 }
+
+#[test]
+fn bounded_scans_require_ordered_capability_on_the_window_column() {
+    let module: stream::Module = syn::parse_quote! {
+        struct Windowed;
+        relation R(a: i32, b: i32);
+        answer(a, b) :- R(a, b), if a >= 2;
+        relational {
+            r = rename R {a -> a, b -> b};
+            s = select r if (a >= 2);
+            output s as answer(a, b);
+        }
+        indexes {} uses {}
+        stream {
+            open R provides { ordered @R[0] };
+            r = alias R;
+            s = pipe for (a, b) in scan r within [0]((2), _) { emit (a, b) };
+            return s;
+        }
+    };
+    let analysis = stream::contract::check(&module).unwrap();
+    assert_eq!(
+        analysis.required["s"]["r"].iter().next(),
+        Some(&Operation::Ordered(vec![0]))
+    );
+    let mut unordered = module.clone();
+    unordered.program.inputs[0].provides = syn::parse_quote!(provides { iter });
+    let error = stream::contract::check(&unordered).unwrap_err().to_string();
+    assert!(error.contains("does not provide Ordered"), "{error}");
+}

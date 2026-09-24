@@ -11,7 +11,7 @@ pub enum Term {
     Integer(i32),
 }
 impl Term {
-    fn from_expr(expr: &syn::Expr) -> Option<Self> {
+    pub fn from_expr(expr: &syn::Expr) -> Option<Self> {
         if let syn::Expr::Paren(paren) = expr {
             if !paren.attrs.is_empty() {
                 return None;

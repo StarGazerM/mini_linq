@@ -338,8 +338,19 @@ impl Realizer<'_> {
             stream::Body::For(f) => {
                 let vars = pattern_variables(&f.pattern);
                 match &f.cursor {
-                    stream::Cursor::Scan { relation, .. } => {
+                    stream::Cursor::Scan {
+                        relation,
+                        within: None,
+                        ..
+                    } => {
                         self.scan(relation, &vars, fragment)?;
+                    }
+                    stream::Cursor::Scan {
+                        relation,
+                        within: Some(within),
+                        ..
+                    } => {
+                        self.bounded_scan(relation, within, &vars, fragment)?;
                     }
                     stream::Cursor::Seek {
                         relation,
@@ -384,9 +395,10 @@ impl Realizer<'_> {
                 match &i.guard {
                     stream::Guard::Expr(p) => {
                         let condition = &p.expr;
+                        let realized = deref_predicates(condition);
                         fragment
                             .clauses
-                            .push(syn::parse_quote! { if #condition => if (#condition) });
+                            .push(syn::parse_quote! { if #condition => if (#realized) });
                     }
                     stream::Guard::Contains {
                         relation,
@@ -485,6 +497,68 @@ impl Realizer<'_> {
                 Ok(())
             }
         }
+    }
+
+    /// `seek(lo)` then every pair while `key <= hi`, over an ordered host.
+    fn bounded_scan(
+        &mut self,
+        relation: &Ident,
+        within: &stream::Within,
+        vars: &[Ident],
+        fragment: &mut Fragment,
+    ) -> syn::Result<()> {
+        let name = symbol_name(relation);
+        let column = within.column.index as usize;
+        let arity = self.analysis.headings[&name].len();
+        let Repr::Host(layout) = &self.reprs[&name] else {
+            return Err(syn::Error::new_spanned(
+                relation,
+                "bounded scans are realized over ordered host relations",
+            ));
+        };
+        let value = &layout.value;
+        let payload_sorted: Vec<usize> = (0..arity).filter(|&i| i != column).collect();
+        // Payload tuple fields are in the host's declared order.
+        let mut declared: Vec<usize> = payload_sorted
+            .iter()
+            .map(|&s| layout.declared_position[s])
+            .collect();
+        declared.sort_unstable();
+        let mut fields: Vec<Option<TokenStream>> = vec![None; arity];
+        fields[layout.declared_position[column]] = Some(quote!(&__cq_k.0));
+        for &sorted in &payload_sorted {
+            let rank = declared
+                .iter()
+                .position(|&d| d == layout.declared_position[sorted])
+                .unwrap();
+            let index = syn::Index::from(rank);
+            fields[layout.declared_position[sorted]] = Some(quote!(&__cq_v.#index));
+        }
+        let fields: Vec<TokenStream> = fields.into_iter().map(Option::unwrap).collect();
+        let mut all: Vec<Option<Ident>> = vec![None; arity];
+        for (sorted, var) in vars.iter().enumerate() {
+            all[layout.declared_position[sorted]] = Some(var.clone());
+        }
+        let all: Vec<Ident> = all.into_iter().map(Option::unwrap).collect();
+        let seek = within.low.value().map(|low| {
+            quote! { ::cq_storage::OrderedCursor::seek(&mut __cq_cursor, &&(#low,)); }
+        });
+        let stop = match within.high.value() {
+            Some(high) => quote! { |(__cq_k, _)| **__cq_k <= (#high,) },
+            None => quote! { |_| true },
+        };
+        let atom = atom(&layout.value, &all);
+        fragment.clauses.push(syn::parse_quote! {
+            #atom => bind (#(#all,)*) <- ({
+                let mut __cq_cursor = ::cq_storage::OrderedRead::ordered(&#value);
+                #seek
+                ::core::iter::Iterator::map(
+                    ::core::iter::Iterator::take_while(__cq_cursor, #stop),
+                    |(__cq_k, __cq_v)| (#(#fields,)*)
+                )
+            })
+        });
+        Ok(())
     }
 
     fn seek(
@@ -707,6 +781,38 @@ impl Realizer<'_> {
         });
         Ok(())
     }
+}
+
+/// Bound variables are references; the total comparison fragment is written
+/// over values, so its variables are dereferenced here. Other Rust is the
+/// author's and is emitted verbatim.
+fn deref_predicates(expr: &Expr) -> Expr {
+    use cq::{Predicate, Term};
+    if let Expr::Binary(syn::ExprBinary {
+        op: syn::BinOp::And(and),
+        left,
+        right,
+        ..
+    }) = cq::rust::unparen(expr)
+    {
+        let (left, right) = (deref_predicates(left), deref_predicates(right));
+        return syn::parse_quote!((#left) #and (#right));
+    }
+    let Some(predicate) = Predicate::from_expr(expr) else {
+        return expr.clone();
+    };
+    let term = |term: &Term| -> Expr {
+        match term {
+            Term::Variable(v) => syn::parse_quote!(*#v),
+            Term::Integer(i) => syn::parse_quote!(#i),
+        }
+    };
+    let (left, right, comparison) = (
+        term(&predicate.left),
+        term(&predicate.right),
+        predicate.comparison,
+    );
+    syn::parse_quote!(#left #comparison #right)
 }
 
 /// Rename variables inside an inlined clause: pattern bindings, atom

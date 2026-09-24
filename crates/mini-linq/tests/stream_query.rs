@@ -275,3 +275,58 @@ fn yannakakis_plan_executes_through_semijoin_membership() {
     let (l, r, s) = fixture();
     assert_eq!(reduced::run(&l, &r, &s), oracle(&l, &r, &s));
 }
+
+/// A comparison on an ordered host column is pushed into the cursor: the
+/// host map is entered at the lower bound and left at the upper bound; the
+/// remaining conjunct stays a guard.
+mod windowed {
+    macro_rules! policy {
+        ($($ix:tt)*) => {
+            ::mini_linq::ix_to_stream! {
+                $($ix)*
+                policy { R provides { ordered @R[0] }; }
+            }
+        };
+    }
+    pub(crate) use policy as stream_policy;
+    mod wiring {
+        pub(crate) use super::stream_policy;
+        pub(crate) use ::mini_linq::{
+            access_to_set_loops as access, index_demands as choose_index_policy, stream_to_access,
+        };
+        #[allow(unused_imports)]
+        pub(crate) use cq_state_providers::{
+            hash_distinct as distinct_state, hash_set_sink as set_sink,
+        };
+    }
+    use wiring as mini_linq;
+
+    #[allow(non_snake_case)]
+    pub(super) fn run(
+        R: &std::collections::BTreeMap<(i32,), Vec<(i32,)>>,
+    ) -> std::collections::HashSet<(&i32, &i32)> {
+        ::mini_linq::cq_to_ra_clause_prefix! {
+            struct Windowed;
+            relation R(a: i32, b: i32);
+            answer(a, b) :- R(a, b), if a >= 2 && a < 9 && b != 5;
+        }
+    }
+}
+
+#[test]
+fn ordered_host_scans_are_bounded_by_pushed_comparisons() {
+    let host: BTreeMap<(i32,), Vec<(i32,)>> = [
+        ((1,), vec![(0,)]),
+        ((2,), vec![(5,), (6,)]),
+        ((3,), vec![(5,)]),
+        ((8,), vec![(1,)]),
+        ((9,), vec![(1,)]),
+    ]
+    .into_iter()
+    .collect();
+    let actual: HashSet<(i32, i32)> = windowed::run(&host)
+        .into_iter()
+        .map(|(a, b)| (*a, *b))
+        .collect();
+    assert_eq!(actual, HashSet::from([(2, 6), (8, 1)]));
+}
