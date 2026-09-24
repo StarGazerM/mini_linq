@@ -31,6 +31,7 @@
 //! - A range summary is internal to a representation's `next`: `may_match`
 //!   is a superset test whose exact residual the representation owns.
 
+mod algorithms;
 mod block_access;
 mod blocks;
 mod hash_index;
@@ -43,6 +44,7 @@ mod replay;
 mod selection;
 mod summary;
 
+pub use algorithms::{pruned_rows, selected_rows};
 pub use block_access::{BlockDescriptor, BlockRead, BuildBlocks, CoordinateBounds};
 pub use blocks::{Block, BlockStore};
 pub use hash_index::{BucketCursor, BuildIndex, HashIndex, IndexRead};

@@ -1,5 +1,10 @@
 //! Deferred hash buckets with independently owned lookup cursors.
-use std::{cell::RefCell, collections::HashMap, hash::Hash, rc::Rc};
+use std::{
+    cell::{OnceCell, RefCell},
+    collections::HashMap,
+    hash::Hash,
+    rc::Rc,
+};
 
 /// Exact lookup preserves every stored occurrence. The cursor owns its bucket
 /// and remains valid after the index handle is dropped.
@@ -30,11 +35,14 @@ where
 }
 
 pub struct HashIndex<'a, K, V> {
-    state: Rc<RefCell<State<'a, K, V>>>,
+    state: Rc<State<'a, K, V>>,
 }
+type Source<'a, K, V> = Box<dyn Iterator<Item = (K, V)> + 'a>;
+
 struct State<'a, K, V> {
-    source: Option<Box<dyn Iterator<Item = (K, V)> + 'a>>,
-    buckets: HashMap<K, Rc<Vec<V>>>,
+    /// Taken exactly once, by the initialization of `buckets`.
+    source: RefCell<Option<Source<'a, K, V>>>,
+    buckets: OnceCell<HashMap<K, Rc<Vec<V>>>>,
 }
 impl<K, V> Clone for HashIndex<'_, K, V> {
     fn clone(&self) -> Self {
@@ -48,10 +56,10 @@ impl<'a, K: Eq + Hash + 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build
 {
     fn build(source: I) -> Self {
         Self {
-            state: Rc::new(RefCell::new(State {
-                source: Some(Box::new(source)),
-                buckets: HashMap::new(),
-            })),
+            state: Rc::new(State {
+                source: RefCell::new(Some(Box::new(source))),
+                buckets: OnceCell::new(),
+            }),
         }
     }
 }
@@ -60,19 +68,24 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
     type Item = V;
     type Cursor = BucketCursor<V>;
     fn lookup(&self, key: &K) -> Self::Cursor {
-        let mut state = self.state.borrow_mut();
-        if let Some(source) = state.source.take() {
+        let buckets = self.state.buckets.get_or_init(|| {
+            let source = self
+                .state
+                .source
+                .borrow_mut()
+                .take()
+                .expect("the source is consumed only by this initialization");
             let mut buckets = HashMap::<K, Vec<V>>::new();
             for (key, value) in source {
                 buckets.entry(key).or_default().push(value);
             }
-            state.buckets = buckets
+            buckets
                 .into_iter()
                 .map(|(key, values)| (key, Rc::new(values)))
-                .collect();
-        }
+                .collect()
+        });
         BucketCursor {
-            bucket: state.buckets.get(key).cloned(),
+            bucket: buckets.get(key).cloned(),
             position: 0,
         }
     }

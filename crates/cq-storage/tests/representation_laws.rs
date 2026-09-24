@@ -156,3 +156,40 @@ fn replay_abstraction_is_the_source_sequence_for_every_cursor() {
         assert_eq!(replay.clone().cursor().collect::<Vec<_>>(), source);
     }
 }
+
+#[test]
+fn traversals_enumerate_exactly_the_selected_or_matching_rows() {
+    use cq_storage::{RangeSummary, ZoneSummary, pruned_rows, selected_rows};
+    let universe = [[0, 0], [0, 1], [1, 0], [1, 1], [2, -1], [3, 3]];
+    let store = BlockStore::<2>::pack_unique(universe, NonZeroUsize::new(2).unwrap());
+    for rows in subsets(&universe) {
+        let chosen: BTreeSet<_> = rows.iter().copied().collect();
+        let mut selection = BlockMask::empty(&store);
+        for block in store.blocks() {
+            for (offset, row) in block.rows() {
+                if chosen.contains(row) {
+                    selection.insert(block.id(), offset);
+                }
+            }
+        }
+        let selected: BTreeSet<_> = selected_rows(&store, &selection)
+            .map(|(_, _, row)| *row)
+            .collect();
+        assert_eq!(selected, chosen);
+
+        // Semijoin residual: rows whose column-1 value is in a key set.
+        let keys: BTreeSet<[i64; 1]> = rows.iter().map(|row| [row[1]]).collect();
+        let mut summary = ZoneSummary::<1>::default();
+        for key in &keys {
+            summary.observe(key);
+        }
+        let matched: BTreeSet<_> = pruned_rows(&store, &summary, [1], &keys)
+            .map(|(_, _, row)| *row)
+            .collect();
+        let expected: BTreeSet<_> = universe
+            .into_iter()
+            .filter(|row| keys.contains(&[row[1]]))
+            .collect();
+        assert_eq!(matched, expected);
+    }
+}
