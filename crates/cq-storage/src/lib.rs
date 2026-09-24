@@ -9,6 +9,27 @@
 //! Query access is available only through the operation traits. Concrete fields
 //! and layout helpers are private; [`BlockStore::from_rows`] is an ingestion
 //! convenience, while compiled construction uses [`BuildBlocks`].
+//!
+//! # Abstraction functions
+//!
+//! Every type here is a representation of a relation and is admissible only
+//! because an abstraction function `α` relates it to that relation, and each
+//! operation commutes with `α`. Storage never adds meaning: `α` of a built
+//! value is exactly the supplied rows. The laws, checked in
+//! `tests/representation_laws.rs`:
+//!
+//! - `α(BlockStore) = { row(c) | c ∈ coordinates }`, a set; `pack_unique` and
+//!   `from_rows` satisfy `α(build(R)) = set(R)`, blocks partition the
+//!   coordinates, and every block's bounds enclose its rows.
+//! - `α(selection over S) = { row(c) | c ∈ selection } ⊆ α(S)`; `all` has
+//!   `α = α(S)`, `empty` has `α = ∅`, `insert(c)` adds exactly `row(c)`.
+//! - `α(index) = bag of (key, item)`; `build(I)` has `α = bag(I)` and
+//!   `lookup(k)` enumerates exactly the items paired with `k`, with
+//!   multiplicity and in source order.
+//! - `α(membership) = key set`; `contains(k) ⇔ k ∈ α`.
+//! - `α(replay) = the source sequence`; every cursor enumerates it.
+//! - A range summary is internal to a representation's `next`: `may_match`
+//!   is a superset test whose exact residual the representation owns.
 
 mod block_access;
 mod blocks;
