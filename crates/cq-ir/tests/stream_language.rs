@@ -1,7 +1,14 @@
 //! Authored Stream programs check the language contract independently of any
 //! lowering: capabilities, scope, affine pipes, IX discharge, and support.
-use cq_ir::stream::{self, Operation};
+use cq_ir::stream::{self, Operation, Realization};
 use quote::{ToTokens, quote};
+
+fn streamed(definition: &mut stream::Definition) -> &mut stream::Streamed {
+    match &mut definition.realization {
+        Realization::Stream(streamed) => streamed,
+        Realization::Alias { .. } => panic!("expected a stream definition"),
+    }
+}
 
 fn chain(stream: proc_macro2::TokenStream) -> stream::Module {
     syn::parse_quote! {
@@ -148,15 +155,16 @@ fn contract_rejects_each_ill_formed_program() {
         (
             "missing capability",
             |m| {
-                m.program.definitions[1].mode = syn::parse_quote!(let provides { iter });
+                streamed(&mut m.program.definitions[1]).mode =
+                    syn::parse_quote!(let provides { iter });
             },
             "does not provide Seek",
         ),
         (
             "pipe read twice",
             |m| {
-                m.program.definitions[3].mode = syn::parse_quote!(pipe);
-                m.program.definitions[4].body = syn::parse_quote! {
+                streamed(&mut m.program.definitions[3]).mode = syn::parse_quote!(pipe);
+                streamed(&mut m.program.definitions[4]).body = syn::parse_quote! {
                     for (a, b) in scan j0 { for (x, y) in scan j0 { emit (a, b, x) } }
                 };
             },
@@ -165,14 +173,14 @@ fn contract_rejects_each_ill_formed_program() {
         (
             "unbound key",
             |m| {
-                m.program.definitions[3].body = syn::parse_quote!(for (a) in scan l { for (b) in seek r[0](zz) { emit (a, b) } });
+                streamed(&mut m.program.definitions[3]).body = syn::parse_quote!(for (a) in scan l { for (b) in seek r[0](zz) { emit (a, b) } });
             },
             "is not bound",
         ),
         (
             "wrong arity",
             |m| {
-                m.program.definitions[0].body =
+                streamed(&mut m.program.definitions[0]).body =
                     syn::parse_quote!(for (a, q) in scan L { emit (a) });
             },
             "pattern binds 2 variables",
@@ -180,7 +188,7 @@ fn contract_rejects_each_ill_formed_program() {
         (
             "emit arity",
             |m| {
-                m.program.definitions[3].body =
+                streamed(&mut m.program.definitions[3]).body =
                     syn::parse_quote!(for (a) in scan l { for (b) in seek r[0](a) { emit (a) } });
             },
             "has arity 2",
@@ -188,7 +196,7 @@ fn contract_rejects_each_ill_formed_program() {
         (
             "missing support",
             |m| {
-                m.program.definitions[5].body =
+                streamed(&mut m.program.definitions[5]).body =
                     syn::parse_quote!(for (a, b, c) in scan j1 { emit (a, c) });
             },
             "set-valued",
@@ -196,9 +204,9 @@ fn contract_rejects_each_ill_formed_program() {
         (
             "ix not discharged",
             |m| {
-                m.program.definitions[1].mode =
+                streamed(&mut m.program.definitions[1]).mode =
                     syn::parse_quote!(let provides { iter, seek @r[0] });
-                m.program.definitions[3].body = syn::parse_quote! {
+                streamed(&mut m.program.definitions[3]).body = syn::parse_quote! {
                     for (a) in scan l { for (x, b) in scan r { if (x == a) { emit (a, b) } } }
                 };
             },
@@ -207,7 +215,7 @@ fn contract_rejects_each_ill_formed_program() {
         (
             "lazy on join",
             |m| {
-                m.program.definitions[3].lazy = Some(Default::default());
+                streamed(&mut m.program.definitions[3]).lazy = Some(Default::default());
             },
             "only to semijoin",
         ),
@@ -235,14 +243,59 @@ fn lazy_semijoin_requires_its_consumer_to_retest_the_reducer() {
     let mut tokens = ya_eager();
     let module = ya(std::mem::take(&mut tokens));
     let mut lazy = module.clone();
-    lazy.program.definitions[3].lazy = Some(Default::default());
+    streamed(&mut lazy.program.definitions[3]).lazy = Some(Default::default());
     let error = stream::contract::check(&lazy).unwrap_err().to_string();
     assert!(error.contains("also reads `d0`"), "{error}");
     // Making the consumer re-test d0 admits the strategy.
-    lazy.program.definitions[4].body = syn::parse_quote! {
+    streamed(&mut lazy.program.definitions[4]).body = syn::parse_quote! {
         for (depot, item) in scan s1 {
             if contains n0[0](item) { if contains d0[0](depot) { emit (depot, item) } }
         }
     };
     stream::contract::check(&lazy).unwrap();
+}
+
+#[test]
+fn alias_inherits_host_capabilities_translated_through_the_rename() {
+    // R(a, b) with host key on column 1 (`b`); r renames a -> x, b -> y so the
+    // seek on r's sorted heading {x, y} is on ordinal 1.
+    let module: stream::Module = syn::parse_quote! {
+        struct Aliased;
+        relation L(y: i32);
+        relation R(a: i32, b: i32);
+        answer(x, y) :- L(y), R(x, y);
+        relational {
+            l = rename L {y -> y};
+            r = rename R {a -> x, b -> y};
+            j = natural_join l with r;
+            output j as answer(x, y);
+        }
+        indexes { i0 = @r[1]; }
+        uses { j.right = i0; }
+        stream {
+            open L provides { iter };
+            open R provides { seek @R[1] };
+            l = pipe for (y) in scan L { emit (y) };
+            r = alias R;
+            j = pipe for (y) in scan l { for (x) in seek r[1](y) { emit (x, y) } };
+            return j;
+        }
+    };
+    let analysis = stream::contract::check(&module).unwrap();
+    assert_eq!(analysis.provided["r"], [Operation::Seek(vec![1])]);
+    assert_eq!(analysis.aliases["r"], "R");
+    assert_eq!(analysis.readers["R"], ["r"]);
+
+    let mut wrong_host = module.clone();
+    wrong_host.program.definitions[1].realization = syn::parse_quote!(alias L);
+    let error = stream::contract::check(&wrong_host)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("renames `R`"), "{error}");
+    let mut not_rename = module.clone();
+    not_rename.program.definitions[2].realization = syn::parse_quote!(alias R);
+    let error = stream::contract::check(&not_rename)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("only a rename"), "{error}");
 }

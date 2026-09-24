@@ -271,10 +271,25 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
         ));
     }
 
+    // Host capabilities in each host's sorted column ordinals.
+    let host_operations: BTreeMap<String, Vec<stream::Operation>> = policy
+        .hosts
+        .iter()
+        .map(|host| (symbol_name(&host.name), operations(&host.provides)))
+        .collect();
+
     let mut definitions = TokenStream::new();
     for definition in &plan.definitions {
         let name = symbol_name(&definition.result);
         let result = &results[&name];
+        let ident = &definition.result;
+        if let ra::Operator::Rename(rename) = &definition.operator {
+            if host_serves(rename, result, &headings, &host_operations) {
+                let host = &rename.relation;
+                definitions.extend(quote! { #ident = alias #host; });
+                continue;
+            }
+        }
         let mode = mode(result);
         let lazy = lazy(policy, definition, result, plan);
         let body = body(definition, &headings, &results, policy);
@@ -283,7 +298,6 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
         } else {
             body
         };
-        let ident = &definition.result;
         definitions.extend(quote! { #ident = #lazy #mode #body; });
     }
     let return_name = &plan.output.input;
@@ -293,6 +307,70 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<stream::Modu
     })?;
     stream::contract::check(&target)?;
     Ok(target)
+}
+
+fn operations(provides: &stream::Provides) -> Vec<stream::Operation> {
+    provides
+        .capabilities
+        .iter()
+        .map(|c| match c {
+            stream::Capability::Iter { .. } => stream::Operation::Iter,
+            stream::Capability::Contains { descriptor, .. } => {
+                stream::Operation::Contains(descriptor.columns.ordinals())
+            }
+            stream::Capability::Seek { descriptor, .. } => {
+                stream::Operation::Seek(descriptor.columns.ordinals())
+            }
+            stream::Capability::Ordered { descriptor, .. } => {
+                stream::Operation::Ordered(descriptor.columns.ordinals())
+            }
+        })
+        .collect()
+}
+
+/// A rename needs no realization of its own when the host, read through the
+/// rename's column translation, already provides every operation required.
+fn host_serves(
+    rename: &ra::Rename,
+    result: &Result_,
+    headings: &BTreeMap<String, Vec<String>>,
+    host_operations: &BTreeMap<String, Vec<stream::Operation>>,
+) -> bool {
+    let host = symbol_name(&rename.relation);
+    let host_heading = &headings[&host];
+    let translate = |ordinals: &[usize]| -> Vec<usize> {
+        let mut translated: Vec<usize> = ordinals
+            .iter()
+            .map(|&column| {
+                let target = rename
+                    .mapping
+                    .iter()
+                    .find(|m| symbol_name(&m.source) == host_heading[column])
+                    .map(|m| symbol_name(&m.target))
+                    .expect("complete rename");
+                result
+                    .heading
+                    .iter()
+                    .position(|h| *h == target)
+                    .expect("target in heading")
+            })
+            .collect();
+        translated.sort_unstable();
+        translated
+    };
+    let provided: Vec<stream::Operation> = host_operations[&host]
+        .iter()
+        .map(|op| match op {
+            stream::Operation::Iter => stream::Operation::Iter,
+            stream::Operation::Contains(c) => stream::Operation::Contains(translate(c)),
+            stream::Operation::Seek(c) => stream::Operation::Seek(translate(c)),
+            stream::Operation::Ordered(c) => stream::Operation::Ordered(translate(c)),
+        })
+        .collect();
+    result
+        .needs
+        .iter()
+        .all(|(_, need)| provided.iter().any(|p| p.satisfies(need)))
 }
 
 fn shared_attributes(

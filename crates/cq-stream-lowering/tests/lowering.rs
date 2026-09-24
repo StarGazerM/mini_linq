@@ -13,6 +13,7 @@ mod stream_oracle;
 use cq_ir::{index_requirements as ix, relational_plan as ra, stream};
 use cq_stream_lowering::{Policy, check, compile};
 use quote::{ToTokens, quote};
+use stream::Realization;
 
 fn parse_policy(tokens: proc_macro2::TokenStream) -> Policy {
     syn::parse2(tokens).unwrap()
@@ -51,7 +52,7 @@ fn seek_policy_realizes_the_authored_hash_chain() {
             open L provides { iter };
             open R provides { iter };
             open S provides { iter };
-            l = pipe for (a,) in scan L { emit (a,) };
+            l = alias L;
             r = let provides { seek @r[0] } for (a, b,) in scan R { emit (a, b,) };
             s = let provides { seek @s[0] } for (b, c,) in scan S { emit (b, c,) };
             j0 = pipe for (a,) in scan l { for (b,) in seek r[0](a,) { emit (a, b,) } };
@@ -141,14 +142,17 @@ fn prefer_lazy_marks_only_semijoins_whose_consumer_retests_the_reducer() {
         policy { R provides { iter }; S provides { iter }; semijoin = prefer_lazy; }
     });
     let target = compile(&source, &policy).unwrap();
-    assert!(target.program.definitions[2].lazy.is_some());
+    let Realization::Stream(streamed) = &target.program.definitions[2].realization else {
+        panic!("semijoin is streamed")
+    };
+    assert!(streamed.lazy.is_some());
     // The same plan whose join no longer reads `s` cannot be lazy.
     let eager = parse_policy(quote! { policy { R provides { iter }; S provides { iter }; } });
-    assert!(
-        compile(&source, &eager).unwrap().program.definitions[2]
-            .lazy
-            .is_none()
-    );
+    let eager = compile(&source, &eager).unwrap();
+    let Realization::Stream(streamed) = &eager.program.definitions[2].realization else {
+        panic!("semijoin is streamed")
+    };
+    assert!(streamed.lazy.is_none());
 }
 
 #[test]
@@ -180,4 +184,35 @@ fn every_shared_case_denotes_the_relational_oracle_under_both_join_rules() {
             assert_eq!(actual, expected, "{} under {join}", case.name);
         }
     }
+}
+
+#[test]
+fn renames_served_by_the_host_become_aliases_and_still_denote_the_oracle() {
+    let source = chain_ix();
+    let policy = parse_policy(quote! {
+        policy { L provides { iter }; R provides { seek @R[0] }; S provides { seek @S[0] }; }
+    });
+    let target = compile(&source, &policy).unwrap();
+    let text = target.program.to_token_stream().to_string();
+    assert!(text.contains("r = alias R ;"), "{text}");
+    assert!(text.contains("s = alias S ;"), "{text}");
+    assert!(text.contains("l = alias L ;"), "{text}");
+    let database: oracle::Database = [
+        ("L".to_owned(), [vec![1], vec![2]].into_iter().collect()),
+        (
+            "R".to_owned(),
+            [vec![1, 10], vec![2, 20], vec![2, 21]]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            "S".to_owned(),
+            [vec![10, 100], vec![21, 210]].into_iter().collect(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let ra_module = &source.relational_plan;
+    let expected = oracle::evaluate_ra(ra_module, &database).output;
+    assert_eq!(stream_oracle::evaluate(&target, &database).output, expected);
 }

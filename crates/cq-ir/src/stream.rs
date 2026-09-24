@@ -26,7 +26,8 @@
 //! ```text
 //! Module     ::= IX "stream" "{" Input* Definition* Return "}"
 //! Input      ::= "open" Ident "provides" "{" [Cap ("," Cap)* [","]] "}" ";"
-//! Definition ::= Ident "=" ["lazy"] Mode Body ";"
+//! Definition ::= Ident "=" Realization ";"
+//! Realization ::= "alias" Ident | ["lazy"] Mode Body
 //! Mode       ::= "pipe" | "let" "provides" "{" [Cap ("," Cap)* [","]] "}"
 //! Cap        ::= "iter" | ("seek" | "contains" | "ordered") "@" Ident "[" Column,* "]"
 //! Body       ::= "for" Pat "in" Cursor "{" Body "}"
@@ -55,6 +56,7 @@ pub mod kw {
     syn::custom_keyword!(provides);
     syn::custom_keyword!(pipe);
     syn::custom_keyword!(lazy);
+    syn::custom_keyword!(alias);
     syn::custom_keyword!(iter);
     syn::custom_keyword!(seek);
     syn::custom_keyword!(contains);
@@ -164,10 +166,37 @@ impl Columns {
 pub struct Definition {
     pub name: Ident,
     pub eq_token: Token![=],
+    pub realization: Realization,
+    pub semi_token: Token![;],
+}
+
+impl Definition {
+    pub fn body(&self) -> Option<&Body> {
+        match &self.realization {
+            Realization::Alias { .. } => None,
+            Realization::Stream(streamed) => Some(&streamed.body),
+        }
+    }
+}
+
+/// A rename of a host relation may be the host value itself, with its
+/// capabilities translated through the rename; every other result is a
+/// stream program in a mode.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum Realization {
+    #[parse(peek = kw::alias)]
+    Alias {
+        alias_token: kw::alias,
+        host: Ident,
+    },
+    Stream(Box<Streamed>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Streamed {
     pub lazy: Option<kw::lazy>,
     pub mode: Mode,
     pub body: Body,
-    pub semi_token: Token![;],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -413,6 +442,8 @@ pub struct Analysis {
     /// Names that are read exactly once, by that reader (or [`RETURN`]), and
     /// never again: a later stage may consume them in place.
     pub unique: BTreeMap<String, String>,
+    /// Alias definitions and the host relation each stands for.
+    pub aliases: BTreeMap<String, String>,
 }
 
 fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> syn::Result<T> {
@@ -582,7 +613,14 @@ impl<'a> Checker<'a> {
                     ),
                 );
             }
-            let is_let = match &definition.mode {
+            let streamed = match &definition.realization {
+                Realization::Alias { alias_token, host } => {
+                    self.check_alias(&name, alias_token, host, &ra_definition.operator)?;
+                    continue;
+                }
+                Realization::Stream(streamed) => streamed,
+            };
+            let is_let = match &streamed.mode {
                 Mode::Pipe { .. } => false,
                 Mode::Let { provides, .. } => {
                     let operations = self.check_provides(&definition.name, provides)?;
@@ -599,7 +637,7 @@ impl<'a> Checker<'a> {
                 emitted: None,
                 supported: false,
             };
-            scope.body(&definition.body, 0)?;
+            scope.body(&streamed.body, 0)?;
             let Scope {
                 required,
                 reads,
@@ -611,7 +649,7 @@ impl<'a> Checker<'a> {
             let arity = self.analysis.headings[&name].len();
             if emitted.len() != arity {
                 return error(
-                    &definition.body,
+                    &streamed.body,
                     format!(
                         "emits {} variables but `{name}` has arity {arity}",
                         emitted.len()
@@ -627,22 +665,98 @@ impl<'a> Checker<'a> {
             }
             self.analysis.required.insert(name.clone(), required);
             self.modes.insert(name.clone(), is_let);
-            self.check_strategy(definition, &reads)?;
-            self.check_set_valued(definition, &reads, supported);
+            self.check_strategy(definition, streamed, &reads)?;
+            self.check_set_valued(name, &streamed.body, &reads, supported);
         }
         self.check_usage()?;
         self.check_ix_discharged()
     }
 
-    fn check_strategy(&self, definition: &Definition, reads: &[String]) -> syn::Result<()> {
-        let Some(lazy) = &definition.lazy else {
+    /// An alias stands for the host value; its capabilities are the host's,
+    /// with column ordinals translated through the rename.
+    fn check_alias(
+        &mut self,
+        name: &str,
+        alias_token: &kw::alias,
+        host: &Ident,
+        operator: &ra::Operator,
+    ) -> syn::Result<()> {
+        let ra::Operator::Rename(rename) = operator else {
+            return error(
+                alias_token,
+                "`alias` realizes only a rename of a host relation",
+            );
+        };
+        if symbol_name(&rename.relation) != symbol_name(host) {
+            return error(
+                host,
+                format!("`{name}` renames `{}`, not `{host}`", rename.relation),
+            );
+        }
+        let host_name = symbol_name(host);
+        let Some(host_operations) = self.analysis.provided.get(&host_name).cloned() else {
+            return error(host, "alias must name an opened host relation");
+        };
+        let host_heading = self.analysis.headings[&host_name].clone();
+        let heading = self.analysis.headings[name].clone();
+        let translate = |ordinals: &[usize]| -> Vec<usize> {
+            let mut translated: Vec<usize> = ordinals
+                .iter()
+                .map(|&column| {
+                    let source = &host_heading[column];
+                    let target = rename
+                        .mapping
+                        .iter()
+                        .find(|m| symbol_name(&m.source) == *source)
+                        .map(|m| symbol_name(&m.target))
+                        .expect("RA checked the rename is complete");
+                    heading
+                        .iter()
+                        .position(|h| *h == target)
+                        .expect("target in heading")
+                })
+                .collect();
+            translated.sort_unstable();
+            translated
+        };
+        let operations = host_operations
+            .iter()
+            .map(|op| match op {
+                Operation::Iter => Operation::Iter,
+                Operation::Contains(c) => Operation::Contains(translate(c)),
+                Operation::Seek(c) => Operation::Seek(translate(c)),
+                Operation::Ordered(c) => Operation::Ordered(translate(c)),
+            })
+            .collect();
+        self.analysis.provided.insert(name.to_string(), operations);
+        self.analysis
+            .readers
+            .entry(host_name.clone())
+            .or_default()
+            .push(name.to_string());
+        self.analysis
+            .required
+            .insert(name.to_string(), BTreeMap::new());
+        self.analysis.aliases.insert(name.to_string(), host_name);
+        self.modes.insert(name.to_string(), true);
+        self.set_valued.insert(name.to_string(), true);
+        Ok(())
+    }
+
+    fn check_strategy(
+        &self,
+        definition: &Definition,
+        streamed: &Streamed,
+        reads: &[String],
+    ) -> syn::Result<()> {
+        let Some(lazy) = &streamed.lazy else {
             return Ok(());
         };
         let name = symbol_name(&definition.name);
         let Some(ra::Operator::Semijoin(semijoin)) = self.operators.get(&name) else {
             return error(lazy, "`lazy` applies only to semijoin results");
         };
-        if matches!(definition.mode, Mode::Let { .. }) {
+        if matches!(streamed.mode, Mode::Let { .. }) {
             return error(
                 lazy,
                 "a lazy semijoin is a pipe; `let` materializes eagerly",
@@ -658,9 +772,9 @@ impl<'a> Checker<'a> {
             .program()
             .definitions
             .iter()
-            .find(|d| reads_name(&d.body, &name))
+            .find(|d| d.body().is_some_and(|b| reads_name(b, &name)))
             .ok_or_else(|| syn::Error::new_spanned(lazy, "a lazy semijoin needs a consumer"))?;
-        if !reads_name(&consumer.body, &reducer) {
+        if !consumer.body().is_some_and(|b| reads_name(b, &reducer)) {
             return error(
                 lazy,
                 format!(
@@ -674,10 +788,9 @@ impl<'a> Checker<'a> {
 
     /// A definition denotes a set when it applies `support`, or when it binds
     /// exactly the variables it emits over set-valued operands.
-    fn check_set_valued(&mut self, definition: &Definition, reads: &[String], supported: bool) {
-        let name = symbol_name(&definition.name);
+    fn check_set_valued(&mut self, name: String, body: &Body, reads: &[String], supported: bool) {
         let set_valued = supported
-            || (emits_all_bound(&definition.body, 0)
+            || (emits_all_bound(body, 0)
                 && reads
                     .iter()
                     .all(|read| self.set_valued.get(read).copied().unwrap_or(true)));
@@ -697,8 +810,10 @@ impl<'a> Checker<'a> {
             if name == returned {
                 readers.push(RETURN.to_string());
             }
-            match &definition.mode {
-                Mode::Pipe { .. } if readers.len() != 1 => {
+            match &definition.realization {
+                Realization::Stream(streamed)
+                    if matches!(streamed.mode, Mode::Pipe { .. }) && readers.len() != 1 =>
+                {
                     return error(
                         &definition.name,
                         format!(

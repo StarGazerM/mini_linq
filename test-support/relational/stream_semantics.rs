@@ -39,9 +39,48 @@ pub fn evaluate(module: &stream::Module, database: &Database) -> Evaluation {
         );
     }
     for definition in &module.program.definitions {
-        let mut rows = Vec::new();
-        body(&definition.body, &Env::new(), &relations, &mut rows, false);
-        relations.insert(symbol_name(&definition.name), rows);
+        let name = symbol_name(&definition.name);
+        let rows = match &definition.realization {
+            stream::Realization::Alias { host, .. } => {
+                // The alias reads the host in its own sorted heading order.
+                let host_heading = &analysis.headings[&symbol_name(host)];
+                let heading = &analysis.headings[&name];
+                let rename = module
+                    .index_requirements
+                    .relational_plan
+                    .plan
+                    .definitions
+                    .iter()
+                    .find(|d| symbol_name(&d.result) == name)
+                    .and_then(|d| match &d.operator {
+                        cq_ir::relational_plan::Operator::Rename(r) => Some(r),
+                        _ => None,
+                    })
+                    .expect("alias realizes a rename");
+                let permutation: Vec<usize> = heading
+                    .iter()
+                    .map(|target| {
+                        let source = rename
+                            .mapping
+                            .iter()
+                            .find(|m| symbol_name(&m.target) == *target)
+                            .map(|m| symbol_name(&m.source))
+                            .unwrap();
+                        host_heading.iter().position(|h| *h == source).unwrap()
+                    })
+                    .collect();
+                relations[&symbol_name(host)]
+                    .iter()
+                    .map(|row| permutation.iter().map(|&i| row[i]).collect())
+                    .collect()
+            }
+            stream::Realization::Stream(streamed) => {
+                let mut rows = Vec::new();
+                body(&streamed.body, &Env::new(), &relations, &mut rows, false);
+                rows
+            }
+        };
+        relations.insert(name, rows);
     }
     let returned = symbol_name(&module.program.return_.name);
     let heading = &analysis.headings[&returned];
