@@ -313,9 +313,9 @@ def isolate(packages, only=()):
 CQ = 'struct Q; relation R(a:i32); answer(x) :- R(x);'
 RA = CQ + ' relational { r = rename R {a -> x}; output r as answer(x); }'
 IX = RA + ' indexes {} uses {}'
-POLICED_IX = IX + ' policy { R provides { iter }; }'
-STRUCTURES = IX + ' structures { R = host provides { iter }; }'
-POLICED_STRUCTURES = STRUCTURES + ' policy { R provides { iter }; }'
+POLICED_IX = IX + ' policy { R; }'
+STRUCTURES = IX + ' structures { R; }'
+POLICED_STRUCTURES = STRUCTURES + ' policy { R; }'
 STREAM = STRUCTURES + ' stream { r = alias R; return r; }'
 ACCESS = 'answer(x) => ((x,)) :- R(x) => bind (x,) <- ([(1i32,), (2,)]);'
 PIPELINE = 'iter0 = scan (x,) in ([(1i32,), (1,), (2,)]) yield (x,); iter1 = project iter0 as (x,) yield ((x,)); iter2 = distinct iter1; return iter2;'
@@ -347,7 +347,7 @@ def frontend_source(feature):
             "clause-prefix": (CQ, "choose_index_policy", ["relational", "rename"]),
             "hypergraph": (CQ, "choose_index_policy", ["relational", "rename"]),
             "index-demands": (RA, "stream_policy", ["indexes", "uses"]),
-            "structure-selection": (POLICED_IX, "structures_to_stream", ["structures", "host", "policy"]),
+            "structure-selection": (POLICED_IX, "structures_to_stream", ["structures", "R", "policy"]),
             "stream-lowering": (POLICED_STRUCTURES, "stream_to_access", ["stream", "alias", "return"]),
         }[feature]
         checks = " ".join(f'assert!(CAPTURE.contains({json.dumps(word)}));' for word in expected)

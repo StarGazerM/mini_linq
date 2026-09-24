@@ -46,13 +46,24 @@ fn text(tokens: impl ToTokens) -> String {
 
 #[test]
 fn hash_chain_builds_two_indexes_and_one_flat_region() {
-    let module = stream_of(
-        &chain(),
-        quote! { policy { L provides { iter }; R provides { iter }; S provides { iter }; } },
-    );
+    let module = stream_of(&chain(), quote! { policy { L; R; S; } });
     let realized = compile(&module, &endpoints()).unwrap();
-    let statements: Vec<String> = realized.statements.iter().map(text).collect();
+    // Each built structure is followed by the guard for the operation the
+    // plan performs on it, naming the relation in any trait error.
+    let statements: Vec<String> = realized
+        .statements
+        .iter()
+        .map(text)
+        .filter(|s| !s.starts_with(":: cq_storage :: require"))
+        .collect();
     assert_eq!(statements.len(), 2);
+    assert!(
+        realized
+            .statements
+            .iter()
+            .map(text)
+            .any(|s| s == ":: cq_storage :: require :: seek (__cq_r_on_0) ;")
+    );
     let expected_r: syn::Stmt = syn::parse_quote! {
         let __cq_r_on_0 = &<::cq_storage::HashIndex<_, _> as ::cq_storage::Build<_>>::build(
             ::core::iter::Iterator::map(
@@ -91,10 +102,7 @@ fn host_maps_are_read_in_place_with_cloned_keys_in_declared_order() {
             output p as answer(a, c);
         }
     };
-    let module = stream_of(
-        &plan,
-        quote! { policy { L provides { iter }; R provides { seek @R[0] }; S provides { seek @S[0] }; } },
-    );
+    let module = stream_of(&plan, quote! { policy { L; R keyed [a]; S keyed [b]; } });
     let realized = compile(&module, &endpoints()).unwrap();
     assert!(realized.statements.is_empty());
     let expected: cq_ir::rust_access_plan::Plan = syn::parse_quote! {
@@ -108,15 +116,13 @@ fn host_maps_are_read_in_place_with_cloned_keys_in_declared_order() {
 
 #[test]
 fn merge_policy_realizes_co_iteration_over_built_ordered_maps() {
-    let module = stream_of(
-        &chain(),
-        quote! { policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; } },
-    );
+    let module = stream_of(&chain(), quote! { policy { L; R; S; join = merge; } });
     let realized = compile(&module, &endpoints()).unwrap();
     let names: Vec<String> = realized
         .statements
         .iter()
         .map(|s| text(s).split_whitespace().nth(1).unwrap().to_owned())
+        .filter(|s| s != "cq_storage")
         .collect();
     assert_eq!(
         names,
@@ -139,7 +145,7 @@ fn every_shared_case_realizes_to_a_checked_access_region() {
             .inputs()
             .map(|d| {
                 let name = &d.name;
-                quote! { #name provides { iter }; }
+                quote! { #name; }
             })
             .collect();
         for join in [quote!(), quote!(join = merge;)] {

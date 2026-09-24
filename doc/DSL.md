@@ -64,19 +64,25 @@ the query head supplies result types and is not an input. Variable-only heads
 infer types from input/typed bindings; computed heads require a declared result
 schema. There is no fact-insertion syntax.
 
-`#[index(Type provides { … })]` on a declaration is storage advice, not
-meaning: the query denotes the same set with or without it. `Type` is any
-Rust type — from any crate — implementing `cq_storage::Build` and the traits
-it claims (`seek`: `IndexRead`, `contains`: `ExactMembership`, `ordered`:
-`OrderedRead`); structure selection builds it over whatever the plan indexes
-on that relation, and the generated program uses it only through those
-traits, so rustc checks the claims. A bare path (`my::Trie`) has its generics
-inferred from the key and payload tuples; written arguments are used as is. It names no columns — which columns are
-indexed is a planner decision the query cannot see — and it is never a
-fallback: a type whose claims do not cover what the plan needs (no `seek`
-where a join probes, no `ordered` under `join = merge`) is a compile error at
-the demanding definition. Without advice the defaults are `HashIndex` for
-joins, `HashSet` for semijoins, `BTreeMap` under `merge`.
+`#[index(Type)]` on a declaration is storage advice, not meaning: the query
+denotes the same set with or without it. `Type` is any Rust type — from any
+crate — implementing `cq_storage::Build`; structure selection builds it over
+whatever the plan indexes on that relation, and the generated program reads
+it only through the runtime traits behind the operations the plan performs
+(`IndexRead` for probes, `ExactMembership` for semijoins, `OrderedRead` under
+`join = merge`). Nothing is claimed: rustc checks the type where the program
+uses it, at a one-line guard beside the structure. A bare path has its
+generics inferred from the key and payload tuples; written arguments are
+used as is. It names no columns — which columns are indexed is a planner
+decision the query cannot see. Without advice the defaults are `HashIndex`
+for joins, `HashSet` for semijoins, `BTreeMap` under `merge`.
+
+Likewise the policy states facts about host values, never capabilities:
+`R keyed [a]` means the host is a map keyed on column `a` (so a demand on `a`
+is answered in place), `R keyed [a] ordered` that the key has an order;
+`L;` is a plain collection. Strategy (`join = merge`, `semijoin =
+prefer_lazy`) is the policy's decision, and every operation it leads the
+program to perform is a trait bound rustc checks on the host value.
 
 CQ validity and expression scheduling preserve these facts:
 

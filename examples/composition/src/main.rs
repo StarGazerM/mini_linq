@@ -13,9 +13,9 @@ macro_rules! policy {
         ::mini_linq::select_structures! {
             $($ix)*
             policy {
-                L provides { iter };
-                R provides { seek @R[0] };
-                S provides { seek @S[0] };
+                L;
+                R keyed [a];
+                S keyed [b];
             }
         }
     };

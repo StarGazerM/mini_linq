@@ -69,9 +69,9 @@ mod hosted {
             ::mini_linq::select_structures! {
                 $($ix)*
                 policy {
-                    L provides { iter };
-                    R provides { seek @R[0] };
-                    S provides { seek @S[0] };
+                    L;
+                    R keyed [a];
+                    S keyed [b];
                 }
             }
         };
@@ -124,7 +124,7 @@ mod built {
         ($($ix:tt)*) => {
             ::mini_linq::select_structures! {
                 $($ix)*
-                policy { L provides { iter }; R provides { iter }; S provides { iter }; }
+                policy { L; R; S; }
             }
         };
     }
@@ -176,10 +176,11 @@ fn compiler_built_indexes_feed_the_lazy_pull_endpoint() {
     assert_eq!(built::run(&doubled, &r, &s).len(), oracle(&l, &r, &s).len());
 }
 
-/// `#[index(Type provides { … })]` on a declaration makes the compiler build
-/// that Rust type — here one defined in this test, unknown to `cq-storage` —
-/// over the relation, using only the traits it claims. `R`, unadvised, keeps
-/// the default hash index.
+/// `#[index(Type)]` on a declaration makes the compiler build that Rust type
+/// — here one defined in this test, unknown to `cq-storage` — over the
+/// relation, reading it through the runtime traits the plan uses; rustc
+/// checks the type implements them. `R`, unadvised, keeps the default hash
+/// index.
 mod advised {
     use super::*;
 
@@ -221,7 +222,7 @@ mod advised {
         ($($ix:tt)*) => {
             ::mini_linq::select_structures! {
                 $($ix)*
-                policy { L provides { iter }; R provides { iter }; S provides { iter }; }
+                policy { L; R; S; }
             }
         };
     }
@@ -257,7 +258,7 @@ mod advised {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
-            #[index(SortedIndex provides { seek, contains })]
+            #[index(SortedIndex)]
             relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
         }
@@ -280,7 +281,7 @@ mod merged {
             ::mini_linq::select_structures! {
                 $($ix)*
                 policy {
-                    L provides { iter }; R provides { iter }; S provides { iter };
+                    L; R; S;
                     join = merge;
                 }
             }
@@ -332,7 +333,7 @@ mod reduced {
         ($($ix:tt)*) => {
             ::mini_linq::select_structures! {
                 $($ix)*
-                policy { L provides { iter }; R provides { iter }; S provides { iter }; }
+                policy { L; R; S; }
             }
         };
     }
@@ -380,7 +381,7 @@ mod windowed {
         ($($ix:tt)*) => {
             ::mini_linq::select_structures! {
                 $($ix)*
-                policy { R provides { ordered @R[0] }; }
+                policy { R keyed [a] ordered; }
             }
         };
     }

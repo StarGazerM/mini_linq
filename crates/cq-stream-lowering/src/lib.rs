@@ -13,7 +13,7 @@
 //! materialized with exactly the operations its readers require. The policy
 //! contributes only the semijoin strategy.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use cq_ir::capabilities::Operation;
 use cq_ir::policy::Policy;
@@ -35,7 +35,6 @@ enum Rule {
 
 /// Facts about one RA result used to choose its mode and body.
 struct Result_ {
-    name: String,
     heading: Vec<String>,
     /// Readers in RA order, each with the operation it needs on this result.
     needs: Vec<(String, Operation)>,
@@ -66,7 +65,6 @@ pub fn compile(source: &structures::Module, policy: &Policy) -> syn::Result<stre
                 name.clone(),
                 Result_ {
                     heading: headings[&name].clone(),
-                    name,
                     needs: Vec::new(),
                     bag: false,
                 },
@@ -93,23 +91,31 @@ pub fn compile(source: &structures::Module, policy: &Policy) -> syn::Result<stre
                 let (l, r) = (symbol_name(&join.left), symbol_name(&join.right));
                 let shared = shared_attributes(headings, &l, &r);
                 let (cl, cr) = (ordinals(&l, &shared), ordinals(&r, &shared));
-                if serves(&l, &Operation::Ordered(cl.clone()))
-                    && serves(&r, &Operation::Ordered(cr.clone()))
-                {
+                // The rule is the policy's; the structures must answer it.
+                if policy.merge_joins() {
+                    if !serves(&l, &Operation::Ordered(cl.clone()))
+                        || !serves(&r, &Operation::Ordered(cr.clone()))
+                    {
+                        return Err(syn::Error::new_spanned(
+                            &definition.result,
+                            format!(
+                                "merge join `{reader}` needs both operands keyed on {shared:?}"
+                            ),
+                        ));
+                    }
                     need(&join.left, Operation::Ordered(cl));
                     need(&join.right, Operation::Ordered(cr));
                     rules.insert(reader.clone(), Rule::Merge);
-                } else if serves(&r, &Operation::Seek(cr.clone())) {
+                } else {
+                    if !serves(&r, &Operation::Seek(cr.clone())) {
+                        return Err(syn::Error::new_spanned(
+                            &definition.result,
+                            format!("join `{reader}` needs `{r}` keyed on {shared:?}"),
+                        ));
+                    }
                     need(&join.left, Operation::Iter);
                     need(&join.right, Operation::Seek(cr));
                     rules.insert(reader.clone(), Rule::Seek);
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        &definition.result,
-                        format!(
-                            "no chosen structure serves the join `{reader}`: `{r}` needs seek or both operands ordered on {shared:?}"
-                        ),
-                    ));
                 }
             }
             ra::Operator::Semijoin(join) => {
@@ -119,9 +125,7 @@ pub fn compile(source: &structures::Module, policy: &Policy) -> syn::Result<stre
                 if !serves(&r, &Operation::Contains(cr.clone())) {
                     return Err(syn::Error::new_spanned(
                         &definition.result,
-                        format!(
-                            "no chosen structure serves the semijoin `{reader}`: `{r}` needs membership on {shared:?}"
-                        ),
+                        format!("semijoin `{reader}` needs `{r}` keyed on {shared:?}"),
                     ));
                 }
                 need(&join.left, Operation::Iter);
@@ -226,28 +230,7 @@ fn mode(result: &Result_) -> TokenStream {
     if !materialized {
         return quote!(pipe);
     }
-    let name = ident(&result.name);
-    // Exactly the operations readers perform, each claimed by a structure.
-    let mut provided = BTreeSet::new();
-    for (_, operation) in &result.needs {
-        provided.insert(operation.clone());
-    }
-    let capabilities = provided.iter().map(|op| match op {
-        Operation::Iter => quote!(iter),
-        Operation::Contains(c) => {
-            let c = c.iter().map(|&i| syn::Index::from(i));
-            quote!(contains @#name[#(#c),*])
-        }
-        Operation::Seek(c) => {
-            let c = c.iter().map(|&i| syn::Index::from(i));
-            quote!(seek @#name[#(#c),*])
-        }
-        Operation::Ordered(c) => {
-            let c = c.iter().map(|&i| syn::Index::from(i));
-            quote!(ordered @#name[#(#c),*])
-        }
-    });
-    quote!(let provides { #(#capabilities),* })
+    quote!(let)
 }
 
 /// A comparison chain on one attribute against integer literals, as a key

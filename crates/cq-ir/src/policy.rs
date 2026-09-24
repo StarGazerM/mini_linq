@@ -1,18 +1,26 @@
 //! The caller's query-independent configuration, read by the structure
 //! selection and Stream lowering passes.
 //!
+//! Hosts are facts, not claims: `R keyed [a]` says the host value is keyed
+//! on column `a` (so a demand on `a` is answered in place), `ordered` that
+//! the key has an order. Whether the value's type implements the traits
+//! those facts lead the program to use is rustc's check. The rest is
+//! strategy.
+//!
 //! ```text
-//! Policy ::= "policy" "{" (Ident "provides" "{" Cap,* "}" ";")*
-//!            ["join" "=" ("seek" | "merge") ";"]
+//! Policy ::= "policy" "{" Host* ["join" "=" ("seek" | "merge") ";"]
 //!            ["semijoin" "=" ("eager" | "prefer_lazy") ";"] "}"
+//! Host   ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ";"
 //! ```
 
 use syn::{Ident, Token, token};
 
-use crate::capabilities::Provides;
+use crate::CommaList;
 
 pub mod kw {
     syn::custom_keyword!(policy);
+    syn::custom_keyword!(keyed);
+    syn::custom_keyword!(ordered);
     syn::custom_keyword!(join);
     syn::custom_keyword!(semijoin);
     syn::custom_keyword!(seek);
@@ -49,8 +57,21 @@ fn parse_hosts(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Host>> {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Host {
     pub name: Ident,
-    pub provides: Provides,
+    #[syn(optional, peek = kw::keyed)]
+    pub key: Option<Key>,
     pub semi_token: Token![;],
+}
+
+/// `keyed [a, b] [ordered]`: the host value's key columns, by name.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Key {
+    pub keyed_token: kw::keyed,
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub columns: CommaList<Ident>,
+    pub ordered: Option<kw::ordered>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]

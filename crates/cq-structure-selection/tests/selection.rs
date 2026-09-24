@@ -55,50 +55,55 @@ fn text(entries: proc_macro2::TokenStream) -> String {
 
 #[test]
 fn defaults_preserve_constant_time_access_and_skip_host_served_demands() {
-    // R keyed on `a` (host sorted column 0) serves r's join demand; nothing
-    // else is served, so s gets a hash and l a key set for the semijoin.
-    let (text, ok) = entries(quote! {
-        policy { L provides { iter }; R provides { seek @R[0] }; S provides { iter }; }
-    });
+    // R keyed on `a` answers r's join demand in place; nothing else is
+    // answered, so s gets a hash index and l a key set for the semijoin.
+    let (text, ok) = entries(quote! { policy { L; R keyed [a]; S; } });
     assert!(ok);
     assert_eq!(
         text,
         self::text(quote! {
-            L = host provides { iter }; R = host provides { seek @R[0] }; S = host provides { iter };
-            l = ::std::collections::HashSet<_> [0] provides { contains };
-            s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
+            L; R keyed [0]; S;
+            l = ::std::collections::HashSet<_> [0];
+            s = ::cq_storage::HashIndex<_, _> [0];
         })
     );
 }
 
 #[test]
-fn merge_orders_both_join_operands_and_the_strongest_kind_wins() {
-    let (text, ok) = entries(quote! {
-        policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; }
-    });
+fn merge_keys_both_join_operands_in_order_and_the_strongest_need_wins() {
+    let (text, ok) = entries(quote! { policy { L; R; S; join = merge; } });
     assert!(ok);
-    // l is both a merge operand (ordered) and a semijoin reducer (key_set):
-    // one ordered structure serves both.
+    // l is both a merge operand and a semijoin reducer: one ordered
+    // structure on `a` answers both.
     assert_eq!(
         text,
         self::text(quote! {
-            L = host provides { iter }; R = host provides { iter }; S = host provides { iter };
-            l = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0] provides { ordered, seek, contains };
-            r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0] provides { ordered, seek, contains };
-            s = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0] provides { ordered, seek, contains };
-            j0 = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [1] provides { ordered, seek, contains };
+            L; R; S;
+            l = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0];
+            r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0];
+            s = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [0];
+            j0 = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [1];
         })
     );
 }
 
-fn advised(
-    attr: proc_macro2::TokenStream,
-    policy: proc_macro2::TokenStream,
-) -> syn::Result<String> {
+#[test]
+fn policy_key_columns_are_names_and_must_exist() {
+    let source = cq_index_policy::compile(&chain()).unwrap();
+    let policy: Policy = syn::parse_quote! { policy { L; R keyed [z]; S; } };
+    let err = compile(&source, &policy).unwrap_err();
+    assert_eq!(err.to_string(), "`R` has no column `z`");
+    let policy: Policy = syn::parse_quote! { policy { L; R; } };
+    let err = compile(&source, &policy).unwrap_err();
+    assert_eq!(err.to_string(), "policy must list host relation `S`");
+}
+
+#[test]
+fn index_advice_names_any_rust_type_for_structures_built_over_that_relation() {
     let plan: ra::Module = syn::parse_quote! {
         struct Chain;
         relation L(a: i32);
-        #attr
+        #[index(my_crate::Trie)]
         relation R(b: i32, a: i32);
         relation S(b: i32, c: i32);
         answer(a, c) :- L(a), R(b, a), S(b, c);
@@ -114,53 +119,17 @@ fn advised(
         }
     };
     let source = cq_index_policy::compile(&plan).unwrap();
-    let policy: Policy = syn::parse2(policy).unwrap();
-    let target = compile(&source, &policy)?;
+    let policy: Policy = syn::parse_quote! { policy { L; R; S; } };
+    let target = compile(&source, &policy).unwrap();
     assert!(check(&source, &target, &policy));
-    Ok(target
-        .entries
-        .iter()
-        .filter(|e| matches!(e.structure, cq_ir::structures::Structure::Keyed(_)))
-        .map(|e| e.to_token_stream().to_string())
-        .collect::<Vec<_>>()
-        .join(" "))
-}
-
-#[test]
-fn index_advice_names_any_rust_type_and_must_claim_what_the_plan_needs() {
-    let hosts =
-        quote! { policy { L provides { iter }; R provides { iter }; S provides { iter }; } };
-    // Any type: the compiler emits `Build` and the claimed traits, nothing else.
-    assert_eq!(
-        advised(
-            quote! { #[index(my_crate::Trie<_, _> provides { seek })] },
-            hosts.clone()
-        )
-        .unwrap(),
-        text(quote! {
-            l = ::std::collections::HashSet<_> [0] provides { contains };
-            r = my_crate::Trie<_, _> [0] provides { seek };
-            s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
-        })
-    );
-    // A type that does not claim what the plan needs is an error, never replaced.
-    let err = advised(
-        quote! { #[index(my_crate::KeySet<_> provides { contains })] },
-        hosts,
-    )
-    .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "relation `R` advises a structure that does not claim seek needed by `r` on [0]"
-    );
-    // Nor does advice override a merge strategy's need for order.
-    let err = advised(
-        quote! { #[index(my_crate::Trie<_, _> provides { seek })] },
-        quote! { policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; } },
-    )
-    .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "relation `R` advises a structure that does not claim ordered needed by `r` on [0]"
-    );
+    let module: cq_ir::structures::Module = syn::parse2(quote! {
+        #source structures {
+            L; R; S;
+            l = ::std::collections::HashSet<_> [0];
+            r = my_crate::Trie [0];
+            s = ::cq_storage::HashIndex<_, _> [0];
+        }
+    })
+    .unwrap();
+    assert_eq!(target.entries, module.entries);
 }

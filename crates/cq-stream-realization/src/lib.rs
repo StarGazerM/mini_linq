@@ -61,20 +61,19 @@ struct HostLayout {
 }
 
 /// The materialized rows of a result and the structures built over them,
-/// each bound by reference, with the operations it claims on its key.
+/// each bound by reference and keyed on its columns.
 #[derive(Default)]
 struct Built {
     rows: Option<Ident>,
-    structures: Vec<(Vec<usize>, Ident, Vec<Operation>)>,
+    structures: Vec<(Vec<usize>, Ident)>,
 }
 
 impl Built {
-    /// The structure on `columns` claiming `operation`.
-    fn claiming(&self, columns: &[usize], operation: &Operation) -> Option<&Ident> {
+    fn keyed_on(&self, columns: &[usize]) -> Option<&Ident> {
         self.structures
             .iter()
-            .find(|(c, _, claims)| c == columns && claims.contains(operation))
-            .map(|(_, structure, _)| structure)
+            .find(|(c, _)| c == columns)
+            .map(|(_, structure)| structure)
     }
 }
 
@@ -116,7 +115,7 @@ pub fn compile(module: &stream::Module, endpoints: &Endpoints) -> syn::Result<Re
     // The structures chosen for every name: the types to build.
     let mut chosen: BTreeMap<String, Vec<&structures::Keyed>> = BTreeMap::new();
     for entry in &module.structures.entries {
-        if let structures::Structure::Keyed(keyed) = &entry.structure {
+        if let structures::Structure::Built { keyed, .. } = &entry.structure {
             chosen
                 .entry(symbol_name(&entry.name))
                 .or_default()
@@ -172,8 +171,7 @@ pub fn compile(module: &stream::Module, endpoints: &Endpoints) -> syn::Result<Re
                                 "support inside a materialized definition is not realized; only the returned result is deduplicated",
                             ));
                         }
-                        let provided = &analysis.provided[&name];
-                        Repr::Built(realizer.build(&name, &fragment, provided, &mut statements)?)
+                        Repr::Built(realizer.build(&name, &fragment, &mut statements)?)
                     }
                 }
             }
@@ -265,11 +263,25 @@ fn clone_of(variable: &Ident) -> TokenStream {
 }
 
 impl Realizer<'_> {
+    /// Every operation some reader performs on `name`.
+    fn required_on(&self, name: &str) -> Vec<Operation> {
+        let mut operations: Vec<Operation> = self
+            .analysis
+            .required
+            .values()
+            .filter_map(|by_name| by_name.get(name))
+            .flatten()
+            .cloned()
+            .collect();
+        operations.sort();
+        operations.dedup();
+        operations
+    }
+
     fn build(
         &mut self,
         name: &str,
         fragment: &Fragment,
-        provided: &[stream::Operation],
         statements: &mut Vec<Stmt>,
     ) -> syn::Result<Built> {
         let heading: Vec<Ident> = self.analysis.headings[name]
@@ -288,7 +300,10 @@ impl Realizer<'_> {
 
         let mut built = Built::default();
         let entries = self.chosen.get(name).cloned().unwrap_or_default();
-        let needs_rows = provided.contains(&stream::Operation::Iter) || entries.len() > 1;
+        // Rows are kept only if some reader scans them or more than one
+        // structure is built from them.
+        let required = self.required_on(name);
+        let needs_rows = required.contains(&Operation::Iter) || entries.len() > 1;
         let source: TokenStream = if needs_rows {
             let rows = format_ident!("__cq_{}_rows", name);
             statements.push(syn::parse_quote! {
@@ -331,9 +346,19 @@ impl Realizer<'_> {
                 _ => quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs)),
             };
             statements.push(syn::parse_quote! { let #structure = &#build; });
-            built
-                .structures
-                .push((columns, structure, keyed.provides()));
+            // A type lacking a trait the plan uses on it fails here, at a
+            // one-line call naming the trait, rather than inside the
+            // comprehension.
+            for operation in &required {
+                let guard = match operation {
+                    Operation::Seek(c) if *c == columns => quote!(seek),
+                    Operation::Contains(c) if *c == columns => quote!(contains),
+                    Operation::Ordered(c) if *c == columns => quote!(ordered),
+                    _ => continue,
+                };
+                statements.push(syn::parse_quote! { ::cq_storage::require::#guard(#structure); });
+            }
+            built.structures.push((columns, structure));
         }
         Ok(built)
     }
@@ -617,11 +642,10 @@ impl Realizer<'_> {
                 Ok(())
             }
             Repr::Built(built) => {
-                let Some(structure) = built.claiming(columns, &Operation::Seek(columns.to_vec()))
-                else {
+                let Some(structure) = built.keyed_on(columns) else {
                     return Err(syn::Error::new_spanned(
                         relation,
-                        "no structure claims `seek` on these columns",
+                        "no structure keyed on these columns",
                     ));
                 };
                 let mut all: Vec<Option<Ident>> = vec![None; arity];
@@ -660,12 +684,10 @@ impl Realizer<'_> {
                 })
             }
             Repr::Built(built) => {
-                let Some(structure) =
-                    built.claiming(columns, &Operation::Contains(columns.to_vec()))
-                else {
+                let Some(structure) = built.keyed_on(columns) else {
                     return Err(syn::Error::new_spanned(
                         relation,
-                        "no structure claims `contains` on these columns",
+                        "no structure keyed on these columns",
                     ));
                 };
                 Ok(syn::parse_quote! {
@@ -733,12 +755,10 @@ impl Realizer<'_> {
                     payload_reads.push(quote!(#(&#side.#fields,)*));
                 }
                 Repr::Built(built) => {
-                    let Some(structure) =
-                        built.claiming(columns, &Operation::Ordered(columns.to_vec()))
-                    else {
+                    let Some(structure) = built.keyed_on(columns) else {
                         return Err(syn::Error::new_spanned(
                             relation,
-                            "no structure claims `ordered` on these columns",
+                            "no structure keyed on these columns",
                         ));
                     };
                     cursors.push(quote!(::cq_storage::OrderedRead::ordered(&#structure)));

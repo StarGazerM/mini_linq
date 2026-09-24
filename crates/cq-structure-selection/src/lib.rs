@@ -2,37 +2,34 @@
 //!
 //! Rules, from mandatory to advisory:
 //!
-//! 1. Admissibility. Every IX demand `@r[C]` must end up served by a structure
-//!    on `r` claiming `seek[C]` (join) or `contains[C]` (semijoin). Host
-//!    capabilities, declared by the policy, serve demands on renames through
-//!    the rename's column translation; then no structure is built.
+//! 1. Admissibility. Every IX demand `@r[C]` must end up answered: by the
+//!    host's key when `r` renames a host keyed on the columns `C` translates
+//!    to (then nothing is built), else by a structure built over `r` keyed
+//!    on `C`.
 //! 2. Guarantee. Defaults preserve the plan's cost premises: O(1) expected
 //!    `seek`/`contains`, so joins get `cq_storage::HashIndex` and semijoins a
 //!    `HashSet` of keys. An ordered structure (`BTreeMap`, O(log n)) is
 //!    chosen only where a rule needs key order — the `merge` strategy, which
-//!    orders both operands on the shared columns so co-iteration is
-//!    admissible.
-//! 3. Advice. The policy supplies host capabilities and the join strategy. A
-//!    relation declared `#[index(Type provides { … })]` fixes the type of
-//!    every structure built over it (through renames): any Rust type
-//!    implementing `cq_storage::Build` and the traits it claims. A type whose
-//!    claims do not cover what the plan requires on that key is an error,
-//!    never silently replaced. Query-specific choices for derived results are
-//!    authored directly in the Structures module.
+//!    keys both operands on the shared columns so co-iteration is admissible.
+//! 3. Advice. The policy states host keys and the strategy. A relation
+//!    declared `#[index(Type)]` fixes the type of every structure built over
+//!    it (through renames): any Rust type implementing `cq_storage::Build`
+//!    and the traits the plan's operations use, which rustc checks.
+//!    Query-specific choices for derived results are authored directly in
+//!    the Structures module.
 //!
-//! One structure per (name, columns), claiming the union of what the plan
-//! requires there; without advice the weakest default whose claims cover it.
+//! One structure per (name, columns). Nothing here claims what a type can
+//! do; the plan decides the operations and rustc decides the type.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_ir::capabilities::{Claims, Operation, operations};
+use cq_ir::capabilities::Operation;
 use cq_ir::policy::Policy;
 use cq_ir::{index_requirements as ix, relational_plan as ra, structures, symbol_name};
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::Ident;
 
-/// One of the three operations a structure may claim on its key.
+/// What a rule needs on a key: the strongest need picks the default type.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Need {
     Contains,
@@ -49,70 +46,15 @@ impl Need {
         }
     }
 
-    fn name(self) -> &'static str {
+    fn default_type(self) -> syn::Type {
         match self {
-            Need::Contains => "contains",
-            Need::Seek => "seek",
-            Need::Ordered => "ordered",
+            Need::Contains => syn::parse_quote!(::std::collections::HashSet<_>),
+            Need::Seek => syn::parse_quote!(::cq_storage::HashIndex<_, _>),
+            Need::Ordered => {
+                syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>)
+            }
         }
     }
-
-    fn claimed(claims: &Claims) -> BTreeSet<Need> {
-        use cq_ir::capabilities::Claim;
-        claims
-            .claims
-            .iter()
-            .map(|c| match c {
-                Claim::Seek(_) => Need::Seek,
-                Claim::Contains(_) => Need::Contains,
-                Claim::Ordered(_) => Need::Ordered,
-            })
-            .collect()
-    }
-}
-
-/// A structure type with the claims it is known to honour.
-#[derive(Clone)]
-struct Choice {
-    ty: syn::Type,
-    claims: Claims,
-}
-
-impl Choice {
-    fn covers(&self, needs: &BTreeSet<Need>) -> bool {
-        needs.is_subset(&Need::claimed(&self.claims))
-    }
-}
-
-/// The defaults, weakest first: the first whose claims cover the needs wins.
-fn defaults() -> [Choice; 3] {
-    [
-        Choice {
-            ty: syn::parse_quote!(::std::collections::HashSet<_>),
-            claims: syn::parse_quote!(provides { contains }),
-        },
-        Choice {
-            ty: syn::parse_quote!(::cq_storage::HashIndex<_, _>),
-            claims: syn::parse_quote!(provides { seek, contains }),
-        },
-        Choice {
-            ty: syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
-            claims: syn::parse_quote!(provides {
-                ordered,
-                seek,
-                contains
-            }),
-        },
-    ]
-}
-
-fn parse_advice(attr: &syn::Attribute) -> syn::Result<Choice> {
-    attr.parse_args_with(|input: syn::parse::ParseStream<'_>| {
-        Ok(Choice {
-            ty: input.parse()?,
-            claims: input.parse()?,
-        })
-    })
 }
 
 pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::Module> {
@@ -131,42 +73,61 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
         headings.insert(name.clone(), infos[&name].heading.iter().cloned().collect());
     }
 
-    // Hosts, exactly as the policy declares them.
+    // Hosts, exactly as the policy states them: key column names resolved
+    // to sorted-heading ordinals.
     let mut host_operations: BTreeMap<String, Vec<Operation>> = BTreeMap::new();
     let mut hosts = TokenStream::new();
     for host in &policy.hosts {
         let name = symbol_name(&host.name);
-        if !headings.contains_key(&name)
-            || plan
-                .definitions
-                .iter()
-                .any(|d| symbol_name(&d.result) == name)
-        {
+        let is_input = ra_module
+            .program
+            .inputs()
+            .any(|input| symbol_name(&input.name) == name);
+        if !is_input {
             return Err(syn::Error::new_spanned(
                 &host.name,
                 "policy names an undeclared host relation",
             ));
         }
-        if host_operations
-            .insert(name, operations(&host.provides))
-            .is_some()
-        {
+        let mut answered = vec![Operation::Iter];
+        let mut key_tokens = TokenStream::new();
+        if let Some(key) = &host.key {
+            let heading = &headings[&name];
+            let mut columns = Vec::new();
+            for column in &key.columns {
+                let Some(ordinal) = heading.iter().position(|h| *h == symbol_name(column)) else {
+                    return Err(syn::Error::new_spanned(
+                        column,
+                        format!("`{name}` has no column `{column}`"),
+                    ));
+                };
+                columns.push(ordinal);
+            }
+            columns.sort_unstable();
+            columns.dedup();
+            answered.push(Operation::Seek(columns.clone()));
+            answered.push(Operation::Contains(columns.clone()));
+            let ordered = key.ordered;
+            if ordered.is_some() {
+                answered.push(Operation::Ordered(columns.clone()));
+            }
+            let columns = columns.iter().map(|&c| syn::Index::from(c));
+            key_tokens = quote! { keyed [#(#columns),*] #ordered };
+        }
+        if host_operations.insert(name, answered).is_some() {
             return Err(syn::Error::new_spanned(
                 &host.name,
                 "host relation configured twice",
             ));
         }
-        let (ident, provides) = (&host.name, &host.provides);
-        hosts.extend(quote! { #ident = host #provides; });
+        let ident = &host.name;
+        hosts.extend(quote! { #ident #key_tokens; });
     }
     for input in ra_module.program.inputs() {
         if !host_operations.contains_key(&symbol_name(&input.name)) {
             return Err(syn::Error::new_spanned(
                 policy,
-                format!(
-                    "policy must declare capabilities for host relation `{}`",
-                    input.name
-                ),
+                format!("policy must list host relation `{}`", input.name),
             ));
         }
     }
@@ -216,24 +177,23 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
     };
 
     // Advice declared on the host relation applies to its renames.
-    let mut advice: BTreeMap<String, Choice> = BTreeMap::new();
+    let mut advice: BTreeMap<String, syn::Type> = BTreeMap::new();
     for input in ra_module.program.inputs() {
         if let Some(attr) = input.index_advice()? {
-            advice.insert(symbol_name(&input.name), parse_advice(attr)?);
+            advice.insert(symbol_name(&input.name), attr.parse_args()?);
         }
     }
 
     // What the plan requires on every (name, key), unless the host serves it.
-    let mut needs: BTreeMap<(String, Vec<usize>), (BTreeSet<Need>, Ident)> = BTreeMap::new();
-    let mut choose = |name: &str, columns: Vec<usize>, need: Need, site: &Ident| {
+    let mut needs: BTreeMap<(String, Vec<usize>), BTreeSet<Need>> = BTreeMap::new();
+    let mut choose = |name: &str, columns: Vec<usize>, need: Need| {
         let required = need.operation(&columns);
         if inherited(name).contains(&required) {
             return;
         }
         needs
             .entry((name.to_string(), columns))
-            .or_insert_with(|| (BTreeSet::new(), site.clone()))
-            .0
+            .or_default()
             .insert(need);
     };
     for definition in &plan.definitions {
@@ -254,17 +214,16 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
                 .map(|a| headings[name].iter().position(|h| h == a).unwrap())
                 .collect()
         };
-        let site = &definition.result;
         match &definition.operator {
             ra::Operator::NaturalJoin(_) if policy.merge_joins() => {
-                choose(&left_name, ordinals(&left_name), Need::Ordered, site);
-                choose(&right_name, ordinals(&right_name), Need::Ordered, site);
+                choose(&left_name, ordinals(&left_name), Need::Ordered);
+                choose(&right_name, ordinals(&right_name), Need::Ordered);
             }
             ra::Operator::NaturalJoin(_) => {
-                choose(&right_name, ordinals(&right_name), Need::Seek, site);
+                choose(&right_name, ordinals(&right_name), Need::Seek);
             }
             ra::Operator::Semijoin(_) => {
-                choose(&right_name, ordinals(&right_name), Need::Contains, site);
+                choose(&right_name, ordinals(&right_name), Need::Contains);
             }
             _ => unreachable!(),
         }
@@ -274,34 +233,16 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
     for definition in &plan.definitions {
         let name = symbol_name(&definition.result);
         let ident = &definition.result;
-        for ((_, columns), (needs, site)) in needs.iter().filter(|((n, _), _)| *n == name) {
+        for ((_, columns), needs) in needs.iter().filter(|((n, _), _)| *n == name) {
             let advised = renames
                 .get(&name)
                 .and_then(|rename| advice.get(&symbol_name(&rename.relation)));
-            let choice = match advised {
-                Some(choice) if choice.covers(needs) => choice.clone(),
-                Some(choice) => {
-                    let missing: Vec<&str> = needs
-                        .difference(&Need::claimed(&choice.claims))
-                        .map(|n| n.name())
-                        .collect();
-                    return Err(syn::Error::new_spanned(
-                        site,
-                        format!(
-                            "relation `{}` advises a structure that does not claim {} needed by `{name}` on {columns:?}",
-                            renames[&name].relation,
-                            missing.join(", "),
-                        ),
-                    ));
-                }
-                None => defaults()
-                    .into_iter()
-                    .find(|d| d.covers(needs))
-                    .expect("BTreeMap covers every need"),
+            let ty = match advised {
+                Some(ty) => ty.clone(),
+                None => needs.iter().max().expect("nonempty").default_type(),
             };
-            let Choice { ty, claims } = choice;
             let columns = columns.iter().map(|&c| syn::Index::from(c));
-            entries.extend(quote! { #ident = #ty [#(#columns),*] #claims; });
+            entries.extend(quote! { #ident = #ty [#(#columns),*]; });
         }
     }
     let target: structures::Module =

@@ -32,88 +32,92 @@ fn demands_are_served_by_chosen_structures_or_translated_host_capabilities() {
     // R is declared (b, a): sorted [a, b], so its key `a` is host column 0,
     // which serves r's demand on r-ordinal 0 (`a`) through the rename.
     let ok = module(quote! {
-        L = host provides { iter, contains @L[0] };
-        R = host provides { seek @R[0] };
-        S = host provides { iter };
-        s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
+        L keyed [0];
+        R keyed [0];
+        S;
+        s = ::cq_storage::HashIndex<_, _> [0];
     });
     let analysis = structures::contract::check(&ok).unwrap();
-    assert_eq!(analysis.provided["r"], [Operation::Seek(vec![0])]);
-    // Exactly the claims, in claim order: nothing is inferred from `seek`.
+    // A host key answers seek and membership in place, translated.
+    assert_eq!(
+        analysis.provided["r"],
+        [
+            Operation::Iter,
+            Operation::Seek(vec![0]),
+            Operation::Contains(vec![0])
+        ]
+    );
+    // A built structure answers every operation on its key, structurally;
+    // whether its type implements each is rustc's check.
     assert_eq!(
         analysis.provided["s"],
-        [Operation::Seek(vec![0]), Operation::Contains(vec![0])]
+        [
+            Operation::Seek(vec![0]),
+            Operation::Contains(vec![0]),
+            Operation::Ordered(vec![0])
+        ]
     );
     assert_eq!(analysis.aliases["r"], "R");
     assert!(!analysis.aliases.contains_key("s"));
 
-    let cases: [(&str, proc_macro2::TokenStream, &str); 7] = [
+    let cases: [(&str, proc_macro2::TokenStream, &str); 6] = [
         (
-            "a structure claims nothing",
+            "duplicate structure",
             quote! {
-                L = host provides { iter, contains @L[0] };
-                R = host provides { seek @R[0] };
-                S = host provides { iter };
-                s = my::Index<_, _> [0] provides { };
+                L keyed [0];
+                R keyed [0];
+                S;
+                s = my::Index<_, _> [0];
+                s = ::cq_storage::HashIndex<_, _> [0];
             },
-            "must claim an operation",
-        ),
-        (
-            "duplicate claim",
-            quote! {
-                L = host provides { iter, contains @L[0] };
-                R = host provides { seek @R[0] };
-                S = host provides { iter };
-                s = my::Index<_, _> [0] provides { seek, seek };
-            },
-            "duplicate claim",
+            "duplicate structure on these columns",
         ),
         (
             "unserved join demand",
             quote! {
-                L = host provides { iter, contains @L[0] };
-                R = host provides { iter };
-                S = host provides { iter };
-                s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
+                L keyed [0];
+                R;
+                S;
+                s = ::cq_storage::HashIndex<_, _> [0];
             },
             "no structure on `r` serves Seek([0])",
         ),
         (
-            "membership does not serve a join",
+            "a structure on other columns does not serve the demand",
             quote! {
-                L = host provides { iter, contains @L[0] };
-                R = host provides { seek @R[0] };
-                S = host provides { iter };
-                s = ::std::collections::HashSet<_> [0] provides { contains };
+                L keyed [0];
+                R keyed [0];
+                S;
+                s = ::cq_storage::HashIndex<_, _> [1];
             },
             "no structure on `s` serves Seek([0])",
         ),
         (
             "missing host",
             quote! {
-                L = host provides { iter, contains @L[0] };
-                R = host provides { seek @R[0] };
-                s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
+                L keyed [0];
+                R keyed [0];
+                s = ::cq_storage::HashIndex<_, _> [0];
             },
-            "`S` has no `host provides`",
+            "`S` has no entry",
         ),
         (
             "keyed structure on a host",
             quote! {
-                L = host provides { iter, contains @L[0] };
-                R = host provides { seek @R[0] };
-                S = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
-                s = ::cq_storage::HashIndex<_, _> [0] provides { seek, contains };
+                L keyed [0];
+                R keyed [0];
+                S = ::cq_storage::HashIndex<_, _> [0];
+                s = ::cq_storage::HashIndex<_, _> [0];
             },
             "represented by its host value",
         ),
         (
             "column out of range",
             quote! {
-                L = host provides { iter, contains @L[0] };
-                R = host provides { seek @R[0] };
-                S = host provides { iter };
-                s = ::cq_storage::HashIndex<_, _> [2] provides { seek, contains };
+                L keyed [0];
+                R keyed [0];
+                S;
+                s = ::cq_storage::HashIndex<_, _> [2];
             },
             "exceeds heading arity",
         ),

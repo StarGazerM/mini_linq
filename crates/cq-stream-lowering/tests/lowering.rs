@@ -48,7 +48,7 @@ fn chain_ix() -> ix::Module {
 fn seek_policy_realizes_the_authored_hash_chain() {
     let source = chain_ix();
     let policy = parse_policy(quote! {
-        policy { L provides { iter }; R provides { iter }; S provides { iter }; }
+        policy { L; R; S; }
     });
     let source = select(&source, &policy);
     let target = compile(&source, &policy).unwrap();
@@ -56,8 +56,8 @@ fn seek_policy_realizes_the_authored_hash_chain() {
         #source
         stream {
             l = alias L;
-            r = let provides { seek @r[0] } for (a, b,) in scan R { emit (a, b,) };
-            s = let provides { seek @s[0] } for (b, c,) in scan S { emit (b, c,) };
+            r = let for (a, b,) in scan R { emit (a, b,) };
+            s = let for (b, c,) in scan S { emit (b, c,) };
             j0 = pipe for (a,) in scan l { for (b,) in seek r[0](a,) { emit (a, b,) } };
             j1 = pipe for (a, b,) in scan j0 { for (c,) in seek s[0](b,) { emit (a, b, c,) } };
             p = pipe support { for (a, b, c,) in scan j1 { emit (a, c,) } };
@@ -70,7 +70,7 @@ fn seek_policy_realizes_the_authored_hash_chain() {
     );
     assert!(check(&source, &target, &policy));
     let merge = parse_policy(quote! {
-        policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; }
+        policy { L; R; S; join = merge; }
     });
     assert!(!check(
         &select(&source.index_requirements, &merge),
@@ -83,18 +83,12 @@ fn seek_policy_realizes_the_authored_hash_chain() {
 fn merge_policy_materializes_both_operands_ordered_and_co_iterates() {
     let source = chain_ix();
     let policy = parse_policy(quote! {
-        policy { L provides { iter }; R provides { iter }; S provides { iter }; join = merge; }
+        policy { L; R; S; join = merge; }
     });
     let target = compile(&select(&source, &policy), &policy).unwrap();
     let text = target.program.to_token_stream().to_string();
-    assert!(
-        text.contains("l = let provides { ordered @ l [0] }"),
-        "{text}"
-    );
-    assert!(
-        text.contains("j0 = let provides { ordered @ j0 [1] }"),
-        "{text}"
-    );
+    assert!(text.contains("l = let"), "{text}");
+    assert!(text.contains("j0 = let"), "{text}");
     assert!(
         text.contains("co (() in order l [0] , (b ,) in order r [0]) on (a ,)"),
         "{text}"
@@ -108,7 +102,7 @@ fn merge_policy_materializes_both_operands_ordered_and_co_iterates() {
 #[test]
 fn policy_must_configure_exactly_the_declared_hosts() {
     let source = chain_ix();
-    let missing = parse_policy(quote! { policy { L provides { iter }; R provides { iter }; } });
+    let missing = parse_policy(quote! { policy { L; R; } });
     assert!(
         cq_structure_selection::compile(&source, &missing)
             .unwrap_err()
@@ -116,7 +110,7 @@ fn policy_must_configure_exactly_the_declared_hosts() {
             .contains("`S`")
     );
     let extra = parse_policy(quote! {
-        policy { L provides { iter }; R provides { iter }; S provides { iter }; T provides { iter }; }
+        policy { L; R; S; T; }
     });
     assert!(
         cq_structure_selection::compile(&source, &extra)
@@ -143,7 +137,7 @@ fn prefer_lazy_marks_only_semijoins_whose_consumer_retests_the_reducer() {
     };
     let source = cq_index_policy::compile(&source).unwrap();
     let policy = parse_policy(quote! {
-        policy { R provides { iter }; S provides { iter }; semijoin = prefer_lazy; }
+        policy { R; S; semijoin = prefer_lazy; }
     });
     let target = compile(&select(&source, &policy), &policy).unwrap();
     let Realization::Stream(streamed) = &target.program.definitions[2].realization else {
@@ -151,7 +145,7 @@ fn prefer_lazy_marks_only_semijoins_whose_consumer_retests_the_reducer() {
     };
     assert!(streamed.lazy.is_some());
     // The same plan whose join no longer reads `s` cannot be lazy.
-    let eager = parse_policy(quote! { policy { R provides { iter }; S provides { iter }; } });
+    let eager = parse_policy(quote! { policy { R; S; } });
     let eager = compile(&select(&source, &eager), &eager).unwrap();
     let Realization::Stream(streamed) = &eager.program.definitions[2].realization else {
         panic!("semijoin is streamed")
@@ -177,7 +171,7 @@ fn every_shared_case_denotes_the_relational_oracle_under_both_join_rules() {
         let source = cq_index_policy::compile(&ra_module).unwrap();
         let hosts = ra_module.program.inputs().map(|d| {
             let name = &d.name;
-            quote! { #name provides { iter }; }
+            quote! { #name; }
         });
         let hosts: proc_macro2::TokenStream = hosts.collect();
         for join in [quote!(), quote!(join = merge;)] {
@@ -196,7 +190,7 @@ fn every_shared_case_denotes_the_relational_oracle_under_both_join_rules() {
 fn renames_served_by_the_host_become_aliases_and_still_denote_the_oracle() {
     let source = chain_ix();
     let policy = parse_policy(quote! {
-        policy { L provides { iter }; R provides { seek @R[0] }; S provides { seek @S[0] }; }
+        policy { L; R keyed [a]; S keyed [b]; }
     });
     let target = compile(&select(&source, &policy), &policy).unwrap();
     let text = target.program.to_token_stream().to_string();
@@ -237,7 +231,7 @@ fn comparisons_on_an_ordered_host_column_become_bounded_scans_with_residual_guar
         }
     };
     let source = cq_index_policy::compile(&plan).unwrap();
-    let ordered = parse_policy(quote! { policy { R provides { iter, ordered @R[0] }; } });
+    let ordered = parse_policy(quote! { policy { R keyed [a] ordered; } });
     let target = compile(&select(&source, &ordered), &ordered).unwrap();
     let text = target.program.to_token_stream().to_string();
     assert!(text.contains("s = pipe for (a , b ,) in scan r within [0] ((2i32) , (8i32)) { if (b != 5) { emit (a , b ,) } }"), "{text}");
@@ -246,7 +240,7 @@ fn comparisons_on_an_ordered_host_column_become_bounded_scans_with_residual_guar
         text.contains("t = pipe for (a , b ,) in scan s { if (b >= 0) { emit (a , b ,) } }"),
         "{text}"
     );
-    let unordered = parse_policy(quote! { policy { R provides { iter }; } });
+    let unordered = parse_policy(quote! { policy { R; } });
     let plain = compile(&select(&source, &unordered), &unordered).unwrap();
     assert!(
         plain

@@ -59,3 +59,12 @@ pub use selection::{BlockSelection, MakeSelection};
 pub use summary::{RangeSummary, ZoneSummary};
 
 type Range = (i64, i64);
+
+/// Trait-bound guards a compiled program places beside each structure it
+/// builds, so a type lacking an operation the plan uses fails at the
+/// binding that names the relation rather than inside a comprehension.
+pub mod require {
+    pub fn seek<T: super::IndexRead>(_: T) {}
+    pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
+    pub fn ordered<T: super::OrderedRead>(_: T) {}
+}

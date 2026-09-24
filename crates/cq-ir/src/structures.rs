@@ -1,42 +1,41 @@
 //! Structures: IX with every attribute-keyed demand bound to a representation.
 //!
-//! This is where index data structures are chosen, before any access rule.
-//! IX names what must be answerable (`@r[C]`); this language names the
-//! catalogue entry that answers it, and any further structures a selection
-//! strategy adds (an ordered left operand for a merge, for instance). Host
-//! relations declare the operations their own values admit. Modes (pipe or
-//! materialized rows) are not chosen here: they follow from result use counts
-//! and belong to Stream.
+//! This is where physical design happens, before any access rule. IX names
+//! what must be answerable (`@r[C]`); this language names, for each host
+//! relation, the key its value is stored under (a fact about the value) and,
+//! for each demand no host answers, the Rust type built over the result and
+//! the columns it is keyed on. Modes (pipe or materialized rows) are not
+//! chosen here: they follow from result use counts and belong to Stream.
 //!
-//! Denotation: a built entry names a Rust type — any type, from any crate —
-//! constructed through `cq_storage::Build` from `(key, payload)` pairs, whose
-//! abstraction function is the RA set; it provides exactly the operations it
-//! claims, each a runtime trait the type must implement (`seek`:
-//! `IndexRead`, `contains`: `ExactMembership`, `ordered`: `OrderedRead`).
-//! The compiler never inspects the type; rustc checks the claims where the
-//! generated program uses them. Contract: every IX demand is served by an
-//! entry on its relation claiming, on the demanded columns, `contains`
-//! (semijoin) or `seek` or `ordered` (join: exact probe or co-iteration),
-//! host capabilities translating through the rename;
-//! columns are valid heading ordinals; claims are nonempty and distinct; no
-//! entry is duplicated.
+//! Denotation: a host entry is the host value with its abstraction function;
+//! a built entry is `Type` constructed through `cq_storage::Build` from
+//! `(key, payload)` pairs of the RA set, so `α(built) = ⟦r⟧`. Which cursor
+//! operations the program performs on an entry is decided by the plan and
+//! the policy; the entry answers them by its key, and whether `Type` (or the
+//! host value) implements the trait behind each operation is checked by
+//! rustc where the generated program uses it. Nothing here claims a
+//! capability. Contract: every IX demand `@r[C]` is answered — a built entry
+//! on `r` keyed on `C`, or `r` renames a host keyed on the columns `C`
+//! translates to; every input has one host entry; columns are valid heading
+//! ordinals; no entry is duplicated.
 //!
 //! ```text
 //! Module ::= IX "structures" "{" (Entry ";")* "}"
-//! Entry  ::= Ident "=" "host" Provides
-//!          | Ident "=" RustType "[" Column,* "]" Claims
+//! Entry  ::= Ident ["keyed" "[" Column,* "]" ["ordered"]]
+//!          | Ident "=" RustType "[" Column,* "]"
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Ident, Token, token};
 
-use crate::capabilities::{Claims, Operation, Provides, operations};
+use crate::capabilities::Operation;
 use crate::{Column, CommaList, index_requirements as ix, relational_plan as ra, symbol_name};
 
 pub mod kw {
     syn::custom_keyword!(structures);
-    syn::custom_keyword!(host);
+    syn::custom_keyword!(keyed);
+    syn::custom_keyword!(ordered);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -62,23 +61,46 @@ fn parse_entries(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Entry>> 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Entry {
     pub name: Ident,
-    pub eq_token: Token![=],
     pub structure: Structure,
     pub semi_token: Token![;],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Structure {
-    #[parse(peek = kw::host)]
-    Host {
-        host_token: kw::host,
-        provides: Provides,
+    #[parse(peek = Token![=])]
+    Built {
+        eq_token: Token![=],
+        keyed: Box<Keyed>,
     },
-    Keyed(Box<Keyed>),
+    Host(Host),
+}
+
+/// A host relation's value, stored under `key` if any.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Host {
+    #[syn(optional, peek = kw::keyed)]
+    pub key: Option<Key>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Key {
+    pub keyed_token: kw::keyed,
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub columns: CommaList<Column>,
+    pub ordered: Option<kw::ordered>,
+}
+
+impl Key {
+    pub fn ordinals(&self) -> Vec<usize> {
+        self.columns.iter().map(|c| c.index as usize).collect()
+    }
 }
 
 /// A structure built over an RA result: a Rust type keyed on `columns`
-/// (payload = the remaining heading columns) that claims `provides`.
+/// (payload = the remaining heading columns).
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Keyed {
     pub ty: syn::Type,
@@ -87,27 +109,25 @@ pub struct Keyed {
     #[syn(in = bracket)]
     #[parse(CommaList::parse_terminated)]
     pub columns: CommaList<Column>,
-    pub claims: Claims,
 }
 
 impl Keyed {
     pub fn ordinals(&self) -> Vec<usize> {
         self.columns.iter().map(|c| c.index as usize).collect()
     }
+}
 
-    /// The operations claimed, on this entry's key columns.
-    pub fn provides(&self) -> Vec<Operation> {
-        self.claims
-            .claims
-            .iter()
-            .map(|claim| claim.operation(self.ordinals()))
-            .collect()
+/// The operations a structure keyed on `columns` answers, structurally: a
+/// key answers exact seek and membership; an ordered key also key order.
+fn answered(columns: &[usize], ordered: bool) -> Vec<Operation> {
+    let mut operations = vec![
+        Operation::Seek(columns.to_vec()),
+        Operation::Contains(columns.to_vec()),
+    ];
+    if ordered {
+        operations.push(Operation::Ordered(columns.to_vec()));
     }
-
-    /// Claimed operation names, deduplicated.
-    pub fn claim_set(&self) -> BTreeSet<&'static str> {
-        self.claims.claims.iter().map(|c| c.name()).collect()
-    }
+    operations
 }
 
 /// The Structures contract in diagnostic and predicate form.
@@ -127,8 +147,10 @@ pub mod contract {
 pub struct Analysis {
     /// Sorted heading of every host relation and RA result.
     pub headings: BTreeMap<String, Vec<String>>,
-    /// Operations each name provides, in its own heading ordinals; renames of
-    /// hosts inherit the host's operations translated through the rename.
+    /// Operations each name answers by its keys, in its own heading
+    /// ordinals: hosts always `iter`; keys answer `seek` and `contains`,
+    /// ordered host keys and every built structure also `ordered`. Renames
+    /// of hosts inherit the host's operations translated through the rename.
     pub provided: BTreeMap<String, Vec<Operation>>,
     /// Host relation of every rename that has no structure of its own.
     pub aliases: BTreeMap<String, String>,
@@ -169,34 +191,26 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
             );
         };
         let provided = match &entry.structure {
-            Structure::Host { provides, .. } => {
+            Structure::Host(host) => {
                 if !declared.contains(&name) {
-                    return error(
-                        &entry.name,
-                        "`host` structures are for declared host relations",
-                    );
+                    return error(&entry.name, "only a declared host relation is a host");
                 }
                 if !seen.insert((name.clone(), None)) {
                     return error(&entry.name, "host relation declared twice");
                 }
-                let arity = heading.len();
-                let mut hosted = Vec::new();
-                for operation in operations(provides) {
-                    if let Operation::Contains(c) | Operation::Seek(c) | Operation::Ordered(c) =
-                        &operation
-                    {
-                        check_columns(c, arity, provides)?;
-                    }
-                    hosted.push(operation);
+                let mut hosted = vec![Operation::Iter];
+                if let Some(key) = &host.key {
+                    let columns = key.ordinals();
+                    check_columns(&columns, heading.len(), key)?;
+                    hosted.extend(answered(&columns, key.ordered.is_some()));
                 }
-                analysis.provided.entry(name).or_default().extend(hosted);
-                continue;
+                hosted
             }
-            Structure::Keyed(keyed) => {
+            Structure::Built { keyed, .. } => {
                 if declared.contains(&name) {
                     return error(
                         &entry.name,
-                        "a host relation is represented by its host value; declare `host provides { … }`",
+                        "a host relation is represented by its host value; declare its key",
                     );
                 }
                 let columns = keyed.ordinals();
@@ -204,13 +218,7 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                 if !seen.insert((name.clone(), Some(columns.clone()))) {
                     return error(&entry.name, "duplicate structure on these columns");
                 }
-                if keyed.claims.claims.is_empty() {
-                    return error(&keyed.claims, "a structure must claim an operation");
-                }
-                if keyed.claim_set().len() != keyed.claims.claims.len() {
-                    return error(&keyed.claims, "duplicate claim");
-                }
-                keyed.provides()
+                answered(&columns, true)
             }
         };
         analysis.provided.entry(name).or_default().extend(provided);
@@ -221,7 +229,7 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
     {
         return error(
             &module.structures_token,
-            format!("host relation `{missing}` has no `host provides` entry"),
+            format!("host relation `{missing}` has no entry"),
         );
     }
 
@@ -287,21 +295,15 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
             .find(|d| symbol_name(&d.result) == consumer)
             .map(|d| &d.operator)
             .expect("IX use names a definition");
-        // A join is answered by exact seek or by co-iteration in key order;
-        // a semijoin only by membership.
-        let serving: &[Operation] = match operator {
-            ra::Operator::NaturalJoin(_) => &[
-                Operation::Seek(columns.clone()),
-                Operation::Ordered(columns.clone()),
-            ],
-            ra::Operator::Semijoin(_) => &[Operation::Contains(columns.clone())],
+        let required = match operator {
+            ra::Operator::NaturalJoin(_) => Operation::Seek(columns.clone()),
+            ra::Operator::Semijoin(_) => Operation::Contains(columns.clone()),
             _ => unreachable!("IX uses name binary operators"),
         };
-        let required = &serving[0];
         let served = analysis
             .provided
             .get(&relation)
-            .is_some_and(|ops| ops.iter().any(|op| serving.contains(op)));
+            .is_some_and(|ops| ops.contains(&required));
         if !served {
             return error(
                 index_use,

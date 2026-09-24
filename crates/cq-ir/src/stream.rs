@@ -3,11 +3,12 @@
 //! This is the first language whose meaning includes representation. Each RA
 //! result becomes a comprehension over cursors of earlier names. `⟦d⟧` is a
 //! bag over the RA heading with `support ⟦d⟧ = ⟦r⟧_RA`; the result's mode says
-//! whether that bag is a stream consumed once (`pipe`) or a value bound with
-//! declared capabilities (`let`). Capabilities are the operations a cursor
-//! over a name admits, each with a law against the name's abstraction
-//! function: `seek @r[C](k) = σ_{C=k}`, `contains` its nonemptiness,
-//! `ordered` a key-ordered `seek`, `iter` enumeration of the support.
+//! whether that bag is a stream consumed once (`pipe`) or a value bound and
+//! read through the structures chosen for it (`let`). Cursor operations
+//! each have a law against the name's abstraction function: `seek r[C](k) =
+//! σ_{C=k}`, `contains` its nonemptiness, `ordered` a key-ordered `seek`,
+//! `iter` enumeration of the support; a read is admitted when a structure
+//! keyed on its columns exists, and rustc checks the structure's type.
 //!
 //! Nothing here names a data structure, a Rust type, or an execution form.
 //! `co` is a comprehension form because its premise (both cursors ordered on
@@ -15,7 +16,7 @@
 //!
 //! ```text
 //! stream {
-//!     r  = let provides { seek @r[0] } for (a, b) in scan R { emit (a, b) };
+//!     r  = let for (a, b) in scan R { emit (a, b) };
 //!     j  = pipe for (a) in scan l { for (b) in seek r[0](a) { emit (a, b) } };
 //!     p  = pipe for (a, b) in scan j { support { emit (a) } };
 //!     return p;
@@ -26,8 +27,7 @@
 //! Module     ::= Structures "stream" "{" Definition* Return "}"
 //! Definition ::= Ident "=" Realization ";"
 //! Realization ::= "alias" Ident | ["lazy"] Mode Body
-//! Mode       ::= "pipe" | "let" "provides" "{" [Cap ("," Cap)* [","]] "}"
-//! Cap        ::= "iter" | ("seek" | "contains" | "ordered") "@" Ident "[" Column,* "]"
+//! Mode       ::= "pipe" | "let"
 //! Body       ::= "for" Pat "in" Cursor "{" Body "}"
 //!              | "co" "(" (Pat "in" Cursor),+ ")" "on" Pat "{" Body "}"
 //!              | "if" Guard "{" Body "}"
@@ -47,16 +47,33 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Expr, Ident, Pat, Token, token};
 
-pub use crate::capabilities::{Capability, Columns, Descriptor, Operation, Provides, operations};
+pub use crate::capabilities::Operation;
 use crate::{Column, CommaList, cq, relational_plan as ra, structures, symbol_name};
+
+/// `[0, 2]`: key columns as heading ordinals.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Columns {
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub columns: CommaList<Column>,
+}
+
+impl Columns {
+    pub fn ordinals(&self) -> Vec<usize> {
+        self.columns.iter().map(|c| c.index as usize).collect()
+    }
+}
 
 pub mod kw {
     syn::custom_keyword!(stream);
-    pub use crate::capabilities::kw::provides;
     syn::custom_keyword!(pipe);
     syn::custom_keyword!(lazy);
     syn::custom_keyword!(alias);
-    pub use crate::capabilities::kw::{contains, iter, ordered, seek};
+    syn::custom_keyword!(contains);
+    syn::custom_keyword!(ordered);
+    syn::custom_keyword!(seek);
     syn::custom_keyword!(co);
     syn::custom_keyword!(on);
     syn::custom_keyword!(scan);
@@ -126,10 +143,7 @@ pub enum Mode {
     #[parse(peek = kw::pipe)]
     Pipe { pipe_token: kw::pipe },
     #[parse(peek = Token![let])]
-    Let {
-        let_token: Token![let],
-        provides: Provides,
-    },
+    Let { let_token: Token![let] },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -452,43 +466,6 @@ impl<'a> Checker<'a> {
             .ok_or_else(|| syn::Error::new_spanned(name, "unknown relation name"))
     }
 
-    /// A `let` may claim only operations some chosen structure on the name
-    /// provides (`iter` is materialized rows and always available).
-    fn check_provides(&self, name: &Ident, provides: &Provides) -> syn::Result<Vec<Operation>> {
-        let arity = self.arity(name)?;
-        for capability in &provides.capabilities {
-            if let Capability::Seek { descriptor: d, .. }
-            | Capability::Contains { descriptor: d, .. }
-            | Capability::Ordered { descriptor: d, .. } = capability
-            {
-                if symbol_name(&d.relation) != symbol_name(name) {
-                    return error(d, format!("capability must describe `{name}` itself"));
-                }
-                check_columns(&d.columns.ordinals(), arity, d)?;
-            }
-        }
-        let operations = operations(provides);
-        let mut seen = BTreeSet::new();
-        let chosen = self
-            .structures
-            .provided
-            .get(&symbol_name(name))
-            .cloned()
-            .unwrap_or_default();
-        for operation in &operations {
-            if !seen.insert(operation.clone()) {
-                return error(provides, "duplicate capability");
-            }
-            if *operation != Operation::Iter && !chosen.contains(operation) {
-                return error(
-                    provides,
-                    format!("no structure chosen on `{name}` provides {operation:?}"),
-                );
-            }
-        }
-        Ok(operations)
-    }
-
     fn check_definitions(&mut self) -> syn::Result<()> {
         let ra_definitions = &self
             .module
@@ -524,8 +501,16 @@ impl<'a> Checker<'a> {
             };
             let is_let = match &streamed.mode {
                 Mode::Pipe { .. } => false,
-                Mode::Let { provides, .. } => {
-                    let operations = self.check_provides(&definition.name, provides)?;
+                Mode::Let { .. } => {
+                    // Materialized rows, plus whatever structures were chosen.
+                    let mut operations = vec![Operation::Iter];
+                    operations.extend(
+                        self.structures
+                            .provided
+                            .get(&name)
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
                     self.analysis.provided.insert(name.clone(), operations);
                     true
                 }
