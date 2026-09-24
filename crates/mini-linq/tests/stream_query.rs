@@ -50,7 +50,9 @@ fn oracle<'a>(
     out
 }
 
-fn fixture() -> (Vec<(Value,)>, Vec<(Value, Value)>, Vec<(Value, Value)>) {
+type Fixture = (Vec<(Value,)>, Vec<(Value, Value)>, Vec<(Value, Value)>);
+
+fn fixture() -> Fixture {
     (
         values([1, 2, 3, 9]),
         pairs([(1, 10), (1, 11), (2, 12), (3, 13), (4, 14)]),

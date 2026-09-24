@@ -1,2 +1,12 @@
 rule	specification	status
 Candidate-Exact	access_refinement.tex	PROPOSED: semantic/compiler obligation; current post-IX implementation is nonconforming.
+Phy-Select	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Phy-Relation	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Phy-Index	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Phy-Use	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Phy-Region	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Realize-Dispatch	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Realize-Resume	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Realize-Finish	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Exact-Join	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Exact-Project	ix_physical_contract.tex	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.

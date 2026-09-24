@@ -25,18 +25,21 @@ except ModuleNotFoundError:
 ROOT = Path(__file__).resolve().parents[1]
 FOUNDATIONS = {"cq-ir": set(), "cq-storage": set()}
 FAMILIES = {name: {"cq-ir"} for name in (
-    "cq-query-lowering", "cq-index-policy", "cq-physical-selection",
-    "cq-physical-lowering", "cq-access-lowering", "cq-pipeline-lowering")}
-PROVIDERS = {"cq-example-providers": {"cq-ir"}}
-TEST_DEPENDENCIES = {"cq-example-providers": {"cq-physical-lowering"}}
+    "cq-query-lowering", "cq-index-policy", "cq-stream-lowering",
+    "cq-stream-realization", "cq-access-lowering", "cq-pipeline-lowering")}
+PROVIDERS = {"cq-state-providers": {"cq-ir"}}
+TEST_DEPENDENCIES = {
+    "cq-stream-lowering": {"cq-index-policy"},
+    "cq-stream-realization": {"cq-index-policy", "cq-stream-lowering"},
+}
 ALLOWED = FOUNDATIONS | FAMILIES | PROVIDERS | {"mini-linq": {"cq-ir", *FAMILIES}}
 FRONTEND = {
     "written-order": ("cq-query-lowering", "written-order"),
     "clause-prefix": ("cq-query-lowering", "clause-prefix"),
     "hypergraph": ("cq-query-lowering", "hypergraph"),
     "index-demands": ("cq-index-policy", None),
-    "physical-selection": ("cq-physical-selection", None),
-    "physical-realization": ("cq-physical-lowering", None),
+    "stream-lowering": ("cq-stream-lowering", None),
+    "stream-realization": ("cq-stream-realization", None),
     "access-to-pipeline": ("cq-access-lowering", "to-pipeline"),
     "access-to-set-loops": ("cq-access-lowering", "to-set-loops"),
     "pipeline-distinct-iter": ("cq-pipeline-lowering", "distinct-iter"),
@@ -47,7 +50,7 @@ FRONTEND = {
 FRONTEND_MACROS = {
     "written-order": "cq_to_ra_written_order", "clause-prefix": "cq_to_ra_clause_prefix",
     "hypergraph": "cq_to_ra_hypergraph", "index-demands": "index_demands",
-    "physical-selection": "given_physical_bindings", "physical-realization": "realize_physical",
+    "stream-lowering": "ix_to_stream", "stream-realization": "stream_to_access",
     "access-to-pipeline": "access_to_distinct_iter", "access-to-set-loops": "access_to_set_loops",
     "pipeline-distinct-iter": "pipeline_to_distinct_iter", "pipeline-set": "pipeline_to_set",
     "pipeline-support-iter": "pipeline_to_support_iter", "pipeline-exists": "pipeline_to_exists",
@@ -73,12 +76,8 @@ IMPLEMENTATIONS = {
 MODULE_WIRING = {}
 CONSUMERS = {
     "state_providers": ["pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists", "access-to-set-loops"],
-    "physical_selection": ["index-demands", "physical-selection"],
-    "physical_realization": ["index-demands", "physical-selection", "physical-realization", "access-to-set-loops"],
-    "physical_variants": ["index-demands", "physical-selection", "physical-realization", "access-to-set-loops"],
-    "physical_query": ["written-order", "index-demands", "physical-selection", "physical-realization", "access-to-set-loops"],
-    "physical_projection": ["written-order", "index-demands", "physical-selection", "physical-realization", "access-to-set-loops"],
-    "physical_pull": ["written-order", "index-demands", "physical-selection", "physical-realization", "access-to-pipeline", "pipeline-distinct-iter"],
+    "stream_query": ["written-order", "hypergraph", "index-demands", "stream-lowering", "stream-realization",
+                     "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"],
 }
 
 def toml(value):
@@ -140,17 +139,17 @@ def negative_dependency_checks(data):
     # Metadata normalizes package aliases, optional and target-specific deps.
     for kind, remote in [(None, False), ("build", False), (None, True), ("build", True)]:
         altered = copy.deepcopy(data)
-        package = next(p for p in altered["packages"] if p["name"] == "cq-physical-lowering")
-        dep = {"name": "cq-example-providers", "kind": kind, "optional": True, "rename": "innocent_alias",
+        package = next(p for p in altered["packages"] if p["name"] == "cq-stream-realization")
+        dep = {"name": "cq-state-providers", "kind": kind, "optional": True, "rename": "innocent_alias",
                "target": "cfg(unix)", "uses_default_features": False}
-        if not remote: dep["path"] = str(ROOT / "crates/cq-example-providers")
+        if not remote: dep["path"] = str(ROOT / "crates/cq-state-providers")
         package["dependencies"].append(dep)
         try: check(altered, announce=False)
         except ValueError: pass
         else: raise ValueError("dependency guard accepted a forbidden renamed/optional/target dependency")
     altered = copy.deepcopy(data)
-    package = next(p for p in altered["packages"] if p["name"] == "cq-physical-lowering")
-    package["dependencies"].append({"name": "cq-example-providers", "kind": "dev", "path": str(ROOT / "crates/cq-example-providers")})
+    package = next(p for p in altered["packages"] if p["name"] == "cq-stream-realization")
+    package["dependencies"].append({"name": "cq-state-providers", "kind": "dev", "path": str(ROOT / "crates/cq-state-providers")})
     check(altered, announce=False)
     print("PASS: four production dependency mutations rejected; cross-implementation test dependency accepted", flush=True)
 
@@ -311,11 +310,8 @@ def isolate(packages, only=()):
 CQ = 'struct Q; relation R(a:i32); answer(x) :- R(x);'
 RA = CQ + ' relational { r = rename R {a -> x}; output r as answer(x); }'
 IX = RA + ' indexes {} uses {}'
-PHYSICAL = IX + ''' physical {
-    relations { R = selected_input; r = selected_input; }
-    indexes {}
-    lowerings { r = selected_rule; }
-}'''
+POLICED_IX = IX + ' policy { R provides { iter }; }'
+STREAM = IX + ' stream { open R provides { iter }; r = alias R; return r; }'
 ACCESS = 'answer(x) => ((x,)) :- R(x) => bind (x,) <- ([(1i32,), (2,)]);'
 PIPELINE = 'iter0 = scan (x,) in ([(1i32,), (1,), (2,)]) yield (x,); iter1 = project iter0 as (x,) yield ((x,)); iter2 = distinct iter1; return iter2;'
 
@@ -340,13 +336,13 @@ use wiring as mini_linq;
 def frontend_source(feature):
     """Valid, small calls: boundary captures are not end-to-end acceptance."""
     implementation = FRONTEND_MACROS[feature]
-    if feature in ("written-order", "clause-prefix", "hypergraph", "index-demands", "physical-selection"):
+    if feature in ("written-order", "clause-prefix", "hypergraph", "index-demands", "stream-lowering"):
         source, continuation, expected = {
             "written-order": (CQ, "choose_index_policy", ["relational", "rename"]),
             "clause-prefix": (CQ, "choose_index_policy", ["relational", "rename"]),
             "hypergraph": (CQ, "choose_index_policy", ["relational", "rename"]),
-            "index-demands": (RA, "choose_physical", ["indexes", "uses"]),
-            "physical-selection": (PHYSICAL, "realize_physical", ["physical", "lowerings", "selected_input"]),
+            "index-demands": (RA, "stream_policy", ["indexes", "uses"]),
+            "stream-lowering": (POLICED_IX, "stream_to_access", ["stream", "alias", "return"]),
         }[feature]
         checks = " ".join(f'assert!(CAPTURE.contains({json.dumps(word)}));' for word in expected)
         return f'''
@@ -357,14 +353,16 @@ use wiring as mini_linq;
 raw::{implementation}! {{ {source} }}
 fn main() {{ {checks} }}
 '''
-    if feature == "physical-realization":
+    if feature == "stream-realization":
         return f'''
-macro_rules! selected_input {{ ($($request:tt)*) => {{ stringify!($($request)*) }}; }}
+macro_rules! capture {{ ($($tokens:tt)*) => {{ stringify!($($tokens)*) }}; }}
+use capture as access;
+mod wiring {{ pub(crate) use super::access; }}
+use wiring as mini_linq;
 fn main() {{
-    let request = raw::{implementation}! {{ {PHYSICAL} }};
-    assert!(request.contains("reply_to"));
-    let compact: String = request.chars().filter(|c| !c.is_whitespace()).collect();
-    assert!(compact.contains("request{{inputRfrom(R)}}"));
+    let region = raw::{implementation}! {{ {STREAM} }};
+    assert!(region.contains("bind"));
+    assert!(region.contains("iter"));
 }}
 '''
     if feature == "access-to-pipeline":
@@ -435,7 +433,7 @@ def check_frontends(packages, only=()):
             with (logdir / f"frontend-{feature}.log").open("w") as log:
                 result = subprocess.run(["cargo", "run", *args], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"actual frontend {feature} failed; see {logdir / ('frontend-' + feature + '.log')}")
-            kind = ("boundary capture" if feature in {"written-order", "clause-prefix", "hypergraph", "index-demands", "physical-selection", "physical-realization", "access-to-pipeline"} else "execution smoke")
+            kind = ("boundary capture" if feature in {"written-order", "clause-prefix", "hypergraph", "index-demands", "stream-lowering", "stream-realization", "access-to-pipeline"} else "execution smoke")
             component = name + (f"/{implementation}" if implementation else "")
             print(f"PASS: {kind} {feature}; renamed dependency and isolated {component}", flush=True)
 
@@ -459,7 +457,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--isolate", action="store_true", help="test copied components with unselected implementation sources absent, then invoke isolated macros")
     parser.add_argument("--frontends", action="store_true", help="invoke each leaf-feature macro with boundary captures or small executable input")
-    parser.add_argument("--consumers", action="store_true", help="run current IX/Physical integration test targets; separate from boundary smoke")
+    parser.add_argument("--consumers", action="store_true", help="run current IX/Stream integration test targets; separate from boundary smoke")
     parser.add_argument("--only", action="append", default=[], help="limit probes by component, implementation label, frontend feature, or integration target")
     args = parser.parse_args()
     labels = set(ALLOWED) | set(FRONTEND) | set(CONSUMERS) | {f"{name}-{feature}" for name, variants in IMPLEMENTATIONS.items() for feature in variants}

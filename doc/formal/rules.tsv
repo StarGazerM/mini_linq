@@ -10,11 +10,11 @@ IX-Reuse	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source 
 IX-New	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
 IX-Join	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
 IX-Other	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-Phy-Select	implementation	crates/cq-physical-selection/src/lib.rs	pub fn given_bindings	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
-Phy-Relation	implementation	crates/cq-physical-lowering/src/lib.rs	fn advance(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
-Phy-Index	implementation	crates/cq-physical-lowering/src/lib.rs	fn advance(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
-Phy-Use	implementation	crates/cq-physical-lowering/src/indexed_join.rs	fn matches_request(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
-Phy-Region	implementation	crates/cq-physical-lowering/src/lib.rs	fn check_reply(	Implemented administrative/structural rule; external representation laws are conditional premises, not mechanically proved.
+Phy-Select	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Phy-Relation	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Phy-Index	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Phy-Use	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Phy-Region	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
 FV-Name	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Bound	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Children	implementation	crates/cq-ir/src/cq/rust.rs	visit::visit_expr(self, expr)	Correspondence location; proof obligation C-Conformance remains.
@@ -91,8 +91,8 @@ C-Match	implementation	crates/cq-query-lowering/src/clause_prefix/rules.rs	fn ma
 C-Finish	implementation	crates/cq-query-lowering/src/clause_prefix/rules.rs	fn finish(	Correspondence location; proof obligation C-Conformance remains.
 ST-Entry	implementation	crates/mini-linq/src/lib.rs	pub fn choose_graph_or_prefix	Representative entry; the caller-relative composition table is in staging.tex.
 ST-Hole	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy is an explicit obligation.
-Realize-Dispatch	implementation	crates/cq-physical-lowering/src/lib.rs	fn advance(	Implemented administrative state rule; validated by driver tests and actual expansion.
-Realize-Resume	implementation	crates/cq-physical-lowering/src/lib.rs	pub fn resume(	Implemented administrative state rule; validated by driver tests and actual expansion.
-Realize-Finish	implementation	crates/cq-physical-lowering/src/lib.rs	fn finish(	Implemented administrative state rule; validated by driver tests and actual expansion.
-Exact-Join	implementation	crates/cq-physical-lowering/src/indexed_join.rs	pub fn compile(tokens:	Selected external exact-family rule; witnessed by actual expansion and independent answers.
-Exact-Project	implementation	crates/cq-physical-lowering/src/project.rs	pub fn lower(tokens:	Selected external terminal projection; intermediate projection explicitly rejects.
+Realize-Dispatch	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Realize-Resume	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Realize-Finish	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Exact-Join	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
+Exact-Project	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.

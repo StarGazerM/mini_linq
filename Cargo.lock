@@ -95,7 +95,6 @@ dependencies = [
 name = "cq-stream-realization"
 version = "0.1.0"
 dependencies = [
- "cq-access-lowering",
  "cq-index-policy",
  "cq-ir",
  "cq-stream-lowering",

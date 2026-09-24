@@ -19,7 +19,7 @@ while IFS=$'\t' read -r package kind target source; do
         status=1
     else
         case "$kind" in
-            test|example) command=(cargo test --locked -p "$package" "--$kind" "$target") ;;
+            test|example) command=(cargo test --locked -p "$package" --all-features "--$kind" "$target") ;;
             lib) command=(cargo test --locked -p "$package" --lib) ;;
             manifest-test) command=(cargo test --locked --manifest-path "$source") ;;
             manifest-run) command=(cargo run --locked --manifest-path "$source") ;;

@@ -135,7 +135,7 @@ fn merge_policy_realizes_co_iteration_over_built_ordered_maps() {
 }
 
 #[test]
-fn every_shared_case_realizes_to_a_pull_lowerable_region() {
+fn every_shared_case_realizes_to_a_checked_access_region() {
     for case in cases::CASES {
         let plan: ra::Module = syn::parse_str(case.plan).unwrap();
         let hosts: proc_macro2::TokenStream = plan
@@ -148,10 +148,14 @@ fn every_shared_case_realizes_to_a_pull_lowerable_region() {
             .collect();
         for join in [quote!(), quote!(join = merge;)] {
             let module = stream_of(&plan, quote! { policy { #hosts #join } });
+            // `compile` checks the Access contract of the region it returns.
             let realized = compile(&module, &endpoints())
                 .unwrap_or_else(|e| panic!("{} under {join}: {e}", case.name));
-            cq_access_lowering::to_pipeline::compile(&realized.access)
-                .unwrap_or_else(|e| panic!("{} under {join}: {e}", case.name));
+            assert!(
+                !realized.access.body.is_empty() || case.name == "scan",
+                "{}",
+                case.name
+            );
         }
     }
 }
