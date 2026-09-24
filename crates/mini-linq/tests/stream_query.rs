@@ -257,7 +257,7 @@ mod advised {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
-            #[index(SortedIndex<_, _> provides { seek, contains })]
+            #[index(SortedIndex provides { seek, contains })]
             relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
         }

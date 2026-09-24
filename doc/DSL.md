@@ -70,8 +70,8 @@ Rust type — from any crate — implementing `cq_storage::Build` and the traits
 it claims (`seek`: `IndexRead`, `contains`: `ExactMembership`, `ordered`:
 `OrderedRead`); structure selection builds it over whatever the plan indexes
 on that relation, and the generated program uses it only through those
-traits, so rustc checks the claims. Inference holes stand for the key and
-payload tuples (`my::Trie<_, _>`). It names no columns — which columns are
+traits, so rustc checks the claims. A bare path (`my::Trie`) has its generics
+inferred from the key and payload tuples; written arguments are used as is. It names no columns — which columns are
 indexed is a planner decision the query cannot see — and it is never a
 fallback: a type whose claims do not cover what the plan needs (no `seek`
 where a join probes, no `ordered` under `join = merge`) is a compile error at

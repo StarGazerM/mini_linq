@@ -317,11 +317,20 @@ impl Realizer<'_> {
             // The one construction protocol; the type is whatever was chosen.
             let structure = format_ident!("__cq_{}_on_{}", name, suffix);
             let ty = &keyed.ty;
-            statements.push(syn::parse_quote! {
-                let #structure = &<#ty as ::cq_storage::Build<_>>::build(
-                    ::core::iter::Iterator::map(#source, |#row| ((#(#key,)*), (#(#payload,)*)))
-                );
-            });
+            let pairs =
+                quote!(::core::iter::Iterator::map(#source, |#row| ((#(#key,)*), (#(#payload,)*))));
+            // A bare path lets Rust infer the type's generics from the pairs;
+            // written arguments (or holes) select the qualified form.
+            let build = match ty {
+                syn::Type::Path(path)
+                    if path.qself.is_none()
+                        && path.path.segments.iter().all(|s| s.arguments.is_none()) =>
+                {
+                    quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
+                }
+                _ => quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs)),
+            };
+            statements.push(syn::parse_quote! { let #structure = &#build; });
             built
                 .structures
                 .push((columns, structure, keyed.provides()));
