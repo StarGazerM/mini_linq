@@ -3,14 +3,14 @@
 //!
 //! Hosts are facts, not claims: `R keyed [a]` says the host value is keyed
 //! on column `a` (so a demand on `a` is answered in place), `ordered` that
-//! the key has an order. Whether the value's type implements the traits
-//! those facts lead the program to use is rustc's check. The rest is
-//! strategy.
+//! the key has an order, `canon` that the value is a set of its rows (each
+//! row once). Whether the value's type implements the traits those facts
+//! lead the program to use is rustc's check. The rest is strategy.
 //!
 //! ```text
 //! Policy ::= "policy" "{" Host* ["join" "=" ("seek" | "merge") ";"]
 //!            ["semijoin" "=" ("eager" | "prefer_lazy") ";"] "}"
-//! Host   ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ";"
+//! Host   ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"] ";"
 //! ```
 
 use syn::{Ident, Token, token};
@@ -20,6 +20,7 @@ use crate::CommaList;
 pub mod kw {
     syn::custom_keyword!(policy);
     syn::custom_keyword!(keyed);
+    syn::custom_keyword!(canon);
     syn::custom_keyword!(ordered);
     syn::custom_keyword!(join);
     syn::custom_keyword!(semijoin);
@@ -59,6 +60,8 @@ pub struct Host {
     pub name: Ident,
     #[syn(optional, peek = kw::keyed)]
     pub key: Option<Key>,
+    #[syn(optional, peek = kw::canon)]
+    pub canon: Option<kw::canon>,
     pub semi_token: Token![;],
 }
 
