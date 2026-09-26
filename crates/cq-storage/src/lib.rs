@@ -51,9 +51,9 @@ pub use block_access::{BlockDescriptor, BlockRead, BuildBlocks, CoordinateBounds
 pub use blocks::{Block, BlockStore};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
 pub use mask::BlockMask;
-pub use membership::ExactMembership;
+pub use membership::{Canonical, ExactMembership};
 pub use metrics::{Counters, Work};
-pub use ordered::{GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, merge};
+pub use ordered::{GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by};
 pub use replay::{BuildReplay, Replay, ReplayCursor, ReplayRead};
 pub use selection::{BlockSelection, MakeSelection};
 pub use summary::{RangeSummary, ZoneSummary};
@@ -67,4 +67,5 @@ pub mod require {
     pub fn seek<T: super::IndexRead>(_: T) {}
     pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
     pub fn ordered<T: super::OrderedRead>(_: T) {}
+    pub fn canonical<T: super::Canonical>(_: T) {}
 }

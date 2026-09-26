@@ -1,10 +1,10 @@
 //! Authored Structures modules check the contract independently of selection:
-//! every IX demand is served, hosts are declared, entries are well formed.
-use cq_ir::capabilities::Operation;
+//! every Physical premise is discharged, hosts are declared, entries are well
+//! formed, the return is canonical.
 use cq_ir::structures;
 use quote::quote;
 
-fn module(entries: proc_macro2::TokenStream) -> structures::Module {
+fn module(physical: proc_macro2::TokenStream, entries: proc_macro2::TokenStream) -> structures::Module {
     syn::parse_quote! {
         struct Chain;
         relation L(a: i32);
@@ -23,109 +23,129 @@ fn module(entries: proc_macro2::TokenStream) -> structures::Module {
         }
         indexes { i0 = @r[0]; i1 = @s[0]; i2 = @l[0]; }
         uses { j0.right = i0; j1.right = i1; x.right = i2; }
+        physical { #physical }
         structures { #entries }
     }
 }
 
-#[test]
-fn demands_are_served_by_chosen_structures_or_translated_host_capabilities() {
-    // R is declared (b, a): sorted [a, b], so its key `a` is host column 0,
-    // which serves r's demand on r-ordinal 0 (`a`) through the rename.
-    let ok = module(quote! {
-        L keyed [0];
-        R keyed [0];
-        S;
-        s = ::cq_storage::HashIndex<_, _> [0];
-    });
-    let analysis = structures::contract::check(&ok).unwrap();
-    // A host key answers seek and membership in place, translated.
-    assert_eq!(
-        analysis.provided["r"],
-        [
-            Operation::Iter,
-            Operation::Seek(vec![0]),
-            Operation::Contains(vec![0])
-        ]
-    );
-    // A built structure answers every operation on its key, structurally;
-    // whether its type implements each is rustc's check.
-    assert_eq!(
-        analysis.provided["s"],
-        [
-            Operation::Seek(vec![0]),
-            Operation::Contains(vec![0]),
-            Operation::Ordered(vec![0])
-        ]
-    );
-    assert_eq!(analysis.aliases["r"], "R");
-    assert!(!analysis.aliases.contains_key("s"));
+fn hash_chain() -> proc_macro2::TokenStream {
+    quote! {
+        l = alias rename; r = alias rename; s = let rename;
+        j0 = pipe probe[a] l, r; j1 = pipe probe[b] j0, s;
+        x = pipe semi[a] j1, l; p = pipe canon project; return p;
+    }
+}
 
-    let cases: [(&str, proc_macro2::TokenStream, &str); 6] = [
+#[test]
+fn keyed_reads_are_answered_by_host_keys_through_renames_or_built_types() {
+    let ok = module(
+        hash_chain(),
+        quote! {
+            L keyed [a];
+            R keyed [a];
+            S;
+            s = ::cq_storage::HashIndex<_, _> [b];
+        },
+    );
+    let analysis = structures::contract::check(&ok).unwrap();
+    assert_eq!(analysis.host_key_for("r", &["a".into()]).unwrap().columns, ["a"]);
+    assert!(analysis.host_key_for("r", &["b".into()]).is_none());
+    assert!(analysis.built_on("s", &["b".into()]).is_some());
+    assert_eq!(analysis.host_layouts["R"], ["b", "a"]);
+    assert!(analysis.unique.contains_key("p"));
+}
+
+#[test]
+fn canonical_return_is_inferred_from_canonical_hosts_through_key_keeping_operators() {
+    // L, R, S canonical: joins keep uniqueness; the projection keeps a and c,
+    // which is not a key of x (x's key is {a, b, c}), so p needs `canon`.
+    let needs_flag = module(
+        quote! {
+            l = alias rename; r = alias rename; s = let rename;
+            j0 = pipe probe[a] l, r; j1 = pipe probe[b] j0, s;
+            x = pipe semi[a] j1, l; p = pipe project; return p;
+        },
+        quote! { L keyed [a] canon; R keyed [a] canon; S canon; s = ::cq_storage::HashIndex<_, _> [b]; },
+    );
+    let error = structures::contract::check(&needs_flag).unwrap_err().to_string();
+    assert!(error.contains("not canonical"), "{error}");
+    // Without canonical hosts, even x is not unique; with the flag it is fine.
+    let flagged = module(
+        hash_chain(),
+        quote! { L keyed [a]; R keyed [a]; S; s = ::cq_storage::HashIndex<_, _> [b]; },
+    );
+    let analysis = structures::contract::check(&flagged).unwrap();
+    assert!(!analysis.unique.contains_key("x"));
+    assert!(analysis.unique.contains_key("p"));
+}
+
+#[test]
+fn merge_sides_are_ordered_by_structure_or_sorted_pipes() {
+    let hosts = quote! { L keyed [a] ordered; R keyed [a] ordered; S keyed [b] ordered; };
+    // j0 is sorted on a by its own merge, but j1 merges on b: rejected.
+    let error = structures::contract::check(&module(
+        quote! {
+            l = alias rename; r = alias rename; s = alias rename;
+            j0 = pipe merge[a] l, r; j1 = pipe merge[b] j0, s;
+            x = pipe semi[a] j1, l; p = pipe canon project; return p;
+        },
+        hosts.clone(),
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("merges `j0` on [\"b\"]"), "{error}");
+    // Materialized on b, it is ordered on b.
+    let ok = module(
+        quote! {
+            l = alias rename; r = alias rename; s = alias rename;
+            j0 = let merge[a] l, r; j1 = pipe merge[b] j0, s;
+            x = pipe semi[a] j1, l; p = pipe canon project; return p;
+        },
+        quote! { #hosts j0 = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [b]; },
+    );
+    structures::contract::check(&ok).unwrap();
+    // A structure over a pipe is rejected.
+    let error = structures::contract::check(&module(
+        quote! {
+            l = alias rename; r = alias rename; s = alias rename;
+            j0 = pipe merge[a] l, r; j1 = pipe merge[b] j0, s;
+            x = pipe semi[a] j1, l; p = pipe canon project; return p;
+        },
+        quote! { #hosts j0 = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [b]; },
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("is a pipe; a structure is built only over a `let`"), "{error}");
+}
+
+#[test]
+fn contract_rejects_malformed_entries() {
+    let cases: [(proc_macro2::TokenStream, &str); 5] = [
         (
-            "duplicate structure",
-            quote! {
-                L keyed [0];
-                R keyed [0];
-                S;
-                s = my::Index<_, _> [0];
-                s = ::cq_storage::HashIndex<_, _> [0];
-            },
+            quote! { L keyed [a]; R keyed [a]; S; s = my::Index<_, _> [b]; s = ::cq_storage::HashIndex<_, _> [b]; },
             "duplicate structure on these columns",
         ),
         (
-            "unserved join demand",
-            quote! {
-                L keyed [0];
-                R;
-                S;
-                s = ::cq_storage::HashIndex<_, _> [0];
-            },
-            "no structure on `r` serves Seek([0])",
+            quote! { L keyed [a]; R; S; s = ::cq_storage::HashIndex<_, _> [b]; },
+            "`j0` reads `r` on [\"a\"]",
         ),
         (
-            "a structure on other columns does not serve the demand",
-            quote! {
-                L keyed [0];
-                R keyed [0];
-                S;
-                s = ::cq_storage::HashIndex<_, _> [1];
-            },
-            "no structure on `s` serves Seek([0])",
+            quote! { L keyed [a]; R keyed [a]; S; s = ::cq_storage::HashIndex<_, _> [c]; },
+            "`j1` reads `s` on [\"b\"]",
         ),
         (
-            "missing host",
-            quote! {
-                L keyed [0];
-                R keyed [0];
-                s = ::cq_storage::HashIndex<_, _> [0];
-            },
+            quote! { L keyed [a]; R keyed [a]; s = ::cq_storage::HashIndex<_, _> [b]; },
             "`S` has no entry",
         ),
         (
-            "keyed structure on a host",
-            quote! {
-                L keyed [0];
-                R keyed [0];
-                S = ::cq_storage::HashIndex<_, _> [0];
-                s = ::cq_storage::HashIndex<_, _> [0];
-            },
-            "represented by its host value",
-        ),
-        (
-            "column out of range",
-            quote! {
-                L keyed [0];
-                R keyed [0];
-                S;
-                s = ::cq_storage::HashIndex<_, _> [2];
-            },
-            "exceeds heading arity",
+            quote! { L keyed [a]; R keyed [a]; S; s = ::cq_storage::HashIndex<_, _> [z]; },
+            "`s` has no column `z`",
         ),
     ];
-    for (name, entries, expected) in cases {
-        let error = structures::contract::check(&module(entries))
-            .expect_err(name)
+    for (entries, needle) in cases {
+        let error = structures::contract::check(&module(hash_chain(), entries))
+            .unwrap_err()
             .to_string();
-        assert!(error.contains(expected), "{name}: {error}");
+        assert!(error.contains(needle), "{error}");
     }
 }

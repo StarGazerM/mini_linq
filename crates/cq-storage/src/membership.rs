@@ -53,3 +53,12 @@ impl<K: ?Sized, T: ExactMembership<K> + ?Sized> ExactMembership<K> for &T {
         T::contains(self, key)
     }
 }
+
+/// A collection that is a set of its keys by construction: every key occurs
+/// once, so a scan of it needs no deduplication. `Vec` never qualifies.
+pub trait Canonical {}
+impl<K, S> Canonical for HashSet<K, S> {}
+impl<K> Canonical for BTreeSet<K> {}
+impl<K, V> Canonical for BTreeMap<K, V> {}
+impl<K, V, S> Canonical for std::collections::HashMap<K, V, S> {}
+impl<T: Canonical + ?Sized> Canonical for &T {}

@@ -1,28 +1,28 @@
-//! MiniLinq's nominal query languages, from CQ down to the Access region.
+//! MiniLinq's nominal query languages, from CQ down to the Structures module.
 //!
-//! CQ, [`relational_plan::Module`], [`index_requirements::Module`], and
-//! [`stream::Module`] each have one public parser and a local language
-//! contract. RA gives every set operator a named DAG result; IX names the
-//! attribute-keyed access each binary operator demands; Stream realizes every
-//! result as a typed indexed-stream program whose modes and capabilities are
-//! the first representation facts in the pipeline. Below Stream,
-//! [`rust_access_plan::Plan`] is the erased, flattened region whose leaves are
-//! Rust expressions over the runtime's traits, and the pull strategy lowers it
-//! to an explicit [`iterator_pipeline::Pipeline`]. [`state_protocol`] is the
-//! one runtime-call shape execution endpoints use for distinct and sink state.
+//! CQ, [`relational_plan::Module`], [`index_requirements::Module`],
+//! [`physical::Module`] and [`structures::Module`] each have one public
+//! parser and a local language contract. RA gives every set operator a named
+//! DAG result; IX names the attribute-keyed access each binary operator
+//! demands; Physical fixes one physical operator per result and the mode
+//! (pipe, let, alias) its reads allow; Structures binds every keyed read to
+//! a host key fact or a Rust type built over the result. Below Structures a
+//! printer emits Rust; [`state_protocol`] is the one runtime-call shape
+//! execution endpoints use for distinct and sink state.
+//! [`rust_access_plan::Plan`] and [`iterator_pipeline::Pipeline`] remain as
+//! hand-staged entry points into the endpoints.
 
 use syn::ext::IdentExt;
 use syn::{Ident, Index, Token};
 
-pub mod capabilities;
 pub mod cq;
 pub mod index_requirements;
 pub mod iterator_pipeline;
+pub mod physical;
 pub mod policy;
 pub mod relational_plan;
 pub mod rust_access_plan;
 pub mod state_protocol;
-pub mod stream;
 pub mod structures;
 
 pub mod kw {

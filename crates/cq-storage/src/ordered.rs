@@ -121,6 +121,50 @@ impl<'a, K: Ord> OrderedRead for &'a BTreeSet<K> {
     }
 }
 
+/// A key-ordered iterator of `(key, item)` pairs presented as a cursor.
+///
+/// The order is asserted by the caller (the compiler's grade on the stream),
+/// never checked: `seek` skips pairs while their key is below the bound,
+/// which is exact precisely when the input is nondecreasing.
+pub fn sorted_by<I>(pairs: I) -> Sorted<I::IntoIter>
+where
+    I: IntoIterator,
+    I::IntoIter: Iterator,
+{
+    Sorted {
+        pairs: pairs.into_iter().peekable(),
+    }
+}
+
+pub struct Sorted<I: Iterator> {
+    pairs: std::iter::Peekable<I>,
+}
+
+impl<I, K, V> Iterator for Sorted<I>
+where
+    I: Iterator<Item = (K, V)>,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.pairs.next()
+    }
+}
+
+impl<I, K: Ord + Copy, V: Copy> OrderedCursor for Sorted<I>
+where
+    I: Iterator<Item = (K, V)>,
+{
+    type Key = K;
+    type Value = V;
+
+    fn seek(&mut self, bound: &K) {
+        while self.pairs.peek().is_some_and(|(key, _)| key < bound) {
+            self.pairs.next();
+        }
+    }
+}
+
 /// One-slot lookahead that keeps `seek` exact: a peeked pair at or beyond
 /// the bound is retained, one below it is discarded with the rest.
 struct Peeked<C: OrderedCursor> {
@@ -296,6 +340,23 @@ mod tests {
                 assert_eq!(actual, expected);
             }
         }
+    }
+
+    #[test]
+    fn sorted_stream_merges_like_an_ordered_map() {
+        let left = grouped(&[(1, 'a'), (2, 'b'), (2, 'c'), (5, 'd')]);
+        let stream = [(1, 'x'), (2, 'y'), (3, 'z'), (5, 'w')];
+        let right = grouped(&stream);
+        let via_map: Vec<_> = merge((&left).ordered(), (&right).ordered())
+            .map(|(k, l, r)| (*k, *l, *r))
+            .collect();
+        let via_stream: Vec<_> = merge(
+            (&left).ordered(),
+            sorted_by(stream.iter().map(|(k, v)| (k, v))),
+        )
+        .map(|(k, l, r)| (*k, *l, *r))
+        .collect();
+        assert_eq!(via_map, via_stream);
     }
 
     #[test]
