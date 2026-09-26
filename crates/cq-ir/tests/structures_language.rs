@@ -4,7 +4,10 @@
 use cq_ir::structures;
 use quote::quote;
 
-fn module(physical: proc_macro2::TokenStream, entries: proc_macro2::TokenStream) -> structures::Module {
+fn module(
+    physical: proc_macro2::TokenStream,
+    entries: proc_macro2::TokenStream,
+) -> structures::Module {
     syn::parse_quote! {
         struct Chain;
         relation L(a: i32);
@@ -48,7 +51,10 @@ fn keyed_reads_are_answered_by_host_keys_through_renames_or_built_types() {
         },
     );
     let analysis = structures::contract::check(&ok).unwrap();
-    assert_eq!(analysis.host_key_for("r", &["a".into()]).unwrap().columns, ["a"]);
+    assert_eq!(
+        analysis.host_key_for("r", &["a".into()]).unwrap().columns,
+        ["a"]
+    );
     assert!(analysis.host_key_for("r", &["b".into()]).is_none());
     assert!(analysis.built_on("s", &["b".into()]).is_some());
     assert_eq!(analysis.host_layouts["R"], ["b", "a"]);
@@ -67,7 +73,9 @@ fn canonical_return_is_inferred_from_canonical_hosts_through_key_keeping_operato
         },
         quote! { L keyed [a] canon; R keyed [a] canon; S canon; s = ::cq_storage::HashIndex<_, _> [b]; },
     );
-    let error = structures::contract::check(&needs_flag).unwrap_err().to_string();
+    let error = structures::contract::check(&needs_flag)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("not canonical"), "{error}");
     // Without canonical hosts, even x is not unique; with the flag it is fine.
     let flagged = module(
@@ -115,7 +123,10 @@ fn merge_sides_are_ordered_by_structure_or_sorted_pipes() {
     ))
     .unwrap_err()
     .to_string();
-    assert!(error.contains("is a pipe; a structure is built only over a `let`"), "{error}");
+    assert!(
+        error.contains("is a pipe; a structure is built only over a `let`"),
+        "{error}"
+    );
 }
 
 #[test]

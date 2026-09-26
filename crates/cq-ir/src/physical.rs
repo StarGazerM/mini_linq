@@ -303,7 +303,10 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                 let column = symbol_name(&ranged.column);
                 let input = symbol_name(&s.input);
                 if !results[&input].heading.contains(&column) {
-                    return error(&ranged.column, format!("`{input}` has no column `{column}`"));
+                    return error(
+                        &ranged.column,
+                        format!("`{input}` has no column `{column}`"),
+                    );
                 }
                 analysis
                     .range_reads
@@ -315,7 +318,11 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
             (Operator::Project(_), ra::Operator::Project(_)) => {}
             (Operator::Probe(_, k) | Operator::Merge(_, k), ra::Operator::NaturalJoin(j)) => {
                 check_operands(k, &j.left, &j.right)?;
-                let columns = join_columns(k, &results[&symbol_name(&j.left)], &results[&symbol_name(&j.right)])?;
+                let columns = join_columns(
+                    k,
+                    &results[&symbol_name(&j.left)],
+                    &results[&symbol_name(&j.right)],
+                )?;
                 let right = symbol_name(&k.right);
                 if matches!(definition.operator, Operator::Probe(..)) {
                     analysis
@@ -335,7 +342,11 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
             }
             (Operator::Semi(_, k), ra::Operator::Semijoin(j)) => {
                 check_operands(k, &j.left, &j.right)?;
-                let columns = join_columns(k, &results[&symbol_name(&j.left)], &results[&symbol_name(&j.right)])?;
+                let columns = join_columns(
+                    k,
+                    &results[&symbol_name(&j.left)],
+                    &results[&symbol_name(&j.right)],
+                )?;
                 analysis
                     .key_reads
                     .entry(symbol_name(&k.right))
@@ -357,13 +368,15 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
             analysis.scanned.insert(input);
         }
         if let Operator::Merge(_, k) = &definition.operator {
+            // A merge side is read through its order: a `let` side through a
+            // structure, a pipe side as the stream itself.
+            analysis.scanned.remove(&symbol_name(&k.left));
             for side in [&k.left, &k.right] {
                 let side = symbol_name(side);
-                readers.entry(side.clone()).or_default().push(name.clone());
-                analysis.scanned.insert(side);
+                if side != symbol_name(&k.left) {
+                    readers.entry(side.clone()).or_default().push(name.clone());
+                }
             }
-            // The left side counted twice above (as input and as merge side).
-            readers.get_mut(&symbol_name(&k.left)).unwrap().pop();
         }
         if let Some((right, _)) = definition.operator.keyed() {
             readers
@@ -386,7 +399,10 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
             format!("RA outputs `{}`", plan.output.input),
         );
     }
-    readers.entry(returned.clone()).or_default().push("return".into());
+    readers
+        .entry(returned.clone())
+        .or_default()
+        .push("return".into());
     analysis.scanned.insert(returned.clone());
 
     // Modes: a pipe is read exactly once, as a stream; anything read
@@ -400,10 +416,14 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                 if reads != 1 {
                     return error(
                         &definition.name,
-                        format!("pipe `{name}` must be read exactly once; it is read {reads} times"),
+                        format!(
+                            "pipe `{name}` must be read exactly once; it is read {reads} times"
+                        ),
                     );
                 }
-                if analysis.key_reads.contains_key(&name) || analysis.range_reads.contains_key(&name) {
+                if analysis.key_reads.contains_key(&name)
+                    || analysis.range_reads.contains_key(&name)
+                {
                     return error(
                         &definition.name,
                         format!("`{name}` is read through a key, so it must be `let`"),
@@ -422,7 +442,9 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
 }
 
 fn check_operands(keyed: &Keyed, left: &Ident, right: &Ident) -> syn::Result<()> {
-    if symbol_name(&keyed.left) != symbol_name(left) || symbol_name(&keyed.right) != symbol_name(right) {
+    if symbol_name(&keyed.left) != symbol_name(left)
+        || symbol_name(&keyed.right) != symbol_name(right)
+    {
         return error(
             &keyed.left,
             format!("operands must be `{left}, {right}` as in RA"),
@@ -457,6 +479,11 @@ pub fn ordinals(analysis: &Analysis, result: &str, columns: &[String]) -> Vec<us
     let heading = &analysis.headings[result];
     columns
         .iter()
-        .map(|c| heading.iter().position(|h| h == c).expect("column in heading"))
+        .map(|c| {
+            heading
+                .iter()
+                .position(|h| h == c)
+                .expect("column in heading")
+        })
         .collect()
 }

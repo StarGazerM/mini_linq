@@ -53,7 +53,9 @@ pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
 pub use mask::BlockMask;
 pub use membership::{Canonical, ExactMembership};
 pub use metrics::{Counters, Work};
-pub use ordered::{GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by};
+pub use ordered::{
+    GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
+};
 pub use replay::{BuildReplay, Replay, ReplayCursor, ReplayRead};
 pub use selection::{BlockSelection, MakeSelection};
 pub use summary::{RangeSummary, ZoneSummary};

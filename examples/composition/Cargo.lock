@@ -3,28 +3,6 @@
 version = 4
 
 [[package]]
-name = "contracts"
-version = "0.6.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80771e396e09e4d428c6d034440a3fc62f3927334b66e13c8b8689d3f8785e42"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.5",
-]
-
-[[package]]
-name = "cq-access-lowering"
-version = "0.1.0"
-dependencies = [
- "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -44,6 +22,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-physical-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-physical-realization"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-state-providers"
 version = "0.1.0"
 dependencies = [
@@ -56,27 +54,6 @@ dependencies = [
 [[package]]
 name = "cq-storage"
 version = "0.1.0"
-
-[[package]]
-name = "cq-stream-lowering"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "syn_derive",
-]
-
-[[package]]
-name = "cq-stream-realization"
-version = "0.1.0"
-dependencies = [
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "cq-structure-selection"
@@ -92,11 +69,10 @@ dependencies = [
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
- "cq-access-lowering",
  "cq-index-policy",
  "cq-ir",
- "cq-stream-lowering",
- "cq-stream-realization",
+ "cq-physical-lowering",
+ "cq-physical-realization",
  "cq-structure-selection",
  "proc-macro2",
  "quote",
@@ -143,9 +119,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.5"
+version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
+checksum = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -159,11 +135,11 @@ source = "git+https://github.com/StarGazerM/syn_derive?rev=97bbe5871ac5ca8e9ba64
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.5",
+ "syn 3.0.6",
 ]
 
 [[package]]
 name = "unicode-ident"
-version = "1.0.24"
+version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"

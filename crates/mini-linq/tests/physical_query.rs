@@ -1,6 +1,8 @@
-//! The real chain, CQ through Stream to executed Rust, under three policies:
-//! host maps read in place, compiler-built hash indexes, and merge joins over
-//! compiler-built ordered maps; plus the acyclic planner's Yannakakis plan.
+//! The real chain, CQ through Physical and Structures to executed Rust,
+//! under several policies: host maps read in place, compiler-built hash
+//! indexes, a user-defined index type, merge joins over compiler-built
+//! ordered maps, the acyclic planner's Yannakakis plan, and a bounded scan
+//! of an ordered host. Every query evaluates to an iterator of answers.
 #![recursion_limit = "1024"]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -66,27 +68,19 @@ mod hosted {
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::select_structures! {
+            ::mini_linq::lower_physical! {
                 $($ix)*
-                policy {
-                    L;
-                    R keyed [a];
-                    S keyed [b];
-                }
+                policy { L; R keyed [a]; S keyed [b]; }
             }
         };
     }
-    pub(crate) use policy as stream_policy;
+    pub(crate) use policy as physical_policy;
     mod wiring {
-        pub(crate) use super::stream_policy;
+        pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{
-            access_to_set_loops as access, index_demands as choose_index_policy, stream_to_access,
-            structures_to_stream,
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
-        #[allow(unused_imports)]
-        pub(crate) use cq_state_providers::{
-            hash_distinct as distinct_state, hash_set_sink as set_sink,
-        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;
 
@@ -96,13 +90,13 @@ mod hosted {
         R: &'a HashMap<(Value,), Vec<(Value,)>>,
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> HashSet<(&'a Value, &'a Value)> {
-        ::mini_linq::cq_to_ra_written_order! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_written_order! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
             relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
-        }
+        })
     }
 }
 
@@ -114,39 +108,26 @@ fn host_maps_are_probed_in_place() {
     assert_eq!(hosted::run(&l, &r_map, &s_map), oracle(&l, &r, &s));
 }
 
-/// Hosts only iterate: the compiler builds hash indexes over borrowed rows.
-/// Built structures live in the query block, so the lazy pull endpoint is
-/// consumed there by the caller's `access` binding.
+/// Hosts only iterate: the compiler builds hash indexes over borrowed rows
+/// inside the query block; the answers stream out of it.
 mod built {
     use super::*;
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::select_structures! {
+            ::mini_linq::lower_physical! {
                 $($ix)*
                 policy { L; R; S; }
             }
         };
     }
-    pub(crate) use policy as stream_policy;
-    macro_rules! collect_pull {
-        ($($access:tt)*) => {
-            ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(
-                ::mini_linq::access_to_distinct_iter! { $($access)* }
-            )
-        };
-    }
-    pub(crate) use collect_pull as access;
+    pub(crate) use policy as physical_policy;
     mod wiring {
-        pub(crate) use super::{access, stream_policy};
+        pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, pipeline_to_distinct_iter,
-            pipeline_to_support_iter, stream_to_access, structures_to_stream,
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
-        #[allow(unused_imports)]
-        pub(crate) use cq_state_providers::{
-            hash_distinct as distinct_state, hash_set_sink as set_sink,
-        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;
 
@@ -156,22 +137,22 @@ mod built {
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::mini_linq::cq_to_ra_written_order! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_written_order! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
             relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
-        }
+        })
     }
 }
 
 #[test]
-fn compiler_built_indexes_feed_the_lazy_pull_endpoint() {
+fn compiler_built_indexes_feed_the_pull_program() {
     let (l, r, s) = fixture();
     let actual: HashSet<_> = built::run(&l, &r, &s).into_iter().collect();
     assert_eq!(actual, oracle(&l, &r, &s));
-    // Distinct: duplicated inputs do not duplicate answers.
+    // Canonical return: duplicated inputs do not duplicate answers.
     let doubled: Vec<_> = l.iter().chain(&l).cloned().collect();
     assert_eq!(built::run(&doubled, &r, &s).len(), oracle(&l, &r, &s).len());
 }
@@ -220,31 +201,19 @@ mod advised {
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::select_structures! {
+            ::mini_linq::lower_physical! {
                 $($ix)*
                 policy { L; R; S; }
             }
         };
     }
-    pub(crate) use policy as stream_policy;
-    macro_rules! collect_pull {
-        ($($access:tt)*) => {
-            ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(
-                ::mini_linq::access_to_distinct_iter! { $($access)* }
-            )
-        };
-    }
-    pub(crate) use collect_pull as access;
+    pub(crate) use policy as physical_policy;
     mod wiring {
-        pub(crate) use super::{access, stream_policy};
+        pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, pipeline_to_distinct_iter,
-            pipeline_to_support_iter, stream_to_access, structures_to_stream,
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
-        #[allow(unused_imports)]
-        pub(crate) use cq_state_providers::{
-            hash_distinct as distinct_state, hash_set_sink as set_sink,
-        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;
 
@@ -254,50 +223,45 @@ mod advised {
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::mini_linq::cq_to_ra_written_order! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_written_order! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
             #[index(SortedIndex)]
             relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
-        }
+        })
     }
 }
 
 #[test]
-fn a_user_defined_index_type_is_built_and_probed_through_the_runtime_traits() {
+fn a_user_defined_index_type_is_built_and_probed() {
     let (l, r, s) = fixture();
     let actual: HashSet<_> = advised::run(&l, &r, &s).into_iter().collect();
     assert_eq!(actual, oracle(&l, &r, &s));
 }
 
-/// Merge joins: every operand is materialized ordered and co-iterated.
+/// `join = merge`: both operands of every join are read in key order and
+/// co-iterated; intermediates whose key changes are materialized into
+/// ordered maps, an intermediate merged on its own key streams on.
 mod merged {
     use super::*;
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::select_structures! {
+            ::mini_linq::lower_physical! {
                 $($ix)*
-                policy {
-                    L; R; S;
-                    join = merge;
-                }
+                policy { L; R; S; join = merge; }
             }
         };
     }
-    pub(crate) use policy as stream_policy;
+    pub(crate) use policy as physical_policy;
     mod wiring {
-        pub(crate) use super::stream_policy;
+        pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{
-            access_to_set as access, index_demands as choose_index_policy, pipeline_to_set,
-            pipeline_to_support_iter, stream_to_access, structures_to_stream,
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
-        #[allow(unused_imports)]
-        pub(crate) use cq_state_providers::{
-            hash_distinct as distinct_state, ordered_set_sink as set_sink,
-        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;
 
@@ -307,13 +271,13 @@ mod merged {
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
-        ::mini_linq::cq_to_ra_written_order! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_written_order! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
             relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
-        }
+        })
     }
 }
 
@@ -331,23 +295,19 @@ mod reduced {
 
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::select_structures! {
+            ::mini_linq::lower_physical! {
                 $($ix)*
                 policy { L; R; S; }
             }
         };
     }
-    pub(crate) use policy as stream_policy;
+    pub(crate) use policy as physical_policy;
     mod wiring {
-        pub(crate) use super::stream_policy;
+        pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{
-            access_to_set_loops as access, index_demands as choose_index_policy,
-            pipeline_to_support_iter, stream_to_access, structures_to_stream,
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
-        #[allow(unused_imports)]
-        pub(crate) use cq_state_providers::{
-            hash_distinct as distinct_state, hash_set_sink as set_sink,
-        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;
 
@@ -357,13 +317,13 @@ mod reduced {
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> HashSet<(&'a Value, &'a Value)> {
-        ::mini_linq::cq_to_ra_hypergraph! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_hypergraph! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
             relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
-        }
+        })
     }
 }
 
@@ -379,23 +339,19 @@ fn yannakakis_plan_executes_through_semijoin_membership() {
 mod windowed {
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::select_structures! {
+            ::mini_linq::lower_physical! {
                 $($ix)*
                 policy { R keyed [a] ordered; }
             }
         };
     }
-    pub(crate) use policy as stream_policy;
+    pub(crate) use policy as physical_policy;
     mod wiring {
-        pub(crate) use super::stream_policy;
+        pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{
-            access_to_set_loops as access, index_demands as choose_index_policy, stream_to_access,
-            structures_to_stream,
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
-        #[allow(unused_imports)]
-        pub(crate) use cq_state_providers::{
-            hash_distinct as distinct_state, hash_set_sink as set_sink,
-        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;
 
@@ -403,11 +359,11 @@ mod windowed {
     pub(super) fn run(
         R: &std::collections::BTreeMap<(i32,), Vec<(i32,)>>,
     ) -> std::collections::HashSet<(&i32, &i32)> {
-        ::mini_linq::cq_to_ra_clause_prefix! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_clause_prefix! {
             struct Windowed;
             relation R(a: i32, b: i32);
             answer(a, b) :- R(a, b), if a >= 2 && a < 9 && b != 5;
-        }
+        })
     }
 }
 
@@ -427,4 +383,48 @@ fn ordered_host_scans_are_bounded_by_pushed_comparisons() {
         .map(|(a, b)| (*a, *b))
         .collect();
     assert_eq!(actual, HashSet::from([(2, 6), (8, 1)]));
+}
+
+/// A computed column and the head's own argument order: the answer tuple
+/// follows `answer(a, s, c)`, not the sorted heading, and the column
+/// reference inside a nested macro resolves.
+mod computed {
+    macro_rules! policy {
+        ($($ix:tt)*) => {
+            ::mini_linq::lower_physical! {
+                $($ix)*
+                policy { R; S; }
+            }
+        };
+    }
+    pub(crate) use policy as physical_policy;
+    mod wiring {
+        pub(crate) use super::physical_policy;
+        pub(crate) use ::mini_linq::{
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
+        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
+    }
+    use wiring as mini_linq;
+
+    #[allow(non_snake_case)]
+    pub(super) fn run<'a>(
+        R: &'a [(i32, i32)],
+        S: &'a [(i32, i32)],
+    ) -> Vec<(&'a i32, String, &'a i32)> {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_clause_prefix! {
+            struct Computed;
+            relation R(a: i32, b: i32);
+            relation S(b: i32, c: i32);
+            answer(a, s, c) :- R(a, b), S(b, c), let s: String = format!("{}", a);
+        })
+    }
+}
+
+#[test]
+fn computed_columns_follow_the_head_order() {
+    assert_eq!(
+        computed::run(&[(1, 2), (1, 2)], &[(2, 3)]),
+        vec![(&1, "1".to_string(), &3)]
+    );
 }

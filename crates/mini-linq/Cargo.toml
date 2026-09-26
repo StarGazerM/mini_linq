@@ -9,15 +9,15 @@ license.workspace = true
 proc-macro = true
 
 [features]
-default = ["logical-selection", "written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "stream-lowering", "stream-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists"]
+default = ["logical-selection", "written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "physical-lowering", "physical-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists"]
 logical-selection = ["written-order", "clause-prefix", "hypergraph"]
 written-order = ["dep:cq-query-lowering", "cq-query-lowering/written-order"]
 clause-prefix = ["dep:cq-query-lowering", "cq-query-lowering/clause-prefix"]
 hypergraph = ["dep:cq-query-lowering", "cq-query-lowering/hypergraph"]
 index-demands = ["dep:cq-index-policy"]
 structure-selection = ["dep:cq-structure-selection"]
-stream-lowering = ["dep:cq-stream-lowering"]
-stream-realization = ["dep:cq-stream-realization"]
+physical-lowering = ["dep:cq-physical-lowering"]
+physical-realization = ["dep:cq-physical-realization"]
 access-to-pipeline = ["dep:cq-access-lowering", "cq-access-lowering/to-pipeline"]
 access-to-set-loops = ["dep:cq-access-lowering", "cq-access-lowering/to-set-loops"]
 pipeline-distinct-iter = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/distinct-iter"]
@@ -33,8 +33,8 @@ syn.workspace = true
 cq-query-lowering = { workspace = true, optional = true }
 cq-index-policy = { workspace = true, optional = true }
 cq-structure-selection = { workspace = true, optional = true }
-cq-stream-lowering = { workspace = true, optional = true }
-cq-stream-realization = { workspace = true, optional = true }
+cq-physical-lowering = { workspace = true, optional = true }
+cq-physical-realization = { workspace = true, optional = true }
 cq-access-lowering = { workspace = true, optional = true }
 cq-pipeline-lowering = { workspace = true, optional = true }
 
@@ -63,5 +63,5 @@ name = "state_providers"
 required-features = ["pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists", "access-to-set-loops"]
 
 [[test]]
-name = "stream_query"
-required-features = ["written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "stream-lowering", "stream-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"]
+name = "physical_query"
+required-features = ["written-order", "clause-prefix", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]

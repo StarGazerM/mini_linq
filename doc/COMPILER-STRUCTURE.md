@@ -1,90 +1,62 @@
 # Compiler ownership and composition
 
-The accepted path is `CQ → RA → IX → Physical → Rust[Access]`. The implemented
-post-IX domain is an open Rust expression over caller-owned inputs. See the
-[design contract](IX-PHYSICAL-REDESIGN.md) and
-[provider protocol](PROVIDER-PROTOCOL.md) for syntax and obligations.
+The accepted path is `CQ → RA → IX → Physical → Structures → Rust`. Each
+language is the previous one plus one section; each pass records one
+decision and is checked by the next language's contract. Below Structures a
+printer emits one pull program over the `cq-storage` traits; Access and
+Pipeline remain as hand-staged entry points into the execution endpoints.
+See [DSL.md](DSL.md) for the grammars.
 
 ## Crates and modules
 
 | Crate | Responsibility | Modules / entry functions |
 |---|---|---|
-| `cq-ir` | Typed syntax and local validity | `cq`, `relational_plan`, `index_requirements`, `physical`, `provider_protocol`, `rust_access_plan`, `iterator_pipeline` |
+| `cq-ir` | Typed syntax and local validity | `cq`, `relational_plan`, `index_requirements`, `physical`, `structures`, `policy`, `state_protocol`, `rust_access_plan`, `iterator_pipeline` |
 | `cq-query-lowering` | CQ planning and RA construction | `written_order`, `clause_prefix`, `hypergraph`; each exports `compile`; `dependencies`, `model`, `proof` support planning |
-| `cq-index-policy` | RA → IX; derive required join-column indexes and their uses | `compile` in `lib.rs`; `correspondence` checks the edge |
-| `cq-physical-selection` | IX plus explicit choices → Physical | `given_bindings` in `lib.rs`; no provider-name dispatch |
-| `cq-physical-lowering` | Realization driver and independently selected operator rules | `begin`, `resume` schedule calls; `rename`, `indexed_join`, `project` lower operators through selected providers; no concrete provider dependency |
-| `cq-example-providers` | External storage, output and execution-state adapters | `storage` establishes slice/maps; `exact` emits Rows/Matches/Output fragments; `layout` decodes declared fields; `state` implements hash/ordered distinct state and exact-set sinks; no operator lowering |
-| `cq-access-lowering` | Existing Access execution implementations | `to_pipeline`, `to_set_loops` |
-| `cq-pipeline-lowering` | Existing Pipeline → Rust endpoints | `distinct_iter`, `collect_set`, `support_iter`, `exists`; shared `operators` emits adapters |
-| `cq-storage` | Runtime data structures and operation traits | Blocks, selections, summaries, hash indexes, replay and counters; no RA interpreter or provider policy |
+| `cq-index-policy` | RA → IX; derive required join-column indexes and their uses | `compile`; `correspondence` checks the edge |
+| `cq-physical-lowering` | IX + policy → Physical; one physical operator per result, modes from use, `canon` on the return when uniqueness is not inferred | `compile`, `check` |
+| `cq-structure-selection` | Physical + policy → Structures; host facts from the policy, a built type for every read no host key answers, `#[index(Type)]` advice | `compile`, `check` |
+| `cq-physical-realization` | Structures → Rust; builds the chosen structures, guards the traits each read needs, prints the pull program | `compile` |
+| `cq-state-providers` | Distinct-state and set-sink providers behind `state_protocol` | `hash_distinct`, `ordered_distinct`, `hash_set_sink`, `ordered_set_sink` |
+| `cq-access-lowering` | Hand-staged Access execution | `to_pipeline`, `to_set_loops` |
+| `cq-pipeline-lowering` | Pipeline → Rust endpoints | `distinct_iter`, `collect_set`, `support_iter`, `exists`; shared `operators` emits adapters |
+| `cq-storage` | Runtime data structures and operation traits | `Build`, `IndexRead`, `ExactMembership`, `OrderedRead`/`merge`/`sorted_by`, `Canonical`, `require` guards; blocks, selections, summaries, replay, counters |
 | `mini-linq` | Procedural macro facade and caller-resolved continuations | `lib.rs` exports entries; `entry` transports typed stages; `workload` captures catalog CQ |
 
-`mini-linq` and `cq-example-providers` are procedural macro crates. The lowering
-crates are ordinary Rust libraries with typed APIs; an individual pass does not
-need its own proc-macro crate. The realizer and concrete providers both depend
-on the protocol in `cq-ir`; the realizer does not depend on the provider crate.
-The provider is a development dependency of the facade for integration tests,
-not a production dependency that selects a backend. Provider protocol tests use
-the physical-lowering library as a test-only dependency. Shared read-only AST
-lookups live in `cq-ir::physical::lookup`; concrete field decoding stays in providers.
-
-The `mini-linq` facade exports `rename!`, `indexed_join!`, `project!` and their
-callbacks under `physical-realization`. Their implementations live in
-`cq-physical-lowering`. They are explicitly selected rules, not driver defaults;
-other rules can still be supplied by external macro paths.
-
-`mini-linq-course` is the workspace/example root, and `cq-workloads` is a typed
-query/data catalog. Neither is a compilation stage. The separate `xtask`
-workspace contains development tooling.
+Every family crate depends only on `cq-ir` (`tools/check_dependencies.py`
+enforces it); test dependencies may compose stages. `mini-linq-course` is the
+workspace/example root, and `cq-workloads` is a typed query/data catalog.
+Neither is a compilation stage. The separate `xtask` workspace contains
+development tooling.
 
 ## Explicit composition boundaries
 
 | Caller-resolved path | Boundary | Current binding example |
 |---|---|---|
 | `mini_linq::choose_index_policy!` | RA → IX | Import `index_demands` under this name |
-| `mini_linq::choose_physical!` | IX → Physical | Caller policy supplies assignments to `given_physical_bindings!` |
-| `mini_linq::realize_physical!` | Physical → Rust[Access] | Import the facade's `realize_physical` implementation |
-| `mini_linq::access!` | Consume the completed Access region | Explicitly import `access_to_set_loops`, or a compatible selected endpoint |
+| `mini_linq::physical_policy!` | IX → Physical | A caller macro appends `policy { … }` and invokes `lower_physical!` |
+| `mini_linq::select_structures!` | Physical → Structures | Import `select_structures` |
+| `mini_linq::structures_to_rust!` | Structures → Rust | Import `structures_to_rust` |
+| `mini_linq::distinct_state!` | canonical return | Import a `cq-state-providers` distinct provider |
 
-A policy that appends a table is actual selection logic. A plain renaming uses
-`use ... as ...`; it requires no forwarding macro. The names of relation/index
-providers and RA lowerers are independently recorded in Physical. Selecting one
-provider for `r` does not change the provider for `s`.
-
-Realization uses driver Input/Index/Lower requests and typed replies. Its
-`resume_physical!` callback is an administrative continuation, not another IR
-stage. The selected join rule may call its operands' Rows/Matches operations
-and the selected result provider's Output operation. These calls disappear into
-Rust/Access during realization; there is no retained Native language.
+The policy is query-independent: host facts (`R keyed [a] ordered canon`)
+and strategy (`join = merge`, `semijoin = prefer_lazy`). Advice on a relation
+declaration (`#[index(Type)]`) names the Rust type built over that relation
+when the plan indexes it; it is erased from the query's meaning.
 
 ## Current execution domain
 
-The [composition example](../examples/composition/README.md) supplies a complete
-RA plan over a slice, `HashMap<K, Vec<V>>`, and `BTreeMap<K, Vec<V>>`. Providers
-check declared Rust types, establish borrowed aliases, and reuse the maps'
-physical first-column indexes after translating Rename's logical ordinals.
-Join results are Access syntax with borrowed field expressions. A left result
-region is composed into its consumer; it is not treated as stored rows.
+The [composition example](../examples/composition/README.md) and the
+[full-chain test](../crates/mini-linq/tests/physical_query.rs) exercise every
+stage: hosts read in place through their declared keys, compiler-built hash
+indexes, a user-defined index type through `#[index(Type)]`, merge joins over
+built ordered maps with a sorted pipe side, Yannakakis semijoin passes as
+membership tests, a bounded scan of an ordered host, and a computed column.
+The printed program is one Rust block evaluating to an iterator of answer
+tuples in head order; the caller collects it however it likes.
 
-The final region must expose distinct logical names in sorted heading order,
-and current output metadata must use that same order. Its physical carrier can
-be a tuple of borrowed fields or another explicitly selected lawful carrier.
-A selected terminal Project retains its source Access clauses and asks the
-selected output provider to construct the projected carrier. Intermediate
-projection rejects because it needs explicit handling of dropped logical names.
-No implicit collection, clone, scan fallback, or alternate provider is inserted.
-
-The RA/IX languages are broader than this provider family. YA/block pruning,
-index construction over intermediate regions, general materialization,
-Select/Extend, nonterminal projection, and generated host APIs remain migration work. The
-placement of push/pull selection is still an open design question. Existing
-Access/Pipeline endpoints remain independently testable without deciding it.
-
-The [full-CQ test](../crates/mini-linq/tests/physical_query.rs) exercises the
-written-order planner through its terminal Project; its
-[query trace](ix-physical/query-trace/review.md) is separate from the
-[direct-RA trace](ix-physical/realization-trace/review.md).
+Recursion, aggregation, negation and incremental evaluation are outside the
+language; deltas are ordinary hosts under a rewrite tool, not IR constructs.
 
 ## Execution state selection
 

@@ -1,35 +1,40 @@
-//! IX → Structures: bind every attribute-keyed demand to a Rust type.
+//! Physical → Structures: bind every keyed read to a value that answers it.
 //!
-//! Rules, from mandatory to advisory:
+//! This pass decides, for each host relation, the facts the policy states
+//! about its value (key, order, canonicity) and, for each read Physical
+//! makes through a key that no host answers, the Rust type built over the
+//! result. Rules, from mandatory to advisory:
 //!
-//! 1. Admissibility. Every IX demand `@r[C]` must end up answered: by the
-//!    host's key when `r` renames a host keyed on the columns `C` translates
-//!    to (then nothing is built), else by a structure built over `r` keyed
-//!    on `C`.
+//! 1. Admissibility. Every `probe`, `semi`, `range` and `merge` read of `r`
+//!    on columns `C` must be answered: by the host's key when `r` renames a
+//!    host keyed on the columns `C` translates to (ordered, where the read
+//!    needs order), by the stream itself when `r` is a pipe sorted on `C` by
+//!    its own merge, else by a structure built over `r` keyed on `C`. What
+//!    cannot be built — a read of a pipe or an alias no host answers — is
+//!    left to the Structures contract to report: no default hides it.
 //! 2. Guarantee. Defaults preserve the plan's cost premises: O(1) expected
-//!    `seek`/`contains`, so joins get `cq_storage::HashIndex` and semijoins a
-//!    `HashSet` of keys. An ordered structure (`BTreeMap`, O(log n)) is
-//!    chosen only where a rule needs key order — the `merge` strategy, which
-//!    keys both operands on the shared columns so co-iteration is admissible.
-//! 3. Advice. The policy states host keys and the strategy. A relation
-//!    declared `#[index(Type)]` fixes the type of every structure built over
-//!    it (through renames): any Rust type implementing `cq_storage::Build`
-//!    and the traits the plan's operations use, which rustc checks.
+//!    `seek`/`contains`, so probes get `cq_storage::HashIndex` and semijoins
+//!    a `HashSet` of keys. An ordered structure (`BTreeMap`, O(log n)) is
+//!    chosen only where a read needs key order — a merge side or a range.
+//!    One structure per (result, columns): the strongest need picks the type.
+//! 3. Advice. A relation declared `#[index(Type)]` fixes the type of every
+//!    structure built over it (through renames): any Rust type implementing
+//!    `cq_storage::Build` and the traits the reads use, which rustc checks.
 //!    Query-specific choices for derived results are authored directly in
 //!    the Structures module.
 //!
-//! One structure per (name, columns). Nothing here claims what a type can
-//! do; the plan decides the operations and rustc decides the type.
+//! The canonical return is Physical's premise (`canon` flag or key
+//! inference); nothing is built to make it hold.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_ir::capabilities::Operation;
+use cq_ir::physical::{self, ModeKind, Operator};
 use cq_ir::policy::Policy;
-use cq_ir::{index_requirements as ix, relational_plan as ra, structures, symbol_name};
+use cq_ir::{structures, symbol_name};
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 
-/// What a rule needs on a key: the strongest need picks the default type.
+/// What a read needs on a key: the strongest need picks the default type.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Need {
     Contains,
@@ -38,14 +43,6 @@ enum Need {
 }
 
 impl Need {
-    fn operation(self, columns: &[usize]) -> Operation {
-        match self {
-            Need::Contains => Operation::Contains(columns.to_vec()),
-            Need::Seek => Operation::Seek(columns.to_vec()),
-            Need::Ordered => Operation::Ordered(columns.to_vec()),
-        }
-    }
-
     fn default_type(self) -> syn::Type {
         match self {
             Need::Contains => syn::parse_quote!(::std::collections::HashSet<_>),
@@ -57,123 +54,92 @@ impl Need {
     }
 }
 
-pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::Module> {
-    ix::contract::check(source)?;
-    let ra_module = &source.relational_plan;
-    let plan = &ra_module.plan;
-    let infos = ra::check_in(ra_module.program.inputs(), plan)?;
-    let mut headings: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for input in ra_module.program.inputs() {
-        let mut heading: Vec<_> = input.columns.iter().map(|c| symbol_name(&c.name)).collect();
-        heading.sort();
-        headings.insert(symbol_name(&input.name), heading);
-    }
-    for definition in &plan.definitions {
-        let name = symbol_name(&definition.result);
-        headings.insert(name.clone(), infos[&name].heading.iter().cloned().collect());
-    }
+/// A host key as the policy states it: sorted column names and order.
+struct HostKey {
+    columns: Vec<String>,
+    ordered: bool,
+}
 
-    // Hosts, exactly as the policy states them: key column names resolved
-    // to sorted-heading ordinals.
-    let mut host_operations: BTreeMap<String, Vec<Operation>> = BTreeMap::new();
+fn sorted(columns: &[String]) -> Vec<String> {
+    let mut columns = columns.to_vec();
+    columns.sort();
+    columns
+}
+
+pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<structures::Module> {
+    let analysis = physical::contract::check(source)?;
+    let ra_module = &source.index_requirements.relational_plan;
+    let layouts: BTreeMap<String, Vec<String>> = ra_module
+        .program
+        .inputs()
+        .map(|input| {
+            (
+                symbol_name(&input.name),
+                input.columns.iter().map(|c| symbol_name(&c.name)).collect(),
+            )
+        })
+        .collect();
+
+    // Hosts, exactly as the policy states them.
+    let mut host_keys: BTreeMap<String, Option<HostKey>> = BTreeMap::new();
     let mut hosts = TokenStream::new();
     for host in &policy.hosts {
         let name = symbol_name(&host.name);
-        let is_input = ra_module
-            .program
-            .inputs()
-            .any(|input| symbol_name(&input.name) == name);
-        if !is_input {
+        let Some(layout) = layouts.get(&name) else {
             return Err(syn::Error::new_spanned(
                 &host.name,
                 "policy names an undeclared host relation",
             ));
-        }
-        let mut answered = vec![Operation::Iter];
-        let mut key_tokens = TokenStream::new();
-        if let Some(key) = &host.key {
-            let heading = &headings[&name];
-            let mut columns = Vec::new();
-            for column in &key.columns {
-                let Some(ordinal) = heading.iter().position(|h| *h == symbol_name(column)) else {
-                    return Err(syn::Error::new_spanned(
-                        column,
-                        format!("`{name}` has no column `{column}`"),
-                    ));
-                };
-                columns.push(ordinal);
+        };
+        let key = match &host.key {
+            Some(key) => {
+                for column in &key.columns {
+                    if !layout.contains(&symbol_name(column)) {
+                        return Err(syn::Error::new_spanned(
+                            column,
+                            format!("`{name}` has no column `{column}`"),
+                        ));
+                    }
+                }
+                let mut columns: Vec<String> = key.columns.iter().map(symbol_name).collect();
+                columns.sort();
+                columns.dedup();
+                Some(HostKey {
+                    columns,
+                    ordered: key.ordered.is_some(),
+                })
             }
-            columns.sort_unstable();
-            columns.dedup();
-            answered.push(Operation::Seek(columns.clone()));
-            answered.push(Operation::Contains(columns.clone()));
-            let ordered = key.ordered;
-            if ordered.is_some() {
-                answered.push(Operation::Ordered(columns.clone()));
-            }
-            let columns = columns.iter().map(|&c| syn::Index::from(c));
-            key_tokens = quote! { keyed [#(#columns),*] #ordered };
-        }
-        if host_operations.insert(name, answered).is_some() {
+            None => None,
+        };
+        if host_keys.insert(name, key).is_some() {
             return Err(syn::Error::new_spanned(
                 &host.name,
                 "host relation configured twice",
             ));
         }
-        let ident = &host.name;
-        hosts.extend(quote! { #ident #key_tokens; });
+        let (ident, key, canon) = (&host.name, &host.key, &host.canon);
+        hosts.extend(quote! { #ident #key #canon; });
     }
-    for input in ra_module.program.inputs() {
-        if !host_operations.contains_key(&symbol_name(&input.name)) {
-            return Err(syn::Error::new_spanned(
-                policy,
-                format!("policy must list host relation `{}`", input.name),
-            ));
-        }
+    if let Some(missing) = layouts.keys().find(|name| !host_keys.contains_key(*name)) {
+        return Err(syn::Error::new_spanned(
+            policy,
+            format!("policy must list host relation `{missing}`"),
+        ));
     }
-    let renames: BTreeMap<String, &ra::Rename> = plan
-        .definitions
-        .iter()
-        .filter_map(|d| match &d.operator {
-            ra::Operator::Rename(r) => Some((symbol_name(&d.result), &**r)),
-            _ => None,
-        })
-        .collect();
-    // What a rename inherits from its host, in its own heading ordinals.
-    let inherited = |name: &str| -> Vec<Operation> {
-        let Some(rename) = renames.get(name) else {
-            return Vec::new();
-        };
-        let host = symbol_name(&rename.relation);
-        let (host_heading, heading) = (&headings[&host], &headings[name]);
-        let translate = |ordinals: &[usize]| -> Vec<usize> {
-            let mut t: Vec<usize> = ordinals
+
+    // The host key answering a read of `result` on `columns` through its
+    // rename, as `structures::Analysis::host_key_for` will see it.
+    let host_key_for = |result: &str, columns: &[String]| -> Option<&HostKey> {
+        let host = analysis.hosts.get(result)?;
+        let key = host_keys[host].as_ref()?;
+        let rename = &analysis.renames[result];
+        let translated = sorted(
+            &columns
                 .iter()
-                .map(|&c| {
-                    let target = rename
-                        .mapping
-                        .iter()
-                        .find(|m| symbol_name(&m.source) == host_heading[c])
-                        .map(|m| symbol_name(&m.target))
-                        .expect("complete rename");
-                    heading
-                        .iter()
-                        .position(|h| *h == target)
-                        .expect("target in heading")
-                })
-                .collect();
-            t.sort_unstable();
-            t
-        };
-        host_operations[&host]
-            .iter()
-            .map(|op| match op {
-                Operation::Iter => Operation::Iter,
-                Operation::Contains(c) => Operation::Contains(translate(c)),
-                Operation::Seek(c) => Operation::Seek(translate(c)),
-                Operation::Ordered(c) => Operation::Ordered(translate(c)),
-            })
-            .collect()
+                .map(|c| rename[c].clone())
+                .collect::<Vec<_>>(),
+        );
+        (translated == key.columns).then_some(key)
     };
 
     // Advice declared on the host relation applies to its renames.
@@ -184,64 +150,79 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
         }
     }
 
-    // What the plan requires on every (name, key), unless the host serves it.
-    let mut needs: BTreeMap<(String, Vec<usize>), BTreeSet<Need>> = BTreeMap::new();
-    let mut choose = |name: &str, columns: Vec<usize>, need: Need| {
-        let required = need.operation(&columns);
-        if inherited(name).contains(&required) {
+    // What every read requires on (result, key), unless a host or the stream
+    // itself answers it. Only a `let` can carry a structure; anything else
+    // left unanswered is the contract's diagnostic, not a default.
+    let program = &source.program;
+    let operators: BTreeMap<String, &Operator> = program
+        .definitions
+        .iter()
+        .map(|d| (symbol_name(&d.name), &d.operator))
+        .collect();
+    let merge_key: BTreeMap<String, Vec<String>> = operators
+        .iter()
+        .filter_map(|(name, op)| match op {
+            Operator::Merge(_, k) => Some((
+                name.clone(),
+                sorted(&k.columns.iter().map(symbol_name).collect::<Vec<_>>()),
+            )),
+            _ => None,
+        })
+        .collect();
+    let mut needs: BTreeMap<(String, Vec<String>), BTreeSet<Need>> = BTreeMap::new();
+    let mut require = |result: &str, columns: &[String], need: Need| {
+        if analysis.modes[result] != ModeKind::Let {
             return;
         }
         needs
-            .entry((name.to_string(), columns))
+            .entry((result.to_string(), sorted(columns)))
             .or_default()
             .insert(need);
     };
-    for definition in &plan.definitions {
-        let (left, right) = match &definition.operator {
-            ra::Operator::NaturalJoin(j) => (&j.left, &j.right),
-            ra::Operator::Semijoin(j) => (&j.left, &j.right),
-            _ => continue,
-        };
-        let (left_name, right_name) = (symbol_name(left), symbol_name(right));
-        let shared: Vec<String> = headings[&right_name]
-            .iter()
-            .filter(|a| headings[&left_name].contains(a))
-            .cloned()
-            .collect();
-        let ordinals = |name: &str| -> Vec<usize> {
-            shared
-                .iter()
-                .map(|a| headings[name].iter().position(|h| h == a).unwrap())
-                .collect()
-        };
-        match &definition.operator {
-            ra::Operator::NaturalJoin(_) if policy.merge_joins() => {
-                choose(&left_name, ordinals(&left_name), Need::Ordered);
-                choose(&right_name, ordinals(&right_name), Need::Ordered);
+    for (result, reads) in &analysis.key_reads {
+        for (reader, columns) in reads {
+            if host_key_for(result, columns).is_some() {
+                continue;
             }
-            ra::Operator::NaturalJoin(_) => {
-                choose(&right_name, ordinals(&right_name), Need::Seek);
+            let need = match operators[reader] {
+                Operator::Semi(..) => Need::Contains,
+                _ => Need::Seek,
+            };
+            require(result, columns, need);
+        }
+    }
+    for (result, reads) in &analysis.range_reads {
+        for (_, column) in reads {
+            let columns = std::slice::from_ref(column);
+            if host_key_for(result, columns).is_some_and(|k| k.ordered) {
+                continue;
             }
-            ra::Operator::Semijoin(_) => {
-                choose(&right_name, ordinals(&right_name), Need::Contains);
+            require(result, columns, Need::Ordered);
+        }
+    }
+    for (side, reads) in &analysis.merge_reads {
+        for (_, columns) in reads {
+            let by_host = host_key_for(side, columns).is_some_and(|k| k.ordered);
+            let by_stream = analysis.modes[side] == ModeKind::Pipe
+                && merge_key.get(side).is_some_and(|k| *k == sorted(columns));
+            if by_host || by_stream {
+                continue;
             }
-            _ => unreachable!(),
+            require(side, columns, Need::Ordered);
         }
     }
 
     let mut entries = TokenStream::new();
-    for definition in &plan.definitions {
-        let name = symbol_name(&definition.result);
-        let ident = &definition.result;
+    for definition in &program.definitions {
+        let name = symbol_name(&definition.name);
+        let ident = &definition.name;
         for ((_, columns), needs) in needs.iter().filter(|((n, _), _)| *n == name) {
-            let advised = renames
-                .get(&name)
-                .and_then(|rename| advice.get(&symbol_name(&rename.relation)));
+            let advised = analysis.hosts.get(&name).and_then(|host| advice.get(host));
             let ty = match advised {
                 Some(ty) => ty.clone(),
                 None => needs.iter().max().expect("nonempty").default_type(),
             };
-            let columns = columns.iter().map(|&c| syn::Index::from(c));
+            let columns = columns.iter().map(|c| format_ident!("{c}"));
             entries.extend(quote! { #ident = #ty [#(#columns),*]; });
         }
     }
@@ -251,10 +232,10 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<structures::
     Ok(target)
 }
 
-/// IX → Structures correspondence: IX preserved, the contract holds, and the
-/// module is exactly the selection under `policy`.
-pub fn check(source: &ix::Module, target: &structures::Module, policy: &Policy) -> bool {
-    target.index_requirements == *source
+/// Physical → Structures correspondence: Physical preserved, the contract
+/// holds, and the module is exactly the selection under `policy`.
+pub fn check(source: &physical::Module, target: &structures::Module, policy: &Policy) -> bool {
+    target.physical == *source
         && structures::contract::well_formed(target)
         && compile(source, policy).is_ok_and(|expected| expected == *target)
 }

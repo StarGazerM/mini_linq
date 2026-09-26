@@ -37,6 +37,18 @@ where
     }
 }
 
+/// A grouped hash map represents the key set of its groups.
+impl<K, Q: ?Sized, V, S> ExactMembership<Q> for std::collections::HashMap<K, V, S>
+where
+    K: Borrow<Q> + Eq + Hash,
+    Q: Eq + Hash,
+    S: BuildHasher,
+{
+    fn contains(&self, key: &Q) -> bool {
+        std::collections::HashMap::contains_key(self, key)
+    }
+}
+
 /// A grouped ordered map represents the key set of its groups.
 impl<K, Q: ?Sized, V> ExactMembership<Q> for BTreeMap<K, V>
 where

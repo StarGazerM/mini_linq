@@ -188,29 +188,55 @@ and `r4.right`. IX validity checks exact demand/use coverage, distinct identitie
 and descriptors, strictly increasing in-range ordinals, and absence of unused
 definitions. Index allocation and data structure selection have not occurred.
 
-## Physical: recorded implementations
+## Physical: one physical operator per result
 
 ```ebnf
-Physical ::= IX "physical" "{"
-               "relations" "{" (Ident "=" RustPath ";")* "}"
-               "indexes" "{" (Ident "=" RustPath ";")* "}"
-               "lowerings" "{" (RelId "=" RustPath ";")* "}"
-             "}"
+Physical   ::= IX "physical" "{" (Definition ";")* "return" RelId ";" "}"
+Definition ::= RelId "=" Mode ["canon"] Operator
+Mode       ::= "pipe" | "let" | "alias"
+Operator   ::= "unit" | "rename" | "select" | "extend" | "project"
+             | "probe" "[" Ident,* "]" RelId "," RelId
+             | "merge" "[" Ident,* "]" RelId "," RelId
+             | "semi"  "[" Ident,* "]" RelId "," RelId
+             | "range" "[" Ident "]"
 ```
 
-`RustPath` is a Rust module/name path identifying an external macro. Its spelling
-has no semantic interpretation in the common compiler. Relation assignments
-cover referenced host inputs and every RA result; index assignments cover IX
-identities; lowering assignments cover RA definitions. Selection preserves IX
-unchanged and checks complete assignment domains. It does not certify external
-representation laws by inspecting names.
+Physical restates every RA result, by name and in RA order, with the
+physical form the caller's policy chose: a natural join is a `probe` of the
+IX-used side or a `merge` of both sides in key order, a semijoin is `semi`,
+a select bounding an ordered host key is a `range`; the other operators keep
+their logical name and their detail stays in the RA definition. Join columns
+are attribute names. Denotation is IX's set.
 
-The driver invokes the recorded providers/rules through the
-[typed protocol](PROVIDER-PROTOCOL.md). It validates reply identity/kind and
-region headings while preserving dependency order. A `stored` binding denotes
-an established Rust value, an `indexed` binding its exact IX resource, and a
-`region` binding unevaluated Access syntax. These administrative records disappear
-during realization. A region cannot be treated as iterable storage.
+What Physical fixes is representation discipline, in linear ANF: a `pipe` is
+read exactly once, as the input of the operator consuming it; a `let` is a
+value read through a key (probe, semi, range, or a merge not fed by a pipe
+already sorted on that key) or read more than once; an `alias` is a host
+rename read in place. `canon` marks a result inserted into a canonical index
+— the endpoint's distinct sink on a pipe, a materialized set on a let. The
+returned result must be canonical, by this flag or by key inference from
+`canon` hosts. Order and uniqueness are premises here; Structures discharges
+them.
+
+## Structures: what answers each read
+
+```ebnf
+Structures ::= Physical "structures" "{" (Entry ";")* "}"
+Entry      ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"]
+             | Ident "=" RustType "[" Ident,* "]"
+```
+
+A host entry states facts about the host value: the key it is stored under
+(`Map<(key columns,), Collection<(remaining declared columns,)>>`), whether
+that key is ordered, whether the value is a canonical set of its rows. A
+built entry names a Rust type — any type implementing `cq_storage::Build` —
+constructed over the result and keyed on the listed columns, so
+`α(built) = ⟦r⟧`. Nothing is claimed: whether a value implements the trait
+each read needs (`IndexRead`, `ExactMembership`, `OrderedRead`, `Canonical`)
+is rustc's check at a guard beside the value. The contract requires every
+probe/semi/range read to be answered by a host key through the rename or a
+built entry on those columns, every merge side ordered on its key (or a pipe
+sorted on it by its own merge), and the return canonical.
 
 ## Access and its independent consumers
 

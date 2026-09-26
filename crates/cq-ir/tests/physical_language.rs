@@ -41,8 +41,14 @@ fn hash_chain_is_well_formed_and_reads_are_recorded() {
     .unwrap();
     let analysis = physical::contract::check(&module).unwrap();
     assert_eq!(analysis.modes["j0"], ModeKind::Pipe);
-    assert_eq!(analysis.key_reads["r"], vec![("j0".to_string(), vec!["a".to_string()])]);
-    assert_eq!(analysis.key_reads["l"], vec![("x".to_string(), vec!["a".to_string()])]);
+    assert_eq!(
+        analysis.key_reads["r"],
+        vec![("j0".to_string(), vec!["a".to_string()])]
+    );
+    assert_eq!(
+        analysis.key_reads["l"],
+        vec![("x".to_string(), vec!["a".to_string()])]
+    );
     assert_eq!(analysis.hosts["r"], "R");
     assert_eq!(analysis.renames["r"]["a"], "a");
     assert!(analysis.canon.contains("p"));
@@ -66,8 +72,14 @@ fn merge_records_both_sides_and_allows_a_typed_pipe_side() {
     })
     .unwrap();
     let analysis = physical::contract::check(&module).unwrap();
-    assert_eq!(analysis.merge_reads["j0"], vec![("j1".to_string(), vec!["b".to_string()])]);
-    assert_eq!(analysis.merge_reads["r"], vec![("j0".to_string(), vec!["a".to_string()])]);
+    assert_eq!(
+        analysis.merge_reads["j0"],
+        vec![("j1".to_string(), vec!["b".to_string()])]
+    );
+    assert_eq!(
+        analysis.merge_reads["r"],
+        vec![("j0".to_string(), vec!["a".to_string()])]
+    );
     // j1 is read through a key by x, so it is a let even though merged once.
     assert_eq!(analysis.modes["j1"], ModeKind::Let);
 }
@@ -77,8 +89,7 @@ fn contract_rejects_wrong_forms() {
     let rejects = |definitions, needle: &str| {
         let error = module(definitions)
             .and_then(|m| physical::contract::check(&m))
-            .err()
-            .expect("rejected")
+            .expect_err("rejected")
             .to_string();
         assert!(error.contains(needle), "{error}");
     };

@@ -283,7 +283,9 @@ fn analyze(module: &Module, physical: physical::Analysis) -> syn::Result<Analysi
             if !answered(result, columns) {
                 return error(
                     &module.structures_token,
-                    format!("`{reader}` reads `{result}` on {columns:?}; no host key or structure answers it"),
+                    format!(
+                        "`{reader}` reads `{result}` on {columns:?}; no host key or structure answers it"
+                    ),
                 );
             }
         }
@@ -298,7 +300,9 @@ fn analyze(module: &Module, physical: physical::Analysis) -> syn::Result<Analysi
             if !ordered {
                 return error(
                     &module.structures_token,
-                    format!("`{reader}` ranges over `{result}` on `{column}`; no ordered key answers it"),
+                    format!(
+                        "`{reader}` ranges over `{result}` on `{column}`; no ordered key answers it"
+                    ),
                 );
             }
         }
@@ -324,7 +328,9 @@ fn analyze(module: &Module, physical: physical::Analysis) -> syn::Result<Analysi
             if !by_structure && !by_stream {
                 return error(
                     &module.structures_token,
-                    format!("`{reader}` merges `{side}` on {columns:?}; it is neither ordered on that key nor a pipe sorted on it"),
+                    format!(
+                        "`{reader}` merges `{side}` on {columns:?}; it is neither ordered on that key nor a pipe sorted on it"
+                    ),
                 );
             }
         }
@@ -341,9 +347,7 @@ fn analyze(module: &Module, physical: physical::Analysis) -> syn::Result<Analysi
             ra::Operator::Unit(_) => Some(Vec::new()),
             ra::Operator::Rename(r) => {
                 let host = symbol_name(&r.relation);
-                let full_by_structure = analysis
-                    .built_on(&name, &heading)
-                    .is_some();
+                let full_by_structure = analysis.built_on(&name, &heading).is_some();
                 (analysis.host_canon.contains(&host) || full_by_structure).then(|| heading.clone())
             }
             ra::Operator::NaturalJoin(j) => {
@@ -380,7 +384,9 @@ fn analyze(module: &Module, physical: physical::Analysis) -> syn::Result<Analysi
     if !analysis.unique.contains_key(&returned) {
         return error(
             &program.returned,
-            format!("returned `{returned}` is not canonical: flag it `canon` or make its inputs canonical"),
+            format!(
+                "returned `{returned}` is not canonical: flag it `canon` or make its inputs canonical"
+            ),
         );
     }
     Ok(analysis)

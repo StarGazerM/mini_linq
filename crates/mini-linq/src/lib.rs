@@ -1,12 +1,14 @@
 //! Procedural entry points at the compiler's explicit language boundaries.
 //!
-//! CQ planning produces RA; IX records index demands and uses; Structures
-//! answers every demand with a host key or a Rust type built over the
-//! result, under a caller-supplied, query-independent policy of host facts
-//! and strategy plus per-relation `#[index]` advice; Stream realizes every result as a typed stream
-//! program directed by those structures; realization erases Stream to Access
-//! over the runtime's traits. Caller import aliases bind policy and execution slots.
-//! No global storage default or fallback whole-query backend is supplied.
+//! CQ planning produces RA; IX records index demands and uses; Physical
+//! fixes one physical operator per result and the mode its reads allow,
+//! under a caller-supplied, query-independent policy; Structures answers
+//! every keyed read with a host key fact or a Rust type built over the
+//! result, with per-relation `#[index]` advice; realization prints one pull
+//! program over the runtime's traits. Access and Pipeline remain as
+//! hand-staged entry points into the execution endpoints. Caller import
+//! aliases bind policy and provider slots. No global storage default or
+//! fallback whole-query backend is supplied.
 
 use proc_macro::TokenStream;
 #[cfg(any(
@@ -16,8 +18,8 @@ use proc_macro::TokenStream;
     feature = "hypergraph",
     feature = "index-demands",
     feature = "structure-selection",
-    feature = "stream-lowering",
-    feature = "stream-realization",
+    feature = "physical-lowering",
+    feature = "physical-realization",
     feature = "access-to-pipeline",
     feature = "access-to-set-loops",
     feature = "pipeline-distinct-iter",
@@ -99,73 +101,71 @@ pub fn choose_graph_or_prefix(input: TokenStream) -> TokenStream {
 
 /// Construct exact-version index definitions and references from every join use.
 ///
-/// The caller binds `mini_linq::stream_policy` to a macro that appends its
-/// query-independent `policy { … }` block and invokes [`select_structures!`].
+/// The caller binds `mini_linq::physical_policy` to a macro that appends its
+/// query-independent `policy { … }` block and invokes [`lower_physical!`].
 #[cfg(feature = "index-demands")]
 #[proc_macro]
 pub fn index_demands(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
-        Some(syn::parse_quote!(mini_linq::stream_policy)),
+        Some(syn::parse_quote!(mini_linq::physical_policy)),
         cq_index_policy::compile,
     )
 }
 
-/// Bind every IX demand to a runtime structure under the appended policy.
+/// Fix one physical operator per RA result under the appended policy.
 ///
-/// Input is `IX policy { … }`. Host keys come from the policy (`R keyed
-/// [a]`). Each demand no host key answers gets a structure: the type a
-/// relation's `#[index(…)]` advice names, else `cq_storage::HashIndex` for
-/// joins, `HashSet` for semijoins, `BTreeMap` (both operands) under `join =
-/// merge`. Whether a type implements the traits the plan uses is rustc's
-/// check. The policy is re-appended for [`structures_to_stream!`].
-#[cfg(feature = "structure-selection")]
+/// Input is `IX policy { … }`. Every natural join becomes a `probe` of the
+/// IX-used side (or a `merge` under `join = merge`), every semijoin a
+/// `semi`, a select bounding an ordered host key a `range`; modes follow
+/// from use; the return is flagged `canon` unless uniqueness is inferred
+/// from `canon` hosts. The policy is re-appended for [`select_structures!`].
+#[cfg(feature = "physical-lowering")]
 #[proc_macro]
-pub fn select_structures(input: TokenStream) -> TokenStream {
+pub fn lower_physical(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
-        Some(syn::parse_quote!(mini_linq::structures_to_stream)),
+        Some(syn::parse_quote!(mini_linq::select_structures)),
         |source: &entry::Policed<cq_ir::index_requirements::Module, cq_ir::policy::Policy>| {
-            let target = cq_structure_selection::compile(&source.language, &source.policy)?;
+            let target = cq_physical_lowering::compile(&source.language, &source.policy)?;
             let policy = &source.policy;
             Ok(quote::quote! { #target #policy })
         },
     )
 }
 
-/// Realize Structures as a Stream program.
+/// Bind every keyed read to a value that answers it under the appended policy.
 ///
-/// Input is `Structures policy { … }`. Each RA result becomes a typed stream
-/// definition whose access rule follows from the chosen structures; modes
-/// follow from use. The result continues to [`stream_to_access!`].
-#[cfg(feature = "stream-lowering")]
+/// Input is `Physical policy { … }`. Host facts come from the policy (`R
+/// keyed [a] ordered canon`). Each read no host key answers gets a
+/// structure: the type the relation's `#[index(…)]` advice names, else
+/// `cq_storage::HashIndex` for probes, `HashSet` for semijoins, `BTreeMap`
+/// for merges and ranges. Whether a type implements the traits the plan uses
+/// is rustc's check. Continues to [`structures_to_rust!`].
+#[cfg(feature = "structure-selection")]
 #[proc_macro]
-pub fn structures_to_stream(input: TokenStream) -> TokenStream {
+pub fn select_structures(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
-        Some(syn::parse_quote!(mini_linq::stream_to_access)),
-        |source: &entry::Policed<cq_ir::structures::Module, cq_ir::policy::Policy>| {
-            cq_stream_lowering::compile(&source.language, &source.policy)
+        Some(syn::parse_quote!(mini_linq::structures_to_rust)),
+        |source: &entry::Policed<cq_ir::physical::Module, cq_ir::policy::Policy>| {
+            cq_structure_selection::compile(&source.language, &source.policy)
         },
     )
 }
 
-/// Erase a Stream program to structure statements and one Access region.
-///
-/// Materialized results become `let` bindings of `cq_storage` structures;
-/// the returned result becomes an Access region passed to the caller's
-/// `mini_linq::access` binding, inside a block that owns the structures.
-#[cfg(feature = "stream-realization")]
+/// Print Structures as one pull program: a block that builds the chosen
+/// structures, guards the traits each read needs, and evaluates to an
+/// iterator of the answer tuples in head order. A `canon` return
+/// deduplicates through the caller's `mini_linq::distinct_state!` provider.
+#[cfg(feature = "physical-realization")]
 #[proc_macro]
-pub fn stream_to_access(input: TokenStream) -> TokenStream {
-    entry::stage(input, None, |source: &cq_ir::stream::Module| {
-        let endpoints = cq_stream_realization::Endpoints {
-            support_iter: syn::parse_quote!(::mini_linq::access_to_support_iter),
+pub fn structures_to_rust(input: TokenStream) -> TokenStream {
+    entry::stage(input, None, |source: &cq_ir::structures::Module| {
+        let endpoints = cq_physical_realization::Endpoints {
+            distinct_state: syn::parse_quote!(mini_linq::distinct_state),
         };
-        let realized = cq_stream_realization::compile(source, &endpoints)?;
-        let statements = &realized.statements;
-        let access = &realized.access;
-        Ok(quote::quote! { { #(#statements)* mini_linq::access! { #access } } })
+        cq_physical_realization::compile(source, &endpoints)
     })
 }
 

@@ -1,7 +1,7 @@
-//! A caller-written host composes RA → IX → Stream → Rust[Access].
+//! A caller-written host composes RA → IX → Physical → Structures → Rust.
 //!
-//! The policy is query-independent: it declares what each host relation can
-//! do and nothing about this query's results. `R` and `S` are host maps keyed
+//! The policy is query-independent: it states facts about each host value
+//! and nothing about this query's results. `R` and `S` are host maps keyed
 //! on their join columns, so the compiler probes them in place and builds no
 //! structure of its own; `L` is only scanned.
 #![recursion_limit = "512"]
@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 macro_rules! policy {
     ($($ix:tt)*) => {
-        ::mini_linq::select_structures! {
+        ::mini_linq::lower_physical! {
             $($ix)*
             policy {
                 L;
@@ -20,16 +20,15 @@ macro_rules! policy {
         }
     };
 }
-use policy as stream_policy;
+use policy as physical_policy;
 mod wiring {
-    pub(crate) use super::stream_policy;
-    pub(crate) use ::mini_linq::{access_to_set_loops as access, stream_to_access, structures_to_stream};
-    #[allow(unused_imports)]
-    pub(crate) use cq_state_providers::{hash_distinct as distinct_state, hash_set_sink as set_sink};
+    pub(crate) use super::physical_policy;
+    pub(crate) use ::mini_linq::{select_structures, structures_to_rust};
+    pub(crate) use cq_state_providers::hash_distinct as distinct_state;
 }
 use wiring as mini_linq;
 
-// The host owns its signature and chooses the Access consumer explicitly.
+// The host owns its signature; the query is an iterator of borrowed answers.
 // Host maps hold tuples: keys over the key columns, payloads over the rest.
 #[allow(non_snake_case)]
 fn query<'a>(
@@ -37,7 +36,7 @@ fn query<'a>(
     R: &'a HashMap<(i32,), Vec<(i32,)>>,
     S: &'a BTreeMap<(i32,), Vec<(i32,)>>,
 ) -> HashSet<(&'a i32, &'a i32, &'a i32)> {
-    ::mini_linq::index_demands! {
+    ::core::iter::Iterator::collect(::mini_linq::index_demands! {
         struct Heterogeneous;
         relation L(a: i32);
         relation R(a: i32, b: i32);
@@ -51,7 +50,7 @@ fn query<'a>(
             j1 = natural_join j0 with s;
             output j1 as answer(a, b, c);
         }
-    }
+    })
 }
 
 fn main() {

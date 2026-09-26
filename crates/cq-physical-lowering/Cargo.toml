@@ -1,5 +1,5 @@
 [package]
-name = "cq-stream-lowering"
+name = "cq-physical-lowering"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,8 +13,7 @@ cq-ir = { path = "../cq-ir" }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
-syn_derive.workspace = true
 
 [dev-dependencies]
 cq-index-policy = { path = "../cq-index-policy" }
-cq-structure-selection = { path = "../cq-structure-selection" }
+cq-query-lowering = { path = "../cq-query-lowering", features = ["clause-prefix", "hypergraph"] }

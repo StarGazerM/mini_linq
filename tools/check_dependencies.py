@@ -25,13 +25,13 @@ except ModuleNotFoundError:
 ROOT = Path(__file__).resolve().parents[1]
 FOUNDATIONS = {"cq-ir": set(), "cq-storage": set()}
 FAMILIES = {name: {"cq-ir"} for name in (
-    "cq-query-lowering", "cq-index-policy", "cq-structure-selection", "cq-stream-lowering",
-    "cq-stream-realization", "cq-access-lowering", "cq-pipeline-lowering")}
+    "cq-query-lowering", "cq-index-policy", "cq-physical-lowering", "cq-structure-selection",
+    "cq-physical-realization", "cq-access-lowering", "cq-pipeline-lowering")}
 PROVIDERS = {"cq-state-providers": {"cq-ir"}}
 TEST_DEPENDENCIES = {
-    "cq-structure-selection": {"cq-index-policy"},
-    "cq-stream-lowering": {"cq-index-policy", "cq-structure-selection"},
-    "cq-stream-realization": {"cq-index-policy", "cq-structure-selection", "cq-stream-lowering"},
+    "cq-physical-lowering": {"cq-query-lowering", "cq-index-policy"},
+    "cq-structure-selection": {"cq-query-lowering", "cq-index-policy", "cq-physical-lowering"},
+    "cq-physical-realization": {"cq-query-lowering", "cq-index-policy", "cq-physical-lowering", "cq-structure-selection"},
 }
 ALLOWED = FOUNDATIONS | FAMILIES | PROVIDERS | {"mini-linq": {"cq-ir", *FAMILIES}}
 FRONTEND = {
@@ -39,9 +39,9 @@ FRONTEND = {
     "clause-prefix": ("cq-query-lowering", "clause-prefix"),
     "hypergraph": ("cq-query-lowering", "hypergraph"),
     "index-demands": ("cq-index-policy", None),
+    "physical-lowering": ("cq-physical-lowering", None),
     "structure-selection": ("cq-structure-selection", None),
-    "stream-lowering": ("cq-stream-lowering", None),
-    "stream-realization": ("cq-stream-realization", None),
+    "physical-realization": ("cq-physical-realization", None),
     "access-to-pipeline": ("cq-access-lowering", "to-pipeline"),
     "access-to-set-loops": ("cq-access-lowering", "to-set-loops"),
     "pipeline-distinct-iter": ("cq-pipeline-lowering", "distinct-iter"),
@@ -52,8 +52,8 @@ FRONTEND = {
 FRONTEND_MACROS = {
     "written-order": "cq_to_ra_written_order", "clause-prefix": "cq_to_ra_clause_prefix",
     "hypergraph": "cq_to_ra_hypergraph", "index-demands": "index_demands",
-    "structure-selection": "select_structures", "stream-lowering": "structures_to_stream",
-    "stream-realization": "stream_to_access",
+    "physical-lowering": "lower_physical", "structure-selection": "select_structures",
+    "physical-realization": "structures_to_rust",
     "access-to-pipeline": "access_to_distinct_iter", "access-to-set-loops": "access_to_set_loops",
     "pipeline-distinct-iter": "pipeline_to_distinct_iter", "pipeline-set": "pipeline_to_set",
     "pipeline-support-iter": "pipeline_to_support_iter", "pipeline-exists": "pipeline_to_exists",
@@ -79,8 +79,8 @@ IMPLEMENTATIONS = {
 MODULE_WIRING = {}
 CONSUMERS = {
     "state_providers": ["pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists", "access-to-set-loops"],
-    "stream_query": ["written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "stream-lowering", "stream-realization",
-                     "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter"],
+    "physical_query": ["written-order", "clause-prefix", "hypergraph", "index-demands", "physical-lowering", "structure-selection",
+                       "physical-realization"],
 }
 
 def toml(value):
@@ -142,7 +142,7 @@ def negative_dependency_checks(data):
     # Metadata normalizes package aliases, optional and target-specific deps.
     for kind, remote in [(None, False), ("build", False), (None, True), ("build", True)]:
         altered = copy.deepcopy(data)
-        package = next(p for p in altered["packages"] if p["name"] == "cq-stream-realization")
+        package = next(p for p in altered["packages"] if p["name"] == "cq-physical-realization")
         dep = {"name": "cq-state-providers", "kind": kind, "optional": True, "rename": "innocent_alias",
                "target": "cfg(unix)", "uses_default_features": False}
         if not remote: dep["path"] = str(ROOT / "crates/cq-state-providers")
@@ -151,7 +151,7 @@ def negative_dependency_checks(data):
         except ValueError: pass
         else: raise ValueError("dependency guard accepted a forbidden renamed/optional/target dependency")
     altered = copy.deepcopy(data)
-    package = next(p for p in altered["packages"] if p["name"] == "cq-stream-realization")
+    package = next(p for p in altered["packages"] if p["name"] == "cq-physical-realization")
     package["dependencies"].append({"name": "cq-state-providers", "kind": "dev", "path": str(ROOT / "crates/cq-state-providers")})
     check(altered, announce=False)
     print("PASS: four production dependency mutations rejected; cross-implementation test dependency accepted", flush=True)
@@ -290,6 +290,15 @@ def copy_selected(destination, name, features=()):
     return paths
 
 
+def copy_whole(destination, name):
+    """A dependency is copied as published: all sources, no test targets."""
+    base = ROOT / "crates" / name
+    output = destination / "crates" / name
+    shutil.copytree(base / "src", output / "src")
+    manifest = re.sub(r'\n\[\[test\]\]\n(.*?)(?=\n\[|\Z)', "", (base / "Cargo.toml").read_text(), flags=re.S)
+    (output / "Cargo.toml").write_text(manifest)
+
+
 def isolate(packages, only=()):
     logdir = ROOT / "target/component-logs"; logdir.mkdir(parents=True, exist_ok=True)
     jobs = [(name, None) for name in FOUNDATIONS | PROVIDERS | {name: dependencies for name, dependencies in FAMILIES.items() if name not in IMPLEMENTATIONS}]
@@ -301,7 +310,13 @@ def isolate(packages, only=()):
             destination = Path(temporary)
             selected = {name} | ALLOWED[name] | TEST_DEPENDENCIES.get(name, set())
             write_workspace(destination, selected)
-            for package in selected: copy_selected(destination, package, [feature] if package == name and feature else [])
+            # The crate under test gets one implementation; a test dependency
+            # gets all of its own, since tests may compose implementations.
+            for package in selected:
+                if package == name:
+                    copy_selected(destination, package, [feature] if feature else [])
+                else:
+                    copy_whole(destination, package)
             env = os.environ.copy(); env["CARGO_TARGET_DIR"] = str(ROOT / "target/component-isolation"); env["CARGO_TERM_COLOR"] = "never"
             command = ["cargo", "test", "-p", name, "--all-targets", "--offline"] + (["--features", feature] if feature else [])
             with (logdir / f"{label}.log").open("w") as log:
@@ -313,10 +328,10 @@ def isolate(packages, only=()):
 CQ = 'struct Q; relation R(a:i32); answer(x) :- R(x);'
 RA = CQ + ' relational { r = rename R {a -> x}; output r as answer(x); }'
 IX = RA + ' indexes {} uses {}'
-POLICED_IX = IX + ' policy { R; }'
-STRUCTURES = IX + ' structures { R; }'
-POLICED_STRUCTURES = STRUCTURES + ' policy { R; }'
-STREAM = STRUCTURES + ' stream { r = alias R; return r; }'
+POLICED_IX = IX + ' policy { R canon; }'
+PHYSICAL = IX + ' physical { r = alias rename; return r; }'
+POLICED_PHYSICAL = PHYSICAL + ' policy { R canon; }'
+STRUCTURES = PHYSICAL + ' structures { R canon; }'
 ACCESS = 'answer(x) => ((x,)) :- R(x) => bind (x,) <- ([(1i32,), (2,)]);'
 PIPELINE = 'iter0 = scan (x,) in ([(1i32,), (1,), (2,)]) yield (x,); iter1 = project iter0 as (x,) yield ((x,)); iter2 = distinct iter1; return iter2;'
 
@@ -341,14 +356,14 @@ use wiring as mini_linq;
 def frontend_source(feature):
     """Valid, small calls: boundary captures are not end-to-end acceptance."""
     implementation = FRONTEND_MACROS[feature]
-    if feature in ("written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "stream-lowering"):
+    if feature in ("written-order", "clause-prefix", "hypergraph", "index-demands", "physical-lowering", "structure-selection"):
         source, continuation, expected = {
             "written-order": (CQ, "choose_index_policy", ["relational", "rename"]),
             "clause-prefix": (CQ, "choose_index_policy", ["relational", "rename"]),
             "hypergraph": (CQ, "choose_index_policy", ["relational", "rename"]),
-            "index-demands": (RA, "stream_policy", ["indexes", "uses"]),
-            "structure-selection": (POLICED_IX, "structures_to_stream", ["structures", "R", "policy"]),
-            "stream-lowering": (POLICED_STRUCTURES, "stream_to_access", ["stream", "alias", "return"]),
+            "index-demands": (RA, "physical_policy", ["indexes", "uses"]),
+            "physical-lowering": (POLICED_IX, "select_structures", ["physical", "alias", "policy"]),
+            "structure-selection": (POLICED_PHYSICAL, "structures_to_rust", ["structures", "R"]),
         }[feature]
         checks = " ".join(f'assert!(CAPTURE.contains({json.dumps(word)}));' for word in expected)
         return f'''
@@ -359,16 +374,12 @@ use wiring as mini_linq;
 raw::{implementation}! {{ {source} }}
 fn main() {{ {checks} }}
 '''
-    if feature == "stream-realization":
-        return f'''
-macro_rules! capture {{ ($($tokens:tt)*) => {{ stringify!($($tokens)*) }}; }}
-use capture as access;
-mod wiring {{ pub(crate) use super::access; }}
-use wiring as mini_linq;
+    if feature == "physical-realization":
+        return STATE_BINDINGS + f'''
 fn main() {{
-    let region = raw::{implementation}! {{ {STREAM} }};
-    assert!(region.contains("bind"));
-    assert!(region.contains("iter"));
+    let R: &::std::collections::BTreeSet<(i32,)> = &[(1,), (2,)].into_iter().collect();
+    let rows: Vec<_> = raw::{implementation}! {{ {STRUCTURES} }}.collect();
+    assert_eq!(rows.len(), 2);
 }}
 '''
     if feature == "access-to-pipeline":
@@ -418,6 +429,7 @@ def check_frontends(packages, only=()):
                 '[package]\nname = "frontend-probe"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
                 'raw = { package = "mini-linq", path = ' + toml(str(ROOT / "crates/mini-linq"))
                 + ', default-features = false, features = [' + toml(feature) + '] }\n'
+                + ('cq-storage = { path = ' + toml(str(ROOT / "crates/cq-storage")) + ' }\n' if feature == "physical-realization" else '')
                 )
             args = ["--manifest-path", str(destination / "Cargo.toml"), "--offline"]
             resolved = json.loads(subprocess.check_output(["cargo", "metadata", "--format-version=1", *args], cwd=ROOT, text=True, stderr=subprocess.PIPE))
@@ -439,7 +451,7 @@ def check_frontends(packages, only=()):
             with (logdir / f"frontend-{feature}.log").open("w") as log:
                 result = subprocess.run(["cargo", "run", *args], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"actual frontend {feature} failed; see {logdir / ('frontend-' + feature + '.log')}")
-            kind = ("boundary capture" if feature in {"written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "stream-lowering", "stream-realization", "access-to-pipeline"} else "execution smoke")
+            kind = ("boundary capture" if feature in {"written-order", "clause-prefix", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "access-to-pipeline"} else "execution smoke")
             component = name + (f"/{implementation}" if implementation else "")
             print(f"PASS: {kind} {feature}; renamed dependency and isolated {component}", flush=True)
 

@@ -8,7 +8,7 @@ cq-ir	test	languages	crates/cq-ir/tests/languages.rs
 cq-ir	test	relational_plan	crates/cq-ir/tests/relational_plan.rs
 cq-ir	test	rust_access_plan	crates/cq-ir/tests/rust_access_plan.rs
 cq-ir	test	rust_expressions	crates/cq-ir/tests/rust_expressions.rs
-cq-ir	test	stream_language	crates/cq-ir/tests/stream_language.rs
+cq-ir	test	physical_language	crates/cq-ir/tests/physical_language.rs
 cq-ir	test	structures_language	crates/cq-ir/tests/structures_language.rs
 cq-ir	test	syntax_boundaries	crates/cq-ir/tests/syntax_boundaries.rs
 cq-storage	test	access_laws	crates/cq-storage/tests/access_laws.rs
@@ -26,8 +26,8 @@ cq-query-lowering	test	rust_expression_contracts	crates/cq-query-lowering/tests/
 cq-query-lowering	test	written_order	crates/cq-query-lowering/tests/written_order.rs
 cq-index-policy	test	index_demands	crates/cq-index-policy/tests/index_demands.rs
 cq-structure-selection	test	selection	crates/cq-structure-selection/tests/selection.rs
-cq-stream-lowering	test	lowering	crates/cq-stream-lowering/tests/lowering.rs
-cq-stream-realization	test	realization	crates/cq-stream-realization/tests/realization.rs
+cq-physical-lowering	test	lowering	crates/cq-physical-lowering/tests/lowering.rs
+cq-physical-realization	test	realization	crates/cq-physical-realization/tests/realization.rs
 cq-access-lowering	test	boundary	crates/cq-access-lowering/tests/boundary.rs
 cq-access-lowering	test	to_set_loops	crates/cq-access-lowering/tests/to_set_loops.rs
 cq-pipeline-lowering	test	boundary	crates/cq-pipeline-lowering/tests/boundary.rs
@@ -36,7 +36,7 @@ mini-linq	test	collect_endpoints	crates/mini-linq/tests/collect_endpoints.rs
 mini-linq	test	endpoint	crates/mini-linq/tests/endpoint.rs
 mini-linq	test	execution_models	crates/mini-linq/tests/execution_models.rs
 mini-linq	test	state_providers	crates/mini-linq/tests/state_providers.rs
-mini-linq	test	stream_query	crates/mini-linq/tests/stream_query.rs
+mini-linq	test	physical_query	crates/mini-linq/tests/physical_query.rs
 mini-linq	lib	macro_inputs	crates/mini-linq/src/lib.rs
 mini-linq-course	example	cq-inspection	examples/cq-inspection/main.rs
 mini-linq-course	example	pull-execution	examples/pull-execution/main.rs
