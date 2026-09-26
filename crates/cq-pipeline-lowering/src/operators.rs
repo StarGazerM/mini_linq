@@ -48,20 +48,13 @@ pub(crate) fn lower_operator_to_rust(definition: &iterator_pipeline::Definition)
             let item_pattern = &operator.item_pattern;
             let source = &operator.source;
             let binding = &operator.binding;
-            let captures = cq::rust::bindings(input_pattern);
-            let retained =
-                cq::rust::known_uses(binding, &captures.iter().map(cq_ir::symbol_name).collect());
-            let copies = captures
-                .iter()
-                .filter(|v| retained.contains(&cq_ir::symbol_name(v)))
-                .map(|v| quote!(let #v = ::core::clone::Clone::clone(&#v);));
             quote! {
                 let #stream = ::core::iter::Iterator::flat_map(
                     #input_stream,
                     move |#input_pattern| {
                         ::core::iter::Iterator::map(
                             ::core::iter::IntoIterator::into_iter(#source),
-                            move |#item_pattern| { #(#copies)* #binding },
+                            move |#item_pattern| #binding,
                         )
                     },
                 );

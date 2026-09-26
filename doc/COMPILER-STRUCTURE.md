@@ -97,5 +97,11 @@ State provider syntax and laws live in `cq-ir::provider_protocol::state`.
 `cq-example-providers` supplies hash and ordered implementations. Distinct
 providers own retained copies; set sinks consume values and need no Clone.
 The execution lowerer owns polling and loop order. Support/existence omit the
-terminal Distinct and need neither slot. Existing dependent-join binding clones
-remain an independent execution-strategy choice.
+terminal Distinct and need neither slot. No execution strategy copies a
+binding: a value bound by an outer source is used inside its dependent joins
+and inner loops as the value the source produced. Hosts and built structures
+yield references, so those are free; an owned value (a computed column) that
+one outer row must hand to several inner rows is a Rust move error, and the
+head expression alone decides what the result owns. The remaining copies are
+the ones a type imposes: probing a host map keyed by owned tuples constructs
+the key, and a distinct provider retains its own copy of each row.

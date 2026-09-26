@@ -36,7 +36,7 @@ fn aggregate_style_identifier_items_remain_an_explicit_join_boundary() {
                     move |(person,)| {
                         ::core::iter::Iterator::map(
                             ::core::iter::IntoIterator::into_iter(totals(*person)),
-                            move |total| { let person = ::core::clone::Clone::clone(&person); (person, total,) },
+                            move |total| (person, total,),
                         )
                     },
                 );

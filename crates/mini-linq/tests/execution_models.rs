@@ -77,12 +77,15 @@ fn eager_push_and_partial_pull_have_different_observation_contracts() {
 
 #[cfg(feature = "access-to-set-loops")]
 #[test]
-fn push_moves_owned_outputs_and_preserves_outer_values_for_multiple_witnesses() {
+fn push_never_copies_a_bound_value_only_the_head_expression_may() {
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct Output(String, i32);
+    // Bound values cross inner loops by reference; the head alone decides
+    // what the result owns.
+    let r = [(String::from("a"),)];
     let pushed = mini_linq::access_to_set_loops! {
-        out(x, y) => (Output(x, y)) :-
-        R(x) => bind (x,) <- ([(String::from("a"),)]),
+        out(x, y) => (Output(x.clone(), y)) :-
+        R(x) => bind (x,) <- (r.iter().map(|(x,)| (x,))),
         S(x, y) => bind (y,) <- ([(1,), (1,), (2,)]);
     };
     assert_eq!(

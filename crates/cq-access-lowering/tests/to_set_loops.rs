@@ -15,7 +15,6 @@ fn push_preserves_control_scope_and_uses_one_exact_set() {
         for (x,) in (rows) {
             if keep(&x) {
                 for (y,) in (lookup(&x)) {
-                    let x = ::core::clone::Clone::clone(&x);
                     mini_linq::set_sink! { operator out; insert(__cq_output, (x, y)) };
                 }
             }
