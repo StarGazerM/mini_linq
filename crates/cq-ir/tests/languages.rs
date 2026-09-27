@@ -1,4 +1,4 @@
-use cq_ir::{cq, index_requirements, iterator_pipeline, relational_plan, rust_access_plan};
+use cq_ir::{cq, index_requirements, relational_plan};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
@@ -40,31 +40,6 @@ fn relational_tokens() -> TokenStream {
     }
 }
 
-fn annotated_access_tokens() -> TokenStream {
-    quote! {
-        triangle(x, y, z) => ((x.clone(), y.clone(), z.clone(),)) :-
-            R(x, y) => bind (x, y,) <- (rows0.iter()),
-            S(y, z) => bind (z,) <-
-                (index0.get(&(y.clone(),)).into_iter().flatten()),
-            T(z, x) => if (index1.contains(&(z.clone(), x.clone(),)));
-    }
-}
-
-fn pipeline_tokens() -> TokenStream {
-    quote! {
-        iter0 = scan (x, y,) in (rows0.iter()) yield (x, y,);
-        iter1 = join iter0 as (x, y,) with (z,) in (
-            index0.get(&(y.clone(),)).into_iter().flatten()
-        ) yield (x, y, z,);
-        iter2 = filter iter1 as (x, y, z,) if (
-            index1.contains(&(z.clone(), x.clone(),))
-        );
-        iter3 = project iter2 as (x, y, z,) yield ((x.clone(), y.clone(), z.clone(),));
-        iter4 = distinct iter3;
-        return iter4;
-    }
-}
-
 fn assert_round_trips<T>(tokens: TokenStream)
 where
     T: syn::parse::Parse + ToTokens + PartialEq + std::fmt::Debug,
@@ -79,19 +54,13 @@ fn every_language_boundary_parses_directly() {
     let logical: cq::Module = syn::parse2(program_tokens()).unwrap();
     let relational: relational_plan::Module = syn::parse2(relational_tokens()).unwrap();
     let indexed: index_requirements::Module = syn::parse2(index_tokens()).unwrap();
-    let annotated: rust_access_plan::Plan = syn::parse2(annotated_access_tokens()).unwrap();
-    let pipeline: iterator_pipeline::Pipeline = syn::parse2(pipeline_tokens()).unwrap();
 
     cq::contract::check(&logical).unwrap();
     relational_plan::contract::check(&relational).unwrap();
     index_requirements::contract::check(&indexed).unwrap();
-    rust_access_plan::contract::check(&annotated).unwrap();
-    iterator_pipeline::contract::check(&pipeline).unwrap();
     assert!(cq::contract::well_formed(&logical));
     assert!(relational_plan::contract::well_formed(&relational));
     assert!(index_requirements::contract::well_formed(&indexed));
-    assert!(matches!(annotated.head.output, syn::Expr::Tuple(_)));
-    assert_eq!(pipeline.definitions.len(), 5);
 }
 
 #[test]
@@ -99,8 +68,6 @@ fn emitted_tokens_round_trip_for_every_language() {
     assert_round_trips::<cq::Module>(program_tokens());
     assert_round_trips::<relational_plan::Module>(relational_tokens());
     assert_round_trips::<index_requirements::Module>(index_tokens());
-    assert_round_trips::<rust_access_plan::Plan>(annotated_access_tokens());
-    assert_round_trips::<iterator_pipeline::Pipeline>(pipeline_tokens());
 }
 
 #[test]
@@ -109,10 +76,6 @@ fn the_grammars_are_distinct() {
     assert!(syn::parse2::<index_requirements::Module>(relational_tokens()).is_err());
     assert!(syn::parse2::<cq::Module>(index_tokens()).is_err());
     assert!(syn::parse2::<relational_plan::Module>(index_tokens()).is_err());
-    assert!(syn::parse2::<rust_access_plan::Plan>(index_tokens()).is_err());
-    assert!(syn::parse2::<index_requirements::Module>(annotated_access_tokens()).is_err());
-    assert!(syn::parse2::<rust_access_plan::Plan>(pipeline_tokens()).is_err());
-    assert!(syn::parse2::<iterator_pipeline::Pipeline>(annotated_access_tokens()).is_err());
 }
 
 #[test]

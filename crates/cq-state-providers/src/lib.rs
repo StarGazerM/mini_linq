@@ -1,9 +1,10 @@
-//! Selectable distinct-state and set-sink implementations.
+//! Selectable distinct-state implementations.
 //!
-//! Execution endpoints request `new`, `insert`, and `finish` through the
-//! [`cq_ir::state_protocol`]; each macro here expands one request to a Rust
-//! expression over a standard collection. Selecting a path is the caller's
-//! choice; the compiler supplies no default.
+//! The printed program requests `new` and `insert` through the
+//! [`cq_ir::state_protocol`] for every canonical result; each macro here
+//! expands one request to a Rust expression over a standard collection.
+//! Selecting a provider is the caller's choice; the compiler supplies no
+//! default.
 
 use proc_macro::TokenStream;
 
@@ -26,14 +27,4 @@ pub fn hash_distinct(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn ordered_distinct(input: TokenStream) -> TokenStream {
     expand(input, state::ordered_distinct)
-}
-
-#[proc_macro]
-pub fn hash_set_sink(input: TokenStream) -> TokenStream {
-    expand(input, state::hash_set_sink)
-}
-
-#[proc_macro]
-pub fn ordered_set_sink(input: TokenStream) -> TokenStream {
-    expand(input, state::ordered_set_sink)
 }

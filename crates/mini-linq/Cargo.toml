@@ -9,7 +9,7 @@ license.workspace = true
 proc-macro = true
 
 [features]
-default = ["logical-selection", "written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "physical-lowering", "physical-realization", "access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists"]
+default = ["logical-selection", "written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "physical-lowering", "physical-realization"]
 logical-selection = ["written-order", "clause-prefix", "hypergraph"]
 written-order = ["dep:cq-query-lowering", "cq-query-lowering/written-order"]
 clause-prefix = ["dep:cq-query-lowering", "cq-query-lowering/clause-prefix"]
@@ -18,12 +18,6 @@ index-demands = ["dep:cq-index-policy"]
 structure-selection = ["dep:cq-structure-selection"]
 physical-lowering = ["dep:cq-physical-lowering"]
 physical-realization = ["dep:cq-physical-realization"]
-access-to-pipeline = ["dep:cq-access-lowering", "cq-access-lowering/to-pipeline"]
-access-to-set-loops = ["dep:cq-access-lowering", "cq-access-lowering/to-set-loops"]
-pipeline-distinct-iter = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/distinct-iter"]
-pipeline-set = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/collect-set"]
-pipeline-support-iter = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/support-iter"]
-pipeline-exists = ["dep:cq-pipeline-lowering", "cq-pipeline-lowering/exists"]
 
 [dependencies]
 proc-macro2.workspace = true
@@ -35,8 +29,6 @@ cq-index-policy = { workspace = true, optional = true }
 cq-structure-selection = { workspace = true, optional = true }
 cq-physical-lowering = { workspace = true, optional = true }
 cq-physical-realization = { workspace = true, optional = true }
-cq-access-lowering = { workspace = true, optional = true }
-cq-pipeline-lowering = { workspace = true, optional = true }
 
 [dev-dependencies]
 cq-state-providers.workspace = true
@@ -46,21 +38,9 @@ contracts.workspace = true
 prettyplease.workspace = true
 syn = { workspace = true, features = ["visit-mut"] }
 
-[[test]]
-name = "collect_endpoints"
-required-features = ["access-to-pipeline", "pipeline-set"]
 
-[[test]]
-name = "endpoint"
-required-features = ["access-to-pipeline", "pipeline-distinct-iter"]
 
-[[test]]
-name = "execution_models"
-required-features = ["access-to-pipeline", "access-to-set-loops", "pipeline-set"]
 
-[[test]]
-name = "state_providers"
-required-features = ["pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists", "access-to-set-loops"]
 
 [[test]]
 name = "physical_query"

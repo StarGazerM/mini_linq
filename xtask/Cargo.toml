@@ -26,5 +26,3 @@ syn = { version = "2", features = ["extra-traits", "full"] }
 proc-macro2 = "1"
 prettyplease = "0.2"
 syn = { version = "2", features = ["visit-mut"] }
-cq-access-lowering = { path = "../crates/cq-access-lowering", default-features = false, features = ["to-pipeline"] }
-cq-pipeline-lowering = { path = "../crates/cq-pipeline-lowering", default-features = false, features = ["distinct-iter"] }

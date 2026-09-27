@@ -17,11 +17,9 @@ use syn::{Ident, Index, Token};
 
 pub mod cq;
 pub mod index_requirements;
-pub mod iterator_pipeline;
 pub mod physical;
 pub mod policy;
 pub mod relational_plan;
-pub mod rust_access_plan;
 pub mod state_protocol;
 pub mod structures;
 

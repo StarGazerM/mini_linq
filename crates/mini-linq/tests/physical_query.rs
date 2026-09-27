@@ -261,7 +261,7 @@ mod merged {
         pub(crate) use ::mini_linq::{
             index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
+        pub(crate) use cq_state_providers::ordered_distinct as distinct_state;
     }
     use wiring as mini_linq;
 

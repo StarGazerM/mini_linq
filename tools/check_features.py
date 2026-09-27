@@ -50,7 +50,6 @@ def feature_cases(package):
         add(feature, [feature])
     add("default", None)
     add("completed", sorted(set(features) - {"default"}))
-    add("execution-alternatives", ["access-to-pipeline", "access-to-set-loops", "pipeline-distinct-iter", "pipeline-set"])
     for target in package["targets"]:
         if not set(target["kind"]) & {"test", "example"}:
             continue

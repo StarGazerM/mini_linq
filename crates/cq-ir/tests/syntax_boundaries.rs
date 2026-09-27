@@ -1,4 +1,4 @@
-use cq_ir::{cq, iterator_pipeline, relational_plan, rust_access_plan};
+use cq_ir::{cq, relational_plan};
 use quote::ToTokens;
 
 #[test]
@@ -11,8 +11,6 @@ fn semicolons_are_required_at_every_language_boundary() {
     }
     check::<cq::Module>("struct P; relation R(a:i32); answer(x) :- R(x);");
     check::<relational_plan::Plan>("r0 = unit; output r0 as answer();");
-    check::<rust_access_plan::Plan>("answer(x) => ((x,)) :- R(x) => bind (x,) <- (rows.iter());");
-    check::<iterator_pipeline::Pipeline>("iter0 = unit yield (); return iter0;");
 }
 
 #[test]

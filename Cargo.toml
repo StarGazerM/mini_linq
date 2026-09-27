@@ -18,8 +18,6 @@ members = [
     "crates/cq-physical-lowering",
     "crates/cq-physical-realization",
     "crates/cq-state-providers",
-    "crates/cq-access-lowering",
-    "crates/cq-pipeline-lowering",
     "crates/mini-linq",
     "workloads",
 ]
@@ -42,8 +40,6 @@ cq-physical-lowering = { path = "crates/cq-physical-lowering", default-features 
 cq-physical-realization = { path = "crates/cq-physical-realization", default-features = false }
 cq-state-providers = { path = "crates/cq-state-providers" }
 mini-linq = { path = "crates/mini-linq" }
-cq-access-lowering = { path = "crates/cq-access-lowering", default-features = false }
-cq-pipeline-lowering = { path = "crates/cq-pipeline-lowering", default-features = false }
 proc-macro2 = "1"
 prettyplease = "0.2"
 quote = "1"
@@ -59,10 +55,6 @@ syn.workspace = true
 [[example]]
 name = "cq-inspection"
 path = "examples/cq-inspection/main.rs"
-
-[[example]]
-name = "pull-execution"
-path = "examples/pull-execution/main.rs"
 
 [[example]]
 name = "free-variables"

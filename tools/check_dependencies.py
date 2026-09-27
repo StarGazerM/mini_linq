@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FOUNDATIONS = {"cq-ir": set(), "cq-storage": set()}
 FAMILIES = {name: {"cq-ir"} for name in (
     "cq-query-lowering", "cq-index-policy", "cq-physical-lowering", "cq-structure-selection",
-    "cq-physical-realization", "cq-access-lowering", "cq-pipeline-lowering")}
+    "cq-physical-realization")}
 PROVIDERS = {"cq-state-providers": {"cq-ir"}}
 TEST_DEPENDENCIES = {
     "cq-physical-lowering": {"cq-query-lowering", "cq-index-policy"},
@@ -42,21 +42,12 @@ FRONTEND = {
     "physical-lowering": ("cq-physical-lowering", None),
     "structure-selection": ("cq-structure-selection", None),
     "physical-realization": ("cq-physical-realization", None),
-    "access-to-pipeline": ("cq-access-lowering", "to-pipeline"),
-    "access-to-set-loops": ("cq-access-lowering", "to-set-loops"),
-    "pipeline-distinct-iter": ("cq-pipeline-lowering", "distinct-iter"),
-    "pipeline-set": ("cq-pipeline-lowering", "collect-set"),
-    "pipeline-support-iter": ("cq-pipeline-lowering", "support-iter"),
-    "pipeline-exists": ("cq-pipeline-lowering", "exists"),
 }
 FRONTEND_MACROS = {
     "written-order": "cq_to_ra_written_order", "clause-prefix": "cq_to_ra_clause_prefix",
     "hypergraph": "cq_to_ra_hypergraph", "index-demands": "index_demands",
     "physical-lowering": "lower_physical", "structure-selection": "select_structures",
     "physical-realization": "structures_to_rust",
-    "access-to-pipeline": "access_to_distinct_iter", "access-to-set-loops": "access_to_set_loops",
-    "pipeline-distinct-iter": "pipeline_to_distinct_iter", "pipeline-set": "pipeline_to_set",
-    "pipeline-support-iter": "pipeline_to_support_iter", "pipeline-exists": "pipeline_to_exists",
 }
 # This fixed build inventory is not provider selection in the query compiler.
 # Primary directories must not import or condition behavior on a sibling feature.
@@ -66,19 +57,9 @@ IMPLEMENTATIONS = {
         "clause-prefix": ["src/clause_prefix", "src/dependencies.rs", "src/model.rs", "src/proof.rs", "tests/clause_prefix.rs"],
         "hypergraph": ["src/hypergraph", "src/dependencies.rs", "src/model.rs", "src/proof.rs", "tests/hypergraph.rs"],
     },
-    "cq-access-lowering": {
-        "to-pipeline": ["src/to_pipeline", "tests/boundary.rs"],
-        "to-set-loops": ["src/to_set_loops.rs", "tests/to_set_loops.rs"],
-    },
-    "cq-pipeline-lowering": {
-        **{feature: [f"src/{module}.rs", f"src/{module}", "src/operators.rs", "src/observations.rs", "tests/boundary.rs"]
-           for feature, module in (("distinct-iter", "distinct_iter"), ("collect-set", "collect_set"), ("support-iter", "support_iter"))},
-        "exists": ["src/exists.rs", "src/operators.rs", "tests/exists.rs"],
-    },
 }
 MODULE_WIRING = {}
 CONSUMERS = {
-    "state_providers": ["pipeline-distinct-iter", "pipeline-set", "pipeline-support-iter", "pipeline-exists", "access-to-set-loops"],
     "physical_query": ["written-order", "clause-prefix", "hypergraph", "index-demands", "physical-lowering", "structure-selection",
                        "physical-realization"],
 }
@@ -189,7 +170,6 @@ def audit_imports():
             base = ROOT / "crates" / name
             primary = base / paths[0]
             owned = list(primary.rglob("*.rs")) if primary.is_dir() else [primary]
-            if name == "cq-pipeline-lowering": owned += list(primary.with_suffix("").rglob("*.rs"))
             for path in owned:
                 audit_implementation_text(name, feature, path.relative_to(base), path.read_text())
                 checked += 1
@@ -332,8 +312,6 @@ POLICED_IX = IX + ' policy { R canon; }'
 PHYSICAL = IX + ' physical { r = alias rename; return r; }'
 POLICED_PHYSICAL = PHYSICAL + ' policy { R canon; }'
 STRUCTURES = PHYSICAL + ' structures { R canon; }'
-ACCESS = 'answer(x) => ((x,)) :- R(x) => bind (x,) <- ([(1i32,), (2,)]);'
-PIPELINE = 'iter0 = scan (x,) in ([(1i32,), (1,), (2,)]) yield (x,); iter1 = project iter0 as (x,) yield ((x,)); iter2 = distinct iter1; return iter2;'
 
 
 STATE_BINDINGS = r"""
@@ -341,15 +319,10 @@ macro_rules! distinct_state {
     (operator $id:ident; new) => { ::std::collections::HashSet::new() };
     (operator $id:ident; insert($state:expr, $row:expr)) => { $state.insert(Clone::clone($row)) };
 }
-macro_rules! set_sink {
-    (operator $id:ident; new) => { ::std::collections::HashSet::new() };
-    (operator $id:ident; insert($state:expr, $row:expr)) => {{ $state.insert($row); }};
-    (operator $id:ident; finish($state:expr)) => { $state };
-}
 #[allow(unused_imports)]
-pub(crate) use {distinct_state, set_sink};
+pub(crate) use distinct_state;
 #[allow(unused_imports)]
-mod wiring { pub(crate) use super::{distinct_state, set_sink}; }
+mod wiring { pub(crate) use super::distinct_state; }
 use wiring as mini_linq;
 """
 
@@ -374,37 +347,14 @@ use wiring as mini_linq;
 raw::{implementation}! {{ {source} }}
 fn main() {{ {checks} }}
 '''
-    if feature == "physical-realization":
-        return STATE_BINDINGS + f'''
+    assert feature == "physical-realization", feature
+    return STATE_BINDINGS + f'''
 fn main() {{
     let R: &::std::collections::BTreeSet<(i32,)> = &[(1,), (2,)].into_iter().collect();
     let rows: Vec<_> = raw::{implementation}! {{ {STRUCTURES} }}.collect();
     assert_eq!(rows.len(), 2);
 }}
 '''
-    if feature == "access-to-pipeline":
-        return f'''
-macro_rules! capture {{ ($($tokens:tt)*) => {{ stringify!($($tokens)*) }}; }}
-use capture as pipeline_to_distinct_iter;
-mod wiring {{ pub(crate) use super::pipeline_to_distinct_iter; }}
-use wiring as mini_linq;
-fn main() {{
-    let pipeline = raw::{implementation}! {{ {ACCESS} }};
-    assert!(pipeline.contains("scan"));
-    assert!(pipeline.contains("distinct"));
-    assert!(pipeline.contains("return"));
-}}
-'''
-    if feature == "access-to-set-loops":
-        return STATE_BINDINGS + f'fn main() {{ assert_eq!(raw::{implementation}! {{ {ACCESS} }}, std::collections::HashSet::from([(1,), (2,)])); }}'
-    if feature == "pipeline-exists":
-        return f'fn main() {{ assert!(raw::{implementation}! {{ {PIPELINE} }}); }}'
-    if feature == "pipeline-set":
-        return STATE_BINDINGS + f'fn main() {{ assert_eq!(raw::{implementation}! {{ {PIPELINE} }}, std::collections::HashSet::from([(1,), (2,)])); }}'
-    expected = 'vec![(1,), (1,), (2,)]' if feature == "pipeline-support-iter" else 'vec![(1,), (2,)]'
-    return ('' if feature == 'pipeline-support-iter' else STATE_BINDINGS) + f'fn main() {{ assert_eq!(raw::{implementation}! {{ {PIPELINE} }}.collect::<Vec<_>>(), {expected}); }}'
-
-
 def all_feature_checks(only=()):
     # Check combined implementation features separately from source removal.
     logdir = ROOT / "target/component-logs"; logdir.mkdir(parents=True, exist_ok=True)
@@ -451,7 +401,7 @@ def check_frontends(packages, only=()):
             with (logdir / f"frontend-{feature}.log").open("w") as log:
                 result = subprocess.run(["cargo", "run", *args], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"actual frontend {feature} failed; see {logdir / ('frontend-' + feature + '.log')}")
-            kind = ("boundary capture" if feature in {"written-order", "clause-prefix", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "access-to-pipeline"} else "execution smoke")
+            kind = ("boundary capture" if feature in {"written-order", "clause-prefix", "hypergraph", "index-demands", "physical-lowering", "structure-selection"} else "execution smoke")
             component = name + (f"/{implementation}" if implementation else "")
             print(f"PASS: {kind} {feature}; renamed dependency and isolated {component}", flush=True)
 
