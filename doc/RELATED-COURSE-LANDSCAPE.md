@@ -329,7 +329,7 @@ the following acceptance conditions:
 The implemented canonical compiler follows
 
 ```text
-CQ -> RelationalPlan -> IndexRequirements -> Rust[Access] -> Rust[Pipeline] -> Rust
+CQ -> RelationalPlan -> IndexRequirements -> Physical -> Structures -> Rust
 ```
 
 Each typed edge lives in its semantic module; the [compiler structure guide](COMPILER-STRUCTURE.md)

@@ -26,4 +26,5 @@ The supplied assertions state the target semantics; they are not evidence of
 a completed lowering. Follow the [HW4 guide](../../doc/HW4-OPTIONAL.md) for the
 IR operators, contracts, overflow checks, and lazy-fold acceptance tests.
 Ordinary Rust `if`, `let`, calls, and computed atom/head expressions are already
-demonstrated separately in the [runnable expression gallery](../rust-expressions/README.md).
+demonstrated separately in the [free-variables example](../free-variables/main.rs)
+and the [full-chain test](../../crates/mini-linq/tests/physical_query.rs).

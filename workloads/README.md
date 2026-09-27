@@ -9,8 +9,8 @@ count by making progressively larger cliques.
 Each leaf under `src/queries/{classic,retail}/*.rs` is authored Rust source and
 the only source of truth for that query's syntax and semantics. Every leaf
 directly invokes `::mini_linq::workload_query!` exactly once. That procedural
-macro emits the typed CQ factory used by the catalog; it does not select physical
-providers or generate an executable query API. The catalog retains stable
+macro emits the typed CQ factory used by the catalog; it does not choose a
+physical policy or generate an executable query API. The catalog retains stable
 ordering and teaching metadata; it does not carry a second copy of the query.
 Generated data, oracle SQL, and golden results are derived artifacts.
 Generation reads the typed CQ factory but never rewrites a query module.
@@ -24,7 +24,7 @@ The workload tools generate deterministic headerless `i32` CSV inputs,
 mechanically translate each authored CQ to visible SQL, evaluate that SQL in
 an independent in-memory DuckDB engine, and compare the canonical result with
 tracked golden CSVs. Generated-query differential execution is unavailable
-until workload-specific Physical assignments and a host input/output contract
+until a physical policy for the workload hosts and a host input/output contract
 are supplied. The corpus oracle is confined to the separate root `xtask`
 workspace. Ordinary workspace builds do not compile DuckDB. The corpus
 implementation uses DuckDB's
@@ -166,9 +166,8 @@ explicit `ORDER BY` in head-column order. Golden CSVs are therefore strictly
 lexicographically ordered, distinct materialized result sets.
 
 Future workload execution must preserve the CQ's set semantics through its
-selected physical representations and explicit output consumer. The retired
-backend's input-normalization and sorted-vector API are not imposed on the new
-Physical contract. No generated-query comparison currently runs for this corpus.
+selected physical operators and structures. The retired backend's
+input-normalization and sorted-vector API are not imposed on the new chain. No generated-query comparison currently runs for this corpus.
 
 Files are organized as follows:
 
@@ -259,8 +258,8 @@ identifies the failing boundary. Post-IX stage requests reject with a diagnostic
 explaining the missing physical choices and host contract.
 
 `cargo xtask differential` is currently unavailable. It immediately reports that
-the old whole-query backend was removed and that workload-specific Physical
-assignments and the new host input/output contract are required. It does not
+the old whole-query backend was removed and that a physical policy for the
+workload hosts and the new host input/output contract are required. It does not
 compile DuckDB or execute a substitute backend.
 
 `generate` and the DuckDB-only `golden` check use the query catalog without

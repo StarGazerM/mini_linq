@@ -1,15 +1,14 @@
 # Executable paper checks
 
 This driver now checks **CQ → RA → IX**. The old whole-query physical backends
-and their generated `run` APIs have been removed. The driver does not synthesize
-replacement physical assignments or skip the new Physical boundary.
+and their generated `run` APIs have been removed. The driver supplies no
+physical policy and does not skip the Physical and Structures stages.
 
 ```sh
 cargo run --manifest-path doc/formal/example/Cargo.toml --locked
 cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin computed_key
 cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin argument_placement
 cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin constraint_planning
-cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin access_representations
 ```
 
 The first four programs write typed `.tokens` payloads and derivation reports
@@ -32,19 +31,9 @@ and explicit use references. The source remains unchanged across the boundaries.
 
 None of these checks compares compiled query execution with the oracle. Runtime
 intermediate counts, old lazy/materialized comparison results, and six-stage
-backend snapshots are retired. Those queries require selected physical rules
+backend snapshots are retired. Those queries require a physical policy
 and a host contract before executable compiler comparison can resume.
 
-`access_representations` is a separate local Access-boundary example. Its authored
-Access quotations compare hash membership, exact bounded bitmaps and a coarse
-prefilter followed by exact membership against independent input membership on
-264 cases. Its runtime representation choice is ordinary Rust. It validates no
-CQ-to-Physical route, YA schedule, zone-map provider, or optimizer cost model.
-Its `bind PAT <- (EXPR)` clauses describe dependent enumeration; the selected
-pull endpoint lowers them through named Pipeline definitions before emitting
-Rust adapters.
-
-The integrated new Physical realization tests live in
-`crates/mini-linq/tests/physical_realization.rs` and `physical_variants.rs`; they
-cover their explicitly admitted host-expression domain, not these retired
-whole-query backends.
+The integrated chain below IX is exercised by
+`crates/mini-linq/tests/physical_query.rs`; it covers the Physical, Structures
+and printed-program boundaries, not these retired whole-query backends.

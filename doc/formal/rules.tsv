@@ -1,5 +1,4 @@
 rule	kind	path	marker	status
-Candidate-Exact	abstract	-	-	PROPOSED: semantic/compiler obligation; current post-IX implementation is nonconforming.
 X-FilterLeft	abstract	-	-	Pure filter placement law; general subtree placement is not implemented by the prefix planner.
 X-ExtendLeft	abstract	-	-	Pure extension placement law; general subtree placement is not implemented by the prefix planner.
 X-FilterExtend	abstract	-	-	Pure independent filter and extension interchange law.
@@ -10,11 +9,6 @@ IX-Reuse	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source 
 IX-New	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
 IX-Join	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
 IX-Other	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-Phy-Select	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
-Phy-Relation	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
-Phy-Index	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
-Phy-Use	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
-Phy-Region	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
 FV-Name	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Bound	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Children	implementation	crates/cq-ir/src/cq/rust.rs	visit::visit_expr(self, expr)	Correspondence location; proof obligation C-Conformance remains.
@@ -36,10 +30,6 @@ RA-Project	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Co
 RA-Select	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
 RA-Extend	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
 RA-Def	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-AC-Enumerate	implementation	crates/cq-ir/src/rust_access_plan.rs	fn check_positive_clause	Correspondence location; proof obligation C-Conformance remains.
-AC-If	implementation	crates/cq-ir/src/rust_access_plan.rs	fn check_positive_clause	Correspondence location; proof obligation C-Conformance remains.
-AC-Guard	implementation	crates/cq-ir/src/rust_access_plan.rs	fn check_plan	Correspondence location; proof obligation C-Conformance remains.
-AC-Bind	implementation	crates/cq-ir/src/rust_access_plan.rs	fn check_plan	Correspondence location; proof obligation C-Conformance remains.
 D-Guard	implementation	crates/cq-query-lowering/src/dependencies.rs	pub fn analyze	Correspondence location; proof obligation C-Conformance remains.
 D-Bind	implementation	crates/cq-query-lowering/src/dependencies.rs	pub fn analyze	Correspondence location; proof obligation C-Conformance remains.
 D-Atom	implementation	crates/cq-query-lowering/src/dependencies.rs	pub fn analyze	Correspondence location; proof obligation C-Conformance remains.
@@ -91,8 +81,3 @@ C-Match	implementation	crates/cq-query-lowering/src/clause_prefix/rules.rs	fn ma
 C-Finish	implementation	crates/cq-query-lowering/src/clause_prefix/rules.rs	fn finish(	Correspondence location; proof obligation C-Conformance remains.
 ST-Entry	implementation	crates/mini-linq/src/lib.rs	pub fn choose_graph_or_prefix	Representative entry; the caller-relative composition table is in staging.tex.
 ST-Hole	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy is an explicit obligation.
-Realize-Dispatch	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
-Realize-Resume	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
-Realize-Finish	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
-Exact-Join	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.
-Exact-Project	abstract	-	-	PROPOSED: superseded by the Stream language (crates/cq-ir/src/stream.rs, crates/cq-stream-lowering, crates/cq-stream-realization); no current implementation.

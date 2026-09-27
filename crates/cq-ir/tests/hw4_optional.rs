@@ -1,6 +1,6 @@
 #![cfg(feature = "hw4")]
 
-use cq_ir::{cq, relational_plan, rust_access_plan};
+use cq_ir::{cq, relational_plan};
 use quote::{ToTokens, quote};
 
 fn spend_query() -> proc_macro2::TokenStream {
@@ -189,19 +189,4 @@ fn extended_relational_plans_use_renames_inferred_correlation_and_one_global_uni
         let second: relational_plan::Module = syn::parse2(first.to_token_stream()).unwrap();
         assert_eq!(first, second);
     }
-}
-
-#[test]
-fn extended_body_items_keep_their_occurrence_labels_until_pull_lowering() {
-    let plan: rust_access_plan::Plan = syn::parse2(quote! {
-        spend(person, total) => ((person.clone(), total,)) :-
-            Person(person) => bind (person,) <- (rows0.iter()),
-            !Blocked(person, _) => if (!index0.contains_key(&(person.clone(),))),
-            agg total = sum(amount) in Purchase(person, _, amount) =>
-                for total in (aggregate_totals(*person));
-    })
-    .expect("OPTIONAL HW4: RustAccessPlan must parse the extended BodyItem variants");
-
-    rust_access_plan::contract::check(&plan)
-        .expect("OPTIONAL HW4: annotate negation with If and aggregation with Bind");
 }

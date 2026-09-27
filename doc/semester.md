@@ -110,43 +110,38 @@ implementation assignment.
 
 Students work individually or in pairs in a supplied Rust codebase. The
 current physical-lowering checkpoint contains one `mini-linq` proc-macro crate,
-Syn-backed CQ, RelationalPlan, IndexRequirements, `rust_access_plan::Plan`,
-`iterator_pipeline::Pipeline`, local language checks, and tests. Its basic
+Syn-backed CQ, RelationalPlan, IndexRequirements, Physical, Structures,
+local language checks, and tests. Its basic
 route assigns three typed compilation edges. Their implementations live in
-`crates/cq-query-lowering/src/written_order/lower.rs`, `crates/cq-index-policy/src/base_demands/mod.rs`, and
-`crates/cq-relation-lowering/src/base_hash/mod.rs`:
+`crates/cq-query-lowering/src/written_order/lower.rs`, `crates/cq-index-policy/src/lib.rs`, and
+the `cq-physical-lowering`, `cq-structure-selection`, and `cq-physical-realization` crates:
 
 1. **Basic HW1:** CQ to a complete named RelationalPlan;
 2. **Basic HW2:** RelationalPlan to IndexRequirements, preserving that entire
    plan while adding exact first-use keys; and
-3. **Basic HW3:** IndexRequirements to the sequential RustAccessPlan residual.
+3. **Basic HW3:** IndexRequirements plus a query-independent policy to
+   Physical, then Structures, then Rust.
 
-The third lowering returns a complete `syn::File`: its visibility-matching
-`Program + Storage` API, concrete
-collections, construction statements, names, patterns, access expressions,
-output row, eager `build`, zero-read lazy `query`, and explicit materializer
-are already Rust.
-One expression-position `access_to_distinct_iter!` region pairs each body occurrence with its
-concrete access and the head with its output expression. The supplied pull
-pass turns it into an IteratorPipeline with named `iterN` results: explicit
-`scan`, left-deep binary `join`, `filter`, `project`, and `distinct` operators
-whose consumers name their predecessor. A second supplied semantic pass
-lowers that plan to the final lazy Rust iterator expression; token emission
-afterward is direct. Intermediate bindings are streamed
-iterator items rather than collected relations;
-generated internal `for` loops do not implement this protocol. Rust may inline
-the iterator combinators later, but pull lowering does not require fusion.
-Logical `rN` names and physical lazy `iterN` names are intentionally
-different dataflow namespaces. `access_to_distinct_iter` names the lowering strategy and
-IteratorPipeline is its target. A later
+The third edge is three recorded decisions. Physical fixes one physical
+operator per result and the mode of every read; Structures names the host
+key or compiler-built type that answers each read; `structures_to_rust!`
+prints one Rust block over the `cq-storage` traits (`Build`, `IndexRead`,
+`ExactMembership`, `OrderedRead`, `Canonical`) that evaluates to an
+iterator of answer tuples in head order. A program over hosts alone
+evaluates to the lazy iterator itself; one that builds structures collects
+its answers inside the block, since the structures live only for the block.
+The caller consumes the iterator however it likes. Rust may inline the
+iterator combinators later, but the printed program does not require fusion.
+Logical `rN` names and the printed program's bindings are intentionally
+different dataflow namespaces. A later
 execution-control checkpoint supplies the push target and asks students for
 the typed lowering in Stage 2; later releases add the remaining algorithmic
 stages:
 
 | Stage | Required implementation | Points |
 |---|---|---:|
-| 1. Logical and physical lowering | Complete Basic HW1 (CQ → RelationalPlan), HW2 (RelationalPlan → IndexRequirements), and HW3 (requirements → sequential RustAccessPlan residual) | 6 |
-| 2. Execution control | Study the supplied pull lowering, then lower the same accesses to a staff-supplied push target without changing the concrete access choices | 4 |
+| 1. Logical and physical lowering | Complete Basic HW1 (CQ → RelationalPlan), HW2 (RelationalPlan → IndexRequirements), and HW3 (requirements → Physical → Structures → Rust) | 6 |
+| 2. Execution control | Study the supplied pull program, then lower the same Structures to a staff-supplied push target without changing the chosen structures | 4 |
 | 3. Semijoin reduction | Implement a semijoin and both Yannakakis passes over a supplied join tree | 8 |
 | 4. Triejoin | Implement leapfrog intersection and variable-at-a-time enumeration using a supplied **variable order** and tries | 12 |
 | 5. Semi-naive evaluation | Maintain full and delta relations, remove duplicates, and run to a fixed point | 10 |
@@ -159,9 +154,8 @@ end of Week 14. Required recursion will be bounded to linear positive rules
 unless the starter code supplies general delta-rule generation.
 
 Every release consists of code and tests—no proposal or long report. The
-current Stage-1 gate structurally checks the complete residual Rust program and
-its occurrence-annotated Plan, checks the resulting explicit iterator plan,
-applies the supplied IteratorPipeline-to-Rust semantic lowering, compiles each
+current Stage-1 gate checks each intermediate module against its language
+contract and the previous stage's correspondence check, compiles each
 fixed fixture with rustc, runs it, and checks expected rows. The fixtures
 include self-join and multiple-index reuse, a proper multi-column map, a used
 input consumed once, an unused input never iterated, lazy partial consumption,
@@ -178,8 +172,8 @@ The recommended Optional Homework 4 is the guided
 [Ascent-style negation and aggregation extension](HW4-OPTIONAL.md). Students
 extend the CQ body IR and safety judgment, add logical `AntiSemijoin` and
 `AggregateApply` operators to RelationalPlan, extend index selection, and lower
-the new operators to the occurrence-annotated concrete Rust plan. The supplied
-pull route continues from those concrete accesses. HW4 is opt-in and does not
+the new operators through Physical and Structures to the printed Rust
+program. HW4 is opt-in and does not
 replace or block a required release stage.
 
 Four further advanced-track designs are recorded in
@@ -198,7 +192,7 @@ Optional HW4 cumulatively edits the production grammar and passes and
 continues to use `mini_linq!`; its `hw4` feature gates only optional test
 targets. A backend alternative gets an explicit macro and typed compiler
 function when it is implemented. Cargo features do not silently change the
-semantics of `mini_linq!`, `access_to_distinct_iter!`, or another baseline macro. Tracks whose
+semantics of `mini_linq!`, `structures_to_rust!`, or another baseline macro. Tracks whose
 design decisions conflict are released on separate checkpoint branches unless
 staff provides a combined contract and test suite.
 
@@ -220,22 +214,23 @@ credit.
 The project uses Rust with a procedural-macro CQ frontend. Staff supplies the
 crate configuration and direct Syn syntax definitions, including derived
 parsing and token emission. Staff also supplies the direct `mini_linq`,
-`choose_index_policy`, `base_index_demands`, `lower_base_hash`, `access_to_distinct_iter`, and `pipeline_to_distinct_iter`
+`index_demands`, `lower_physical`, `select_structures`, and `structures_to_rust`
 proc-macro entries. Each
 entry parses one `TokenStream` into its typed source and calls the corresponding
 typed compiler function directly. Grammar failures become span-aware `syn::Error`
 diagnostics emitted as `compile_error!`. The typed compiler function checks
 source semantics and returns the same diagnostic type; the macro entry does
-not duplicate that check. Students implement only three typed functions.
+not duplicate that check. Students implement the typed functions behind those entries.
 `cq_query_lowering::written_order::compile(&cq::Module)` returns
 `syn::Result<relational_plan::Module>` for CQ to the exact named logical plan.
-`cq_index_policy::base_demands::compile(&relational_plan::Module)` returns
+`cq_index_policy::compile(&relational_plan::Module)` returns
 `syn::Result<index_requirements::Module>` preserving that full plan and adding
 the exact requirements.
-`cq_relation_lowering::base_hash::compile(&index_requirements::Module, &syn::Path)` returns
-`syn::Result<syn::File>` containing the complete staged Rust program and one
-expression-position
-`access_to_distinct_iter! { rust_access_plan::Plan }` region. Inside each body they inspect
+`cq_physical_lowering::compile(&index_requirements::Module, &Policy)` and
+`cq_structure_selection::compile(&physical::Module, &Policy)` record the
+physical operators and the structures that answer each read, and
+`cq_physical_realization::compile(&structures::Module, &Endpoints)` returns
+`syn::Result<syn::Expr>`: one Rust block over the `cq-storage` traits. Inside each body they inspect
 the borrowed source and construct the complete target with `quote!` and
 `syn::parse2`.
 
@@ -245,12 +240,12 @@ relation. The exact CQ-to-RelationalPlan and
 RelationalPlan-to-IndexRequirements relations and the physical edge's
 covered-input/`Ok` definedness predicate compile out in release builds. The
 generated physical Rust is inspected structurally by staged fixtures.
-The Basic-HW3 harness checks the Plan annotations, applies the supplied pull
-operator lowering, checks the explicit IteratorPipeline, emits Rust, compiles
+The Basic-HW3 harness checks Physical and Structures against their language
+contracts and correspondence checks, prints Rust, compiles
 the resulting standalone file with rustc, executes it, and checks fixed fixture-specific
-results. The physical compiler also checks the generated storage and Access
-wiring against its source; this structural audit does not prove arbitrary
-embedded Rust or provider implementations correct. The fixture harness is
+results. `cq_physical_realization::check` compares the printed program
+against its Structures source; this structural audit does not prove arbitrary
+embedded Rust or state-provider implementations correct. The fixture harness is
 not a dynamic CQ/DuckDB oracle and not a generic `Pass` or `WellFormedIr` trait
 system.
 For each IR, diagnostic `contract::check` and Boolean
@@ -260,31 +255,29 @@ judgment. Every public typed compilation entry calls its source's diagnostic
 in debug and release builds. Macro entries do not repeat this check. Tests and
 tools may also call it directly. Debug postconditions check the transformation
 separately; they are not the source-validation gate.
-`cq_query_lowering::written_order::compile`, `cq_index_policy::base_demands::compile`, and `cq_access_lowering::to_pipeline::compile` own nominal target
-well-formedness in postconditions. The physical endpoints return typed Rust AST nodes, while each
-local proc-macro entry parses its embedded Plan before calling the matching
+`cq_query_lowering::written_order::compile`, `cq_index_policy::compile`, `cq_physical_lowering::compile`, and `cq_structure_selection::compile` own nominal target
+well-formedness in postconditions. The realization endpoint returns a typed Rust AST node, while each
+proc-macro entry parses its embedded module before calling the matching
 typed function. Malformed grammar and invalid source semantics both produce
 `syn::Error` diagnostics; a debug edge-contract failure means a lowering
 violated its specified transformation.
 Students do not write a parser, printer, procedural-macro entry point, or
-parallel Rust builder API. The third pass emits actual Rust collection
+parallel Rust builder API. The final pass emits actual Rust collection
 construction and access expressions rather than another descriptor language.
-A supplied `cq_access_lowering::to_pipeline::compile` pass consumes the occurrence-annotated
-`rust_access_plan::Plan` and produces `iterator_pipeline::Pipeline`; supplied
-`cq_pipeline_lowering::distinct_iter::compile` returns one ordinary iterator expression. The plan
-retains binary operator and intermediate-record boundaries, while the emitted
+Supplied `cq_physical_realization::compile` consumes a `structures::Module`
+and returns one ordinary Rust block whose value is an iterator of answer
+tuples. Structures retains operator and intermediate-result boundaries, while the emitted
 combinators retain resumable state. Calling `next()` or a consumer such as
-`any()` executes query traversal; `Storage::materialize` drains the root into
-a collection. Other consumers can drain it without storing the answers.
+`any()` executes query traversal; the caller collects the root into
+a collection or drains it without storing the answers.
 No async runtime is needed for finite in-memory
 sources. The later push
 checkpoint targets an explicit staff-supplied Rust mechanism; students do not
 have to invent the callback/channel IR or runtime shell.
 
 The current starter supplies the logical syntax, `relational_plan::Module`,
-`rust_access_plan::Plan`, `iterator_pipeline::Pipeline`, their local `contract`
-modules, both supplied pull
-lowerings, and the compiler test
+`index_requirements::Module`, `physical::Module`, `structures::Module`, their local `contract`
+modules, the supplied structure selection and pull-program printer, and the compiler test
 harness. Later releases add richer workload,
 reference, and benchmark infrastructure.
 Students implement only the named compiler and execution passes; they do not

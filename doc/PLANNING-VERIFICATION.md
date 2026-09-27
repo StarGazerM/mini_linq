@@ -50,7 +50,7 @@ fixed authored answers
 
 This is logical validation. The removed compiled-backend/public-query matrices
 and their runtime effect counters are not current evidence. No existing golden
-RA fixture alone proves that a new physical provider can execute it.
+RA fixture alone proves that a new physical policy can execute it.
 
 ## Twenty-five known query patterns
 
@@ -128,8 +128,8 @@ that connectivity alone is not a universal cost argument.
 
 The authored reduction plans spell semijoins using join/project so their
 construction can be interpreted independently. Production RA also has an
-explicit Semijoin operator. Neither representation currently has a migrated
-physical semijoin provider in the new slice/map family.
+explicit Semijoin operator, which Physical realizes as `semi` (membership on
+the key).
 
 ## Reproduce current checks
 
@@ -137,7 +137,7 @@ physical semijoin provider in the new slice/map family.
 cargo test -p cq-query-lowering --all-features
 cargo test -p cq-query-lowering --all-features --release
 cargo test -p cq-index-policy
-cargo test -p mini-linq --test physical_realization --test physical_variants --test physical_query --test physical_projection
+cargo test -p mini-linq --test physical_query
 cargo test --workspace
 ```
 
@@ -145,18 +145,11 @@ cargo test --workspace
 it does not enable the separate unfinished `cq-ir/hw4` exercise. Workspace
 `--all-features` is not the ordinary completion gate.
 
-The [physical realization tests](../crates/mini-linq/tests/physical_realization.rs)
-compare actual macro boundaries against authored IX, Physical and Access
-fixtures and execute a borrowed heterogeneous join. The
-[provider variants](../crates/mini-linq/tests/physical_variants.rs) cover local
-provider replacement, Rename column order, caller-defined output and hygiene.
-The [actual realization trace](ix-physical/realization-trace/review.md) separates
-immediate provider callbacks from completed Access. These tests cover that
-admitted domain separately from the 25 logical plans.
-
-The separate [full-CQ trace](ix-physical/query-trace/review.md) follows the
-written-order planner through terminal projection for one heterogeneous chain.
-[Its test](../crates/mini-linq/tests/physical_query.rs) checks the borrowed result
-and 256 input subsets against independent relational enumeration. This is
-additional physical coverage of one supported query, not compiled execution
-of all 25 reference plans.
+The [full-chain test](../crates/mini-linq/tests/physical_query.rs) exercises
+every stage after IX: hosts read in place through their declared keys,
+compiler-built hash indexes, a user-defined index type through
+`#[index(Type)]`, merge joins over built ordered maps, Yannakakis semijoin
+passes as membership tests, a bounded scan of an ordered host, and a
+computed column, each checked against independent relational enumeration.
+This is additional physical coverage of supported queries, not compiled
+execution of all 25 reference plans.

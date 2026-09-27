@@ -1,10 +1,9 @@
 # MiniLinq languages and compilation boundaries
 
-The common query path is `CQ → RA → IX → Physical → Rust[Access]`. The
-[design contract](IX-PHYSICAL-REDESIGN.md) defines the post-IX boundary, and the
-[crate map](COMPILER-STRUCTURE.md) identifies its implementation owners.
-The syntax below distinguishes language validity from the narrower domain of a
-selected physical implementation.
+The common query path is `CQ → RA → IX → Physical → Structures → Rust`. The
+[crate map](COMPILER-STRUCTURE.md) identifies each stage's implementation
+owner. The syntax below distinguishes language validity from the narrower
+domain a caller's policy admits.
 
 ## Typed boundaries
 
@@ -12,23 +11,18 @@ selected physical implementation.
 |---|---|
 | CQ → RA | `cq_query_lowering::{written_order,clause_prefix,hypergraph}::compile` |
 | RA → IX | `cq_index_policy::compile` |
-| IX plus explicit assignments → Physical | `cq_physical_selection::given_bindings` |
-| Physical → Rust[Access] | `cq_physical_lowering::{begin,resume}` and selected external macros |
-| Existing Access → Pipeline | `cq_access_lowering::to_pipeline::compile` |
-| Existing Access → eager Rust set | `cq_access_lowering::to_set_loops::compile` |
-| Existing Pipeline → Rust | `cq_pipeline_lowering::{distinct_iter,collect_set,support_iter,exists}::compile` |
+| IX + policy → Physical | `cq_physical_lowering::compile` |
+| Physical + policy → Structures | `cq_structure_selection::compile` |
+| Structures → Rust | `cq_physical_realization::compile` |
 
 `mini-linq` supplies procedural entries and transports each typed input/output.
-External providers and RA rules are executable macros. Their callback messages
-are administrative syntax inside Physical realization, not a new query stage.
-Syntax types and validity checks live in `cq-ir`.
+The policy and the distinct-state provider are caller-resolved macro slots
+(`physical_policy!`, `select_structures!`, `structures_to_rust!`,
+`distinct_state!`). Syntax types and validity checks live in `cq-ir`.
 
-The current realizer emits a Rust expression in a caller-written host. Input
-identifiers refer to bindings in that scope. The CQ `struct Name;` is retained
-program metadata; it does not promise a generated `build/run/query` API.
-Push/pull placement in the redesigned architecture remains open. The existing
-Access and Pipeline implementations are independently usable endpoints with
-explicit observation contracts.
+The printer emits a Rust block in a caller-written host. Input identifiers
+refer to bindings in that scope. The CQ `struct Name;` is retained program
+metadata; it does not promise a generated `build/run/query` API.
 
 ## CQ and Rust leaves
 
@@ -102,12 +96,12 @@ literals and comparisons `==`, `!=`, `<`, `<=`, `>`, `>=`. Calls/arithmetic are
 outside that movable fragment. [Rust-expression helpers](RUST-EXPRESSION-HELPERS.md)
 describe lexical free-name and pattern-binding analysis.
 
-Column types are operational, not comments. The example providers emit concrete
-Rust reference types using the declared columns. Collection and consumer trait
-requirements are local choices: hash-map columns require the map's Eq/Hash
-operations, sorted-map columns require ordering, and a set consumer requires
-Eq/Hash on its result. There is no universal payload `Clone` requirement or
-implicit deterministic sorting step.
+Column types are operational, not comments. Host maps and built structures are
+typed over the declared columns. Trait requirements are local choices: a
+hash-keyed read requires Eq/Hash on its key columns, an ordered read requires
+Ord, and a distinct provider requires Eq/Hash or Ord on the rows it retains.
+There is no universal payload `Clone` requirement or implicit deterministic
+sorting step.
 
 ## Named relational algebra
 
@@ -156,10 +150,7 @@ relational {
 }
 ```
 
-This is a syntax illustration, not a captured complete expansion or a promise
-that current physical providers implement its full-column index. Terminal
-Project is supported separately; that does not make the entire triangle
-physically admitted.
+This is a syntax illustration, not a captured expansion.
 The written-order CQ policy emits one Rename per occurrence, a left-deep join
 fold, a final Project and output metadata. The other planners own different
 scheduling rules, including YA reductions. Planning precedes IX and storage
@@ -238,107 +229,20 @@ probe/semi/range read to be answered by a host key through the rename or a
 built entry on those columns, every merge side ordered on its key (or a pipe
 sorted on it by its own merge), and the return canonical.
 
-## Access and its independent consumers
-
-```ebnf
-RustAccessPlan ::= Output ":-" [Clause ("," Clause)*] ";"
-Output         ::= Atom "=>" "(" RustExpr ")"
-Clause         ::= BodyItem "=>" RustAccess
-RustAccess     ::= "bind" RustPat "<-" "(" RustExpr ")"
-                 | "if" "(" RustExpr ")"
-```
-
-The local Access contract currently supports positive occurrences, Rust guards,
-and `let`; accepting a CQ body form in the parser does not imply an Access
-lowering for optional negation/aggregation.
-
-Each logical occurrence is paired with concrete Rust access. Storage types,
-index selection and lookup expressions are already supplied. Fresh-variable
-occurrences require `bind`, whose pattern binds exactly the fresh variables in
-occurrence order. One fresh variable may use a simple identifier; otherwise
-an exact tuple pattern is required. A fully bound occurrence uses `if` and
-binds nothing. A guard requires already-bound logical dependencies. The head
-uses bound variables and carries the selected Rust output expression.
-
-`bind p <- (e)` extends the current logical environment with each item supplied
-by `e`; the source may depend on preceding bindings. It specifies neither a
-Rust loop nor an iterator adapter. A pull consumer demands the source only when
-polled; the eager consumer traverses it while executing the region. Exact-family
-Rows/Matches providers return only an iterator expression, its item pattern,
-and a logical witness. The selected RA lowering assembles the Access bindings;
-an Output provider returns only its witness.
-
-An empty body denotes one empty binding: `out() => (()) :- ;`. Access labels
-retain the logical binding structure for checking; they do not re-plan RA or
-select storage. Handwritten Access can be broader than the current example
-providers' output domain.
-
-The current Physical realizer requires each region's logical head to equal its
-RA heading in sorted order. Final output metadata must have that normalized
-order too. Its physical carrier is selected independently: the tests include
-both a flat reference tuple and a caller-defined nested reference tuple.
-
-## Existing IteratorPipeline
-
-```ebnf
-IteratorPipeline ::= IterDefinition* "return" IterId ";"
-IterDefinition   ::= IterId "=" IterOperator ";"
-IterOperator     ::= "unit" "yield" RustExpr
-                   | "scan" RustPat "in" "(" RustExpr ")" "yield" RustExpr
-                   | "join" IterId "as" RustPat "with" RustPat
-                     "in" "(" RustExpr ")" "yield" RustExpr
-                   | "filter" IterId "as" RustPat "if" "(" RustExpr ")"
-                   | "project" IterId "as" RustPat "yield" "(" RustExpr ")"
-                   | "distinct" IterId
-```
-
-Each definition names a lazy stream. Every non-source consumes the immediately
-preceding stream; the returned stream is terminal distinct. Binding patterns
-and retained tuples make edges explicit; names need not be `iterN`. Projection,
-renaming and unused-binding removal can occur before another join/filter.
-This language denotes a single-consumer chain, not shared RA relations.
-
-Access-to-Pipeline emits these named definitions, not nested Rust adapters.
-The final Pipeline-to-Rust lowering emits one Rust adapter local per definition;
-dependent `join` becomes `flat_map` only there. The distinct
-iterator endpoint defers source-expression evaluation and distinct-state
-construction until first polling, resumes on later polls, and does not drain
-remaining rows on drop. Iteration executes when advanced (`next`, `any`, full
-consumption); collection is optional. Support-stream, existence and set endpoints
-have their own completed-result and observation contracts. `ToTokens` then emits
-the resulting Rust AST without performing another semantic transformation.
-
-`access_to_set_loops!` is an existing separate Access implementation that emits
-eager loops and a set directly. It is not the same typed edge or observation
-contract as Access → Pipeline → lazy iterator. Their independent availability
-does not settle push/pull placement in the new architecture.
-
 ## Implemented domain and evidence
 
-The current external family implements direct input Rename, indexed binary
-NaturalJoin, and terminal Project over borrowed scalar slices and two-column
-hash/sorted maps. IX
-ordinals are translated through Rename to reuse a physical first-column index.
-A prior left Access region can be composed into the next join. Unsupported
-operator/storage combinations reject; there is no implicit clone, intermediate
-collection, scan fallback, or generated host API.
-
-General materialization, indexes over intermediate regions, semijoin/YA block
-access, nonterminal projection, reordered/computed output metadata and broader
-operator support remain migration
-work. The logical grammar and planner tests are not evidence of their physical
-implementation. The [runnable example](../examples/composition/README.md),
-[realization tests](../crates/mini-linq/tests/physical_realization.rs), and
-[provider variants](../crates/mini-linq/tests/physical_variants.rs) exercise the
-implemented domain. The [full-CQ trace](ix-physical/query-trace/review.md) also
-covers terminal projection; the selected rule rejects intermediate projection
-because dropped logical-variable scope needs separate handling. Authored
-expectation fixtures are distinguished from actual
-macro captures in those tests.
+The [full-chain test](../crates/mini-linq/tests/physical_query.rs) and the
+[runnable example](../examples/composition/README.md) exercise every stage:
+hosts read in place through their declared keys, compiler-built hash indexes,
+a user-defined index type through `#[index(Type)]`, merge joins over built
+ordered maps with a sorted pipe side, Yannakakis semijoin passes as membership
+tests, a bounded scan of an ordered host, and a computed column. Each pass
+also has a `check` over its source and target, and the languages have parser
+round-trip tests in `cq-ir`. The logical grammar and planner tests are not
+evidence of physical implementation.
 
 ```sh
 cargo test -p cq-ir
-cargo test -p cq-index-policy -p cq-physical-selection -p cq-physical-lowering
-cargo test -p mini-linq --test physical_realization --test physical_variants --test physical_query --test physical_projection --test physical_pull
-cargo test -p mini-linq --test endpoint --test collect_endpoints --test execution_models
+cargo test -p cq-index-policy -p cq-physical-lowering -p cq-structure-selection -p cq-physical-realization
+cargo test -p mini-linq --test physical_query
 ```

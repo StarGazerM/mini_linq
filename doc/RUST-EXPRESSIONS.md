@@ -164,12 +164,11 @@ suites are:
 These inspect RA and derivations. The old compiled-expression gallery,
 materialized/lazy host APIs, runtime evaluation-count matrix and
 `compiled-workloads` feature are removed; they are not verification of the
-current physical path. Physical execution of expression-rich and YA plans is
-still unported. The current borrowed slice/map realization has separate tests
-and [actual expansion captures](ix-physical/realization-trace/review.md)
-for its admitted domain. A separate [full-CQ trace](ix-physical/query-trace/review.md)
-covers an ordinary joined query with terminal projection; it contains none of
-the expression-rich Select/Extend operations discussed here.
+current physical path. The physical chain has its own
+[full-chain test](../crates/mini-linq/tests/physical_query.rs) for its
+admitted domain, including pushed comparisons that bound an ordered scan and
+a computed column; the broader expression-rich and YA planning discussed
+here is verified logically, not by compiled execution.
 
 ```sh
 cargo test -p cq-query-lowering --all-features \

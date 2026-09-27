@@ -7,8 +7,8 @@ syntax trees, proc macros, and pass contracts. The central bridge is:
 > A program can be represented as a value, transformed into another value,
 > and finally emitted as an ordinary Rust expression.
 
-The [complete Triangle expansion](DSL.md#complete-triangle-expansion) is the
-running example. It shows the whole program after every transformation, so no
+The Triangle example in [DSL.md](DSL.md) is the
+running example. It shows the program after every transformation, so no
 concept depends on an invisible compiler stage.
 
 ## Learning outcomes
@@ -52,8 +52,8 @@ fn normalize(
 
 `IntoIterator` is not a fixed collection type. It names a value that can be
 consumed to produce rows. Calling `into_iter()` takes that value. This matters
-because the generated `Program::build` must consume each used public input
-exactly once, regardless of whether the caller supplied a `Vec`, array, set,
+because a structure built through `cq_storage::Build` consumes its source
+rows exactly once, regardless of whether the caller supplied a `Vec`, array, set,
 or user-defined iterator.
 
 Normalizing to `HashSet<Row>` establishes set semantics before storage layout
@@ -136,7 +136,7 @@ ordinary compiled value with a hidden concrete type; it does not materialize
 the values and it does not create a thread or task.
 
 This matches database-driver language: building the result cursor is a query
-step, while creating physical state happened in `Program::build`.
+step, while built structures are created at the top of the printed block.
 
 Then show partial consumption:
 
@@ -303,7 +303,7 @@ mini_linq(TokenStream)
 ```
 
 The same pattern repeats for RelationalPlan, IndexRequirements,
-RustAccessPlan, and IteratorPipeline. There is no extra public `expand_*`
+Physical, and Structures. There is no extra public `expand_*`
 wrapper because the proc-macro entry already owns the only token-level work.
 
 ## Sequence 8: local contracts and edge contracts
@@ -366,26 +366,29 @@ empty binding is needed. Rust's standard library does not define a general
 higher-kinded `Monad` or monad-transformer trait, and this compiler does not
 need one.
 
-The explicit IteratorPipeline appears before these concrete combinators:
+The explicit Physical module appears before these concrete combinators:
 
 ```text
-iter0 = scan (x,) in (left.iter()) yield (x,);
-iter1 = join iter0 as (x,) with (y,) in (right_source) yield (x, y,);
-iter2 = project iter1 as (x, y,) yield ((x.clone(), y.clone(),));
-iter3 = distinct iter2;
-return iter3;
+physical {
+    r0 = alias rename;
+    r1 = let rename;
+    r2 = pipe probe[y] r0, r1;
+    r3 = pipe select r2;
+    r4 = pipe canon project r3;
+    return r4;
+}
 ```
 
-That plan states the physical operator and dataflow structure, but not the
-host-language spelling. `cq_pipeline_lowering::distinct_iter::compile` is the semantic lowering
-that maps it to `map`, `flat_map`, and `filter`. This keeps the final emitter
+That module states the physical operator and dataflow structure, but not the
+host-language spelling. Structures then names what answers each read, and
+`cq_physical_realization::compile` is the printer
+that maps them to `map`, `flat_map`, and `filter`. This keeps the final emitter
 honest: it does not invent a join or intermediate result while printing.
 
 ## Sequence 10: root laziness and distinct state
 
 If the source expression itself can perform work, merely creating adapters
-outside a closure may evaluate it too early. The supplied Rust lowering wraps
-all named locals in:
+outside a closure may evaluate it too early. `once_with` defers a source:
 
 ```rust
 fn deferred() -> impl Iterator<Item = i32> {
@@ -398,8 +401,9 @@ fn deferred() -> impl Iterator<Item = i32> {
 ```
 
 The closure is invoked only when the outer iterator is first advanced. The
-complete Triangle final residual uses the same shape and declares one
-`let iterN` for every operator.
+printed program over hosts alone evaluates to a lazy iterator of the same
+kind; a program that builds structures collects its answers inside the
+block, since the structures live only for the block.
 
 Building the outer iterator still constructs closure and adapter state.
 Advancement by `next()` or `any()` performs query work without collecting any
@@ -408,8 +412,8 @@ it is one possible consumer, not the trigger required for all iterator execution
 The nested adapter types persist even when each construction has a `let` name.
 
 CQ projection has set semantics, while a join cursor may enumerate several
-witnesses for the same result. IteratorPipeline therefore includes an explicit
-`Distinct` after `Project`. Its Rust implementation owns state:
+witnesses for the same result. Physical therefore flags the returned result
+`canon` when uniqueness is not inferred. Its Rust implementation owns state:
 
 ```rust
 fn distinct_rows(
@@ -422,7 +426,7 @@ fn distinct_rows(
 
 The filter is still lazy, but memory grows with first-seen results. It clones
 the owned result tuple into `seen`; this is not a clone of an input row or an
-index payload. `Storage::materialize` only collects and sorts this already
+index payload. Collecting only stores this already
 distinct result cursor.
 
 ## Mapping Rust topics to homework passes
@@ -460,24 +464,24 @@ calculate every inferred attribute-set heading by hand.
 
 ### Lab C: two namespaces
 
-Place the Triangle RelationalPlan and IteratorPipeline side by side. Ask which
-names denote sets, which denote cursors, where duplicate derivations can arise,
-and why only the cursor side needs explicit `Distinct`.
+Place the Triangle RelationalPlan and Physical module side by side. Ask which
+names denote sets, which are `pipe` cursors, where duplicate derivations can arise,
+and why only the returned result needs `canon`.
 
 ### Lab D: inspect one compiler layer at a time
 
-Run `cargo xtask explain triangle`, then open the six generated `.rs` files
+Run `cargo xtask explain triangle`, then open the generated `.tokens` files
 under `target/mini-linq-explain/triangle/`. Use the editor's compare command on
 adjacent files to inspect them. They are syntax/diff snapshots outside Cargo's
 crate graph, not Rust Analyzer type-checked modules. Compare:
 
-1. `mini_linq!` to RelationalPlan;
-2. RelationalPlan to the index overlay;
-3. the complete staged Rust file;
-4. RustAccessPlan to IteratorPipeline; and
-5. the final named-local Rust expression.
+1. `mini_linq!` to RelationalPlan; and
+2. RelationalPlan to the index overlay.
 
-Students should compare each result with the six authoritative DSL artifacts,
+The stepper stops at IX; read the Physical, Structures and printed Rust
+stages from the [full-chain test](../crates/mini-linq/tests/physical_query.rs).
+
+Students should compare each result with the authoritative DSL artifacts,
 not inspect only the final expansion. They can stop early with, for example,
 `cargo xtask explain triangle --through relational-plan`; a later failure
 leaves the successful earlier artifacts and an `ERROR.md` diagnostic.
@@ -492,10 +496,10 @@ does not require that debugger.
 
 ### Lab E: partial cursor consumption
 
-Build Triangle storage, call `query()`, request one row, pause, request a
-second row, and then drop the cursor. Instrument a source expression to verify
-that constructing the cursor performs zero source work and that dropping it
-does not scan remaining rows.
+Evaluate the printed Triangle block over host maps, request one row, pause,
+request a second row, and then drop the cursor. Instrument a source
+expression to verify that constructing the cursor performs zero source work
+and that dropping it does not scan remaining rows.
 
 ## Common misconceptions to surface
 
@@ -509,15 +513,15 @@ does not scan remaining rows.
 - **“`iter2` is a `for` loop.”** It is a lazy cursor value with resumable state.
 - **“An iterator runs only when materialized.”** `next()` and short-circuit
   consumers also execute it; collecting outputs is optional.
-- **“IteratorPipeline already means `flat_map`.”** It names the operator edge;
-  the next pass chooses the exact Rust combinator.
+- **“A Physical `probe` already means `flat_map`.”** It names the operator edge;
+  the printer chooses the exact Rust combinator.
 - **“Quoting is code generation.”** Once the final target is `syn::Expr`, the
   quoting step is pure token emission. Semantic work must already be done.
 - **“Laziness means indexes are built on first `next()`.”** In this teaching
-  composition, `Program::build` eagerly prepares storage; query traversal is
-  lazy. Resource construction timing belongs to the selected realization.
-- **“Materialization provides set semantics.”** Explicit cursor `Distinct`
-  does; materialization only collects and sorts.
+  composition, the printed block builds its structures at the top; query
+  traversal follows. Resource construction timing belongs to the selected realization.
+- **“Materialization provides set semantics.”** The explicit `canon` flag and
+  the caller's distinct-state provider do; materialization only collects.
 - **“Async makes pull more lazy.”** Async adds suspension for waiting, not the
   demand-driven iterator semantics used by finite in-memory execution.
 

@@ -1,2 +1,0 @@
-43 actual invocation pairs; 593 original source hashes unchanged.
-Recording returns the original TokenStream without reparsing.

@@ -8,9 +8,7 @@
 //! (pipe, let, alias) its reads allow; Structures binds every keyed read to
 //! a host key fact or a Rust type built over the result. Below Structures a
 //! printer emits Rust; [`state_protocol`] is the one runtime-call shape
-//! execution endpoints use for distinct and sink state.
-//! [`rust_access_plan::Plan`] and [`iterator_pipeline::Pipeline`] remain as
-//! hand-staged entry points into the endpoints.
+//! the printed program uses for distinct state.
 
 use syn::ext::IdentExt;
 use syn::{Ident, Index, Token};

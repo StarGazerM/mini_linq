@@ -24,9 +24,9 @@ Use the starter branch's corresponding source file when working on that release.
 
 ## Read these two artifacts
 
-Compare the complete [CQ](DSL.md#1-entire-cq) and
-[RelationalPlan](DSL.md#2-entire-relationalplan-program) Triangle programs.
-Ignore the later four residuals until later homework.
+Compare the complete [CQ](DSL.md#cq-and-rust-leaves) and
+[RelationalPlan](DSL.md#named-relational-algebra) Triangle programs.
+Ignore the later languages until later homework.
 
 The output preserves the complete source program and adds a named
 relational-algebra fragment. Each `rN` is a serialized DAG reference to a
@@ -90,7 +90,7 @@ cargo xtask explain triangle --through relational-plan
 ```
 
 The files are written under `target/mini-linq-explain/triangle/` as
-`01-cq.rs` and `02-relational-plan.rs`. In VS Code, run **MiniLinq: Explain
+`01-cq.tokens` and `02-relational-plan.tokens`. In VS Code, run **MiniLinq: Explain
 query**; the Homework 1 starter defaults to `relational-plan`.
 
 ## Definition of done
@@ -98,7 +98,7 @@ query**; the Homework 1 starter defaults to `relational-plan`.
 Run the Homework 1 edge test and formatting check:
 
 ```text
-cargo test -p cq-compose --test edge_contracts cq_to_relational_plan_contract
+cargo test -p cq-query-lowering --test written_order
 cargo fmt --all --check
 ```
 

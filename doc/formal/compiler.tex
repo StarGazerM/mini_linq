@@ -1,5 +1,5 @@
 \input{common}
-\title{MiniLinq: Relational Planning and Open Physical Providers}
+\title{MiniLinq: Relational Planning and Index Requirements}
 \author{Syntax, semantics, compilation rules, and expansion expectations}
 \date{18 September 2026}
 \begin{document}
@@ -7,29 +7,22 @@
 \begin{abstract}
 MiniLinq compiles conjunctive queries through named relational algebra and IX,
 which records both required indexes and explicit references from relation-access
-positions. A replaceable policy produces Physical IR, recording individual
-relation/index providers and the lowering of each RA definition. Realization
-follows these fixed choices without rerunning selection. The proposed common
-compiler has no closed catalogue of data structures or global relation-implementation
-switch. We specify both boundaries with syntax, semantics, algorithmic inference
-rules and authored expectations for heterogeneous relation access.
-The generic driver and a borrowed exact-index instance are implemented and
-checked against real macro expansion. General stored intermediates and
-block/YA realization remain outside the implemented domain.
-The relational planning theory is retained; the placement of push/pull and
-lazy-to-eager transformations remains open.
+positions. A caller-supplied, query-independent policy then fixes one physical
+operator per result (Physical) and binds every keyed read to a host key fact or
+a built Rust structure (Structures); a printer emits one pull program over the
+runtime operation traits. We specify CQ, RA, planning and IX with syntax,
+semantics and algorithmic inference rules; Physical and Structures are
+specified by the \code{cq-ir} module documentation and \path{doc/DSL.md} until
+a formal treatment is written.
 \end{abstract}
 \input{introduction}
 \input{research_contract}
-\input{overview}
 \input{foundations}
 \input{languages}
 \input{constraint_planning}
 \input{planning}
 \input{ix_physical_contract}
-\input{physical}
 \input{staging}
-\input{extensibility}
 \input{evaluation}
 \input{related_work}
 \begin{thebibliography}{99}

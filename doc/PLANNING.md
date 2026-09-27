@@ -1,9 +1,9 @@
 # Logical planning and its compiler boundary
 
-The logical planners produce RA. They do not choose providers or an execution
+The logical planners produce RA. They do not choose structures or an execution
 model. The [verification guide](PLANNING-VERIFICATION.md) describes independent
-logical oracles and authored plans. Post-IX compilation follows the separate
-[IX/Physical design](IX-PHYSICAL-REDESIGN.md).
+logical oracles and authored plans. Post-IX compilation follows
+[Compiler ownership and composition](COMPILER-STRUCTURE.md).
 
 ## Ownership and composition
 
@@ -14,25 +14,23 @@ logical oracles and authored plans. Post-IX compilation follows the separate
 | Graph-planned CQ → RA, including YA | `cq_query_lowering::hypergraph::compile` |
 | Typed planner selection/report/replay | `cq_query_lowering::composition` |
 | RA → named index demands and uses | `cq_index_policy::compile` |
-| IX plus explicit assignments → Physical | `cq_physical_selection::given_bindings` |
-| Physical realization | `cq_physical_lowering::{begin,resume}` plus selected external providers/rules |
+| IX plus policy → Physical | `cq_physical_lowering::compile` |
+| Physical plus policy → Structures | `cq_structure_selection::compile` |
+| Structures → Rust | `cq_physical_realization::compile` |
 
 `choose_graph_or_prefix!` dispatches through caller-bound
 `cq_to_ra_hypergraph!` or `cq_to_ra_clause_prefix!`. Each planner passes its RA to
 `mini_linq::choose_index_policy!`; a caller can import `index_demands` under that
-name. IX then goes to the caller's `choose_physical!` policy. The Physical table
-records each relation/index provider and every operation's lowering separately.
-There is no default whole-query hash backend.
+name. IX then goes to the caller's `physical_policy!`, which appends a
+query-independent `policy { … }` and invokes `lower_physical!`; Physical
+records one operator and mode per result, and Structures records what
+answers each read. There is no default whole-query hash backend.
 
-Planning can be tested through the typed API without any physical provider.
-The current borrowed slice/map implementation admits direct input Rename,
-indexed NaturalJoin and terminal Project. The
-[full-CQ trace](ix-physical/query-trace/review.md) follows the written-order
-planner through that supported domain. Select, Extend, YA Semijoin and
-nonterminal projection do not yet have migrated physical rules. The
+Planning can be tested through the typed API without any policy. The
+[full-chain test](../crates/mini-linq/tests/physical_query.rs) follows the
+planners through the supported physical domain. The
 [runnable composition example](../examples/composition/README.md) starts from
-explicit RA; its [trace](ix-physical/realization-trace/review.md) is reported
-separately from the full-CQ query.
+explicit RA.
 
 The policies are Written, Connected, GreedyWidth and Auto. They use source order,
 connectivity or heading arity; they do not estimate cardinalities or perform
@@ -66,10 +64,10 @@ written algebra instead of rebuilding a plan from that annotation.
   remain barriers.
 - IX names indexes on exact RA versions: `i = @r[0,2]` uses ordinals in `r`'s
   sorted logical heading, and `j.right = i` records consumption. Empty shared
-  headings still require an explicit `[]` demand. No provider is chosen by IX.
-- Access associates logical occurrences with already-selected concrete Rust
-  leaves. Its existing execution endpoints do not participate in logical join
-  planning. Push/pull placement in the redesigned compiler remains unresolved.
+  headings still require an explicit `[]` demand. No structure is chosen by IX.
+- Physical fixes one physical operator and mode per result; Structures binds
+  every keyed read to a host key or a built type. Neither participates in
+  logical join planning.
 
 ## Administrative rules and contracts
 
@@ -131,6 +129,6 @@ YA complexity are outside the implemented planning claims.
 The current [planning tests](PLANNING-VERIFICATION.md) cover independent
 valuation/RA equality, intermediate YA support, derivation mutation and expression
 scheduling. They do not certify generated execution for expression-rich or YA
-programs after removal of the old physical backends. Physical realization has
-its own narrower integration tests and
-[actual expansion trace](ix-physical/realization-trace/review.md).
+programs after removal of the old physical backends. Physical lowering,
+structure selection and realization have
+their own narrower integration tests.

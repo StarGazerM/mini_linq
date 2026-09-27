@@ -12,22 +12,22 @@ when practical. If an option is shared, teams receive different workloads,
 claims, or adversarial cases. Students complete one extension deeply; combining
 tracks is not required.
 
-The current baseline is a genuine pull path. `cq_access_lowering::to_pipeline::compile` first exposes a
-named IteratorPipeline with results `iter0`, `iter1`, and so on, and `scan`,
-left-deep binary `join`, `filter`, `project`, and `distinct` operators. Each
-consumer explicitly names its predecessor. The supplied Rust lowering maps
-that plan to one lazy iterator that embodies the entire query execution. Each
+The current baseline is a genuine pull path. `structures_to_rust!` prints
+one Rust block over the `cq-storage` traits: it builds the chosen structures,
+then evaluates to one iterator of answer tuples that embodies the entire
+query execution. Each
 client call to `next` pulls one binding through the operator chain; intermediate
-tuples are streamed, not collected as relations. Public `Storage::query`
-constructs the result iterator without reading a row. Its only `for` loop is in
-an eager client that chooses to materialize the root iterator. Rust may inline
+`pipe` results are streamed, not collected as relations. A program over
+hosts alone evaluates to the lazy iterator itself; one that builds
+structures collects its answers inside the block, since the structures live
+only for the block. Rust may inline
 the emitted combinators, but operator fusion is not a requirement of this
 baseline.
 
 The synchronous push warm-up below is part of the required execution-control
 core. Tokio channels and the IVM continuation are separate pick-one options.
-Push branches from RustAccessPlan rather than translating the pull-specific
-IteratorPipeline. Async tasks and channels are a second push realization, not
+Push branches from Structures rather than translating the pull-specific
+printed program. Async tasks and channels are a second push realization, not
 a pull variant.
 
 ## Route graph and configuration rule
@@ -38,9 +38,9 @@ The required baseline is one explicit chain:
 CQ
   -- Basic HW1 --> RelationalPlan                         // rN DAG references
   -- Basic HW2 --> IndexRequirements(RelationalPlan)
-  -- Basic HW3 --> sequential Rust residual + RustAccessPlan
-  -- supplied pull --> IteratorPipeline                  // iterN edges
-  -- supplied Rust lowering --> lazy result-set Iterator
+  -- Basic HW3 --> Physical(IndexRequirements)           // operator and mode per result
+  -- supplied selection --> Structures(Physical)         // what answers each read
+  -- supplied printer --> lazy result-set Iterator
 ```
 
 The negation and aggregation option extends the first four languages rather
@@ -51,8 +51,8 @@ logical layer:
 Extended CQ with ! and agg
   --> Extended RelationalPlan with AntiSemijoin and AggregateApply
   --> Extended IndexRequirements preserving that entire plan
-  --> Extended sequential RustAccessPlan
-  --> the supplied pull route
+  --> Extended Physical and Structures
+  --> the supplied printer
 ```
 
 The general RelationalPlan already supplies the singleton zero-attribute `Unit`
@@ -76,7 +76,7 @@ The extension families are intentionally separate at first:
 
 | Track | Decision it exposes | Correct branch point |
 |---|---|---|
-| Push and async messages | who drives execution and how intermediate bindings move | `rust_access_plan::Plan` |
+| Push and async messages | who drives execution and how intermediate bindings move | Structures |
 | Parallel Rayon execution | work partitioning, parallel builders, and result ownership | IndexRequirements, before sequential physical Rust |
 | Multiple queries | global index sharing across independent query bodies | CQ, RelationalPlan, and IndexRequirements |
 
@@ -131,13 +131,13 @@ disabled without removing source validation. Tests and tools can also call
 
 The terminology is precise:
 
-- CQ, RelationalPlan, and IndexRequirements are whole-program IRs.
-- A complete `syn::File` containing a local macro invocation is a **staged Rust
-  program** or **program residual**.
-- The syntax object parsed by that local macro is a local IR.
-- `access_to_distinct_iter`, `push`, and `push_tokio` name transformations. They are not names for
+- CQ, RelationalPlan, IndexRequirements, Physical, and Structures are
+  whole-program IRs.
+- The Rust block printed by `structures_to_rust!` is the **printed pull
+  program**.
+- `structures_to_rust`, `push`, and `push_tokio` name transformations. They are not names for
   an otherwise unspecified query IR.
-- IteratorPipeline is the concrete operator target of `access_to_distinct_iter`; callback and
+- The printed pull program is the concrete target of `structures_to_rust`; callback and
   scheduled push transformations have different targets.
 
 ## Track A: push execution, Tokio channels, and an IVM continuation
@@ -160,7 +160,7 @@ method's consumer with one output row. The student implements only:
 
 ```rust
 fn compile_push(
-    source: &rust_access_plan::Plan,
+    source: &structures::Module,
 ) -> syn::Result<rust_callback_nest::Nest>;
 ```
 
@@ -219,7 +219,7 @@ The supplied emitter places the expansion in a method such as
 ```
 
 This is fused synchronous push through callbacks. Unlike the baseline
-IteratorPipeline, its final representation deliberately erases the operator
+printed pull program, its final representation deliberately erases the operator
 stream boundary into nested producer/consumer callbacks. It has no queue,
 backpressure, lazily returned result iterator, or parallelism. At the
 query-operator boundary each producer invokes its continuation; a leaf source
@@ -239,7 +239,7 @@ not runtime channels.
 ### A2. Advanced Tokio channel lowering
 
 Async message passing is a distinct, harder push target. It also branches from
-`rust_access_plan::Plan`; the annotated logical occurrences make it possible
+Structures; the physical operators and their heading columns make it possible
 to derive and check which prefix variables each message must carry.
 
 Staff supplies `tokio_channel_plan::Plan` and its checker/emitter. Its fields
@@ -319,7 +319,7 @@ Tokio plumbing. The only student transformation is:
 
 ```rust
 fn compile_push_tokio(
-    source: &rust_access_plan::Plan,
+    source: &structures::Module,
 ) -> syn::Result<tokio_channel_plan::Plan>;
 ```
 
@@ -428,8 +428,8 @@ has selected a single mutable `BTreeSet` and sequential builders:
 
 ```text
 RelationalPlan -> IndexRequirements(RelationalPlan)
-                    |-- sequential -> staged Rust with RustAccessPlan
-                    |                  |-- pull -> IteratorPipeline -> Rust Iterator
+                    |-- sequential -> Physical -> Structures
+                    |                  |-- pull -> printed Rust Iterator
                     |                  `-- push -> RustCallbackNest -> fused callback Rust
                     `-- parallel   -> RayonFoldPlan -> Rayon Rust
 ```
@@ -519,7 +519,7 @@ fixtures, sequential differential oracle, custom Rayon pools, and benchmark
 shell. Tests compare exact results at one, two, and four threads and cover
 duplicates, projection, misses, self-joins, shared and extra indexes,
 non-leading and multi-column keys, skew, and repeated runs. Pool construction
-and warm-up stay outside the timed `Program::run` call.
+and warm-up stay outside the timed query call.
 
 This path is naturally expressed with map/fold/reduce, but that does not make
 it the same assignment as async push. The first teaches partition-local state
@@ -589,8 +589,8 @@ membership key uses the already-normalized `relationN: HashSet<Row>` directly;
 it must not build a second identical `HashSet`. Exactly one final physical
 consumer moves each normalized relation, while any earlier genuinely distinct
 builder borrows it; a declared input unused by every query and written extra
-requirement is not iterated. It emits one query-local
-`access_to_distinct_iter! { rust_access_plan::Plan }` per query and returns a source-order result
+requirement is not iterated. It prints one query-local
+Rust block per query and returns a source-order result
 tuple from a single convenience `run` call:
 
 ```rust
@@ -613,8 +613,8 @@ pub trait SharedGraphApi {
 ```
 
 There is no `BatchPlan`: each named RelationalPlan and each
-occurrence-annotated RustAccessPlan remains local to one query, and each
-physical expansion is enclosed in its own Rust block. The global sharing facts
+Physical and Structures module remains local to one query, and each
+printed program is enclosed in its own Rust block. The global sharing facts
 live in the extended Program, the collection of query-local relational plans,
 canonical IndexRequirements, and the complete Rust file.
 

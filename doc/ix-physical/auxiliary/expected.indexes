@@ -1,8 +1,0 @@
-indexes {
-    i0 = @r[0];
-    i1 = @r[1];
-}
-uses {
-    j0.right = i0;
-    j1.right = i1;
-}

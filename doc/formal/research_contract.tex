@@ -14,34 +14,22 @@ follow the stated boundary: physical expansion cannot replace IX's explicit
 use references with independently reconstructed index analysis.
 
 \paragraph{Open physical configuration.}
-$\Omega$ supplies external provider definitions and $\eta$ is the replaceable
-physical-selection policy. Selection produces Physical IR
-$P=(\mathrm{IX},\Phi,\Lambda)$, where $\Phi=(\Phi_R,\Phi_I)$ binds relation
-and index identities to provider instances and $\Lambda$ selects a lowering
-for every RA definition. External host inputs have relation bindings but no
-separate lowering entry. Realization receives $P$, dispatches its recorded
-choices and establishes the compiled relation/view environment $\Gamma$.
-It does not invoke $\eta$ or reselect a provider. No global provider alias or
-compiler-owned data-structure enumeration replaces these maps.
-
-The proposed macro API slots are \texttt{choose\_physical!} for
-IX $\to$ Physical and \texttt{realize\_physical!} for
-Physical $\to$ Rust[Access]. Import aliases select their implementations.
-The compatibility premises of a provider or lowering are domain obligations;
-Rust subsequently checks applicable types and lifetimes. This contract does
-not posit a generic decision procedure for arbitrary semantic laws.
+The post-IX passes take explicit configuration $\chi$ from the caller: a
+query-independent policy stating host facts (the key a host value is stored
+under, whether that key is ordered, whether the value is canonical) and
+strategy (merge or probe joins, semijoin preference), plus \texttt{\#[index(Type)]}
+advice naming the Rust type built over a relation when the plan indexes it.
+Neither pass reselects a choice recorded by the previous one. Whether a value
+implements the operation trait each read needs is Rust's check at a guard the
+printer emits beside the value; those trait laws are stated in
+\path{crates/cq-storage/src/lib.rs} and checked by its representation tests.
 
 \paragraph{Residual syntax and ownership.}
 An expansion can return $C[h_1,\ldots,h_n]$, an ordinary Rust context containing
 lower-language quotations. Each hole records a remaining compilation task.
-A selected provider may emit concrete Rust construction and access expressions;
-a generic runtime relation-call layer is not mandatory. Provider instances
-must agree on storage, field interpretation, current views and ownership.
-Physical values may be borrowed rows, tuples of references or other supported
-representations. Provider callbacks pending during realization are
-administrative expansion steps, not another mandatory public IR stage. Any
-retained semantic provider dialect needs its own syntax and laws. Rust type
-checking alone does not establish the representation laws.
+The printed program borrows from hosts and built structures and copies no
+binding; an owned computed value crossing a join is a Rust move error. Rust
+type checking alone does not establish the representation laws.
 
 \paragraph{Three independent checks.}
 Acceptance requires
@@ -53,9 +41,8 @@ Acceptance requires
 The first checks compilation premises and conclusions. The second compares
 each actual macro output with its authored boundary fixture, ignoring only
 whitespace and source spans. The third checks representation laws and answers
-with independent oracles. Equal answers cannot compensate for global provider
-replacement, hardcoded dispatch, reselection during realization or an omitted
-boundary. Fixtures are revised
+with independent oracles. Equal answers cannot compensate for hardcoded dispatch,
+reselection in a later pass or an omitted boundary. Fixtures are revised
 through design review, never regenerated merely to bless changed output.
 
 \paragraph{Observation and status.}
@@ -64,7 +51,5 @@ consumer must implement the requested observation. Pure completed answers do
 not establish equal partial-consumption, callback or destructor traces. Host
 quotation requires binding, typing and lifetime preservation and the assumptions
 of Section~\ref{sec:scope}. Push/pull placement remains unspecified.
-Section~\ref{sec:ix-physical-redesign} specifies the implemented driver and its
-first exact-index domain. Current-source macro captures and independent answers
-validate that instance. Documentation checks alone do not establish arbitrary
-provider laws or admit the unported stored-intermediate and block/YA cases.
+Section~\ref{sec:evaluation} lists the evidence for the implemented chain.
+Documentation checks alone do not establish the runtime trait laws.

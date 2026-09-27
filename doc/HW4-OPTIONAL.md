@@ -340,161 +340,49 @@ indexes {}
 Both the student pass and the staff contract predicate must implement the same
 extended judgment. They share the numbered `STUDENT 4/6` region.
 
-## `rust_access_plan::Plan` and physical Rust extension
+## Physical, Structures and printed Rust extension
 
-The existing physical pass must consume the extended IndexRequirements object
-and emit the same complete staged `Program + Storage` Rust file as Basic HW3, not
-another negation/aggregation or storage descriptor IR. Its one
-`access_to_distinct_iter! { rust_access_plan::Plan }` expression must retain every extended
-logical occurrence beside the exact Rust leaf that implements it.
+The stages after IX must consume the extended IndexRequirements object and
+continue to produce the same shape as Basic HW3: a `physical::Module`, a
+`structures::Module`, and one Rust block printed by `structures_to_rust!`
+over the `cq-storage` traits, not another negation/aggregation or storage
+descriptor IR. `AntiSemijoin` and `AggregateApply` keep their logical names
+in Physical; the physical form they need is fixed by the already-derived key
+shape and answered by Structures in the usual way.
 
-For the example, the relevant concrete objects are conceptually:
+The physical choice follows that key shape:
 
-```rust
-let rows0: ::std::vec::Vec<(::std::primitive::i32,)> =
-    relation0.into_iter().collect();
-let mut index0: ::std::collections::HashMap<
-    (::std::primitive::i32,),
-    ::std::vec::Vec<(::std::primitive::i32,)>,
-> = ::std::collections::HashMap::new();
-for (person, reason,) in relation1 {
-    index0.entry((person,)).or_default().push((reason,));
-}
-let mut index1: ::std::collections::HashMap<
-    (::std::primitive::i32,),
-    ::std::vec::Vec<(::std::primitive::i32, ::std::primitive::i32,)>,
-> = ::std::collections::HashMap::new();
-for (person, category, amount,) in relation2 {
-    index1
-        .entry((person,))
-        .or_default()
-        .push((category, amount,));
-}
-```
+| Clause | Empty key | Proper key | Full key |
+|---|---|---|---|
+| `!R(...)` | test whether the row collection is empty | negate an `IndexRead` lookup on the key | negate `ExactMembership` on the full row |
+| `sum(...) in R(...)` | fold the row iterator | fold the matching `IndexRead` bucket | not required: the aggregate value column is excluded from the key |
 
-Each normalized relation above has only one physical consumer, so that
-consumer moves its rows. If an extended program requires several genuinely
-different objects for one relation, earlier builders borrow and only the final
-builder consumes it. Such an earlier eager builder may use
-`relationN.iter()` and clone the selected key and complement fields to populate
-an additional owning object. Those are construction-time field clones;
-query-time positive and aggregate accesses must borrow their stored tuples
-instead.
+Wildcard columns remain in a bucket's payload tuple. They are ignored
+only by the Rust projection passed to `sum`; do not silently remove them from
+the physical row representation.
 
-The occurrence-annotated residual region is already Rust-shaped. This excerpt
-focuses on the new occurrence-to-access relation:
-
-```rust
-::mini_linq::access_to_distinct_iter! {
-    spend(person, total) => ((
-        ::core::clone::Clone::clone(person),
-        total,
-    )) :-
-        Person(person) => bind (person,) <- (self.rows0.iter()),
-        !Blocked(person, _) => if (!self.index0.contains_key(&(
-            ::core::clone::Clone::clone(person),
-        ))),
-        agg total = sum(amount) in Purchase(person, _, amount)
-            => bind total <- (::std::iter::once_with(move || {
-                let wide_total = self.index1
-                    .get(&(::core::clone::Clone::clone(person),))
-                    .into_iter()
-                    .flatten()
-                    .map(|(_, amount,)| ::std::primitive::i128::from(*amount))
-                    .try_fold(0_i128, |total, amount| total.checked_add(amount))
-                    .expect("MiniLinq sum overflow");
-                ::std::primitive::i32::try_from(wide_total)
-                    .expect("MiniLinq sum overflow")
-            }));
-}
-```
-
-Extend `rust_access_plan::contract::check(&Plan)` so safe negation requires `If` and
-binds nothing. Aggregation requires `Bind` with a simple scalar identifier
-pattern exactly equal to its fresh output—`bind total`, not `bind (total,)`—and
-binds only that result. The checker must not inspect the Rust expressions to
-rediscover correlation or aggregation semantics.
-
-The ownership distinction in this plan is deliberate. A positive source binds
-`person` by reference. Negation only observes that borrowed value, so its key
-clones just `person`. The aggregate bucket also yields borrowed complement
+The ownership distinction is deliberate. A positive source binds `person`
+by reference. Negation only observes that borrowed value, so its key
+constructs just `person`. The aggregate bucket also yields borrowed payload
 tuples, and its projection reads only the borrowed `amount` needed by `sum`.
 The fold produces the owned scalar `total`; unlike a positive variable, that
 aggregate output is moved into the head tuple. Thus no stored relation row or
 index payload is cloned wholesale during traversal.
 
-The aggregate source uses `once_with`, so constructing that source does not run
-the fold; requesting its one row does. The mapped amounts accumulate in `i128`
-and convert to `i32` only once. Do not fold directly in `i32`: `relationN` is a
-`HashSet`, so iteration order is unspecified, and `MAX + 1 - 1` must not
-sometimes overflow before the cancellation is seen. The aggregate result is
-then bound by the `Bind` pattern.
+Constructing the aggregate source must not run the fold; requesting its one
+row does. The mapped amounts accumulate in `i128`
+and convert to `i32` only once. Do not fold directly in `i32`: a canonical
+set's iteration order is unspecified, and `MAX + 1 - 1` must not
+sometimes overflow before the cancellation is seen.
 
-The physical choice follows the already-derived key shape:
-
-| Clause | Empty key | Proper key | Full key |
-|---|---|---|---|
-| `!R(...)` | test whether the row collection is empty | negate `HashMap::contains_key` | negate `HashSet::contains` |
-| `sum(...) in R(...)` | fold the row iterator | fold the matching `HashMap` bucket | not required: the aggregate value column is excluded from the key |
-
-Wildcard columns remain in a hash bucket's complement tuple. They are ignored
-only by the Rust projection passed to `sum`; do not silently remove them from
-the physical row representation.
-
-HW4 needs no new execution IR after RustAccessPlan. It reuses the supplied
-pull lowering and IteratorPipeline-to-Rust lowering unchanged. The access plan
-above becomes:
-
-```rust
-::mini_linq::pipeline_to_distinct_iter! {
-    iter0 = scan (person,) in (self.rows0.iter()) yield (person,);
-    iter1 = filter iter0 as (person,)
-        if (!self.index0.contains_key(&(
-            ::core::clone::Clone::clone(person),
-        )));
-    iter2 = join iter1 as (person,) with total in (::std::iter::once_with(move || {
-        let wide_total = self.index1
-            .get(&(::core::clone::Clone::clone(person),))
-            .into_iter()
-            .flatten()
-            .map(|(_, amount,)| ::std::primitive::i128::from(*amount))
-            .try_fold(0_i128, |total, amount| total.checked_add(amount))
-            .expect("MiniLinq sum overflow");
-        ::std::primitive::i32::try_from(wide_total)
-            .expect("MiniLinq sum overflow")
-    })) yield (person, total,);
-    iter3 = project iter2 as (person, total,) yield ((
-        ::core::clone::Clone::clone(person),
-        total,
-    ));
-    iter4 = distinct iter3;
-    return iter4;
-}
-```
-
-The `iterN` identifiers make every physical stream edge explicit. The
-intermediate bindings make the ownership transition visible: `person` remains
-a borrowed field across physical `scan` and `filter`, while the aggregate
-source produces the owned scalar `total` at the binary `join`. These names
-must not be confused with the logical `rN` DAG references. More generally:
-
-- a positive relation or aggregate result already supplies a `Bind` pattern and
-  source expression, which becomes `scan` or binary `join`;
-- negation already supplies an `If` condition, which becomes `filter`;
-- the Plan head already supplies the output expression, which becomes
-  `project`; and
-- the unchanged IteratorPipeline lowering returns one lazy iterator over all
-  extended-query results. Public `Storage::query` constructs that iterator
-  without evaluating any access leaf; the explicit `distinct` stream removes
-  projected duplicates as `next()` advances it. The head constructs an owned
-  result row, and lazy distinctness retains each first-seen owned result; that
-  result-level ownership cost is separate from borrowing physical tuples.
-
-`Negation` and `Aggregate` remain visible in `rust_access_plan::Plan` because
-its useful job is to check the logical occurrence-to-access relation. The
-baseline pull pass then erases those logical labels while preserving their
-concrete leaves in the existing operator IR. HW4 does not add another
-operator language or special emitter.
+HW4 needs no new intermediate language after IX. The printed program remains
+one iterator over all extended-query results: the aggregate fold runs only
+when its row is requested, and the `canon` return removes projected duplicates
+through the caller's `distinct_state!` provider. The
+head constructs an owned result row, and distinctness retains each
+first-seen owned result; that result-level ownership cost is separate from
+borrowing physical tuples. HW4 does not add another operator language or
+special emitter.
 
 ## Implementation stages
 
@@ -506,9 +394,9 @@ must update each affected language contract and its corresponding lowering.
 | Supplied CQ syntax | `crates/cq-ir/src/cq.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
 | CQ validity | `crates/cq-ir/src/cq.rs` | Implement the left-to-right safety rules |
 | Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-query-lowering/src/written_order/lower.rs`, and `crates/cq-query-lowering/src/clause_prefix/rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence in the owning logical implementation module |
-| Index selection | `crates/cq-index-policy/src/base_demands/mod.rs`, `crates/cq-index-policy/src/result_demands/mod.rs`, and their `correspondence.rs` checks | Extend key derivation over the complete RelationalPlan and its independent check |
-| Access annotations | `crates/cq-ir/src/rust_access_plan.rs` | Extend occurrence-to-access checking for negation and aggregation |
-| Physical realization | `crates/cq-relation-lowering/src/base_hash/mod.rs` and `crates/cq-relation-lowering/src/prefix_hash/mod.rs` | Emit concrete negative and aggregate Rust accesses and extend the physical source correspondence |
+| Index selection | `crates/cq-index-policy/src/lib.rs` and its `correspondence.rs` check | Extend key derivation over the complete RelationalPlan and its independent check |
+| Physical lowering | `crates/cq-ir/src/physical.rs` and `crates/cq-physical-lowering/src/lib.rs` | Carry the new operators through Physical and extend its contract and correspondence check |
+| Structures and printer | `crates/cq-ir/src/structures.rs`, `crates/cq-structure-selection/src/lib.rs`, and `crates/cq-physical-realization/src/lib.rs` | Answer the negative and aggregate reads and print the concrete negative and aggregate Rust accesses |
 
 You may add private helpers next to these sites. Do not add a generic pass
 trait, a dynamic query interpreter, or a second storage/access descriptor IR.
@@ -522,11 +410,13 @@ local contracts and logical operators first:
 cargo test -p cq-ir --features hw4 --test hw4_optional
 ```
 
-Then isolate both exact pass edges—extended CQ to RelationalPlan and that
-complete plan to IndexRequirements—before testing physical Rust:
+Then isolate the exact pass edges—extended CQ to RelationalPlan, that
+complete plan to IndexRequirements, and IX to Physical—before testing printed Rust:
 
 ```text
-cargo test -p cq-compose --features hw4 --test hw4_optional
+cargo test -p cq-query-lowering --test written_order
+cargo test -p cq-index-policy --test index_demands
+cargo test -p cq-physical-lowering --test lowering
 ```
 
 After all three completed basic passes support the cumulative extension, run
@@ -539,9 +429,8 @@ cargo test -p mini-linq --release --features hw4 --test hw4_optional
 
 The endpoint checks duplicate elimination, safe negation, correlated sum,
 empty-input sum behavior, checked overflow, and result rows. It must also use
-an observable aggregate source to assert that constructing
-`Storage::query()` does not run the aggregate fold and that the first
-relevant `next()` does. The ordinary basic-checkpoint commands do not enable
+an observable aggregate source to assert that the aggregate fold runs only
+when its row is requested. The ordinary basic-checkpoint commands do not enable
 `hw4`, so this extension cannot block a basic submission.
 
 Include the global example in all three IR/pass suites. Test the exact single
@@ -566,15 +455,12 @@ nonempty `Blocked`, and empty and nonempty `Purchase`.
 - The exact requirements are `Blocked[0]` then `Purchase[0]`.
 - The global example has no index requirements and never writes an empty-key
   index entry.
-- `rust_access_plan::Plan` retains and checks every extended logical occurrence beside
-  its concrete Rust access.
-- The physical pass emits concrete Rust builders and access expressions in the
-  complete `Program + Storage` shell. `Program::build` performs normalization
-  and index construction; constructing the iterator returned by
-  `Storage::query` evaluates no access leaf or aggregate fold.
-- The supplied RustAccessPlan-to-IteratorPipeline and IteratorPipeline-to-Rust
-  lowerings are unchanged.
-- All four opt-in commands above pass.
+- Physical and Structures retain and check every extended logical result
+  beside its physical form and the structure that answers it.
+- The printed Rust block builds its structures at the top and reads through
+  the `cq-storage` traits; the aggregate fold runs only when its row is
+  requested.
+- All opt-in commands above pass.
 - You can explain why this one-rule subset is stratified by construction.
 
 ## Honest stretch directions

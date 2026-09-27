@@ -1,53 +1,3 @@
-\section{Access meaning and deferred scheduling}
-\label{sec:cursor}
-An Access region contains concrete source and lookup expressions after physical
-realization. Its meaning is dependent enumeration. Let $\nu$ be the current
-binding environment, $h$ the output expression, and $\bar a$ the remaining
-clauses. For finite pure host evaluations, define its output support by
-\[
-\begin{aligned}
- \mathcal E(\emptyseq,h,\nu)
-   &=\{\sem h_\nu\},\\
- \mathcal E((p\leftarrow e)\concat\bar a,h,\nu)
-   &=\bigcup_{v\in\sem e_\nu}
-       \mathcal E(\bar a,h,\nu[p\mapsto v]),\\
- \mathcal E((\mathsf{if}\ e)\concat\bar a,h,\nu)
-   &=\begin{cases}
-       \mathcal E(\bar a,h,\nu),&\sem e_\nu=\mathsf{true},\\
-       \varnothing,&\sem e_\nu=\mathsf{false}.
-      \end{cases}
-\end{aligned}
-\]
-The $p\leftarrow e$ abbreviation denotes \code{bind p <- (e)}; its source may
-depend on earlier bindings. In the exact-map fixture a lookup depends on the
-left binding. A block realization can instead expose a descriptor, metadata
-guard, and surviving payload traversal. These are Access regions assembled by
-the selected lowering, not one universal row-loop template. A logical join has already been
-realized as dependent bindings at this boundary; the consumer must not reconstruct join columns or
-choose a different index.
-
-\paragraph{What is deliberately undecided.}
-This support semantics does not choose lazy polling, eager loops, materialization,
-or the placement of a push transformation. A lazy implementation must additionally
-specify construction and polling observations: constructing a cursor need not
-read its source, and stopping after one answer need not exhaust it. An eager
-implementation must specify when it consumes inputs. Equal final sets alone do
-not equate those behaviors for partial consumers or observable effects.
-Likewise, support preservation alone cannot prove that a rejected block is
-never opened. A provider promising skipped payload reads must establish that
-operational observation and its required evaluation order separately.
-The IX physical contract stops at the concrete Access quotation. This document
-does not prescribe a canonical Access/Pipeline/push ordering while that design
-question is open.
-
-The supplied pull implementation lowers each Access binding to a named Pipeline
-\code{scan} or dependent \code{join}; guards become \code{filter}. These are
-definitions of lazy streams, not calls nested into earlier stream expressions.
-Only Pipeline-to-Rust introduces query-composition adapters such as
-\code{flat_map}. A provider may still use adapters internally to decode one
-storage representation, such as the payload buckets of a map. That local
-enumeration does not compose query inputs or evaluate a later Access binding.
-
 \section{Quotation and composition obligations}
 \label{sec:staging}
 Let $C[\square^L_\Gamma]$ be a Rust context containing a quotation in language
@@ -61,46 +11,25 @@ has the local expansion rule
  {C[\square^L_\Gamma(s)]\longrightarrow C[\square^M_\Gamma(t)]}
 \end{mathpar}
 These rules describe composition, not permission to insert a redundant language.
-The physical boundary now has two distinct judgments. Selection consumes IX,
-$\Omega$, $\eta$, and explicit host declarations and produces the bound program
-$P=(IX,\Phi,\Lambda)$. Realization consumes $P$, $\Omega$, and $\Gamma$;
-it has no $\eta$ parameter. It follows $\Lambda$ and $\Phi$, emitting concrete
-preparation and Access expressions, or rejects unmet premises. It cannot repair
-an invalid assignment by selecting another lowering.
+The post-IX boundary has two policy steps and one printer. \code{lower_physical!}
+consumes IX and the caller's query-independent policy and produces Physical;
+\code{select_structures!} consumes Physical and the same policy and produces
+Structures; \code{structures_to_rust!} prints one pull program and rejects
+unmet premises. No pass repairs an invalid choice by selecting another one.
 
 \paragraph{Wire slots and immediate expansions.}
-The proposed API slots are \code{choose_physical!} and
-\code{realize_physical!}. The following illustrative imports select their
-implementations through aliases, without adding wrapper macros:
-\begin{lstlisting}
-use policies::given_bindings as choose_physical;
-use lowering::by_bindings as realize_physical;
-\end{lstlisting}
-The authored immediate output of \code{choose_physical!} is the next macro
-call containing the completed Physical program, as recorded in
-\path{doc/ix-physical/expected.choose.rs}. The compiler can stop at that boundary
-for inspection. These paths and wire slots are proposed interfaces, not claims
-about currently implemented exports.
-
-A macro path resolves an external provider definition; the declaration it
-delivers supplies the physical rules and bindings. Generic dispatch consumes
-that declaration, rather than recognizing the path's spelling or guessing its
-meaning from Rust type inference. Substituting a path is sufficient only when
-the delivered definition satisfies the consuming boundary. Macro replaceability
-does not itself establish representation or version compatibility.
+The caller-resolved slots are \code{choose_index_policy!} (RA $\to$ IX),
+\code{physical_policy!} (IX $\to$ Physical, the caller macro appends its
+\texttt{policy \{\ldots\}} and invokes \code{lower_physical!}),
+\code{select_structures!}, \code{structures_to_rust!} and
+\code{distinct_state!} (the canonical return's distinct provider). Import
+aliases select their implementations, without adding wrapper macros; the
+composition example in \path{examples/composition/} binds every slot.
 
 ST-Entry describes the immediate replacement produced by one entry expansion.
-A provider declaration request may produce a callback that resumes realization;
-therefore a completed realization can require several such steps,
-$\longrightarrow^{*}$. Its final \code{Rust[Access]} text must not be reported
-as a single immediate macro output. A standalone callback example establishes
-only that transport mechanism, not an integrated IX-to-Physical compiler trace.
-
-Provider quotations can remain locally inside Rust/Access while their selected
-definitions expand. The map fixture does not require a third whole-program
-provider-dialect IR. A future language retaining physical operations for another
-transformation would require its own syntax and semantics; naming a macro path
-does not by itself define that language.
+Each entry emits the next slot's invocation around its complete typed payload,
+so a completed compilation takes several steps, $\longrightarrow^{*}$, and the
+compiler can stop at any boundary for inspection.
 
 \paragraph{An edge contract.}
 Each compiler edge declares an admitted source domain, target well-formedness,
@@ -126,5 +55,5 @@ defined. Closing-context adequacy permits the same argument for quotations.
 
 Semantic preservation and expansion conformance are independent obligations.
 A generated program that returns the expected answer still fails the present
-design if its macro boundaries, index identities, use references, or concrete
-access expressions differ from the authored expansion contract.
+design if its macro boundaries, index identities, use references, or selected
+physical operators and structures differ from the authored expansion contract.

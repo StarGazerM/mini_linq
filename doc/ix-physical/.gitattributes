@@ -1,3 +1,0 @@
-# Preserve whitespace in original compiler logs and unified capture patches.
-*-trace/instrumentation.patch -whitespace
-*-trace/compile.log -whitespace

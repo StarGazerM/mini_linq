@@ -1,2 +1,0 @@
-struct ProjectedChain; relation L(a: Value); relation R(a: Value, b: Value);
-relation S(b: Value, c: Value); answer(a, c) :- L(a), R(a, b), S(b, c);

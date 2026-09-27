@@ -341,17 +341,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "cq-access-lowering"
-version = "0.1.0"
-dependencies = [
- "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -368,17 +357,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
-]
-
-[[package]]
-name = "cq-pipeline-lowering"
-version = "0.1.0"
-dependencies = [
- "contracts",
- "cq-ir",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -405,10 +383,8 @@ dependencies = [
 name = "cq-xtask"
 version = "0.1.0"
 dependencies = [
- "cq-access-lowering",
  "cq-index-policy",
  "cq-ir",
- "cq-pipeline-lowering",
  "cq-query-lowering",
  "cq-workloads",
  "duckdb",

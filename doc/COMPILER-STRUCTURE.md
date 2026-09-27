@@ -3,24 +3,21 @@
 The accepted path is `CQ → RA → IX → Physical → Structures → Rust`. Each
 language is the previous one plus one section; each pass records one
 decision and is checked by the next language's contract. Below Structures a
-printer emits one pull program over the `cq-storage` traits; Access and
-Pipeline remain as hand-staged entry points into the execution endpoints.
+printer emits one pull program over the `cq-storage` traits.
 See [DSL.md](DSL.md) for the grammars.
 
 ## Crates and modules
 
 | Crate | Responsibility | Modules / entry functions |
 |---|---|---|
-| `cq-ir` | Typed syntax and local validity | `cq`, `relational_plan`, `index_requirements`, `physical`, `structures`, `policy`, `state_protocol`, `rust_access_plan`, `iterator_pipeline` |
+| `cq-ir` | Typed syntax and local validity | `cq`, `relational_plan`, `index_requirements`, `physical`, `structures`, `policy`, `state_protocol` |
 | `cq-query-lowering` | CQ planning and RA construction | `written_order`, `clause_prefix`, `hypergraph`; each exports `compile`; `dependencies`, `model`, `proof` support planning |
 | `cq-index-policy` | RA → IX; derive required join-column indexes and their uses | `compile`; `correspondence` checks the edge |
 | `cq-physical-lowering` | IX + policy → Physical; one physical operator per result, modes from use, `canon` on the return when uniqueness is not inferred | `compile`, `check` |
 | `cq-structure-selection` | Physical + policy → Structures; host facts from the policy, a built type for every read no host key answers, `#[index(Type)]` advice | `compile`, `check` |
 | `cq-physical-realization` | Structures → Rust; builds the chosen structures, guards the traits each read needs, prints the pull program | `compile` |
-| `cq-state-providers` | Distinct-state and set-sink providers behind `state_protocol` | `hash_distinct`, `ordered_distinct`, `hash_set_sink`, `ordered_set_sink` |
-| `cq-access-lowering` | Hand-staged Access execution | `to_pipeline`, `to_set_loops` |
-| `cq-pipeline-lowering` | Pipeline → Rust endpoints | `distinct_iter`, `collect_set`, `support_iter`, `exists`; shared `operators` emits adapters |
-| `cq-storage` | Runtime data structures and operation traits | `Build`, `IndexRead`, `ExactMembership`, `OrderedRead`/`merge`/`sorted_by`, `Canonical`, `require` guards; blocks, selections, summaries, replay, counters |
+| `cq-state-providers` | Distinct-state providers behind `state_protocol` | `hash_distinct`, `ordered_distinct` |
+| `cq-storage` | Runtime data structures and operation traits | `Build`, `IndexRead`, `ExactMembership`, `OrderedRead`/`merge`/`sorted_by`, `Canonical`, `require` guards; `HashIndex` |
 | `mini-linq` | Procedural macro facade and caller-resolved continuations | `lib.rs` exports entries; `entry` transports typed stages; `workload` captures catalog CQ |
 
 Every family crate depends only on `cq-ir` (`tools/check_dependencies.py`
@@ -60,16 +57,14 @@ language; deltas are ordinary hosts under a rewrite tool, not IR constructs.
 
 ## Execution state selection
 
-Distinct and output collection use caller-bound `mini_linq::distinct_state!` and
-`mini_linq::set_sink!` slots. There is no HashSet fallback in Access/Pipeline
-lowering. Each request carries its local operator name; a caller policy can
-choose separately for each occurrence. The semantic Pipeline is unchanged.
-State provider syntax and laws live in `cq-ir::provider_protocol::state`.
+The canonical return is deduplicated through the caller-bound
+`mini_linq::distinct_state!` slot; there is no HashSet fallback. Each request
+carries its local operator name, so a caller policy can choose separately for
+each occurrence. State provider syntax and laws live in `cq_ir::state_protocol`;
+`cq-state-providers` supplies hash and ordered implementations, which own
+retained copies of the rows they deduplicate.
 
-`cq-example-providers` supplies hash and ordered implementations. Distinct
-providers own retained copies; set sinks consume values and need no Clone.
-The execution lowerer owns polling and loop order. Support/existence omit the
-terminal Distinct and need neither slot. No execution strategy copies a
+The printer owns polling and loop order. No execution strategy copies a
 binding: a value bound by an outer source is used inside its dependent joins
 and inner loops as the value the source produced. Hosts and built structures
 yield references, so those are free; an owned value (a computed column) that

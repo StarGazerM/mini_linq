@@ -1,6 +1,6 @@
 \section{Languages and local judgments}
 \label{sec:languages}
-CQ and Access rules end in semicolons; Rust expressions are opaque leaves
+CQ rules end in semicolons; Rust expressions are opaque leaves
 except for the lexical dependency checks below. This specification covers
 positive queries without aggregates. It defines the admitted language, not
 every form accepted by a current parser.
@@ -160,7 +160,7 @@ $\{\bar e(t)\mid t\in\mathcal E(r)\}$. References denote the same immutable
 result; this denotation imposes no physical materialization schedule.
 \subsection{Indexes and their uses}
 The normative syntax and construction rules are in
-Section~\ref{sec:ix-physical-redesign}. IX is $(A,D,U)$: the unchanged RA
+Section~\ref{sec:ix}. IX is $(A,D,U)$: the unchanged RA
 plan $A$, named index definitions $D(i)=(r,C)$, and references
 $U(j.\mathsf{right})=i$ from consuming operator positions. Here $r$ is an
 exact immutable result version. $C$ records its required join-column ordinals
@@ -171,113 +171,13 @@ Local validity checks source versions, column ranges, unique descriptors,
 and exact coverage of every admitted join position. In particular, it does
 not accept an empty annotation as permission to rediscover requirements or
 execute a repeated-scan join. The full judgment is $\mathsf{WF}_{IX}(A,D,U)$
-of Section~\ref{sec:ix-physical-redesign}, and
+of Section~\ref{sec:ix}, and
 \[
  \sem{A,D,U}_{IX}=\sem A_{RA}.
 \]
-\subsection{Bound Physical programs}
-Physical selection is separate from IX analysis. It consumes the open provider
-definitions $\Omega$, policy $\eta$, and explicit host declarations,
-and produces $P=(IX,\Phi,\Lambda)$. Here $\Phi=(\Phi_R,\Phi_I)$ binds relation
-versions and required index identities to external provider instances.
-The domain of $\Phi_I$ is exactly $\dom D$. The map $\Lambda$ selects one
-external lowering for every RA definition result, including Rename and Unit.
-Free host inputs have relation bindings but no lowering entry: their production
-is not an RA definition in this program.
-
-The serialized Physical program retains IX and appends the \code{physical}
-block specified in Section~\ref{sec:ix-physical-redesign}, with
-\code{relations}, \code{indexes}, and \code{lowerings} bindings. This is
-an inspectable selected program, not emitted loops or construction code.
-Its erasure is the original IX and its meaning is unchanged:
-\[
- \operatorname{erase}(IX,\Phi,\Lambda)=IX,\qquad
- \sem{IX,\Phi,\Lambda}_{\mathsf{Physical}}=\sem{IX}_{IX}.
-\]
-Well-formedness requires the selected declarations to agree on operator domains,
-exact source versions, written index uses, and output representations.
-Declarations supply the physical definitions available to compilation; neither
-a path's spelling nor Rust type inference supplies those definitions. There
-is no closed hash/sorted enumeration at this boundary.
-
-The representation environment $\Gamma$ gives semantic meaning to physical
-relations and current views. A carrier may be a borrowed row, a tuple of
-borrowed fields, or a stable handle. Its decoding must agree with the exact RA
-version. Index preparation may reuse an index already embodied by that relation
-or construct an auxiliary representation. Selection does not change the RA
-join columns or the references in $U$. Realization consumes Physical and follows
-$\Lambda$ and $\Phi$; it has no policy parameter, does not select a replacement
-lowering, and rejects unmet premises. Answer equivalence alone is insufficient:
-compilation must bind and use the realizations specified by the selected program.
-
-\subsection{Local Access regions}
-An Access plan $h(\bar x)\Rightarrow e_h\mathrel{:-}\bar a$ has clauses
-$\ell\Rightarrow\mathsf{bind}\ p\leftarrow e$ or
-$\ell\Rightarrow\mathsf{if}\ e$. Labels describe logical occurrences,
-guards, or bindings; Rust leaves supply concrete sources and operations.
-The clause sequence may be empty; it then supplies exactly one empty binding.
-For ordered bindings $\bar B$, $\operatorname{new}(\ell,B)$ lists first
-positive-label names outside $B$, in label order. Write $p\sim\bar N$ when
-$p$ is the simple tuple pattern $(\bar N)$, or $\bar N=[x]$ and $p=x$ is
-one simple identifier pattern. Both forms bind precisely the listed names;
-Rust checks the source item's shape.
-\begin{mathpar}
-
-\Rule{AC-Enumerate}{\bar N=\operatorname{new}(\ell,B)\ne\emptyseq\quad
- p\sim\bar N}
- {\bar B\vdash\ell\Rightarrow\mathsf{bind}\ p\leftarrow e\Rightarrow\bar B\concat\bar N}
-
-\Rule{AC-If}{\operatorname{new}(\ell,B)=\emptyseq}
- {\bar B\vdash\ell\Rightarrow\mathsf{if}\ e\Rightarrow\bar B}
-
-\Rule{AC-Guard}{\ell=\mathsf{if}\ e_0\quad e_0\checkmark_B}
- {\bar B\vdash\ell\Rightarrow\mathsf{if}\ e\Rightarrow\bar B}
-
-\Rule{AC-Bind}{\ell=\mathsf{let}\ p_0=e_0\quad e_0\checkmark_B\quad
- \bar N=\binds(p_0)\quad |\set(\bar N)|=|\bar N|\quad \set(\bar N)\cap B=\emptyset\\
- p\sim\bar N}
- {\bar B\vdash\ell\Rightarrow\mathsf{bind}\ p\leftarrow e\Rightarrow\bar B\concat\bar N}
-\end{mathpar}
-AC-Enumerate/If concern positive labels; an empty label uses If. AC-Bind permits
-empty bindings while evaluating their source. Head label names must be bound.
-Freshness and logical-label RHS availability hold for direct quotations too, but
-label/leaf agreement and singleton binding sources are edge obligations
-(or assumptions for quoted plans). Rust checks name resolution and types in
-concrete leaves and macros. For example, the source of
-\code{bind rows <- (rows.iter())} may refer to the outer host variable
-\code{rows}; the new item binding starts after the source expression.
-
-Access has a schedule-independent support denotation under the pure relational
-host assumptions $\mathcal H_{\rm rel}$. Starting from the singleton empty
-environment, a Bind clause extends each current environment with the rows of
-its Rust source; an If clause retains precisely the environments satisfying
-its predicate. The head maps surviving environments to result values:
-\[
-\begin{aligned}
- E_0&=\{\emptyset\},\\
- E_{k+1}&=\{\rho\cup[p\mapsto t]\mid\rho\in E_k,\
-              t\in\sem e(\rho)\}
-              &&\text{for a Bind clause},\\
- E_{k+1}&=\{\rho\in E_k\mid\sem e(\rho)=\mathsf{true}\}
-              &&\text{for an If clause},\\
- \sem{h(\bar x)\Rightarrow e_h\mathrel{:-}\bar a}
-    &=\{\sem{e_h}(\rho)\mid\rho\in E_{|\bar a|}\}.
-\end{aligned}
-\]
-The notation $[p\mapsto t]$ means successful pattern binding. Rust sources
-may enumerate duplicate witnesses; set observation removes multiplicity.
-The source is scoped under preceding bindings, before $p$ is introduced.
-\code{bind} prescribes neither a Rust loop nor an iterator adapter. Pull
-consumers demand each source lazily; eager consumers traverse it during region
-execution. Both implement the support equation above, subject to their distinct
-operational observations.
-Physical lowering must prove that these concrete sources and predicates
-implement the associated RA operator. The provider declarations and compilation
-rules in Section~\ref{sec:ix-physical-redesign} establish that obligation for
-each admitted realization. The core does not first prescribe a left-row scan
-and then ask every provider to substitute one point-lookup expression.
-
-This boundary does not prescribe a Pipeline IR or a push/pull lowering.
-Whether a later transformation converts lazy enumeration into eager
-execution remains outside the present contract. No such transformation may
-alter the written index-use associations or weaken exact lookup semantics.
+\subsection{Physical and Structures}
+Physical restates IX with one physical operator and read mode per result, and
+Structures binds every keyed read to a host key fact or a built Rust type;
+both erase to IX and preserve its meaning. Their contracts are specified by
+the \code{cq-ir} module documentation and \path{doc/DSL.md}
+(Section~\ref{sec:ix}); this paper does not yet give them inference rules.

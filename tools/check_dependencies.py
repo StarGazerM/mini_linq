@@ -425,7 +425,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--isolate", action="store_true", help="test copied components with unselected implementation sources absent, then invoke isolated macros")
     parser.add_argument("--frontends", action="store_true", help="invoke each leaf-feature macro with boundary captures or small executable input")
-    parser.add_argument("--consumers", action="store_true", help="run current IX/Stream integration test targets; separate from boundary smoke")
+    parser.add_argument("--consumers", action="store_true", help="run current IX/Physical integration test targets; separate from boundary smoke")
     parser.add_argument("--only", action="append", default=[], help="limit probes by component, implementation label, frontend feature, or integration target")
     args = parser.parse_args()
     labels = set(ALLOWED) | set(FRONTEND) | set(CONSUMERS) | {f"{name}-{feature}" for name, variants in IMPLEMENTATIONS.items() for feature in variants}

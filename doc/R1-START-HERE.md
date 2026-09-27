@@ -6,18 +6,18 @@ Implement exactly three typed passes:
 CQ
   -- Basic HW1 --> RelationalPlan
   -- Basic HW2 --> IndexRequirements preserving the complete RelationalPlan
-  -- Basic HW3 --> complete staged Rust file with one access_to_distinct_iter! { RustAccessPlan }
-  -- supplied pull --> same file with pipeline_to_distinct_iter! { IteratorPipeline }
-  -- supplied Rust lowering --> final ordinary Rust file
+  -- Basic HW3 --> Physical (IX plus one physical operator and mode per result)
+  -- supplied selection --> Structures (what answers each read)
+  -- supplied printer --> one Rust block over the cq-storage traits
 ```
 
-Before coding, read the [complete six-artifact Triangle
-expansion](DSL.md#complete-triangle-expansion). It shows the entire program
-after every pass. Those artifacts, the typed contracts, and the tests are the
-assignment specification.
+Before coding, read the language grammars and the triangle example in
+[DSL.md](DSL.md). They show the program after every pass. Those artifacts,
+the typed contracts, and the tests are the assignment specification.
 
 This handout describes the student checkpoint. The staff implementation also
-provides the broader routes listed in the [IR boundary review](IR-STAGE-REVIEW.md).
+provides the broader routes listed in
+[Compiler ownership and composition](COMPILER-STRUCTURE.md).
 
 ## What students write
 
@@ -25,18 +25,18 @@ The assignments follow three semantic compilation edges. Their implementations
 in this checkout live in separate implementation modules:
 
 - CQ lowering: `crates/cq-query-lowering/src/written_order/lower.rs`;
-- input-index selection: `crates/cq-index-policy/src/base_demands/mod.rs`;
-- indexed physical lowering: `crates/cq-relation-lowering/src/base_hash/mod.rs`.
+- input-index selection: `crates/cq-index-policy/src/lib.rs`;
+- physical lowering: `crates/cq-physical-lowering/src/lib.rs`.
 
 | Homework | Typed function | Successful result |
 |---|---|---|
 | Basic HW1 | `cq_query_lowering::written_order::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` containing the unchanged source `Program` and a complete named relational plan |
-| Basic HW2 | `cq_index_policy::base_demands::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
-| Basic HW3 | `cq_relation_lowering::base_hash::compile(&index_requirements::Module, &syn::Path)` | `syn::Result<syn::File>` containing the complete sequential `Program + Storage` API and exactly one expression-position `access_to_distinct_iter!` region |
+| Basic HW2 | `cq_index_policy::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
+| Basic HW3 | `cq_physical_lowering::compile(&index_requirements::Module, &Policy)` | `syn::Result<physical::Module>` containing the unchanged IX plus one physical operator, mode, and `canon` flag per result |
 
 Staff supplies the syntax definitions, parsers, local contracts, edge
-contracts, direct proc-macro entries, `cq_access_lowering::to_pipeline::compile`,
-`cq_pipeline_lowering::distinct_iter::compile`, fixtures, and the structural and runtime harness.
+contracts, direct proc-macro entries, `cq_structure_selection::compile`,
+`cq_physical_realization::compile`, fixtures, and the structural and runtime harness.
 Do not add a second parser, a token-stream compiler API, a generic pass
 framework, or an expansion wrapper.
 
@@ -142,131 +142,65 @@ The implemented expression-prefix route accepts `Unit`, and the materialized
 backend accepts bushy plans through a separate physical lowering. Neither
 extends the basic homework's required domain.
 
-## Basic HW3: IndexRequirements to staged Rust
+## Basic HW3: IndexRequirements to Physical
 
-This pass consumes the indexed logical plan and returns a complete
-`syn::File`. It owns every remaining baseline storage and Rust-access decision:
+This pass consumes the indexed logical plan and a query-independent policy
+and returns a `physical::Module`: the unchanged IX plus, for every result,
+one physical operator and one mode:
 
-- the public `Program` and owning `ProgramStorage` declarations;
-- exact input, row, key, payload, iterator-item, and result types;
-- generated `inputN`, `relationN`, `rowsN`, `indexN`, and builder-local names;
-- normalization and construction of every required or explicitly written
-  physical object;
-- each concrete Rust scan, lookup, membership condition, and output row;
-- eager `build`, lazy `query`, deterministic `materialize`, and convenience
-  `run` methods; and
-- one local occurrence-annotated `access_to_distinct_iter! { rust_access_plan::Plan }` expression.
+- a natural join becomes `probe` (the right result read through a key) or,
+  when the policy says `join = merge` and both sides can be ordered on the
+  key, `merge`; a semijoin becomes `semi`; a select over an ordered key may
+  become `range`; every other operator keeps its logical name;
+- a `pipe` is read exactly once by its consumer; a `let` is read through a
+  key or more than once; an `alias` is a host relation read in place;
+- a result is flagged `canon` when it must be a set and uniqueness is not
+  inferred; the returned result must be canonical.
 
-Do not return a storage descriptor, builder plan, isolated RustAccessPlan, or
-token stream. At this boundary, the struct declarations and all build/query
-shell syntax are already concrete Rust AST.
+Nothing at this boundary names a Rust type, a loop, or a variable: operands
+are result names and columns are attribute names. Do not return a storage
+descriptor, builder plan, or token stream.
 
-### Storage policy
+### Policy
 
-Normalize every used input exactly once into `HashSet<Row>` so public input
-duplicates obey relation set semantics. An input used by neither the logical
-query nor a written extra index is dropped without invoking its iterator.
+The policy is query-independent: host facts (`R keyed [a] ordered canon`),
+strategy (`join = merge`, `semijoin = prefer_lazy`), and `#[index(Type)]`
+advice on relation declarations. The same policy is passed unchanged to the
+supplied structure selection.
 
-Choose exactly one final ownership-taking physical consumer per normalized
-relation:
+## Supplied structures and printer
 
-- a final row store consumes it with `into_iter().collect::<Vec<_>>()`;
-- a final proper-key map consumes its rows while building the map; or
-- a final full-key index takes the normalized `HashSet<Row>` by direct move.
+`cq_structure_selection::compile` (Physical → Structures) binds every keyed
+read to the host key that answers it or, when no host key does, to a Rust
+type built over the result through `cq_storage::Build`; `#[index(Type)]`
+advice names that type. It also discharges every `merge` and return
+premise: an ordered host key, a built ordered type, or a pipe sorted by its
+own merge.
 
-If the relation needs additional physical representations, build them first
-by borrowing `relationN.iter()` and cloning the key and complement fields that
-the new representation must own. Never recollect a full-key set identical to
-the normalized relation.
-
-Build every locally valid index written in `IndexRequirements`, including an
-extra one not used by the query. If the logical plan needs a key that the
-module omitted, return a span-aware error at the needing relation occurrence.
-
-The baseline representations are:
-
-| Access | Concrete storage | Query action |
-|---|---|---|
-| unbound scan | `Vec<Row>` | borrow with `rowsN.iter()` |
-| proper equality key | `HashMap<Key, Vec<Complement>>` | borrow payloads with `get(&key).into_iter().flatten()` |
-| full equality key | `HashSet<Row>` | test with `contains(&row)` |
-
-Key columns follow the written increasing column order. Complement columns
-follow base-relation order. Query traversal borrows stored rows and payloads;
-do not append `.cloned()` to scan or lookup sources. Rust match ergonomics
-therefore bind the positive variables as references. Generated lookup keys,
-membership rows, and the owned result tuple clone only the selected fields.
-
-### Generated API
-
-`Program::build(inputs...) -> ProgramStorage` performs eager storage preparation. It
-normalizes inputs, builds row stores and indexes, and returns their owner.
-
-`Storage::query(&self) -> impl Iterator<Item = Row> + '_` returns one lazy
-iterator for the entire distinct result set. Its whole body is exactly one
-`access_to_distinct_iter!` expression. Creating the iterator reads no stored row; the first
-`next()` starts the root access.
-
-Consumers such as `next()`, `any()` and `count()` execute traversal without
-materializing the result. Nested iterator adapters retain cursor state between
-requests; constructing their enclosing expression does not drain their inputs.
-
-`Storage::materialize(&self) -> Vec<Row>` collects `self.query()`, sorts the
-already-distinct rows with `sort_unstable`, and returns them. It does not
-perform a second distinctness algorithm.
-
-`Program::run(inputs...) -> Vec<Row>` is exactly the convenience path
-`Self::build(inputs...).materialize()`.
-
-Index building is eager and occurs only in `build`; `query` is the
-database-driver-style result cursor and the only generated cursor method.
-
-## Supplied pull path
-
-The first supplied pass maps each concrete access to a named
-`IteratorPipeline`:
-
-```text
-RustAccessPlan
-  -> iter0 = scan (x, y,) in (self.rows0.iter()) yield (x, y,)
-  -> iter1 = join iter0 as (x, y,) with (z,) in (self.index0.get(&(y.clone(),)).into_iter().flatten()) yield (x, y, z,)
-  -> iter2 = filter iter1 as (x, y, z,) if (self.index1.contains(&(z.clone(), x.clone(),)))
-  -> iter3 = project iter2 as (x, y, z,) yield ((x.clone(), y.clone(), z.clone(),))
-  -> iter4 = distinct iter3
-  -> return iter4
-```
-
-Every `iterN` is one lazy iterator value, not a relation and not a loop that
-materializes its input. The plan exposes the conventional left-deep binary
-operator boundaries and intermediate binding tuples. It deliberately does not
-contain the Rust names `map` or `flat_map`.
-
-This is the supplied emitter's shape. Authored Pipeline programs may use other
-fresh stream names, rename tuple fields, select/reorder retained bindings and
-project before another operator. Each operator still consumes the preceding
-stream exactly once, and `distinct` remains final.
-
-The second supplied pass performs the semantic lowering from those operators
-to one ordinary Rust `syn::Expr`. It creates one named `let iterN` per plan
-definition. `scan` becomes `map`, binary join becomes `flat_map` whose right
-side is a parameterized `map`, predicates become consuming `filter_map`, projection becomes
-`map`, and distinctness becomes a stateful `HashSet` filter.
-
-An outer `once_with(move || { ... }).flatten()` defers even the root source
-expression until the first `next()`. This expression is the final concrete
-IR. The `pipeline_to_distinct_iter!` proc macro only calls `ToTokens` on it; there is
-no hidden code generator after this pass.
+`cq_physical_realization::compile` (Structures → Rust) prints one Rust block
+over the `cq-storage` traits (`Build`, `IndexRead`, `ExactMembership`,
+`OrderedRead`/`merge`/`sorted_by`, `Canonical`). Built structures are
+constructed at the top of the block and guarded by `cq_storage::require`
+naming the trait every read on them uses; the block's value is an
+iterator of answer tuples in head order. A program over hosts alone
+evaluates to the lazy iterator itself, so `next()`, `any()` and `count()`
+execute traversal without materializing the result; a program that builds
+structures collects its answers inside the block, since the structures live
+only for the block. A `canon` result is deduplicated through the caller's
+`distinct_state!` provider. The `structures_to_rust!` proc macro
+only calls `ToTokens` on that block; there is no hidden code generator after
+this pass.
 
 ## Recommended implementation order
 
-1. Read the six complete Triangle artifacts in `DSL.md`.
+1. Read the language grammars and the triangle example in `DSL.md`.
 2. Implement and test Basic HW1 before touching index selection.
 3. Implement Basic HW2 by walking the named logical operators.
-4. Implement the Basic HW3 storage schema and builders.
-5. Add the physical walk that translates the same logical operator chain into
-   concrete Rust accesses.
-6. Emit the complete `syn::File` around the one local `access_to_distinct_iter!` expression.
-7. Run formatting, contracts, structural tests, rustc-backed tests, and the
+4. Implement Basic HW3 by assigning each result its physical operator and
+   mode from the policy and its uses.
+5. Bind the supplied `select_structures!` and `structures_to_rust!` slots
+   and read the printed Rust block.
+6. Run formatting, contracts, structural tests, rustc-backed tests, and the
    independent workload oracle.
 
 Do not put physical storage decisions back into RelationalPlan. In particular,
@@ -278,9 +212,9 @@ decisions, its source or target IR is missing an explicit fact.
 ## Inspect one query, one pass at a time
 
 `cargo xtask explain` is the MiniLinq layer stepper. It invokes the real typed
-passes and writes each complete result as an ordinary `.rs` file, so you can
+passes and writes each complete result as a `.tokens` file, so you can
 inspect your own compiler output in the editor instead of comparing only a
-final recursive macro expansion.
+final recursive macro expansion. It stops at IX.
 
 Start with Triangle and stop after the layer you are implementing:
 
@@ -288,32 +222,24 @@ Start with Triangle and stop after the layer you are implementing:
 cargo xtask explain triangle --through cq
 cargo xtask explain triangle --through relational-plan
 cargo xtask explain triangle --through index-requirements
-cargo xtask explain triangle --through rust-access-plan
-cargo xtask explain triangle --through iterator-pipeline
-cargo xtask explain triangle --through final-rust
 ```
 
 The last command can be shortened to `cargo xtask explain triangle`, because
-`final-rust` is the default. Run `cargo xtask list` for the other catalog case
+`index-requirements` is the default. Run `cargo xtask list` for the other catalog case
 names. The `explain`, `list`, and `generate` commands use the lightweight tool
 build and do not compile DuckDB; only `golden` and `differential`
 transparently enable the optional oracle.
 
 | `--through` value | Artifact | First student implementation required |
 |---|---|---|
-| `cq` | `01-cq.rs` | none |
-| `relational-plan` | `02-relational-plan.rs` | Basic HW1 |
-| `index-requirements` | `03-index-requirements.rs` | Basic HW2 |
-| `rust-access-plan` | `04-rust-access-plan.rs` | Basic HW3 |
-| `iterator-pipeline` | `05-iterator-pipeline.rs` | Basic HW3; the pull lowering is supplied |
-| `final-rust` | `06-final-rust.rs` | Basic HW3; both later lowerings are supplied |
+| `cq` | `01-cq.tokens` | none |
+| `relational-plan` | `02-relational-plan.tokens` | Basic HW1 |
+| `index-requirements` | `03-index-requirements.tokens` | Basic HW2 |
 
-The files appear under `target/mini-linq-explain/triangle/`. Artifact 04 is
-the **entire staged Rust file** whose one expression hole is
-`access_to_distinct_iter! { RustAccessPlan }`; artifact 05 is that entire file with the hole
-replaced by `pipeline_to_distinct_iter! { IteratorPipeline }`. They are not isolated
-operator excerpts. The directory's `README.md` identifies the generated
-files. Because the trace lives under ignored `target/`, its `.rs` files are
+The files appear under `target/mini-linq-explain/triangle/`. Each is a
+complete typed compiler payload, not an isolated
+operator excerpt. The directory's `README.md` identifies the generated
+files. Because the trace lives under ignored `target/`, its files are
 editor-readable syntax and diff snapshots rather than modules in the Cargo
 crate graph. Rust Analyzer does not type-check them as workspace code; use the
 real query call site, focused tests, or `cargo check` for type diagnostics.
@@ -341,11 +267,9 @@ open an editor window.
 
 Rust Analyzer's **Expand macro recursively at caret** is a separate final-code
 view, not a Racket-style stepper. It recursively expands to ordinary Rust.
-Moreover, `workload_query!` calls `cq_compose::compile_program` when compiled
-queries are enabled, so the first three typed results are not nested
-macro calls for Rust Analyzer to pause on. Do not invoke expansion again from
+Do not invoke expansion again from
 the virtual `[EXPANSION].rs` buffer; it is not a supported source document and
-may produce an editor error. Use the six generated files for layer-by-layer
+may produce an editor error. Use the generated files for layer-by-layer
 inspection and the recursive expansion only when you want the final code in
 the context of its call site.
 
@@ -362,12 +286,12 @@ Start with the smallest edge under construction:
 
 ```text
 cargo test -p cq-ir --test relational_plan
-cargo test -p cq-compose --test edge_contracts cq_to_relational_plan_contract
-cargo test -p cq-compose --test edge_contracts relational_plan_to_index_requirements_contract
-cargo test -p cq-compose --test edge_contracts index_requirements_to_staged_rust_contract
-cargo test -p cq-compose --test documented_triangle
-cargo test -p cq-compose --test pull_lowering
-cargo test -p mini-linq --test endpoint
+cargo test -p cq-query-lowering --test written_order
+cargo test -p cq-index-policy --test index_demands
+cargo test -p cq-physical-lowering --test lowering
+cargo test -p cq-structure-selection --test selection
+cargo test -p cq-physical-realization --test realization
+cargo test -p mini-linq --test physical_query
 ```
 
 Then run the full baseline:
@@ -381,11 +305,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo test --manifest-path xtask/Cargo.toml --locked
 ```
 
-Enable direct compilation of the authored workload
-queries and compare them with DuckDB:
+Check the authored workload catalog and compare the golden answers with
+DuckDB:
 
 ```text
-cargo test -p cq-workloads --features compiled-queries
+cargo test -p cq-workloads
 cargo xtask golden all tiny --scenario all
 ```
 

@@ -2,45 +2,26 @@
 \label{sec:introduction}
 A conjunctive query specifies satisfying valuations, not a relation container,
 index layout, or access algorithm. MiniLinq constructs a relational plan,
-records required indexes and their uses, selects a bound physical program,
-then realizes that program. External provider instances supply the definitions; the
-compiler core does not enumerate storage families. The result is Rust containing
-storage-specific Access quotations. Push/pull placement remains open.
+records required indexes and their uses, and then lets a caller-supplied,
+query-independent policy fix one physical operator per result and bind every
+keyed read to a host key fact or a Rust structure built over the result. A
+printer emits one pull program over the runtime operation traits; the compiler
+core enumerates no storage families beyond those traits.
 
-The proposed boundary is
+The compiled chain is
 \[
-\begin{gathered}
- \mathsf{CQ}\longrightarrow\mathsf{RA}\longrightarrow\mathsf{IX},\\
- \mathsf{IX}\xrightarrow{\;\Omega,\eta,\mathsf{host}\;}\mathsf{Physical}
- \xrightarrow{\;\Omega,\Gamma\;}\mathsf{Rust}[\mathsf{Access}].
-\end{gathered}
+ \mathsf{CQ}\longrightarrow\mathsf{RA}\longrightarrow\mathsf{IX}
+ \xrightarrow{\;\text{policy}\;}\mathsf{Physical}
+ \xrightarrow{\;\text{policy}\;}\mathsf{Structures}
+ \longrightarrow\mathsf{Rust}.
 \]
-IX preserves the RA plan and adds named index definitions plus explicit references
-from access positions. $\Omega$ is an open collection of external provider
-definitions; $\eta$ is the policy used only during selection. The resulting
-Physical IR is $P=(IX,\Phi,\Lambda)$. Its assignment
-$\Phi=(\Phi_R,\Phi_I)$ binds exact relation versions and required indexes to
-provider instances; $\Lambda$ records the selected lowering for every RA
-definition. Realization follows those bindings without running the policy again.
-$\Gamma$ records semantic representations and current views. Different
-relations and indexes can use different instances. Provider declarations supply
-the definitions consumed by compilation; macro names and Rust's inferred types
-do not reveal those definitions.
-
-Physical realization coordinates relation representation, index preparation,
-and consuming access. An index may already be present in its relation's storage;
-creating an auxiliary map is one possibility, not a universal requirement.
-An algorithm that reads left rows before probing the right index is likewise
-one realization, not a fixed control shape into which every provider must fit.
-
-The implementation now exercises the specified boundaries for an explicit
-borrowed exact-index domain. A complete three-input query selects slice, hash
-and sorted representations independently; an external caller-defined output
-provider requires no common-compiler changes. Actual expansion and independent
-answer checks complement structural validation. The old whole-query routes
-have been retired. General stored intermediates, block/YA realization and
-provider-specific dialect extensions remain unimplemented; the documented
-domain is not a claim of feature parity with the retired prototypes.
+IX preserves the RA plan and adds named index definitions plus explicit
+references from access positions. Physical restates each result with one
+physical operator and the mode its reads allow; Structures binds each keyed
+read and discharges order and canonical premises; both erase to IX. This paper
+formalizes CQ, RA, planning and IX. Physical and Structures are specified by
+the \code{cq-ir} module documentation and \path{doc/DSL.md}
+(Section~\ref{sec:ix}) until a formal treatment is written.
 
 The retained relational theory covers valuations, named RA, host-expression
 dependencies, GYO and Yannakakis planning. These logical results do not choose

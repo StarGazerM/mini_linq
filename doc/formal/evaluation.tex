@@ -1,23 +1,10 @@
 \section{Conformance and validation}
 \label{sec:evaluation}
-The current admitted exact-index domain has an implemented IX analysis,
-structural Physical selection, generic callback driver, and external borrowed
-providers. The whole-query hash/configured/Native routes have been removed.
-This is not feature parity with those retired prototypes.
-
-The complete three-input fixture uses a slice, hash map and B-tree map in one
-query. A separate full-CQ fixture includes terminal projection and compares
-answers over 256 input subsets. Its trace is kept separate from the direct-RA
-fixture. Its independently authored IX, Physical assignment table and completed
-Rust[Access] are compared with actual procedural-macro outputs. External
-callbacks are captured in the same compiler-process invocation order. The
-capture returns original token streams; it does not reconstruct the compiler
-or flatten away its boundaries. Source hashes and an instrumentation patch
-record the observed source. See \path{doc/ix-physical/realization-trace/}.
-A separate full-CQ pull capture in \path{doc/ix-physical/pull-trace/} also checks
-the named Pipeline boundary before Rust adapters appear. It observes zero source
-evaluations at construction and unpolled drop, one row per source at first
-success, and resumption within the existing innermost bucket.
+The implemented chain is \code{CQ -> RA -> IX -> Physical -> Structures -> Rust}.
+Each pass has a \code{check} over its source and target, and the languages have
+parser round-trip and contract tests in \code{cq-ir}. The evidence below is
+what the repository exercises; it is not a proof of the runtime trait laws for
+arbitrary user types.
 
 \begin{center}\small
 \begin{tabular}{p{.29\linewidth}p{.61\linewidth}}
@@ -25,35 +12,30 @@ success, and resumption within the existing innermost bucket.
 Obligation & Current evidence\\
 \midrule
 IX & Named $D,U$, exact versions, canonical column ordinals, reused demands,
-missing and incorrect use-reference rejection.\\
-Frozen Physical & Exact assignment domains, opaque paths, dependency-order
-requests, reply identity/kind checks, and unchanged payloads across callbacks.\\
-Open providers & Independent rebinding of one relation/index family and a
-caller-defined nested output carrier; neither edits common dispatch.\\
-Access/result meaning & Independent enumeration with empty inputs, missing and
-multiple matches, duplicate support, and reversed column layouts.\\
-Ownership & Non-\code{Clone} fields, references into original inputs, explicit
-Rust type failures for mismatched relation/index assignments.\\
-Macro boundaries & Authored boundary tokens checked against the actual
-expansion; all administrative exchanges available for inspection.\\
-Lazy demand & Observed provider sources remain unevaluated until polling;
-short-circuiting and resumption preserve the unfinished input traversal.\\
+missing and incorrect use-reference rejection
+(\path{crates/cq-index-policy/tests/index_demands.rs}).\\
+Physical & One operator per result, modes checked by use, \code{canon} on the
+return when uniqueness is not inferred
+(\path{crates/cq-physical-lowering/tests/lowering.rs}).\\
+Structures & Every keyed read answered by a host key fact or a built type,
+merge sides ordered, canonical return
+(\path{crates/cq-structure-selection/tests/selection.rs}).\\
+Printed program & Structures printed in head order without binding copies
+(\path{crates/cq-physical-realization/tests/realization.rs}).\\
+Storage laws & Abstraction functions of \code{HashIndex}, membership and
+ordered cursors against an independent bag oracle
+(\path{crates/cq-storage/tests/}).\\
+Whole chain & Host maps probed in place, compiler-built indexes, a
+user-defined \texttt{\#[index(Type)]}, merge joins over built ordered maps,
+Yannakakis semijoin passes as membership tests, bounded ordered scans and a
+computed head column, each compared with an independent oracle
+(\path{crates/mini-linq/tests/physical_query.rs}); the runnable
+\path{examples/composition/} binds every macro slot.\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The normal workspace test command excludes opt-in unfinished HW4 teaching
-exercises. The 19 September run passes 312 tests; three trace-dependent tests
-also pass separately against fresh captures. The feature matrix passes all 24
-configurations, 12 isolated frontend probes pass, and workspace clippy passes
-with warnings denied. These checks describe the active workspace,
-not the removed physical tests or every proposed extension. Logical YA proof
-and relational-oracle tests were retained in \code{cq-query-lowering}.
-Storage and Access/Pipeline tests establish only their own component properties.
-
-The authored local two-output and auxiliary-index fixtures in the paper remain
-expectations; the executable complete-module fixture is separate. General
-stored intermediates, composite/empty index providers, additional physical RA
-rules, block/YA realization and trie WCOJ remain unimplemented. Provider laws
-are conditional obligations, not theorems checked for arbitrary external Rust.
+Logical YA proof and relational-oracle tests are retained in
+\code{cq-query-lowering}. Recursion, aggregation, negation, incremental
+evaluation, general physical cost search and WCOJ remain outside the language.
 No performance or asymptotic claim follows from fixture agreement.
