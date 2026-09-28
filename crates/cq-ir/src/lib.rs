@@ -20,6 +20,7 @@ pub mod policy;
 pub mod relational_plan;
 pub mod state_protocol;
 pub mod structures;
+pub mod valuation;
 
 pub mod kw {
     syn::custom_keyword!(agg);
