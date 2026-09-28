@@ -215,6 +215,15 @@ impl Kernel {
 
     pub fn of_query(query: &Query) -> Kernel {
         let mut renaming = Renaming::default();
+        // Atom variables are named first, in atom order, so a plan that moves
+        // a binding earlier or later than the query wrote it keeps its kernel.
+        for item in &query.body {
+            if let BodyItem::Positive { atom } = item {
+                for variable in atom.variables() {
+                    renaming.name(variable);
+                }
+            }
+        }
         let mut kernel = Kernel {
             atoms: Vec::new(),
             guards: Vec::new(),

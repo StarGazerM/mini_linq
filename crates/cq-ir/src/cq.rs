@@ -1,5 +1,6 @@
 mod predicate;
 pub use predicate::{Comparison, Predicate, Term};
+pub mod hypergraph;
 pub mod normal;
 pub mod rust;
 
