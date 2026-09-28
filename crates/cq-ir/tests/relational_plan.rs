@@ -273,3 +273,53 @@ fn unit_is_the_zero_attribute_relation() {
     })
     .unwrap();
 }
+
+#[test]
+fn erasure_reads_the_query_back_from_the_plan_in_the_program_order() {
+    use cq_ir::cq::{self, normal::Kernel};
+    // Atoms out of written order and named by the plan's own results, a
+    // self-join renamed twice (one occurrence, restricted), a select and an
+    // extend outside the elaborated `{ let …; (…) }` shape.
+    let module: relational_plan::Module = syn::parse2(quote! {
+        struct P;
+        relation R(a: i32, b: i32);
+        relation S(b: i32, c: i32);
+        answer(x, k) :- R(x, y), S(y, z), R(z, x), if x != z, let k: i32 = x + z;
+        relational {
+            last = rename R { a -> z, b -> x };
+            first = rename R { a -> x, b -> y };
+            only_x = project first keep { x };
+            seed = natural_join last with only_x;
+            again = rename R { a -> x, b -> y };
+            both = natural_join seed with again;
+            mid = rename S { b -> y, c -> z };
+            all = natural_join both with mid;
+            kept = select all if (x != z);
+            wide = extend kept with { k: i32 } value ((x + z,));
+            done = project wide keep { x, k };
+            output done as answer(x, k);
+        }
+    })
+    .unwrap();
+    let erased = relational_plan::erase(&module);
+    let mut expected = module.program.clone();
+    expected.query = syn::parse_quote! {
+        answer(x, k) :- R(x, y), S(y, z), R(z, x), if x != z, let (k,) = (x + z,);
+    };
+    assert_eq!(
+        erased.program.query.to_token_stream().to_string(),
+        expected.query.to_token_stream().to_string()
+    );
+    assert_eq!(
+        relational_plan::kernel(&module),
+        Kernel::of(&cq::Module { program: expected })
+    );
+    // What the plan lacks is missing from the kernel; the kernel is not
+    // the program's.
+    let mut fewer = module.clone();
+    fewer.plan.definitions.retain(|d| d.result != "kept");
+    fewer.plan.definitions[8].operator =
+        syn::parse_quote!(extend all with { k: i32 } value ((x + z,)));
+    assert!(relational_plan::contract::well_formed(&fewer));
+    assert_eq!(relational_plan::kernel(&fewer).guards, Vec::<String>::new());
+}

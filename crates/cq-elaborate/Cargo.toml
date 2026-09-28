@@ -1,0 +1,18 @@
+[package]
+name = "cq-elaborate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+cq-ir = { path = "../cq-ir" }
+quote.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+cq-query-lowering = { path = "../cq-query-lowering", features = ["written-order", "clause-prefix"] }
+proc-macro2.workspace = true

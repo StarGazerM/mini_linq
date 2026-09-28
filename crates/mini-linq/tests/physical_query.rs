@@ -90,7 +90,7 @@ mod hosted {
         R: &'a HashMap<(Value,), Vec<(Value,)>>,
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> HashSet<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_written_order! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
@@ -137,7 +137,7 @@ mod built {
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_written_order! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
@@ -223,7 +223,7 @@ mod advised {
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_written_order! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
@@ -271,7 +271,7 @@ mod merged {
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_written_order! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
@@ -359,7 +359,7 @@ mod windowed {
     pub(super) fn run(
         R: &std::collections::BTreeMap<(i32,), Vec<(i32,)>>,
     ) -> std::collections::HashSet<(&i32, &i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_clause_prefix! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Windowed;
             relation R(a: i32, b: i32);
             answer(a, b) :- R(a, b), if a >= 2 && a < 9 && b != 5;
@@ -412,7 +412,7 @@ mod computed {
         R: &'a [(i32, i32)],
         S: &'a [(i32, i32)],
     ) -> Vec<(&'a i32, String, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_clause_prefix! {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Computed;
             relation R(a: i32, b: i32);
             relation S(b: i32, c: i32);

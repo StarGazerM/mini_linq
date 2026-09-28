@@ -14,7 +14,6 @@ use proc_macro::TokenStream;
 #[cfg(any(
     feature = "logical-selection",
     feature = "written-order",
-    feature = "clause-prefix",
     feature = "hypergraph",
     feature = "index-demands",
     feature = "structure-selection",
@@ -36,37 +35,26 @@ pub fn workload_query(input: TokenStream) -> TokenStream {
 pub fn mini_linq(input: TokenStream) -> TokenStream {
     entry::stage(input, None, |source: &cq_ir::cq::Module| {
         cq_ir::cq::contract::check(source)?;
-        Ok(if source.program.query.is_basic() {
-            quote::quote!(mini_linq::cq_to_ra_written_order! { #source })
-        } else {
-            quote::quote!(mini_linq::cq_to_ra_clause_prefix! { #source })
-        })
+        Ok(quote::quote!(mini_linq::cq_to_ra! { #source }))
     })
 }
 
-/// Canonical CQ-to-RA rules for variable-only conjunctive queries.
+/// CQ → RA in written order: normalize, schedule clauses as written, one
+/// full subatom per atom, elaborate to named RA.
 #[cfg(feature = "written-order")]
 #[proc_macro]
-pub fn cq_to_ra_written_order(input: TokenStream) -> TokenStream {
+pub fn cq_to_ra(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::choose_index_policy)),
-        cq_query_lowering::written_order::compile,
+        |source: &cq_ir::cq::Module| {
+            let normal = cq_ir::cq::normal::normalize(source)?;
+            let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
+            cq_elaborate::compile(&plan)
+        },
     )
 }
 
-/// Source-order clause-prefix CQ lowering, selected independently of source shape.
-#[cfg(feature = "clause-prefix")]
-#[proc_macro]
-pub fn cq_to_ra_clause_prefix(input: TokenStream) -> TokenStream {
-    entry::stage(
-        input,
-        Some(syn::parse_quote!(mini_linq::choose_index_policy)),
-        cq_query_lowering::clause_prefix::compile,
-    )
-}
-
-/// Graph planning, including YA reduction when the query is acyclic.
 #[cfg(feature = "hypergraph")]
 #[proc_macro]
 pub fn cq_to_ra_hypergraph(input: TokenStream) -> TokenStream {
@@ -88,7 +76,7 @@ pub fn choose_graph_or_prefix(input: TokenStream) -> TokenStream {
         Ok(if facts.supports_graph_rules {
             quote::quote!(mini_linq::cq_to_ra_hypergraph! { #source })
         } else {
-            quote::quote!(mini_linq::cq_to_ra_clause_prefix! { #source })
+            quote::quote!(mini_linq::cq_to_ra! { #source })
         })
     })
 }

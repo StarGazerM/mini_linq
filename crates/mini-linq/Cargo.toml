@@ -9,11 +9,10 @@ license.workspace = true
 proc-macro = true
 
 [features]
-default = ["logical-selection", "written-order", "clause-prefix", "hypergraph", "index-demands", "structure-selection", "physical-lowering", "physical-realization"]
-logical-selection = ["written-order", "clause-prefix", "hypergraph"]
-written-order = ["dep:cq-query-lowering", "cq-query-lowering/written-order"]
-clause-prefix = ["dep:cq-query-lowering", "cq-query-lowering/clause-prefix"]
-hypergraph = ["dep:cq-query-lowering", "cq-query-lowering/hypergraph"]
+default = ["logical-selection", "written-order", "hypergraph", "index-demands", "structure-selection", "physical-lowering", "physical-realization"]
+logical-selection = ["written-order", "hypergraph"]
+written-order = ["dep:cq-order", "dep:cq-elaborate"]
+hypergraph = ["dep:cq-query-lowering", "cq-query-lowering/hypergraph", "cq-query-lowering/clause-prefix"]
 index-demands = ["dep:cq-index-policy"]
 structure-selection = ["dep:cq-structure-selection"]
 physical-lowering = ["dep:cq-physical-lowering"]
@@ -25,6 +24,8 @@ cq-ir.workspace = true
 quote.workspace = true
 syn.workspace = true
 cq-query-lowering = { workspace = true, optional = true }
+cq-order = { workspace = true, optional = true }
+cq-elaborate = { workspace = true, optional = true }
 cq-index-policy = { workspace = true, optional = true }
 cq-structure-selection = { workspace = true, optional = true }
 cq-physical-lowering = { workspace = true, optional = true }
@@ -44,4 +45,4 @@ syn = { workspace = true, features = ["visit-mut"] }
 
 [[test]]
 name = "physical_query"
-required-features = ["written-order", "clause-prefix", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]
+required-features = ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]

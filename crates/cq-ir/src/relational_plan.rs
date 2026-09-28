@@ -10,6 +10,12 @@
 //! It promises neither materialization nor a reusable iterator instance. The
 //! selected realization decides whether those uses recompute or share retained
 //! data; each independent traversal needs its own cursor state.
+//!
+//! [`erase`] and [`kernel`] read back the normal-form query a plan computes,
+//! so a plan can be checked against the valuation it elaborates.
+
+mod kernel;
+pub use kernel::{erase, kernel};
 
 use std::collections::{BTreeMap, BTreeSet};
 
