@@ -55,30 +55,33 @@ pub fn cq_to_ra(input: TokenStream) -> TokenStream {
     )
 }
 
+/// CQ → RA with Yannakakis reduction: normalize, schedule clauses as
+/// written, push single-atom guards onto their atoms, semijoin-reduce along
+/// the GYO join tree when the query is acyclic, elaborate to named RA.
 #[cfg(feature = "hypergraph")]
 #[proc_macro]
 pub fn cq_to_ra_hypergraph(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::choose_index_policy)),
-        cq_query_lowering::hypergraph::compile,
+        |source: &cq_ir::cq::Module| {
+            let normal = cq_ir::cq::normal::normalize(source)?;
+            let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
+            let semijoins = if cq_ir::cq::hypergraph::Analysis::of(&normal).acyclic {
+                cq_reduce::Reductions::Tree
+            } else {
+                cq_reduce::Reductions::None
+            };
+            let reduced = cq_reduce::compile(
+                &plan,
+                &cq_reduce::Options {
+                    guards: cq_reduce::Pushdown::Atoms,
+                    semijoins,
+                },
+            )?;
+            cq_elaborate::compile(&reduced)
+        },
     )
-}
-
-/// Select graph or expression-preserving prefix planning through caller bindings.
-/// Evaluation demand belongs to the downstream composition, not this selector.
-#[cfg(feature = "logical-selection")]
-#[proc_macro]
-pub fn choose_graph_or_prefix(input: TokenStream) -> TokenStream {
-    entry::stage(input, None, |source: &cq_ir::cq::Module| {
-        cq_ir::cq::contract::check(source)?;
-        let facts = cq_query_lowering::dependencies::ClauseDependencies::analyze(source)?;
-        Ok(if facts.supports_graph_rules {
-            quote::quote!(mini_linq::cq_to_ra_hypergraph! { #source })
-        } else {
-            quote::quote!(mini_linq::cq_to_ra! { #source })
-        })
-    })
 }
 
 /// Construct exact-version index definitions and references from every join use.

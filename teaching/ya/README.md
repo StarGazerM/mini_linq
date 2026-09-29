@@ -7,26 +7,34 @@ A standalone teaching release must now follow the same boundaries as the compile
 CQ → RA → IX → Physical → Structures → Rust
 ```
 
-Logical YA scheduling remains implemented in
-[`hypergraph/ya.rs`](../../crates/cq-query-lowering/src/hypergraph/ya.rs), with
-checked administrative rules and independent relational oracle tests. The retained
-[`ya_schedule.rs`](ya_schedule.rs) is an acceptance-test source for that logical
-exercise: it checks upward/downward dependencies, complete reduction before
-assembly, and singleton, chain, branching, composite, disconnected, and repeated
-occurrence cases. It is not a standalone Cargo release.
+Logical YA scheduling is the `Reductions::Tree` option of the
+[`cq-reduce`](../../crates/cq-reduce/src/lib.rs) pass: it writes the upward and
+downward semijoin sweeps over the GYO join tree of
+[`cq::hypergraph::Analysis`](../../crates/cq-ir/src/cq/hypergraph.rs) into a
+valuation plan as `reduce parent with child(shared)` / `reduce child with
+parent(shared)` steps, all before the first atom step, and `cq-elaborate` turns
+each into an RA semijoin. The pass's own tests
+([`crates/cq-reduce/tests/reduce.rs`](../../crates/cq-reduce/tests/reduce.rs))
+pin the chain schedule and evaluate every reduced plan against the relational
+oracle. The retained [`ya_schedule.rs`](ya_schedule.rs) is an acceptance-test
+source for that logical exercise, written against `cq_ir`, `cq_reduce` and
+`cq_elaborate`: it checks upward/downward dependencies, complete reduction before
+the first atom, the exact schedules of the chain, branching, composite,
+disconnected and repeated occurrence cases, and the rejection of a cyclic
+query. It is not a standalone Cargo release.
 
 Run the current logical foundation with:
 
 ```sh
-cargo test -p cq-query-lowering --all-features --locked
+cargo test -p cq-reduce --locked
 ```
 
 The shared [relational fixtures](../../test-support/relational) and
 [workload queries, datasets, and golden results](../../workloads) remain available.
 The executable [heterogeneous composition](../../examples/composition/README.md)
 probes host maps in place; the [full-chain test](../../crates/mini-linq/tests/physical_query.rs)
-realizes the acyclic planner's semijoin passes as `semi` operators answered by
-membership tests over built structures.
+realizes the reducer's semijoin passes (`cq_to_ra_hypergraph!`) as `semi`
+operators answered by membership tests over built structures.
 
 A new YA release therefore requires checked expansion fixtures for that
 semijoin realization before an exporter or physical exercise can be supplied. The logical exercise and

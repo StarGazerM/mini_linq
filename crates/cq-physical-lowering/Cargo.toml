@@ -16,4 +16,6 @@ syn.workspace = true
 
 [dev-dependencies]
 cq-index-policy = { path = "../cq-index-policy" }
-cq-query-lowering = { path = "../cq-query-lowering", features = ["clause-prefix", "hypergraph"] }
+cq-order = { path = "../cq-order" }
+cq-reduce = { path = "../cq-reduce" }
+cq-elaborate = { path = "../cq-elaborate" }

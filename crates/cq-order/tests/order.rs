@@ -1,10 +1,10 @@
 //! Written, prefix-ranked and elimination orders, coarse and fine: every plan
 //! passes the VO contract and erases to its query; prefix rankings place the
-//! clauses exactly as the old clause-prefix planner did.
+//! clauses in the pinned sequences (those of the clause-prefix planner they
+//! replace).
 use cq_ir::cq::{self, BodyItem, normal::Kernel};
 use cq_ir::valuation;
 use cq_order::{Heuristic, Options, Ranking, Split};
-use cq_query_lowering::{JoinPolicy, PlanningOptions, Rule};
 use quote::{ToTokens, quote};
 
 fn cq(tokens: proc_macro2::TokenStream) -> cq::Module {
@@ -75,6 +75,7 @@ fn sequence(plan: &valuation::Module) -> Vec<usize> {
                 lets += 1;
                 nth(lets - 1, |item| matches!(item, BodyItem::Let(_)))
             }
+            valuation::Step::Reduce(..) => unreachable!("order emits no reductions"),
         })
         .collect()
 }
@@ -163,48 +164,58 @@ fn a_bound_key_is_checked_by_every_atom_holding_it() {
 }
 
 #[test]
-fn prefix_rankings_place_clauses_as_the_clause_prefix_planner_did() {
+fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
+    // Each case pins the clause sequence under `Written`, then under the
+    // three prefix rankings (`Connected`, `GreedyWidth`, `Auto`).
     let cases = [
-        chain(),
-        triangle(),
+        (chain(), [0, 1, 2].as_slice(), [0, 1, 2].as_slice()),
+        (triangle(), &[0, 1, 2], &[0, 1, 2]),
         // Guards become ready in query order: VO keeps guards in that order,
-        // where the old planner would place `x != z` before `w > 1`.
-        cq(quote! {
-            struct Q;
-            relation R(a: i32, b: i32);
-            relation S(a: i32, b: i32);
-            relation T(a: i32, b: i32);
-            answer(x) :- R(x, y), S(z, w), T(y, z), if x != z, if w > 1;
-        }),
-        cq(quote! {
-            struct Q;
-            relation R(a: i32, b: i32);
-            relation S(a: i32, b: i32);
-            relation T(a: i32, b: i32);
-            answer(x) :- let k: i32 = 5, R(x, k), S(x, y), T(y, z);
-        }),
-        cq(quote! {
-            struct Q;
-            relation R(a: i32, b: i32);
-            relation S(a: i32, b: i32);
-            relation T(a: i32, b: i32);
-            answer(x, z) :- R(x, y), S(y, z), T(x, z), if y > x;
-        }),
-    ];
-    let policies = [
-        (Heuristic::Written, JoinPolicy::Written),
-        (Heuristic::Prefix(Ranking::Connected), JoinPolicy::Connected),
+        // so `x != z` is placed as soon as T binds z and `w > 1` after S.
         (
-            Heuristic::Prefix(Ranking::GreedyWidth),
-            JoinPolicy::GreedyWidth,
+            cq(quote! {
+                struct Q;
+                relation R(a: i32, b: i32);
+                relation S(a: i32, b: i32);
+                relation T(a: i32, b: i32);
+                answer(x) :- R(x, y), S(z, w), T(y, z), if x != z, if w > 1;
+            }),
+            &[0, 1, 2, 3, 4],
+            &[0, 2, 3, 1, 4],
         ),
-        (Heuristic::Prefix(Ranking::Auto), JoinPolicy::Auto),
+        (
+            cq(quote! {
+                struct Q;
+                relation R(a: i32, b: i32);
+                relation S(a: i32, b: i32);
+                relation T(a: i32, b: i32);
+                answer(x) :- let k: i32 = 5, R(x, k), S(x, y), T(y, z);
+            }),
+            &[0, 1, 2, 3],
+            &[0, 1, 2, 3],
+        ),
+        (
+            cq(quote! {
+                struct Q;
+                relation R(a: i32, b: i32);
+                relation S(a: i32, b: i32);
+                relation T(a: i32, b: i32);
+                answer(x, z) :- R(x, y), S(y, z), T(x, z), if y > x;
+            }),
+            &[0, 1, 2, 3],
+            &[0, 3, 1, 2],
+        ),
     ];
-    for source in &cases {
-        for (heuristic, strategy) in policies {
+    for (source, written, prefix) in &cases {
+        for (heuristic, expected) in [
+            (Heuristic::Written, *written),
+            (Heuristic::Prefix(Ranking::Connected), *prefix),
+            (Heuristic::Prefix(Ranking::GreedyWidth), *prefix),
+            (Heuristic::Prefix(Ranking::Auto), *prefix),
+        ] {
             assert_eq!(
                 sequence(&plan(source, heuristic, Split::Coarse)),
-                old_sequence(source, strategy),
+                expected,
                 "{heuristic:?} on {}",
                 source.program.query.to_token_stream()
             );
@@ -230,12 +241,9 @@ fn prefix_ranking_counts_normalized_constants_as_the_old_literal_keys() {
         .take_while(|item| matches!(item, BodyItem::Let(_)))
         .count();
     assert_eq!(constants, 2);
-    for (heuristic, strategy) in [
-        (Heuristic::Prefix(Ranking::Connected), JoinPolicy::Connected),
-        (
-            Heuristic::Prefix(Ranking::GreedyWidth),
-            JoinPolicy::GreedyWidth,
-        ),
+    for heuristic in [
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
     ] {
         let sequence = sequence(&plan(&normal, heuristic, Split::Coarse));
         // The constants' bindings come first, as C-CONSTANT did.
@@ -244,27 +252,8 @@ fn prefix_ranking_counts_normalized_constants_as_the_old_literal_keys() {
             .iter()
             .map(|c| c - constants)
             .collect();
-        assert_eq!(clauses, old_sequence(&source, strategy), "{heuristic:?}");
+        assert_eq!(clauses, [0, 1, 2], "{heuristic:?}");
     }
-}
-
-/// The clause each Match/Guard/Bind rule of the old derivation applied.
-fn old_sequence(source: &cq::Module, strategy: JoinPolicy) -> Vec<usize> {
-    let options = PlanningOptions {
-        strategy,
-        max_arity: None,
-    };
-    let (_, report) = cq_query_lowering::clause_prefix::explain(source, options).unwrap();
-    report
-        .derivation
-        .iter()
-        .filter_map(|rule| match rule {
-            Rule::Match { clause } | Rule::Guard { clause } | Rule::Bind { clause } => {
-                Some(*clause)
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 #[test]

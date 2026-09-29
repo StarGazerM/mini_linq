@@ -1,5 +1,20 @@
 \section{Current CQ-to-RA administrative algorithms}
 \label{sec:planning}
+\paragraph{The pass chain.}
+CQ reaches RA through nanopasses over the languages of
+Section~\ref{sec:nf-vo}: \code{cq::normal::normalize} (CQ $\to$ NF),
+\code{cq_order::compile} (NF $\to$ VO; a heuristic --- written order, the
+clause-prefix rankings, or the elimination order of
+\code{cq::hypergraph::Analysis} --- and a split, coarse or fine),
+\code{cq_reduce::compile} (VO $\to$ VO; single-atom guards pushed onto
+their atoms and the Yannakakis full reducer over the GYO join tree when the
+query is acyclic) and \code{cq_elaborate::compile} (VO $\to$ RA). Each pass
+checks its target's contract and has a \code{check} that re-derives the
+source by erasure: the RA kernel equals the VO kernel equals the NF kernel.
+The rules below are the administrative systems of the retired monolithic
+planners; the manifest \path{rules.tsv} pins each rule name whose subject
+survives to the pass that now realizes it, and marks the rest abstract.
+
 D-analysis chooses graph or prefix transitions. Incidence and a GYO join tree
 constrain command selection; commands emit RA and witness binary assembly order.
 \textsc{Apply} checks a command before updating state and appending its trace
@@ -103,8 +118,8 @@ initially $Z(i)=X_i$, $\pi(i)=\bot$. Original incidence is immutable.
 \Rule{G-Reject}{\operatorname{terminal}(Z)\quad Z\ne\{i\mapsto\emptyset\}\text{ for every }i}
  {(Z,\pi)\Downarrow_{\rm GYO}\mathsf{None}}
 \end{mathpar}
-Terminal means neither transition applies. Algorithm~\ref{alg:gyo} implements
-\code{hypergraph::analyze}; H-JoinTree checks its result on original edges.
+Terminal means neither transition applies. Algorithm~\ref{alg:gyo} is
+\code{cq::hypergraph::Analysis::of}; H-JoinTree characterizes its result on original edges.
 \begin{algorithm}[tbp]
 \caption{GYO recognition: $X\mapsto(\alpha,J)$}
 \label{alg:gyo}
@@ -327,9 +342,10 @@ children/parent respectively, visiting each nonroot edge once per direction.
 Empty separators and the one-node case satisfy the same argument.
 \end{proof}
 This reducer includes applied local guards, not pending cross-occurrence
-predicates: these still require assembly. \code{up}, \code{down}, and
-\code{freeze} in \code{rules.rs} implement the transitions; the independent
-checker validates directions, latest operands, unchanged sorts, and completion.
+predicates: these still require assembly. \code{cq_reduce::tree} emits the Up
+and Down sweeps as \code{reduce} steps before the first atom step; the VO
+contract validates directions and shared variables, and \code{cq_reduce::check}
+requires the erasure to give the unreduced plan back.
 
 \subsection{Policy, width, and the compilation judgment}
 \label{sec:planning-policy}\label{sec:join-arity}
@@ -410,7 +426,8 @@ otherwise the least applicable Trim group, until neither exists.
 \end{algorithmic}
 \end{algorithm}
 The initial Select loop uses the same least $(p,g)$ choice. $\mathsf{pick}_{s,J}$
-is the dispatcher defined above; \code{strategy.rs} implements these choices.
+is the dispatcher defined above; \code{cq_order::Heuristic} realizes Written
+and the prefix rankings, and no heuristic reproduces S-Tree.
 With successful D-analysis $\mathcal D$ and the algorithms' return conventions:
 \begin{mathpar}
 
@@ -423,8 +440,8 @@ With successful D-analysis $\mathcal D$ and the algorithms' return conventions:
  {\Sigma\vdash_s^b q\Downarrow(D,o;\emptyseq,\mathsf{None},\delta,w(D))}
 \end{mathpar}
 The target retains source annotation and $(D,o)$; other components form the
-report. Checking establishes trace legality; \code{compile_cq_derivation}
-accepts other legal schedules without enforcing canonical policy choice.
+report. Checking establishes trace legality; the VO contract accepts other
+legal schedules without enforcing canonical policy choice.
 
 \subsection{Canonical and dependency-constrained prefixes}
 \label{sec:prefix-planning}

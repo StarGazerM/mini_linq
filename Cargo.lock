@@ -18,7 +18,6 @@ name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
- "cq-query-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -48,7 +47,6 @@ name = "cq-order"
 version = "0.1.0"
 dependencies = [
  "cq-ir",
- "cq-query-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -58,9 +56,11 @@ dependencies = [
 name = "cq-physical-lowering"
 version = "0.1.0"
 dependencies = [
+ "cq-elaborate",
  "cq-index-policy",
  "cq-ir",
- "cq-query-lowering",
+ "cq-order",
+ "cq-reduce",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -77,10 +77,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-query-lowering"
+name = "cq-reduce"
 version = "0.1.0"
 dependencies = [
- "contracts",
+ "cq-elaborate",
  "cq-ir",
  "proc-macro2",
  "quote",
@@ -132,7 +132,7 @@ dependencies = [
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
- "cq-query-lowering",
+ "cq-reduce",
  "cq-state-providers",
  "cq-storage",
  "cq-structure-selection",

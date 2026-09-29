@@ -1,7 +1,7 @@
 # Compiler ownership and composition
 
-The accepted path is `CQ → RA → IX → Physical → Structures → Rust`. Each
-language is the previous one plus one section; each pass records one
+The accepted path is `CQ → NF → VO → RA → IX → Physical → Structures → Rust`.
+Each language is the previous one plus one section; each pass records one
 decision and is checked by the next language's contract. Below Structures a
 printer emits one pull program over the `cq-storage` traits.
 See [DSL.md](DSL.md) for the grammars.
@@ -10,8 +10,10 @@ See [DSL.md](DSL.md) for the grammars.
 
 | Crate | Responsibility | Modules / entry functions |
 |---|---|---|
-| `cq-ir` | Typed syntax and local validity | `cq`, `relational_plan`, `index_requirements`, `physical`, `structures`, `policy`, `state_protocol` |
-| `cq-query-lowering` | CQ planning and RA construction | `written_order`, `clause_prefix`, `hypergraph`; each exports `compile`; `dependencies`, `model`, `proof` support planning |
+| `cq-ir` | Typed syntax and local validity | `cq` (with `cq::normal`: normal form, `normalize`, `Kernel`; `cq::hypergraph`: incidence, GYO join tree, elimination order), `valuation` (VO plans, `erase`, `kernel`), `relational_plan` (with `erase`, `kernel`), `index_requirements`, `physical`, `structures`, `policy`, `state_protocol` |
+| `cq-order` | NF → VO; the order of the steps: a `Heuristic` (`Written`, `Prefix(Ranking)`, `Elimination`) fixes the clause order, a `Split` (`Coarse`, `Fine`) the granularity | `compile`, `check` |
+| `cq-reduce` | VO → VO; the reductions a plan carries: `Pushdown::Atoms` pushes single-atom guards onto their atoms, `Reductions::Tree` is the Yannakakis full reducer over the GYO join tree (acyclic queries) | `compile`, `check` |
+| `cq-elaborate` | VO → RA; rename per clause at first mention, join/semijoin per subatom, select/extend per guard/binding, semijoin/select per reduction, one final projection | `compile`, `check` |
 | `cq-index-policy` | RA → IX; derive required join-column indexes and their uses | `compile`; `correspondence` checks the edge |
 | `cq-physical-lowering` | IX + policy → Physical; one physical operator per result, modes from use, `canon` on the return when uniqueness is not inferred | `compile`, `check` |
 | `cq-structure-selection` | Physical + policy → Structures; host facts from the policy, a built type for every read no host key answers, `#[index(Type)]` advice | `compile`, `check` |

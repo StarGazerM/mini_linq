@@ -21,8 +21,20 @@
 //! whose subatom adds no new variable is a consistency check, which erases
 //! to nothing under set semantics.
 //!
+//! A **reduction** restricts a clause's relation before the clause is ever
+//! joined. `reduce R@0 with S@1(b, _)` keeps the tuples of `R@0` that agree
+//! with some tuple of `S@1` on the variables the two clauses share — the
+//! subatom lists exactly those, `_` elsewhere. `reduce R@0 if (e)` keeps the
+//! tuples satisfying `e`, one of the query's guards over `R@0`'s own
+//! variables; that guard is thereby placed and appears as no step. A
+//! reduction may stand anywhere before the reduced clause's first subatom
+//! step. Under set semantics it changes nothing the plan denotes — it is a
+//! Yannakakis semijoin, or a guard pushed onto one atom, written down where
+//! the algebra will apply it — so the erasure ignores reductions.
+//!
 //! ```text
 //! valuation {
+//!     reduce R@0 with T@2(a, _); // keep the R tuples whose a occurs in T
 //!     R@0(a, _);            // bind a from R
 //!     T@2(a, _);            // check a against T
 //!     R@0(a, b);            // bind b from R given a
@@ -33,9 +45,11 @@
 //! ```
 //!
 //! ```text
-//! Module  ::= CQ "valuation" "{" Step* "}"
-//! Step    ::= Subatom ";" | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
-//! Subatom ::= Ident "@" Int "(" (Ident | "_"),* ")"
+//! Module    ::= CQ "valuation" "{" Step* "}"
+//! Step      ::= Subatom ";" | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
+//!             | "reduce" Ident "@" Int Reduction ";"
+//! Reduction ::= "with" Subatom | "if" Expr
+//! Subatom   ::= Ident "@" Int "(" (Ident | "_"),* ")"
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,7 +60,9 @@ use crate::cq::{self, normal::Kernel, rust};
 use crate::{CommaList, symbol_name};
 
 pub mod kw {
+    syn::custom_keyword!(reduce);
     syn::custom_keyword!(valuation);
+    syn::custom_keyword!(with);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -75,7 +91,34 @@ pub enum Step {
     Guard(cq::Filter, Token![;]),
     #[parse(peek = Token![let])]
     Let(Box<cq::Let>, Token![;]),
+    #[parse(peek = kw::reduce)]
+    Reduce(Reduce, Token![;]),
     Atom(Subatom, Token![;]),
+}
+
+/// A restriction of one clause's relation, applied before its first subatom.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Reduce {
+    pub reduce_token: kw::reduce,
+    pub relation: Ident,
+    pub at: Token![@],
+    pub clause: LitInt,
+    pub reduction: Reduction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum Reduction {
+    /// Semijoin with another clause on the variables the subatom lists.
+    #[parse(peek = kw::with)]
+    With(kw::with, Subatom),
+    /// One of the query's guards, over the reduced clause's variables.
+    Guard(cq::Filter),
+}
+
+impl Reduce {
+    pub fn clause(&self) -> usize {
+        self.clause.base10_parse().expect("clause index")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -135,7 +178,10 @@ pub mod contract {
     }
 }
 
-fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> syn::Result<T> {
+fn error<T>(
+    spanned: &(impl quote::ToTokens + ?Sized),
+    message: impl std::fmt::Display,
+) -> syn::Result<T> {
     Err(syn::Error::new_spanned(spanned, message))
 }
 
@@ -160,6 +206,60 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
             _ => unreachable!("normal form"),
         }
     }
+    let let_bound: Vec<String> = lets
+        .iter()
+        .flat_map(|binding| rust::bindings(&binding.pattern))
+        .map(|v| symbol_name(&v))
+        .collect();
+    let is_variable = |v: &str| {
+        clause_variables.values().flatten().any(|c| c == v) || let_bound.iter().any(|c| c == v)
+    };
+    // The clause a subatom or a reduction names: an atom of that relation.
+    let atom_clause = |named: &dyn quote::ToTokens, relation: &Ident, clause: usize| {
+        let Some(variables) = clause_variables.get(&clause) else {
+            return error(named, format!("clause #{clause} is not an atom"));
+        };
+        let atom = &analysis.atoms[&clause];
+        if symbol_name(relation) != symbol_name(&atom.relation) {
+            return error(relation, format!("clause #{clause} is `{}`", atom.relation));
+        }
+        Ok(variables)
+    };
+    let columns = |subatom: &Subatom| {
+        let clause = subatom.clause();
+        let variables = atom_clause(subatom, &subatom.relation, clause)?;
+        if subatom.columns.len() != variables.len() {
+            return error(
+                subatom,
+                format!("clause #{clause} has {} columns", variables.len()),
+            );
+        }
+        Ok(variables)
+    };
+    // The guards the reductions place; a guard step is then the next guard
+    // the reductions leave, in query order.
+    let mut consumed = vec![false; guards.len()];
+    for step in &module.steps {
+        let Step::Reduce(reduce, _) = step else {
+            continue;
+        };
+        let Reduction::Guard(filter) = &reduce.reduction else {
+            continue;
+        };
+        let unplaced = guards
+            .iter()
+            .zip(&consumed)
+            .position(|(guard, taken)| !taken && guard.condition == filter.condition);
+        match unplaced {
+            Some(guard) => consumed[guard] = true,
+            None => {
+                return error(
+                    filter,
+                    "a reduction guard is one of the query's guards, once",
+                );
+            }
+        }
+    }
     let mut bound: Vec<String> = Vec::new();
     let mut covered: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
     let mut guards_seen = 0usize;
@@ -170,22 +270,7 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
         match step {
             Step::Atom(subatom, _) => {
                 let clause = subatom.clause();
-                let Some(variables) = clause_variables.get(&clause) else {
-                    return error(subatom, format!("clause #{clause} is not an atom"));
-                };
-                let atom = &analysis.atoms[&clause];
-                if symbol_name(&subatom.relation) != symbol_name(&atom.relation) {
-                    return error(
-                        &subatom.relation,
-                        format!("clause #{clause} is `{}`", atom.relation),
-                    );
-                }
-                if subatom.columns.len() != variables.len() {
-                    return error(
-                        subatom,
-                        format!("clause #{clause} has {} columns", variables.len()),
-                    );
-                }
+                let variables = columns(subatom)?;
                 let mut introduced = Vec::new();
                 for (position, column) in subatom.columns.iter().enumerate() {
                     let expected = &variables[position];
@@ -219,7 +304,78 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
             }
+            Step::Reduce(reduce, _) => {
+                let clause = reduce.clause();
+                let variables = atom_clause(reduce, &reduce.relation, clause)?;
+                if covered.contains_key(&clause) {
+                    return error(
+                        reduce,
+                        format!("clause #{clause} is reduced after its first subatom"),
+                    );
+                }
+                match &reduce.reduction {
+                    Reduction::With(_, subatom) => {
+                        let support = subatom.clause();
+                        let support_variables = columns(subatom)?;
+                        if support == clause {
+                            return error(subatom, "a clause cannot reduce itself");
+                        }
+                        for (position, column) in subatom.columns.iter().enumerate() {
+                            let expected = &support_variables[position];
+                            let shared = variables.contains(expected);
+                            match column {
+                                Column::Variable(v) if symbol_name(v) != *expected => {
+                                    return error(
+                                        v,
+                                        format!(
+                                            "column {position} of clause #{support} is `{expected}`"
+                                        ),
+                                    );
+                                }
+                                Column::Variable(_) if !shared => {
+                                    return error(
+                                        subatom,
+                                        format!(
+                                            "`{expected}` is not shared with clause #{clause}; a reduction lists exactly the shared variables"
+                                        ),
+                                    );
+                                }
+                                Column::Dropped(_) if shared => {
+                                    return error(
+                                        subatom,
+                                        format!(
+                                            "`{expected}` is shared with clause #{clause}; a reduction lists exactly the shared variables"
+                                        ),
+                                    );
+                                }
+                                Column::Variable(_) | Column::Dropped(_) => {}
+                            }
+                        }
+                    }
+                    Reduction::Guard(filter) => {
+                        // Names that are not query variables — callees,
+                        // constants — are Rust's to resolve.
+                        let free = rust::free_variables(&filter.condition);
+                        if let Some(missing) = free
+                            .names
+                            .iter()
+                            .find(|v| !variables.contains(*v) && is_variable(v))
+                        {
+                            return error(
+                                filter,
+                                format!(
+                                    "reduction guard uses `{missing}`, not a variable of clause #{clause}"
+                                ),
+                            );
+                        }
+                    }
+                }
+                analysis.introduces.push(Vec::new());
+            }
             Step::Guard(filter, _) => {
+                while consumed.get(guards_seen).is_some_and(|taken| *taken) {
+                    guards_seen += 1;
+                }
                 let Some(expected) = guards.get(guards_seen) else {
                     return error(filter, "more guards than the query has");
                 };
@@ -227,12 +383,13 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                     return error(filter, "guards must appear in query order");
                 }
                 guards_seen += 1;
-                let environment: BTreeSet<String> = bound.iter().cloned().collect();
                 let free = rust::free_variables(&filter.condition);
-                if let Some(missing) = free.names.difference(&environment).next() {
-                    if !free.opaque || clause_variables.values().flatten().any(|v| v == missing) {
-                        return error(filter, format!("guard uses `{missing}` before it is bound"));
-                    }
+                if let Some(missing) = free
+                    .names
+                    .iter()
+                    .find(|v| !bound.contains(*v) && is_variable(v))
+                {
+                    return error(filter, format!("guard uses `{missing}` before it is bound"));
                 }
                 analysis.introduces.push(Vec::new());
             }
@@ -271,6 +428,9 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                 format!("clause #{clause} never binds `{missing}`"),
             );
         }
+    }
+    while consumed.get(guards_seen).is_some_and(|taken| *taken) {
+        guards_seen += 1;
     }
     if guards_seen != guards.len() {
         return error(&module.valuation_token, "every guard must be placed");

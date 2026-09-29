@@ -14,7 +14,7 @@ fn semicolons_are_required_at_every_language_boundary() {
 }
 
 #[test]
-fn declarations_require_items_and_preserve_written_order() {
+fn declarations_require_items_and_preserve_source_order() {
     let source: cq::Module =
         syn::parse_str("struct P; relation Z(a:i32); relation A(a:i32); answer(x) :- Z(x), A(x);")
             .unwrap();

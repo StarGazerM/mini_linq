@@ -14,5 +14,4 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-cq-query-lowering = { path = "../cq-query-lowering", features = ["written-order", "clause-prefix"] }
 proc-macro2.workspace = true

@@ -12,7 +12,7 @@ proc-macro = true
 default = ["logical-selection", "written-order", "hypergraph", "index-demands", "structure-selection", "physical-lowering", "physical-realization"]
 logical-selection = ["written-order", "hypergraph"]
 written-order = ["dep:cq-order", "dep:cq-elaborate"]
-hypergraph = ["dep:cq-query-lowering", "cq-query-lowering/hypergraph", "cq-query-lowering/clause-prefix"]
+hypergraph = ["dep:cq-order", "dep:cq-reduce", "dep:cq-elaborate"]
 index-demands = ["dep:cq-index-policy"]
 structure-selection = ["dep:cq-structure-selection"]
 physical-lowering = ["dep:cq-physical-lowering"]
@@ -23,9 +23,9 @@ proc-macro2.workspace = true
 cq-ir.workspace = true
 quote.workspace = true
 syn.workspace = true
-cq-query-lowering = { workspace = true, optional = true }
 cq-order = { workspace = true, optional = true }
 cq-elaborate = { workspace = true, optional = true }
+cq-reduce = { workspace = true, optional = true }
 cq-index-policy = { workspace = true, optional = true }
 cq-structure-selection = { workspace = true, optional = true }
 cq-physical-lowering = { workspace = true, optional = true }

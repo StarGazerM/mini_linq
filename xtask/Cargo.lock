@@ -324,21 +324,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "contracts"
-version = "0.6.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80771e396e09e4d428c6d034440a3fc62f3927334b66e13c8b8689d3f8785e42"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+
+[[package]]
+name = "cq-elaborate"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "cq-index-policy"
@@ -360,10 +358,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-query-lowering"
+name = "cq-order"
 version = "0.1.0"
 dependencies = [
- "contracts",
  "cq-ir",
  "proc-macro2",
  "quote",
@@ -383,9 +380,10 @@ dependencies = [
 name = "cq-xtask"
 version = "0.1.0"
 dependencies = [
+ "cq-elaborate",
  "cq-index-policy",
  "cq-ir",
- "cq-query-lowering",
+ "cq-order",
  "cq-workloads",
  "duckdb",
  "prettyplease",

@@ -5,7 +5,6 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 use cq_ir::{cq, index_requirements, relational_plan};
-use cq_query_lowering::composition::compile_cq;
 use cq_workloads::QueryCase;
 use quote::ToTokens;
 
@@ -303,6 +302,14 @@ fn panic_diagnostic(payload: &(dyn std::any::Any + Send)) -> String {
     } else {
         "compiler panicked with a non-string payload".to_owned()
     }
+}
+
+/// CQ → RA in written order: normalize, schedule the clauses as written, one
+/// full subatom per atom, elaborate to named RA.
+fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
+    let normal = cq::normal::normalize(source)?;
+    let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
+    cq_elaborate::compile(&plan)
 }
 
 fn render_cq(source: &cq::Module) -> String {

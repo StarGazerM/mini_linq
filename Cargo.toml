@@ -12,9 +12,9 @@ publish = false
 members = [
     "crates/cq-ir",
     "crates/cq-storage",
-    "crates/cq-query-lowering",
     "crates/cq-order",
     "crates/cq-elaborate",
+    "crates/cq-reduce",
     "crates/cq-index-policy",
     "crates/cq-structure-selection",
     "crates/cq-physical-lowering",
@@ -35,9 +35,9 @@ version = "0.1.0"
 contracts = "=0.6.10"
 cq-ir = { path = "crates/cq-ir" }
 cq-storage = { path = "crates/cq-storage" }
-cq-query-lowering = { path = "crates/cq-query-lowering", default-features = false }
 cq-order = { path = "crates/cq-order", default-features = false }
 cq-elaborate = { path = "crates/cq-elaborate", default-features = false }
+cq-reduce = { path = "crates/cq-reduce", default-features = false }
 cq-index-policy = { path = "crates/cq-index-policy", default-features = false }
 cq-structure-selection = { path = "crates/cq-structure-selection", default-features = false }
 cq-physical-lowering = { path = "crates/cq-physical-lowering", default-features = false }

@@ -1,6 +1,6 @@
 # MiniLinq languages and compilation boundaries
 
-The common query path is `CQ → RA → IX → Physical → Structures → Rust`. The
+The common query path is `CQ → NF → VO → RA → IX → Physical → Structures → Rust`. The
 [crate map](COMPILER-STRUCTURE.md) identifies each stage's implementation
 owner. The syntax below distinguishes language validity from the narrower
 domain a caller's policy admits.
@@ -9,7 +9,10 @@ domain a caller's policy admits.
 
 | Transformation | Typed owner |
 |---|---|
-| CQ → RA | `cq_query_lowering::{written_order,clause_prefix,hypergraph}::compile` |
+| CQ → NF | `cq_ir::cq::normal::normalize` |
+| NF → VO | `cq_order::compile` (heuristic × split) |
+| VO → VO | `cq_reduce::compile` (guard pushdown, Yannakakis reducer) |
+| VO → RA | `cq_elaborate::compile` |
 | RA → IX | `cq_index_policy::compile` |
 | IX + policy → Physical | `cq_physical_lowering::compile` |
 | Physical + policy → Structures | `cq_structure_selection::compile` |
@@ -87,14 +90,15 @@ CQ validity and expression scheduling preserve these facts:
 - `let` introduces fresh pattern bindings and retains its complete Rust expression.
 - Known logical dependencies must be bound before use. Rust resolves host names,
   type aliases and operations; there is no independent Rust type checker here.
-- Rust effects constrain expression scheduling. The dependency-aware prefix
-  planner preserves its admitted expression semantics; the graph planner admits
-  its own movable fragment, not arbitrary calls merely because they parse.
+- Expression scheduling is by availability only: normalization moves
+  expression arguments out of atoms, and a VO plan places a guard or binding
+  once its variables are bound — a guard may move earlier than written, never
+  later than its variables — with guards (bindings) in query order among
+  themselves. `cq_reduce` pushes onto an atom only a guard whose lexical
+  analysis is not opaque and whose names all belong to that atom.
 
-The graph planner's primitive comparison fragment has terms `Ident` or i32
-literals and comparisons `==`, `!=`, `<`, `<=`, `>`, `>=`. Calls/arithmetic are
-outside that movable fragment. [Rust-expression helpers](RUST-EXPRESSION-HELPERS.md)
-describe lexical free-name and pattern-binding analysis.
+[Rust-expression helpers](RUST-EXPRESSION-HELPERS.md) describe lexical
+free-name and pattern-binding analysis.
 
 Column types are operational, not comments. Host maps and built structures are
 typed over the declared columns. Trait requirements are local choices: a
@@ -102,6 +106,68 @@ hash-keyed read requires Eq/Hash on its key columns, an ordered read requires
 Ord, and a distinct provider requires Eq/Hash or Ord on the rows it retains.
 There is no universal payload `Clone` requirement or implicit deterministic
 sorting step.
+
+## Normal form
+
+CQ-NF is the kernel form every plan erases to. A normal query has one
+variable per atom argument, distinct within the atom; constants, repeated
+variables, wildcards and expression arguments have been moved out of atoms
+into `let` bindings and `if` guards. `cq::normal::normalize` is the
+canonicalization and records no decision: a constant's binding goes before
+every atom (it is a join key), an equality or expression guard right after
+its atom. The grammar is the CQ grammar restricted so that every `Atom` is a
+relation applied to distinct variables:
+
+```ebnf
+NormalBody ::= (NormalItem ",")* NormalItem
+NormalItem ::= Ident "(" (Ident ("," Ident)*)? ")" | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
+```
+
+The `Kernel` of a program — its atoms, guards, bindings and head, with
+variables renamed by first occurrence — is how every later language is
+checked against this one by erasure: two programs agree iff their kernels
+agree.
+
+## Valuation plans
+
+VO is a valuation plan: the order in which a query's valuations are built.
+A plan is a sequence of steps that extend a partial valuation. An atom step
+binds the variables of one **subatom** — an atom restricted to some of its
+columns, the rest written `_` — and constrains the already-bound ones; a
+guard or binding step is placed once its variables are bound. A subatom names
+its source clause (`R@2`) so self-joins stay distinct, and must list every
+variable of that clause that is already bound. A **reduction** restricts a
+clause's relation before the clause is ever joined: `reduce R@0 with S@1(b, _)`
+keeps the tuples of `R@0` that agree with some tuple of `S@1` on the shared
+variables (the subatom lists exactly those), `reduce R@0 if (e)` keeps the
+tuples satisfying `e`, one of the query's guards over `R@0`'s own variables.
+Under set semantics a reduction changes nothing the plan denotes, so the
+erasure ignores reductions.
+
+```ebnf
+Module    ::= CQ "valuation" "{" Step* "}"
+Step      ::= Subatom ";" | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
+            | "reduce" Ident "@" Int Reduction ";"
+Reduction ::= "with" Subatom | "if" Expr
+Subatom   ::= Ident "@" Int "(" (Ident | "_"),* ")"
+```
+
+```text
+valuation {
+    reduce R@0 with T@2(a, _); // keep the R tuples whose a occurs in T
+    R@0(a, _);            // bind a from R
+    T@2(a, _);            // check a against T
+    R@0(a, b);            // bind b from R given a
+    S@1(b, _);
+    if (b != 5);
+    S@1(b, c);  T@2(a, c);
+}
+```
+
+One subatom per atom with all its columns is relation-at-a-time (a binary
+join plan); one new variable per subatom is variable-at-a-time (generic
+join). Nothing here names an operator, a key or a structure; the algebra
+below chooses them.
 
 ## Named relational algebra
 
@@ -151,10 +217,11 @@ relational {
 ```
 
 This is a syntax illustration, not a captured expansion.
-The written-order CQ policy emits one Rename per occurrence, a left-deep join
-fold, a final Project and output metadata. The other planners own different
-scheduling rules, including YA reductions. Planning precedes IX and storage
-choices. A logical result's multiple uses require an explicit physical reuse or
+`cq_elaborate` emits one Rename per clause at its first mention, a join per
+full subatom in step order, a Select per guard, an Extend per binding, a
+Semijoin or Select per reduction, a final Project and output metadata; the
+schedule and the reductions are the earlier passes' decisions. Planning
+precedes IX and storage choices. A logical result's multiple uses require an explicit physical reuse or
 recomputation decision; they do not make one iterator reusable.
 
 ## IX: required indexes and exact uses
@@ -238,11 +305,12 @@ a user-defined index type through `#[index(Type)]`, merge joins over built
 ordered maps with a sorted pipe side, Yannakakis semijoin passes as membership
 tests, a bounded scan of an ordered host, and a computed column. Each pass
 also has a `check` over its source and target, and the languages have parser
-round-trip tests in `cq-ir`. The logical grammar and planner tests are not
+round-trip tests in `cq-ir`. The logical grammar and planning-pass tests are not
 evidence of physical implementation.
 
 ```sh
 cargo test -p cq-ir
+cargo test -p cq-order -p cq-reduce -p cq-elaborate
 cargo test -p cq-index-policy -p cq-physical-lowering -p cq-structure-selection -p cq-physical-realization
 cargo test -p mini-linq --test physical_query
 ```

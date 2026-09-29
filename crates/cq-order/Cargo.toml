@@ -15,4 +15,3 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-cq-query-lowering = { path = "../cq-query-lowering", features = ["clause-prefix", "hypergraph", "written-order"] }

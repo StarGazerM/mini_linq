@@ -119,3 +119,71 @@ fn contract_rejects_dropped_bound_columns_uncovered_clauses_and_early_guards() {
         "clause #2 is `T`",
     );
 }
+
+#[test]
+fn reductions_precede_the_reduced_clause_and_place_a_guard_once() {
+    let reduced = plan(quote! {
+        reduce R@0 with T@2(a, _); reduce R@0 if a > 0; reduce T@2 with R@0(a, _);
+        R@0(a, b); S@1(b, c); let d: i32 = a + c; T@2(a, c);
+    })
+    .unwrap();
+    let analysis = valuation::contract::check(&reduced).unwrap();
+    // Reductions bind nothing; the guard they place is no step.
+    assert_eq!(analysis.bound_before[3], Vec::<String>::new());
+    assert!(analysis.introduces[..3].iter().all(Vec::is_empty));
+    assert_eq!(analysis.introduces[3], ["a", "b"]);
+    let coarse = plan(quote! {
+        R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c);
+    })
+    .unwrap();
+    assert_eq!(valuation::kernel(&reduced), valuation::kernel(&coarse));
+    assert_eq!(valuation::erase(&reduced), valuation::erase(&coarse));
+    // A later guard step is the next guard the reductions leave.
+    let twice = plan(quote! {
+        R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; if a > 0; T@2(a, c);
+    });
+    assert!(twice.is_err() || valuation::contract::check(&twice.unwrap()).is_err());
+}
+
+#[test]
+fn contract_rejects_late_misaligned_and_foreign_reductions() {
+    let rejects = |steps, needle: &str| {
+        let error = plan(steps)
+            .and_then(|m| valuation::contract::check(&m))
+            .expect_err("rejected")
+            .to_string();
+        assert!(error.contains(needle), "{error}");
+    };
+    rejects(
+        quote! { R@0(a, b); reduce R@0 with T@2(a, _); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        "clause #0 is reduced after its first subatom",
+    );
+    rejects(
+        quote! { reduce R@0 with T@2(a, c); R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        "`c` is not shared with clause #0",
+    );
+    rejects(
+        quote! { reduce R@0 with T@2(_, _); R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        "`a` is shared with clause #0",
+    );
+    rejects(
+        quote! { reduce R@0 with R@0(a, b); R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        "a clause cannot reduce itself",
+    );
+    rejects(
+        quote! { reduce S@1 if a > 0; R@0(a, b); S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        "reduction guard uses `a`, not a variable of clause #1",
+    );
+    rejects(
+        quote! { reduce R@0 if a > 1; R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        "a reduction guard is one of the query's guards, once",
+    );
+    rejects(
+        quote! { reduce R@0 if a > 0; R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        "more guards than the query has",
+    );
+    rejects(
+        quote! { reduce S@0 with T@2(a, _); R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        "clause #0 is `R`",
+    );
+}

@@ -60,19 +60,6 @@ def check_rule_inventory():
         assert source.read_text().count(entry["marker"]) == 1, (
             "source marker must identify exactly one location", entry
         )
-    # Inventory of executable rule variants, independent of LaTeX rendering.
-    rule_source = (ROOT / "crates/cq-query-lowering/src/model.rs").read_text()
-    enum = re.search(r"pub enum Rule \{(.*?)^\}", rule_source, re.S | re.M).group(1)
-    variants = set(re.findall(r"^    (\w+)", enum, re.M))
-    paired = {
-        "Introduce": "P-Start", "Select": "P-Select", "Begin": "P-Begin",
-        "Up": "Y-Up", "Down": "Y-Down", "Freeze": "Y-Freeze",
-        "Combine": "P-Combine", "Trim": "P-Trim", "Output": "P-Output",
-        "Match": "C-Match", "Guard": "C-Guard", "Bind": "C-Bind",
-        "Constant": "C-Constant", "Finish": "C-Finish",
-    }
-    assert variants == set(paired), "administrative enum inventory changed"
-    assert set(paired.values()) <= set(labels)
     return len(labels)
 
 

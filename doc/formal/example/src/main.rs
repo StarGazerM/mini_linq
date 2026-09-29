@@ -1,6 +1,5 @@
-//! The paper's YA example stops at verified RA and IX boundaries.
-use cq_ir::{cq, relational_plan};
-use cq_query_lowering::Rule as JoinRule;
+//! The paper's YA example stops at verified VO, RA and IX boundaries.
+use cq_ir::{cq, relational_plan, valuation};
 use mini_linq_paper_overview::{boundaries, directory};
 use std::collections::BTreeSet;
 
@@ -29,64 +28,60 @@ fn main() {
         relation answer(a:i32,b:i32);
         answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
     };
-    let (ra, report) = cq_query_lowering::composition::explain_cq_plan(
-        &source,
-        cq_query_lowering::PlanningOptions {
-            strategy: cq_query_lowering::JoinPolicy::Auto,
-            max_arity: None,
-        },
-    )
-    .unwrap();
-    std::fs::write(directory.join("report.txt"), format!("{report:#?}")).unwrap();
-    cq_query_lowering::composition::check_cq_plan(&source, &ra, &report).unwrap();
-    assert_eq!(
-        report.join_tree.as_ref().unwrap().parent,
-        [Some(1), Some(2), None]
-    );
-    assert_eq!(report.peak_arity, 4);
-    assert_eq!(
-        report.derivation,
-        [
-            JoinRule::Introduce { occurrence: 0 },
-            JoinRule::Introduce { occurrence: 1 },
-            JoinRule::Introduce { occurrence: 2 },
-            JoinRule::Select {
-                group: 2,
-                predicate: 0
-            },
-            JoinRule::Begin,
-            JoinRule::Up { child: 0 },
-            JoinRule::Up { child: 1 },
-            JoinRule::Down { child: 1 },
-            JoinRule::Down { child: 0 },
-            JoinRule::Freeze,
-            JoinRule::Trim { group: 0 },
-            JoinRule::Combine { left: 2, right: 1 },
-            JoinRule::Trim { group: 2 },
-            JoinRule::Combine { left: 2, right: 0 },
-            JoinRule::Trim { group: 2 },
-            JoinRule::Output { group: 2 },
-        ]
-    );
-    let expected_ra: relational_plan::Plan = syn::parse_quote! {
-        r0 = rename R { a -> x, b -> k, c -> tag, d -> unused };
-        r1 = rename S { a -> k, b -> tag, c -> z };
-        r2 = rename T { a -> z, b -> y };
-        r3 = select r2 if (y > 0i32);
-        r4 = semijoin r1 with r0;
-        r5 = semijoin r3 with r4;
-        r6 = semijoin r4 with r5;
-        r7 = semijoin r0 with r6;
-        r8 = project r7 keep { k, tag, x };
-        r9 = natural_join r5 with r6;
-        r10 = project r9 keep { k, tag, y };
-        r11 = natural_join r10 with r8;
-        r12 = project r11 keep { x, y };
-        output r12 as answer(x, y);
-    };
-    assert_eq!(ra.plan, expected_ra);
     let planned = boundaries(&directory, "planned", &source, true);
     let written = boundaries(&directory, "written", &source, false);
+    // The GYO join tree: R under S under the root T.
+    assert_eq!(
+        cq::hypergraph::Analysis::of(&planned.normal).join_tree,
+        Some(vec![(0, Some(1)), (1, Some(2)), (2, None)])
+    );
+    // The guard on T is pushed onto T; the reducer goes up from R through S
+    // to T and down again, before the first atom step.
+    let expected_vo: valuation::Module = syn::parse_quote! {
+        pub struct Overview;
+        relation R(a:i32,b:i32,c:i32,d:i32);
+        relation S(a:i32,b:i32,c:i32);
+        relation T(a:i32,b:i32);
+        relation answer(a:i32,b:i32);
+        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
+        valuation {
+            reduce T@2 if y > 0;
+            reduce S@1 with R@0(_, k, tag, _);
+            reduce T@2 with S@1(_, _, z);
+            reduce S@1 with T@2(z, _);
+            reduce R@0 with S@1(k, tag, _);
+            R@0(x, k, tag, unused);
+            S@1(k, tag, z);
+            T@2(z, y);
+        }
+    };
+    assert_eq!(planned.valuation, expected_vo);
+    let expected_ra: relational_plan::Plan = syn::parse_quote! {
+        r0 = rename T { a -> z, b -> y };
+        r1 = select r0 if (y > 0);
+        r2 = rename S { a -> k, b -> tag, c -> z };
+        r3 = rename R { a -> x, b -> k, c -> tag, d -> unused };
+        r4 = semijoin r2 with r3;
+        r5 = semijoin r1 with r4;
+        r6 = semijoin r4 with r5;
+        r7 = semijoin r3 with r6;
+        r8 = natural_join r7 with r6;
+        r9 = natural_join r8 with r5;
+        r10 = project r9 keep { r#x, r#y };
+        output r10 as answer(x, y);
+    };
+    assert_eq!(planned.relational.plan, expected_ra);
+    let expected_written: relational_plan::Plan = syn::parse_quote! {
+        r0 = rename R { a -> x, b -> k, c -> tag, d -> unused };
+        r1 = rename S { a -> k, b -> tag, c -> z };
+        r2 = natural_join r0 with r1;
+        r3 = rename T { a -> z, b -> y };
+        r4 = natural_join r2 with r3;
+        r5 = select r4 if (y > 0);
+        r6 = project r5 keep { r#x, r#y };
+        output r6 as answer(x, y);
+    };
+    assert_eq!(written.relational.plan, expected_written);
     let descriptors = |ix: &cq_ir::index_requirements::Module| {
         ix.indexes
             .iter()
@@ -104,18 +99,16 @@ fn main() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        descriptors(&planned),
+        descriptors(&planned.indexes),
         vec![
-            ("r0".into(), vec![0, 1]),
+            ("r3".into(), vec![0, 1]),
             ("r4".into(), vec![2]),
             ("r5".into(), vec![1]),
-            ("r6".into(), vec![0, 1]),
-            ("r6".into(), vec![2]),
-            ("r8".into(), vec![0, 1])
+            ("r6".into(), vec![0, 1])
         ]
     );
     assert_eq!(
-        descriptors(&written),
+        descriptors(&written.indexes),
         vec![("r1".into(), vec![0, 1]), ("r3".into(), vec![1])]
     );
     let r = [
@@ -154,7 +147,7 @@ fn main() {
     assert!(oracle(&[], &s, &t).is_empty());
     assert!(oracle(&r, &[], &t).is_empty());
     assert!(oracle(&r, &s, &[]).is_empty());
-    let evidence = "PASS: exact YA derivation, RA and IX descriptors; independent oracle checks five input presentations. No post-IX compiler or generated-query execution is exercised.\n";
+    let evidence = "PASS: exact YA valuation plan, RA and IX descriptors; independent oracle checks five input presentations. No post-IX compiler or generated-query execution is exercised.\n";
     std::fs::write(directory.join("validation.txt"), evidence).unwrap();
     print!("{evidence}");
 }

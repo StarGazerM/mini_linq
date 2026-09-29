@@ -10,8 +10,10 @@ publish = false
 [workspace]
 
 [dependencies]
-cq-query-lowering = { path = "../../../crates/cq-query-lowering", default-features = false, features = ["written-order", "clause-prefix", "hypergraph"] }
+cq-elaborate = { path = "../../../crates/cq-elaborate" }
 cq-index-policy = { path = "../../../crates/cq-index-policy" }
 cq-ir = { path = "../../../crates/cq-ir" }
+cq-order = { path = "../../../crates/cq-order" }
+cq-reduce = { path = "../../../crates/cq-reduce" }
 quote = "1"
 syn = { version = "2", features = ["full"] }

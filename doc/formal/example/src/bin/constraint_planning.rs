@@ -78,8 +78,8 @@ fn main() {
     let directory = directory("logical-constraint-planning");
     boundaries(&directory, "written", &source, false);
     boundaries(&directory, "planned", &source, true);
-    write(&directory, "authored-02-relational.tokens", &authored);
-    write(&directory, "authored-03-indexes.tokens", &ix);
+    write(&directory, "authored-04-relational.tokens", &authored);
+    write(&directory, "authored-05-indexes.tokens", &ix);
     let input = Input {
         r: vec![(1, 1), (1, 2), (2, -1), (3, 3)],
         s: vec![(1, 2), (2, 1), (3, 2)],

@@ -5,11 +5,20 @@
 //! becomes over the running prefix `P`, the relation of valuations bound so
 //! far.
 //!
-//! - A subatom `R@i(x, …)` is `rename R { col -> var, … }` over the whole
-//!   clause, restricted by `project … keep { x, … }` when it drops columns.
-//!   It is the prefix when there is none, else `natural_join P with it`;
-//!   a partial subatom that binds no new variable only checks the prefix,
-//!   `semijoin P with it`.
+//! - A clause's relation is `rename R { col -> var, … }` over the whole
+//!   clause, emitted where the clause is first mentioned — by a reduction or
+//!   a subatom — and reused after.
+//! - A subatom `R@i(x, …)` is the clause's relation, restricted by
+//!   `project … keep { x, … }` when it drops columns. It is the prefix when
+//!   there is none, else `natural_join P with it`; a partial subatom that
+//!   binds no new variable only checks the prefix, `semijoin P with it`.
+//! - A reduction restricts the clause's relation itself, before the prefix
+//!   sees it: `reduce C with D(cols)` is `semijoin rC with rD` over the two
+//!   clauses' current relations — the RA semijoin keeps the tuples of the
+//!   left agreeing with some tuple of the right on their shared heading,
+//!   exactly the columns the subatom lists, so nothing is projected — and
+//!   `reduce C if (e)` is `select rC if (e)`. The result becomes the
+//!   clause's relation for every later reduction and subatom of it.
 //! - A guard is `select P if (e)`; a binding is `extend P with { v: T, … }
 //!   value ({ let pat: T = e; (v, …) })`. Either before every atom seeds
 //!   the prefix with `unit`.
@@ -21,7 +30,7 @@
 //! later passes see nothing new. A plan's erasure is its query:
 //! [`check`] compares [`ra::kernel`] with [`valuation::kernel`].
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cq_ir::{cq, relational_plan as ra, symbol_name, valuation};
 use quote::format_ident;
@@ -31,22 +40,21 @@ use syn::Ident;
 pub fn compile(source: &valuation::Module) -> syn::Result<ra::Module> {
     let analysis = valuation::contract::check(source)?;
     let mut state = State {
+        program: &source.program,
+        atoms: &analysis.atoms,
         definitions: Vec::new(),
+        relations: BTreeMap::new(),
         prefix: None,
         heading: BTreeSet::new(),
     };
     for (step, introduces) in source.steps.iter().zip(&analysis.introduces) {
         match step {
-            valuation::Step::Atom(subatom, _) => {
-                let atom = &analysis.atoms[&subatom.clause()];
-                let declaration = source
-                    .program
-                    .inputs()
-                    .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
-                    .expect("the CQ contract declares every body relation");
-                state.subatom(subatom, atom, declaration, introduces.is_empty());
+            valuation::Step::Atom(subatom, _) => state.subatom(subatom, introduces.is_empty()),
+            valuation::Step::Reduce(reduce, _) => state.reduce(reduce),
+            valuation::Step::Guard(filter, _) => {
+                let input = state.prefix_or_unit();
+                state.prefix = Some(state.select(input, filter));
             }
-            valuation::Step::Guard(filter, _) => state.select(filter),
             valuation::Step::Let(binding, _) => state.extend(binding),
         }
         state.heading.extend(introduces.iter().cloned());
@@ -73,41 +81,57 @@ pub fn check(source: &valuation::Module, target: &ra::Module) -> bool {
         && ra::kernel(target) == valuation::kernel(source)
 }
 
-/// The definitions so far, the prefix result and its heading.
-struct State {
+/// The definitions so far, each clause's current relation, the prefix
+/// result and its heading.
+struct State<'a> {
+    program: &'a cq::Program,
+    atoms: &'a BTreeMap<usize, cq::Atom>,
     definitions: Vec<ra::Definition>,
+    relations: BTreeMap<usize, Ident>,
     prefix: Option<Ident>,
     heading: BTreeSet<String>,
 }
 
-impl State {
-    fn subatom(
-        &mut self,
-        subatom: &valuation::Subatom,
-        atom: &cq::Atom,
-        declaration: &cq::RelationDecl,
-        check: bool,
-    ) {
-        let variables: Vec<&Ident> = atom.variables().collect();
+impl State<'_> {
+    /// The clause's relation: its rename, emitted at first mention, as
+    /// reduced so far.
+    fn relation(&mut self, clause: usize) -> Ident {
+        if let Some(result) = self.relations.get(&clause) {
+            return result.clone();
+        }
+        let atom = &self.atoms[&clause];
+        let declaration = self
+            .program
+            .inputs()
+            .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
+            .expect("the CQ contract declares every body relation");
         let mapping = declaration
             .columns
             .iter()
-            .zip(&variables)
+            .zip(atom.variables())
             .map(|(column, variable)| ra::AttributeRename {
                 source: column.name.clone(),
                 minus_token: Default::default(),
                 gt_token: Default::default(),
-                target: (*variable).clone(),
+                target: variable.clone(),
             })
             .collect();
-        let mut right = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
+        let result = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
             rename_token: Default::default(),
             relation: atom.relation.clone(),
             mapping_brace: Default::default(),
             mapping,
         })));
+        self.relations.insert(clause, result.clone());
+        result
+    }
+
+    fn subatom(&mut self, subatom: &valuation::Subatom, check: bool) {
+        let clause = subatom.clause();
+        let mut right = self.relation(clause);
         let partial = subatom.columns.len() != subatom.variables().count();
         if partial {
+            let variables: Vec<&Ident> = self.atoms[&clause].variables().collect();
             let attributes = subatom
                 .variables()
                 .map(|(position, _)| variables[position].clone())
@@ -116,14 +140,7 @@ impl State {
         }
         self.prefix = Some(match self.prefix.take() {
             None => right,
-            Some(left) if partial && check => {
-                self.emit(ra::Operator::Semijoin(Box::new(ra::Semijoin {
-                    semijoin_token: Default::default(),
-                    left,
-                    with_token: Default::default(),
-                    right,
-                })))
-            }
+            Some(left) if partial && check => self.semijoin(left, right),
             Some(left) => self.emit(ra::Operator::NaturalJoin(Box::new(ra::NaturalJoin {
                 natural_join_token: Default::default(),
                 left,
@@ -133,15 +150,36 @@ impl State {
         });
     }
 
-    fn select(&mut self, filter: &cq::Filter) {
-        let input = self.prefix_or_unit();
-        self.prefix = Some(self.emit(ra::Operator::Select(Box::new(ra::Select {
+    fn reduce(&mut self, reduce: &valuation::Reduce) {
+        let clause = reduce.clause();
+        let left = self.relation(clause);
+        let result = match &reduce.reduction {
+            valuation::Reduction::With(_, subatom) => {
+                let right = self.relation(subatom.clause());
+                self.semijoin(left, right)
+            }
+            valuation::Reduction::Guard(filter) => self.select(left, filter),
+        };
+        self.relations.insert(clause, result);
+    }
+
+    fn semijoin(&mut self, left: Ident, right: Ident) -> Ident {
+        self.emit(ra::Operator::Semijoin(Box::new(ra::Semijoin {
+            semijoin_token: Default::default(),
+            left,
+            with_token: Default::default(),
+            right,
+        })))
+    }
+
+    fn select(&mut self, input: Ident, filter: &cq::Filter) -> Ident {
+        self.emit(ra::Operator::Select(Box::new(ra::Select {
             select_token: Default::default(),
             input,
             if_token: Default::default(),
             condition_paren: Default::default(),
             condition: filter.condition.clone(),
-        }))));
+        })))
     }
 
     /// `extend P with { v: T, … } value ({ let pat: T = e; (v, …) })`: the

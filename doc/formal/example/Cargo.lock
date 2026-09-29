@@ -3,14 +3,12 @@
 version = 4
 
 [[package]]
-name = "contracts"
-version = "0.6.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80771e396e09e4d428c6d034440a3fc62f3927334b66e13c8b8689d3f8785e42"
+name = "cq-elaborate"
+version = "0.1.0"
 dependencies = [
- "proc-macro2",
+ "cq-ir",
  "quote",
- "syn 3.0.5",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -33,10 +31,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-query-lowering"
+name = "cq-order"
 version = "0.1.0"
 dependencies = [
- "contracts",
  "cq-ir",
  "proc-macro2",
  "quote",
@@ -44,12 +41,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-reduce"
+version = "0.1.0"
+dependencies = [
+ "cq-ir",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "mini-linq-paper-overview"
 version = "0.0.0"
 dependencies = [
+ "cq-elaborate",
  "cq-index-policy",
  "cq-ir",
- "cq-query-lowering",
+ "cq-order",
+ "cq-reduce",
  "quote",
  "syn 2.0.119",
 ]

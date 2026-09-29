@@ -14,9 +14,10 @@ default = []
 oracle = ["dep:duckdb"]
 
 [dependencies]
-cq-query-lowering = { path = "../crates/cq-query-lowering", default-features = false, features = ["written-order", "clause-prefix", "hypergraph"] }
+cq-elaborate = { path = "../crates/cq-elaborate" }
 cq-index-policy = { path = "../crates/cq-index-policy" }
 cq-ir = { path = "../crates/cq-ir" }
+cq-order = { path = "../crates/cq-order" }
 cq-workloads = { path = "../workloads" }
 duckdb = { version = "~1.10505.0", features = ["bundled"], optional = true }
 quote = "1"

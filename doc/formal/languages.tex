@@ -106,6 +106,36 @@ a guard retains true environments and a let extends them by its pattern
 result. Compose from $\mathbf1$ and take the set of ordered head results to
 define $\sem q_I$. This agrees with classical $q(I)$ on its domain and gives
 no effectful evaluation-order semantics.
+\subsection{Normal form and valuation plans}
+\label{sec:nf-vo}
+Two intermediate languages sit between CQ and RA; both are specified by the
+\code{cq-ir} module documentation (\code{cq::normal}, \code{valuation}).
+\emph{CQ-NF} is the kernel form every plan erases to: one variable per atom
+argument, distinct within the atom; constants, repeated variables, wildcards
+and expression arguments have been moved out of atoms into \code{let}
+bindings and \code{if} guards. \code{normalize} is the canonicalization and
+records no decision: a constant's binding goes before every atom, an
+equality or expression guard right after its atom. The \emph{kernel} of a
+program is its atoms, guards, bindings and head up to renaming of variables;
+two programs agree iff their kernels agree, which is how every later
+language is checked against this one by erasure.
+
+\emph{VO} is a valuation plan: a sequence of steps that extend a partial
+valuation. An atom step \code{R@2(a, _)} binds the variables of one
+\emph{subatom} --- an atom restricted to some of its columns --- and
+constrains the already-bound ones; it must list every variable of its clause
+that is already bound, so a plan may drop only unbound columns, never a
+constraint. A guard or binding step is placed once its variables are bound,
+guards and bindings in query order among themselves. A \emph{reduction}
+\code{reduce R@0 with S@1(b, _)} or \code{reduce R@0 if (e)} restricts a
+clause's relation before its first subatom --- a Yannakakis semijoin over
+exactly the shared variables, or a guard pushed onto one atom --- and changes
+nothing the plan denotes, so the erasure ignores reductions. The contract
+requires every clause fully covered and every guard and binding placed; the
+plan then erases to its normal-form query, and its kernel equals the query's.
+Order and granularity are the only choices: one full subatom per atom is
+relation-at-a-time, one new variable per subatom is generic join.
+
 \subsection{Named relational algebra}
 This IR represents named SPJR using immutable definitions, adding explicit
 Unit/Semijoin and Rust Select/Extend:
