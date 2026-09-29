@@ -3,7 +3,7 @@
 //! read in place, merges over native or sorted cursors, bounded scans,
 //! extends, and the distinct wrapper — with answers in head order.
 use cq_lang_structures as structures;
-use cq_physical_realization::{Endpoints, check, compile};
+use cq_physical_realization::{Endpoints, compile};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
@@ -20,7 +20,6 @@ fn text(tokens: impl ToTokens) -> String {
 
 fn program(module: &structures::Program) -> String {
     let expr = compile(module, &endpoints()).unwrap();
-    check(module, &expr, &endpoints()).unwrap();
     text(expr)
 }
 
@@ -445,8 +444,6 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     for case in scenarios::SCENARIOS {
         let source: structures::Program = syn::parse_str(&case.structured()).unwrap();
         let expression = compile(&source, &endpoints).unwrap();
-        check(&source, &expression, &endpoints).unwrap();
-        assert!(check(&source, &syn::parse_quote!(0), &endpoints).is_err());
         let data_name = if case.name == "fine_triangle" {
             "triangle"
         } else {

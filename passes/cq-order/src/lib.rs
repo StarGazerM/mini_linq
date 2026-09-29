@@ -26,6 +26,10 @@
 //! guards (bindings) keep their query order among themselves as VO
 //! requires. Normal form has no expression arguments; availability is
 //! derived from the complete query carried by the resulting VO program.
+//! [`check`] independently validates preservation and split obligations;
+//! Prefix/Elimination rankings remain fixture choices. Under Written the
+//! subatoms that introduce variables follow the normal body; Fine may check a
+//! later clause first.
 
 use std::collections::BTreeSet;
 
@@ -432,18 +436,87 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     Ok(program)
 }
 
-/// Check the selected schedule against the source query and options.
+/// Check normal form, unchanged CQ, split granularity and explicit order.
+/// Prefix and elimination rankings are expansion choices, not obligations.
 pub fn check(
     source: &cq::Program,
     target: &valuation::Program,
     options: &Options,
 ) -> syn::Result<()> {
-    valuation::contract::check(target)?;
-    if compile(source, options)? != *target {
+    cq::normal::check(source)?;
+    let analysis = valuation::contract::check(target)?;
+    if target.cq != *source {
         return Err(syn::Error::new_spanned(
             &target.cq.name,
-            "valuation differs from the requested schedule",
+            format!(
+                "query `{}`: valuation must preserve source CQ `{}`",
+                target.cq.name, source.name
+            ),
         ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut previous = None;
+    for (step, introduced) in target.valuation.steps.iter().zip(&analysis.introduces) {
+        match step {
+            valuation::Step::Reduce(r, _) => {
+                return Err(syn::Error::new_spanned(
+                    r,
+                    format!(
+                        "clause #{} (`{}`): ordering cannot introduce reductions",
+                        r.clause(),
+                        r.relation
+                    ),
+                ));
+            }
+            valuation::Step::Atom(a, _) => {
+                let clause = a.clause();
+                let first = seen.insert(clause);
+                let fail = |message: &str| {
+                    syn::Error::new_spanned(
+                        a,
+                        format!("clause #{clause} (`{}`): {message}", a.relation),
+                    )
+                };
+                if options.split == Split::Coarse
+                    && (!first || a.variables().count() != a.columns.len())
+                {
+                    return Err(fail(
+                        "Coarse requires exactly one full subatom per atom clause",
+                    ));
+                }
+                if options.split == Split::Fine && introduced.len() > 1 {
+                    return Err(fail("Fine permits at most one new variable per subatom"));
+                }
+                // Written: the clauses that introduce variables follow the
+                // normal body (Coarse: every clause's single subatom; Fine: a
+                // check of a later clause may precede, as in R@0, T@2, S@1).
+                let introduces = match options.split {
+                    Split::Coarse => first,
+                    Split::Fine => !introduced.is_empty(),
+                };
+                if options.heuristic == Heuristic::Written && introduces {
+                    if previous.is_some_and(|p| p > clause) {
+                        return Err(fail(
+                            "Written requires introducing subatoms in normal-body order",
+                        ));
+                    }
+                    previous = Some(clause);
+                }
+            }
+            valuation::Step::Guard(..) | valuation::Step::Let(..) => {}
+        }
+    }
+    // The VO variable-coverage check alone is vacuous for nullary atoms.
+    for (clause, atom) in &analysis.atoms {
+        if !seen.contains(clause) {
+            return Err(syn::Error::new_spanned(
+                atom,
+                format!(
+                    "clause #{clause} (`{}`): every atom requires a subatom",
+                    atom.relation
+                ),
+            ));
+        }
     }
     Ok(())
 }

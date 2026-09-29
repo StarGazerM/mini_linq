@@ -5,10 +5,10 @@ X-FilterExtend	abstract	-	-	Pure independent filter and extension interchange la
 X-Keys	abstract	-	-	Pure multi-argument matching law; motivates complete prefix-key access.
 X-Local	abstract	-	-	Pure candidate-local matching law; motivates partial-key access and residual selection.
 H-Eval	abstract	-	-	Finite successful host boundary; host semantics and representation adequacy are premises.
-IX-Reuse	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile(source: &ra::Program)	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-New	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile(source: &ra::Program)	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-Join	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile(source: &ra::Program)	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-Other	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile(source: &ra::Program)	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+IX-Reuse	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Reuse:	Independent first-use demand derivation; authored fixtures separately check expansion.
+IX-New	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-New:	Independent first-use demand derivation; authored fixtures separately check expansion.
+IX-Join	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Join:	Independent first-use demand derivation; authored fixtures separately check expansion.
+IX-Other	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Other:	Independent first-use demand derivation; authored fixtures separately check expansion.
 FV-Name	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Bound	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Children	implementation	languages/cq-syntax/src/rust.rs	visit::visit_expr(self, expr)	Correspondence location; proof obligation C-Conformance remains.

@@ -129,3 +129,42 @@ fn join_free_plan_has_no_demands_and_missing_operands_are_diagnostic() {
     let error = compile(&invalid).unwrap_err().to_string();
     assert!(error.contains("missing"), "{error}");
 }
+
+#[test]
+fn independent_derivation_rejects_mutations_with_construct_diagnostics() {
+    let source = versions();
+    let target = compile(&source).unwrap();
+    let reject = |s: &ra::Program, t: &ix::Program, names: &[&str]| {
+        let error = check(s, t).unwrap_err().to_string();
+        for name in names {
+            assert!(error.contains(name), "{error}");
+        }
+    };
+    let mut bad_source = source.clone();
+    bad_source.plan.definitions[2].operator = syn::parse_quote!(natural_join absent with r);
+    reject(&bad_source, &target, &["absent"]);
+    let mut bad = target.clone();
+    bad.indexes[1].requirement.columns = syn::parse_quote!(2, 1);
+    reject(&source, &bad, &["i1", "increasing"]);
+    let mut bad = target.clone();
+    bad.ra.plan.definitions[1].operator = syn::parse_quote!(rename R {c -> z, b -> y, a -> x});
+    reject(&source, &bad, &["r", "preserve"]);
+    let mut bad = target.clone();
+    bad.indexes =
+        syn::parse_quote!(i0 = @r[]; i1 = @s[1,2]; i2 = @t[0]; i3 = @r[0,1]; i4 = @right[1,2];);
+    ix::contract::check(&bad).unwrap();
+    reject(&source, &bad, &["right", "first-use"]);
+    let mut bad = target.clone();
+    bad.indexes[1].name = syn::parse_quote!(other);
+    reject(&source, &bad, &["left", "i1", "named"]);
+    let mut bad = target.clone();
+    bad.indexes.pop();
+    reject(&source, &bad, &["joined", "missing"]);
+    let mut bad = target.clone();
+    bad.indexes[1].requirement.columns = syn::parse_quote!(0, 1);
+    reject(&source, &bad, &["i1", "no join"]);
+    let mut bad = target.clone();
+    bad.indexes.push(syn::parse_quote!(extra = @r[]));
+    bad.indexes.push_punct(Default::default());
+    reject(&source, &bad, &["extra", "duplicate"]);
+}

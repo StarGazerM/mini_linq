@@ -465,3 +465,70 @@ fn shared_scenarios_preserve_answers_and_reject_changed_schedules() {
         }
     }
 }
+
+#[test]
+fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
+    let source = chain();
+    let coarse = Options::default();
+    let good = expected(&source, quote! { R@0(x,y); S@1(y,z); T@2(z,w); });
+    let reject = |s: &cq::Program, t: &valuation::Program, options: &Options, names: &[&str]| {
+        let error = cq_order::check(s, t, options).unwrap_err().to_string();
+        for name in names {
+            assert!(error.contains(name), "{error}");
+        }
+    };
+    let mut changed = source.clone();
+    changed.query.body[0] = syn::parse_quote!(R(x, x));
+    reject(&changed, &good, &coarse, &["R", "normal form"]);
+    let malformed = expected(&source, quote! { R@9(x,y); S@1(y,z); T@2(z,w); });
+    reject(&source, &malformed, &coarse, &["clause #9"]);
+    let mut changed = good.clone();
+    changed.cq.name = syn::parse_quote!(Changed);
+    reject(&source, &changed, &coarse, &["Changed", "preserve"]);
+    let partial = expected(&source, quote! { R@0(x,_); R@0(x,y); S@1(y,z); T@2(z,w); });
+    valuation::contract::check(&partial).unwrap();
+    reject(&source, &partial, &coarse, &["clause #0", "Coarse"]);
+    let duplicated = expected(&source, quote! { R@0(x,y); R@0(x,y); S@1(y,z); T@2(z,w); });
+    reject(&source, &duplicated, &coarse, &["clause #0", "Coarse"]);
+    reject(
+        &source,
+        &good,
+        &Options {
+            split: Split::Fine,
+            ..coarse
+        },
+        &["clause #0", "Fine"],
+    );
+    let reduced = expected(
+        &source,
+        quote! { reduce R@0 with S@1(y,_); R@0(x,y); S@1(y,z); T@2(z,w); },
+    );
+    reject(&source, &reduced, &coarse, &["clause #0", "reductions"]);
+    let reverse = expected(&source, quote! { T@2(z,w); S@1(y,z); R@0(x,y); });
+    valuation::contract::check(&reverse).unwrap();
+    reject(&source, &reverse, &coarse, &["clause #1", "Written"]);
+    let fine = Options {
+        split: Split::Fine,
+        ..coarse
+    };
+    let fine_reverse = expected(
+        &source,
+        quote! { T@2(_,w); T@2(z,w); S@1(_,z); S@1(y,z); R@0(_,y); R@0(x,y); },
+    );
+    valuation::contract::check(&fine_reverse).unwrap();
+    reject(&source, &fine_reverse, &fine, &["clause #1", "Written"]);
+    let alternative = expected(&source, quote! { S@1(y,z); R@0(x,y); T@2(z,w); });
+    for heuristic in [
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Prefix(Ranking::Auto),
+        Heuristic::Elimination,
+    ] {
+        let options = Options {
+            heuristic,
+            ..coarse
+        };
+        assert_ne!(cq_order::compile(&source, &options).unwrap(), alternative);
+        cq_order::check(&source, &alternative, &options).unwrap();
+    }
+}

@@ -22,6 +22,14 @@
 //!    `cq_storage::Build` and the traits the reads use, which rustc checks.
 //!    Query-specific choices for derived results are authored directly in
 //!    the Structures module.
+//! 4. Chained membership keys use one `Trie` level per successive key
+//!    difference, with the strongest full-key default at the leaf; a probe
+//!    can read only the full chain. Ordered reads retain separate maps.
+//!    Eligible `intersect = smallest` pairs add prefix/full membership keys
+//!    and use two levels, even when the prefix is also probed.
+//!
+//! [`check`] derives these read obligations independently of selection. It
+//! preserves Physical exactly and accepts any ordering of structure entries.
 //!
 //! The canonical return is Physical's premise (`canon` flag or key
 //! inference); nothing is built to make it hold.
@@ -367,18 +375,5 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
     Ok(target)
 }
 
-/// Check physical execution and the storage choices requested by policy.
-pub fn check(
-    source: &physical::Program,
-    target: &structures::Program,
-    policy: &Policy,
-) -> syn::Result<()> {
-    structures::contract::check(target)?;
-    if compile(source, policy)? != *target {
-        return Err(syn::Error::new_spanned(
-            &target.physical.program.returned,
-            "structures differ from the requested policy",
-        ));
-    }
-    Ok(())
-}
+mod correspondence;
+pub use correspondence::check;

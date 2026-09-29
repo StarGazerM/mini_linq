@@ -190,3 +190,128 @@ fn reduced_scenario_fixtures_pin_the_tree_schedule() {
         );
     }
 }
+
+fn reject(
+    source: &valuation::Program,
+    target: &valuation::Program,
+    options: &Options,
+    names: &[&str],
+) {
+    let error = check(source, target, options).unwrap_err().to_string();
+    for name in names {
+        assert!(error.contains(name), "{error}");
+    }
+}
+
+#[test]
+fn correspondence_checks_domains_erasure_and_each_reduction_obligation() {
+    let source = schedule(CHAIN, ATOMS);
+    let good = compile(&source, &TREE).unwrap();
+    reject(&good, &good, &TREE, &["clause #1", "already"]);
+    let mut invalid = source.clone();
+    invalid.valuation.steps[0] = syn::parse_quote!(L@9(a););
+    reject(&invalid, &good, &TREE, &["clause #9"]);
+    reject(&source, &invalid, &TREE, &["clause #9"]);
+    let cycle = schedule(
+        "struct Cycle; relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(a:i32,c:i32); answer(a,b,c) :- R(a,b), S(b,c), T(a,c);",
+        "R@0(a,b); S@1(b,c); T@2(a,c);",
+    );
+    reject(&cycle, &cycle, &TREE, &["Cycle", "acyclic"]);
+    let mut changed = good.clone();
+    changed.cq.name = syn::parse_quote!(Other);
+    reject(&source, &changed, &TREE, &["Other", "preserve"]);
+    let mut reordered = source.clone();
+    reordered.valuation.steps.swap(0, 1);
+    valuation::contract::check(&reordered).unwrap();
+    reject(
+        &source,
+        &reordered,
+        &Options::default(),
+        &["clause #1", "erasure"],
+    );
+    reject(
+        &source,
+        &good,
+        &Options::default(),
+        &["clause #1", "semijoins=None"],
+    );
+    for position in 0..4 {
+        let mut missing = good.clone();
+        missing.valuation.steps.remove(position);
+        reject(&source, &missing, &TREE, &["clause #", "missing"]);
+    }
+    let mut wrong = good.clone();
+    wrong.valuation.steps[0] = syn::parse_quote!(reduce R@1 with L@0(_););
+    reject(&source, &wrong, &TREE, &["clause #1", "shared"]);
+    let mut nonedge = good.clone();
+    nonedge
+        .valuation
+        .steps
+        .insert(0, syn::parse_quote!(reduce L@0 with S@2(_, _);));
+    reject(
+        &source,
+        &nonedge,
+        &TREE,
+        &["clause #0", "not a join-tree edge"],
+    );
+    let mut duplicate = good.clone();
+    duplicate
+        .valuation
+        .steps
+        .insert(0, good.valuation.steps[0].clone());
+    reject(&source, &duplicate, &TREE, &["clause #1", "duplicate"]);
+    let mut phase = good.clone();
+    phase.valuation.steps.swap(1, 2);
+    reject(&source, &phase, &TREE, &["clause #2", "precede"]);
+    let mut upward = good.clone();
+    upward.valuation.steps.swap(0, 1);
+    reject(&source, &upward, &TREE, &["clause #1", "upward"]);
+    let mut downward = good.clone();
+    downward.valuation.steps.swap(2, 3);
+    reject(&source, &downward, &TREE, &["clause #0", "downward"]);
+}
+
+#[test]
+fn guard_policy_is_checked_but_eligible_guard_host_is_free() {
+    let query = CHAIN.replace("S(b, c);", "S(b, c), if b > 0;");
+    let source = schedule(&query, &format!("{ATOMS} if b > 0;"));
+    let options = Options {
+        guards: Pushdown::Atoms,
+        semijoins: Reductions::None,
+    };
+    let alternative = schedule(&query, &format!("reduce S@2 if b > 0; {ATOMS}"));
+    assert_ne!(compile(&source, &options).unwrap(), alternative);
+    check(&source, &alternative, &options).unwrap();
+    reject(
+        &source,
+        &alternative,
+        &Options::default(),
+        &["clause #2", "guards=None"],
+    );
+    let invalid = schedule(&query, &format!("reduce L@0 if b > 0; {ATOMS}"));
+    reject(&source, &invalid, &options, &["clause #0", "b"]);
+    let opaque_query = query.replace("b > 0", "opaque!(b)");
+    let opaque_source = schedule(&opaque_query, &format!("{ATOMS} if opaque!(b);"));
+    let opaque = schedule(&opaque_query, &format!("reduce R@1 if opaque!(b); {ATOMS}"));
+    reject(
+        &opaque_source,
+        &opaque,
+        &options,
+        &["clause #1", "guards=Atoms"],
+    );
+}
+
+#[test]
+fn full_reducer_accepts_independent_sibling_orders() {
+    let query = "struct Star; relation A(a:i32,x:i32); relation B(b:i32,y:i32); relation C(c:i32,z:i32); relation R(a:i32,b:i32,c:i32); answer(a,b,c) :- A(a,x), B(b,y), C(c,z), R(a,b,c);";
+    let atoms = "A@0(a,x); B@1(b,y); C@2(c,z); R@3(a,b,c);";
+    let source = schedule(query, atoms);
+    let alternative = schedule(
+        query,
+        &format!(
+            "reduce R@3 with A@0(a,_); reduce R@3 with B@1(b,_); reduce R@3 with C@2(c,_); reduce C@2 with R@3(_,_,c); reduce B@1 with R@3(_,b,_); reduce A@0 with R@3(a,_,_); {atoms}"
+        ),
+    );
+    assert_ne!(compile(&source, &TREE).unwrap(), alternative);
+    check(&source, &alternative, &TREE).unwrap();
+}

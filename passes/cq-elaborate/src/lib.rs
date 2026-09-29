@@ -83,13 +83,31 @@ pub use kernel::{erase, kernel};
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     valuation::contract::check(source)?;
     ra::contract::check(target)?;
-    if target.plan.declarations != source.cq.declarations
-        || target.plan.output.head != source.cq.query.head
-        || kernel(target, &source.cq) != valuation::cq::normal::Kernel::of(&source.cq)
-    {
+    if target.plan.declarations != source.cq.declarations {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
-            "output does not compute the source query",
+            format!(
+                "result `{}`: declarations differ from query `{}`",
+                target.plan.output.input, source.cq.name
+            ),
+        ));
+    }
+    if target.plan.output.head != source.cq.query.head {
+        return Err(syn::Error::new_spanned(
+            &target.plan.output,
+            format!(
+                "result `{}`: output head differs from `{}`",
+                target.plan.output.input, source.cq.query.head.relation
+            ),
+        ));
+    }
+    if kernel(target, &source.cq) != valuation::cq::normal::Kernel::of(&source.cq) {
+        return Err(syn::Error::new_spanned(
+            &target.plan.output,
+            format!(
+                "result `{}`: kernel does not compute query `{}`",
+                target.plan.output.input, source.cq.name
+            ),
         ));
     }
     Ok(())

@@ -30,7 +30,9 @@
 //! No Rust type is named here (Structures binds every keyed read to a
 //! value), and `policy { semijoin = prefer_lazy; }` is not read: whether a
 //! semijoin's test is deferred to its consumer is a printer's choice with no
-//! trace in this language.
+//! trace in this language. [`check`] independently checks erasure and policy
+//! obligations; any admissible alias/let/pipe choice is accepted, without
+//! replaying operator or mode selection.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -567,15 +569,5 @@ fn check_demands(source: &ix::Program, target: &physical::Program) -> syn::Resul
     Ok(())
 }
 
-/// Check logical erasure, demand coverage, and policy choices.
-pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) -> syn::Result<()> {
-    ix::contract::check(source)?;
-    check_demands(source, target)?;
-    if erase(target) != source.ra || compile(source, policy)? != *target {
-        return Err(syn::Error::new_spanned(
-            &target.program.returned,
-            "physical return differs from the source or policy",
-        ));
-    }
-    Ok(())
-}
+mod correspondence;
+pub use correspondence::check;

@@ -425,3 +425,42 @@ fn erasure_restores_query_order_collapses_renames_and_handles_non_block_extends(
     ra::contract::check(&fewer).unwrap();
     assert!(cq_elaborate::kernel(&fewer, &source).guards.is_empty());
 }
+
+#[test]
+fn independent_kernel_checks_obligations_and_accepts_result_names() {
+    let source: valuation::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32); answer(a) :- R(a), if a > 0;
+        valuation { R@0(a); if a > 0; }
+    };
+    let alternative: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32);
+        input_rows = rename R {a -> a};
+        filtered = select input_rows if (a > 0);
+        answer_rows = project filtered keep {a};
+        output answer_rows as answer(a);
+    }};
+    check(&source, &alternative).unwrap();
+    assert_ne!(compile(&source).unwrap(), alternative);
+    let reject = |s: &valuation::Program, t: &ra::Program, names: &[&str]| {
+        let error = check(s, t).unwrap_err().to_string();
+        for name in names {
+            assert!(error.contains(name), "{error}");
+        }
+    };
+    let mut invalid = source.clone();
+    invalid.valuation.steps[0] = syn::parse_quote!(R@9(a););
+    reject(&invalid, &alternative, &["clause #9"]);
+    let mut invalid = alternative.clone();
+    invalid.plan.output.input = syn::parse_quote!(missing);
+    reject(&source, &invalid, &["missing"]);
+    let mut changed = alternative.clone();
+    changed.plan.declarations[0].columns[0].ty = syn::parse_quote!(u32);
+    reject(&source, &changed, &["answer_rows", "declarations"]);
+    let mut changed = alternative.clone();
+    changed.plan.output.head.relation = syn::parse_quote!(other);
+    reject(&source, &changed, &["answer_rows", "head"]);
+    let mut changed = alternative.clone();
+    changed.plan.definitions[1].operator = syn::parse_quote!(select input_rows if (a > 1));
+    ra::contract::check(&changed).unwrap();
+    reject(&source, &changed, &["answer_rows", "kernel"]);
+}

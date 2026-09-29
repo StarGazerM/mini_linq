@@ -59,7 +59,7 @@ fn reduced_plans_compute_the_authored_answers() {
 }
 
 #[test]
-fn reordered_named_demands_are_accepted_but_each_reader_needs_its_demand() {
+fn lowering_preserves_authored_demands_but_index_policy_requires_first_use_names() {
     let source: ix::Program = syn::parse_quote! { relational {
         relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
         l = rename L {a -> a}; r = rename R {a -> a, b -> b}; s = rename S {b -> b, c -> c};
@@ -68,7 +68,14 @@ fn reordered_named_demands_are_accepted_but_each_reader_needs_its_demand() {
     } indexes { membership = @l[0]; second = @s[0]; first = @r[0]; }};
     let policy: physical::policy::Policy = syn::parse_quote!(policy { L; R; S; });
     let target = cq_physical_lowering::compile(&source, &policy).unwrap();
-    cq_index_policy::check(&source.ra, &source).unwrap();
+    ix::contract::check(&source).unwrap();
+    let error = cq_index_policy::check(&source.ra, &source)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("j0") && error.contains("first-use"),
+        "{error}"
+    );
     cq_physical_lowering::check(&source, &target, &policy).unwrap();
     for (missing, reader) in [(0, "x"), (1, "j1"), (2, "j0")] {
         let mut changed = source.clone();

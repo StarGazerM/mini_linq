@@ -269,6 +269,12 @@ fn fine_triangle_canon_policy_pins_intermediate_projection_and_mode() {
         target,
         syn::parse_str::<physical::Program>(&expected).unwrap()
     );
+    reject(
+        &source,
+        &target,
+        &syn::parse_quote!(policy { R; S; T; project = keep; }),
+        &["r1", "canon"],
+    );
     for change_mode in [false, true] {
         let mut changed = target.clone();
         if change_mode {
@@ -277,7 +283,16 @@ fn fine_triangle_canon_policy_pins_intermediate_projection_and_mode() {
             changed.program.definitions[1].canon = None;
         }
         physical::contract::check(&changed).unwrap();
-        assert!(check(&source, &changed, &policy).is_err());
+        if change_mode {
+            assert_ne!(changed, target);
+            check(&source, &changed, &policy).unwrap();
+        } else {
+            let error = check(&source, &changed, &policy).unwrap_err().to_string();
+            assert!(
+                error.contains("r1") && error.contains("project=canon"),
+                "{error}"
+            );
+        }
     }
 }
 
@@ -525,4 +540,157 @@ fn missing_demands_name_the_reader_and_arbitrary_demand_names_are_accepted() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("undeclared"), "{error}");
+}
+
+fn reject(source: &ix::Program, target: &physical::Program, policy: &Policy, names: &[&str]) {
+    let error = check(source, target, policy).unwrap_err().to_string();
+    for name in names {
+        assert!(error.contains(name), "{error}");
+    }
+}
+
+#[test]
+fn independent_lowering_diagnoses_contracts_erasure_demands_and_hosts() {
+    let source: ix::Program = syn::parse_str(CHAIN).unwrap();
+    let policy: Policy = syn::parse_quote!(policy { L; R; S; });
+    let target = compile(&source, &policy).unwrap();
+    let mut bad_source = source.clone();
+    bad_source.indexes[0].requirement.relation = syn::parse_quote!(absent);
+    reject(&bad_source, &target, &policy, &["absent"]);
+    let mut invalid = target.clone();
+    invalid.program.definitions[2] = syn::parse_quote!(r2 = pipe probe[b] r0,r1;);
+    reject(&source, &invalid, &policy, &["r2", "join columns"]);
+    let mut changed = target.clone();
+    changed.program.definitions[1] = syn::parse_quote!(r1 = let rename R {b -> b, a -> a};);
+    physical::contract::check(&changed).unwrap();
+    reject(&source, &changed, &policy, &["r1", "erasure"]);
+    let mut missing = source.clone();
+    missing.indexes.pop();
+    reject(&missing, &target, &policy, &["r4", "demand"]);
+    for (text, names) in [
+        ("policy { L; R; }", &["S", "missing"][..]),
+        ("policy { L; R; S; Extra; }", &["Extra", "undeclared"]),
+        ("policy { L; R; S; R; }", &["R", "duplicate"]),
+        ("policy { L; R keyed [missing]; S; }", &["R", "missing"]),
+        ("policy { L; R keyed [a,a]; S; }", &["R", "duplicate"]),
+    ] {
+        reject(&source, &target, &syn::parse_str(text).unwrap(), names);
+    }
+}
+
+#[test]
+fn independent_lowering_checks_join_semijoin_alias_and_canonical_policy() {
+    let source: ix::Program = syn::parse_str(CHAIN).unwrap();
+    let policy: Policy = syn::parse_quote!(policy { L; R; S; });
+    let target = compile(&source, &policy).unwrap();
+    let mut changed = target.clone();
+    changed.program.definitions[0].mode = syn::parse_quote!(let);
+    changed.program.definitions[2] = syn::parse_quote!(r2 = pipe merge[a] r0,r1;);
+    reject(&source, &changed, &policy, &["r2", "requires probe"]);
+    let mut materialized = target.clone();
+    materialized.program.definitions[0].mode = syn::parse_quote!(let);
+    reject(
+        &source,
+        &materialized,
+        &syn::parse_quote!(policy { L; R; S; join = merge; }),
+        &["r2", "requires merge"],
+    );
+    let mut changed = target.clone();
+    changed.program.definitions[1].mode = syn::parse_quote!(alias);
+    reject(&source, &changed, &policy, &["r1", "alias reads", "R"]);
+    let mut changed = target.clone();
+    changed.program.definitions[2].mode = syn::parse_quote!(alias);
+    reject(&source, &changed, &policy, &["r2", "must rename"]);
+    let mut changed = target.clone();
+    changed.program.definitions[0].canon = Some(Default::default());
+    reject(&source, &changed, &policy, &["r0", "canon"]);
+    let mut changed = target.clone();
+    changed.program.definitions[5].canon = None;
+    reject(&source, &changed, &policy, &["r5", "not canonical"]);
+
+    let semi: ix::Program = syn::parse_quote! { relational {
+        relation L(a:i32); relation R(a:i32);
+        l = rename L {a -> a}; r = rename R {a -> a};
+        s = semijoin l with r; output s as answer(a);
+    } indexes { i0 = @r[0]; } };
+    let p: Policy = syn::parse_quote!(policy { L; R; });
+    let mut changed = compile(&semi, &p).unwrap();
+    changed.program.definitions[2] = syn::parse_quote!(s = pipe canon probe[a] l,r;);
+    physical::contract::check(&changed).unwrap();
+    reject(&semi, &changed, &p, &["s", "erasure"]);
+}
+
+#[test]
+fn range_obligations_are_independent_of_the_select_lowerer() {
+    let source: ix::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
+        s = select r if (x >= 2); output s as answer(x,y);
+    } indexes {} };
+    let ordered: Policy = syn::parse_quote!(policy { R keyed [a] ordered; });
+    let target = compile(&source, &ordered).unwrap();
+    // Let is always admissible here, independently of alias selection.
+    let mut materialized = target.clone();
+    materialized.program.definitions[0].mode = syn::parse_quote!(let);
+    check(&source, &materialized, &ordered).unwrap();
+    assert_ne!(materialized, target);
+    for policy in [
+        syn::parse_quote!(policy { R keyed [a]; }),
+        syn::parse_quote!(policy { R keyed [b] ordered; }),
+    ] {
+        reject(&source, &materialized, &policy, &["s", "ordered host key"]);
+    }
+    for condition in ["x != 2", "x < y", "x > 2147483647", "x < -2147483648"] {
+        let mut s = source.clone();
+        let ra::Operator::Select(select) = &mut s.ra.plan.definitions[1].operator else {
+            unreachable!()
+        };
+        select.condition = syn::parse_str(condition).unwrap();
+        let mut t = materialized.clone();
+        let physical::Operator::Range(_, range) = &mut t.program.definitions[1].operator else {
+            unreachable!()
+        };
+        range.condition = syn::parse_str(condition).unwrap();
+        reject(&s, &t, &ordered, &["s", "does not bound", "x"]);
+    }
+    // The policy permits select even when range is available.
+    let alternative: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32,b:i32); r = let rename R {a -> x,b -> y};
+        s = pipe canon select r if (x >= 2); return s as answer(x,y);
+    }};
+    check(&source, &alternative, &ordered).unwrap();
+    assert_ne!(target, alternative);
+}
+
+#[test]
+fn hand_written_alias_to_let_alternative_is_accepted() {
+    let source: ix::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R {a -> a}; output r as answer(a);
+    } indexes {} };
+    let policy: Policy = syn::parse_quote!(policy { R canon; });
+    let alternative: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32); r = let rename R {a -> a}; return r as answer(a);
+    }};
+    check(&source, &alternative, &policy).unwrap();
+    assert_ne!(compile(&source, &policy).unwrap(), alternative);
+}
+
+#[test]
+fn cartesian_merge_is_rejected_under_both_policies() {
+    let source: ix::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(b:i32);
+        r = rename R {a -> a}; s = rename S {b -> b};
+        j = natural_join r with s; output j as answer(a,b);
+    } indexes { i0 = @s[]; } };
+    let target: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32); relation S(b:i32);
+        r = let rename R {a -> a}; s = let rename S {b -> b};
+        j = pipe canon merge[] r,s; return j as answer(a,b);
+    }};
+    physical::contract::check(&target).unwrap();
+    for policy in [
+        syn::parse_quote!(policy { R; S; }),
+        syn::parse_quote!(policy { R; S; join = merge; }),
+    ] {
+        reject(&source, &target, &policy, &["j", "Cartesian", "probe"]);
+    }
 }

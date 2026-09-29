@@ -210,3 +210,196 @@ fn merge_and_range_choose_ordered_storage() {
     }",
     );
 }
+
+fn reject(
+    source: &physical::Program,
+    target: &structures::Program,
+    policy: &physical::policy::Policy,
+    names: &[&str],
+) {
+    let error = check(source, target, policy).unwrap_err().to_string();
+    for name in names {
+        assert!(error.contains(name), "{error}");
+    }
+}
+
+#[test]
+fn independent_selection_checks_contracts_preservation_and_exact_host_facts() {
+    let source = chain("");
+    let policy: physical::policy::Policy =
+        syn::parse_quote!(policy { L canon; R keyed [a] ordered canon; S; });
+    let target = compile(&source, &policy).unwrap();
+    let mut bad_source = source.clone();
+    bad_source.program.definitions[3] = syn::parse_quote!(j0 = pipe probe[a] missing,r;);
+    reject(&bad_source, &target, &policy, &["j0", "missing"]);
+    let mut missing = target.clone();
+    missing.structures.entries.pop();
+    reject(&source, &missing, &policy, &["j1", "s", "no host key"]);
+    let mut changed = target.clone();
+    changed.physical.program.definitions[1].mode = syn::parse_quote!(let);
+    structures::contract::check(&changed).unwrap();
+    reject(&source, &changed, &policy, &["r", "preserve"]);
+    for (entry, replacement, name) in [
+        (0, "L;", "L"),
+        (1, "R keyed [a] canon;", "R"),
+        (0, "L keyed [a] canon;", "L"),
+    ] {
+        let mut changed = target.clone();
+        changed.structures.entries[entry] = syn::parse_str(replacement).unwrap();
+        structures::contract::check(&changed).unwrap();
+        reject(&source, &changed, &policy, &[name, "host facts"]);
+    }
+    for (text, names) in [
+        (
+            "policy { L canon; R keyed [a] ordered canon; }",
+            &["S", "missing"][..],
+        ),
+        (
+            "policy { L canon; R keyed [a] ordered canon; S; Extra; }",
+            &["Extra", "extra"],
+        ),
+        (
+            "policy { L canon; R keyed [a] ordered canon; S; L; }",
+            &["L", "duplicate"],
+        ),
+    ] {
+        reject(&source, &target, &syn::parse_str(text).unwrap(), names);
+    }
+    let mut source = source;
+    source.program.definitions[1].mode = syn::parse_quote!(let);
+    let mut redundant = compile(&source, &policy).unwrap();
+    redundant
+        .structures
+        .entries
+        .push(syn::parse_quote!(r = ::cq_storage::HashIndex<_,_> [a];));
+    structures::contract::check(&redundant).unwrap();
+    reject(
+        &source,
+        &redundant,
+        &policy,
+        &["r", "host key already answers"],
+    );
+}
+
+#[test]
+fn independent_selection_checks_advice_and_each_read_default() {
+    let policy = syn::parse_quote!(policy { L; R; S; });
+    let mut source = chain("#[index(MyIndex)]");
+    source.program.definitions[1].mode = syn::parse_quote!(let);
+    let target = compile(&source, &policy).unwrap();
+    for (name, ty, diagnostic) in [
+        ("r", "::cq_storage::HashIndex<_,_>", "#[index(T)]"),
+        ("l", "::cq_storage::HashIndex<_,_>", "HashSet"),
+        ("s", "::std::collections::HashSet<_>", "HashIndex"),
+    ] {
+        let mut changed = target.clone();
+        let entry = changed
+            .structures
+            .entries
+            .iter_mut()
+            .find(|e| e.name == name)
+            .unwrap();
+        let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+            unreachable!()
+        };
+        keyed.ty = syn::parse_str(ty).unwrap();
+        structures::contract::check(&changed).unwrap();
+        reject(&source, &changed, &policy, &[name, diagnostic]);
+    }
+    let ordered: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32); relation S(a:i32);
+        r = let rename R {a -> a}; s = let rename S {a -> a};
+        j = let merge[a] r,s; w = pipe canon range[a] j if (a > 0);
+        return w as answer(a);
+    }};
+    let policy = syn::parse_quote!(policy { R; S; });
+    let target = compile(&ordered, &policy).unwrap();
+    for name in ["r", "s", "j"] {
+        let mut changed = target.clone();
+        let entry = changed
+            .structures
+            .entries
+            .iter_mut()
+            .find(|e| e.name == name)
+            .unwrap();
+        let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+            unreachable!()
+        };
+        keyed.ty = syn::parse_quote!(::cq_storage::HashIndex<_,_>);
+        structures::contract::check(&changed).unwrap();
+        reject(&ordered, &changed, &policy, &[name, "BTreeMap"]);
+    }
+}
+
+#[test]
+fn independent_selection_checks_chain_levels_and_smallest_membership() {
+    let case = scenarios::SCENARIOS
+        .iter()
+        .find(|c| c.name == "fine_triangle")
+        .unwrap();
+    let source = syn::parse_str(case.physical).unwrap();
+    let policy = syn::parse_str(case.policy).unwrap();
+    let target = compile(&source, &policy).unwrap();
+    let position = target
+        .structures
+        .entries
+        .iter()
+        .position(|e| e.name == "r2")
+        .unwrap();
+    let mut wrong_type = target.clone();
+    wrong_type.structures.entries[position] =
+        syn::parse_quote!(r2 = ::cq_storage::Trie<'_,_,::std::collections::HashSet<_>> [a][c];);
+    reject(&source, &wrong_type, &policy, &["r2", "HashIndex"]);
+    let mut separate = target.clone();
+    separate.structures.entries[position] =
+        syn::parse_quote!(r2 = ::std::collections::HashSet<_> [a];);
+    separate
+        .structures
+        .entries
+        .push(syn::parse_quote!(r2 = ::cq_storage::HashIndex<_,_> [a,c];));
+    structures::contract::check(&separate).unwrap();
+    reject(&source, &separate, &policy, &["r2", "Trie levels"]);
+    let smallest = syn::parse_quote!(policy { R; S; T; intersect = smallest; });
+    // All physical reads hold, but smallest's extra membership key is absent.
+    reject(&source, &target, &smallest, &["r5", "Trie levels"]);
+    let mut wrong_leaf = compile(&source, &smallest).unwrap();
+    let position = wrong_leaf
+        .structures
+        .entries
+        .iter()
+        .position(|e| e.name == "r5")
+        .unwrap();
+    wrong_leaf.structures.entries[position] =
+        syn::parse_quote!(r5 = ::cq_storage::Trie<'_,_,::cq_storage::HashIndex<_,_>> [b][c];);
+    reject(&source, &wrong_leaf, &smallest, &["r5", "HashSet"]);
+}
+
+#[test]
+fn hand_written_entry_order_is_free() {
+    let source = chain("");
+    let policy = syn::parse_quote!(policy { L canon; R keyed [a]; S; });
+    let alternative: structures::Program = syn::parse_quote! {
+        #source structures {
+            s = ::cq_storage::HashIndex<_,_> [b];
+            S; R keyed [a];
+            l = ::std::collections::HashSet<_> [a];
+            L canon;
+        }
+    };
+    check(&source, &alternative, &policy).unwrap();
+    assert_ne!(compile(&source, &policy).unwrap(), alternative);
+}
+
+#[test]
+fn host_key_tuple_order_is_a_preserved_policy_fact() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32,b:i32);
+        r = alias canon rename R {a -> a,b -> b}; return r as answer(a,b);
+    }};
+    let policy = syn::parse_quote!(policy { R keyed [b,a]; });
+    let mut target = compile(&source, &policy).unwrap();
+    check(&source, &target, &policy).unwrap();
+    target.structures.entries[0] = syn::parse_quote!(R keyed [a,b];);
+    structures::contract::check(&target).unwrap();
+    reject(&source, &target, &policy, &["R", "host facts"]);
+}

@@ -6,7 +6,8 @@
 //! are. A reduction is a semijoin or a selection that, under set semantics,
 //! changes nothing the plan denotes, so [`check`] erases them — drops the
 //! semijoins and returns each pushed guard to a step — and requires the
-//! input plan back.
+//! input plan back. The checker validates tree edges and dependency order
+//! independently of the scheduler; sibling orders and guard hosts are free.
 //!
 //! - `Pushdown::Atoms` turns every guard whose variables all belong to one
 //!   atom clause into `reduce C@k if (e);` on the earliest such clause,
@@ -144,24 +145,8 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
     Ok(program)
 }
 
-/// Check the reduction schedule and its erasure against the input plan.
-pub fn check(
-    source: &valuation::Program,
-    target: &valuation::Program,
-    options: &Options,
-) -> syn::Result<()> {
-    valuation::contract::check(target)?;
-    let (steps, guards) = erase(target);
-    if steps != without_guards(&source.valuation.steps, &guards)
-        || compile(source, options)? != *target
-    {
-        return Err(syn::Error::new_spanned(
-            &target.cq.name,
-            "reduction changes the source valuation",
-        ));
-    }
-    Ok(())
-}
+mod correspondence;
+pub use correspondence::check;
 
 /// The plan's steps without its reductions, and the guards those placed.
 fn erase(module: &valuation::Program) -> (Vec<Step>, Vec<cq::Filter>) {

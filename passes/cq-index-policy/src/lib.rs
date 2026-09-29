@@ -1,7 +1,9 @@
 //! RA → IX: name exact index demands for joins and semijoins.
 //!
 //! This analysis preserves the relational plan and makes no representation,
-//! physical algorithm, or continuation choice.
+//! physical algorithm, or continuation choice. [`check`] independently derives
+//! the ordered first-use demands and their rule-mandated names; fixtures
+//! separately pin the expansion.
 
 use std::collections::BTreeSet;
 
@@ -58,21 +60,5 @@ pub fn compile(source: &ra::Program) -> syn::Result<ix::Program> {
     Ok(target)
 }
 
-/// Check that every join has exactly its shared-column demand.
-pub fn check(source: &ra::Program, target: &ix::Program) -> syn::Result<()> {
-    ix::contract::check(target)?;
-    let expected = compile(source)?;
-    let signatures = |p: &ix::Program| {
-        p.indexes
-            .iter()
-            .map(|i| ix::signature(&i.requirement))
-            .collect::<BTreeSet<_>>()
-    };
-    if target.ra != *source || signatures(target) != signatures(&expected) {
-        return Err(syn::Error::new_spanned(
-            &target.ra.plan.output,
-            "index demands do not cover the source joins",
-        ));
-    }
-    Ok(())
-}
+mod correspondence;
+pub use correspondence::check;

@@ -80,6 +80,29 @@ def production(package):
     return [d for d in package["dependencies"] if d["kind"] != "dev"]
 
 
+def recomputing_checks(source):
+    """Inspect balanced check bodies after masking Rust comments and strings."""
+    masked = re.sub(r'//[^\n]*|/\*.*?\*/|r(#+)".*?"\1|"(?:\\.|[^"\\])*"',
+                    lambda m: " " * len(m.group()), source, flags=re.S)
+    for match in re.finditer(r"\bpub\s+fn\s+check\s*\(", masked):
+        start = masked.index("{", match.end())
+        depth, end = 1, start + 1
+        while depth and end < len(masked):
+            depth += (masked[end] == "{") - (masked[end] == "}")
+            end += 1
+        if re.search(r"\bcompile\s*\(", masked[start:end]):
+            yield source.count("\n", 0, match.start()) + 1
+
+
+def check_independent_relations():
+    assert list(recomputing_checks('pub fn check() { if true { compile(s); } }')) == [1]
+    assert not list(recomputing_checks('pub fn check() { let x = "compile("; /* compile(s) */ }\nfn f() { compile(s); }'))
+    for path in sorted((ROOT / "passes").glob("*/src/**/*.rs")):
+        for line in recomputing_checks(path.read_text()):
+            raise ValueError(f"{path.relative_to(ROOT)}:{line}: check must not call compile")
+    print("PASS: pass check bodies do not call compile", flush=True)
+
+
 def check(data, announce=True):
     packages = {p["name"]: p for p in data["packages"]}
     for name, path in PATHS.items():
@@ -326,6 +349,7 @@ def main():
     parser.add_argument("--consumers", action="store_true", help="run current IX/Physical integration test targets; separate from boundary smoke")
     parser.add_argument("--only", action="append", default=[], help="limit probes by component, frontend feature, or integration target")
     args = parser.parse_args()
+    check_independent_relations()
     labels = set(ALLOWED) | set(FRONTEND) | set(CONSUMERS)
     if set(args.only) - labels:
         parser.error("unknown --only label(s): " + ", ".join(sorted(set(args.only) - labels)))

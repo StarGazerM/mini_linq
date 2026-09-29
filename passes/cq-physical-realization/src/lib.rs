@@ -1,5 +1,9 @@
 //! Structures → Rust: print one pull program.
 //!
+//! This pass has no independent Rust semantic checker. Its obligations are
+//! SemanticAgreement against oracle answers and rustc's generated trait
+//! guards; authored expansion fixtures separately pin the emitted syntax.
+//!
 //! Nothing about the query is decided here: every physical operator, mode,
 //! host fact and built type is fixed by Structures. This pass decides only
 //! the Rust shape of each read and the layout of the values flowing between
@@ -95,21 +99,6 @@ pub fn compile(module: &structures::Program, endpoints: &Endpoints) -> syn::Resu
         }
     };
     syn::parse2(quote! { { #(#statements)* #value } })
-}
-
-/// Check that the emitted expression is the requested realization.
-pub fn check(
-    source: &structures::Program,
-    target: &Expr,
-    endpoints: &Endpoints,
-) -> syn::Result<()> {
-    if compile(source, endpoints)? != *target {
-        return Err(syn::Error::new_spanned(
-            target,
-            "Rust expression differs from the requested realization",
-        ));
-    }
-    Ok(())
 }
 
 struct Printer<'a> {
