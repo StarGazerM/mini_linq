@@ -56,13 +56,15 @@ the post-RA slots it uses. It does not bind the logical slots.
 
 \paragraph{Abstract contexts and edge obligations.}
 Let $C[\square^L_\Gamma]$ be a Rust context containing a quotation in language
-$L$, with runtime bindings supplied by $\Gamma$. This is metalinguistic notation,
-not a residual-hole IR in the implementation:
+$L$, with runtime bindings supplied by $\Gamma$. The implementation uses ordinary Rust macro contexts and replaces one
+quotation with its checked continuation; no residual-hole IR is needed:
 \[
 \Rule{ST-Hole}{\Gamma\vdash s:L\quad f(s)=t\quad\Gamma\vdash t:M}
  {C[\square^L_\Gamma(s)]\longrightarrow C[\square^M_\Gamma(t)]}.
 \]
-ST-Hole is abstract. Each edge declares an admitted source domain, target
+ST-Hole is implemented by the stage continuation inside the caller's Rust
+context. Leaf bindings and the four interfaces are checked as specified in
+Section~\ref{sec:pass-contracts}. Each edge declares an admitted source domain, target
 well-formedness, a representation relation and an observation to preserve.
 Closing contexts must supply bindings and ownership lifetimes. A completed
 answer-set observation does not establish a polling or effect-trace observation.

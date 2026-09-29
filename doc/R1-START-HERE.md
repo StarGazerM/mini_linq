@@ -189,9 +189,9 @@ descriptor, builder plan, or token stream.
 
 ### Policy
 
-The policy is query-independent: host facts (`R keyed [a] ordered canon`),
-strategy (`join = merge`, `semijoin = prefer_lazy`), and `#[index(Type)]`
-advice on relation declarations. The same policy is passed unchanged to the
+The policy is query-independent strategy (`join = merge`, `semijoin = prefer_lazy`,
+`project`, `intersect`). Host facts (`#[host(keyed [a] ordered, canon)]`) and
+`#[index(Type)]` advice live on relation declarations. The same policy is passed unchanged to the
 supplied structure selection.
 
 ## Supplied structure selection and printer

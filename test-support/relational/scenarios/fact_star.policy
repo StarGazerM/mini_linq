@@ -1,6 +1,1 @@
-policy {
-    F;
-    A;
-    B;
-    C;
-}
+policy {}

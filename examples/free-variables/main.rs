@@ -40,6 +40,7 @@ fn main() {
                     report("negated atom", expression);
                 }
             }
+            BodyItem::Extension { name, .. } => println!("unexpanded {name}!"),
             BodyItem::Aggregate(aggregate) => {
                 if let cq::Aggregator::Expression { expression, .. } = &aggregate.aggregator {
                     report("aggregator", expression);

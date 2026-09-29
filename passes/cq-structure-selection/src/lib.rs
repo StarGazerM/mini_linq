@@ -1,6 +1,6 @@
 //! Physical → Structures: bind every keyed read to a value that answers it.
 //!
-//! This pass decides, for each host relation, the facts the policy states
+//! This pass decides, for each host relation, the facts the declarations state
 //! about its value (key, order, canonicity) and, for each read Physical
 //! makes through a key that no host answers, the Rust type built over the
 //! result. Rules, from mandatory to advisory:
@@ -67,7 +67,7 @@ impl Need {
     }
 }
 
-/// A host key as the policy states it: sorted column names and order.
+/// A host key as its declaration states it: sorted column names and order.
 struct HostKey {
     columns: Vec<String>,
     ordered: bool,
@@ -114,61 +114,22 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
 
 pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<structures::Program> {
     let analysis = physical::contract::check(source)?;
-    let layouts: BTreeMap<String, Vec<String>> = source
-        .inputs()
-        .map(|input| {
-            (
-                symbol_name(&input.name),
-                input.columns.iter().map(|c| symbol_name(&c.name)).collect(),
-            )
-        })
-        .collect();
-
-    // Hosts, exactly as the policy states them.
+    // Preserve declaration facts, including the host's written key tuple order.
     let mut host_keys: BTreeMap<String, Option<HostKey>> = BTreeMap::new();
     let mut hosts = TokenStream::new();
-    for host in &policy.hosts {
-        let name = symbol_name(&host.name);
-        let Some(layout) = layouts.get(&name) else {
-            return Err(syn::Error::new_spanned(
-                &host.name,
-                "policy names an undeclared host relation",
-            ));
-        };
-        let key = match &host.key {
-            Some(key) => {
-                for column in &key.columns {
-                    if !layout.contains(&symbol_name(column)) {
-                        return Err(syn::Error::new_spanned(
-                            column,
-                            format!("`{name}` has no column `{column}`"),
-                        ));
-                    }
-                }
-                let mut columns: Vec<String> = key.columns.iter().map(symbol_name).collect();
-                columns.sort();
-                columns.dedup();
-                Some(HostKey {
-                    columns,
-                    ordered: key.ordered.is_some(),
-                })
+    for input in source.inputs() {
+        let host = input.host_facts()?;
+        let key = host.key.as_ref().map(|key| {
+            let mut columns: Vec<_> = key.columns.iter().map(symbol_name).collect();
+            columns.sort();
+            HostKey {
+                columns,
+                ordered: key.ordered.is_some(),
             }
-            None => None,
-        };
-        if host_keys.insert(name, key).is_some() {
-            return Err(syn::Error::new_spanned(
-                &host.name,
-                "host relation configured twice",
-            ));
-        }
-        let (ident, key, canon) = (&host.name, &host.key, &host.canon);
+        });
+        host_keys.insert(symbol_name(&input.name), key);
+        let (ident, key, canon) = (&input.name, &host.key, &host.canon);
         hosts.extend(quote! { #ident #key #canon; });
-    }
-    if let Some(missing) = layouts.keys().find(|name| !host_keys.contains_key(*name)) {
-        return Err(syn::Error::new_spanned(
-            policy,
-            format!("policy must list host relation `{missing}`"),
-        ));
     }
 
     // The host key answering a read of `result` on `columns` through its

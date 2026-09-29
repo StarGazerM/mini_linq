@@ -167,6 +167,9 @@ fn check_in<'a>(
     plan: &Plan,
 ) -> syn::Result<BTreeMap<String, RelationInfo>> {
     let declarations = cq_syntax::check_input_declarations(inputs)?;
+    if let Some(output) = declarations.get(&symbol_name(&plan.output.head.relation)) {
+        output.check_result()?;
+    }
     let mut relations = BTreeMap::<String, RelationInfo>::new();
     let logical: BTreeSet<_> = plan
         .definitions

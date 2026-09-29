@@ -13,13 +13,17 @@ each implementation rule is registered at the function that checks them.
 $\mathsf{CQScope}(s)$ consists of the CQ clause rules in
 Section~\ref{sec:languages}, plus declaration and result checks: relation and
 column names are unique and declared relations have positive arity;
-declaration attributes are limited to at most one \code{index(...)} list; body atoms name declared inputs at the declared arity;
+declaration attributes are limited to at most one \code{index(...)} list and
+at most one \code{host(...)} list; host key columns are known and duplicate-free;
+an optional parenthesized leaf expression is preserved as Rust syntax; body atoms name declared inputs at the declared arity;
 lets cannot shadow bound logical names; the body contains an atom; the head has
 positive arity. A declaration named by the head is treated as the result and
-must have its arity. Without that declaration, every head argument must be a
+must have its arity and cannot declare host facts or a leaf value. Without that declaration, every head argument must be a
 bound bare variable with a known, non-inference symbolic type. With a declared
 result, these bare-head binding/type-inference requirements are not imposed.
-Negation and aggregation parse but are rejected by CQ checking. Visible logical
+Negation and aggregation parse but are rejected by CQ checking. An opaque
+\code{name! \{tokens\}} clause also parses and round-trips, but CQ checking
+rejects it with the name of the unexpanded extension. Visible logical
 uses are checked in written scope; opaque syntax remains Rust's responsibility.
 \begin{mathpar}
 
@@ -114,9 +118,8 @@ $\mathsf{Entries}(t,A)$ validates its embedded Physical and records exactly one
 host entry per input, host key names from declared columns, canon facts, and
 built entries over existing \code{let} results. Built columns are in the
 heading and do not repeat across levels. Duplicate host entries and duplicate
-built entries with the same concatenated level sequence are rejected. Host
-key duplicates are not separately rejected by this local analysis; pass policy
-validation is stricter. A built key answers the union of a prefix of its levels.
+built entries with the same concatenated level sequence are rejected. Every host entry must exactly repeat its declaration facts, including written
+key order, ordered and canon flags. A built key answers the union of a prefix of its levels.
 Define $\mathsf{host}(r,C)$ by translating $C$ through a rename and comparing
 its sorted list with the host's sorted key list (without removing duplicates); $\mathsf{built}(r,C)$ by a matching
 level prefix. Write $\mathsf{orderedHost}$ when the host also says ordered.
@@ -143,8 +146,8 @@ the input key; project keeps it only when no key column is dropped. If no key
 is inherited, a canon flag or full-key build supplies the full heading as key.
 The return must have a key. These are symbolic premises: a built type accepted
 here must still implement the appropriate ordered, membership, construction or
-canonical trait in generated Rust. Trait laws and host canon/order claims are
-representation assumptions, not established by syntactic analysis.
+canonical trait in generated Rust. Every declared host fact is checked by a generated trait guard. Trait laws
+remain representation assumptions, not established by syntactic analysis.
 
 \subsection{Pass correspondence checks}
 Each complete pass check requires successful local checks of its source
@@ -216,18 +219,17 @@ normalized name \code{iN}; extra entries are rejected.
 \paragraph{Physical lowering.}
 Erase probe/merge to natural join, semi to semijoin, range to select, and remove
 modes/canon flags, preserving definitions, names, declarations and output.
-$\mathsf{PolicyPhysical}(t,\chi)$ requires exactly the declared input host names
-in the policy, with unique valid key columns. A join is merge iff merge policy
+$\mathsf{PolicyPhysical}(t,\chi)$ reads checked host facts from declarations; the policy contains only strategy. A join is merge iff merge policy
 is set and its shared heading is nonempty; otherwise it is probe. A range must
 rename a host with a single ordered key matching its range column and have a
 recognized usable integer bound among conjunction leaves. Bounds are recognized
 by the comparison parser, excluding inequality and strict bounds that overflow
 \code{i32}; an eligible select is not required to become a range.
-Aliases must answer every keyed/range/merge read from policy host facts, ordered
+Aliases must answer every keyed/range/merge read from declaration host facts, ordered
 where required. Let/pipe choices may differ from construction when locally valid.
 Canon may appear only at return or a project=canon projection; that policy
 requires canon on key-dropping projections. The return must be unique by the
-policy key inference or a canon flag. This inference uses Unit, canon hosts,
+declaration key inference or a canon flag. This inference uses Unit, canon hosts,
 join key unions, left keys for semi, preservation through select/range/extend,
 and key-preserving project. It does not consult built structures.
 \begin{mathpar}
@@ -246,7 +248,7 @@ The checker does not require the constructor's particular materialization
 choices and does not use \code{semijoin = prefer_lazy}.
 
 \paragraph{Structure selection.}
-$\mathsf{StorageRules}(s,t,\chi)$ first requires exactly the policy host facts,
+$\mathsf{StorageRules}(s,t,\chi)$ first requires exactly the declaration host facts,
 including written host-key tuple order and canon/order flags, and unchanged
 Physical. Independently collect unanswered reads per exact result and key,
 with strength membership $<$ payload $<$ ordered. Host keys discharge exact
@@ -289,3 +291,57 @@ clone owned key values; distinct providers may clone retained rows. A block
 with bound storage collects answers before returning \code{Vec::into_iter};
 a block without bound statements may return the lazy iterator. This evidence
 supports the exercised cases, not an arbitrary Rust equivalence theorem.
+
+\subsection{The four interfaces of the closed core}
+Extensions produce Rust contexts $C[h_1,\ldots,h_n]$; each quotation $h_i$
+passes through the same closed core. Surface extensions introduce no operators.
+The following rules are implementation obligations, not proofs of extension
+semantics or Rust expression equivalence. Let $\mathsf{facts}(d)=(K,o,c)$
+be the optional written key tuple, ordering flag and canonical flag.
+\begin{mathpar}
+\Rule{IF-Surface}{\operatorname{parse}_{CQ}(T)=s\quad
+ \text{no unexpanded extension clause remains in }s}
+ {\mathsf{surface}(T)=s\text{ is admitted to CQ checking}}
+
+\Rule{IF-Input}{\text{at most one host attribute on }d\quad
+ K\subseteq\operatorname{columns}(d)\quad\text{no duplicate in }K}
+ {\mathsf{hostFacts}(d)\Downarrow(K,o,c)}
+
+\Rule{IF-Output}{A=\mathsf{collect\_from}(I)\quad
+ \alpha(A)=\{r\mid r\in I\}}
+ {A:\code{Canonical}\quad A\text{ may supply an input host}}
+
+\Rule{IF-Environment}{\mathsf{visibleLogicalUses}(e)\subseteq\Gamma_Q\quad
+ \Gamma_H,\Gamma_Q\vdash_{Rust}e}
+ {e\text{ is an expression hole in the closing environment}}
+
+\Rule{IF-Leaf}{d=\code{relation R(...)=}(e)\quad b\text{ fresh}\quad
+ \Gamma_H\vdash_{Rust}e}
+ {d\longmapsto\code{let b = \&(e);}\quad R\mapsto b}
+
+\Rule{STR-Facts}{\mathsf{entryFacts}(R)=\mathsf{facts}(\mathsf{decl}(R))}
+ {\mathsf{HostEntryOK}(R)}
+
+\Rule{IF-Facts}{\text{emit every applicable guard below for every input declaration}}
+ {\mathsf{declaredFactsCheckedByRustc}}
+
+\Rule{IF-Canon}{c=\mathsf{true}}
+ {\mathsf{emit}(\code{require::canonical(\&value)})}
+
+\Rule{IF-Keyed}{K=(k_1,\ldots,k_m)\quad\tau_i=\mathsf{type}_d(k_i)}
+ {\mathsf{emit}(\code{require::keyed::<}(\tau_1,\ldots,\tau_m),\code{_>(\&value)})}
+
+\Rule{IF-Ordered}{o=\mathsf{true}}
+ {\mathsf{emit}(\code{require::ordered(\&value)})}
+\end{mathpar}
+The keyed guard requires $\code{IndexRead::Key}=(\tau_1,\ldots,\tau_m)$,
+including written tuple order; the other guards require \code{Canonical}
+and \code{OrderedRead}. Guards are emitted even when the chosen plan does not
+use the declared access. Grouped answers collect distinct $(K,V)$ pairs and
+implement keyed read; ungrouped answers collect distinct full rows. Both may
+retain references. Leaf bindings occur once per query-block evaluation, before
+operators, in declaration order. Rust checks that returned borrows outlive the
+block. Named hosts keep their access expressions. All pass correspondences
+preserve complete declarations, including facts and leaf syntax, without
+calling compilation. No purity or arbitrary contextual equivalence follows
+from these structural checks.

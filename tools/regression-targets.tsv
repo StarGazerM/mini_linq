@@ -32,3 +32,5 @@ cq-reduce	test	ya_schedule	teaching/ya/ya_schedule.rs
 cq-print	test	expressions	passes/cq-print/tests/expressions.rs
 cq-lang-cq	test	program	languages/cq-lang-cq/tests/program.rs
 cq-lang-cq	test	normal	languages/cq-lang-cq/tests/normal.rs
+mini-linq	test	openings	facade/mini-linq/tests/openings.rs
+mini-linq	test	pass_contracts	facade/mini-linq/tests/pass_contracts.rs

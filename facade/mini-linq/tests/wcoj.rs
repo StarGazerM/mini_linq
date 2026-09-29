@@ -24,7 +24,7 @@ mod binary {
     use super::{Answer, V};
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! { $($ix)* policy { R; S; T; } }
+            ::mini_linq::lower_physical! { $($ix)* policy {    } }
         };
     }
     pub(crate) use policy as physical_policy;
@@ -53,7 +53,7 @@ mod first {
     use super::{Answer, V};
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! { $($ix)* policy { R; S; T; project = canon; } }
+            ::mini_linq::lower_physical! { $($ix)* policy {    project = canon; } }
         };
     }
     pub(crate) use policy as physical_policy;
@@ -82,7 +82,7 @@ mod smallest {
     use super::{Answer, V};
     macro_rules! policy {
         ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! { $($ix)* policy { R; S; T; project = canon; intersect = smallest; } }
+            ::mini_linq::lower_physical! { $($ix)* policy {    project = canon; intersect = smallest; } }
         };
     }
     pub(crate) use policy as physical_policy;

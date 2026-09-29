@@ -1,7 +1,7 @@
 //! A caller-written host composes RA → IX → Physical → Structures → Rust.
 //!
-//! The policy is query-independent: it states facts about each host value
-//! and nothing about this query's results. `R` and `S` are host maps keyed
+//! The policy contains query-independent strategy; declarations carry host facts.
+//! `R` and `S` are host maps keyed
 //! on their join columns, so the compiler probes them in place and builds no
 //! structure of its own; `L` is only scanned.
 #![recursion_limit = "512"]
@@ -12,11 +12,7 @@ macro_rules! policy {
     ($($ix:tt)*) => {
         ::mini_linq::lower_physical! {
             $($ix)*
-            policy {
-                L;
-                R keyed [a];
-                S keyed [b];
-            }
+            policy {}
         }
     };
 }
@@ -39,8 +35,8 @@ fn query<'a>(
     ::core::iter::Iterator::collect(::mini_linq::index_demands! {
         relational {
         relation L(a: i32);
-        relation R(a: i32, b: i32);
-        relation S(b: i32, c: i32);
+        #[host(keyed [a])] relation R(a: i32, b: i32);
+        #[host(keyed [b])] relation S(b: i32, c: i32);
             l = rename L {a -> a};
             r = rename R {a -> a, b -> b};
             s = rename S {b -> b, c -> c};

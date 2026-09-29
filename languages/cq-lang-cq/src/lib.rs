@@ -102,21 +102,81 @@ impl Query {
 ///
 /// ```text
 /// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
+///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug)]
 pub enum BodyItem {
-    #[parse(peek = Token![if])]
     Filter(Filter),
-    #[parse(peek = Token![let])]
     Let(Box<Let>),
-    #[parse(peek = Token![!])]
     Negation(Negation),
-    #[parse(peek = kw::agg)]
     Aggregate(Box<Aggregate>),
-    #[parse(peek = Ident)]
-    Positive { atom: Atom },
+    /// Opaque extension text; an enclosing extension must expand it before CQ checking.
+    Extension {
+        name: Ident,
+        tokens: proc_macro2::TokenStream,
+    },
+    Positive {
+        atom: Atom,
+    },
 }
+
+impl syn::parse::Parse for BodyItem {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        Ok(if input.peek(Token![if]) {
+            Self::Filter(input.parse()?)
+        } else if input.peek(Token![let]) {
+            Self::Let(input.parse()?)
+        } else if input.peek(Token![!]) {
+            Self::Negation(input.parse()?)
+        } else if input.peek(kw::agg) && !input.peek2(Token![!]) {
+            Self::Aggregate(input.parse()?)
+        } else if input.peek(Ident) && input.peek2(Token![!]) {
+            let name = input.parse()?;
+            input.parse::<Token![!]>()?;
+            let body;
+            syn::braced!(body in input);
+            Self::Extension {
+                name,
+                tokens: body.parse()?,
+            }
+        } else {
+            Self::Positive {
+                atom: input.parse()?,
+            }
+        })
+    }
+}
+
+impl quote::ToTokens for BodyItem {
+    fn to_tokens(&self, output: &mut proc_macro2::TokenStream) {
+        match self {
+            Self::Filter(x) => x.to_tokens(output),
+            Self::Let(x) => x.to_tokens(output),
+            Self::Negation(x) => x.to_tokens(output),
+            Self::Aggregate(x) => x.to_tokens(output),
+            Self::Positive { atom } => atom.to_tokens(output),
+            Self::Extension { name, tokens } => output.extend(quote::quote!(#name! { #tokens })),
+        }
+    }
+}
+
+impl PartialEq for BodyItem {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Filter(a), Self::Filter(b)) => a == b,
+            (Self::Let(a), Self::Let(b)) => a == b,
+            (Self::Negation(a), Self::Negation(b)) => a == b,
+            (Self::Aggregate(a), Self::Aggregate(b)) => a == b,
+            (Self::Positive { atom: a }, Self::Positive { atom: b }) => a == b,
+            (Self::Extension { name: a, tokens: x }, Self::Extension { name: b, tokens: y }) => {
+                a == b && x.to_string() == y.to_string()
+            }
+            _ => false,
+        }
+    }
+}
+impl Eq for BodyItem {}
 
 pub use cq_syntax::{Filter, Let, TypeAnnotation};
 
@@ -179,6 +239,7 @@ pub mod contract {
 fn check_program(program: &Program) -> syn::Result<()> {
     let mut schema = check_input_declarations(&program.declarations)?;
     if let Some(output) = schema.remove(&symbol_name(&program.query.head.relation)) {
+        output.check_result()?;
         if output.arity() != program.query.head.args.len() {
             return Err(syn::Error::new_spanned(
                 output,
@@ -207,7 +268,10 @@ fn check_program(program: &Program) -> syn::Result<()> {
                         .into_iter()
                         .map(|(id, ty)| (symbol_name(&id), ty)),
                 ),
-                BodyItem::Filter(_) | BodyItem::Negation(_) | BodyItem::Aggregate(_) => (),
+                BodyItem::Filter(_)
+                | BodyItem::Negation(_)
+                | BodyItem::Aggregate(_)
+                | BodyItem::Extension { .. } => (),
             }
         }
         for arg in &program.query.head.args {
@@ -239,7 +303,10 @@ fn check_query(
         .flat_map(|item| match item {
             BodyItem::Positive { atom } => atom.variables().cloned().collect(),
             BodyItem::Let(binding) => rust::bindings(&binding.pattern),
-            BodyItem::Filter(_) | BodyItem::Negation(_) | BodyItem::Aggregate(_) => Vec::new(),
+            BodyItem::Filter(_)
+            | BodyItem::Negation(_)
+            | BodyItem::Aggregate(_)
+            | BodyItem::Extension { .. } => Vec::new(),
         })
         .map(|id| symbol_name(&id))
         .collect();
@@ -269,12 +336,20 @@ fn check_query(
                     }
                 }
             }
+            // Formal rule IF-Surface: No unexpanded extension enters the checked core.
+            BodyItem::Extension { name, .. } => {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    format!("extension `{name}!` was not expanded"),
+                ));
+            }
             BodyItem::Negation(_) | BodyItem::Aggregate(_) => {
                 return Err(syn::Error::new_spanned(
                     item,
                     "negation and aggregation require the extended CQ semantic contract",
                 ));
             }
+            // Formal rule IF-Environment: Check logical scope; Rust resolves enclosing values.
             BodyItem::Filter(filter) => check_uses(&filter.condition, &body_variables)?,
             BodyItem::Let(binding) => {
                 check_uses(&binding.expression, &body_variables)?;

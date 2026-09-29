@@ -146,8 +146,8 @@ pub fn lower_physical(input: TokenStream) -> TokenStream {
 
 /// Bind every keyed read to a value that answers it under the appended policy.
 ///
-/// Input is `Physical policy { … }`. Host facts come from the policy (`R
-/// keyed [a] ordered canon`). Each read no host key answers gets a
+/// Input is `Physical policy { … }`. Host facts come from declarations
+/// (`#[host(keyed [a] ordered, canon)]`). Each read no host key answers gets a
 /// structure: the type the relation's `#[index(…)]` advice names, else
 /// `cq_storage::HashIndex` for probes, `HashSet` for semijoins, `BTreeMap`
 /// for merges and ranges. Whether a type implements the traits the plan uses

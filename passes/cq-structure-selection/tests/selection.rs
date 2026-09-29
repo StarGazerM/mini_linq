@@ -28,6 +28,22 @@ fn chain(advice: &str) -> physical::Program {
         p = pipe canon project x keep {{a,c}}; return p as answer(a,c); }}")).unwrap()
 }
 
+fn with_facts(source: &physical::Program, facts: &[(&str, &str)]) -> physical::Program {
+    let mut source = source.clone();
+    for (name, text) in facts {
+        let d = source
+            .program
+            .declarations
+            .iter_mut()
+            .find(|d| d.name == *name)
+            .unwrap();
+        d.attrs.retain(|a| !a.path().is_ident("host"));
+        let tokens: proc_macro2::TokenStream = text.parse().unwrap();
+        d.attrs.push(syn::parse_quote!(#[host(#tokens)]));
+    }
+    source
+}
+
 fn assert_selection(source: &physical::Program, policy: &str, expected: &str) {
     let policy = syn::parse_str(policy).unwrap();
     let target = compile(source, &policy).unwrap();
@@ -42,8 +58,8 @@ fn assert_selection(source: &physical::Program, policy: &str, expected: &str) {
 fn host_facts_and_keys_take_precedence_over_index_advice() {
     let source = chain("#[index(MyIndex)]");
     assert_selection(
-        &source,
-        "policy { L canon; R keyed [a] ordered canon; S; }",
+        &with_facts(&source, &[("L", "canon"), ("R", "keyed [a] ordered canon")]),
+        "policy {    }",
         "structures {
         L canon; R keyed [a] ordered canon; S;
         l = ::std::collections::HashSet<_> [a];
@@ -53,8 +69,8 @@ fn host_facts_and_keys_take_precedence_over_index_advice() {
     let mut built = source.clone();
     built.program.definitions[1].mode = syn::parse_quote!(let);
     assert_selection(
-        &built,
-        "policy { L; R; S; }",
+        &with_facts(&built, &[]),
+        "policy {    }",
         "structures {
         L; R; S;
         l = ::std::collections::HashSet<_> [a];
@@ -62,7 +78,7 @@ fn host_facts_and_keys_take_precedence_over_index_advice() {
         s = ::cq_storage::HashIndex<_, _> [b];
     }",
     );
-    let error = compile(&source, &syn::parse_quote!(policy { L; R; S; }))
+    let error = compile(&source, &syn::parse_quote!(policy {}))
         .unwrap_err()
         .to_string();
     assert!(error.contains("`r`"), "{error}");
@@ -71,8 +87,8 @@ fn host_facts_and_keys_take_precedence_over_index_advice() {
 #[test]
 fn wrong_column_host_keys_report_the_alias_and_reader() {
     let error = compile(
-        &chain(""),
-        &syn::parse_quote!(policy { L; R keyed [b]; S; }),
+        &with_facts(&chain(""), &[("R", "keyed [b]")]),
+        &syn::parse_quote!(policy {}),
     )
     .unwrap_err()
     .to_string();
@@ -88,8 +104,8 @@ fn merge_storage_also_answers_membership_and_sorted_pipes_need_no_build() {
     source.program.definitions[3] = syn::parse_quote!(j0 = let merge[a] l, r;);
     source.program.definitions[4] = syn::parse_quote!(j1 = pipe merge[b] j0, s;);
     assert_selection(
-        &source,
-        "policy { L; R; S; join = merge; }",
+        &with_facts(&source, &[]),
+        "policy {    join = merge; }",
         "structures {
         L; R; S;
         l = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [a];
@@ -107,8 +123,11 @@ fn merge_storage_also_answers_membership_and_sorted_pipes_need_no_build() {
         j1 = pipe canon merge[a] j0, t; return j1 as answer(a, b, c);
     }};
     assert_selection(
-        &star,
-        "policy { L keyed [a] ordered; R keyed [a] ordered; T; join = merge; }",
+        &with_facts(
+            &star,
+            &[("L", "keyed [a] ordered"), ("R", "keyed [a] ordered")],
+        ),
+        "policy {    join = merge; }",
         "structures {
         L keyed [a] ordered; R keyed [a] ordered; T;
         t = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [a];
@@ -124,16 +143,16 @@ fn range_builds_only_when_the_host_key_is_not_ordered() {
         f = pipe range[a] r if (a > 1); return f as answer(a, b);
     }};
     assert_selection(
-        &source,
-        "policy { R keyed [a] canon; }",
+        &with_facts(&source, &[("R", "keyed [a] canon")]),
+        "policy {  }",
         "structures {
         R keyed [a] canon;
         r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [a];
     }",
     );
     assert_selection(
-        &source,
-        "policy { R keyed [a] ordered canon; }",
+        &with_facts(&source, &[("R", "keyed [a] ordered canon")]),
+        "policy {  }",
         "structures {
         R keyed [a] ordered canon;
     }",
@@ -142,21 +161,14 @@ fn range_builds_only_when_the_host_key_is_not_ordered() {
 
 #[test]
 fn invalid_policy_and_noncanonical_return_name_the_construct() {
-    for (policy, names) in [
-        ("policy { L; R keyed [z]; S; }", &["R", "z"][..]),
-        ("policy { L; R keyed [a]; }", &["S"][..]),
-    ] {
-        let error = compile(&chain(""), &syn::parse_str(policy).unwrap())
-            .unwrap_err()
-            .to_string();
-        for name in names {
-            assert!(error.contains(&format!("`{name}`")), "{error}");
-        }
+    for fact in ["keyed [z]", "keyed [a,a]"] {
+        let source = with_facts(&chain(""), &[("R", fact)]);
+        assert!(compile(&source, &syn::parse_quote!(policy {})).is_err());
     }
-    let mut source = chain("");
+    let mut source = with_facts(&chain(""), &[("R", "keyed [a]")]);
     source.program.definitions[6] = syn::parse_quote!(p = pipe project x keep {a, c};);
     physical::contract::check(&source).unwrap();
-    let error = compile(&source, &syn::parse_quote!(policy { L; R keyed [a]; S; }))
+    let error = compile(&source, &syn::parse_quote!(policy {}))
         .unwrap_err()
         .to_string();
     assert!(error.contains("`p`"), "{error}");
@@ -180,8 +192,8 @@ fn fine_triangle_pins_trie_levels_and_smallest_candidate_storage() {
     }",
     );
     assert_selection(
-        &source,
-        "policy { R; S; T; intersect = smallest; }",
+        &with_facts(&source, &[]),
+        "policy {    intersect = smallest; }",
         "structures {
         R; S; T;
         r0 = ::cq_storage::HashIndex<_, _> [a];
@@ -200,8 +212,8 @@ fn merge_and_range_choose_ordered_storage() {
         return w as answer(x);
     }};
     assert_selection(
-        &source,
-        "policy { R; S; }",
+        &with_facts(&source, &[]),
+        "policy {   }",
         "structures {
         R; S;
         r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
@@ -226,8 +238,8 @@ fn reject(
 #[test]
 fn independent_selection_checks_contracts_preservation_and_exact_host_facts() {
     let source = chain("");
-    let policy: physical::policy::Policy =
-        syn::parse_quote!(policy { L canon; R keyed [a] ordered canon; S; });
+    let source = with_facts(&source, &[("L", "canon"), ("R", "keyed [a] ordered canon")]);
+    let policy: physical::policy::Policy = syn::parse_quote!(policy {});
     let target = compile(&source, &policy).unwrap();
     let mut bad_source = source.clone();
     bad_source.program.definitions[3] = syn::parse_quote!(j0 = pipe probe[a] missing,r;);
@@ -246,25 +258,15 @@ fn independent_selection_checks_contracts_preservation_and_exact_host_facts() {
     ] {
         let mut changed = target.clone();
         changed.structures.entries[entry] = syn::parse_str(replacement).unwrap();
-        structures::contract::check(&changed).unwrap();
+        assert!(structures::contract::check(&changed).is_err());
         reject(&source, &changed, &policy, &[name, "host facts"]);
     }
-    for (text, names) in [
-        (
-            "policy { L canon; R keyed [a] ordered canon; }",
-            &["S", "missing"][..],
-        ),
-        (
-            "policy { L canon; R keyed [a] ordered canon; S; Extra; }",
-            &["Extra", "extra"],
-        ),
-        (
-            "policy { L canon; R keyed [a] ordered canon; S; L; }",
-            &["L", "duplicate"],
-        ),
-    ] {
-        reject(&source, &target, &syn::parse_str(text).unwrap(), names);
+    for fact in ["keyed [missing]", "keyed [a,a]"] {
+        let changed = with_facts(&source, &[("R", fact)]);
+        reject(&changed, &target, &policy, &["R"]);
     }
+    let changed = with_facts(&source, &[("L", "")]);
+    reject(&changed, &target, &policy, &["preserve"]);
     let mut source = source;
     source.program.definitions[1].mode = syn::parse_quote!(let);
     let mut redundant = compile(&source, &policy).unwrap();
@@ -283,7 +285,7 @@ fn independent_selection_checks_contracts_preservation_and_exact_host_facts() {
 
 #[test]
 fn independent_selection_checks_advice_and_each_read_default() {
-    let policy = syn::parse_quote!(policy { L; R; S; });
+    let policy = syn::parse_quote!(policy {});
     let mut source = chain("#[index(MyIndex)]");
     source.program.definitions[1].mode = syn::parse_quote!(let);
     let target = compile(&source, &policy).unwrap();
@@ -312,7 +314,7 @@ fn independent_selection_checks_advice_and_each_read_default() {
         j = let merge[a] r,s; w = pipe canon range[a] j if (a > 0);
         return w as answer(a);
     }};
-    let policy = syn::parse_quote!(policy { R; S; });
+    let policy = syn::parse_quote!(policy {});
     let target = compile(&ordered, &policy).unwrap();
     for name in ["r", "s", "j"] {
         let mut changed = target.clone();
@@ -359,7 +361,7 @@ fn independent_selection_checks_chain_levels_and_smallest_membership() {
         .push(syn::parse_quote!(r2 = ::cq_storage::HashIndex<_,_> [a,c];));
     structures::contract::check(&separate).unwrap();
     reject(&source, &separate, &policy, &["r2", "Trie levels"]);
-    let smallest = syn::parse_quote!(policy { R; S; T; intersect = smallest; });
+    let smallest = syn::parse_quote!(policy {    intersect = smallest; });
     // All physical reads hold, but smallest's extra membership key is absent.
     reject(&source, &target, &smallest, &["r5", "Trie levels"]);
     let mut wrong_leaf = compile(&source, &smallest).unwrap();
@@ -377,7 +379,8 @@ fn independent_selection_checks_chain_levels_and_smallest_membership() {
 #[test]
 fn hand_written_entry_order_is_free() {
     let source = chain("");
-    let policy = syn::parse_quote!(policy { L canon; R keyed [a]; S; });
+    let source = with_facts(&source, &[("L", "canon"), ("R", "keyed [a]")]);
+    let policy = syn::parse_quote!(policy {});
     let alternative: structures::Program = syn::parse_quote! {
         #source structures {
             s = ::cq_storage::HashIndex<_,_> [b];
@@ -391,15 +394,16 @@ fn hand_written_entry_order_is_free() {
 }
 
 #[test]
-fn host_key_tuple_order_is_a_preserved_policy_fact() {
+fn host_key_tuple_order_is_a_preserved_declaration_fact() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32,b:i32);
         r = alias canon rename R {a -> a,b -> b}; return r as answer(a,b);
     }};
-    let policy = syn::parse_quote!(policy { R keyed [b,a]; });
+    let source = with_facts(&source, &[("R", "keyed [b,a]")]);
+    let policy = syn::parse_quote!(policy {});
     let mut target = compile(&source, &policy).unwrap();
     check(&source, &target, &policy).unwrap();
     target.structures.entries[0] = syn::parse_quote!(R keyed [a,b];);
-    structures::contract::check(&target).unwrap();
+    assert!(structures::contract::check(&target).is_err());
     reject(&source, &target, &policy, &["R", "host facts"]);
 }

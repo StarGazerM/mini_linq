@@ -75,10 +75,9 @@ fn query<'a>(
 }
 ```
 
-The caller's query-independent policy, appended by the local macro the
-example binds as `mini_linq::physical_policy`, states each host's shape. An unkeyed
-host (`L;`) is read as `L.iter()` over full-row tuples. A keyed host
-(`R keyed [a];`) is a map `Map<(key…,), Coll<(rest…,)>>` in the declared column
+The declarations state each host's shape. An unkeyed
+host (`relation L(a: i32);`) is read as `L.iter()` over full-row tuples. A keyed host
+(`#[host(keyed [a])] relation R(a: i32, b: i32);`) is a map `Map<(key…,), Coll<(rest…,)>>` in the declared column
 order, probed in place. There is no input normalization step: the host value
 is used exactly as supplied.
 
@@ -88,8 +87,8 @@ checker, not a MiniLinq rule, explains both answers.
 
 ## Sequence 2: built structures borrow host rows
 
-When the policy says a relation is only scanned but a probe needs a key,
-Structures binds a structure for that read. Triangle's policy declares `R`,
+When a declaration gives no host key but a probe needs one,
+Structures binds a structure for that read. Triangle declares `R`,
 `S`, and `T` unkeyed, so its Structures suffix is:
 
 ```text

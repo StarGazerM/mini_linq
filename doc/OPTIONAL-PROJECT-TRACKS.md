@@ -582,7 +582,7 @@ selected program actually performs:
 
 | Operation | Rust obligation |
 |---|---|
-| scan or probe a host | the host supports the read its policy declares (`.iter()`, or `cq_storage::IndexRead` for a keyed host map) |
+| scan or probe a host | the host supports the read its declaration states (`.iter()`, or `cq_storage::IndexRead` for a keyed host map) |
 | probe a host map with owned keys | the bound key fields satisfy `Clone` |
 | build and read a selected structure | its type implements `cq_storage::Build` and the access traits used; `cq_storage::require` guards name the structure on failure |
 | `canon` distinctness | whatever the caller-bound `distinct_state!` provider needs (e.g. `hash_distinct`: `Eq + Hash` rows; `ordered_distinct`: `Ord`) |

@@ -134,7 +134,9 @@ fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
                         .collect(),
                     rust::free_variables(&binding.expression).dependencies(&prefix),
                 ),
-                BodyItem::Negation(_) | BodyItem::Aggregate(_) => unreachable!("normal form"),
+                BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
+                    unreachable!("normal form")
+                }
             };
             prefix.extend(provides.iter().cloned());
             Clause {
@@ -170,7 +172,9 @@ fn ready(
                     .find(|&&c| matches!(clauses[c].item, BodyItem::Let(_)))
                     == Some(&clause)
             }
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) => unreachable!("normal form"),
+            BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
+                unreachable!("normal form")
+            }
         }
 }
 
@@ -298,7 +302,9 @@ fn coarse(clauses: &[Clause<'_>], sequence: &[usize]) -> Vec<valuation::Step> {
             BodyItem::Positive { atom } => subatom(clause, atom, |_| true),
             BodyItem::Filter(filter) => valuation::Step::Guard(filter.clone(), Default::default()),
             BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) => unreachable!("normal form"),
+            BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
+                unreachable!("normal form")
+            }
         })
         .collect()
 }
@@ -329,7 +335,10 @@ impl Fine<'_> {
                     valuation::Step::Guard(filter.clone(), Default::default())
                 }
                 BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
-                BodyItem::Positive { .. } | BodyItem::Negation(_) | BodyItem::Aggregate(_) => {
+                BodyItem::Positive { .. }
+                | BodyItem::Negation(_)
+                | BodyItem::Aggregate(_)
+                | BodyItem::Extension { .. } => {
                     unreachable!("guards and bindings wait")
                 }
             });

@@ -4,14 +4,13 @@ use quote::{ToTokens, quote};
 #[test]
 fn projection_strategy_defaults_to_keep_and_round_trips() {
     for (tokens, canon) in [
-        (quote! { policy { R; } }, false),
-        (quote! { policy { R; project = keep; } }, false),
-        (quote! { policy { R; project = canon; } }, true),
+        (quote! { policy {  } }, false),
+        (quote! { policy {  project = keep; } }, false),
+        (quote! { policy {  project = canon; } }, true),
         (quote! { policy { project = canon; } }, true),
         (
             quote! {
                 policy {
-                    R keyed [a] ordered canon;
                     join = merge;
                     semijoin = prefer_lazy;
                     project = canon;
@@ -30,10 +29,17 @@ fn projection_strategy_defaults_to_keep_and_round_trips() {
 #[test]
 fn projection_strategy_rejects_unknown_duplicate_and_unterminated_choices() {
     for tokens in [
-        quote! { policy { R; project = eager; } },
-        quote! { policy { R; project = canon; project = keep; } },
-        quote! { policy { R; project = canon } },
+        quote! { policy {  project = eager; } },
+        quote! { policy {  project = canon; project = keep; } },
+        quote! { policy {  project = canon } },
     ] {
         assert!(syn::parse2::<Policy>(tokens).is_err());
+    }
+}
+
+#[test]
+fn policy_rejects_removed_host_entries() {
+    for text in ["policy { R; }", "policy { R keyed [a] ordered canon; }"] {
+        assert!(syn::parse_str::<Policy>(text).is_err());
     }
 }

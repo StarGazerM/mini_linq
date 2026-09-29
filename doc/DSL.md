@@ -42,12 +42,13 @@ beside its pattern. Rust expressions are parsed without token rewriting.
 
 ```ebnf
 Program        ::= RustVisibility? "struct" Ident ";" RelationDecl* Query
-RelationDecl   ::= RustOuterAttribute* "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
+RelationDecl   ::= RustOuterAttribute* "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ["=" "(" RustExpr ")"] ";"
 ColumnDecl     ::= Ident ":" RustType
 Query          ::= Atom ":-" BodyItem ("," BodyItem)* ";"
 Atom           ::= Ident "(" [RustExpr ("," RustExpr)* [","]] ")"
 BodyItem       ::= Atom | "if" RustExpr
                  | "let" RustPat [":" RustType] "=" RustExpr
+                 | Ident "!" "{" TokenTree* "}"
                  | "!" Atom | Aggregate
 Aggregate      ::= "agg" RustPat "=" Aggregator
                    "(" [Ident ("," Ident)* [","]] ")" "in" Atom
@@ -60,7 +61,11 @@ local binder names; Rust expressions occur in the parenthesized aggregator and
 input atom arguments. Parsing an empty column list also does not override the
 input contract's positive-arity requirement. Parsing accepts Rust outer
 attributes on a declaration; the declaration contract admits at most one
-`#[index(...)]` list, whose contents structure selection parses as a `RustType`.
+`#[index(...)]` list, whose contents structure selection parses as a `RustType`,
+and at most one `#[host(...)]` list. Host key columns must be declared and
+duplicate-free (including raw-identifier aliases). An unexpanded extension
+clause is rejected by name: ``extension `neg!` was not expanded``. Its opaque
+token trees round-trip through the parser for an enclosing extension to consume.
 
 A declaration names Rust columns in positional order. A declaration matching
 the query head supplies result types and is not an input. Variable-only heads
@@ -80,20 +85,28 @@ used as is. It names no columns — which columns are indexed is a planner
 decision the query cannot see. Without advice the defaults are `HashIndex`
 for joins, `HashSet` for semijoins, `BTreeMap` under `merge`.
 
-Likewise the policy states facts about host values, never capabilities:
-`R keyed [a]` means the host is a map keyed on column `a` (so a demand on `a`
-is answered in place), `R keyed [a] ordered` that the key has an order;
-`L;` is a plain collection. Strategy (`join = merge`, `semijoin =
-prefer_lazy`, `project = canon`) is the policy's decision, and every operation
-it leads the program to perform is a trait bound rustc checks on the host value.
+Host facts belong to declarations: `#[host(keyed [a] ordered, canon)]` says
+that the host is keyed by `a`, ordered, and canonical. Without `host`, it is
+an ordinary unkeyed collection. Facts are preserved by every IR. Rustc checks
+every declared fact, even when the query only scans the value, using
+`require::canonical`, `require::keyed::<(KeyTypes,), _>` and `require::ordered`.
+The key tuple follows the written column order. Policy contains only strategy.
 
 ```ebnf
-Policy ::= "policy" "{" Host* ["join" "=" ("seek" | "merge") ";"]
+HostAttribute ::= "#[" "host" "(" ["keyed" "[" Ident,* "]" ["ordered"]] [","] ["canon"] ")" "]"
+Policy ::= "policy" "{" ["join" "=" ("seek" | "merge") ";"]
            ["semijoin" "=" ("eager" | "prefer_lazy") ";"]
            ["project" "=" ("keep" | "canon") ";"]
            ["intersect" "=" ("first" | "smallest") ";"] "}"
-Host   ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"] ";"
 ```
+
+A leaf hole `relation R(a: i32) = (expression);` supplies the same host layout
+and facts as a named host. The printer evaluates the expression once, in
+declaration order at the beginning of the Rust query block, and borrows it
+under a fresh binding. Rust checks ownership and the lifetime of returned
+rows. An owned temporary leaf can yield owned answers; borrowed answers must
+refer to data that outlives the query block. The optional result declaration
+supplies output types; host attributes and leaf values are rejected on result declarations.
 
 `project = keep` is the default. `project = canon` flags every projection
 whose kept columns do not contain an inferred input key, including atom
@@ -343,7 +356,8 @@ Entry      ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"]
              | Ident "=" RustType ("[" Ident,* "]")+
 ```
 
-A host entry states facts about the host value: the key it is stored under
+A host entry must exactly repeat its declaration facts, including key tuple
+order: the key it is stored under
 (`Map<(key columns,), Collection<(remaining declared columns,)>>`), whether
 that key is ordered, whether the value is a canonical set of its rows. A
 built entry names a Rust type — any type implementing `cq_storage::Build` —

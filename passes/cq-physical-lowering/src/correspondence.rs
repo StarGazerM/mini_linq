@@ -27,43 +27,10 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
         ));
     }
     super::check_demands(source, target)?;
-    let declarations: BTreeMap<_, _> = target.inputs().map(|d| (symbol_name(&d.name), d)).collect();
-    let mut hosts = BTreeMap::new();
-    for host in &policy.hosts {
-        let name = symbol_name(&host.name);
-        let fail = |message: &str| {
-            syn::Error::new_spanned(&host.name, format!("relation `{name}`: {message}"))
-        };
-        let Some(declaration) = declarations.get(&name) else {
-            return Err(fail("policy names an undeclared host relation"));
-        };
-        if hosts.insert(name.clone(), host).is_some() {
-            return Err(fail("duplicate policy host"));
-        }
-        if let Some(key) = &host.key {
-            let mut seen = BTreeSet::new();
-            for c in &key.columns {
-                if !declaration
-                    .columns
-                    .iter()
-                    .any(|d| symbol_name(&d.name) == symbol_name(c))
-                {
-                    return Err(fail(&format!("policy key names missing column `{c}`")));
-                }
-                if !seen.insert(symbol_name(c)) {
-                    return Err(fail(&format!("duplicate policy key column `{c}`")));
-                }
-            }
-        }
-    }
-    for name in declarations.keys() {
-        if !hosts.contains_key(name) {
-            return Err(syn::Error::new_spanned(
-                policy,
-                format!("relation `{name}`: missing policy host"),
-            ));
-        }
-    }
+    let hosts: BTreeMap<_, _> = target
+        .inputs()
+        .map(|d| Ok((symbol_name(&d.name), d.host_facts()?)))
+        .collect::<syn::Result<_>>()?;
     let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for definition in &target.program.definitions {
         let name = symbol_name(&definition.name);
@@ -106,7 +73,7 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
                     });
                 if !ordered {
                     return Err(fail(&format!(
-                        "range of `{input}` requires the policy's single ordered host key `{}`",
+                        "range of `{input}` requires the declaration's single ordered host key `{}`",
                         r.column
                     )));
                 }
@@ -126,7 +93,7 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
         };
         if matches!(definition.mode, physical::Mode::Alias(_)) {
             let Some(host) = facts.hosts.get(&name).and_then(|h| hosts.get(h)) else {
-                return Err(fail("alias must rename a host listed in policy"));
+                return Err(fail("alias must rename a declared host"));
             };
             // A host alias must answer its reads; a let can instead carry builds.
             let answers = |columns: &[String], ordered: bool| {
@@ -159,8 +126,8 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
                     .any(|(_, c)| !answers(std::slice::from_ref(c), true))
             {
                 return Err(fail(&format!(
-                    "alias reads are not answered by policy host `{}`",
-                    host.name
+                    "alias reads are not answered by declaration for `{}`",
+                    facts.hosts[&name]
                 )));
             }
         }
@@ -189,7 +156,7 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
     if !keys.contains_key(&returned) {
         return Err(syn::Error::new_spanned(
             &target.program.returned,
-            format!("return `{returned}`: not canonical by flag or policy key inference"),
+            format!("return `{returned}`: not canonical by flag or declaration key inference"),
         ));
     }
     Ok(())

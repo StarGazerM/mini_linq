@@ -71,7 +71,7 @@ checks the source is in the pass's domain, the target contract, the relation
 between them (unchanged base program, reduction erasure, CQ-NF kernel
 agreement, RA erasure of Physical, preserved Physical), and the obligations
 of every explicit choice (split granularity, reduction tree edges, demand
-derivation and names, policy-mandated operators and host facts, read
+derivation and names, policy-mandated operators and declaration facts, read
 admissibility and `#[index]` advice). Choices the options leave free — a
 prefix or elimination ranking, sibling reduction order, alias/let/pipe when
 several are admissible, structure entry order — are accepted in any
@@ -80,7 +80,8 @@ admissible form; the selector is never re-run to compare.
 The printer has no `check`: nothing independent can decide whether Rust means
 a Structures program. Its evidence is oracle answers from executing the
 expansion, and the `cq_storage::require` guards through which rustc checks
-that every built type implements the traits its reads use.
+that every built type implements the traits its reads use and every declared
+host fact has its corresponding trait at the declared key type.
 
 Fixtures pin the choices `check` leaves free.
 [test-support/relational/scenarios](../test-support/relational/scenarios) holds
@@ -116,10 +117,42 @@ is enabled by the course package's `hw4` feature; language crates stay featurele
 | `mini_linq::structures_to_rust!` | Structures → Rust | Import `structures_to_rust` |
 | `mini_linq::distinct_state!` | canon pipe or alias return | Import a `cq-state-providers` distinct provider |
 
-The policy is query-independent: host facts (`R keyed [a] ordered canon`)
-and strategy (`join = merge`, `semijoin = prefer_lazy`). Advice on a relation
-declaration (`#[index(Type)]`) names the Rust type built over that relation
-when the plan indexes it; it is erased from the query's meaning.
+The policy is query-independent strategy (`join`, `semijoin`, `project`,
+`intersect`). Host facts belong to relation declarations:
+`#[host(keyed [a] ordered, canon)] relation R(a: i32, b: i32);`.
+Advice `#[index(Type)]` names the Rust type built over a relation when needed.
+The caller wiring macros keep the same shape; policy blocks contain no hosts.
+
+## Openings
+
+The small checked core is closed: CQ → VO → RA → IX → Physical → Structures
+→ Rust. Extensions add no core operators. They produce Rust contexts
+`C[h1, …, hn]` whose holes are checked core programs (ST-Hole).
+
+- **Surface / core text:** a frontend emits CQ text. `name! { tokens }` is a
+  pass-through body clause for extension stacking; CQ checking rejects every
+  clause still unexpanded. The optional HW4 negation/aggregate syntax is unchanged.
+- **Output / answers:** `cq_storage::Answers::collect_from` materializes distinct
+  rows. `GroupedAnswers::collect_from` takes `(key, payload)` tuples and groups
+  distinct payloads for keyed reads. Both are canonical hosts and retain borrowed
+  columns without cloning referents.
+- **Input / hosts and leaf holes:** declarations carry `#[host(...)]` facts
+  through every stage. `relation R(...) = (expr);` evaluates `expr` once at the
+  top of the printed block under a fresh borrowed binding. A named host retains
+  its existing generated access expressions. Rustc checks all fact guards,
+  including unused keyed/ordered claims.
+- **Environment / expression holes:** guards, computed columns and heads embed
+  Rust expressions. Logical scope is checked; rustc resolves in-scope host
+  values, types, ownership and lifetimes.
+
+**Context holes** are ordinary macro invocations in an enclosing Rust context.
+The stage continuation replaces one quotation, leaving its surrounding context
+intact. Contexts may collect an answer and feed it to another quotation, or
+provide a Rust expression as a leaf. There is no residual-hole IR. The
+[end-to-end openings tests](../facade/mini-linq/tests/openings.rs) exercise
+borrowed answers, grouped probes, environment guards, fresh bindings and
+single evaluation. Extensions must discharge their own semantics before the
+core contract; the six extension crates are a later slice.
 
 ## Current execution domain
 

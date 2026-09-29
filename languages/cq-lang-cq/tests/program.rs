@@ -96,3 +96,81 @@ fn column_types_preserve_lifetimes_and_nested_generic_arguments() {
     );
     assert_eq!(reparsed, source);
 }
+
+#[test]
+fn host_facts_and_leaf_values_round_trip_and_reject_declaration_mutations() {
+    for facts in [
+        "",
+        ",",
+        "canon",
+        ", canon",
+        "keyed []",
+        "keyed [b,a,] ordered, canon",
+    ] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Q; #[index(Index)] #[host({facts})] relation R(a:i32,b:&str) = (make_rows(config)); answer(x,y) :- R(x,y);"
+        )).unwrap();
+        cq::contract::check(&source).unwrap();
+        assert_eq!(
+            syn::parse2::<cq::Program>(source.to_token_stream()).unwrap(),
+            source
+        );
+    }
+    for (attribute, diagnostic) in [
+        ("#[host(keyed [missing])]", "missing"),
+        ("#[host(keyed [a,r#a])]", "duplicate"),
+        ("#[host()] #[host(canon)]", "twice"),
+        ("#[host(ordered)]", "unexpected"),
+        ("#[host(canon, keyed [a])]", "unexpected"),
+    ] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Q; {attribute} relation R(a:i32); answer(x) :- R(x);"
+        ))
+        .unwrap();
+        let error = cq::contract::check(&source).unwrap_err().to_string();
+        assert!(error.contains(diagnostic), "{error}");
+    }
+    for text in [
+        "struct Q; relation R(a:i32) = rows; answer(x) :- R(x);",
+        "struct Q; relation R(a:i32) = (); answer(x) :- R(x);",
+    ] {
+        assert!(syn::parse_str::<cq::Program>(text).is_err());
+    }
+}
+
+#[test]
+fn extension_clauses_preserve_opaque_tokens_and_cannot_enter_the_core() {
+    let mut source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32);
+        answer(x) :- R(x), neg! { S(x) strange => [ nested!{a + b} ] };
+    };
+    let cq::BodyItem::Extension { name, tokens } = &source.query.body[1] else {
+        panic!("extension")
+    };
+    assert_eq!(name, "neg");
+    assert_eq!(
+        tokens.to_string(),
+        quote::quote!(S(x) strange => [nested!{a + b}]).to_string()
+    );
+    assert_eq!(
+        syn::parse2::<cq::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    assert_eq!(
+        cq::contract::check(&source).unwrap_err().to_string(),
+        "extension `neg!` was not expanded"
+    );
+    let stacked: cq::Program = syn::parse_str(
+        &source
+            .to_token_stream()
+            .to_string()
+            .replace("neg !", "agg !"),
+    )
+    .unwrap();
+    assert_eq!(
+        cq::contract::check(&stacked).unwrap_err().to_string(),
+        "extension `agg!` was not expanded"
+    );
+    source.query.body.pop();
+    cq::contract::check(&source).unwrap();
+}

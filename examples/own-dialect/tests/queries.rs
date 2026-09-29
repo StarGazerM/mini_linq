@@ -51,7 +51,7 @@ mod built {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { L; R; S; }
+                policy {    }
             }
         };
     }
@@ -84,7 +84,7 @@ mod generic {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { R; S; T; }
+                policy {    }
             }
         };
     }

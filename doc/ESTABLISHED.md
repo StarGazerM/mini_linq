@@ -74,7 +74,7 @@ are at the end.
     erasure and that semijoins form a full reducer of a join tree.
 17. **Policy is query-independent and caller-supplied, and no pass reselects**
     a choice an earlier pass recorded (selection preserves the Physical
-    program unchanged; lowering respects `join`, `project`, host facts).
+    program unchanged; lowering respects `join`, `project` and declaration facts).
 18. **Worst-case-optimal join is not a new IR:** `split = Fine`,
     `project = canon`, checks read through one trie, and
     `intersect = smallest`. On the fan instance the hash count of that
@@ -97,9 +97,23 @@ are at the end.
     obligations D1–D6 of [SEMANTICS.md](SEMANTICS.md), checked against
     oracles.
 
+22. **The core opens at four checked interfaces.** Surface text enters CQ after
+    extension clauses have been expanded; output answer sets become canonical
+    hosts; declarations carry host facts and once-evaluated leaf expressions;
+    Rust expressions use the enclosing environment. Extensions produce contexts
+    around core holes and add no operators. [Openings](COMPILER-STRUCTURE.md#openings)
+23. **Every declared host fact reaches rustc.** `canon`, `keyed` at its declared
+    tuple type, and `ordered` emit `cq_storage::require` guards even if unused
+    by the chosen plan. Local contracts reject unknown/duplicate key columns
+    and repeated `host` attributes; pass checks preserve complete declarations.
+24. **Answers can be inputs.** `Answers` and `GroupedAnswers` construct distinct
+    rows, owned or borrowed; the grouped form answers host probes in place.
+    [openings.rs](../facade/mini-linq/tests/openings.rs)
+
 ## Open
 
-- `union` (and any operator beyond the positive conjunctive fragment).
+- The six extension crates and their semantics (including `union` beyond the
+  positive conjunctive core).
 - Bag or annotated (K-relation) semantics.
 - A proven WCOJ complexity bound.
 - Host-declared tries (`keyed [a][b]` on a host's own nested maps).

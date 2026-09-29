@@ -275,6 +275,31 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 if !seen.insert((name.clone(), None)) {
                     return error(&entry.name, "host relation declared twice");
                 }
+                // Formal rule STR-Facts: Entries must repeat declaration facts exactly.
+                let declaration = program
+                    .physical
+                    .inputs()
+                    .find(|d| symbol_name(&d.name) == name)
+                    .expect("checked host");
+                let declared = declaration.host_facts()?;
+                let written = host.key.as_ref().map(|k| {
+                    (
+                        k.columns.iter().map(symbol_name).collect::<Vec<_>>(),
+                        k.ordered.is_some(),
+                    )
+                });
+                let expected = declared.key.as_ref().map(|k| {
+                    (
+                        k.columns.iter().map(symbol_name).collect::<Vec<_>>(),
+                        k.ordered.is_some(),
+                    )
+                });
+                if written != expected || host.canon.is_some() != declared.canon.is_some() {
+                    return error(
+                        &entry.name,
+                        "Structures host facts differ from declaration (key, order, or canon)",
+                    );
+                }
                 let fact = match &host.key {
                     Some(key) => {
                         for column in &key.columns {

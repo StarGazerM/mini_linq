@@ -68,32 +68,84 @@ pub fn index(i: usize) -> syn::Index {
 impl<'a> Context<'a> {
     /// Construct printer state from the complete program and its checked analysis.
     pub fn new(module: &'a structures::Program, analysis: &'a structures::Analysis) -> Self {
-        let mut hosts: BTreeMap<String, Host> = module
-            .physical
-            .inputs()
-            .map(|input| {
-                let name = symbol_name(&input.name);
-                let host = Host {
-                    value: input.name.clone(),
-                    layout: analysis.host_layouts[&name].clone(),
-                    key: None,
-                };
-                (name, host)
-            })
-            .collect();
+        let mut hosts = BTreeMap::new();
         let mut statements = Vec::new();
-        for entry in &module.structures.entries {
-            if let structures::Structure::Host(host) = &entry.structure {
-                let name = symbol_name(&entry.name);
-                if let Some(key) = &host.key {
-                    hosts.get_mut(&name).expect("checked host").key =
-                        Some(key.columns.iter().map(symbol_name).collect());
+        let mut bound = false;
+        // Reserve names even inside opaque user tokens before introducing leaf bindings.
+        fn names(tokens: TokenStream, used: &mut std::collections::BTreeSet<String>) {
+            for token in tokens {
+                match token {
+                    proc_macro2::TokenTree::Ident(i) => {
+                        used.insert(symbol_name(&i));
+                    }
+                    proc_macro2::TokenTree::Group(g) => names(g.stream(), used),
+                    _ => {}
                 }
-                if host.canon.is_some() {
-                    let value = &hosts[&name].value;
-                    statements.push(syn::parse_quote! {
-                        ::cq_storage::require::canonical(&#value);
-                    });
+            }
+        }
+        let mut used = std::collections::BTreeSet::new();
+        names(module.to_token_stream(), &mut used);
+        for input in module.physical.inputs() {
+            let facts = input.host_facts().expect("checked declaration");
+            let value = if let Some(leaf) = &input.value {
+                // Formal rule IF-Leaf: Bind each leaf once in its enclosing Rust context.
+                let mut n = hosts.len();
+                while used.contains(&format!("__cq_leaf_{n}")) {
+                    n += 1;
+                }
+                let value = format_ident!("__cq_leaf_{n}", span = proc_macro2::Span::mixed_site());
+                used.insert(value.to_string());
+                let expression = &leaf.expression;
+                statements.push(syn::parse_quote! { let #value = &(#expression); });
+                bound = true;
+                value
+            } else {
+                input.name.clone()
+            };
+            let name = symbol_name(&input.name);
+            hosts.insert(
+                name.clone(),
+                Host {
+                    value,
+                    layout: analysis.host_layouts[&name].clone(),
+                    key: facts
+                        .key
+                        .map(|k| k.columns.iter().map(symbol_name).collect()),
+                },
+            );
+        }
+        // Keep named-host guard order identical to the authored Structures order.
+        // Facts themselves come only from the checked declarations.
+        for entry in &module.structures.entries {
+            if !matches!(entry.structure, structures::Structure::Host(_)) {
+                continue;
+            }
+            let input = module
+                .physical
+                .inputs()
+                .find(|d| symbol_name(&d.name) == symbol_name(&entry.name))
+                .expect("checked host");
+            let facts = input.host_facts().expect("checked declaration");
+            let value = &hosts[&symbol_name(&input.name)].value;
+            // Formal rule IF-Facts: rustc checks every declared fact, even on unused access paths.
+            // Formal rule IF-Canon: Require the canonical marker.
+            if facts.canon.is_some() {
+                statements.push(syn::parse_quote! { ::cq_storage::require::canonical(&#value); });
+            }
+            // Formal rule IF-Keyed: Require keyed read at the declared key tuple type.
+            if let Some(key) = &facts.key {
+                let types = key.columns.iter().map(|c| {
+                    &input
+                        .columns
+                        .iter()
+                        .find(|d| symbol_name(&d.name) == symbol_name(c))
+                        .expect("checked column")
+                        .ty
+                });
+                statements.push(syn::parse_quote! { ::cq_storage::require::keyed::<(#(#types,)*), _>(&#value); });
+                // Formal rule IF-Ordered: Require ordered read even when only scanned.
+                if key.ordered.is_some() {
+                    statements.push(syn::parse_quote! { ::cq_storage::require::ordered(&#value); });
                 }
             }
         }
@@ -112,7 +164,7 @@ impl<'a> Context<'a> {
             idents: BTreeMap::new(),
             reprs: BTreeMap::new(),
             statements,
-            bound: false,
+            bound,
         }
     }
 

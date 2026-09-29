@@ -26,14 +26,28 @@ fn program(module: &structures::Program) -> String {
 /// `answer(c, a) :- L(a), R(b, a), S(b, c)`: the head reverses the sorted
 /// heading `[a, c]`, and `R` declares `b` before `a`.
 fn chain(physical: TokenStream, entries: TokenStream) -> structures::Program {
-    syn::parse_quote! {
+    let mut module: structures::Program = syn::parse_quote! {
             physical {
     relation L(a: i32);
     relation R(b: i32, a: i32);
     relation S(b: i32, c: i32);
      #physical }
             structures { #entries }
+        };
+    for entry in &module.structures.entries {
+        if let structures::Structure::Host(host) = &entry.structure {
+            let d = module
+                .physical
+                .program
+                .declarations
+                .iter_mut()
+                .find(|d| d.name == entry.name)
+                .unwrap();
+            let (key, canon) = (&host.key, &host.canon);
+            d.attrs.push(syn::parse_quote!(#[host(#key #canon)]));
         }
+    }
+    module
 }
 
 #[test]
@@ -123,7 +137,7 @@ fn host_maps_are_read_in_place_with_constructed_keys_in_declared_order() {
     let printed = program(&module);
     // Nothing is built, so the block is the lazy iterator itself.
     assert!(
-        printed.starts_with("{ :: core :: iter :: Iterator :: map ("),
+        printed.starts_with("{ :: cq_storage :: require :: keyed"),
         "{printed}"
     );
     assert!(!printed.contains("collect"), "{printed}");
@@ -147,7 +161,7 @@ fn keyed_hosts_scan_their_groups_and_semijoins_test_membership() {
     let module: structures::Program = syn::parse_quote! {
             physical {
     relation L(a: i32);
-    relation R(b: i32, a: i32);
+    #[host(keyed [b])] relation R(b: i32, a: i32);
      r = alias rename R {b -> b, a -> a}; l = let rename L {a -> a}; x = pipe canon semi[a] r, l; return x as answer(a, b); }
             structures { L; R keyed [b]; l = ::std::collections::HashSet<_> [a]; }
         };
@@ -187,7 +201,7 @@ fn merge_chain_co_iterates_native_cursors_and_sorts_a_pipe_side() {
             physical {
     relation L(b: i32);
     relation R(b: i32, a: i32);
-    relation S(b: i32, c: i32);
+    #[host(keyed [b] ordered)] relation S(b: i32, c: i32);
 
                 l = let rename L {b -> b}; r = let rename R {b -> b, a -> a}; s = alias rename S {b -> b, c -> c};
                 j0 = pipe merge[b] l, r; j1 = pipe merge[b] j0, s;
@@ -247,7 +261,7 @@ fn merge_chain_co_iterates_native_cursors_and_sorts_a_pipe_side() {
 fn range_enters_an_ordered_host_at_the_bounds_and_keeps_the_residual() {
     let module: structures::Program = syn::parse_quote! {
             physical {
-    relation R(a: i32, b: i32);
+    #[host(keyed [a] ordered canon)] relation R(a: i32, b: i32);
      r = alias rename R {a -> a, b -> b}; w = pipe range[a] r if (a >= 2 && a < 9 && b != 5); return w as answer(a, b); }
             structures { R keyed [a] ordered canon; }
         };
@@ -381,7 +395,7 @@ fn a_canonical_let_is_a_set_of_its_rows_and_scans_read_it() {
     let module: structures::Program = syn::parse_quote! {
             physical {
     relation R(a: i32);
-    relation S(a: i32);
+    #[host(keyed [a])] relation S(a: i32);
      r = alias rename R {a -> a}; s = alias rename S {a -> a}; x = let canon semi[a] r, s; return x as answer(a); }
             structures { R; S keyed [a]; }
         };
@@ -407,8 +421,8 @@ fn unserved_reads_are_errors_not_fallbacks() {
     // A host ordered by a key that is not the merge's order is rejected.
     let module: structures::Program = syn::parse_quote! {
             physical {
-    relation L(a: i32, b: i32);
-    relation R(b: i32, a: i32);
+    #[host(keyed [a, b] ordered)] relation L(a: i32, b: i32);
+    #[host(keyed [b, a] ordered)] #[host(keyed [a] ordered canon)] relation R(b: i32, a: i32);
      l = alias rename L {a -> a, b -> b}; r = alias rename R {b -> b, a -> a}; j = pipe canon merge[a, b] l, r; return j as answer(a, b); }
             structures { L keyed [a, b] ordered; R keyed [b, a] ordered; }
         };
@@ -417,7 +431,7 @@ fn unserved_reads_are_errors_not_fallbacks() {
     // A range whose condition has no literal bound on its column.
     let module: structures::Program = syn::parse_quote! {
             physical {
-    relation R(a: i32, b: i32);
+    #[host(keyed [b, a] ordered)] #[host(keyed [a] ordered canon)] relation R(a: i32, b: i32);
      r = alias rename R {a -> a, b -> b}; w = pipe range[a] r if (a < b); return w as answer(a, b); }
             structures { R keyed [a] ordered canon; }
         };
@@ -530,4 +544,56 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         String::from_utf8_lossy(&result.stderr)
     );
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn every_host_fact_emits_a_guard_even_when_only_scanned() {
+    for (facts, guards) in [
+        ("", (false, false, false)),
+        ("canon", (true, false, false)),
+        ("keyed [b,a]", (false, true, false)),
+        ("keyed [b,a] ordered, canon", (true, true, true)),
+    ] {
+        let host: structures::syntax::HostFacts = syn::parse_str(facts).unwrap();
+        let (key, canon) = (&host.key, &host.canon);
+        let module: structures::Program = syn::parse_quote! {
+            physical {
+                #[host(#host)] relation R(a: &str, b: u64);
+                r = alias canon rename R {a -> a,b -> b}; return r as answer(a,b);
+            }
+            structures { R #key #canon; }
+        };
+        let printed = program(&module);
+        for (guard, present) in [
+            ("canonical", guards.0),
+            ("keyed", guards.1),
+            ("ordered", guards.2),
+        ] {
+            assert_eq!(
+                printed.contains(&format!(":: cq_storage :: require :: {guard}")),
+                present,
+                "{printed}"
+            );
+        }
+        if guards.1 {
+            assert!(
+                printed.contains("keyed :: < (u64 , & str ,) , _ > (& R)"),
+                "{printed}"
+            );
+        }
+    }
+}
+
+#[test]
+fn named_hosts_preserve_the_existing_guard_order() {
+    let module: structures::Program = syn::parse_quote! {
+        physical {
+            #[host(canon)] relation R(a:i32);
+            #[host(canon)] relation S(a:i32);
+            r = alias rename R {a -> a}; return r as answer(a);
+        }
+        structures { r#S canon; R canon; }
+    };
+    let printed = program(&module);
+    assert!(printed.starts_with("{ :: cq_storage :: require :: canonical (& S) ; :: cq_storage :: require :: canonical (& R) ;"), "{printed}");
 }

@@ -80,3 +80,22 @@ curried structure serves them), and `intersect = smallest` (enumerate the
 smaller candidate set, test the other). `facade/mini-linq/tests/wcoj.rs`
 measures it on the fan instance: binary and first-only plans do Θ(n²) hash
 work, the smallest-first plan Θ(n).
+
+## Answer sets as hosts
+
+An answer set is a canonical host; declare it `#[host(canon)]` (and
+`keyed [...]` for the grouped form). `cq_storage::Answers::collect_from(iter)`
+retains distinct full rows. `GroupedAnswers::collect_from(iter)` accepts
+`(key_tuple, payload_tuple)` pairs, deduplicates complete pairs and implements
+keyed host reads. Key fields follow the declared key order; payload fields
+follow the remaining declaration order. Bind grouped hosts by reference, as
+with ordinary host maps, so dependent iterators borrow the enclosing value.
+
+Rows can own their fields or contain `&T` fields. For zero-copy composition,
+declare reference-valued columns as `&T`: a scan borrows those fields once more,
+and the head chooses the output ownership. Neither collector clones referents.
+The collections expose immutable iteration; construction establishes distinctness.
+Rustc checks the declaration facts and lifetimes, while trait laws remain the
+runtime implementation's obligation. A leaf expression is evaluated once in
+declaration order; returning references to an owned temporary leaf is subject
+to Rust's ordinary lifetime rules.

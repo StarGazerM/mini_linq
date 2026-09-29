@@ -1,6 +1,1 @@
-policy {
-    ABC;
-    BCD;
-    ACD;
-    ABD;
-}
+policy {}

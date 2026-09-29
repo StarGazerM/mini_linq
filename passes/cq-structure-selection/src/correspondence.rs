@@ -35,69 +35,8 @@ pub fn check(
             format!("result `{construct}`: Structures must preserve the source Physical program"),
         ));
     }
-    let mut configured = BTreeSet::new();
-    for host in &policy.hosts {
-        let name = symbol_name(&host.name);
-        let fail = |message: &str| {
-            syn::Error::new_spanned(&host.name, format!("relation `{name}`: {message}"))
-        };
-        let Some(actual) = info.host_keys.get(&name) else {
-            return Err(fail("extra policy host"));
-        };
-        if !configured.insert(name.clone()) {
-            return Err(fail("duplicate policy host"));
-        }
-        let expected = host.key.as_ref().map(|k| structures::KeyFact {
-            columns: k
-                .columns
-                .iter()
-                .map(symbol_name)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-            ordered: k.ordered.is_some(),
-        });
-        if let Some(k) = &host.key {
-            if k.columns.len() != expected.as_ref().unwrap().columns.len() {
-                return Err(fail("duplicate policy key column"));
-            }
-        }
-        // Host key tuple order is part of the representation fact. The
-        // language analysis sorts keys for read coverage, so also compare
-        // the written columns used by realization to construct host keys.
-        let written = target
-            .structures
-            .entries
-            .iter()
-            .find_map(|entry| match &entry.structure {
-                Structure::Host(h) if symbol_name(&entry.name) == name => Some(
-                    h.key
-                        .as_ref()
-                        .map(|k| k.columns.iter().map(symbol_name).collect::<Vec<_>>()),
-                ),
-                _ => None,
-            });
-        let requested = host
-            .key
-            .as_ref()
-            .map(|k| k.columns.iter().map(symbol_name).collect::<Vec<_>>());
-        if *actual != expected
-            || written != Some(requested)
-            || info.host_canon.contains(&name) != host.canon.is_some()
-        {
-            return Err(fail(
-                "Structures host facts differ from policy (key, order, or canon)",
-            ));
-        }
-    }
-    for name in info.host_keys.keys() {
-        if !configured.contains(name) {
-            return Err(syn::Error::new_spanned(
-                policy,
-                format!("relation `{name}`: missing policy host"),
-            ));
-        }
-    }
+    // The target contract independently compares each Structures host entry
+    // with its declaration, including written key order and canon/order facts.
     let facts = &info.physical;
     let definitions: BTreeMap<_, _> = source
         .program

@@ -8,18 +8,18 @@
 //!   `merge[C] l, r` under `policy { join = merge; }`; a join without shared
 //!   attributes is the Cartesian `probe[] l, r` under either rule, since
 //!   there is no key to co-iterate on; a semijoin is `semi[C] l, r`; a
-//!   select is `range[c]` when its input renames a host the policy keeps
+//!   select is `range[c]` when its input renames a host declared
 //!   `keyed [c] ordered` on that one column and the condition bounds `c` by
 //!   an integer literal inside the total comparison fragment, else `select`;
 //!   every other operator keeps its logical name;
-//! - the **mode**: a rename is an `alias` when the host's policy key answers
+//! - the **mode**: a rename is an `alias` when the host's declared key answers
 //!   every keyed, ranged or merged read of it (a rename that is only scanned
 //!   is always an alias), else a `let` for Structures to build over; any
 //!   other result is a `let` when it is read through a key, read more than
 //!   once, or merged on a key it is not itself sorted on by its own merge,
 //!   else a `pipe`;
 //! - the **canon** flag: on the returned result when uniqueness does not
-//!   follow from the policy's `canon` hosts through joins, semijoins,
+//!   follow from the declared `canon` hosts through joins, semijoins,
 //!   selects, extends and key-keeping projections — the same inference
 //!   Structures repeats with the built values it adds. Under
 //!   `policy { project = canon; }`, every projection whose kept columns do
@@ -44,13 +44,13 @@ use cq_lang_physical as physical;
 use cq_lang_physical::policy::Policy;
 use syn::Ident;
 
-/// A host's key as the policy states it: sorted host attribute names.
+/// A host's key as its declaration states it: sorted host attribute names.
 struct HostKey {
     columns: Vec<String>,
     ordered: bool,
 }
 
-/// The policy's facts about every declared host relation.
+/// The declarations' facts about every declared host relation.
 struct Hosts {
     keys: BTreeMap<String, Option<HostKey>>,
     canon: BTreeSet<String>,
@@ -88,7 +88,7 @@ pub fn compile(source: &ix::Program, policy: &Policy) -> syn::Result<physical::P
         .filter(|d| symbol_name(&d.name) != symbol_name(&source.ra.plan.output.head.relation))
         .cloned()
         .collect();
-    let hosts = hosts(policy, &inputs)?;
+    let hosts = hosts(&inputs)?;
     let returned = source.ra.plan.output.input.clone();
     let (operators, reads) = operators(source, &info, &operations, &hosts, policy)?;
     let modes = modes(&operations, &operators, &reads, &hosts);
@@ -299,65 +299,27 @@ fn canonical(
     unique.into_keys().collect()
 }
 
-/// The policy's hosts, checked against the declared input relations.
-fn hosts(policy: &Policy, inputs: &[cq::RelationDecl]) -> syn::Result<Hosts> {
-    let layouts: BTreeMap<String, Vec<String>> = inputs
-        .iter()
-        .map(|input| {
-            (
-                symbol_name(&input.name),
-                input.columns.iter().map(|c| symbol_name(&c.name)).collect(),
-            )
-        })
-        .collect();
+/// Read checked declaration facts, without query-specific policy entries.
+fn hosts(inputs: &[cq::RelationDecl]) -> syn::Result<Hosts> {
     let mut hosts = Hosts {
         keys: BTreeMap::new(),
         canon: BTreeSet::new(),
     };
-    for host in &policy.hosts {
-        let name = symbol_name(&host.name);
-        let Some(layout) = layouts.get(&name) else {
-            return Err(syn::Error::new_spanned(
-                &host.name,
-                "policy names an undeclared host relation",
-            ));
-        };
-        let key = match &host.key {
-            Some(key) => {
-                let mut columns = Vec::with_capacity(key.columns.len());
-                for column in &key.columns {
-                    if !layout.contains(&symbol_name(column)) {
-                        return Err(syn::Error::new_spanned(
-                            column,
-                            format!("`{name}` has no column `{column}`"),
-                        ));
-                    }
-                    columns.push(symbol_name(column));
-                }
-                columns.sort();
-                columns.dedup();
-                Some(HostKey {
-                    columns,
-                    ordered: key.ordered.is_some(),
-                })
+    for input in inputs {
+        let host = input.host_facts()?;
+        let name = symbol_name(&input.name);
+        let key = host.key.map(|key| {
+            let mut columns: Vec<_> = key.columns.iter().map(symbol_name).collect();
+            columns.sort();
+            HostKey {
+                columns,
+                ordered: key.ordered.is_some(),
             }
-            None => None,
-        };
-        if hosts.keys.insert(name.clone(), key).is_some() {
-            return Err(syn::Error::new_spanned(
-                &host.name,
-                "host relation configured twice",
-            ));
-        }
+        });
+        hosts.keys.insert(name.clone(), key);
         if host.canon.is_some() {
             hosts.canon.insert(name);
         }
-    }
-    if let Some(missing) = layouts.keys().find(|name| !hosts.keys.contains_key(*name)) {
-        return Err(syn::Error::new_spanned(
-            policy,
-            format!("policy must list host relation `{missing}`"),
-        ));
     }
     Ok(hosts)
 }

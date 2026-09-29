@@ -70,7 +70,7 @@ mod hosted {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { L; R keyed [a]; S keyed [b]; }
+                policy {    }
             }
         };
     }
@@ -93,8 +93,8 @@ mod hosted {
         ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Chain;
             relation L(a: Value);
-            relation R(a: Value, b: Value);
-            relation S(b: Value, c: Value);
+            #[host(keyed [a])] relation R(a: Value, b: Value);
+            #[host(keyed [b])] relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
         })
     }
@@ -117,7 +117,7 @@ mod built {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { L; R; S; }
+                policy {    }
             }
         };
     }
@@ -203,7 +203,7 @@ mod advised {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { L; R; S; }
+                policy {    }
             }
         };
     }
@@ -251,7 +251,7 @@ mod merged {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { L; R; S; join = merge; }
+                policy {    join = merge; }
             }
         };
     }
@@ -297,7 +297,7 @@ mod reduced {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { L; R; S; }
+                policy {    }
             }
         };
     }
@@ -341,7 +341,7 @@ mod windowed {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { R keyed [a] ordered; }
+                policy {  }
             }
         };
     }
@@ -361,7 +361,7 @@ mod windowed {
     ) -> std::collections::HashSet<(&i32, &i32)> {
         ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Windowed;
-            relation R(a: i32, b: i32);
+            #[host(keyed [a] ordered)] relation R(a: i32, b: i32);
             answer(a, b) :- R(a, b), if a >= 2 && a < 9 && b != 5;
         })
     }
@@ -393,7 +393,7 @@ mod computed {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { R; S; }
+                policy {   }
             }
         };
     }
@@ -438,7 +438,7 @@ mod generic_canon {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { R; S; T; project = canon; }
+                policy {    project = canon; }
             }
         };
     }
@@ -502,7 +502,7 @@ mod generic {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { R; S; T; }
+                policy {    }
             }
         };
     }
@@ -537,7 +537,7 @@ mod generic_smallest {
         ($($ix:tt)*) => {
             ::mini_linq::lower_physical! {
                 $($ix)*
-                policy { R; S; T; intersect = smallest; }
+                policy {    intersect = smallest; }
             }
         };
     }

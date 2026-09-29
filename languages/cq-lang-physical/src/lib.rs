@@ -230,6 +230,9 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 fn analyze(module: &Program) -> syn::Result<Analysis> {
     let program = &module.program;
     let declarations = cq_syntax::check_input_declarations(&program.declarations)?;
+    if let Some(output) = declarations.get(&symbol_name(&program.head.relation)) {
+        output.check_result()?;
+    }
     let logical: BTreeSet<String> = program
         .definitions
         .iter()

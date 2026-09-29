@@ -32,6 +32,16 @@ pub trait OrderedRead {
     fn ordered(&self) -> Self::Cursor<'_>;
 }
 
+impl<T: OrderedRead + ?Sized> OrderedRead for &T {
+    type Cursor<'a>
+        = T::Cursor<'a>
+    where
+        Self: 'a;
+    fn ordered(&self) -> Self::Cursor<'_> {
+        T::ordered(*self)
+    }
+}
+
 /// Ordered cursor over `BTreeMap<K, Vec<V>>`: every value under a key shares it.
 pub struct GroupedCursor<'a, K, V> {
     map: &'a BTreeMap<K, Vec<V>>,

@@ -8,14 +8,29 @@ fn module(
     physical: proc_macro2::TokenStream,
     entries: proc_macro2::TokenStream,
 ) -> structures::Program {
-    syn::parse_quote! {
+    let mut program: structures::Program = syn::parse_quote! {
             physical {
     relation L(a: i32);
     relation R(b: i32, a: i32);
     relation S(b: i32, c: i32);
      #physical }
             structures { #entries }
+        };
+    for entry in &program.structures.entries {
+        if let structures::Structure::Host(host) = &entry.structure {
+            let (key, canon) = (&host.key, &host.canon);
+            if let Some(d) = program
+                .physical
+                .program
+                .declarations
+                .iter_mut()
+                .find(|d| d.name == entry.name)
+            {
+                d.attrs.push(syn::parse_quote!(#[host(#key #canon)]));
+            }
         }
+    }
+    program
 }
 
 fn hash_chain() -> proc_macro2::TokenStream {

@@ -41,7 +41,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
                 ));
             }
             BodyItem::Filter(_) | BodyItem::Let(_) => {}
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) => {
+            BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
                     "normal form covers positive queries with guards and bindings",
@@ -125,7 +125,7 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
                 body.extend(after);
             }
             BodyItem::Filter(_) | BodyItem::Let(_) => body.push(item.clone()),
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) => {
+            BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
                     "normal form covers positive queries with guards and bindings",
@@ -264,7 +264,7 @@ impl Kernel {
                         renaming.text(binding.expression.to_token_stream()),
                     ));
                 }
-                BodyItem::Negation(_) | BodyItem::Aggregate(_) => {}
+                BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {}
             }
         }
         kernel.head = query

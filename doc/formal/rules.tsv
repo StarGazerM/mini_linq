@@ -98,4 +98,14 @@ Plan-Graph	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Graph
 ST-Entry	implementation	facade/mini-linq/src/lib.rs	/// Formal rule ST-Entry:	Check and dispatch unchanged CQ to the caller-resolved logical slot.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
 ST-Terminal	implementation	facade/mini-linq/src/lib.rs	/// Formal rule ST-Terminal:	Realize the policed Structures payload with no next continuation.
-ST-Hole	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy is an explicit obligation.
+ST-Hole	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Hole:	Stage continuation replaces a quotation in the caller Rust context; rustc checks closing bindings.
+IF-Surface	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Surface:	Reject every remaining extension clause by name.
+IF-Input	implementation	languages/cq-syntax/src/lib.rs	/// Formal rule IF-Input:	Check unique host attributes and known duplicate-free keys.
+IF-Output	implementation	runtime/cq-storage/src/answers.rs	/// Formal rule IF-Output:	Collect distinct rows into a canonical input host.
+IF-Environment	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Environment:	Check visible logical scope and leave Rust environment resolution to rustc.
+IF-Leaf	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Leaf:	Evaluate leaf expressions once under fresh bindings.
+STR-Facts	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-Facts:	Require exact declaration facts in Structures entries.
+IF-Facts	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Facts:	Emit a guard for each declared fact even if unused.
+IF-Canon	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Canon:	Require Canonical for each canon host.
+IF-Keyed	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Keyed:	Require IndexRead at the written declaration key type.
+IF-Ordered	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Ordered:	Require OrderedRead for every ordered host.

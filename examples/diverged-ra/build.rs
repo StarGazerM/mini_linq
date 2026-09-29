@@ -5,13 +5,10 @@ fn main() {
     let indexes: cq_lang_ix::Program = query.indexes().unwrap();
     let mut functions = Vec::new();
     for (name, policy) in [
-        (
-            syn::parse_quote!(run_probe),
-            syn::parse_quote!(policy { L; R; }),
-        ),
+        (syn::parse_quote!(run_probe), syn::parse_quote!(policy {})),
         (
             syn::parse_quote!(run_merge),
-            syn::parse_quote!(policy { L; R; join = merge; }),
+            syn::parse_quote!(policy {   join = merge; }),
         ),
     ] {
         let name: syn::Ident = name;

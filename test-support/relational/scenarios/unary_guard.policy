@@ -1,4 +1,1 @@
-policy {
-    R;
-    Approved;
-}
+policy {}

@@ -29,7 +29,10 @@ pub fn valuations(program: &cq::Program, database: &Database) -> Relation {
                 atom.variables().map(symbol_name).collect::<Vec<_>>(),
             )),
             cq::BodyItem::Filter(_) => None,
-            cq::BodyItem::Let(_) | cq::BodyItem::Negation(_) | cq::BodyItem::Aggregate(_) => {
+            cq::BodyItem::Let(_)
+            | cq::BodyItem::Negation(_)
+            | cq::BodyItem::Aggregate(_)
+            | cq::BodyItem::Extension { .. } => {
                 panic!("integer valuation oracle domain excludes let, negation, and aggregation")
             }
         })

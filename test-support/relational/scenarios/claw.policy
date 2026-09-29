@@ -1,5 +1,1 @@
-policy {
-    A;
-    B;
-    C;
-}
+policy {}

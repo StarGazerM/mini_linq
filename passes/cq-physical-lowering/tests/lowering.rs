@@ -73,25 +73,21 @@ fn demands_are_a_pass_obligation_and_policy_is_checked() {
     physical::contract::check(&target).unwrap();
     assert!(check(&missing, &target, &policy).is_err());
     assert!(compile(&missing, &policy).is_err());
-    for text in [
-        "policy { R; S; }",
-        "policy { R; S; T; R; }",
-        "policy { R keyed [missing]; S; T; }",
-    ] {
-        assert!(compile(&source, &syn::parse_str(text).unwrap()).is_err());
+    for fact in ["keyed [missing]", "keyed [a,a]"] {
+        assert!(compile(&with_facts(&source, &[("R", fact)]), &policy).is_err());
     }
-    let changed: Policy = syn::parse_str("policy { R; S; T; join = merge; }").unwrap();
+    let changed: Policy = syn::parse_str("policy {    join = merge; }").unwrap();
     assert!(check(&source, &target, &changed).is_err());
 }
 #[test]
-fn ordered_host_range_and_canon_follow_policy() {
+fn ordered_host_range_and_canon_follow_declarations() {
     let source: ix::Program = syn::parse_quote! { relational {
-        relation R(a:i32,b:i32);
+        #[host(keyed [a] ordered canon)] relation R(a:i32,b:i32);
         r = rename R {a -> x,b -> y};
         s = select r if (x >= 2 && x < 9 && y != 5);
         p = project s keep {x}; output p as answer(x);
     } indexes {} };
-    let policy: Policy = syn::parse_quote!(policy { R keyed [a] ordered canon; project = canon; });
+    let policy: Policy = syn::parse_quote!(policy {  project = canon; });
     let target = compile(&source, &policy).unwrap();
     assert_body(
         &target,
@@ -129,6 +125,23 @@ const CHAIN: &str = "relational {
     output r5 as answer(a, c);
 } indexes { i0 = @r1[0]; i1 = @r3[0]; }";
 
+fn with_facts(source: &ix::Program, facts: &[(&str, &str)]) -> ix::Program {
+    let mut source = source.clone();
+    for (name, text) in facts {
+        let d = source
+            .ra
+            .plan
+            .declarations
+            .iter_mut()
+            .find(|d| d.name == *name)
+            .unwrap();
+        d.attrs.retain(|a| !a.path().is_ident("host"));
+        let tokens: proc_macro2::TokenStream = text.parse().unwrap();
+        d.attrs.push(syn::parse_quote!(#[host(#tokens)]));
+    }
+    source
+}
+
 fn lower(source: &ix::Program, policy: &str) -> physical::Program {
     let policy = syn::parse_str(policy).unwrap();
     let target = compile(source, &policy).unwrap();
@@ -163,7 +176,7 @@ fn assert_definition(target: &physical::Program, name: &str, expected: &str) {
 #[test]
 fn merge_materializes_changed_keys_and_uses_ordered_hosts_in_place() {
     let chain = syn::parse_str(CHAIN).unwrap();
-    let target = lower(&chain, "policy { L; R; S; join = merge; }");
+    let target = lower(&chain, "policy {    join = merge; }");
     assert_body(
         &target,
         "
@@ -181,12 +194,17 @@ fn merge_materializes_changed_keys_and_uses_ordered_hosts_in_place() {
             .replace("S {b -> b", "S {a -> a"),
     )
     .unwrap();
-    for (left, mode) in [("L keyed [a] ordered", "alias"), ("L keyed [a]", "let")] {
+    for (left, mode) in [("keyed [a] ordered", "alias"), ("keyed [a]", "let")] {
         let target = lower(
-            &star,
-            &format!(
-                "policy {{ {left}; R keyed [a] ordered; S keyed [a] ordered; join = merge; }}"
+            &with_facts(
+                &star,
+                &[
+                    ("L", left),
+                    ("R", "keyed [a] ordered"),
+                    ("S", "keyed [a] ordered"),
+                ],
             ),
+            "policy { join = merge; }",
         );
         assert_body(
             &target,
@@ -209,8 +227,15 @@ fn merge_materializes_changed_keys_and_uses_ordered_hosts_in_place() {
 fn keyed_hosts_alias_and_canon_hosts_avoid_only_redundant_return_canon() {
     let chain = syn::parse_str(CHAIN).unwrap();
     let target = lower(
-        &chain,
-        "policy { L canon; R keyed [a] canon; S keyed [b] canon; }",
+        &with_facts(
+            &chain,
+            &[
+                ("L", "canon"),
+                ("R", "keyed [a] canon"),
+                ("S", "keyed [b] canon"),
+            ],
+        ),
+        "policy {}",
     );
     assert_body(
         &target,
@@ -229,8 +254,11 @@ fn keyed_hosts_alias_and_canon_hosts_avoid_only_redundant_return_canon() {
         r2 = natural_join r0 with r1;
         r3 = project r2 keep {a, b}; output r3 as answer(a, b);
     } indexes { i0 = @r1[0]; }};
-    for (host, canon) in [("R keyed [a] canon", ""), ("R keyed [a]", "canon")] {
-        let target = lower(&full, &format!("policy {{ L canon; {host}; }}"));
+    for (host, canon) in [("keyed [a] canon", ""), ("keyed [a]", "canon")] {
+        let target = lower(
+            &with_facts(&full, &[("L", "canon"), ("R", host)]),
+            "policy {}",
+        );
         assert_body(
             &target,
             &format!(
@@ -253,13 +281,13 @@ fn fine_triangle_canon_policy_pins_intermediate_projection_and_mode() {
         .find(|c| c.name == "fine_triangle")
         .unwrap();
     let source = syn::parse_str(&case.ix()).unwrap();
-    let keep = lower(&source, "policy { R; S; T; project = keep; }");
+    let keep = lower(&source, "policy {    project = keep; }");
     assert_eq!(lower(&source, case.policy), keep);
     assert_eq!(
         keep,
         syn::parse_str::<physical::Program>(case.physical).unwrap()
     );
-    let policy: Policy = syn::parse_quote!(policy { R; S; T; project = canon; });
+    let policy: Policy = syn::parse_quote!(policy {    project = canon; });
     let target = compile(&source, &policy).unwrap();
     // The entire program is pinned: no other operator or mode changes.
     let expected = case
@@ -272,7 +300,7 @@ fn fine_triangle_canon_policy_pins_intermediate_projection_and_mode() {
     reject(
         &source,
         &target,
-        &syn::parse_quote!(policy { R; S; T; project = keep; }),
+        &syn::parse_quote!(policy {    project = keep; }),
         &["r1", "canon"],
     );
     for change_mode in [false, true] {
@@ -304,12 +332,9 @@ fn keyed_projection_is_a_canonical_let_even_with_canonical_hosts() {
         p = project r keep {a}; j = natural_join l with p;
         output j as answer(a);
     } indexes { i0 = @p[0]; }};
-    for policy in [
-        "policy { L; R; project = canon; }",
-        "policy { L canon; R keyed [a] canon; project = canon; }",
-    ] {
+    for facts in [&[][..], &[("L", "canon"), ("R", "keyed [a] canon")][..]] {
         assert_body(
-            &lower(&source, policy),
+            &lower(&with_facts(&source, facts), "policy { project = canon; }"),
             "
             l = alias rename L {a -> a};
             r = alias rename R {a -> a, b -> b};
@@ -323,10 +348,10 @@ fn keyed_projection_is_a_canonical_let_even_with_canonical_hosts() {
 #[test]
 fn projection_canon_uses_the_inferred_key_after_extend() {
     for (host, columns, canon) in [
-        ("R canon", "a", ""),
-        ("R canon", "a, b", ""),
-        ("R canon", "b", "canon"),
-        ("R", "a, b", "canon"),
+        ("canon", "a", ""),
+        ("canon", "a, b", ""),
+        ("canon", "b", "canon"),
+        ("", "a, b", "canon"),
     ] {
         let source = syn::parse_str(&format!(
             "relational {{
@@ -338,13 +363,19 @@ fn projection_canon_uses_the_inferred_key_after_extend() {
         }} indexes {{}}"
         ))
         .unwrap();
-        let target = lower(&source, &format!("policy {{ {host}; project = canon; }}"));
+        let target = lower(
+            &with_facts(&source, &[("R", host)]),
+            "policy { project = canon; }",
+        );
         assert_definition(
             &target,
             "p",
             &format!("p = pipe {canon} project e keep {{{columns}}};"),
         );
-        let kept = lower(&source, &format!("policy {{ {host}; project = keep; }}"));
+        let kept = lower(
+            &with_facts(&source, &[("R", host)]),
+            "policy { project = keep; }",
+        );
         assert_definition(
             &kept,
             "p",
@@ -390,7 +421,7 @@ fn full_reduction_uses_membership_and_materializes_shared_results() {
         r4 = natural_join r3 with r2;
         r5 = project r4 keep {a}; output r5 as answer(a);
     } indexes { i0 = @r1[1]; i1 = @r2[0]; }};
-    let target = lower(&source, "policy { L keyed [b]; R; }");
+    let target = lower(&with_facts(&source, &[("L", "keyed [b]")]), "policy {}");
     assert_body(
         &target,
         "
@@ -410,7 +441,10 @@ fn full_reduction_uses_membership_and_materializes_shared_results() {
             ("r4".into(), vec!["b".into()])
         ]
     );
-    let target = lower(&source, "policy { L canon; R canon; }");
+    let target = lower(
+        &with_facts(&source, &[("L", "canon"), ("R", "canon")]),
+        "policy {}",
+    );
     assert_definition(&target, "r1", "r1 = let rename L {a -> a, b -> b};");
     assert_definition(&target, "r5", "r5 = pipe canon project r4 keep {a};");
 }
@@ -435,7 +469,10 @@ fn range_requires_a_bounded_ordered_host_key_and_preserves_non_host_selects() {
         }} indexes {{}}"
         ))
         .unwrap();
-        let target = lower(&source, &format!("policy {{ R keyed {key}; }}"));
+        let target = lower(
+            &with_facts(&source, &[("R", &format!("keyed {key}"))]),
+            "policy {}",
+        );
         assert_body(
             &target,
             &format!(
@@ -467,24 +504,34 @@ fn reduced_chain_satisfies_the_contract_under_mixed_policies() {
         r8 = natural_join r7 with r4; r9 = project r8 keep {a, c};
         output r9 as answer(a, c);
     } indexes { i0 = @r1[0]; i1 = @r2[1]; i2 = @r4[0]; i3 = @r5[0]; }};
-    for (policy, host_mode, join_mode, join) in [
-        ("policy { L; R; S; }", "let", "pipe", "probe"),
-        ("policy { L; R; S; join = merge; }", "let", "let", "merge"),
+    for (facts, policy, host_mode, join_mode, join) in [
+        (&[][..], "policy {}", "let", "pipe", "probe"),
+        (&[][..], "policy { join = merge; }", "let", "let", "merge"),
         (
-            "policy { L keyed [a] ordered canon; R keyed [a]; S keyed [b] ordered; }",
+            &[
+                ("L", "keyed [a] ordered canon"),
+                ("R", "keyed [a]"),
+                ("S", "keyed [b] ordered"),
+            ][..],
+            "policy {}",
             "alias",
             "pipe",
             "probe",
         ),
         (
-            "policy { L keyed [a] ordered canon; R keyed [b] ordered canon; S keyed [b] ordered canon; join = merge; semijoin = prefer_lazy; }",
+            &[
+                ("L", "keyed [a] ordered canon"),
+                ("R", "keyed [b] ordered canon"),
+                ("S", "keyed [b] ordered canon"),
+            ][..],
+            "policy { join = merge; semijoin = prefer_lazy; }",
             "alias",
             "let",
             "merge",
         ),
     ] {
         assert_body(
-            &lower(&source, policy),
+            &lower(&with_facts(&source, facts), policy),
             &format!(
                 "
             r0 = alias rename R {{a -> a, b -> b}};
@@ -507,7 +554,7 @@ fn reduced_chain_satisfies_the_contract_under_mixed_policies() {
 fn missing_demands_name_the_reader_and_arbitrary_demand_names_are_accepted() {
     let mut source: ix::Program = syn::parse_str(CHAIN).unwrap();
     source.indexes.pop();
-    let error = compile(&source, &syn::parse_quote!(policy { L; R; S; }))
+    let error = compile(&source, &syn::parse_quote!(policy {}))
         .unwrap_err()
         .to_string();
     for name in ["`r4`", "`@r3[b]`"] {
@@ -518,28 +565,17 @@ fn missing_demands_name_the_reader_and_arbitrary_demand_names_are_accepted() {
         l = rename L {a -> a}; r = rename R {a -> a};
         j = semijoin l with r; output j as answer(a);
     } indexes {} };
-    let error = compile(&source, &syn::parse_quote!(policy { L; R; }))
+    let error = compile(&source, &syn::parse_quote!(policy {}))
         .unwrap_err()
         .to_string();
     assert!(error.contains("`j`"), "{error}");
     source.indexes = syn::parse_quote!(arbitrary_name = @r[0];);
     assert_body(
-        &lower(&source, "policy { L; R; }"),
+        &lower(&source, "policy {   }"),
         "
         l = alias rename L {a -> a}; r = let rename R {a -> a};
         j = pipe canon semi[a] l, r; return j as answer(a);",
     );
-    let case = scenarios::SCENARIOS
-        .iter()
-        .find(|c| c.name == "triangle")
-        .unwrap();
-    let error = compile(
-        &syn::parse_str(&case.ix()).unwrap(),
-        &syn::parse_quote!(policy { R; S; T; Extra; }),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("undeclared"), "{error}");
 }
 
 fn reject(source: &ix::Program, target: &physical::Program, policy: &Policy, names: &[&str]) {
@@ -552,7 +588,7 @@ fn reject(source: &ix::Program, target: &physical::Program, policy: &Policy, nam
 #[test]
 fn independent_lowering_diagnoses_contracts_erasure_demands_and_hosts() {
     let source: ix::Program = syn::parse_str(CHAIN).unwrap();
-    let policy: Policy = syn::parse_quote!(policy { L; R; S; });
+    let policy: Policy = syn::parse_quote!(policy {});
     let target = compile(&source, &policy).unwrap();
     let mut bad_source = source.clone();
     bad_source.indexes[0].requirement.relation = syn::parse_quote!(absent);
@@ -567,21 +603,28 @@ fn independent_lowering_diagnoses_contracts_erasure_demands_and_hosts() {
     let mut missing = source.clone();
     missing.indexes.pop();
     reject(&missing, &target, &policy, &["r4", "demand"]);
-    for (text, names) in [
-        ("policy { L; R; }", &["S", "missing"][..]),
-        ("policy { L; R; S; Extra; }", &["Extra", "undeclared"]),
-        ("policy { L; R; S; R; }", &["R", "duplicate"]),
-        ("policy { L; R keyed [missing]; S; }", &["R", "missing"]),
-        ("policy { L; R keyed [a,a]; S; }", &["R", "duplicate"]),
+    for (fact, names) in [
+        ("keyed [missing]", &["R", "missing"][..]),
+        ("keyed [a,a]", &["R", "duplicate"]),
     ] {
-        reject(&source, &target, &syn::parse_str(text).unwrap(), names);
+        let changed = with_facts(&source, &[("R", fact)]);
+        reject(&changed, &target, &policy, names);
+        let mut changed_target = target.clone();
+        changed_target.program.declarations = changed.ra.plan.declarations.clone();
+        reject(&source, &changed_target, &policy, names);
     }
+    let mut duplicate = source.clone();
+    duplicate.ra.plan.declarations[0].attrs =
+        vec![syn::parse_quote!(#[host()]), syn::parse_quote!(#[host()])];
+    reject(&duplicate, &target, &policy, &["L", "twice"]);
+    let changed = with_facts(&source, &[("L", "canon")]);
+    reject(&changed, &target, &policy, &["erasure"]);
 }
 
 #[test]
 fn independent_lowering_checks_join_semijoin_alias_and_canonical_policy() {
     let source: ix::Program = syn::parse_str(CHAIN).unwrap();
-    let policy: Policy = syn::parse_quote!(policy { L; R; S; });
+    let policy: Policy = syn::parse_quote!(policy {});
     let target = compile(&source, &policy).unwrap();
     let mut changed = target.clone();
     changed.program.definitions[0].mode = syn::parse_quote!(let);
@@ -592,7 +635,7 @@ fn independent_lowering_checks_join_semijoin_alias_and_canonical_policy() {
     reject(
         &source,
         &materialized,
-        &syn::parse_quote!(policy { L; R; S; join = merge; }),
+        &syn::parse_quote!(policy {    join = merge; }),
         &["r2", "requires merge"],
     );
     let mut changed = target.clone();
@@ -613,7 +656,7 @@ fn independent_lowering_checks_join_semijoin_alias_and_canonical_policy() {
         l = rename L {a -> a}; r = rename R {a -> a};
         s = semijoin l with r; output s as answer(a);
     } indexes { i0 = @r[0]; } };
-    let p: Policy = syn::parse_quote!(policy { L; R; });
+    let p: Policy = syn::parse_quote!(policy {});
     let mut changed = compile(&semi, &p).unwrap();
     changed.program.definitions[2] = syn::parse_quote!(s = pipe canon probe[a] l,r;);
     physical::contract::check(&changed).unwrap();
@@ -623,21 +666,21 @@ fn independent_lowering_checks_join_semijoin_alias_and_canonical_policy() {
 #[test]
 fn range_obligations_are_independent_of_the_select_lowerer() {
     let source: ix::Program = syn::parse_quote! { relational {
-        relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
+        #[host(keyed [a] ordered)] relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
         s = select r if (x >= 2); output s as answer(x,y);
     } indexes {} };
-    let ordered: Policy = syn::parse_quote!(policy { R keyed [a] ordered; });
+    let ordered: Policy = syn::parse_quote!(policy {});
     let target = compile(&source, &ordered).unwrap();
     // Let is always admissible here, independently of alias selection.
     let mut materialized = target.clone();
     materialized.program.definitions[0].mode = syn::parse_quote!(let);
     check(&source, &materialized, &ordered).unwrap();
     assert_ne!(materialized, target);
-    for policy in [
-        syn::parse_quote!(policy { R keyed [a]; }),
-        syn::parse_quote!(policy { R keyed [b] ordered; }),
-    ] {
-        reject(&source, &materialized, &policy, &["s", "ordered host key"]);
+    for fact in ["keyed [a]", "keyed [b] ordered"] {
+        let changed = with_facts(&source, &[("R", fact)]);
+        let mut target = materialized.clone();
+        target.program.declarations = changed.ra.plan.declarations.clone();
+        reject(&changed, &target, &ordered, &["s", "ordered host key"]);
     }
     for condition in ["x != 2", "x < y", "x > 2147483647", "x < -2147483648"] {
         let mut s = source.clone();
@@ -654,7 +697,7 @@ fn range_obligations_are_independent_of_the_select_lowerer() {
     }
     // The policy permits select even when range is available.
     let alternative: physical::Program = syn::parse_quote! { physical {
-        relation R(a:i32,b:i32); r = let rename R {a -> x,b -> y};
+        #[host(keyed [a] ordered)] relation R(a:i32,b:i32); r = let rename R {a -> x,b -> y};
         s = pipe canon select r if (x >= 2); return s as answer(x,y);
     }};
     check(&source, &alternative, &ordered).unwrap();
@@ -664,11 +707,11 @@ fn range_obligations_are_independent_of_the_select_lowerer() {
 #[test]
 fn hand_written_alias_to_let_alternative_is_accepted() {
     let source: ix::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R {a -> a}; output r as answer(a);
+        #[host(canon)] relation R(a:i32); r = rename R {a -> a}; output r as answer(a);
     } indexes {} };
-    let policy: Policy = syn::parse_quote!(policy { R canon; });
+    let policy: Policy = syn::parse_quote!(policy {});
     let alternative: physical::Program = syn::parse_quote! { physical {
-        relation R(a:i32); r = let rename R {a -> a}; return r as answer(a);
+        #[host(canon)] relation R(a:i32); r = let rename R {a -> a}; return r as answer(a);
     }};
     check(&source, &alternative, &policy).unwrap();
     assert_ne!(compile(&source, &policy).unwrap(), alternative);
@@ -688,8 +731,8 @@ fn cartesian_merge_is_rejected_under_both_policies() {
     }};
     physical::contract::check(&target).unwrap();
     for policy in [
-        syn::parse_quote!(policy { R; S; }),
-        syn::parse_quote!(policy { R; S; join = merge; }),
+        syn::parse_quote!(policy {}),
+        syn::parse_quote!(policy {   join = merge; }),
     ] {
         reject(&source, &target, &policy, &["j", "Cartesian", "probe"]);
     }

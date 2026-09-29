@@ -15,11 +15,10 @@ checks their demands in IX; it cannot invent a missing demand or substitute
 a different RA version.
 
 \paragraph{Open physical configuration.}
-The post-IX passes take explicit configuration $\chi$ from the caller: a
-query-independent policy stating host facts (the key a host value is stored
-under, whether that key is ordered, whether the value is canonical) and
-strategy (merge or probe joins, semijoin preference), plus \texttt{\#[index(Type)]}
-advice naming the Rust type built over a relation when the plan indexes it.
+The post-IX passes take query-independent strategy $\chi$ from the caller
+(merge or probe joins, semijoin preference, projection and intersection choices).
+Declarations carry host facts (key columns, order and canonical status) and
+\texttt{\#[index(Type)]} advice naming the Rust type built over a relation.
 Neither pass reselects a choice recorded by the previous one. Whether a value
 implements the operation trait each read needs is Rust's check at a guard the
 printer emits beside the value; those trait laws are stated in

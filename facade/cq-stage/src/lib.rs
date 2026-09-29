@@ -20,6 +20,7 @@ use syn::parse::Parse;
 /// );
 /// assert_eq!(output.to_string(), "1 + 2");
 /// ```
+/// Formal rule ST-Hole: Expand one checked quotation inside its caller-supplied Rust context.
 /// Formal rule ST-Next: Parse and transform a payload, then emit the selected next macro invocation.
 pub fn stage<S: Parse, T: ToTokens>(
     input: TokenStream,

@@ -6,6 +6,10 @@
 //! [`Build`] plus the access traits a plan uses is a first-class structure,
 //! and the compiler names it without inspecting it.
 //!
+//! An answer set is a canonical host; declare it `#[host(canon)]` (and
+//! `keyed [...]` for [`GroupedAnswers`]). [`Answers::collect_from`] accepts
+//! any answer iterator, including tuples of references for zero-copy columns.
+//!
 //! # Abstraction functions
 //!
 //! Every type here is a representation of a relation and is admissible only
@@ -29,6 +33,7 @@
 //! [`require`] holds one-line guards the compiler emits beside each
 //! structure so a missing trait fails there, naming the structure.
 
+mod answers;
 mod candidates;
 mod hash_index;
 mod host;
@@ -36,6 +41,7 @@ mod membership;
 mod ordered;
 mod trie;
 
+pub use answers::{Answers, GroupedAnswers};
 pub use candidates::{Candidates, Keys};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
 pub use membership::{Canonical, ExactMembership};
@@ -46,6 +52,7 @@ pub use trie::Trie;
 
 pub mod require {
     pub fn candidates<T: super::Candidates>(_: T) {}
+    pub fn keyed<K, T: super::IndexRead<Key = K>>(_: T) {}
     pub fn seek<T: super::IndexRead>(_: T) {}
     pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
     pub fn ordered<T: super::OrderedRead>(_: T) {}

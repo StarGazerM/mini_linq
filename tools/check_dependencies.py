@@ -241,12 +241,12 @@ def isolate(packages, only=()):
             print(f"PASS: {name} {detail}", flush=True)
 
 
-CQ = 'struct Q; relation R(a:i32); answer(x) :- R(x);'
-RA = 'relational { relation R(a:i32); r = rename R {a -> x}; output r as answer(x); }'
+CQ = 'struct Q; #[host(canon)] relation R(a:i32); answer(x) :- R(x);'
+RA = 'relational { #[host(canon)] relation R(a:i32); r = rename R {a -> x}; output r as answer(x); }'
 IX = RA + ' indexes {}'
-POLICED_IX = IX + ' policy { R canon; }'
-PHYSICAL = 'physical { relation R(a:i32); r = alias rename R {a -> x}; return r as answer(x); }'
-POLICED_PHYSICAL = PHYSICAL + ' policy { R canon; }'
+POLICED_IX = IX + ' policy {}'
+PHYSICAL = 'physical { #[host(canon)] relation R(a:i32); r = alias rename R {a -> x}; return r as answer(x); }'
+POLICED_PHYSICAL = PHYSICAL + ' policy {}'
 STRUCTURES = PHYSICAL + ' structures { R canon; }'
 
 
@@ -286,7 +286,7 @@ fn main() {{ {checks} }}
     return STATE_BINDINGS + f'''
 fn main() {{
     let R: &::std::collections::BTreeSet<(i32,)> = &[(1,), (2,)].into_iter().collect();
-    let rows: Vec<_> = raw::{implementation}! {{ {STRUCTURES} policy {{ R canon; }} }}.collect();
+    let rows: Vec<_> = raw::{implementation}! {{ {STRUCTURES} policy {{}} }}.collect();
     assert_eq!(rows.len(), 2);
 }}
 '''

@@ -7,6 +7,9 @@ pub mod kw {
     syn::custom_keyword!(agg);
     syn::custom_keyword!(indexes);
     syn::custom_keyword!(relation);
+    syn::custom_keyword!(keyed);
+    syn::custom_keyword!(ordered);
+    syn::custom_keyword!(canon);
 }
 
 /// A list that retains the separators written between its items.
@@ -55,12 +58,14 @@ pub struct ColumnDecl {
 /// names, with the operations it claims. It is not part of the query's
 /// meaning and names no columns — which columns get indexed is a planner
 /// decision the query cannot see. The declaration contract permits at most
-/// one `#[index(…)]` list attribute; its argument belongs to the pass that reads it.
+/// one `#[index(…)]` list and one `#[host(…)]` list. Host facts are checked
+/// against the declared columns; index advice belongs to the pass that reads it.
 /// The parser accepts arbitrary outer attributes; the contract restricts them.
 ///
 /// ```text
 /// RelationDecl ::= RustOuterAttribute*
-///                  "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
+///                  "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")"
+///                  ["=" "(" Expr ")"] ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct RelationDecl {
@@ -74,6 +79,8 @@ pub struct RelationDecl {
     #[syn(in = columns_paren)]
     #[parse(CommaList::parse_terminated)]
     pub columns: CommaList<ColumnDecl>,
+    #[syn(optional, peek = Token![=])]
+    pub value: Option<LeafValue>,
     pub semi_token: Token![;],
 }
 
@@ -87,25 +94,112 @@ impl RelationDecl {
     /// CQ contract's concern; the argument is read by the pass that consults
     /// it.
     pub fn index_advice(&self) -> syn::Result<Option<&syn::Attribute>> {
+        self.host_facts()?;
         let mut advice = None;
         for attr in &self.attrs {
+            if attr.path().is_ident("host") {
+                continue;
+            }
             if !attr.path().is_ident("index") {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "relation declarations accept only `#[index(…)]`",
+                    "relation declarations accept only `#[index(…)]` and `#[host(…)]`",
                 ));
             }
             attr.meta.require_list()?;
-            if advice.is_some() {
+            if advice.replace(attr).is_some() {
                 return Err(syn::Error::new_spanned(
                     attr,
                     format!("relation `{}` advises an index twice", self.name),
                 ));
             }
-            advice = Some(attr);
         }
         Ok(advice)
     }
+
+    /// A result schema describes types, not a runtime input value.
+    pub fn check_result(&self) -> syn::Result<()> {
+        if self.value.is_some() || self.attrs.iter().any(|a| a.path().is_ident("host")) {
+            return Err(syn::Error::new_spanned(
+                self,
+                "result declarations cannot bind a host value or declare host facts",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Formal rule IF-Input: Check declaration facts before any planning decision.
+    pub fn host_facts(&self) -> syn::Result<HostFacts> {
+        let mut facts = None;
+        for attr in &self.attrs {
+            if !attr.path().is_ident("host") {
+                continue;
+            }
+            if facts.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    format!("relation `{}` declares host facts twice", self.name),
+                ));
+            }
+            let host: HostFacts = attr.parse_args()?;
+            if let Some(key) = &host.key {
+                let mut seen = BTreeSet::new();
+                for c in &key.columns {
+                    if !self
+                        .columns
+                        .iter()
+                        .any(|d| symbol_name(&d.name) == symbol_name(c))
+                    {
+                        return Err(syn::Error::new_spanned(
+                            c,
+                            format!("relation `{}` has no column `{c}`", self.name),
+                        ));
+                    }
+                    if !seen.insert(symbol_name(c)) {
+                        return Err(syn::Error::new_spanned(
+                            c,
+                            format!(
+                                "relation `{}` has duplicate host key column `{c}`",
+                                self.name
+                            ),
+                        ));
+                    }
+                }
+            }
+            facts = Some(host);
+        }
+        Ok(facts.unwrap_or_default())
+    }
+}
+
+/// A leaf expression is evaluated once in the enclosing Rust environment.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct LeafValue {
+    pub eq_token: Token![=],
+    #[syn(parenthesized)]
+    pub paren_token: token::Paren,
+    #[syn(in = paren_token)]
+    pub expression: syn::Expr,
+}
+
+/// Declaration facts, with written key order preserved for host tuple layout.
+#[derive(Clone, Debug, Default, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct HostFacts {
+    #[syn(optional, peek = kw::keyed)]
+    pub key: Option<HostKey>,
+    pub comma: Option<Token![,]>,
+    pub canon: Option<kw::canon>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct HostKey {
+    pub keyed_token: kw::keyed,
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub columns: CommaList<Ident>,
+    pub ordered: Option<kw::ordered>,
 }
 
 use std::collections::{BTreeMap, BTreeSet};
