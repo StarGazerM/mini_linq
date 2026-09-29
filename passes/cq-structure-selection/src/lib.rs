@@ -101,12 +101,15 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
     Some(levels)
 }
 
-pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<structures::Section> {
-    let analysis = physical::contract::check_module(source)?;
-    let ra_module = &source.index_requirements.relational_plan;
-    let layouts: BTreeMap<String, Vec<String>> = ra_module
-        .program
+pub fn compile(
+    source: &physical::Section,
+    env: &impl physical::Env,
+    policy: &Policy,
+) -> syn::Result<structures::Section> {
+    let analysis = physical::contract::check(source, env)?;
+    let layouts: BTreeMap<String, Vec<String>> = env
         .inputs()
+        .iter()
         .map(|input| {
             (
                 symbol_name(&input.name),
@@ -179,7 +182,7 @@ pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<struct
 
     // Advice declared on the host relation applies to its renames.
     let mut advice: BTreeMap<String, syn::Type> = BTreeMap::new();
-    for input in ra_module.program.inputs() {
+    for input in env.inputs() {
         if let Some(attr) = input.index_advice()? {
             advice.insert(symbol_name(&input.name), attr.parse_args()?);
         }
@@ -356,14 +359,36 @@ pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<struct
         }
     }
     let target: structures::Section = syn::parse2(quote! { structures { #hosts #entries } })?;
-    structures::contract::check(&target, &structures::reference::Env::new(source)?)?;
+    structures::contract::check(&target, &Env::new(source, env)?)?;
     Ok(target)
 }
 
 /// Physical → Structures correspondence: Physical preserved, the contract
 /// holds, and the module is exactly the selection under `policy`.
-pub fn check(source: &physical::Module, target: &structures::Section, policy: &Policy) -> bool {
-    structures::reference::Env::new(source)
-        .is_ok_and(|env| structures::contract::well_formed(target, &env))
-        && compile(source, policy).is_ok_and(|expected| expected == *target)
+pub fn check(
+    source: &physical::Section,
+    env: &impl physical::Env,
+    target: &structures::Section,
+    policy: &Policy,
+) -> bool {
+    Env::new(source, env).is_ok_and(|env| structures::contract::well_formed(target, &env))
+        && compile(source, env, policy).is_ok_and(|expected| expected == *target)
+}
+
+mod env;
+pub use env::Env;
+#[cfg(feature = "reference")]
+pub mod reference {
+    use super::*;
+    pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<structures::Section> {
+        super::compile(
+            source,
+            &physical::reference::Env::new(&source.index_requirements)?,
+            policy,
+        )
+    }
+    pub fn check(source: &physical::Module, target: &structures::Section, policy: &Policy) -> bool {
+        physical::reference::Env::new(&source.index_requirements)
+            .is_ok_and(|env| super::check(source, &env, target, policy))
+    }
 }

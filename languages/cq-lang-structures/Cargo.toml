@@ -15,7 +15,7 @@ syn_derive.workspace = true
 
 [features]
 default = ["reference-prefix"]
-reference-prefix = ["dep:cq-lang-physical"]
+reference-prefix = ["dep:cq-lang-physical", "cq-lang-physical/reference-prefix"]
 
 [[test]]
 name = "structures_language"

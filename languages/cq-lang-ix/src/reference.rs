@@ -74,3 +74,58 @@ impl syn::parse::Parse for Module {
         Ok(Self::new(staged.prefix, staged.section))
     }
 }
+
+impl super::Env for Env<'_> {
+    fn inputs(&self) -> Vec<cq_syntax::RelationDecl> {
+        self.source.program.inputs().cloned().collect()
+    }
+    fn operations(&self) -> Vec<(syn::Ident, Operation)> {
+        self.source
+            .plan
+            .definitions
+            .iter()
+            .map(|d| (d.result.clone(), operation(&d.operator)))
+            .collect()
+    }
+    fn returned(&self) -> syn::Ident {
+        self.source.plan.output.input.clone()
+    }
+    fn head(&self) -> &cq_syntax::Atom {
+        &self.source.plan.output.head
+    }
+}
+/// Translate reference syntax once at the IX boundary.
+pub fn operation(op: &relational_plan::Operator) -> Operation {
+    use relational_plan::Operator as R;
+    match op {
+        R::Unit(_) => Operation::Unit,
+        R::Rename(r) => Operation::Rename {
+            host: r.relation.clone(),
+            mapping: r
+                .mapping
+                .iter()
+                .map(|m| (m.target.clone(), m.source.clone()))
+                .collect(),
+        },
+        R::NaturalJoin(j) => Operation::Join {
+            left: j.left.clone(),
+            right: j.right.clone(),
+        },
+        R::Semijoin(j) => Operation::Semijoin {
+            left: j.left.clone(),
+            right: j.right.clone(),
+        },
+        R::Select(s) => Operation::Select {
+            input: s.input.clone(),
+            condition: s.condition.clone(),
+        },
+        R::Extend(e) => Operation::Extend {
+            input: e.input.clone(),
+            columns: e.columns.iter().cloned().collect(),
+            value: e.value.clone(),
+        },
+        R::Project(p) => Operation::Project {
+            input: p.input.clone(),
+        },
+    }
+}

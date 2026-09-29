@@ -608,3 +608,16 @@ pub use cq_syntax as syntax;
 pub mod reference;
 #[cfg(feature = "reference-prefix")]
 pub use reference::Module;
+
+/// Source facts read by Physical consumers, including the Rust expressions
+/// carried through to execution. No producer language types occur here.
+pub trait Env: IxEnv {
+    /// Declared host layouts, types and structure-selection advice.
+    fn inputs(&self) -> Vec<cq_syntax::RelationDecl>;
+    fn head(&self) -> &cq_syntax::Atom;
+    /// Logical column to Rust binder, retaining the caller's identifier hygiene.
+    fn bindings(&self, result: &str) -> BTreeMap<String, Ident>;
+    /// Columns owned because they were introduced by an Extend.
+    fn computed(&self, result: &str) -> BTreeSet<String>;
+    fn extension(&self, result: &str) -> Option<(Vec<cq_syntax::ColumnDecl>, syn::Expr)>;
+}

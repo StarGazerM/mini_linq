@@ -6,21 +6,26 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["reference"]
+reference = ["cq-lang-vo/reference-prefix"]
 
 [dependencies]
-cq-lang-vo.workspace = true
+cq-lang-vo = { workspace = true, default-features = false }
 proc-macro2.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
 cq-syntax.workspace = true
-cq-lang-cq.workspace = true
+cq-lang-cq = { workspace = true, default-features = false }
 
-cq-lang-ra.workspace = true
-cq-elaborate = { workspace = true  }
+cq-lang-ra = { workspace = true, default-features = false, features = ["reference-prefix"] }
+cq-elaborate = { workspace = true, features = ["reference"] }
 quote.workspace = true
 
 [package.metadata.cq]
 source = "cq-lang-vo"
 target = "cq-lang-vo"
+
+[[test]]
+name = "reduce"
+required-features = ["reference"]

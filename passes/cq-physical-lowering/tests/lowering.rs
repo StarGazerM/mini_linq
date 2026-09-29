@@ -620,7 +620,7 @@ mod cq_order {
     ) -> syn::Result<cq_lang_vo::Module> {
         Ok(cq_lang_vo::Module::new(
             source.program.clone(),
-            ::cq_order::compile(source, options)?,
+            ::cq_order::reference::compile(source, options)?,
         ))
     }
     pub fn check(
@@ -628,7 +628,8 @@ mod cq_order {
         target: &cq_lang_vo::Module,
         options: &::cq_order::Options,
     ) -> bool {
-        target.program == source.program && ::cq_order::check(source, &target.section, options)
+        target.program == source.program
+            && ::cq_order::reference::check(source, &target.section, options)
     }
 }
 
@@ -641,7 +642,7 @@ mod cq_reduce {
     ) -> syn::Result<cq_lang_vo::Module> {
         Ok(cq_lang_vo::Module::new(
             source.program.clone(),
-            ::cq_reduce::compile(source, options)?,
+            ::cq_reduce::reference::compile(source, options)?,
         ))
     }
     pub fn check(
@@ -649,7 +650,8 @@ mod cq_reduce {
         target: &cq_lang_vo::Module,
         options: &::cq_reduce::Options,
     ) -> bool {
-        target.program == source.program && ::cq_reduce::check(source, &target.section, options)
+        target.program == source.program
+            && ::cq_reduce::reference::check(source, &target.section, options)
     }
 }
 
@@ -659,11 +661,12 @@ mod cq_elaborate {
     pub fn compile(source: &cq_lang_vo::Module) -> syn::Result<cq_lang_ra::Module> {
         Ok(cq_lang_ra::Module::new(
             source.program.clone(),
-            ::cq_elaborate::compile(source)?,
+            ::cq_elaborate::reference::compile(source)?,
         ))
     }
     pub fn check(source: &cq_lang_vo::Module, target: &cq_lang_ra::Module) -> bool {
-        target.program == source.program && ::cq_elaborate::check(source, &target.section)
+        target.program == source.program
+            && ::cq_elaborate::reference::check(source, &target.section)
     }
 }
 
@@ -673,11 +676,12 @@ mod cq_index_policy {
     pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
         Ok(cq_lang_ix::Module::new(
             source.clone(),
-            ::cq_index_policy::compile(source)?,
+            ::cq_index_policy::reference::compile(source)?,
         ))
     }
     pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
-        target.relational_plan == *source && ::cq_index_policy::check(source, &target.section)
+        target.relational_plan == *source
+            && ::cq_index_policy::reference::check(source, &target.section)
     }
 }
 
@@ -690,7 +694,7 @@ mod cq_physical_lowering {
     ) -> syn::Result<cq_lang_physical::Module> {
         Ok(cq_lang_physical::Module::new(
             source.clone(),
-            ::cq_physical_lowering::compile(source, policy)?,
+            ::cq_physical_lowering::reference::compile(source, policy)?,
         ))
     }
     pub fn check(
@@ -699,6 +703,6 @@ mod cq_physical_lowering {
         policy: &cq_lang_physical::policy::Policy,
     ) -> bool {
         target.index_requirements == *source
-            && ::cq_physical_lowering::check(source, &target.section, policy)
+            && ::cq_physical_lowering::reference::check(source, &target.section, policy)
     }
 }

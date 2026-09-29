@@ -3,7 +3,10 @@
 //! read in place, merges over native or sorted cursors, bounded scans,
 //! extends, and the distinct wrapper — with answers in head order.
 use cq_lang_structures as structures;
-use cq_physical_realization::{Endpoints, check, compile};
+use cq_physical_realization::{
+    Endpoints,
+    reference::{check, compile},
+};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 

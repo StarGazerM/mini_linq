@@ -9,8 +9,6 @@ impl Printer<'_> {
         &mut self,
         first: &physical::Definition,
         second: &physical::Definition,
-        first_ra: &ra::Definition,
-        second_ra: &ra::Definition,
     ) -> syn::Result<bool> {
         let Some((a, b, variable)) =
             physical::binary_intersection(first, second, self.physical_analysis)
@@ -33,8 +31,8 @@ impl Printer<'_> {
         };
         let first_name = symbol_name(&first.name);
         let name = symbol_name(&second.name);
-        self.register(&first_name, &first_ra.operator);
-        self.register(&name, &second_ra.operator);
+        self.register(&first_name);
+        self.register(&name);
         let outer = self.scan(&a.left)?;
         let left = symbol_name(&a.left);
         let pattern = self.pattern(&left);
@@ -89,14 +87,14 @@ impl Printer<'_> {
             })
         }};
         let repr = match second.mode {
-            physical::Mode::Pipe(_) => {
-                if second.canon.is_some() {
+            structures::ModeKind::Pipe => {
+                if second.canon {
                     rows = self.distinct(&second.name, rows);
                 }
                 Repr::Pipe(Some(rows))
             }
-            physical::Mode::Let(_) => self.materialize(&name, second.canon.is_some(), rows),
-            physical::Mode::Alias(_) => unreachable!("a check is not an alias"),
+            structures::ModeKind::Let => self.materialize(&name, second.canon, rows),
+            structures::ModeKind::Alias => unreachable!("a check is not an alias"),
         };
         self.reprs.insert(first_name, Repr::Pipe(None));
         self.reprs.insert(name, repr);

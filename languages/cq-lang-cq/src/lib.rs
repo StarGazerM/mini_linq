@@ -381,3 +381,9 @@ fn check_input_atom<'a>(
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
+
+/// CQ is the root language; its section contains its whole program.
+pub type Section = Module;
+/// The root language has no upstream facts.
+pub trait Env {}
+impl Env for () {}

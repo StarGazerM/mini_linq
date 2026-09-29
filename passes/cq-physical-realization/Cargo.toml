@@ -6,20 +6,21 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["reference"]
+reference = ["cq-print/reference", "cq-lang-structures/reference-prefix"]
 
 [dependencies]
-cq-print.workspace = true
-cq-lang-structures.workspace = true
+cq-print = { workspace = true, default-features = false }
+cq-lang-structures = { workspace = true, default-features = false }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
 cq-syntax.workspace = true
-cq-lang-cq.workspace = true
-cq-lang-ra.workspace = true
-cq-lang-physical.workspace = true
+cq-lang-cq = { workspace = true, default-features = false }
+cq-lang-ra = { workspace = true, default-features = false, features = ["reference-prefix"] }
+cq-lang-physical = { workspace = true, default-features = false, features = ["reference-prefix"] }
 
 mini-linq.workspace = true
 
@@ -27,3 +28,7 @@ mini-linq.workspace = true
 source = "cq-lang-structures"
 target = "rust"
 printer = true
+
+[[test]]
+name = "realization"
+required-features = ["reference"]

@@ -13,7 +13,7 @@
 //!   placed before that clause's first step; the guard's `if` step goes. A
 //!   guard the lexical analysis cannot see through (`opaque`) stays a step.
 //! - `Reductions::Tree` is the Yannakakis full reducer over the GYO join tree
-//!   of [`cq::hypergraph::Analysis`], so the query must be acyclic: an upward
+//!   of the source environment, so the query must be acyclic: an upward
 //!   pass, leaves toward the root, `reduce parent with child(shared)`, then a
 //!   downward pass, root toward the leaves, `reduce child with parent(shared)`,
 //!   the edges visited in breadth-first order from the root — the Y-UP and
@@ -27,8 +27,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_vo as valuation;
-use cq_lang_vo::cq;
-use cq_lang_vo::cq::rust;
+use cq_lang_vo::syntax as cq;
+use cq_lang_vo::syntax::rust;
 use cq_lang_vo::syntax::symbol_name;
 use cq_lang_vo::{Column, Reduce, Reduction, Step, Subatom};
 use proc_macro2::Span;
@@ -59,8 +59,12 @@ pub enum Reductions {
 }
 
 /// Insert the reductions `options` ask for, then check the VO contract.
-pub fn compile(source: &valuation::Module, options: &Options) -> syn::Result<valuation::Section> {
-    let analysis = valuation::contract::check_module(source)?;
+pub fn compile(
+    source: &valuation::Section,
+    env: &impl valuation::Env,
+    options: &Options,
+) -> syn::Result<valuation::Section> {
+    let analysis = valuation::contract::check(source, env)?;
     if let Some(step) = source
         .steps
         .iter()
@@ -116,7 +120,7 @@ pub fn compile(source: &valuation::Module, options: &Options) -> syn::Result<val
         }
     }
     if options.semijoins == Reductions::Tree {
-        let reducer = tree(source, &analysis)?;
+        let reducer = tree(source, env, &analysis)?;
         if let Some(first) = first_atom {
             before.entry(first).or_default().extend(reducer);
         }
@@ -136,18 +140,23 @@ pub fn compile(source: &valuation::Module, options: &Options) -> syn::Result<val
         brace: Default::default(),
         steps,
     };
-    valuation::contract::check(&section, &valuation::erase(source))?;
+    valuation::contract::check(&section, env)?;
     Ok(section)
 }
 
 /// The program is preserved, the target satisfies the VO contract, erasing
 /// its reductions gives the source back — a pushed guard returns to the
 /// step it was — and it is what `compile` records under `options`.
-pub fn check(source: &valuation::Module, target: &valuation::Section, options: &Options) -> bool {
+pub fn check(
+    source: &valuation::Section,
+    env: &impl valuation::Env,
+    target: &valuation::Section,
+    options: &Options,
+) -> bool {
     let (steps, guards) = erase(target);
-    valuation::contract::well_formed(target, &valuation::erase(source))
+    valuation::contract::well_formed(target, env)
         && steps == without_guards(&source.steps, &guards)
-        && compile(source, options).is_ok_and(|expected| expected == *target)
+        && compile(source, env, options).is_ok_and(|expected| expected == *target)
 }
 
 /// The plan's steps without its reductions, and the guards those placed.
@@ -193,9 +202,12 @@ fn without_guards(steps: &[Step], placed: &[cq::Filter]) -> Vec<Step> {
 
 /// The Yannakakis full reducer: Y-UP over every tree edge, leaves first,
 /// then Y-DOWN, root first, both in breadth-first order from the root.
-fn tree(source: &valuation::Module, analysis: &valuation::Analysis) -> syn::Result<Vec<Step>> {
-    let hypergraph = cq::hypergraph::Analysis::of(&valuation::erase(source));
-    let Some(join_tree) = &hypergraph.join_tree else {
+fn tree(
+    source: &valuation::Section,
+    env: &impl valuation::Env,
+    analysis: &valuation::Analysis,
+) -> syn::Result<Vec<Step>> {
+    let Some(join_tree) = env.join_tree() else {
         return Err(syn::Error::new_spanned(
             source.valuation_token,
             "Yannakakis reduction requires an acyclic query",
@@ -274,4 +286,22 @@ fn reduce(clause: usize, atom: &cq::Atom, reduction: Reduction) -> Step {
 
 fn index(clause: usize) -> LitInt {
     LitInt::new(&clause.to_string(), Span::call_site())
+}
+
+#[cfg(feature = "reference")]
+pub mod reference {
+    use super::*;
+    pub fn compile(
+        source: &valuation::Module,
+        options: &Options,
+    ) -> syn::Result<valuation::Section> {
+        super::compile(source, &valuation::erase(source), options)
+    }
+    pub fn check(
+        source: &valuation::Module,
+        target: &valuation::Section,
+        options: &Options,
+    ) -> bool {
+        super::check(source, &valuation::erase(source), target, options)
+    }
 }

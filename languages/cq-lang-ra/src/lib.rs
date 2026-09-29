@@ -631,3 +631,6 @@ pub use cq_syntax as syntax;
 pub mod reference;
 #[cfg(feature = "reference-prefix")]
 pub use reference::Module;
+
+/// Source environment of an RA pass.
+pub use CqEnv as Env;

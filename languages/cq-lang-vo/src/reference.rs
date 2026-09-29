@@ -46,3 +46,15 @@ impl syn::parse::Parse for Module {
         Ok(Self::new(staged.prefix, staged.section))
     }
 }
+
+impl super::Env for cq::Module {
+    fn inputs(&self) -> Vec<cq_syntax::RelationDecl> {
+        self.program.inputs().cloned().collect()
+    }
+    fn head(&self) -> &cq_syntax::Atom {
+        &self.program.query.head
+    }
+    fn join_tree(&self) -> Option<Vec<(usize, Option<usize>)>> {
+        cq::hypergraph::Analysis::of(self).join_tree
+    }
+}

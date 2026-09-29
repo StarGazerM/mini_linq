@@ -491,3 +491,12 @@ pub use cq_syntax as syntax;
 pub mod reference;
 #[cfg(feature = "reference-prefix")]
 pub use reference::Module;
+
+/// Facts consumed by VO passes, in addition to section validation.
+pub trait Env: CqEnv {
+    fn inputs(&self) -> Vec<cq_syntax::RelationDecl>;
+    fn head(&self) -> &cq_syntax::Atom;
+    /// GYO join tree over atom clause indices, or None for a cyclic query.
+    /// As with headings in later Envs, correctness is a producer obligation.
+    fn join_tree(&self) -> Option<Vec<(usize, Option<usize>)>>;
+}

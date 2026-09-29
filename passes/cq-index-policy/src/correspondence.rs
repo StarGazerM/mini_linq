@@ -7,14 +7,14 @@ use std::collections::BTreeSet;
 
 /// IX checks that each demand is used. This relation additionally requires
 /// unchanged RA, complete demands, and deterministic first-use serialization.
-pub fn check(source: &ra::Module, target: &ix::Section) -> bool {
-    let Ok(env) = ix::reference::Env::new(source) else {
+pub fn check(source: &ra::Section, source_env: &impl ra::Env, target: &ix::Section) -> bool {
+    let Ok(env) = super::Env::new(source, source_env) else {
         return false;
     };
     if !ix::contract::well_formed(target, &env) {
         return false;
     }
-    let Ok(info) = ra::check_in(source.program.inputs(), &source.plan) else {
+    let Ok(info) = ra::check_in(source_env.inputs(), &source.plan) else {
         return false;
     };
     let mut seen = BTreeSet::new();

@@ -60,9 +60,7 @@ impl Stage {
         match self {
             Self::Cq => "the complete source conjunctive query",
             Self::RelationalPlan => "the complete named logical relational-algebra plan",
-            Self::IndexRequirements => {
-                "the logical plan plus named index demands"
-            }
+            Self::IndexRequirements => "the logical plan plus named index demands",
         }
     }
 }
@@ -573,16 +571,25 @@ mod tests {
     }
 }
 
-
 #[allow(unused_imports, dead_code)]
 mod cq_order {
     pub use ::cq_order::*;
-    pub fn compile(source: &cq_lang_cq::Module, options: &::cq_order::Options) -> syn::Result<cq_lang_vo::Module> {
-        Ok(cq_lang_vo::Module::new(source.program.clone(), ::cq_order::compile(source, options)?))
+    pub fn compile(
+        source: &cq_lang_cq::Module,
+        options: &::cq_order::Options,
+    ) -> syn::Result<cq_lang_vo::Module> {
+        Ok(cq_lang_vo::Module::new(
+            source.program.clone(),
+            ::cq_order::reference::compile(source, options)?,
+        ))
     }
-    pub fn check(source: &cq_lang_cq::Module, target: &cq_lang_vo::Module, options: &::cq_order::Options) -> bool {
+    pub fn check(
+        source: &cq_lang_cq::Module,
+        target: &cq_lang_vo::Module,
+        options: &::cq_order::Options,
+    ) -> bool {
         target.program == source.program
-            && ::cq_order::check(source, &target.section, options)
+            && ::cq_order::reference::check(source, &target.section, options)
     }
 }
 
@@ -590,11 +597,14 @@ mod cq_order {
 mod cq_elaborate {
     pub use ::cq_elaborate::*;
     pub fn compile(source: &cq_lang_vo::Module) -> syn::Result<cq_lang_ra::Module> {
-        Ok(cq_lang_ra::Module::new(source.program.clone(), ::cq_elaborate::compile(source)?))
+        Ok(cq_lang_ra::Module::new(
+            source.program.clone(),
+            ::cq_elaborate::reference::compile(source)?,
+        ))
     }
     pub fn check(source: &cq_lang_vo::Module, target: &cq_lang_ra::Module) -> bool {
         target.program == source.program
-            && ::cq_elaborate::check(source, &target.section)
+            && ::cq_elaborate::reference::check(source, &target.section)
     }
 }
 
@@ -602,10 +612,13 @@ mod cq_elaborate {
 mod cq_index_policy {
     pub use ::cq_index_policy::*;
     pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
-        Ok(cq_lang_ix::Module::new(source.clone(), ::cq_index_policy::compile(source)?))
+        Ok(cq_lang_ix::Module::new(
+            source.clone(),
+            ::cq_index_policy::reference::compile(source)?,
+        ))
     }
     pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
         target.relational_plan == *source
-            && ::cq_index_policy::check(source, &target.section)
+            && ::cq_index_policy::reference::check(source, &target.section)
     }
 }

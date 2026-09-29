@@ -4,7 +4,8 @@ use cq_print::{Context, Repr, access::Access, error, index, sorted};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as Tokens;
 use quote::{ToTokens, quote};
-use structures::physical::{self, Operator, ra};
+use structures::execution::Operator;
+use structures::physical::{self, ra};
 use structures::syntax::symbol_name;
 
 #[proc_macro]
@@ -45,22 +46,15 @@ impl<'a> std::ops::Deref for Push<'a> {
 
 fn compile(module: &structures::Module) -> syn::Result<syn::Expr> {
     let analysis = structures::contract::check_module(module)?;
-    let physical_analysis = physical::contract::check_module(&module.physical)?;
+    let env = structures::reference::Env::new(&module.physical)?;
     let logical = &module.physical.index_requirements.relational_plan;
-    let infos = ra::check_in(logical.program.inputs(), &logical.plan)?;
     let mut push = Push {
-        context: Context::new(module, &analysis, &physical_analysis, infos),
+        context: Context::new(&module.section, &env, &analysis),
         module,
     };
-    for (p, r) in module
-        .physical
-        .program
-        .definitions
-        .iter()
-        .zip(&logical.plan.definitions)
-    {
+    for p in &module.physical.program.definitions {
         let name = symbol_name(&p.name);
-        push.context.register(&name, &r.operator);
+        push.context.register(&name);
         match p.mode {
             physical::Mode::Alias(_) => {
                 push.context.reprs.insert(name, Repr::Alias);
@@ -115,7 +109,7 @@ impl Push<'_> {
                 .iter()
                 .find(|(levels, _)| levels.len() == 1 && levels[0] == heading)
                 .map(|(_, s)| s);
-            let storage = match (definition.canon.is_some(), set, rows) {
+            let storage = match (definition.canon, set, rows) {
                 (true, Some(set), _) => set,
                 (_, _, Some(rows)) => rows,
                 _ => return error(&definition.name, "unmaterialized scan"),
@@ -125,7 +119,7 @@ impl Push<'_> {
                 quote!(#[allow(unused_variables)] for &#pattern in #storage.iter() { #sink }),
             );
         }
-        if definition.canon.is_some() {
+        if definition.canon {
             let row = self.pattern(result);
             let id = &definition.name;
             let body = self.operator(result, quote!(
@@ -148,20 +142,20 @@ impl Push<'_> {
             .unwrap();
         let p = self.physical[result];
         match (&p.operator, &r.operator) {
-            (Operator::Unit(_), _) => Ok(sink),
-            (Operator::Rename(_), _) => {
+            (Operator::Unit, _) => Ok(sink),
+            (Operator::Rename, _) => {
                 let rows = self.host_scan(result);
                 let pattern = self.pattern(result);
                 Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
             }
-            (Operator::Project(_), ra::Operator::Project(project)) => {
+            (Operator::Project, ra::Operator::Project(project)) => {
                 self.emit(&symbol_name(&project.input), sink)
             }
-            (Operator::Select(_), ra::Operator::Select(select)) => {
+            (Operator::Select, ra::Operator::Select(select)) => {
                 let condition = cq_print::expressions::deref_predicates(&select.condition);
                 self.emit(&symbol_name(&select.input), quote!(if #condition { #sink }))
             }
-            (Operator::Probe(_, k), _) => {
+            (Operator::Probe(k), _) => {
                 let left = symbol_name(&k.left);
                 let right = symbol_name(&k.right);
                 let columns = sorted(&k.columns);
@@ -205,7 +199,7 @@ impl Push<'_> {
                 let pattern = self.pattern(result);
                 self.emit(&left, quote!(for __push_v in #lookup { #[allow(unused_variables)] let #pattern = #row; #sink }))
             }
-            (Operator::Semi(_, k), _) => {
+            (Operator::Semi(k), _) => {
                 let left = symbol_name(&k.left);
                 let right = symbol_name(&k.right);
                 let test = match self.keyed(&k.right, &sorted(&k.columns))? {
@@ -226,7 +220,7 @@ impl Push<'_> {
                 self.emit(&left, quote!(if #test { #sink }))
             }
             _ => error(
-                &p.operator,
+                &p.name,
                 "this push example implements unit, rename, project, select, probe and semi",
             ),
         }

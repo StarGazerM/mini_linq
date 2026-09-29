@@ -325,7 +325,7 @@ mod cq_reduce {
     ) -> syn::Result<cq_lang_vo::Module> {
         Ok(cq_lang_vo::Module::new(
             source.program.clone(),
-            ::cq_reduce::compile(source, options)?,
+            ::cq_reduce::reference::compile(source, options)?,
         ))
     }
     pub fn check(
@@ -333,7 +333,8 @@ mod cq_reduce {
         target: &cq_lang_vo::Module,
         options: &::cq_reduce::Options,
     ) -> bool {
-        target.program == source.program && ::cq_reduce::check(source, &target.section, options)
+        target.program == source.program
+            && ::cq_reduce::reference::check(source, &target.section, options)
     }
 }
 
@@ -343,10 +344,11 @@ mod cq_elaborate {
     pub fn compile(source: &cq_lang_vo::Module) -> syn::Result<cq_lang_ra::Module> {
         Ok(cq_lang_ra::Module::new(
             source.program.clone(),
-            ::cq_elaborate::compile(source)?,
+            ::cq_elaborate::reference::compile(source)?,
         ))
     }
     pub fn check(source: &cq_lang_vo::Module, target: &cq_lang_ra::Module) -> bool {
-        target.program == source.program && ::cq_elaborate::check(source, &target.section)
+        target.program == source.program
+            && ::cq_elaborate::reference::check(source, &target.section)
     }
 }

@@ -41,16 +41,16 @@ rust-version = "1.85"
 version = "0.1.0"
 
 [workspace.dependencies]
-cq-print = { path = "passes/cq-print" }
+cq-print = { path = "passes/cq-print", default-features = false }
 cq-stage = { path = "facade/cq-stage" }
 contracts = "=0.6.10"
-cq-lang-physical = { path = "languages/cq-lang-physical" }
-cq-lang-cq = { path = "languages/cq-lang-cq" }
-cq-lang-structures = { path = "languages/cq-lang-structures" }
-cq-lang-ra = { path = "languages/cq-lang-ra" }
+cq-lang-physical = { path = "languages/cq-lang-physical", default-features = false }
+cq-lang-cq = { path = "languages/cq-lang-cq", default-features = false }
+cq-lang-structures = { path = "languages/cq-lang-structures", default-features = false }
+cq-lang-ra = { path = "languages/cq-lang-ra", default-features = false }
 cq-syntax = { path = "languages/cq-syntax" }
-cq-lang-ix = { path = "languages/cq-lang-ix" }
-cq-lang-vo = { path = "languages/cq-lang-vo" }
+cq-lang-ix = { path = "languages/cq-lang-ix", default-features = false }
+cq-lang-vo = { path = "languages/cq-lang-vo", default-features = false }
 cq-protocol = { path = "runtime/cq-protocol" }
 cq-storage = { path = "runtime/cq-storage" }
 cq-order = { path = "passes/cq-order", default-features = false }

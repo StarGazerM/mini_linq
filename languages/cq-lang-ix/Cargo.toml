@@ -15,7 +15,7 @@ syn_derive.workspace = true
 
 [features]
 default = ["reference-prefix"]
-reference-prefix = ["dep:cq-lang-ra"]
+reference-prefix = ["dep:cq-lang-ra", "cq-lang-ra/reference-prefix"]
 
 [[test]]
 name = "index_join_requirements"

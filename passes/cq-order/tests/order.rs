@@ -419,7 +419,7 @@ mod cq_order {
     ) -> syn::Result<cq_lang_vo::Module> {
         Ok(cq_lang_vo::Module::new(
             source.program.clone(),
-            ::cq_order::compile(source, options)?,
+            ::cq_order::reference::compile(source, options)?,
         ))
     }
     pub fn check(
@@ -427,6 +427,7 @@ mod cq_order {
         target: &cq_lang_vo::Module,
         options: &::cq_order::Options,
     ) -> bool {
-        target.program == source.program && ::cq_order::check(source, &target.section, options)
+        target.program == source.program
+            && ::cq_order::reference::check(source, &target.section, options)
     }
 }

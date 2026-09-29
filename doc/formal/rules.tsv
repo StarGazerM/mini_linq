@@ -5,10 +5,10 @@ X-FilterExtend	abstract	-	-	Pure independent filter and extension interchange la
 X-Keys	abstract	-	-	Pure multi-argument matching law; motivates complete prefix-key access.
 X-Local	abstract	-	-	Pure candidate-local matching law; motivates partial-key access and residual selection.
 H-Eval	abstract	-	-	Finite successful host boundary; host semantics and representation adequacy are premises.
-IX-Reuse	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-New	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-Join	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-Other	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+IX-Reuse	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile(source: &ra::Section, env: &impl ra::Env)	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+IX-New	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile(source: &ra::Section, env: &impl ra::Env)	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+IX-Join	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile(source: &ra::Section, env: &impl ra::Env)	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+IX-Other	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile(source: &ra::Section, env: &impl ra::Env)	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
 FV-Name	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Bound	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
 FV-Children	implementation	languages/cq-syntax/src/rust.rs	visit::visit_expr(self, expr)	Correspondence location; proof obligation C-Conformance remains.
@@ -52,7 +52,7 @@ P-Begin	implementation	passes/cq-reduce/src/lib.rs	before.entry(first).or_defaul
 P-Combine	implementation	passes/cq-elaborate/src/lib.rs	natural_join_token: Default::default(),	Joins follow the plan's step order, prefix on the left.
 P-Trim	abstract	-	-	No intermediate projection is emitted; the head is projected once at the end (C-Finish).
 P-Output	implementation	passes/cq-elaborate/src/lib.rs	fn finish(&mut self, head: &cq::Atom) -> ra::Output	Correspondence location; proof obligation C-Conformance remains.
-Y-Init	implementation	passes/cq-reduce/src/lib.rs	fn tree(source: &valuation::Module, analysis: &valuation::Analysis)	Requires the GYO join tree of the erased plan; rejects cyclic queries.
+Y-Init	implementation	passes/cq-reduce/src/lib.rs	fn tree(	Requires the source Env GYO join tree; rejects cyclic queries.
 Y-Up	implementation	passes/cq-reduce/src/lib.rs	let up = order.iter().skip(1).rev().map(edge);	`reduce parent with child(shared)`, leaves first in reverse breadth-first order.
 Y-Down	implementation	passes/cq-reduce/src/lib.rs	let down = order.iter().skip(1).map(edge).map(|(p, c)| (c, p));	`reduce child with parent(shared)`, root first in breadth-first order.
 Y-Freeze	abstract	-	-	The elaboration keeps each clause's latest relation; no freeze transition is emitted.

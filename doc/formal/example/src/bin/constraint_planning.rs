@@ -127,10 +127,13 @@ fn main() {
 mod cq_index_policy {
     pub use ::cq_index_policy::*;
     pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
-        Ok(cq_lang_ix::Module::new(source.clone(), ::cq_index_policy::compile(source)?))
+        Ok(cq_lang_ix::Module::new(
+            source.clone(),
+            ::cq_index_policy::reference::compile(source)?,
+        ))
     }
     pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
         target.relational_plan == *source
-            && ::cq_index_policy::check(source, &target.section)
+            && ::cq_index_policy::reference::check(source, &target.section)
     }
 }

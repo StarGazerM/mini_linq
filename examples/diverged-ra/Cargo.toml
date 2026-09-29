@@ -1,0 +1,22 @@
+[package]
+name = "diverged-ra"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["ra-theta"]
+
+[dependencies]
+cq-storage = { path = "../../runtime/cq-storage" }
+
+[build-dependencies]
+ra-theta = { path = "ra-theta" }
+cq-lang-ix = { path = "../../languages/cq-lang-ix", default-features = false }
+cq-lang-physical = { path = "../../languages/cq-lang-physical", default-features = false }
+cq-physical-lowering = { path = "../../passes/cq-physical-lowering", default-features = false }
+cq-lang-structures = { path = "../../languages/cq-lang-structures", default-features = false }
+cq-structure-selection = { path = "../../passes/cq-structure-selection", default-features = false }
+cq-physical-realization = { path = "../../passes/cq-physical-realization", default-features = false }
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }

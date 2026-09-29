@@ -193,6 +193,7 @@ pub enum ModeKind {
 /// Physical facts consumed by structure validation, owned by this language.
 #[derive(Clone, Debug, Default)]
 pub struct PhysicalFacts {
+    pub scanned: BTreeSet<String>,
     pub headings: BTreeMap<String, Vec<String>>,
     pub hosts: BTreeMap<String, String>,
     pub renames: BTreeMap<String, BTreeMap<String, String>>,
@@ -492,3 +493,13 @@ pub use cq_syntax as syntax;
 pub mod reference;
 #[cfg(feature = "reference-prefix")]
 pub use reference::Module;
+
+pub mod execution;
+/// Source environment for a Structures printer.
+pub trait Env: PhysicalEnv {
+    fn inputs(&self) -> Vec<cq_syntax::RelationDecl>;
+    fn definitions(&self) -> &[execution::Definition];
+    fn row(&self, result: &str) -> &execution::Row;
+    fn returned(&self) -> &Ident;
+    fn head(&self) -> &cq_syntax::Atom;
+}

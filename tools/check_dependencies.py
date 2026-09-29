@@ -90,7 +90,7 @@ def check(data, announce=True):
             if len(prefixes) > 1: raise ValueError(f"language has multiple reference prefixes: {name}")
             allowed = {"cq-syntax"} - {name}
             for dep in prefixes:
-                if not dep["optional"] or package["features"].get("reference-prefix") != ["dep:" + dep["name"]]:
+                if not dep["optional"] or package["features"].get("reference-prefix") != ["dep:" + dep["name"]] + ([dep["name"] + "/reference-prefix"] if dep["name"] != "cq-lang-cq" else []):
                     raise ValueError(f"language dependency must be optional and owned by reference-prefix: {name} -> {dep['name']}")
                 if package["features"].get("default") != ["reference-prefix"]:
                     raise ValueError(f"reference-prefix must be the default adapter: {name}")
@@ -104,6 +104,13 @@ def check(data, announce=True):
             allowed = required | ({"cq-print"} if edge.get("printer") and name != "cq-print" else set())
             if internal & set(LANGUAGES) != required:
                 raise ValueError(f"pass must depend on exactly its source and target languages: {name}: {internal}")
+            for dep in production(package):
+                if dep["name"] in LANGUAGES and dep["uses_default_features"]:
+                    raise ValueError(f"pass enables language defaults: {name} -> {dep['name']}")
+            expected_reference = {d + "/reference-prefix" for d in required if d != "cq-lang-cq"}
+            if name == "cq-physical-realization": expected_reference.add("cq-print/reference")
+            if set(package["features"].get("reference", [])) != expected_reference or package["features"].get("default") != ["reference"]:
+                raise ValueError(f"pass reference feature must own its prefix adapters: {name}")
         elif name in RUNTIME:
             allowed = {"cq-syntax", "cq-protocol"} - {name}
         else:
@@ -145,7 +152,17 @@ def negative_dependency_checks(data):
         try: check(altered, announce=False)
         except ValueError: pass
         else: raise ValueError(f"guard accepted forbidden edge: {owner} -> {target}")
-    print(f"PASS: {len(mutations)} forbidden dependency mutations rejected", flush=True)
+    for feature_mutation in ("language-defaults", "reference-leak"):
+        altered = copy.deepcopy(data)
+        package = next(p for p in altered["packages"] if p["name"] == "cq-physical-lowering")
+        if feature_mutation == "language-defaults":
+            next(d for d in package["dependencies"] if d["name"] == "cq-lang-ix")["uses_default_features"] = True
+        else:
+            package["features"]["reference"] = []
+        try: check(altered, announce=False)
+        except ValueError: pass
+        else: raise ValueError(f"guard accepted isolation mutation: {feature_mutation}")
+    print(f"PASS: {len(mutations)} forbidden dependency and 2 feature mutations rejected", flush=True)
 
 
 def closure(packages, name):
@@ -175,7 +192,7 @@ def copy_component(destination, name, selected, standalone):
     shutil.copytree(base / "src", output / "src")
     manifest = tomllib.loads((base / "Cargo.toml").read_text())
     manifest.pop("dev-dependencies", None)
-    manifest.pop("test", None)
+    tests = manifest.pop("test", [])
     manifest["package"].pop("metadata", None)
     manifest["package"]["autotests"] = False
     # Cargo resolves optional path manifests even when disabled. Remove only
@@ -186,12 +203,18 @@ def copy_component(destination, name, selected, standalone):
             if not spec.get("optional"): raise ValueError(f"missing non-optional dependency: {name} -> {dep}")
             del manifest["dependencies"][dep]
             for feature in manifest.get("features", {}).values():
-                feature[:] = [f for f in feature if f != "dep:" + dep]
+                feature[:] = [f for f in feature if f != "dep:" + dep and not f.startswith(dep + "/")]
     lines = []
     for section, values in manifest.items():
         lines.append(f"[{section}]")
         lines.extend(f"{k} = {toml(v)}" for k, v in values.items())
         lines.append("")
+    if name in FAMILIES and (base / "tests").exists():
+        shutil.copytree(base / "tests", output / "tests")
+        registered = {t["name"]: t for t in tests}
+        for path in sorted((base / "tests").glob("*.rs")):
+            test = registered.get(path.stem, {"name": path.stem})
+            lines += ["[[test]]"] + [f"{k} = {toml(v)}" for k, v in test.items()]
     if standalone and (base / "tests/section.rs").exists():
         (output / "tests").mkdir()
         shutil.copy2(base / "tests/section.rs", output / "tests/section.rs")
@@ -204,7 +227,12 @@ def isolate(packages, only=()):
     for name in LANGUAGES | RUNTIME | FAMILIES:
         if only and name not in only: continue
         standalone = name in LANGUAGES
-        selected = ({name, "cq-syntax"} if standalone else closure(packages, name))
+        if name in FAMILIES:
+            edge = EDGES[name]
+            selected = {name, "cq-syntax", edge["source"], edge["target"]} - {"rust"}
+            if edge.get("printer"): selected.add("cq-print")
+        else:
+            selected = ({name, "cq-syntax"} if standalone else closure(packages, name))
         with tempfile.TemporaryDirectory(prefix=f"mini-linq-{name}-") as temporary:
             destination = Path(temporary)
             write_workspace(destination, selected)
@@ -214,7 +242,16 @@ def isolate(packages, only=()):
             with (logdir / f"{name}.log").open("w") as log:
                 result = subprocess.run(command, cwd=destination, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"isolation failed: {name}; see {logdir / (name + '.log')}")
-            detail = "without any reference prefix" if standalone else "with declared production dependency closure: " + ", ".join(sorted(selected - {name}))
+            if name in FAMILIES:
+                # Check resolved features as well as physically absent directories.
+                resolved = json.loads(subprocess.check_output(["cargo", "metadata", "--format-version=1", "--no-default-features", "--offline"], cwd=destination, text=True, stderr=subprocess.PIPE))
+                by_id = {p["id"]: p["name"] for p in resolved["packages"]}
+                for node in resolved["resolve"]["nodes"]:
+                    if by_id[node["id"]] in LANGUAGES and "reference-prefix" in node["features"]:
+                        raise ValueError(f"isolation enabled a reference prefix: {name}")
+                if not re.search(r"test result: ok\. [1-9][0-9]* passed", (logdir / f"{name}.log").read_text()):
+                    raise ValueError(f"isolation executed no tests: {name}")
+            detail = "without any reference prefix" if standalone else "with only: " + ", ".join(sorted(selected - {name}))
             print(f"PASS: {name} {detail}", flush=True)
 
 

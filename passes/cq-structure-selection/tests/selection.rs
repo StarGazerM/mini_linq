@@ -260,11 +260,12 @@ mod cq_index_policy {
     pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
         Ok(cq_lang_ix::Module::new(
             source.clone(),
-            ::cq_index_policy::compile(source)?,
+            ::cq_index_policy::reference::compile(source)?,
         ))
     }
     pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
-        target.relational_plan == *source && ::cq_index_policy::check(source, &target.section)
+        target.relational_plan == *source
+            && ::cq_index_policy::reference::check(source, &target.section)
     }
 }
 
@@ -277,7 +278,7 @@ mod cq_structure_selection {
     ) -> syn::Result<cq_lang_structures::Module> {
         Ok(cq_lang_structures::Module::new(
             source.clone(),
-            ::cq_structure_selection::compile(source, policy)?,
+            ::cq_structure_selection::reference::compile(source, policy)?,
         ))
     }
     pub fn check(
@@ -286,6 +287,6 @@ mod cq_structure_selection {
         policy: &cq_lang_physical::policy::Policy,
     ) -> bool {
         target.physical == *source
-            && ::cq_structure_selection::check(source, &target.section, policy)
+            && ::cq_structure_selection::reference::check(source, &target.section, policy)
     }
 }

@@ -35,16 +35,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_ix as ix;
-use cq_lang_ix::relational_plan as ra;
-use cq_lang_ix::relational_plan::cq;
+use cq_lang_ix::Operation as Op;
+use cq_lang_ix::syntax as cq;
 use cq_lang_ix::syntax::symbol_name;
 use cq_lang_physical as physical;
 use cq_lang_physical::policy::Policy;
 use proc_macro2::Span;
 use quote::format_ident;
 use syn::Ident;
-
-type Infos = BTreeMap<String, ra::RelationInfo>;
 
 /// A host's key as the policy states it: sorted host attribute names.
 struct HostKey {
@@ -72,31 +70,29 @@ struct Reads {
 }
 
 /// Lower IX to Physical under the policy, then check the Physical contract.
-pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<physical::Section> {
-    ix::contract::check_module(source)?;
-    let ra_module = &source.relational_plan;
-    let plan = &ra_module.plan;
-    let infos = ra::check_in(ra_module.program.inputs(), plan)?;
-    let hosts = hosts(policy, ra_module)?;
-    let returned = symbol_name(&plan.output.input);
-
-    let (operators, reads) = operators(source, &infos, &hosts, policy)?;
-    let modes = modes(plan, &operators, &reads, &hosts);
-    let unique = canonical(plan, &infos, &hosts);
-
-    let definitions = plan
-        .definitions
+pub fn compile(
+    source: &ix::Section,
+    env: &impl ix::Env,
+    policy: &Policy,
+) -> syn::Result<physical::Section> {
+    ix::contract::check(source, env)?;
+    let operations = env.operations();
+    let hosts = hosts(policy, &env.inputs())?;
+    let returned = env.returned();
+    let (operators, reads) = operators(source, env, &operations, &hosts, policy)?;
+    let modes = modes(&operations, &operators, &reads, &hosts);
+    let unique = canonical(env, &operations, &hosts);
+    let definitions = operations
         .iter()
         .zip(modes)
         .zip(operators)
-        .map(|((definition, mode), operator)| physical::Definition {
-            name: definition.result.clone(),
+        .map(|(((name, op), mode), operator)| physical::Definition {
+            name: name.clone(),
             eq_token: Default::default(),
             mode,
-            canon: (!unique.contains(&symbol_name(&definition.result))
-                && (symbol_name(&definition.result) == returned
-                    || (policy.canon_projections()
-                        && matches!(definition.operator, ra::Operator::Project(_)))))
+            canon: (!unique.contains(&symbol_name(name))
+                && (name == &returned
+                    || (policy.canon_projections() && matches!(op, Op::Project { .. }))))
             .then(Default::default),
             operator,
             semi_token: Default::default(),
@@ -108,113 +104,84 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<physical::Se
         program: physical::Program {
             definitions,
             return_token: Default::default(),
-            returned: plan.output.input.clone(),
+            returned,
             return_semi: Default::default(),
         },
     };
-    physical::contract::check(&section, &physical::reference::Env::new(source)?)?;
+    physical::contract::check(&section, &Env::new(source, env)?)?;
     Ok(section)
 }
 
-/// The physical operator of every result, and the reads each performs on
-/// its operands (the return's scan included).
 fn operators(
-    source: &ix::Module,
-    infos: &Infos,
+    source: &ix::Section,
+    env: &impl ix::Env,
+    operations: &[(Ident, Op)],
     hosts: &Hosts,
     policy: &Policy,
 ) -> syn::Result<(Vec<physical::Operator>, BTreeMap<String, Reads>)> {
-    let plan = &source.relational_plan.plan;
     let demands: BTreeSet<_> = source
         .indexes
         .iter()
-        .map(|index| ix::signature(&index.requirement))
+        .map(|i| ix::signature(&i.requirement))
         .collect();
-    let has_demand = |left: &Ident, right: &Ident| {
-        demands.contains(&(
-            symbol_name(right),
-            ix::result_join_columns(
-                &infos[&symbol_name(left)]
-                    .heading
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
-                &infos[&symbol_name(right)]
-                    .heading
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ),
-        ))
-    };
-    let renames: BTreeMap<String, &ra::Rename> = plan
-        .definitions
+    let heading = |id: &Ident| env.heading(&symbol_name(id)).expect("checked heading");
+    let mut reads: BTreeMap<String, Reads> = operations
         .iter()
-        .filter_map(|d| match &d.operator {
-            ra::Operator::Rename(r) => Some((symbol_name(&d.result), &**r)),
-            _ => None,
-        })
+        .map(|(id, _)| (symbol_name(id), Reads::default()))
         .collect();
-    let shared = |left: &Ident, right: &Ident| -> Vec<String> {
-        infos[&symbol_name(left)]
-            .heading
-            .intersection(&infos[&symbol_name(right)].heading)
-            .cloned()
-            .collect()
-    };
-
-    let mut reads: BTreeMap<String, Reads> = plan
-        .definitions
-        .iter()
-        .map(|d| (symbol_name(&d.result), Reads::default()))
-        .collect();
-    let mut operators = Vec::with_capacity(plan.definitions.len());
-    for definition in &plan.definitions {
-        let name = symbol_name(&definition.result);
-        let operator = match &definition.operator {
-            ra::Operator::Unit(_) => physical::Operator::Unit(Default::default()),
-            ra::Operator::Rename(_) => physical::Operator::Rename(Default::default()),
-            ra::Operator::NaturalJoin(join) => {
-                let columns = shared(&join.left, &join.right);
-                let right = &join.right;
-                if !has_demand(&join.left, right) {
+    let mut operators = Vec::new();
+    for (name, op) in operations {
+        let operator = match op {
+            Op::Unit => physical::Operator::Unit(Default::default()),
+            Op::Rename { .. } => physical::Operator::Rename(Default::default()),
+            Op::Join { left, right } | Op::Semijoin { left, right } => {
+                if !demands.contains(&(
+                    symbol_name(right),
+                    ix::result_join_columns(heading(left), heading(right)),
+                )) {
                     return Err(syn::Error::new_spanned(
-                        &definition.result,
-                        format!("natural join `{name}` has no index use"),
+                        name,
+                        format!(
+                            "{} `{name}` has no index use",
+                            if matches!(op, Op::Join { .. }) {
+                                "natural join"
+                            } else {
+                                "semijoin"
+                            }
+                        ),
                     ));
                 }
-                scan(&mut reads, &join.left);
-                let keyed = keyed(&columns, &join.left, right);
-                if policy.merge_joins() && !columns.is_empty() {
-                    merge(&mut reads, &join.left, right, columns);
+                let columns: Vec<String> = heading(left)
+                    .iter()
+                    .filter(|c| heading(right).contains(c))
+                    .cloned()
+                    .collect();
+                scan(&mut reads, left);
+                let keyed = keyed(&columns, left, right);
+                if matches!(op, Op::Semijoin { .. }) {
+                    probe(&mut reads, right, columns);
+                    physical::Operator::Semi(Default::default(), keyed)
+                } else if policy.merge_joins() && !columns.is_empty() {
+                    merge(&mut reads, left, right, columns);
                     physical::Operator::Merge(Default::default(), keyed)
                 } else {
                     probe(&mut reads, right, columns);
                     physical::Operator::Probe(Default::default(), keyed)
                 }
             }
-            ra::Operator::Semijoin(join) => {
-                let columns = shared(&join.left, &join.right);
-                let right = &join.right;
-                if !has_demand(&join.left, right) {
-                    return Err(syn::Error::new_spanned(
-                        &definition.result,
-                        format!("semijoin `{name}` has no index use"),
-                    ));
-                }
-                scan(&mut reads, &join.left);
-                let keyed = keyed(&columns, &join.left, right);
-                probe(&mut reads, right, columns);
-                physical::Operator::Semi(Default::default(), keyed)
-            }
-            ra::Operator::Select(select) => {
-                scan(&mut reads, &select.input);
-                let input = symbol_name(&select.input);
-                match ordered_column(hosts, renames.get(&input).copied())
-                    .filter(|column| bounded(&select.condition, column))
-                {
+            Op::Select { input, condition } => {
+                scan(&mut reads, input);
+                let rename = operations
+                    .iter()
+                    .find(|(name, _)| name == input)
+                    .map(|(_, op)| op);
+                match ordered_column(hosts, rename).filter(|column| bounded(condition, column)) {
                     Some(column) => {
-                        reads.get_mut(&input).unwrap().ranged.push(column.clone());
+                        reads
+                            .get_mut(&symbol_name(input))
+                            .unwrap()
+                            .ranged
+                            .push(column.clone());
                         physical::Operator::Range(
                             Default::default(),
                             physical::Ranged {
@@ -226,100 +193,93 @@ fn operators(
                     None => physical::Operator::Select(Default::default()),
                 }
             }
-            ra::Operator::Extend(extend) => {
-                scan(&mut reads, &extend.input);
+            Op::Extend { input, .. } => {
+                scan(&mut reads, input);
                 physical::Operator::Extend(Default::default())
             }
-            ra::Operator::Project(project) => {
-                scan(&mut reads, &project.input);
+            Op::Project { input } => {
+                scan(&mut reads, input);
                 physical::Operator::Project(Default::default())
             }
         };
         operators.push(operator);
     }
-    scan(&mut reads, &plan.output.input);
+    scan(&mut reads, &env.returned());
     Ok((operators, reads))
 }
 
-/// The mode of every result: what its reads require, and what a host
-/// answers in place.
 fn modes(
-    plan: &ra::Plan,
+    operations: &[(Ident, Op)],
     operators: &[physical::Operator],
     reads: &BTreeMap<String, Reads>,
     hosts: &Hosts,
 ) -> Vec<physical::Mode> {
-    let own_merge: BTreeMap<String, Vec<String>> = plan
-        .definitions
+    let own_merge: BTreeMap<String, Vec<String>> = operations
         .iter()
         .zip(operators)
-        .filter_map(|(d, op)| match op {
-            physical::Operator::Merge(_, keyed) => Some((
-                symbol_name(&d.result),
-                keyed.columns.iter().map(symbol_name).collect(),
+        .filter_map(|((name, _), op)| match op {
+            physical::Operator::Merge(_, k) => Some((
+                symbol_name(name),
+                k.columns.iter().map(symbol_name).collect(),
             )),
             _ => None,
         })
         .collect();
-    plan.definitions
+    operations
         .iter()
-        .map(|definition| {
-            let name = symbol_name(&definition.result);
+        .map(|(name, op)| {
+            let name = symbol_name(name);
             let result = &reads[&name];
-            match &definition.operator {
-                ra::Operator::Rename(rename) if hosts.answers(rename, result) => {
+            match op {
+                Op::Rename { .. } if hosts.answers(op, result) => {
                     physical::Mode::Alias(Default::default())
                 }
-                ra::Operator::Rename(_) => physical::Mode::Let(Default::default()),
-                _ => {
-                    let keyed = !result.keyed.is_empty() || !result.ranged.is_empty();
-                    let unsorted = result
+                Op::Rename { .. } => physical::Mode::Let(Default::default()),
+                _ if !result.keyed.is_empty()
+                    || !result.ranged.is_empty()
+                    || result.count >= 2
+                    || result
                         .merged
                         .iter()
-                        .any(|columns| own_merge.get(&name) != Some(columns));
-                    if keyed || result.count >= 2 || unsorted {
-                        physical::Mode::Let(Default::default())
-                    } else {
-                        physical::Mode::Pipe(Default::default())
-                    }
+                        .any(|c| own_merge.get(&name) != Some(c)) =>
+                {
+                    physical::Mode::Let(Default::default())
                 }
+                _ => physical::Mode::Pipe(Default::default()),
             }
         })
         .collect()
 }
 
-/// The results unique by key inference from the policy's canonical hosts.
-fn canonical(plan: &ra::Plan, infos: &Infos, hosts: &Hosts) -> BTreeSet<String> {
+fn canonical(env: &impl ix::Env, operations: &[(Ident, Op)], hosts: &Hosts) -> BTreeSet<String> {
     let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for definition in &plan.definitions {
-        let name = symbol_name(&definition.result);
-        let heading: Vec<String> = infos[&name].heading.iter().cloned().collect();
-        let key = match &definition.operator {
-            ra::Operator::Unit(_) => Some(Vec::new()),
-            ra::Operator::Rename(r) => hosts
+    for (name, op) in operations {
+        let name = symbol_name(name);
+        let heading = env.heading(&name).expect("checked heading");
+        let key = match op {
+            Op::Unit => Some(Vec::new()),
+            Op::Rename { host, .. } => hosts
                 .canon
-                .contains(&symbol_name(&r.relation))
-                .then_some(heading),
-            ra::Operator::NaturalJoin(j) => {
-                match (
-                    unique.get(&symbol_name(&j.left)),
-                    unique.get(&symbol_name(&j.right)),
-                ) {
-                    (Some(kl), Some(kr)) => {
-                        let mut key: Vec<String> = kl.iter().chain(kr).cloned().collect();
-                        key.sort();
-                        key.dedup();
-                        Some(key)
-                    }
-                    _ => None,
+                .contains(&symbol_name(host))
+                .then(|| heading.to_vec()),
+            Op::Join { left, right } => match (
+                unique.get(&symbol_name(left)),
+                unique.get(&symbol_name(right)),
+            ) {
+                (Some(l), Some(r)) => {
+                    let mut key: Vec<_> = l.iter().chain(r).cloned().collect();
+                    key.sort();
+                    key.dedup();
+                    Some(key)
                 }
-            }
-            ra::Operator::Semijoin(j) => unique.get(&symbol_name(&j.left)).cloned(),
-            ra::Operator::Select(s) => unique.get(&symbol_name(&s.input)).cloned(),
-            ra::Operator::Extend(e) => unique.get(&symbol_name(&e.input)).cloned(),
-            ra::Operator::Project(p) => unique
-                .get(&symbol_name(&p.input))
-                .filter(|key| key.iter().all(|k| heading.contains(k)))
+                _ => None,
+            },
+            Op::Semijoin { left: input, .. }
+            | Op::Select { input, .. }
+            | Op::Extend { input, .. } => unique.get(&symbol_name(input)).cloned(),
+            Op::Project { input } => unique
+                .get(&symbol_name(input))
+                .filter(|key| key.iter().all(|c| heading.contains(c)))
                 .cloned(),
         };
         if let Some(key) = key {
@@ -330,10 +290,9 @@ fn canonical(plan: &ra::Plan, infos: &Infos, hosts: &Hosts) -> BTreeSet<String> 
 }
 
 /// The policy's hosts, checked against the declared input relations.
-fn hosts(policy: &Policy, ra_module: &ra::Module) -> syn::Result<Hosts> {
-    let layouts: BTreeMap<String, Vec<String>> = ra_module
-        .program
-        .inputs()
+fn hosts(policy: &Policy, inputs: &[cq::RelationDecl]) -> syn::Result<Hosts> {
+    let layouts: BTreeMap<String, Vec<String>> = inputs
+        .iter()
         .map(|input| {
             (
                 symbol_name(&input.name),
@@ -396,13 +355,15 @@ fn hosts(policy: &Policy, ra_module: &ra::Module) -> syn::Result<Hosts> {
 impl Hosts {
     /// The host's key columns translated into a rename's attribute names,
     /// sorted, with whether the key is ordered.
-    fn key_through(&self, rename: &ra::Rename) -> Option<(Vec<String>, bool)> {
-        let key = self.keys[&symbol_name(&rename.relation)].as_ref()?;
-        let mut columns: Vec<String> = rename
-            .mapping
+    fn key_through(&self, rename: &Op) -> Option<(Vec<String>, bool)> {
+        let Op::Rename { host, mapping } = rename else {
+            return None;
+        };
+        let key = self.keys[&symbol_name(host)].as_ref()?;
+        let mut columns: Vec<String> = mapping
             .iter()
-            .filter(|m| key.columns.contains(&symbol_name(&m.source)))
-            .map(|m| symbol_name(&m.target))
+            .filter(|(_, source)| key.columns.contains(&symbol_name(source)))
+            .map(|(target, _)| symbol_name(target))
             .collect();
         columns.sort();
         Some((columns, key.ordered))
@@ -410,7 +371,7 @@ impl Hosts {
 
     /// Whether the host behind `rename` answers every read in place: keyed
     /// reads on its key, ranged and merged reads on its ordered key.
-    fn answers(&self, rename: &ra::Rename, reads: &Reads) -> bool {
+    fn answers(&self, rename: &Op, reads: &Reads) -> bool {
         let key = self.key_through(rename);
         let on_key = |columns: &[String], needs_order: bool| {
             key.as_ref().is_some_and(|(key, ordered)| {
@@ -430,7 +391,7 @@ impl Hosts {
 
 /// The single ordered key column of the host behind `rename`, in the
 /// rename's attribute name.
-fn ordered_column(hosts: &Hosts, rename: Option<&ra::Rename>) -> Option<String> {
+fn ordered_column(hosts: &Hosts, rename: Option<&Op>) -> Option<String> {
     let (columns, ordered) = hosts.key_through(rename?)?;
     match columns.as_slice() {
         [column] if ordered => Some(column.clone()),
@@ -503,7 +464,7 @@ fn conjuncts(expr: &syn::Expr) -> Vec<&syn::Expr> {
 /// above by an integer literal: a comparison in the total fragment other
 /// than `!=`, whose strict bound does not overflow `i32`.
 fn bounded(condition: &syn::Expr, attribute: &str) -> bool {
-    use cq::{Comparison, Predicate, Term};
+    use cq::predicate::{Comparison, Predicate, Term};
     conjuncts(condition).into_iter().any(|part| {
         let Some(predicate) = Predicate::from_expr(part) else {
             return false;
@@ -529,8 +490,30 @@ fn bounded(condition: &syn::Expr, attribute: &str) -> bool {
 
 /// IX → Physical correspondence: IX preserved, the Physical contract holds,
 /// and the program is exactly what the policy decides.
-pub fn check(source: &ix::Module, target: &physical::Section, policy: &Policy) -> bool {
-    physical::reference::Env::new(source)
-        .is_ok_and(|env| physical::contract::well_formed(target, &env))
-        && compile(source, policy).is_ok_and(|expected| expected == *target)
+pub fn check(
+    source: &ix::Section,
+    env: &impl ix::Env,
+    target: &physical::Section,
+    policy: &Policy,
+) -> bool {
+    Env::new(source, env).is_ok_and(|env| physical::contract::well_formed(target, &env))
+        && compile(source, env, policy).is_ok_and(|expected| expected == *target)
+}
+
+mod env;
+pub use env::Env;
+#[cfg(feature = "reference")]
+pub mod reference {
+    use super::*;
+    pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<physical::Section> {
+        super::compile(
+            source,
+            &ix::reference::Env::new(&source.relational_plan)?,
+            policy,
+        )
+    }
+    pub fn check(source: &ix::Module, target: &physical::Section, policy: &Policy) -> bool {
+        ix::reference::Env::new(&source.relational_plan)
+            .is_ok_and(|env| super::check(source, &env, target, policy))
+    }
 }

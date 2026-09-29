@@ -6,11 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["reference"]
+reference = ["cq-lang-ix/reference-prefix", "cq-lang-ra/reference-prefix"]
 
 [dependencies]
-cq-lang-ix.workspace = true
-cq-lang-ra.workspace = true
+cq-lang-ix = { workspace = true, default-features = false }
+cq-lang-ra = { workspace = true, default-features = false }
 quote.workspace = true
 syn.workspace = true
 [dev-dependencies]
@@ -19,3 +20,7 @@ cq-syntax.workspace = true
 [package.metadata.cq]
 source = "cq-lang-ra"
 target = "cq-lang-ix"
+
+[[test]]
+name = "index_demands"
+required-features = ["reference"]

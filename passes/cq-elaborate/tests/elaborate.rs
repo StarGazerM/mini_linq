@@ -348,10 +348,11 @@ mod cq_elaborate {
     pub fn compile(source: &cq_lang_vo::Module) -> syn::Result<cq_lang_ra::Module> {
         Ok(cq_lang_ra::Module::new(
             source.program.clone(),
-            ::cq_elaborate::compile(source)?,
+            ::cq_elaborate::reference::compile(source)?,
         ))
     }
     pub fn check(source: &cq_lang_vo::Module, target: &cq_lang_ra::Module) -> bool {
-        target.program == source.program && ::cq_elaborate::check(source, &target.section)
+        target.program == source.program
+            && ::cq_elaborate::reference::check(source, &target.section)
     }
 }

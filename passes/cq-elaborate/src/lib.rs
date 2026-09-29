@@ -35,17 +35,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_ra as ra;
-use cq_lang_ra::cq;
 use cq_lang_vo as valuation;
+use cq_lang_vo::syntax as cq;
 use cq_lang_vo::syntax::symbol_name;
 use quote::format_ident;
 use syn::Ident;
 
 /// Elaborate a valuation plan into named RA, then check the RA contract.
-pub fn compile(source: &valuation::Module) -> syn::Result<ra::Section> {
-    let analysis = valuation::contract::check_module(source)?;
+pub fn compile(source: &valuation::Section, env: &impl valuation::Env) -> syn::Result<ra::Section> {
+    let analysis = valuation::contract::check(source, env)?;
     let mut state = State {
-        program: &source.program,
+        inputs: &env.inputs(),
         atoms: &analysis.atoms,
         definitions: Vec::new(),
         relations: BTreeMap::new(),
@@ -64,7 +64,7 @@ pub fn compile(source: &valuation::Module) -> syn::Result<ra::Section> {
         }
         state.heading.extend(introduces.iter().cloned());
     }
-    let output = state.finish(&source.program.query.head);
+    let output = state.finish(env.head());
     let section = ra::Section {
         relational_token: Default::default(),
         relational_brace: Default::default(),
@@ -73,21 +73,43 @@ pub fn compile(source: &valuation::Module) -> syn::Result<ra::Section> {
             output,
         },
     };
-    ra::contract::check(&section, &ra::reference::Env::new(&source.program))?;
+    ra::contract::check(&section, &Env::new(env))?;
     Ok(section)
 }
 
 /// VO → RA correspondence: the program preserved, the RA contract holds,
 /// and the plan computes the query the valuation schedules.
-pub fn check(source: &valuation::Module, target: &ra::Section) -> bool {
-    let target = &ra::Module::new(source.program.clone(), target.clone());
-    ra::contract::well_formed_module(target) && ra::kernel(target) == valuation::kernel(source)
+pub fn check(source: &valuation::Section, env: &impl valuation::Env, target: &ra::Section) -> bool {
+    ra::contract::well_formed(target, &Env::new(env))
+        && compile(source, env).is_ok_and(|expected| expected == *target)
+}
+
+/// RA schema and head inherited from the VO environment.
+pub struct Env<'a, E> {
+    source: &'a E,
+    inputs: Vec<cq::RelationDecl>,
+}
+impl<'a, E: valuation::Env> Env<'a, E> {
+    pub fn new(source: &'a E) -> Self {
+        Self {
+            source,
+            inputs: source.inputs(),
+        }
+    }
+}
+impl<E: valuation::Env> ra::Env for Env<'_, E> {
+    fn inputs(&self) -> &[cq::RelationDecl] {
+        &self.inputs
+    }
+    fn head(&self) -> &cq::Atom {
+        self.source.head()
+    }
 }
 
 /// The definitions so far, each clause's current relation, the prefix
 /// result and its heading.
 struct State<'a> {
-    program: &'a cq::Program,
+    inputs: &'a [cq::RelationDecl],
     atoms: &'a BTreeMap<usize, cq::Atom>,
     definitions: Vec<ra::Definition>,
     relations: BTreeMap<usize, Ident>,
@@ -104,8 +126,8 @@ impl State<'_> {
         }
         let atom = &self.atoms[&clause];
         let declaration = self
-            .program
-            .inputs()
+            .inputs
+            .iter()
             .find(|d| symbol_name(&d.name) == symbol_name(&atom.relation))
             .expect("the CQ contract declares every body relation");
         let mapping = declaration
@@ -321,5 +343,19 @@ impl State<'_> {
             semi_token: Default::default(),
         });
         result
+    }
+}
+
+#[cfg(feature = "reference")]
+pub mod reference {
+    use super::*;
+    pub fn compile(source: &valuation::Module) -> syn::Result<ra::Section> {
+        super::compile(source, &valuation::erase(source))
+    }
+    /// Reference semantic correspondence retains the independent kernel check.
+    pub fn check(source: &valuation::Module, target: &ra::Section) -> bool {
+        let target = ra::Module::new(source.program.clone(), target.clone());
+        ra::contract::well_formed_module(&target)
+            && ra::kernel(&target) == valuation::kernel(source)
     }
 }

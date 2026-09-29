@@ -5,8 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["reference"]
+reference = ["cq-lang-structures/reference-prefix"]
+
 [dependencies]
-cq-lang-structures.workspace = true
+cq-lang-structures = { workspace = true, default-features = false }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

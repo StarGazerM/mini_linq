@@ -37,10 +37,9 @@
 //!   evaluates to the lazy iterator itself.
 
 use cq_lang_structures as structures;
-use cq_lang_structures::physical;
-use cq_lang_structures::physical::Operator;
-use cq_lang_structures::physical::ra;
-use cq_lang_structures::physical::ra::cq;
+use cq_lang_structures::execution as physical;
+use cq_lang_structures::execution::Operator;
+use cq_lang_structures::syntax as cq;
 use cq_lang_structures::syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
@@ -63,39 +62,32 @@ pub struct Endpoints {
 }
 
 /// The pull program of a Structures module.
-pub fn compile(module: &structures::Module, endpoints: &Endpoints) -> syn::Result<Expr> {
-    let analysis = structures::contract::check_module(module)?;
-    let ra_module = &module.physical.index_requirements.relational_plan;
-    let infos = ra::check_in(ra_module.program.inputs(), &ra_module.plan)?;
-    let physical_analysis = physical::contract::check_module(&module.physical)?;
+pub fn compile(
+    module: &structures::Section,
+    env: &impl structures::Env,
+    endpoints: &Endpoints,
+) -> syn::Result<Expr> {
+    let analysis = structures::contract::check(module, env)?;
     let mut printer = Printer {
-        context: Context::new(module, &analysis, &physical_analysis, infos),
+        context: Context::new(module, env, &analysis),
         endpoints,
     };
-    let definitions = &module.physical.program.definitions;
+    let definitions = env.definitions();
     let mut position = 0;
     while position < definitions.len() {
         if endpoints.intersect
             && position + 1 < definitions.len()
-            && printer.intersection(
-                &definitions[position],
-                &definitions[position + 1],
-                &ra_module.plan.definitions[position],
-                &ra_module.plan.definitions[position + 1],
-            )?
+            && printer.intersection(&definitions[position], &definitions[position + 1])?
         {
             position += 2;
         } else {
-            printer.define(
-                &definitions[position],
-                &ra_module.plan.definitions[position],
-            )?;
+            printer.define(&definitions[position])?;
             position += 1;
         }
     }
-    let returned = &module.physical.program.returned;
+    let returned = env.returned();
     let rows = printer.scan(returned)?;
-    let output = printer.head(&symbol_name(returned), &ra_module.plan.output.head, rows);
+    let output = printer.head(&symbol_name(returned), env.head(), rows);
     let statements = &printer.statements;
     let value = if !printer.bound {
         output
@@ -110,8 +102,13 @@ pub fn compile(module: &structures::Module, endpoints: &Endpoints) -> syn::Resul
 }
 
 /// Whether `target` is the program this pass prints for `source`.
-pub fn check(source: &structures::Module, target: &Expr, endpoints: &Endpoints) -> bool {
-    compile(source, endpoints).is_ok_and(|expected| expected == *target)
+pub fn check(
+    source: &structures::Section,
+    env: &impl structures::Env,
+    target: &Expr,
+    endpoints: &Endpoints,
+) -> bool {
+    compile(source, env, endpoints).is_ok_and(|expected| expected == *target)
 }
 
 struct Printer<'a> {
@@ -130,25 +127,21 @@ impl std::ops::DerefMut for Printer<'_> {
     }
 }
 impl Printer<'_> {
-    pub(crate) fn define(
-        &mut self,
-        definition: &physical::Definition,
-        ra_definition: &ra::Definition,
-    ) -> syn::Result<()> {
+    pub(crate) fn define(&mut self, definition: &physical::Definition) -> syn::Result<()> {
         let name = symbol_name(&definition.name);
-        self.register(&name, &ra_definition.operator);
+        self.register(&name);
         let repr = match definition.mode {
-            physical::Mode::Alias(_) => Repr::Alias,
-            physical::Mode::Pipe(_) => {
-                let mut rows = self.produce(&name, definition, ra_definition)?;
-                if definition.canon.is_some() {
+            structures::ModeKind::Alias => Repr::Alias,
+            structures::ModeKind::Pipe => {
+                let mut rows = self.produce(&name, definition)?;
+                if definition.canon {
                     rows = self.distinct(&definition.name, rows);
                 }
                 Repr::Pipe(Some(rows))
             }
-            physical::Mode::Let(_) => {
-                let rows = self.produce(&name, definition, ra_definition)?;
-                self.materialize(&name, definition.canon.is_some(), rows)
+            structures::ModeKind::Let => {
+                let rows = self.produce(&name, definition)?;
+                self.materialize(&name, definition.canon, rows)
             }
         };
         self.reprs.insert(name, repr);
@@ -245,5 +238,21 @@ impl Printer<'_> {
                 (#(#output,)*)
             })
         }
+    }
+}
+
+#[cfg(feature = "reference")]
+pub mod reference {
+    use super::*;
+    pub fn compile(source: &structures::Module, endpoints: &Endpoints) -> syn::Result<Expr> {
+        super::compile(
+            source,
+            &structures::reference::Env::new(&source.physical)?,
+            endpoints,
+        )
+    }
+    pub fn check(source: &structures::Module, target: &Expr, endpoints: &Endpoints) -> bool {
+        structures::reference::Env::new(&source.physical)
+            .is_ok_and(|env| super::check(source, &env, target, endpoints))
     }
 }

@@ -31,12 +31,14 @@ impl Module {
 pub struct Env<'a> {
     source: &'a ix::Module,
     ra: ix::reference::Env<'a>,
+    rows: BTreeMap<String, ix::RowFacts>,
 }
 impl<'a> Env<'a> {
     pub fn new(source: &'a ix::Module) -> syn::Result<Self> {
         let ra = ix::reference::Env::new(&source.relational_plan)?;
         ix::contract::check(&source.section, &ra)?;
-        Ok(Self { source, ra })
+        let rows = ix::rows(&ra);
+        Ok(Self { source, ra, rows })
     }
 }
 impl IxEnv for Env<'_> {
@@ -125,5 +127,34 @@ impl syn::parse::Parse for Module {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let staged: cq_syntax::Staged<ix::Module, Section> = input.parse()?;
         Ok(Self::new(staged.prefix, staged.section))
+    }
+}
+
+impl super::Env for Env<'_> {
+    fn inputs(&self) -> Vec<cq_syntax::RelationDecl> {
+        ix::Env::inputs(&self.ra)
+    }
+    fn head(&self) -> &cq_syntax::Atom {
+        ix::Env::head(&self.ra)
+    }
+    fn bindings(&self, result: &str) -> BTreeMap<String, Ident> {
+        self.rows[result].bindings.clone()
+    }
+    fn computed(&self, result: &str) -> BTreeSet<String> {
+        self.rows[result].computed.clone()
+    }
+    fn extension(&self, result: &str) -> Option<(Vec<cq_syntax::ColumnDecl>, syn::Expr)> {
+        ix::Env::operations(&self.ra)
+            .into_iter()
+            .find_map(|(name, op)| {
+                if symbol_name(&name) != result {
+                    return None;
+                }
+                if let ix::Operation::Extend { columns, value, .. } = op {
+                    Some((columns, value))
+                } else {
+                    None
+                }
+            })
     }
 }

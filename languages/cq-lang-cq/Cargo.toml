@@ -13,8 +13,8 @@ syn.workspace = true
 syn_derive.workspace = true
 
 [dev-dependencies]
-cq-lang-ix.workspace = true
-cq-lang-ra.workspace = true
+cq-lang-ix = { workspace = true, features = ["reference-prefix"] }
+cq-lang-ra = { workspace = true, features = ["reference-prefix"] }
 
 [features]
 hw4 = []

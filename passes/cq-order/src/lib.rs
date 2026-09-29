@@ -401,7 +401,11 @@ fn atom(item: &BodyItem) -> &cq::Atom {
 }
 
 /// Order the normal-form query under `options`, then check the VO contract.
-pub fn compile(source: &cq::Module, options: &Options) -> syn::Result<valuation::Section> {
+pub fn compile(
+    source: &cq::Section,
+    _env: &impl cq::Env,
+    options: &Options,
+) -> syn::Result<valuation::Section> {
     cq::normal::check(source)?;
     let query = &source.program.query;
     let clauses = clauses(query);
@@ -427,14 +431,61 @@ pub fn compile(source: &cq::Module, options: &Options) -> syn::Result<valuation:
         brace: Default::default(),
         steps,
     };
-    valuation::contract::check(&section, source)?;
+    valuation::contract::check(&section, &Env(source))?;
     Ok(section)
 }
 
 /// The plan schedules exactly the source query, satisfies the VO contract,
 /// and is what `compile` records under `options`.
-pub fn check(source: &cq::Module, target: &valuation::Section, options: &Options) -> bool {
+pub fn check(
+    source: &cq::Section,
+    env: &impl cq::Env,
+    target: &valuation::Section,
+    options: &Options,
+) -> bool {
     cq::normal::check(source).is_ok()
-        && valuation::contract::well_formed(target, source)
-        && compile(source, options).is_ok_and(|expected| expected == *target)
+        && valuation::contract::well_formed(target, &Env(source))
+        && compile(source, env, options).is_ok_and(|expected| expected == *target)
+}
+
+/// VO environment produced by the root CQ section.
+pub struct Env<'a>(pub &'a cq::Section);
+impl valuation::CqEnv for Env<'_> {
+    fn clauses(&self) -> syn::Result<Vec<valuation::Clause>> {
+        cq::normal::check(self.0)?;
+        Ok(self
+            .0
+            .program
+            .query
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                cq::BodyItem::Positive { atom } => Some(valuation::Clause::Atom(atom.clone())),
+                cq::BodyItem::Filter(f) => Some(valuation::Clause::Guard(f.clone())),
+                cq::BodyItem::Let(l) => Some(valuation::Clause::Let(l.clone())),
+                _ => None,
+            })
+            .collect())
+    }
+}
+impl valuation::Env for Env<'_> {
+    fn inputs(&self) -> Vec<cq::RelationDecl> {
+        self.0.program.inputs().cloned().collect()
+    }
+    fn head(&self) -> &cq::Atom {
+        &self.0.program.query.head
+    }
+    fn join_tree(&self) -> Option<Vec<(usize, Option<usize>)>> {
+        cq::hypergraph::Analysis::of(self.0).join_tree
+    }
+}
+#[cfg(feature = "reference")]
+pub mod reference {
+    use super::*;
+    pub fn compile(source: &cq::Module, options: &Options) -> syn::Result<valuation::Section> {
+        super::compile(source, &(), options)
+    }
+    pub fn check(source: &cq::Module, target: &valuation::Section, options: &Options) -> bool {
+        super::check(source, &(), target, options)
+    }
 }

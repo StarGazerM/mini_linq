@@ -6,11 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["reference"]
+reference = ["cq-lang-vo/reference-prefix"]
 
 [dependencies]
-cq-lang-cq.workspace = true
-cq-lang-vo.workspace = true
+cq-lang-cq = { workspace = true, default-features = false }
+cq-lang-vo = { workspace = true, default-features = false }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
@@ -22,3 +23,7 @@ cq-syntax.workspace = true
 [package.metadata.cq]
 source = "cq-lang-cq"
 target = "cq-lang-vo"
+
+[[test]]
+name = "order"
+required-features = ["reference"]

@@ -8,12 +8,13 @@ impl<'a> Printer<'a> {
         &mut self,
         name: &str,
         definition: &physical::Definition,
-        ra_definition: &ra::Definition,
     ) -> syn::Result<TokenStream> {
-        match (&definition.operator, &ra_definition.operator) {
-            (Operator::Unit(_), _) => Ok(quote!(::core::iter::once(()))),
-            (Operator::Rename(_), _) => Ok(self.host_scan(name)),
-            (Operator::Select(_), ra::Operator::Select(select)) => {
+        let row = self.infos[name].clone();
+        match &definition.operator {
+            Operator::Unit => Ok(quote!(::core::iter::once(()))),
+            Operator::Rename => Ok(self.host_scan(name)),
+            Operator::Select => {
+                let select = row.select.as_ref().expect("select facts");
                 let input = self.scan(&select.input)?;
                 let pattern = self.borrowed_pattern(&symbol_name(&select.input));
                 let condition = deref_predicates(&select.condition);
@@ -24,10 +25,14 @@ impl<'a> Printer<'a> {
                     )
                 })
             }
-            (Operator::Range(_, ranged), ra::Operator::Select(select)) => {
-                self.range(name, &definition.name, &ranged.column, select)
-            }
-            (Operator::Extend(_), ra::Operator::Extend(extend)) => {
+            Operator::Range(column) => self.range(
+                name,
+                &definition.name,
+                column,
+                row.select.as_ref().expect("select facts"),
+            ),
+            Operator::Extend => {
+                let extend = row.extend.as_ref().expect("extend facts");
                 let input = self.scan(&extend.input)?;
                 let input_name = symbol_name(&extend.input);
                 let pattern = self.pattern(&input_name);
@@ -43,9 +48,10 @@ impl<'a> Printer<'a> {
                     })
                 })
             }
-            (Operator::Project(_), ra::Operator::Project(project)) => {
-                let input = self.scan(&project.input)?;
-                let input_name = symbol_name(&project.input);
+            Operator::Project => {
+                let project = row.project.as_ref().expect("project facts");
+                let input = self.scan(project)?;
+                let input_name = symbol_name(project);
                 let kept = self.heading(name);
                 let binders = self.heading(&input_name).iter().map(|c| {
                     if kept.contains(c) {
@@ -59,10 +65,9 @@ impl<'a> Printer<'a> {
                     ::core::iter::Iterator::map(#input, move |(#(#binders,)*)| #row)
                 })
             }
-            (Operator::Probe(_, keyed), _) => self.probe(name, keyed),
-            (Operator::Semi(_, keyed), _) => self.semi(keyed),
-            (Operator::Merge(_, keyed), _) => self.merge(name, &definition.name, keyed),
-            (operator, _) => error(operator, "physical operator does not match its RA operator"),
+            Operator::Probe(keyed) => self.probe(name, keyed),
+            Operator::Semi(keyed) => self.semi(keyed),
+            Operator::Merge(keyed) => self.merge(name, &definition.name, keyed),
         }
     }
 
@@ -281,7 +286,7 @@ impl<'a> Printer<'a> {
         name: &str,
         reader: &Ident,
         column: &Ident,
-        select: &ra::Select,
+        select: &physical::Select,
     ) -> syn::Result<TokenStream> {
         let input = symbol_name(&select.input);
         let column_name = symbol_name(column);

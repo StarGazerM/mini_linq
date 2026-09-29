@@ -29,3 +29,4 @@ cq-xtask	manifest-test	restored	xtask/Cargo.toml
 mini-linq-composition-example	manifest-run	composition	examples/composition/Cargo.toml
 own-dialect	manifest-test	queries	examples/own-dialect/Cargo.toml
 stacked-ir	scenario	expansions	examples/stacked-ir/check_expansions.py
+diverged-ra	scenario	downstream-reuse	examples/diverged-ra/check.py

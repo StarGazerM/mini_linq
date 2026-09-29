@@ -20,12 +20,12 @@ physical-realization = ["dep:cq-physical-realization"]
 
 [dependencies]
 cq-stage.workspace = true
-cq-lang-ra.workspace = true
-cq-lang-vo.workspace = true
+cq-lang-ra = { workspace = true, features = ["reference-prefix"] }
+cq-lang-vo = { workspace = true, features = ["reference-prefix"] }
 cq-lang-cq.workspace = true
-cq-lang-ix.workspace = true
-cq-lang-physical.workspace = true
-cq-lang-structures.workspace = true
+cq-lang-ix = { workspace = true, features = ["reference-prefix"] }
+cq-lang-physical = { workspace = true, features = ["reference-prefix"] }
+cq-lang-structures = { workspace = true, features = ["reference-prefix"] }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

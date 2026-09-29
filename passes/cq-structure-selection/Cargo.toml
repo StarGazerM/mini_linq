@@ -6,22 +6,27 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["reference"]
+reference = ["cq-lang-physical/reference-prefix", "cq-lang-structures/reference-prefix"]
 
 [dependencies]
-cq-lang-physical.workspace = true
-cq-lang-structures.workspace = true
+cq-lang-physical = { workspace = true, default-features = false }
+cq-lang-structures = { workspace = true, default-features = false }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
-cq-lang-ix.workspace = true
+cq-lang-ix = { workspace = true, default-features = false, features = ["reference-prefix"] }
 cq-syntax.workspace = true
 
-cq-lang-ra.workspace = true
-cq-index-policy = { workspace = true  }
+cq-lang-ra = { workspace = true, default-features = false, features = ["reference-prefix"] }
+cq-index-policy = { workspace = true, features = ["reference"] }
 
 [package.metadata.cq]
 source = "cq-lang-physical"
 target = "cq-lang-structures"
+
+[[test]]
+name = "selection"
+required-features = ["reference"]
