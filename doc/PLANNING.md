@@ -15,10 +15,10 @@ follows [Compiler ownership and composition](COMPILER-STRUCTURE.md).
 | CQ-NF → VO; choose valuation order and granularity | `cq_order::compile` |
 | VO → VO; push single-atom guards and optionally apply tree semijoins | `cq_reduce::compile` |
 | VO → named RA | `cq_elaborate::compile` |
-| RA → named index demands | `cq_index_policy::compile` |
+| RA → named demands | `cq_index_policy::compile` |
 | IX plus policy → Physical | `cq_physical_lowering::compile` |
-| Physical plus policy → Structures | `cq_structure_selection::compile` |
-| Structures → Rust | `cq_physical_realization::compile` |
+| Physical plus policy → Γ | `cq_structure_selection::compile` |
+| Γ → Rust | `cq_physical_realization::compile` |
 
 `mini_linq!` selects `cq_to_ra!`: normalization, Written/Coarse ordering,
 and elaboration. `cq_to_ra_hypergraph!` uses the same order, then
@@ -27,7 +27,8 @@ elaboration. These facades pass RA to `mini_linq::choose_index_policy!`; a
 caller can import `index_demands` under that name. IX then goes to the
 caller's `physical_policy!`, which appends a query-independent `policy { … }`
 and invokes `lower_physical!`; Physical records one operator and mode per
-result, and Structures records what answers each read.
+result, and the `structures` section records the bindings Γ: the value answering
+each keyed read.
 
 Planning can be tested through the typed pass APIs without a physical policy.
 The [full-chain test](../facade/mini-linq/tests/physical_query.rs) follows the
@@ -40,7 +41,7 @@ explicit RA.
 places one full subatom per atom, giving a binary join plan;
 `Split::Fine` places one new variable per subatom, giving a generic join
 plan. Prefix rankings use bound-variable connectivity and heading arity;
-Elimination uses the hypergraph analysis's variable order. They do not
+Elimination uses the hypergraph analysis's valuation order. They do not
 estimate cardinalities or perform global cost search. The GYO join tree
 belongs to analysis and optional reduction, not to a cost model.
 
@@ -74,10 +75,10 @@ algebra.
   heading, including composite and empty separators. `cq_elaborate` emits
   renames, joins or semijoins, selections, extensions and a final projection
   from the VO steps.
-- IX names indexes on exact RA versions: `i = @r[0,2]` uses ordinals in `r`'s
+- IX records demands on exact RA versions: `i = @r[0,2]` uses ordinals in `r`'s
   sorted logical heading. Physical derives consumption from its operands. Empty shared
   headings still require an explicit `[]` demand. No structure is chosen by IX.
-- Physical fixes one physical operator and mode per result; Structures binds
+- Physical fixes one physical operator and mode per result; Γ binds
   every keyed read to a host key or a built type. Neither participates in
   logical join planning.
 

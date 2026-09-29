@@ -1,9 +1,10 @@
 # MiniLinq specification
 
-Read the [paper](build/compiler.pdf) for CQ/RA semantics, planning and IX.
+The [paper source](compiler.tex) covers CQ/RA semantics, planning and IX.
+Build `build/compiler.pdf` with the `pdf` command below.
 It includes [ix_physical_contract.tex](ix_physical_contract.tex), which gives
-the IX construction rules and notes that Physical and Structures are specified
-by the the language crates under `languages/` module docs and [DSL.md](../DSL.md) until a formal treatment is
+the IX construction rules and notes that Physical and the bindings Γ are specified
+by the language crates under `languages/` module docs and [DSL.md](../DSL.md) until a formal treatment is
 written.
 
 | Subject | Source |

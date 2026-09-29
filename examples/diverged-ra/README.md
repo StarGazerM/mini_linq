@@ -2,13 +2,12 @@
 
 `ra-theta` defines `theta_join … with … if …; output …;` and its own schema
 and heading analysis. It desugars the join to IX's semantic `Join` + `Select`
-operations, derives its own IX index demands, and implements `cq_lang_ix::Env`.
+operations, derives its own IX demands, and implements `cq_lang_ix::Env`.
 It does not depend on the reference RA grammar or `cq-index-policy`, whose
 source is the reference RA section.
 
-This chooses the surface-language alternative in Slice D2. A true `union`
-operator cannot be sent to the unchanged Physical language: Physical has no
-union operation. An independent surface using the existing semantic operations
+A true `union` operator cannot be sent to the unchanged Physical language:
+Physical has no union operation. An independent surface using the existing semantic operations
 can reuse every downstream pass without copying or modifying those crates.
 
 `build.rs` calls `cq-physical-lowering::compile`, creates its target Env,

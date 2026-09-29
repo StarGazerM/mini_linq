@@ -1,6 +1,6 @@
 # MiniLinq languages and compilation boundaries
 
-The common query path is `CQ → NF → VO → RA → IX → Physical → Structures → Rust`. The
+The common query path is `CQ → NF → VO → RA → IX → Physical → Γ → Rust`. The
 [crate map](COMPILER-STRUCTURE.md) identifies each stage's implementation
 owner. The syntax below distinguishes language validity from the narrower
 domain a caller's policy admits.
@@ -15,8 +15,8 @@ domain a caller's policy admits.
 | VO → RA | `cq_elaborate::compile` |
 | RA → IX | `cq_index_policy::compile` |
 | IX + policy → Physical | `cq_physical_lowering::compile` |
-| Physical + policy → Structures | `cq_structure_selection::compile` |
-| Structures → Rust | `cq_physical_realization::compile` |
+| Physical + policy → Γ | `cq_structure_selection::compile` |
+| Γ → Rust | `cq_physical_realization::compile` |
 
 `mini-linq` supplies procedural entries and transports each typed input/output.
 The policy and the distinct-state provider are caller-resolved macro slots
@@ -256,7 +256,10 @@ schedule and the reductions are the earlier passes' decisions. Planning
 precedes IX and storage choices. A logical result's multiple uses require an explicit physical reuse or
 recomputation decision; they do not make one iterator reusable.
 
-## IX: required index demands
+## IX: demands
+
+An IX entry is a demand: the key set a plan applies a result at. The syntax
+retains the section name `indexes`; its entries do not select storage.
 
 ```ebnf
 IX              ::= RelationalModule
@@ -265,7 +268,7 @@ IndexDefinition ::= Ident "=" "@" RelId "[" [Column ("," Column)* [","]] "]"
 ```
 
 `Column` is a nonnegative integer ordinal. IX preserves the whole RA payload.
-Index analysis records each NaturalJoin/Semijoin's right version and joined-column
+Demand analysis records each NaturalJoin/Semijoin's right version and joined-column
 ordinals in that result's sorted logical heading. They are not source-declaration
 positions. Identical `(version, columns)` demands share one identity. Physical
 derives uses from its operands. Empty shared headings use an explicit `[]`
@@ -276,7 +279,7 @@ of `r2` and `r4`. IX validity checks distinct identities and descriptors, exact
 RA result versions, and strictly increasing in-range ordinals. Every demand must
 match some RA natural join or semijoin's right operand and join columns; otherwise
 it reports ``index `i0` is demanded by no join``. IX permits partial demand sets;
-index-policy correspondence requires the complete set in first-use order.
+demand-derivation correspondence requires the complete set in first-use order.
 Physical checks that each probe/semi's right operand and join columns have a
 matching demand. Index allocation and data structure selection have not occurred.
 
@@ -307,10 +310,13 @@ already sorted on that key) or read more than once; an `alias` is a host
 rename read in place. `canon` marks a result inserted into a canonical index
 — the endpoint's distinct sink on a pipe, a materialized set on a let. The
 returned result must be canonical, by this flag or by key inference from
-`canon` hosts. Order and uniqueness are premises here; Structures discharges
+`canon` hosts. Order and uniqueness are premises here; Γ discharges
 them.
 
-## Structures: what answers each read
+## The bindings Γ: what answers each keyed read
+
+The `structures` section records the bindings Γ: the value answering each
+keyed read.
 
 ```ebnf
 Structures ::= Physical "structures" "{" (Entry ";")* "}"

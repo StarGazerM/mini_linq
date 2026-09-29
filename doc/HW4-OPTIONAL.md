@@ -6,7 +6,7 @@ Homeworks 1–3. A team works on it only when assigned the released
 commands do not run it. Start from the released reference branch, not from
 unfinished basic pass bodies. The extension is harder because you
 extend the source language contract, the named relational
-algebra fragment, the index-requirement relation, and the physical Rust lowering.
+algebra fragment, the demand relation, and the physical Rust lowering.
 Its relationship to push, Rayon, multi-query, and arbitrary-type options is
 recorded in the
 [extension compatibility matrix](OPTIONAL-PROJECT-TRACKS.md#route-graph-and-configuration-rule).
@@ -79,7 +79,7 @@ the same aggregate value still contribute separately. Thus the three distinct
 person-1 tuples each contribute `5`. The second columns of both `Blocked` and
 `Purchase` are intentionally ignored: this fixture makes `_` part of the
 required surface and proves that wildcard and aggregate-value columns do not
-become index-key columns.
+become demand-key columns.
 
 ### Global-clause example
 
@@ -290,9 +290,9 @@ operators rather than repeating a direct CQ-body walk:
 The narrow Basic-HW2 assignment does not require Unit. The implemented default
 expression route already admits it; HW4 must also continue the logical walk
 through AntiSemijoin and AggregateApply. For the global example, both
-heading intersections are empty, so neither clause creates an index
-requirement. An empty key means “enumerate/test the whole relation”; it is not
-written as an empty `R[]` index.
+heading intersections are empty, so neither clause creates a demand.
+An empty key means “enumerate/test the whole relation”; it is not
+written as an empty `R[]` demand.
 
 The complete IndexRequirements target therefore retains both the source and
 logical plan and then appends the two keys:
@@ -321,7 +321,7 @@ indexes {
 }
 ```
 
-The complete index overlay for the global example preserves its entire plan
+The complete demand overlay for the global example preserves its entire plan
 and has no entries:
 
 ```text
@@ -346,7 +346,7 @@ indexes {}
 Extend the RA → IX correspondence check for these operators as well as the
 local IndexRequirements contract.
 
-## Physical, Structures and printed Rust extension
+## Physical, the bindings Γ and printed Rust extension
 
 The stages after IX must consume the extended IndexRequirements object and
 continue to produce the same shape as Basic HW3: a `physical::Module`, a
@@ -354,7 +354,7 @@ continue to produce the same shape as Basic HW3: a `physical::Module`, a
 over the `cq-storage` traits, not another negation/aggregation or storage
 descriptor IR. `AntiSemijoin` and `AggregateApply` keep their logical names
 in Physical; the physical form they need is fixed by the already-derived key
-shape and answered by Structures in the usual way.
+shape and answered by the bindings Γ in the `structures` section in the usual way.
 
 The physical choice follows that key shape:
 
@@ -400,9 +400,9 @@ must update each affected language contract and its corresponding lowering.
 | Supplied CQ syntax | `languages/cq-lang-cq/src/lib.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
 | CQ validity | `languages/cq-lang-cq/src/lib.rs` | Implement the left-to-right safety rules |
 | CQ → NF → VO → RA | `languages/cq-lang-cq/src/normal.rs`, `languages/cq-lang-vo/src/lib.rs`, `passes/cq-order/src/lib.rs`, `passes/cq-elaborate/src/lib.rs`, and `languages/cq-lang-ra/src/lib.rs` | Define the extended clauses across normalization and valuation planning; add `AntiSemijoin`/`AggregateApply` and their inferred-heading rules; extend each pass's correspondence check |
-| Index selection | `passes/cq-index-policy/src/lib.rs` and its `correspondence.rs` check | Extend key derivation over the complete RelationalPlan and its independent check |
+| Demand derivation | `passes/cq-index-policy/src/lib.rs` and its `correspondence.rs` check | Extend key derivation over the complete RelationalPlan and its independent check |
 | Physical lowering | `languages/cq-lang-physical/src/lib.rs` and `passes/cq-physical-lowering/src/lib.rs` | Carry the new operators through Physical and extend its contract and correspondence check |
-| Structures and printer | `languages/cq-lang-structures/src/lib.rs`, `passes/cq-structure-selection/src/lib.rs`, and `passes/cq-physical-realization/src/lib.rs` | Answer the negative and aggregate reads and print the concrete negative and aggregate Rust accesses |
+| Γ and printer | `languages/cq-lang-structures/src/lib.rs`, `passes/cq-structure-selection/src/lib.rs`, and `passes/cq-physical-realization/src/lib.rs` | Answer the negative and aggregate reads and print the concrete negative and aggregate Rust accesses |
 
 You may add private helpers next to these sites. Do not add a generic pass
 trait, a dynamic query interpreter, or a second storage/access descriptor IR.
@@ -442,7 +442,7 @@ when its row is requested. The ordinary basic-checkpoint commands do not enable
 `hw4`, so this extension cannot block a basic submission.
 
 Include the global example in the affected IR/pass suites. Test the exact single
-`Unit`, both empty inferred correlations, the empty index overlay, empty and
+`Unit`, both empty inferred correlations, the empty demand overlay, empty and
 nonempty `Blocked`, and empty and nonempty `Purchase`.
 
 ## Definition of done
@@ -461,9 +461,9 @@ nonempty `Blocked`, and empty and nonempty `Purchase`.
 - IndexRequirements preserves that entire logical plan rather than replacing
   it with only a key list.
 - The exact requirements are `Blocked[0]` then `Purchase[0]`.
-- The global example has no index requirements and never writes an empty-key
-  index entry.
-- Physical and Structures retain and check every extended logical result
+- The global example has no demands and never writes an empty-key
+  demand entry.
+- Physical and Γ retain and check every extended logical result
   beside its physical form and the structure that answers it.
 - The printed Rust block builds its structures at the top and reads through
   the `cq-storage` traits; the aggregate fold runs only when its row is

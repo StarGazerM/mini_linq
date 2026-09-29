@@ -4,8 +4,11 @@ The old executable export and its materialized-backend profile have been removed
 A standalone teaching release must now follow the same boundaries as the compiler:
 
 ```text
-CQ → RA → IX → Physical → Structures → Rust
+CQ → RA → IX → Physical → Γ → Rust
 ```
+
+IX records demands, the key sets a plan applies results at. The `structures`
+section records the bindings Γ, the value answering each keyed read.
 
 Logical YA scheduling is the `Reductions::Tree` option of the
 [`cq-reduce`](../../passes/cq-reduce/src/lib.rs) pass: it writes the upward and

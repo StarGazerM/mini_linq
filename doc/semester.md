@@ -76,7 +76,7 @@ midterm, or final exam.
 | 6 · Oct. 5–9 | Yannakakis | Join trees, two semijoin passes, and enumeration | Yannakakis, [*Algorithms for Acyclic Database Schemes*](https://dblp.org/rec/conf/vldb/Yannakakis81), §§2, 4; **Fall Break adjustment** |
 | 7 · Oct. 12–16 | Practical join filtering | **Hangdong Zhao guest lecture:** predicate transfer and runtime filters | Yang et al., [*Predicate Transfer*](https://www.vldb.org/cidrdb/papers/2024/p22-yang.pdf) |
 | 8 · Oct. 19–23 | WCOJ principle | Contrast binary plans with variable-oriented Generic Join | Ngo, Porat, Ré, and Rudra, [*Worst-case Optimal Join Algorithms*](https://arxiv.org/abs/1203.1952), §§1–2 and §5 overview |
-| 9 · Oct. 26–30 | Leapfrog Triejoin | Trace trie cursors under supplied variable orders | Veldhuizen, [*Leapfrog Triejoin*](https://www.openproceedings.org/2014/conf/icdt/Veldhuizen14.pdf), §§1, 3.1–3.5; **practicum 3** |
+| 9 · Oct. 26–30 | Leapfrog Triejoin | Trace trie cursors under supplied valuation orders | Veldhuizen, [*Leapfrog Triejoin*](https://www.openproceedings.org/2014/conf/icdt/Veldhuizen14.pdf), §§1, 3.1–3.5; **practicum 3** |
 | 10 · Nov. 2–6 | Positive Datalog | Model, fixed-point, and proof views of recursion | *Foundations of Databases*, §§12.1–12.4; **R2 due** |
 | 11 · Nov. 9–13 | Semi-naive evaluation | Track full, delta, candidates, duplicates, and termination | *Foundations of Databases*, §13.1 |
 | 12 · Nov. 16–20 | Probabilistic and neuro-symbolic Datalog | Compare exact, top-k, and differentiable proof evaluation | Huang et al., [*Scallop*](https://proceedings.neurips.cc/paper/2021/hash/d367eef13f90793bd8121e2f675f0dc2-Abstract.html), §§2–4.2 |
@@ -111,7 +111,7 @@ implementation assignment.
 Students work individually or in pairs in a supplied Rust codebase. The
 current physical-lowering checkpoint contains one `mini-linq` proc-macro crate,
 Syn-backed CQ, CQ-NF, VO, RelationalPlan, IndexRequirements, Physical,
-Structures, local language checks, and tests. Its basic route has three
+the bindings Γ, local language checks, and tests. Its basic route has three
 homework boundaries. The CQ-to-RA chain lives in `languages/cq-lang-cq/src/normal.rs`,
 `passes/cq-order/src/lib.rs`, and `passes/cq-elaborate/src/lib.rs`; later stages
 live in `passes/cq-index-policy/src/lib.rs` and the `cq-physical-lowering`,
@@ -122,12 +122,12 @@ live in `passes/cq-index-policy/src/lib.rs` and the `cq-physical-lowering`,
 2. **Basic HW2:** RelationalPlan to IndexRequirements, preserving that entire
    plan while adding exact first-use keys; and
 3. **Basic HW3:** IndexRequirements plus a query-independent policy to
-   Physical, then Structures, then Rust.
+   Physical, then Γ, then Rust.
 
 The third edge is three recorded decisions. Physical fixes one physical
-operator per result and the mode of every read; Structures names the host
-key or compiler-built type that answers each read; `structures_to_rust!`
-prints one Rust block over the `cq-storage` traits (`Build`, `IndexRead`,
+operator per result and the mode of every read; the `structures` section
+records the bindings Γ, the host or built value answering each keyed read;
+`structures_to_rust!` prints one Rust block over the `cq-storage` traits (`Build`, `IndexRead`,
 `ExactMembership`, `OrderedRead`, `Canonical`) that evaluates to an
 iterator of answer tuples in head order. A program over hosts alone
 evaluates to the lazy iterator itself; one that builds structures collects
@@ -142,10 +142,10 @@ stages:
 
 | Stage | Required implementation | Points |
 |---|---|---:|
-| 1. Logical and physical lowering | Complete Basic HW1 (CQ → NF → VO → RelationalPlan), HW2 (RelationalPlan → IndexRequirements), and HW3 (requirements → Physical → Structures → Rust) | 6 |
-| 2. Execution control | Study the supplied pull program, then lower the same Structures to a staff-supplied push target without changing the chosen structures | 4 |
+| 1. Logical and physical lowering | Complete Basic HW1 (CQ → NF → VO → RelationalPlan), HW2 (RelationalPlan → IndexRequirements), and HW3 (requirements → Physical → Γ → Rust) | 6 |
+| 2. Execution control | Study the supplied pull program, then lower the same Γ to a staff-supplied push target without changing the chosen structures | 4 |
 | 3. Semijoin reduction | Implement a semijoin and both Yannakakis passes over a supplied join tree | 8 |
-| 4. Triejoin | Implement leapfrog intersection and variable-at-a-time enumeration using a supplied **variable order** and tries | 12 |
+| 4. Triejoin | Implement leapfrog intersection and variable-at-a-time enumeration using a supplied **valuation order** and tries | 12 |
 | 5. Semi-naive evaluation | Maintain full and delta relations, remove duplicates, and run to a fixed point | 10 |
 | Final presentation | Demonstrate one result and explain the relevant choices, evidence, and limitations | 10 |
 | **Total** | | **50** |
@@ -173,15 +173,15 @@ so.
 The recommended Optional Homework 4 is the guided
 [Ascent-style negation and aggregation extension](HW4-OPTIONAL.md). Students
 extend the CQ body IR and safety judgment, add logical `AntiSemijoin` and
-`AggregateApply` operators to RelationalPlan, extend index selection, and lower
-the new operators through Physical and Structures to the printed Rust
+`AggregateApply` operators to RelationalPlan, extend demand derivation, and lower
+the new operators through Physical and Γ to the printed Rust
 program. HW4 is opt-in and does not
 replace or block a required release stage.
 
 Four further advanced-track designs are recorded in
 [Optional project tracks](OPTIONAL-PROJECT-TRACKS.md): push with Tokio messages
 and a possible IVM continuation, Rayon parallel physical lowering, several
-queries with an exact globally shared index set, and arbitrary concrete Rust
+queries with an exact globally shared demand set, and arbitrary concrete Rust
 column types. Staff supplies any new target IR, checker, emitter, dependencies,
 and complete residual examples; a student implements the named transformation
 rather than designing an IR from scratch. The document does not assign points
@@ -231,7 +231,7 @@ implement the designated typed stages behind those entries.
 the exact requirements.
 `cq_physical_lowering::compile(&index_requirements::Module, &Policy)` and
 `cq_structure_selection::compile(&physical::Module, &Policy)` record the
-physical operators and the structures that answer each read, and
+physical operators and the bindings Γ answering each keyed read, and
 `cq_physical_realization::compile(&structures::Module, &Endpoints)` returns
 `syn::Result<syn::Expr>`: one Rust block over the `cq-storage` traits. Inside each body they inspect
 the borrowed source and construct the complete target with `quote!` and
@@ -244,11 +244,11 @@ and VO kernels by erasure, up to variable renaming. The later
 RelationalPlan-to-IndexRequirements and physical edges
 have their own correspondence checks. The generated physical Rust is
 inspected structurally by staged fixtures.
-The Basic-HW3 harness checks Physical and Structures against their language
+The Basic-HW3 harness checks Physical and Γ against their language
 contracts and correspondence checks, prints Rust, compiles
 the resulting standalone file with rustc, executes it, and checks fixed fixture-specific
 results. `cq_physical_realization::check` compares the printed program
-against its Structures source; this structural audit does not prove arbitrary
+against its Γ source; this structural audit does not prove arbitrary
 embedded Rust or state-provider implementations correct. The fixture harness is
 not a dynamic CQ/DuckDB oracle and not a generic `Pass` or `WellFormedIr` trait
 system.
@@ -273,7 +273,7 @@ parallel Rust builder API. The final pass emits actual Rust collection
 construction and access expressions rather than another descriptor language.
 Supplied `cq_physical_realization::compile` consumes a `structures::Module`
 and returns one ordinary Rust block whose value is an iterator of answer
-tuples. Structures retains operator and intermediate-result boundaries, while the emitted
+tuples. The reference payload retains operator and intermediate-result boundaries, while the emitted
 combinators retain resumable state. Calling `next()` or a consumer such as
 `any()` executes query traversal; the caller collects the root into
 a collection or drains it without storing the answers.

@@ -12,7 +12,7 @@ how that set is *presented*, never what it is. Correspondence between
 adjacent languages is therefore an erasure: CQ-NF is the kernel every plan
 erases to (`Kernel`, compared up to renaming of variables), VO reductions
 erase to the unreduced plan, RA erases back to the kernel
-(`relational_plan::kernel`), IX/Physical/Structures erase by dropping their
+(`relational_plan::kernel`), IX/Physical/Γ erase by dropping their
 section.
 
 | language | presentation | decision recorded |
@@ -21,9 +21,9 @@ section.
 | VO | the order in which valuations are built; granularity of each step | valuation order, split |
 | VO (reduced) | + consistency checks placed before joins | where reductions go |
 | RA | straight-line named algebra (SSA without φ) | none (elaboration) |
-| IX | the key sets the plan applies results at | none (derived demands) |
+| IX | demands: the key sets the plan applies results at | none (derived demands) |
 | Physical | one operator per result; `pipe`/`let`/`alias` modes | operator form, dedup placement |
-| Structures (Γ) | the value answering each keyed read | representation |
+| `structures` | the bindings Γ: the value answering each keyed read | representation |
 
 A valuation plan's step `i` denotes the partial valuations on the variables
 bound so far that satisfy every subatom seen; the last step denotes `⟦Q⟧`.

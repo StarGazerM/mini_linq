@@ -26,9 +26,9 @@ baseline.
 
 The synchronous push warm-up below is part of the required execution-control
 core. Tokio channels and the IVM continuation are separate pick-one options.
-Push branches from Structures rather than translating the pull-specific
-printed program. Async tasks and channels are a second push realization, not
-a pull variant.
+Push branches from the bindings Γ (the `structures` section) rather than
+translating the pull-specific printed program. Async tasks and channels are a
+second push realization, not a pull variant.
 
 ## Route graph and configuration rule
 
@@ -39,7 +39,7 @@ CQ
   -- Basic HW1 --> RelationalPlan                         // rN DAG references
   -- Basic HW2 --> IndexRequirements(RelationalPlan)
   -- Basic HW3 --> Physical(IndexRequirements)           // operator and mode per result
-  -- supplied selection --> Structures(Physical)         // what answers each read
+  -- supplied selection --> Γ(Physical)                  // bindings answering each keyed read
   -- supplied printer --> lazy result-set Iterator
 ```
 
@@ -51,13 +51,13 @@ logical layer:
 Extended CQ with ! and agg
   --> Extended RelationalPlan with AntiSemijoin and AggregateApply
   --> Extended IndexRequirements preserving that entire plan
-  --> Extended Physical and Structures
+  --> Extended Physical and Γ
   --> the supplied printer
 ```
 
 The general RelationalPlan already supplies the singleton zero-attribute `Unit`
 source. HW4 uses it when global negation or aggregation appears before any
-positive binding; their empty correlation keys require no index entries. The
+positive binding; their empty correlation keys require no demand entries. The
 narrow Basic-HW2/3 assignment does not require Unit. The implemented default
 expression route already supports it; global negation and aggregation still
 require their own logical and physical lowering.
@@ -76,7 +76,7 @@ The extension families are intentionally separate at first:
 
 | Track | Decision it exposes | Correct branch point |
 |---|---|---|
-| Push and async messages | who drives execution and how intermediate bindings move | Structures |
+| Push and async messages | who drives execution and how intermediate bindings move | Γ |
 | Parallel Rayon execution | work partitioning, parallel builders, and result ownership | IndexRequirements, before sequential physical Rust |
 | Multiple queries | global index sharing across independent query bodies | CQ, RelationalPlan, and IndexRequirements |
 
@@ -131,8 +131,9 @@ disabled without removing source validation. Tests and tools can also call
 
 The terminology is precise:
 
-- CQ, RelationalPlan, IndexRequirements, Physical, and Structures are
-  whole-program IRs.
+- CQ, RelationalPlan, IndexRequirements, Physical, and `structures` name
+  reference payloads. Later payloads compose a local section with its prefix;
+  the `structures` section records the bindings Γ.
 - The Rust block printed by `structures_to_rust!` is the **printed pull
   program**.
 - `structures_to_rust`, `push`, and `push_tokio` name transformations. They are not names for
@@ -239,7 +240,7 @@ not runtime channels.
 ### A2. Advanced Tokio channel lowering
 
 Async message passing is a distinct, harder push target. It also branches from
-Structures; the physical operators and their heading columns make it possible
+Γ; the physical operators and their heading columns make it possible
 to derive and check which prefix variables each message must carry.
 
 Staff supplies `tokio_channel_plan::Plan` and its checker/emitter. Its fields
@@ -428,7 +429,7 @@ has selected a single mutable `BTreeSet` and sequential builders:
 
 ```text
 RelationalPlan -> IndexRequirements(RelationalPlan)
-                    |-- sequential -> Physical -> Structures
+                    |-- sequential -> Physical -> Γ
                     |                  |-- pull -> printed Rust Iterator
                     |                  `-- push -> RustCallbackNest -> fused callback Rust
                     `-- parallel   -> RayonFoldPlan -> Rayon Rust
@@ -526,7 +527,7 @@ it the same assignment as async push. The first teaches partition-local state
 and associative merging; the second teaches producer/consumer protocol,
 backpressure, and termination.
 
-## Track C: several queries with one exact global index set
+## Track C: several queries with one exact global demand set
 
 This option extends the existing CQ program rather than creating a batch-query
 wrapper. It supports several independent named CQs over the same declared
@@ -550,10 +551,11 @@ independent CQs, not recursion, rule union, or Datalog evaluation.
 
 Basic HW1 produces one named RelationalPlan per query. DAG references such as
 `r0` are local to that query plan and may be reused in the next plan; they do
-not identify shared physical storage or denote algebra operators. Index sharing is derived only in
-the next whole-program stage.
+not identify shared physical storage or denote algebra operators. Shared demands
+are derived in the next whole-program stage; they determine which indexes the
+physical target can share.
 
-Canonical requirements are a stable global first-use union:
+Canonical demands are a stable global first-use union:
 
 ```text
 seen = {}
@@ -575,11 +577,11 @@ indexes {
 ```
 
 `Edge[0]` used again by `two_hop` is not repeated. The contract is strict:
-missing, extra, duplicate, or reordered requirements fail. “Redundant” means
+missing, extra, duplicate, or reordered demands fail. “Redundant” means
 the same normalized relation and the same ordered key columns. `Edge[0]` does
-not subsume `Edge[0, 1]`; those are different physical requirements.
-This is exact shared-index reuse, in the same broad family as shared dataflow
-[arrangements](https://www.vldb.org/pvldb/vol13/p1793-mcsherry.pdf), not a claim
+not subsume `Edge[0, 1]`; those are different demands.
+These shared demands permit exact index reuse, in the same broad family as
+shared dataflow [arrangements](https://www.vldb.org/pvldb/vol13/p1793-mcsherry.pdf), not a claim
 that one arbitrary access path can answer another.
 
 The physical target normalizes every globally used input once, builds one rows
@@ -613,7 +615,7 @@ pub trait SharedGraphApi {
 ```
 
 There is no `BatchPlan`: each named RelationalPlan and each
-Physical and Structures module remains local to one query, and each
+`physical` and `structures` module remains local to one query, and each
 printed program is enclosed in its own Rust block. The global sharing facts
 live in the extended Program, the collection of query-local relational plans,
 canonical IndexRequirements, and the complete Rust file.

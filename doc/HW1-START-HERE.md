@@ -23,7 +23,7 @@ The current route lives in `languages/cq-lang-cq/src/normal.rs`,
 The parsers, local contracts, pass correspondence checks, fixtures and lower
 stages are supplied in this checkout. A released starter identifies which
 parts students complete.
-Index selection and physical construction belong to later assignments.
+Demand derivation and physical construction belong to later assignments.
 Use the starter branch's corresponding source file when working on that release.
 
 ## Read these two artifacts

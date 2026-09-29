@@ -10,7 +10,7 @@ CQ
   -- elaborate --> RelationalPlan
   -- Basic HW2 --> IndexRequirements preserving the complete RelationalPlan
   -- Basic HW3 --> Physical (IX plus one physical operator and mode per result)
-  -- supplied selection --> Structures (what answers each read)
+  -- supplied selection --> Γ (the bindings answering each keyed read)
   -- supplied printer --> one Rust block over the cq-storage traits
 ```
 
@@ -30,7 +30,7 @@ implementations in this checkout live in separate modules:
 - CQ normalization: `languages/cq-lang-cq/src/normal.rs`;
 - valuation ordering: `passes/cq-order/src/lib.rs`;
 - RA elaboration: `passes/cq-elaborate/src/lib.rs`;
-- input-index selection: `passes/cq-index-policy/src/lib.rs`;
+- demand derivation: `passes/cq-index-policy/src/lib.rs`;
 - physical lowering: `passes/cq-physical-lowering/src/lib.rs`.
 
 | Homework | Typed function | Successful result |
@@ -61,7 +61,7 @@ Tests and tools can also call local `contract::check` directly.
 
 ## Basic HW1: CQ to RelationalPlan
 
-The output is a complete named relational-algebra program, not an index list.
+The output is a complete named relational-algebra program, not a demand list.
 Each body occurrence receives its own complete `rename` directly from the
 atomic declared relation name. Every later operator names the exact earlier
 result it consumes.
@@ -117,7 +117,7 @@ compares the RA and VO kernels up to variable renaming. `Written` with
 ## Basic HW2: RelationalPlan to IndexRequirements
 
 Preserve the **entire** input RelationalPlan, byte-for-byte at the typed syntax
-level, and append the equality-index overlay required by its probes. Do not
+level, and append the equality-demand overlay required by its probes. Do not
 reconstruct the original CQ walk and do not discard the logical operators.
 
 The basic sequential backend accepts a supported left-deep plan. For each
@@ -139,8 +139,8 @@ indexes {
 }
 ```
 
-This rule supports self-joins, reuse of one index by several Rename
-occurrences, and several different indexes on one declared relation. The
+This rule supports self-joins, reuse of one demand by several Rename
+occurrences, and several different demands on one declared relation. The
 output still contains all six Triangle `rN` definitions; see the complete
 third artifact in `DSL.md`.
 
@@ -153,7 +153,7 @@ other RA shapes. Those cases lie outside the basic homework's required domain.
 
 ## Basic HW3: IndexRequirements to Physical
 
-This pass consumes the indexed logical plan and a query-independent policy
+This pass consumes the logical plan with demands and a query-independent policy
 and returns a `physical::Module`: the unchanged IX plus, for every result,
 one physical operator and one mode:
 
@@ -177,16 +177,19 @@ strategy (`join = merge`, `semijoin = prefer_lazy`), and `#[index(Type)]`
 advice on relation declarations. The same policy is passed unchanged to the
 supplied structure selection.
 
-## Supplied structures and printer
+## Supplied bindings Γ and printer
 
-`cq_structure_selection::compile` (Physical → Structures) binds every keyed
+The `structures` section records the bindings Γ: the value answering each
+keyed read.
+
+`cq_structure_selection::compile` (Physical → Γ) binds every keyed
 read to the host key that answers it or, when no host key does, to a Rust
 type built over the result through `cq_storage::Build`; `#[index(Type)]`
 advice names that type. It also discharges every `merge` and return
 premise: an ordered host key, a built ordered type, or a pipe sorted by its
 own merge.
 
-`cq_physical_realization::compile` (Structures → Rust) prints one Rust block
+`cq_physical_realization::compile` (Γ → Rust) prints one Rust block
 over the `cq-storage` traits (`Build`, `IndexRead`, `ExactMembership`,
 `OrderedRead`/`merge`/`sorted_by`, `Canonical`). Built structures are
 constructed at the top of the block and guarded by `cq_storage::require`
@@ -203,7 +206,7 @@ this pass.
 ## Recommended implementation order
 
 1. Read the language grammars and the triangle example in `DSL.md`.
-2. Implement and test Basic HW1 before touching index selection.
+2. Implement and test Basic HW1 before touching demand derivation.
 3. Implement Basic HW2 by walking the named logical operators.
 4. Implement Basic HW3 by assigning each result its physical operator and
    mode from the policy and its uses.
@@ -216,7 +219,7 @@ Do not put physical storage decisions back into RelationalPlan. A full
 `Coarse` subatom remains a NaturalJoin even when all its variables are bound;
 only a partial consistency check elaborates to a logical Semijoin. Physical
 lowering decides how to implement membership. Do not reconstruct NaturalJoin
-structure during index selection. If one pass becomes responsible for both
+structure during demand derivation. If one pass becomes responsible for both
 logical and physical decisions, its source or target IR is missing an explicit
 fact.
 

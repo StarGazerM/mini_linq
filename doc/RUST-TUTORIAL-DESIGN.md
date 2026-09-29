@@ -303,7 +303,7 @@ mini_linq(TokenStream)
 ```
 
 The same pattern repeats for RelationalPlan, IndexRequirements,
-Physical, and Structures. There is no extra public `expand_*`
+Physical, and the `structures` payload carrying the bindings Γ. There is no extra public `expand_*`
 wrapper because the proc-macro entry already owns the only token-level work.
 
 ## Sequence 8: local contracts and edge contracts
@@ -380,9 +380,9 @@ physical {
 ```
 
 That module states the physical operator and dataflow structure, but not the
-host-language spelling. Structures then names what answers each read, and
-`cq_physical_realization::compile` is the printer
-that maps them to `map`, `flat_map`, and `filter`. This keeps the final emitter
+host-language spelling. The bindings Γ in the `structures` section then name
+the value answering each keyed read, and `cq_physical_realization::compile`
+is the printer that maps them to `map`, `flat_map`, and `filter`. This keeps the final emitter
 honest: it does not invent a join or intermediate result while printing.
 
 ## Sequence 10: root laziness and distinct state
@@ -476,9 +476,9 @@ adjacent files to inspect them. They are syntax/diff snapshots outside Cargo's
 crate graph, not Rust Analyzer type-checked modules. Compare:
 
 1. `mini_linq!` to RelationalPlan; and
-2. RelationalPlan to the index overlay.
+2. RelationalPlan to the demand overlay.
 
-The stepper stops at IX; read the Physical, Structures and printed Rust
+The stepper stops at IX; read the Physical, Γ and printed Rust
 stages from the [full-chain test](../facade/mini-linq/tests/physical_query.rs).
 
 Students should compare each result with the authoritative DSL artifacts,
@@ -538,7 +538,7 @@ before a positive atom, students use that empty-heading singleton as the left
 input. Correlation is inferred from heading intersection, so a global clause
 has an empty intersection rather than a serialized `()` key. AntiSemijoin may
 preserve that empty heading; the following global aggregate appends its owned
-output. The empty intersection creates no index entry.
+output. The empty intersection creates no demand entry.
 
 Students cumulatively edit the production grammar and passes on that
 checkpoint. The `hw4` feature gates only the optional test targets; it does

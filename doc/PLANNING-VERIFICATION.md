@@ -35,7 +35,7 @@ The oracles use different algorithms:
   and analysis facts.
 
 The CQ/RA evaluators share integer/set carriers and name normalization, but
-do not share ordering, reduction or index analysis. Fixed authored answers
+do not share ordering, reduction or demand analysis. Fixed authored answers
 help expose shared misunderstandings. The current hypergraph tests cover
 specific chain, star, cycle and self-join cases; they do not claim exhaustive
 enumeration of small hypergraphs.

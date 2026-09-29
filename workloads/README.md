@@ -43,7 +43,7 @@ stable order and teaching metadata.
 |---|---|
 | [`intersection`](src/queries/classic/intersection.rs) | Unary equality join ending in full-key membership. |
 | [`cartesian-product`](src/queries/classic/cartesian_product.rs) | A disconnected body; the second occurrence has a disjoint heading and forms a Cartesian product. |
-| [`oriented-chain`](src/queries/classic/oriented_chain.rs) | One self-joined relation needs leading- and non-leading-column indexes; the head also projects away join variables. |
+| [`oriented-chain`](src/queries/classic/oriented_chain.rs) | One self-joined relation has demands on leading and non-leading columns; the head also projects away join variables. |
 | [`claw`](src/queries/classic/claw.rs) | The variable-graph star `K_1,3`, with three branches sharing one center. |
 | [`fact-star`](src/queries/classic/fact_star.rs) | A relation-join-graph fact/dimension star, distinct from the variable-graph claw. |
 | [`triangle`](src/queries/classic/triangle.rs) | The smallest cyclic CQ: root enumeration, partial lookup, then full-key cycle closure. |
@@ -240,7 +240,8 @@ cargo xtask explain retail_h21_positive
 
 `--through` accepts `cq`, `relational-plan`, or `index-requirements`; its default
 is `index-requirements`. The command calls the typed CQ → RA → IX passes and
-checks their local contracts. IX records named demands over exact RA results;
+checks their local contracts. IX records named demands over exact RA results:
+each demand is the key set a plan applies a result at.
 Physical derives demand uses from its operands.
 
 Complete typed payloads are written under `target/mini-linq-explain/<case>/`:
@@ -249,7 +250,7 @@ Complete typed payloads are written under `target/mini-linq-explain/<case>/`:
 |---|---|
 | `01-cq.tokens` | Authored CQ module. |
 | `02-relational-plan.tokens` | Planned named RA module. |
-| `03-index-requirements.tokens` | RA plus named index demands. |
+| `03-index-requirements.tokens` | RA plus named demands. |
 
 These files are typed pass outputs, not captured individual macro expansions or
 Rust Analyzer type-checked workspace modules. A new run clears stale later

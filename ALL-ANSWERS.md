@@ -7,7 +7,7 @@ compiler redesign in progress, not a completed answer release for every query.
 The compiler boundaries are:
 
 ```text
-CQ → NF → VO → RA → IX → Physical → Structures → Rust
+CQ → NF → VO → RA → IX → Physical → Γ → Rust
 ```
 
 `cq_lang_cq::normal::normalize` puts CQ in kernel normal form. `cq-order` orders
@@ -16,10 +16,10 @@ Yannakakis semijoin reductions; `cq-elaborate` turns VO into named RA. Normal
 form has a contract check; order, reduction, and elaboration have correspondence
 checks. Reductions erase to the input VO plan, and VO and RA plans erase to the
 CQ-NF kernel up to variable renaming. `cq-index-policy` records exact-version
-index demands. `cq-physical-lowering` restates every
-IX result with one physical operator and read mode from the caller's policy.
-`cq-structure-selection` binds every keyed read to a host key fact or a Rust
-type built over the result.
+demands, the key sets a plan applies results at. `cq-physical-lowering` restates
+every IX result with one physical operator and read mode from the caller's policy.
+`cq-structure-selection` produces the bindings Γ in the `structures` section:
+the value answering each keyed read, supplied by a host or built over the result.
 `cq-physical-realization` prints one pull program over the `cq-storage` traits;
 `cq-state-providers` supplies the selectable distinct providers. `mini-linq`
 exports the procedural entry points and caller-resolved slots. The
