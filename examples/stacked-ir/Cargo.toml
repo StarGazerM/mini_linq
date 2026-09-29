@@ -1,0 +1,14 @@
+[package]
+name = "stacked-ir"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["trace", "physical-to-trace", "trace-to-physical", "bridge"]
+
+[dependencies]
+mini-linq = { path = "../../facade/mini-linq" }
+cq-state-providers = { path = "../../runtime/cq-state-providers" }
+cq-storage = { path = "../../runtime/cq-storage" }
+trace-bridge = { path = "bridge" }

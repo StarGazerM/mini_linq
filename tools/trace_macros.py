@@ -161,7 +161,7 @@ pub(crate) fn expand(
 
 
 macro_packages = list(dict.fromkeys(['mini-linq', *args.macro_package]))
-macro_sources = {'mini-linq': COPY / 'crates/mini-linq/src/lib.rs'}
+macro_sources = {'mini-linq': COPY / 'facade/mini-linq/src/lib.rs'}
 if args.macro_package:
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--manifest-path', str(manifest), '--no-deps',

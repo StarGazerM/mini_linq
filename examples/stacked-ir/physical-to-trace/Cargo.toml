@@ -1,0 +1,10 @@
+[package]
+name = "physical-to-trace"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cq-lang-physical = { path = "../../../languages/cq-lang-physical", default-features = false }
+cq-lang-trace = { path = "../trace" }
+syn = "2"

@@ -10,7 +10,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cq_ir::{cq, symbol_name};
+use cq_lang_cq as cq;
+use cq_syntax::symbol_name;
 
 use crate::{GENERATOR_VERSION, GenerationConfig, Scale, Scenario, Suite};
 

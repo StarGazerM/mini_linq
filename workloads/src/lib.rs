@@ -11,7 +11,7 @@ pub mod generate;
 pub mod queries;
 pub mod sql;
 
-use cq_ir::cq;
+use cq_lang_cq as cq;
 
 /// The stable version written into generated workload manifests.
 pub const GENERATOR_VERSION: u32 = 2;

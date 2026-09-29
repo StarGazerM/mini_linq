@@ -397,12 +397,12 @@ must update each affected language contract and its corresponding lowering.
 
 | Stage | File | Required change |
 |---|---|---|
-| Supplied CQ syntax | `crates/cq-ir/src/cq.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
-| CQ validity | `crates/cq-ir/src/cq.rs` | Implement the left-to-right safety rules |
-| CQ → NF → VO → RA | `crates/cq-ir/src/cq/normal.rs`, `crates/cq-ir/src/valuation.rs`, `crates/cq-order/src/lib.rs`, `crates/cq-elaborate/src/lib.rs`, and `crates/cq-ir/src/relational_plan.rs` | Define the extended clauses across normalization and valuation planning; add `AntiSemijoin`/`AggregateApply` and their inferred-heading rules; extend each pass's correspondence check |
-| Index selection | `crates/cq-index-policy/src/lib.rs` and its `correspondence.rs` check | Extend key derivation over the complete RelationalPlan and its independent check |
-| Physical lowering | `crates/cq-ir/src/physical.rs` and `crates/cq-physical-lowering/src/lib.rs` | Carry the new operators through Physical and extend its contract and correspondence check |
-| Structures and printer | `crates/cq-ir/src/structures.rs`, `crates/cq-structure-selection/src/lib.rs`, and `crates/cq-physical-realization/src/lib.rs` | Answer the negative and aggregate reads and print the concrete negative and aggregate Rust accesses |
+| Supplied CQ syntax | `languages/cq-lang-cq/src/lib.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
+| CQ validity | `languages/cq-lang-cq/src/lib.rs` | Implement the left-to-right safety rules |
+| CQ → NF → VO → RA | `languages/cq-lang-cq/src/normal.rs`, `languages/cq-lang-vo/src/lib.rs`, `passes/cq-order/src/lib.rs`, `passes/cq-elaborate/src/lib.rs`, and `languages/cq-lang-ra/src/lib.rs` | Define the extended clauses across normalization and valuation planning; add `AntiSemijoin`/`AggregateApply` and their inferred-heading rules; extend each pass's correspondence check |
+| Index selection | `passes/cq-index-policy/src/lib.rs` and its `correspondence.rs` check | Extend key derivation over the complete RelationalPlan and its independent check |
+| Physical lowering | `languages/cq-lang-physical/src/lib.rs` and `passes/cq-physical-lowering/src/lib.rs` | Carry the new operators through Physical and extend its contract and correspondence check |
+| Structures and printer | `languages/cq-lang-structures/src/lib.rs`, `passes/cq-structure-selection/src/lib.rs`, and `passes/cq-physical-realization/src/lib.rs` | Answer the negative and aggregate reads and print the concrete negative and aggregate Rust accesses |
 
 You may add private helpers next to these sites. Do not add a generic pass
 trait, a dynamic query interpreter, or a second storage/access descriptor IR.
@@ -413,14 +413,14 @@ The syntax and lexical helper tests run in the ordinary suite. Complete the
 local contracts and logical operators first:
 
 ```text
-cargo test -p cq-ir --features hw4 --test hw4_optional
+cargo test -p cq-lang-cq --features hw4 --test hw4_optional
 ```
 
 Then isolate the CQ → NF → VO → RA chain, that complete plan to
 IndexRequirements, and IX to Physical before testing printed Rust:
 
 ```text
-cargo test -p cq-ir --test valuation_language
+cargo test -p cq-lang-vo --test valuation_language
 cargo test -p cq-order --test order
 cargo test -p cq-elaborate --test elaborate
 cargo test -p cq-index-policy --test index_demands

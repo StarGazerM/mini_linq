@@ -1,0 +1,234 @@
+//! A push dialect: physical reads feed nested for loops and a caller-bound set sink.
+use cq_lang_structures as structures;
+use cq_print::{Context, Repr, access::Access, error, index, sorted};
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as Tokens;
+use quote::{ToTokens, quote};
+use structures::physical::{self, Operator, ra};
+use structures::syntax::symbol_name;
+
+#[proc_macro]
+pub fn set_sink(input: TokenStream) -> TokenStream {
+    cq_stage::stage(input.into(), None, |request: &cq_protocol::Request| {
+        Ok(match &request.task {
+            cq_protocol::Task::New { .. } => quote!(::std::collections::HashSet::new()),
+            cq_protocol::Task::Insert { state, value, .. } => {
+                quote!((#state).insert(::core::clone::Clone::clone(#value)))
+            }
+        })
+    })
+    .into()
+}
+
+#[proc_macro]
+pub fn push(input: TokenStream) -> TokenStream {
+    cq_stage::stage(
+        input.into(),
+        None,
+        |source: &cq_stage::Policed<structures::Module, physical::policy::Policy>| {
+            compile(&source.language)
+        },
+    )
+    .into()
+}
+
+struct Push<'a> {
+    context: Context<'a>,
+    module: &'a structures::Module,
+}
+impl<'a> std::ops::Deref for Push<'a> {
+    type Target = Context<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
+}
+
+fn compile(module: &structures::Module) -> syn::Result<syn::Expr> {
+    let analysis = structures::contract::check_module(module)?;
+    let physical_analysis = physical::contract::check_module(&module.physical)?;
+    let logical = &module.physical.index_requirements.relational_plan;
+    let infos = ra::check_in(logical.program.inputs(), &logical.plan)?;
+    let mut push = Push {
+        context: Context::new(module, &analysis, &physical_analysis, infos),
+        module,
+    };
+    for (p, r) in module
+        .physical
+        .program
+        .definitions
+        .iter()
+        .zip(&logical.plan.definitions)
+    {
+        let name = symbol_name(&p.name);
+        push.context.register(&name, &r.operator);
+        match p.mode {
+            physical::Mode::Alias(_) => {
+                push.context.reprs.insert(name, Repr::Alias);
+            }
+            physical::Mode::Pipe(_) => {}
+            physical::Mode::Let(_) => {
+                let row = push.pattern(&name);
+                let body = push.operator(&name, quote!(__push_rows.push(#row);))?;
+                let source = quote!({
+                    let mut __push_rows = ::std::vec::Vec::new();
+                    #body
+                    ::core::iter::IntoIterator::into_iter(__push_rows)
+                });
+                let repr = push.context.materialize(&name, p.canon.is_some(), source);
+                push.context.reprs.insert(name, repr);
+            }
+        }
+    }
+    let returned = &module.physical.program.returned;
+    let name = symbol_name(returned);
+    let mut fields = Vec::new();
+    for expression in &logical.plan.output.head.args {
+        let Some(variable) = structures::syntax::rust::variable(expression) else {
+            return error(
+                expression,
+                "this example push dialect supports variable heads",
+            );
+        };
+        fields.push(push.ident(&name, &symbol_name(variable)));
+    }
+    let body = push.emit(
+        &name,
+        quote! {
+            mini_linq::distinct_state! { operator #returned; insert(__push_out, &(#(#fields,)*)) };
+        },
+    )?;
+    let statements = &push.statements;
+    syn::parse2(quote!({
+        #(#statements)*
+        let mut __push_out = mini_linq::distinct_state! { operator #returned; new };
+        #body
+        ::core::iter::IntoIterator::into_iter(__push_out)
+    }))
+}
+
+impl Push<'_> {
+    fn emit(&self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
+        let definition = self.physical[result];
+        if let Some(Repr::Let { rows, structures }) = self.reprs.get(result) {
+            let heading = self.heading(result);
+            let set = structures
+                .iter()
+                .find(|(levels, _)| levels.len() == 1 && levels[0] == heading)
+                .map(|(_, s)| s);
+            let storage = match (definition.canon.is_some(), set, rows) {
+                (true, Some(set), _) => set,
+                (_, _, Some(rows)) => rows,
+                _ => return error(&definition.name, "unmaterialized scan"),
+            };
+            let pattern = self.pattern(result);
+            return Ok(
+                quote!(#[allow(unused_variables)] for &#pattern in #storage.iter() { #sink }),
+            );
+        }
+        if definition.canon.is_some() {
+            let row = self.pattern(result);
+            let id = &definition.name;
+            let body = self.operator(result, quote!(
+                if mini_linq::distinct_state! { operator #id; insert(__push_seen, &#row) } { #sink }
+            ))?;
+            return Ok(quote!({
+                let mut __push_seen = mini_linq::distinct_state! { operator #id; new };
+                #body
+            }));
+        }
+        self.operator(result, sink)
+    }
+
+    fn operator(&self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
+        let logical = &self.module.physical.index_requirements.relational_plan.plan;
+        let r = logical
+            .definitions
+            .iter()
+            .find(|d| symbol_name(&d.result) == result)
+            .unwrap();
+        let p = self.physical[result];
+        match (&p.operator, &r.operator) {
+            (Operator::Unit(_), _) => Ok(sink),
+            (Operator::Rename(_), _) => {
+                let rows = self.host_scan(result);
+                let pattern = self.pattern(result);
+                Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
+            }
+            (Operator::Project(_), ra::Operator::Project(project)) => {
+                self.emit(&symbol_name(&project.input), sink)
+            }
+            (Operator::Select(_), ra::Operator::Select(select)) => {
+                let condition = cq_print::expressions::deref_predicates(&select.condition);
+                self.emit(&symbol_name(&select.input), quote!(if #condition { #sink }))
+            }
+            (Operator::Probe(_, k), _) => {
+                let left = symbol_name(&k.left);
+                let right = symbol_name(&k.right);
+                let columns = sorted(&k.columns);
+                let (lookup, payload, host) = match self.keyed(&k.right, &columns)? {
+                    Access::Host(access) => {
+                        let key = self.host_key(&left, &access);
+                        let value = access.value;
+                        (
+                            quote!(::cq_storage::IndexRead::lookup(&&#value, #key)),
+                            access.payload,
+                            true,
+                        )
+                    }
+                    Access::Built(structure) => (
+                        self.chained_lookup(&left, &structure, &right, &columns),
+                        self.heading(&right)
+                            .iter()
+                            .filter(|c| !columns.contains(c))
+                            .cloned()
+                            .collect(),
+                        false,
+                    ),
+                    Access::Prefix(_, _) => {
+                        return error(
+                            &k.right,
+                            "prefix payload probes are outside this example dialect",
+                        );
+                    }
+                };
+                let row = self.row(result, |c| match payload.iter().position(|p| p == c) {
+                    Some(i) => {
+                        let i = index(i);
+                        if host {
+                            quote!(&__push_v.#i)
+                        } else {
+                            quote!(__push_v.#i)
+                        }
+                    }
+                    None => self.ident(&left, c).to_token_stream(),
+                });
+                let pattern = self.pattern(result);
+                self.emit(&left, quote!(for __push_v in #lookup { #[allow(unused_variables)] let #pattern = #row; #sink }))
+            }
+            (Operator::Semi(_, k), _) => {
+                let left = symbol_name(&k.left);
+                let right = symbol_name(&k.right);
+                let test = match self.keyed(&k.right, &sorted(&k.columns))? {
+                    Access::Host(access) => {
+                        let key = self.host_key(&left, &access);
+                        let value = access.value;
+                        quote!(::cq_storage::ExactMembership::contains(&#value, #key))
+                    }
+                    Access::Built(structure) => self.chained_contains(
+                        &left,
+                        &structure,
+                        &self.levels_of(&right, &structure),
+                    ),
+                    Access::Prefix(structure, levels) => {
+                        self.chained_contains(&left, &structure, &levels)
+                    }
+                };
+                self.emit(&left, quote!(if #test { #sink }))
+            }
+            _ => error(
+                &p.operator,
+                "this push example implements unit, rename, project, select, probe and semi",
+            ),
+        }
+    }
+}

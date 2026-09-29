@@ -10,17 +10,26 @@ publish = false
 
 [workspace]
 members = [
-    "crates/cq-ir",
-    "crates/cq-storage",
-    "crates/cq-order",
-    "crates/cq-elaborate",
-    "crates/cq-reduce",
-    "crates/cq-index-policy",
-    "crates/cq-structure-selection",
-    "crates/cq-physical-lowering",
-    "crates/cq-physical-realization",
-    "crates/cq-state-providers",
-    "crates/mini-linq",
+    "languages/cq-syntax",
+    "languages/cq-lang-cq",
+    "languages/cq-lang-vo",
+    "languages/cq-lang-ra",
+    "languages/cq-lang-ix",
+    "languages/cq-lang-physical",
+    "languages/cq-lang-structures",
+    "passes/cq-order",
+    "passes/cq-reduce",
+    "passes/cq-elaborate",
+    "passes/cq-index-policy",
+    "passes/cq-physical-lowering",
+    "passes/cq-structure-selection",
+    "passes/cq-print",
+    "passes/cq-physical-realization",
+    "runtime/cq-storage",
+    "runtime/cq-state-providers",
+    "runtime/cq-protocol",
+    "facade/cq-stage",
+    "facade/mini-linq",
     "workloads",
 ]
 resolver = "3"
@@ -32,18 +41,27 @@ rust-version = "1.85"
 version = "0.1.0"
 
 [workspace.dependencies]
+cq-print = { path = "passes/cq-print" }
+cq-stage = { path = "facade/cq-stage" }
 contracts = "=0.6.10"
-cq-ir = { path = "crates/cq-ir" }
-cq-storage = { path = "crates/cq-storage" }
-cq-order = { path = "crates/cq-order", default-features = false }
-cq-elaborate = { path = "crates/cq-elaborate", default-features = false }
-cq-reduce = { path = "crates/cq-reduce", default-features = false }
-cq-index-policy = { path = "crates/cq-index-policy", default-features = false }
-cq-structure-selection = { path = "crates/cq-structure-selection", default-features = false }
-cq-physical-lowering = { path = "crates/cq-physical-lowering", default-features = false }
-cq-physical-realization = { path = "crates/cq-physical-realization", default-features = false }
-cq-state-providers = { path = "crates/cq-state-providers" }
-mini-linq = { path = "crates/mini-linq" }
+cq-lang-physical = { path = "languages/cq-lang-physical" }
+cq-lang-cq = { path = "languages/cq-lang-cq" }
+cq-lang-structures = { path = "languages/cq-lang-structures" }
+cq-lang-ra = { path = "languages/cq-lang-ra" }
+cq-syntax = { path = "languages/cq-syntax" }
+cq-lang-ix = { path = "languages/cq-lang-ix" }
+cq-lang-vo = { path = "languages/cq-lang-vo" }
+cq-protocol = { path = "runtime/cq-protocol" }
+cq-storage = { path = "runtime/cq-storage" }
+cq-order = { path = "passes/cq-order", default-features = false }
+cq-elaborate = { path = "passes/cq-elaborate", default-features = false }
+cq-reduce = { path = "passes/cq-reduce", default-features = false }
+cq-index-policy = { path = "passes/cq-index-policy", default-features = false }
+cq-structure-selection = { path = "passes/cq-structure-selection", default-features = false }
+cq-physical-lowering = { path = "passes/cq-physical-lowering", default-features = false }
+cq-physical-realization = { path = "passes/cq-physical-realization", default-features = false }
+cq-state-providers = { path = "runtime/cq-state-providers" }
+mini-linq = { path = "facade/mini-linq" }
 proc-macro2 = "1"
 prettyplease = "0.2"
 quote = "1"
@@ -51,7 +69,8 @@ syn = { version = "2", features = ["extra-traits", "full", "visit"] }
 syn_derive = { git = "https://github.com/StarGazerM/syn_derive", rev = "97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562" }
 
 [dependencies]
-cq-ir.workspace = true
+cq-lang-cq.workspace = true
+cq-syntax.workspace = true
 mini-linq.workspace = true
 quote.workspace = true
 syn.workspace = true

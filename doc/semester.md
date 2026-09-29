@@ -112,9 +112,9 @@ Students work individually or in pairs in a supplied Rust codebase. The
 current physical-lowering checkpoint contains one `mini-linq` proc-macro crate,
 Syn-backed CQ, CQ-NF, VO, RelationalPlan, IndexRequirements, Physical,
 Structures, local language checks, and tests. Its basic route has three
-homework boundaries. The CQ-to-RA chain lives in `crates/cq-ir/src/cq/normal.rs`,
-`crates/cq-order/src/lib.rs`, and `crates/cq-elaborate/src/lib.rs`; later stages
-live in `crates/cq-index-policy/src/lib.rs` and the `cq-physical-lowering`,
+homework boundaries. The CQ-to-RA chain lives in `languages/cq-lang-cq/src/normal.rs`,
+`passes/cq-order/src/lib.rs`, and `passes/cq-elaborate/src/lib.rs`; later stages
+live in `passes/cq-index-policy/src/lib.rs` and the `cq-physical-lowering`,
 `cq-structure-selection`, and `cq-physical-realization` crates:
 
 1. **Basic HW1:** CQ normalization, written-order coarse valuation planning,
@@ -223,7 +223,7 @@ stage. Grammar failures become span-aware `syn::Error` diagnostics emitted as
 `compile_error!`. The typed functions check source semantics and return the
 same diagnostic type; macro entries do not duplicate those checks. Students
 implement the designated typed stages behind those entries.
-`cq_ir::cq::normal::normalize(&cq::Module)` produces CQ-NF;
+`cq_lang_cq::normal::normalize(&cq::Module)` produces CQ-NF;
 `cq_order::compile` with `Written` and `Coarse` produces a valuation plan;
 `cq_elaborate::compile` produces the named `relational_plan::Module`.
 `cq_index_policy::compile(&relational_plan::Module)` returns

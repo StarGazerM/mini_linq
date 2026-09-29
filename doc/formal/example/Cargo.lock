@@ -6,7 +6,8 @@ version = 4
 name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-ra",
+ "cq-lang-vo",
  "quote",
  "syn 2.0.119",
 ]
@@ -15,15 +16,53 @@ dependencies = [
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-ix",
+ "cq-lang-ra",
  "quote",
  "syn 2.0.119",
 ]
 
 [[package]]
-name = "cq-ir"
+name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-ix"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-ra"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-vo"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -34,7 +73,8 @@ dependencies = [
 name = "cq-order"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-cq",
+ "cq-lang-vo",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -44,9 +84,19 @@ dependencies = [
 name = "cq-reduce"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-vo",
  "proc-macro2",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-syntax"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
 ]
 
 [[package]]
@@ -55,7 +105,10 @@ version = "0.0.0"
 dependencies = [
  "cq-elaborate",
  "cq-index-policy",
- "cq-ir",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-ra",
+ "cq-lang-vo",
  "cq-order",
  "cq-reduce",
  "quote",

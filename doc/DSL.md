@@ -9,7 +9,7 @@ domain a caller's policy admits.
 
 | Transformation | Typed owner |
 |---|---|
-| CQ → NF | `cq_ir::cq::normal::normalize` |
+| CQ → NF | `cq_lang_cq::normal::normalize` |
 | NF → VO | `cq_order::compile` (heuristic × split) |
 | VO → VO | `cq_reduce::compile` (guard pushdown, Yannakakis reducer) |
 | VO → RA | `cq_elaborate::compile` |
@@ -21,7 +21,7 @@ domain a caller's policy admits.
 `mini-linq` supplies procedural entries and transports each typed input/output.
 The policy and the distinct-state provider are caller-resolved macro slots
 (`physical_policy!`, `select_structures!`, `structures_to_rust!`,
-`distinct_state!`). Syntax types and validity checks live in `cq-ir`.
+`distinct_state!`). Syntax types and validity checks live in the language crates under `languages/`.
 
 The printer emits a Rust block in a caller-written host. Input identifiers
 refer to bindings in that scope. The CQ `struct Name;` is retained program
@@ -332,18 +332,18 @@ sorted on it by its own merge), and the return canonical.
 
 ## Implemented domain and evidence
 
-The [full-chain test](../crates/mini-linq/tests/physical_query.rs) and the
+The [full-chain test](../facade/mini-linq/tests/physical_query.rs) and the
 [runnable example](../examples/composition/README.md) exercise every stage:
 hosts read in place through their declared keys, compiler-built hash indexes,
 a user-defined index type through `#[index(Type)]`, merge joins over built
 ordered maps with a sorted pipe side, Yannakakis semijoin passes as membership
 tests, a bounded scan of an ordered host, and a computed column. Each pass
 also has a `check` over its source and target, and the languages have parser
-round-trip tests in `cq-ir`. The logical grammar and planning-pass tests are not
+round-trip tests in the language crates under `languages/`. The logical grammar and planning-pass tests are not
 evidence of physical implementation.
 
 ```sh
-cargo test -p cq-ir
+cargo test -p cq-lang-cq
 cargo test -p cq-order -p cq-reduce -p cq-elaborate
 cargo test -p cq-index-policy -p cq-physical-lowering -p cq-structure-selection -p cq-physical-realization
 cargo test -p mini-linq --test physical_query

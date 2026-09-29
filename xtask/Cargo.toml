@@ -14,10 +14,13 @@ default = []
 oracle = ["dep:duckdb"]
 
 [dependencies]
-cq-elaborate = { path = "../crates/cq-elaborate" }
-cq-index-policy = { path = "../crates/cq-index-policy" }
-cq-ir = { path = "../crates/cq-ir" }
-cq-order = { path = "../crates/cq-order" }
+cq-lang-vo = { path = "../languages/cq-lang-vo" }
+cq-lang-cq = { path = "../languages/cq-lang-cq" }
+cq-lang-ix = { path = "../languages/cq-lang-ix" }
+cq-lang-ra = { path = "../languages/cq-lang-ra" }
+cq-elaborate = { path = "../passes/cq-elaborate" }
+cq-index-policy = { path = "../passes/cq-index-policy" }
+cq-order = { path = "../passes/cq-order" }
 cq-workloads = { path = "../workloads" }
 duckdb = { version = "~1.10505.0", features = ["bundled"], optional = true }
 quote = "1"

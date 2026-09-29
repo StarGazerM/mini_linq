@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 
-use cq_ir::{cq, symbol_name};
+use cq_lang_cq as cq;
+use cq_syntax::symbol_name;
 
 /// The private DuckDB table populated from the Nth declared input.
 ///

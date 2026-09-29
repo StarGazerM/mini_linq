@@ -35,7 +35,7 @@ compiler does not infer Rust function return types. The chosen realization
 must establish actual field borrowing, ownership and collection requirements;
 logical planning does not grant ownership or insert a universal Clone bound.
 
-`cq_ir::cq::normal::normalize` turns `R(7,x)` into a fresh typed `let` for the
+`cq_lang_cq::normal::normalize` turns `R(7,x)` into a fresh typed `let` for the
 literal before the atoms and an atom using that bound variable. A repeated
 argument becomes a fresh atom variable plus an equality guard after the atom;
 `_` becomes a fresh witness variable. A computed argument becomes a binding
@@ -64,7 +64,7 @@ a proof that an arbitrary Rust computation is pure.
 
 `cq::normal::check` validates the normalized form: each atom argument is a
 distinct variable. The [normal-form description](DSL.md#normal-form) and
-[implementation](../crates/cq-ir/src/cq/normal.rs) define the kernel to which
+[implementation](../languages/cq-lang-cq/src/normal.rs) define the kernel to which
 later plans erase. Its atoms, guards, bindings and head compare up to variable
 renaming.
 
@@ -87,7 +87,7 @@ guards and bindings. `cq-elaborate` then turns those steps into named RA.
 When a guard or binding precedes all atoms, elaboration seeds the prefix with
 `unit`. A computed head retains the full heading for its final projection.
 See [valuation plans](DSL.md#valuation-plans) and the
-[elaboration pass](../crates/cq-elaborate/src/lib.rs) for these operators.
+[elaboration pass](../passes/cq-elaborate/src/lib.rs) for these operators.
 
 ### Atom arguments through normal form
 
@@ -105,13 +105,13 @@ query's kernel.
 
 ### Order, reductions, and verification
 
-The [order pass](../crates/cq-order/src/lib.rs) offers `Heuristic::Written`,
+The [order pass](../passes/cq-order/src/lib.rs) offers `Heuristic::Written`,
 `Heuristic::Prefix(Ranking::{Connected, GreedyWidth, Auto})`, and
 `Heuristic::Elimination`. Readiness depends on available variables; guards and
 bindings retain their respective query orders. The default `cq_to_ra!` facade
 normalizes, orders with Written/Coarse, and elaborates.
 
-The [reduction pass](../crates/cq-reduce/src/lib.rs) can push a guard onto a
+The [reduction pass](../passes/cq-reduce/src/lib.rs) can push a guard onto a
 single atom when its lexical dependencies are visible and all belong to that
 atom. It can also insert Yannakakis semijoin reductions along a GYO join tree
 for an acyclic query. `cq_to_ra_hypergraph!` uses atom guard pushdown and tree
@@ -127,24 +127,26 @@ Rust expressions.
 
 ## Current verification boundary
 
-The [CQ expression tests](../crates/cq-ir/tests/rust_expressions.rs),
-[free-variable tests](../crates/cq-ir/tests/free_variables.rs), and
-[expression-syntax tests](../crates/cq-ir/tests/expression_syntax.rs) cover
+The [CQ expression tests](../languages/cq-lang-cq/tests/rust_expressions.rs),
+[free-variable tests](../languages/cq-syntax/tests/free_variables.rs), and
+[expression-syntax tests](../languages/cq-lang-cq/tests/expression_syntax.rs) cover
 round trips, lexical shadowing, opaque macros, Rust expression ASTs and
-logical forward-reference rejection. The [valuation-language tests](../crates/cq-ir/tests/valuation_language.rs)
+logical forward-reference rejection. The [valuation-language tests](../languages/cq-lang-vo/tests/valuation_language.rs)
 cover normalization, plan contracts and kernel comparison.
 
-The [order tests](../crates/cq-order/tests/order.rs),
-[reduction tests](../crates/cq-reduce/tests/reduce.rs), and
-[elaboration tests](../crates/cq-elaborate/tests/elaborate.rs) inspect the
+The [order tests](../passes/cq-order/tests/order.rs),
+[reduction tests](../passes/cq-reduce/tests/reduce.rs), and
+[elaboration tests](../passes/cq-elaborate/tests/elaborate.rs) inspect the
 planned steps and their RA. The reduction suite also compares CQ and RA
 results on generated databases for its tested queries. The
-[full-chain test](../crates/mini-linq/tests/physical_query.rs) exercises its
+[full-chain test](../facade/mini-linq/tests/physical_query.rs) exercises its
 admitted physical domain, including a pushed comparison that bounds an
 ordered scan and a computed column.
 
 ```sh
-cargo test -p cq-ir --test rust_expressions --test free_variables --test expression_syntax --test valuation_language
+cargo test -p cq-lang-cq --test rust_expressions --test expression_syntax
+cargo test -p cq-syntax --test free_variables
+cargo test -p cq-lang-vo --test valuation_language
 cargo test -p cq-order --test order
 cargo test -p cq-reduce --test reduce
 cargo test -p cq-elaborate --test elaborate

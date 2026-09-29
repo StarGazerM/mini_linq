@@ -5,9 +5,11 @@
 //! sweep reduces a child with its parent only after the parent (or from the
 //! root), each tree edge is used exactly once per direction, and the
 //! elaborated RA carries one semijoin per reduction.
-use cq_ir::cq::{self, hypergraph::Analysis};
-use cq_ir::valuation::{self, Reduction, Step};
-use cq_ir::relational_plan as ra;
+use cq_lang_cq as cq;
+use cq_lang_cq::{hypergraph::Analysis};
+use cq_lang_vo as valuation;
+use cq_lang_vo::{Reduction, Step};
+use cq_lang_ra as ra;
 use cq_reduce::{Options, Pushdown, Reductions};
 use quote::quote;
 use std::collections::BTreeSet;

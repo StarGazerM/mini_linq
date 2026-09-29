@@ -1,0 +1,11 @@
+[package]
+name = "cq-lang-trace"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cq-syntax = { path = "../../../languages/cq-syntax" }
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"

@@ -4,7 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_ir::{cq, stream, symbol_name};
+use cq_lang_cq as cq;
+use cq_syntax::stream;
+use cq_syntax::symbol_name;
 
 use super::oracle::{Database, evaluate_predicate};
 
@@ -54,7 +56,7 @@ pub fn evaluate(module: &stream::Module, database: &Database) -> Evaluation {
                     .iter()
                     .find(|d| symbol_name(&d.result) == name)
                     .and_then(|d| match &d.operator {
-                        cq_ir::relational_plan::Operator::Rename(r) => Some(r),
+                        cq_lang_ra::Operator::Rename(r) => Some(r),
                         _ => None,
                     })
                     .expect("alias realizes a rename");

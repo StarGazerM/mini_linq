@@ -1,0 +1,22 @@
+[package]
+name = "cq-lang-structures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cq-syntax.workspace = true
+cq-lang-physical = { workspace = true, optional = true }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+syn_derive.workspace = true
+
+[features]
+default = ["reference-prefix"]
+reference-prefix = ["dep:cq-lang-physical"]
+
+[[test]]
+name = "structures_language"
+required-features = ["reference-prefix"]

@@ -10,8 +10,8 @@ follows [Compiler ownership and composition](COMPILER-STRUCTURE.md).
 
 | Operation | Implementation |
 |---|---|
-| CQ → CQ-NF; make atom arguments distinct variables | `cq_ir::cq::normal::normalize` |
-| CQ-NF hypergraph facts: incidence, GYO join tree, elimination order and width | `cq_ir::cq::hypergraph::Analysis` |
+| CQ → CQ-NF; make atom arguments distinct variables | `cq_lang_cq::normal::normalize` |
+| CQ-NF hypergraph facts: incidence, GYO join tree, elimination order and width | `cq_lang_cq::hypergraph::Analysis` |
 | CQ-NF → VO; choose valuation order and granularity | `cq_order::compile` |
 | VO → VO; push single-atom guards and optionally apply tree semijoins | `cq_reduce::compile` |
 | VO → named RA | `cq_elaborate::compile` |
@@ -30,7 +30,7 @@ and invokes `lower_physical!`; Physical records one operator and mode per
 result, and Structures records what answers each read.
 
 Planning can be tested through the typed pass APIs without a physical policy.
-The [full-chain test](../crates/mini-linq/tests/physical_query.rs) follows the
+The [full-chain test](../facade/mini-linq/tests/physical_query.rs) follows the
 supported path into execution. The
 [runnable composition example](../examples/composition/README.md) starts from
 explicit RA.
@@ -83,7 +83,7 @@ algebra.
 
 ## Administrative rules and contracts
 
-`cq_ir::cq::hypergraph::Analysis` records each atom occurrence's variables
+`cq_lang_cq::hypergraph::Analysis` records each atom occurrence's variables
 and incidence, the primal graph, GYO steps and join tree when acyclic,
 maximum-cardinality-search elimination order (perfect when the primal
 graph is chordal), and width. Guards and bindings are not hyperedges. GYO
@@ -109,13 +109,13 @@ plans with independently evaluated query answers.
 
 | Concept | Current location |
 |---|---|
-| Normalization and kernel | [normal.rs](../crates/cq-ir/src/cq/normal.rs) |
-| Incidence, GYO, join tree, elimination order and width | [hypergraph.rs](../crates/cq-ir/src/cq/hypergraph.rs) |
-| VO syntax, contract and kernel | [valuation.rs](../crates/cq-ir/src/valuation.rs) |
-| Order, heuristic and split | [cq-order](../crates/cq-order/src/lib.rs) |
-| Guard pushdown and tree reductions | [cq-reduce](../crates/cq-reduce/src/lib.rs) |
-| VO elaboration and correspondence | [cq-elaborate](../crates/cq-elaborate/src/lib.rs) |
-| RA erasure and kernel | [relational_plan/kernel.rs](../crates/cq-ir/src/relational_plan/kernel.rs) |
+| Normalization and kernel | [normal.rs](../languages/cq-lang-cq/src/normal.rs) |
+| Incidence, GYO, join tree, elimination order and width | [hypergraph.rs](../languages/cq-lang-cq/src/hypergraph.rs) |
+| VO syntax, contract and kernel | [valuation.rs](../languages/cq-lang-vo/src/lib.rs) |
+| Order, heuristic and split | [cq-order](../passes/cq-order/src/lib.rs) |
+| Guard pushdown and tree reductions | [cq-reduce](../passes/cq-reduce/src/lib.rs) |
+| VO elaboration and correspondence | [cq-elaborate](../passes/cq-elaborate/src/lib.rs) |
+| RA erasure and kernel | [relational_plan/kernel.rs](../languages/cq-lang-ra/src/kernel.rs) |
 
 ## Scope and evidence
 

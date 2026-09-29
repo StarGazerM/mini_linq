@@ -183,7 +183,7 @@ fn read_generated(
     case: &QueryCase,
     config: GenerationConfig,
     expected: Option<&cq_workloads::dataset::Dataset>,
-) -> Result<(cq_ir::cq::Module, cq_workloads::dataset::Dataset)> {
+) -> Result<(cq_lang_cq::Module, cq_workloads::dataset::Dataset)> {
     let directory = data_directory(case, config.scenario, config.scale);
     if !directory.join("manifest.txt").is_file() {
         return Err(format!(

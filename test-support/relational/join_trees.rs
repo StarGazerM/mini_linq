@@ -1,5 +1,6 @@
 //! Independent bounded tree-enumeration oracle; no GYO implementation.
-use cq_ir::{cq, symbol_name};
+use cq_lang_cq as cq;
+use cq_syntax::symbol_name;
 use std::collections::BTreeSet;
 
 /// Independent small-query oracle for future GYO tests: enumerate trees and

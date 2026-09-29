@@ -27,15 +27,15 @@ provides the broader routes listed in
 The assignments follow these semantic compilation boundaries. Their
 implementations in this checkout live in separate modules:
 
-- CQ normalization: `crates/cq-ir/src/cq/normal.rs`;
-- valuation ordering: `crates/cq-order/src/lib.rs`;
-- RA elaboration: `crates/cq-elaborate/src/lib.rs`;
-- input-index selection: `crates/cq-index-policy/src/lib.rs`;
-- physical lowering: `crates/cq-physical-lowering/src/lib.rs`.
+- CQ normalization: `languages/cq-lang-cq/src/normal.rs`;
+- valuation ordering: `passes/cq-order/src/lib.rs`;
+- RA elaboration: `passes/cq-elaborate/src/lib.rs`;
+- input-index selection: `passes/cq-index-policy/src/lib.rs`;
+- physical lowering: `passes/cq-physical-lowering/src/lib.rs`.
 
 | Homework | Typed function | Successful result |
 |---|---|---|
-| Basic HW1 | `cq_ir::cq::normal::normalize` → `cq_order::compile` (`Written`, `Coarse`) → `cq_elaborate::compile` | `syn::Result<relational_plan::Module>` containing the normalized `Program` and a complete named relational plan |
+| Basic HW1 | `cq_lang_cq::normal::normalize` → `cq_order::compile` (`Written`, `Coarse`) → `cq_elaborate::compile` | `syn::Result<relational_plan::Module>` containing the normalized `Program` and a complete named relational plan |
 | Basic HW2 | `cq_index_policy::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
 | Basic HW3 | `cq_physical_lowering::compile(&index_requirements::Module, &Policy)` | `syn::Result<physical::Module>` containing the unchanged IX plus one physical operator, mode, and `canon` flag per result |
 
@@ -296,8 +296,8 @@ pass code, while `cargo xtask explain` remains the source-level IR stepper.
 Start with the smallest edge under construction:
 
 ```text
-cargo test -p cq-ir --test relational_plan
-cargo test -p cq-ir --test valuation_language
+cargo test -p cq-lang-ra --test relational_plan
+cargo test -p cq-lang-vo --test valuation_language
 cargo test -p cq-order --test order
 cargo test -p cq-elaborate --test elaborate
 cargo test -p cq-index-policy --test index_demands

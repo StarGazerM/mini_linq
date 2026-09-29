@@ -35,5 +35,5 @@ backend snapshots are retired. Those queries require a physical policy
 and a host contract before executable compiler comparison can resume.
 
 The integrated chain below IX is exercised by
-`crates/mini-linq/tests/physical_query.rs`; it covers the Physical, Structures
+`facade/mini-linq/tests/physical_query.rs`; it covers the Physical, Structures
 and printed-program boundaries, not these retired whole-query backends.

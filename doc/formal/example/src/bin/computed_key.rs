@@ -1,5 +1,6 @@
 //! Computed-argument planning and index demands; no physical execution.
-use cq_ir::{cq, valuation};
+use cq_lang_cq as cq;
+use cq_lang_vo as valuation;
 use mini_linq_paper_overview::{boundaries, directory};
 use std::collections::BTreeSet;
 

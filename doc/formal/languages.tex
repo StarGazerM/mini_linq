@@ -109,7 +109,7 @@ no effectful evaluation-order semantics.
 \subsection{Normal form and valuation plans}
 \label{sec:nf-vo}
 Two intermediate languages sit between CQ and RA; both are specified by the
-\code{cq-ir} module documentation (\code{cq::normal}, \code{valuation}).
+\code{cq-lang-*} module documentation (\code{cq::normal}, \code{valuation}).
 \emph{CQ-NF} is the kernel form every plan erases to: one variable per atom
 argument, distinct within the atom; constants, repeated variables, wildcards
 and expression arguments have been moved out of atoms into \code{let}
@@ -210,5 +210,5 @@ of Section~\ref{sec:ix}, and
 Physical restates IX with one physical operator and read mode per result, and
 Structures binds every keyed read to a host key fact or a built Rust type;
 both erase to IX and preserve its meaning. Their contracts are specified by
-the \code{cq-ir} module documentation and \path{doc/DSL.md}
+the \code{cq-lang-*} module documentation and \path{doc/DSL.md}
 (Section~\ref{sec:ix}); this paper does not yet give them inference rules.

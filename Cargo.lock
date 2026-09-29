@@ -17,7 +17,10 @@ dependencies = [
 name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -27,15 +30,80 @@ dependencies = [
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-ix",
+ "cq-lang-ra",
+ "cq-syntax",
  "quote",
  "syn 2.0.119",
 ]
 
 [[package]]
-name = "cq-ir"
+name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-ix",
+ "cq-lang-ra",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-ix"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-physical"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ix",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-ra"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-structures"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-physical",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-vo"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -46,7 +114,9 @@ dependencies = [
 name = "cq-order"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-cq",
+ "cq-lang-vo",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -58,9 +128,14 @@ version = "0.1.0"
 dependencies = [
  "cq-elaborate",
  "cq-index-policy",
- "cq-ir",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-vo",
  "cq-order",
  "cq-reduce",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -70,10 +145,36 @@ dependencies = [
 name = "cq-physical-realization"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-cq",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-print",
+ "cq-syntax",
+ "mini-linq",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-print"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-protocol"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
 ]
 
 [[package]]
@@ -81,7 +182,19 @@ name = "cq-reduce"
 version = "0.1.0"
 dependencies = [
  "cq-elaborate",
- "cq-ir",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-stage"
+version = "0.1.0"
+dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -91,7 +204,7 @@ dependencies = [
 name = "cq-state-providers"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-protocol",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -106,17 +219,32 @@ name = "cq-structure-selection"
 version = "0.1.0"
 dependencies = [
  "cq-index-policy",
- "cq-ir",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
 
 [[package]]
+name = "cq-syntax"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
 name = "cq-workloads"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-cq",
+ "cq-syntax",
  "mini-linq",
  "syn 2.0.119",
 ]
@@ -128,11 +256,17 @@ dependencies = [
  "contracts",
  "cq-elaborate",
  "cq-index-policy",
- "cq-ir",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-lang-vo",
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
  "cq-reduce",
+ "cq-stage",
  "cq-state-providers",
  "cq-storage",
  "cq-structure-selection",
@@ -147,9 +281,10 @@ dependencies = [
 name = "mini-linq-course"
 version = "0.1.0"
 dependencies = [
- "cq-ir",
+ "cq-lang-cq",
  "cq-state-providers",
  "cq-storage",
+ "cq-syntax",
  "mini-linq",
  "quote",
  "syn 2.0.119",

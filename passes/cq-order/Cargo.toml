@@ -1,0 +1,24 @@
+[package]
+name = "cq-order"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+cq-lang-cq.workspace = true
+cq-lang-vo.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+cq-syntax.workspace = true
+
+
+[package.metadata.cq]
+source = "cq-lang-cq"
+target = "cq-lang-vo"

@@ -1,0 +1,17 @@
+[package]
+name = "trace-bridge"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
+cq-lang-trace = { path = "../trace" }
+physical-to-trace = { path = "../physical-to-trace" }
+trace-to-physical = { path = "../trace-to-physical" }
+cq-stage = { path = "../../../facade/cq-stage" }
+quote = "1"
+syn = { version = "2", features = ["full"] }

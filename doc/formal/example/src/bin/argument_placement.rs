@@ -2,7 +2,9 @@
 //! arguments: a closed expression before the atom, one over a bound variable
 //! after it. This is a planning check, not an observation of generated Rust
 //! execution.
-use cq_ir::{cq, relational_plan::Operator, valuation};
+use cq_lang_cq as cq;
+use cq_lang_ra::Operator;
+use cq_lang_vo as valuation;
 use mini_linq_paper_overview::{boundaries, directory};
 use quote::ToTokens;
 

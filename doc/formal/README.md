@@ -3,7 +3,7 @@
 Read the [paper](build/compiler.pdf) for CQ/RA semantics, planning and IX.
 It includes [ix_physical_contract.tex](ix_physical_contract.tex), which gives
 the IX construction rules and notes that Physical and Structures are specified
-by the `cq-ir` module docs and [DSL.md](../DSL.md) until a formal treatment is
+by the the language crates under `languages/` module docs and [DSL.md](../DSL.md) until a formal treatment is
 written.
 
 | Subject | Source |

@@ -1,5 +1,5 @@
 //! Deterministic binary-domain databases shared by independent test consumers.
-use cq_ir::cq;
+use cq_lang_cq as cq;
 
 pub fn binary_database(
     program: &cq::Program,
@@ -24,7 +24,7 @@ pub fn binary_database(
                     })
                 })
                 .collect();
-            (cq_ir::symbol_name(&input.name), rows)
+            (cq_syntax::symbol_name(&input.name), rows)
         })
         .collect()
 }

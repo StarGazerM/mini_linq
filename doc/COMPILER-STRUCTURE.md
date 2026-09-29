@@ -1,8 +1,8 @@
 # Compiler ownership and composition
 
 The accepted path is `CQ → NF → VO → RA → IX → Physical → Structures → Rust`.
-Each language is the previous one plus one section; each pass records one
-decision and is checked by the next language's contract. Below Structures a
+The pipeline wire format concatenates sections. Each language owns one section;
+its contract reads earlier facts through an Env trait. Below Structures a
 printer emits one pull program over the `cq-storage` traits.
 See [DSL.md](DSL.md) for the grammars.
 
@@ -10,7 +10,13 @@ See [DSL.md](DSL.md) for the grammars.
 
 | Crate | Responsibility | Modules / entry functions |
 |---|---|---|
-| `cq-ir` | Typed syntax and local validity | `cq` (with `cq::normal`: normal form, `normalize`, `Kernel`; `cq::hypergraph`: incidence, GYO join tree, elimination order), `valuation` (VO plans, `erase`, `kernel`), `relational_plan` (with `erase`, `kernel`), `index_requirements`, `physical`, `structures`, `policy`, `state_protocol` |
+| `languages/cq-syntax` | Shared syntax fragments, input declarations, list aliases, Rust expression helpers, predicates, `Staged<Prefix, Section>` | `rust`, `predicate` |
+| `languages/cq-lang-cq` | CQ contract and normalization | `Module`, `normal`, `hypergraph` |
+| `languages/cq-lang-vo` | Valuation section and source facts | `Section`, `CqEnv`, `contract` |
+| `languages/cq-lang-ra` | RA section, headings and reference erasure | `Section`, `CqEnv`, `contract`, `kernel` |
+| `languages/cq-lang-ix` | Exact index demands | `Section`, `RaEnv`, `Join`, `contract` |
+| `languages/cq-lang-physical` | Physical operators and read discipline | `Section`, `IxEnv`, `LogicalOp`, `Analysis`, `policy` |
+| `languages/cq-lang-structures` | Host and built structures | `Section`, `PhysicalEnv`, `PhysicalFacts`, `UniqueOp`, `Analysis` |
 | `cq-order` | NF → VO; the order of the steps: a `Heuristic` (`Written`, `Prefix(Ranking)`, `Elimination`) fixes the clause order, a `Split` (`Coarse`, `Fine`) the granularity | `compile`, `check` |
 | `cq-reduce` | VO → VO; the reductions a plan carries: `Pushdown::Atoms` pushes single-atom guards onto their atoms, `Reductions::Tree` is the Yannakakis full reducer over the GYO join tree (acyclic queries) | `compile`, `check` |
 | `cq-elaborate` | VO → RA; rename per clause at first mention, join/semijoin per subatom, select/extend per guard/binding, semijoin/select per reduction, one final projection | `compile`, `check` |
@@ -22,11 +28,37 @@ See [DSL.md](DSL.md) for the grammars.
 | `cq-storage` | Runtime data structures and operation traits | `Build`, `IndexRead`, `ExactMembership`, `OrderedRead`/`merge`/`sorted_by`, `Canonical`, `require` guards; `HashIndex` |
 | `mini-linq` | Procedural macro facade and caller-resolved continuations | `lib.rs` exports entries; `entry` transports typed stages; `workload` captures catalog CQ |
 
-Every family crate depends only on `cq-ir` (`tools/check_dependencies.py`
-enforces it); test dependencies may compose stages. `mini-linq-course` is the
-workspace/example root, and `cq-workloads` is a typed query/data catalog.
-Neither is a compilation stage. The separate `xtask` workspace contains
-development tooling.
+Language cores depend only on `cq-syntax`. Later languages expose their
+reference prefix through the default `reference-prefix` feature; disabling it
+removes the preceding language dependency. `Section` owns the local grammar,
+and `contract::check(&section, &env)` uses facts supplied by a producer.
+`reference::Env` validates the reference prefix and caches borrowed headings;
+`reference::Module` parses that prefix followed by the section. Its
+`contract::check_module` convenience function checks the composed payload.
+
+Passes under `passes/` depend directly on their declared source and target
+languages. They return the new section; facade code reassembles consecutive
+sections. A same-language pass has one distinct language dependency; a Rust
+printer has a Structures source and the external `syn` target. `cq-print`
+contains shared row/access/expression helpers; `cq-physical-realization` adds
+pull control flow. Passes have no runtime dependency: runtime names are emitted
+as Rust tokens.
+
+`runtime/` contains `cq-storage`, the independent `cq-protocol` token grammar,
+and `cq-state-providers`. `facade/cq-stage` provides the library stage ABI;
+`facade/mini-linq` supplies the reference proc macros.
+
+`tools/check_dependencies.py` enforces these direct edges, including optional,
+renamed, build and target-specific dependencies. It copies each language core
+without its optional prefix for isolation tests. Pass isolation copies only
+the production dependency closure of its endpoints (including the reference
+prefixes those languages enable by default), with no test dependencies or
+unrelated passes. `mini-linq-course`, `cq-workloads` and the separate `xtask`
+workspace are consumers, not compilation stages.
+
+The standalone [push-printer example](../examples/own-dialect/README.md) replaces
+the printer; the [trace example](../examples/stacked-ir/README.md) inserts an
+independent section and verifies byte-identical output after erasure.
 
 ## Explicit composition boundaries
 
@@ -46,7 +78,7 @@ when the plan indexes it; it is erased from the query's meaning.
 ## Current execution domain
 
 The [composition example](../examples/composition/README.md) and the
-[full-chain test](../crates/mini-linq/tests/physical_query.rs) exercise every
+[full-chain test](../facade/mini-linq/tests/physical_query.rs) exercise every
 stage: hosts read in place through their declared keys, compiler-built hash
 indexes, a user-defined index type through `#[index(Type)]`, merge joins over
 built ordered maps with a sorted pipe side, Yannakakis semijoin passes as
@@ -62,7 +94,7 @@ language; deltas are ordinary hosts under a rewrite tool, not IR constructs.
 The canonical return is deduplicated through the caller-bound
 `mini_linq::distinct_state!` slot; there is no HashSet fallback. Each request
 carries its local operator name, so a caller policy can choose separately for
-each occurrence. State provider syntax and laws live in `cq_ir::state_protocol`;
+each occurrence. State provider syntax and laws live in `cq_protocol`;
 `cq-state-providers` supplies hash and ordered implementations, which own
 retained copies of the rows they deduplicate.
 

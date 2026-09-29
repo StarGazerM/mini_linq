@@ -1,5 +1,6 @@
 //! Logical planning and an independently authored RA; no physical execution.
-use cq_ir::{cq, relational_plan};
+use cq_lang_cq as cq;
+use cq_lang_ra as relational_plan;
 use mini_linq_paper_overview::{boundaries, directory, write};
 use std::collections::BTreeSet;
 
@@ -69,9 +70,9 @@ fn main() {
             output r_out as answer(a,w);
         }
     };
-    relational_plan::contract::check(&authored).unwrap();
+    relational_plan::contract::check_module(&authored).unwrap();
     let ix = cq_index_policy::compile(&authored).unwrap();
-    cq_ir::index_requirements::contract::check(&ix).unwrap();
+    cq_lang_ix::contract::check_module(&ix).unwrap();
     let source = cq::Module {
         program: authored.program.clone(),
     };
@@ -120,4 +121,16 @@ fn main() {
     println!(
         "PASS: automatic and authored RA/IX contracts; independent whole-tuple oracle and duplicate/empty fixtures. No generated-query equivalence or intermediate runtime counts are claimed."
     );
+}
+
+#[allow(unused_imports, dead_code)]
+mod cq_index_policy {
+    pub use ::cq_index_policy::*;
+    pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
+        Ok(cq_lang_ix::Module::new(source.clone(), ::cq_index_policy::compile(source)?))
+    }
+    pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
+        target.relational_plan == *source
+            && ::cq_index_policy::check(source, &target.section)
+    }
 }

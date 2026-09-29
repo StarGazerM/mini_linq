@@ -4,7 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_ir::{cq, relational_plan, symbol_name};
+use cq_lang_cq as cq;
+use cq_lang_ra as relational_plan;
+use cq_syntax::symbol_name;
 
 pub type Rows = BTreeSet<Vec<i32>>;
 pub type Database = BTreeMap<String, Rows>;

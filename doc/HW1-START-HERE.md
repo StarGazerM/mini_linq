@@ -18,8 +18,8 @@ git switch -c submission/hw1
 Do not start from `main` after a later homework has been announced. The
 [branch policy](../BRANCHES.md) keeps every assignment's starter stable.
 
-The current route lives in `crates/cq-ir/src/cq/normal.rs`,
-`crates/cq-order/src/lib.rs`, and `crates/cq-elaborate/src/lib.rs`.
+The current route lives in `languages/cq-lang-cq/src/normal.rs`,
+`passes/cq-order/src/lib.rs`, and `passes/cq-elaborate/src/lib.rs`.
 The parsers, local contracts, pass correspondence checks, fixtures and lower
 stages are supplied in this checkout. A released starter identifies which
 parts students complete.
@@ -87,7 +87,7 @@ These commands inspect syntax and fixtures without invoking CQ lowering:
 
 ```text
 cargo run --example cq-inspection
-cargo test -p cq-ir --test relational_plan
+cargo test -p cq-lang-ra --test relational_plan
 cargo xtask list
 cargo xtask explain triangle --through cq
 ```
@@ -107,7 +107,7 @@ query**; the Homework 1 starter defaults to `relational-plan`.
 Run the normal-form, ordering and elaboration tests and formatting check:
 
 ```text
-cargo test -p cq-ir --test valuation_language
+cargo test -p cq-lang-vo --test valuation_language
 cargo test -p cq-order --test order
 cargo test -p cq-elaborate --test elaborate
 cargo fmt --all --check

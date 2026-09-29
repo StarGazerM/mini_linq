@@ -1,0 +1,31 @@
+[package]
+name = "cq-physical-lowering"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+cq-lang-ix.workspace = true
+cq-lang-physical.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[dev-dependencies]
+cq-lang-vo.workspace = true
+cq-syntax.workspace = true
+cq-lang-cq.workspace = true
+cq-lang-ra.workspace = true
+
+cq-index-policy = { workspace = true  }
+cq-order = { workspace = true  }
+cq-reduce = { workspace = true  }
+cq-elaborate = { workspace = true  }
+
+[package.metadata.cq]
+source = "cq-lang-ix"
+target = "cq-lang-physical"

@@ -1,5 +1,7 @@
 //! The paper's YA example stops at verified VO, RA and IX boundaries.
-use cq_ir::{cq, relational_plan, valuation};
+use cq_lang_cq as cq;
+use cq_lang_ra as relational_plan;
+use cq_lang_vo as valuation;
 use mini_linq_paper_overview::{boundaries, directory};
 use std::collections::BTreeSet;
 
@@ -82,7 +84,7 @@ fn main() {
         output r6 as answer(x, y);
     };
     assert_eq!(written.relational.plan, expected_written);
-    let descriptors = |ix: &cq_ir::index_requirements::Module| {
+    let descriptors = |ix: &cq_lang_ix::Module| {
         ix.indexes
             .iter()
             .map(|index| {

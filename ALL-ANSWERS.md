@@ -10,7 +10,7 @@ The compiler boundaries are:
 CQ → NF → VO → RA → IX → Physical → Structures → Rust
 ```
 
-`cq_ir::cq::normal::normalize` puts CQ in kernel normal form. `cq-order` orders
+`cq_lang_cq::normal::normalize` puts CQ in kernel normal form. `cq-order` orders
 valuations in VO; `cq-reduce` can add guard pushdown and, for acyclic queries,
 Yannakakis semijoin reductions; `cq-elaborate` turns VO into named RA. Normal
 form has a contract check; order, reduction, and elaboration have correspondence
@@ -28,7 +28,7 @@ authoritative.
 
 The executable [composition example](examples/composition/README.md) binds
 every slot: hosts keyed on their join columns are probed in place and nothing
-is built at runtime. The [full-chain test](crates/mini-linq/tests/physical_query.rs)
+is built at runtime. The [full-chain test](facade/mini-linq/tests/physical_query.rs)
 additionally covers compiler-built indexes, a user-defined `#[index(Type)]`,
 merge joins, Yannakakis semijoin passes, bounded ordered scans and computed
 columns against an independent oracle.
@@ -69,7 +69,7 @@ python3 doc/formal/check.py
 ```
 
 Package-wide `--all-features` is used only for supported implementation
-components: the optional `cq-ir/hw4` exercise is unfinished and is not part of
+components: the optional `cq-lang-cq/hw4` exercise is unfinished and is not part of
 ordinary workspace acceptance. Default workspace checks, macro tracing, and
 logical explanation do not build DuckDB.
 

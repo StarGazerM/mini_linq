@@ -5,79 +5,79 @@ X-FilterExtend	abstract	-	-	Pure independent filter and extension interchange la
 X-Keys	abstract	-	-	Pure multi-argument matching law; motivates complete prefix-key access.
 X-Local	abstract	-	-	Pure candidate-local matching law; motivates partial-key access and residual selection.
 H-Eval	abstract	-	-	Finite successful host boundary; host semantics and representation adequacy are premises.
-IX-Reuse	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-New	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-Join	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-IX-Other	implementation	crates/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
-FV-Name	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
-FV-Bound	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
-FV-Children	implementation	crates/cq-ir/src/cq/rust.rs	visit::visit_expr(self, expr)	Correspondence location; proof obligation C-Conformance remains.
-FV-Closure	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_closure	Correspondence location; proof obligation C-Conformance remains.
-FV-For	implementation	crates/cq-ir/src/cq/rust.rs	fn visit_expr_for_loop	Correspondence location; proof obligation C-Conformance remains.
-FV-CondLet	implementation	crates/cq-ir/src/cq/rust.rs	fn condition	Correspondence location; proof obligation C-Conformance remains.
-FV-And	implementation	crates/cq-ir/src/cq/rust.rs	fn condition	Correspondence location; proof obligation C-Conformance remains.
-FV-Cond	implementation	crates/cq-ir/src/cq/rust.rs	fn condition	Correspondence location; proof obligation C-Conformance remains.
-CQ-Var	implementation	crates/cq-ir/src/cq.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
-CQ-Expr	implementation	crates/cq-ir/src/cq.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
-CQ-Atom	implementation	crates/cq-ir/src/cq.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
-CQ-Guard	implementation	crates/cq-ir/src/cq.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
-CQ-Bind	implementation	crates/cq-ir/src/cq.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
-RA-Unit	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-RA-Rename	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-RA-Join	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-RA-Semi	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-RA-Project	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-RA-Select	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-RA-Extend	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-RA-Def	implementation	crates/cq-ir/src/relational_plan.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
-D-Guard	implementation	crates/cq-order/src/lib.rs	BodyItem::Filter(filter) => (	Required names are the guard's free names among the written prefix.
-D-Bind	implementation	crates/cq-order/src/lib.rs	BodyItem::Let(binding) => (	Provided names are the pattern's bindings; required names are the expression's free names among the prefix.
-D-Atom	implementation	crates/cq-ir/src/cq/normal.rs	pub fn normalize(	The argument walk is normalization: constants, repeats, wildcards and expressions leave the atom; only bare names remain.
+IX-Reuse	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+IX-New	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+IX-Join	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+IX-Other	implementation	passes/cq-index-policy/src/lib.rs	pub fn compile	Source correspondence checked against authored IX fixtures; this mapping is not a mathematical proof.
+FV-Name	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
+FV-Bound	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_path	Correspondence location; proof obligation C-Conformance remains.
+FV-Children	implementation	languages/cq-syntax/src/rust.rs	visit::visit_expr(self, expr)	Correspondence location; proof obligation C-Conformance remains.
+FV-Closure	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_closure	Correspondence location; proof obligation C-Conformance remains.
+FV-For	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_for_loop	Correspondence location; proof obligation C-Conformance remains.
+FV-CondLet	implementation	languages/cq-syntax/src/rust.rs	fn condition	Correspondence location; proof obligation C-Conformance remains.
+FV-And	implementation	languages/cq-syntax/src/rust.rs	fn condition	Correspondence location; proof obligation C-Conformance remains.
+FV-Cond	implementation	languages/cq-syntax/src/rust.rs	fn condition	Correspondence location; proof obligation C-Conformance remains.
+CQ-Var	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
+CQ-Expr	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
+CQ-Atom	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
+CQ-Guard	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
+CQ-Bind	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Correspondence location; proof obligation C-Conformance remains.
+RA-Unit	implementation	languages/cq-lang-ra/src/lib.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
+RA-Rename	implementation	languages/cq-lang-ra/src/lib.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
+RA-Join	implementation	languages/cq-lang-ra/src/lib.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
+RA-Semi	implementation	languages/cq-lang-ra/src/lib.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
+RA-Project	implementation	languages/cq-lang-ra/src/lib.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
+RA-Select	implementation	languages/cq-lang-ra/src/lib.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
+RA-Extend	implementation	languages/cq-lang-ra/src/lib.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
+RA-Def	implementation	languages/cq-lang-ra/src/lib.rs	pub fn check_in	Correspondence location; proof obligation C-Conformance remains.
+D-Guard	implementation	passes/cq-order/src/lib.rs	BodyItem::Filter(filter) => (	Required names are the guard's free names among the written prefix.
+D-Bind	implementation	passes/cq-order/src/lib.rs	BodyItem::Let(binding) => (	Provided names are the pattern's bindings; required names are the expression's free names among the prefix.
+D-Atom	implementation	languages/cq-lang-cq/src/normal.rs	pub fn normalize(	The argument walk is normalization: constants, repeats, wildcards and expressions leave the atom; only bare names remain.
 D-Move	abstract	-	-	Normal form has no expression arguments; VO places a guard or binding once its variables are bound, so no movability whitelist remains.
 D-Barrier	abstract	-	-	No evaluation barrier remains: VO lets a guard move earlier than written, never later than its variables.
-D-Graph	implementation	crates/cq-ir/src/cq/hypergraph.rs	pub fn of(module: &Module) -> Analysis	Every normal-form query is analyzed; the reducer requires `acyclic`, not a separate graph domain.
-H-Occurrence	implementation	crates/cq-ir/src/cq/hypergraph.rs	analysis.clauses.insert(clause, columns);	Atom clause index to its variables in column order.
-H-Incidence	implementation	crates/cq-ir/src/cq/hypergraph.rs	pub incidence: BTreeMap<String, BTreeSet<usize>>,	Variable to the atom clauses it occurs in.
+D-Graph	implementation	languages/cq-lang-cq/src/hypergraph.rs	pub fn of(module: &Module) -> Analysis	Every normal-form query is analyzed; the reducer requires `acyclic`, not a separate graph domain.
+H-Occurrence	implementation	languages/cq-lang-cq/src/hypergraph.rs	analysis.clauses.insert(clause, columns);	Atom clause index to its variables in column order.
+H-Incidence	implementation	languages/cq-lang-cq/src/hypergraph.rs	pub incidence: BTreeMap<String, BTreeSet<usize>>,	Variable to the atom clauses it occurs in.
 H-Adjacency	abstract	-	-	Derived labeled SIP view of incidence; no separately stored compiler graph.
-H-JoinTree	implementation	crates/cq-ir/src/cq/hypergraph.rs	self.join_tree = self.acyclic.then(	The GYO parent map, present iff the reduction ended with one empty edge.
-G-Private	implementation	crates/cq-ir/src/cq/hypergraph.rs	self.gyo_steps.push(GyoStep::Private	Correspondence location; proof obligation C-Conformance remains.
-G-Absorb	implementation	crates/cq-ir/src/cq/hypergraph.rs	self.gyo_steps.push(GyoStep::Absorb	Correspondence location; proof obligation C-Conformance remains.
-G-Accept	implementation	crates/cq-ir/src/cq/hypergraph.rs	self.acyclic = residual.len() <= 1	Correspondence location; proof obligation C-Conformance remains.
-G-Reject	implementation	crates/cq-ir/src/cq/hypergraph.rs	self.acyclic = residual.len() <= 1	Correspondence location; proof obligation C-Conformance remains.
+H-JoinTree	implementation	languages/cq-lang-cq/src/hypergraph.rs	self.join_tree = self.acyclic.then(	The GYO parent map, present iff the reduction ended with one empty edge.
+G-Private	implementation	languages/cq-lang-cq/src/hypergraph.rs	self.gyo_steps.push(GyoStep::Private	Correspondence location; proof obligation C-Conformance remains.
+G-Absorb	implementation	languages/cq-lang-cq/src/hypergraph.rs	self.gyo_steps.push(GyoStep::Absorb	Correspondence location; proof obligation C-Conformance remains.
+G-Accept	implementation	languages/cq-lang-cq/src/hypergraph.rs	self.acyclic = residual.len() <= 1	Correspondence location; proof obligation C-Conformance remains.
+G-Reject	implementation	languages/cq-lang-cq/src/hypergraph.rs	self.acyclic = residual.len() <= 1	Correspondence location; proof obligation C-Conformance remains.
 O-Leaf	abstract	-	-	Ghost binary-order witness recovered from introduction commands; no added IR.
 O-Join	abstract	-	-	Ghost forest update accompanying P-Combine on disjoint occurrence coverages.
-P-Start	implementation	crates/cq-elaborate/src/lib.rs	fn relation(&mut self, clause: usize) -> Ident	A clause's rename is emitted at its first mention, reduction or subatom, not all up front.
-P-Select	implementation	crates/cq-elaborate/src/lib.rs	valuation::Reduction::Guard(filter) => self.select(left, filter),	A guard pushed onto one atom (`reduce C if e`) selects on that clause's relation.
-P-Begin	implementation	crates/cq-reduce/src/lib.rs	before.entry(first).or_default().extend(reducer);	The reducer is placed before the first atom step; no phase state exists.
-P-Combine	implementation	crates/cq-elaborate/src/lib.rs	natural_join_token: Default::default(),	Joins follow the plan's step order, prefix on the left.
+P-Start	implementation	passes/cq-elaborate/src/lib.rs	fn relation(&mut self, clause: usize) -> Ident	A clause's rename is emitted at its first mention, reduction or subatom, not all up front.
+P-Select	implementation	passes/cq-elaborate/src/lib.rs	valuation::Reduction::Guard(filter) => self.select(left, filter),	A guard pushed onto one atom (`reduce C if e`) selects on that clause's relation.
+P-Begin	implementation	passes/cq-reduce/src/lib.rs	before.entry(first).or_default().extend(reducer);	The reducer is placed before the first atom step; no phase state exists.
+P-Combine	implementation	passes/cq-elaborate/src/lib.rs	natural_join_token: Default::default(),	Joins follow the plan's step order, prefix on the left.
 P-Trim	abstract	-	-	No intermediate projection is emitted; the head is projected once at the end (C-Finish).
-P-Output	implementation	crates/cq-elaborate/src/lib.rs	fn finish(&mut self, head: &cq::Atom) -> ra::Output	Correspondence location; proof obligation C-Conformance remains.
-Y-Init	implementation	crates/cq-reduce/src/lib.rs	fn tree(source: &valuation::Module, analysis: &valuation::Analysis)	Requires the GYO join tree of the erased plan; rejects cyclic queries.
-Y-Up	implementation	crates/cq-reduce/src/lib.rs	let up = order.iter().skip(1).rev().map(edge);	`reduce parent with child(shared)`, leaves first in reverse breadth-first order.
-Y-Down	implementation	crates/cq-reduce/src/lib.rs	let down = order.iter().skip(1).map(edge).map(|(p, c)| (c, p));	`reduce child with parent(shared)`, root first in breadth-first order.
+P-Output	implementation	passes/cq-elaborate/src/lib.rs	fn finish(&mut self, head: &cq::Atom) -> ra::Output	Correspondence location; proof obligation C-Conformance remains.
+Y-Init	implementation	passes/cq-reduce/src/lib.rs	fn tree(source: &valuation::Module, analysis: &valuation::Analysis)	Requires the GYO join tree of the erased plan; rejects cyclic queries.
+Y-Up	implementation	passes/cq-reduce/src/lib.rs	let up = order.iter().skip(1).rev().map(edge);	`reduce parent with child(shared)`, leaves first in reverse breadth-first order.
+Y-Down	implementation	passes/cq-reduce/src/lib.rs	let down = order.iter().skip(1).map(edge).map(|(p, c)| (c, p));	`reduce child with parent(shared)`, root first in breadth-first order.
 Y-Freeze	abstract	-	-	The elaboration keeps each clause's latest relation; no freeze transition is emitted.
-S-Written	implementation	crates/cq-order/src/lib.rs	Heuristic::Written => {	Clauses in normal-form body order.
-S-Connected	implementation	crates/cq-order/src/lib.rs	Ranking::Connected => 0,	A ready guard or binding, then an atom sharing a bound variable, then the earliest clause.
-S-Greedy	implementation	crates/cq-order/src/lib.rs	Ranking::GreedyWidth | Ranking::Auto => bound.len() + facts.provides.len() - shared,	Connected, then the narrowest heading after the join; `Auto` is the same ranking.
+S-Written	implementation	passes/cq-order/src/lib.rs	Heuristic::Written => {	Clauses in normal-form body order.
+S-Connected	implementation	passes/cq-order/src/lib.rs	Ranking::Connected => 0,	A ready guard or binding, then an atom sharing a bound variable, then the earliest clause.
+S-Greedy	implementation	passes/cq-order/src/lib.rs	Ranking::GreedyWidth | Ranking::Auto => bound.len() + facts.provides.len() - shared,	Connected, then the narrowest heading after the join; `Auto` is the same ranking.
 S-Tree	abstract	-	-	No heuristic reproduces the root-first tree walk; `Elimination` orders atoms by their earliest variable in the elimination order instead.
-E-Emit	implementation	crates/cq-elaborate/src/lib.rs	fn emit(&mut self, operator: ra::Operator) -> Ident	Appends a fresh named result; no cap is checked.
+E-Emit	implementation	passes/cq-elaborate/src/lib.rs	fn emit(&mut self, operator: ra::Operator) -> Ident	Appends a fresh named result; no cap is checked.
 E-Arity	abstract	-	-	No arity cap; `cq::hypergraph::Analysis` reports the width, which no pass enforces.
-Plan-Graph	implementation	crates/mini-linq/src/lib.rs	pub fn cq_to_ra_hypergraph	normalize, order (written, coarse), reduce (guards onto atoms; the tree reducer iff acyclic), elaborate.
-Plan-Prefix	implementation	crates/mini-linq/src/lib.rs	pub fn cq_to_ra(	normalize, order (written, coarse), elaborate.
-B-Root	implementation	crates/cq-elaborate/src/lib.rs	fn subatom(&mut self, subatom: &valuation::Subatom, check: bool)	The first subatom's relation is the prefix.
-B-Join	implementation	crates/cq-elaborate/src/lib.rs	natural_join_token: Default::default(),	Every later full subatom joins the prefix.
-B-Output	implementation	crates/cq-elaborate/src/lib.rs	fn finish(&mut self, head: &cq::Atom) -> ra::Output	Correspondence location; proof obligation C-Conformance remains.
-C-Ready	implementation	crates/cq-order/src/lib.rs	fn ready(	Inputs bound and, for a guard or binding, the next of its kind in query order.
-C-Constant	implementation	crates/cq-ir/src/cq/normal.rs	prefix.push(binding(&key, ty, quote!(#argument)));	A literal argument becomes a typed binding before every atom.
-C-Guard	implementation	crates/cq-elaborate/src/lib.rs	valuation::Step::Guard(filter, _) => {	Correspondence location; proof obligation C-Conformance remains.
-C-Bind	implementation	crates/cq-elaborate/src/lib.rs	valuation::Step::Let(binding, _) => state.extend(binding),	Correspondence location; proof obligation C-Conformance remains.
-A-Constant	implementation	crates/cq-ir/src/cq/normal.rs	} else if rust::literal(argument) {	Correspondence location; proof obligation C-Conformance remains.
-A-Variable	implementation	crates/cq-ir/src/cq/normal.rs	if seen.insert(symbol_name(variable)) {	Correspondence location; proof obligation C-Conformance remains.
-A-Repeat	implementation	crates/cq-ir/src/cq/normal.rs	after.push(guard(quote!(#key == #variable)));	A repeated variable becomes a fresh column and an equality guard after the atom.
-A-Wildcard	implementation	crates/cq-ir/src/cq/normal.rs	if matches!(argument, syn::Expr::Infer(_)) {	Correspondence location; proof obligation C-Conformance remains.
-A-Prefix	implementation	crates/cq-ir/src/cq/normal.rs	before.push(binding(&key, ty, quote!(#argument)));	An expression over earlier names becomes a binding before its atom.
-A-Local	implementation	crates/cq-ir/src/cq/normal.rs	after.push(guard(quote!(#key.eq(&(#argument)))));	An expression over same-atom variables becomes an equality guard after its atom.
-C-Match	implementation	crates/cq-elaborate/src/lib.rs	valuation::Step::Atom(subatom, _) => state.subatom(subatom, introduces.is_empty()),	A full subatom renames its relation and joins the prefix; normalization supplies the argument cases.
-C-Finish	implementation	crates/cq-elaborate/src/lib.rs	fn finish(&mut self, head: &cq::Atom) -> ra::Output	Correspondence location; proof obligation C-Conformance remains.
-ST-Entry	implementation	crates/mini-linq/src/lib.rs	pub fn mini_linq(	Representative entry; the caller-relative composition table is in staging.tex.
+Plan-Graph	implementation	facade/mini-linq/src/lib.rs	pub fn cq_to_ra_hypergraph	normalize, order (written, coarse), reduce (guards onto atoms; the tree reducer iff acyclic), elaborate.
+Plan-Prefix	implementation	facade/mini-linq/src/lib.rs	pub fn cq_to_ra(	normalize, order (written, coarse), elaborate.
+B-Root	implementation	passes/cq-elaborate/src/lib.rs	fn subatom(&mut self, subatom: &valuation::Subatom, check: bool)	The first subatom's relation is the prefix.
+B-Join	implementation	passes/cq-elaborate/src/lib.rs	natural_join_token: Default::default(),	Every later full subatom joins the prefix.
+B-Output	implementation	passes/cq-elaborate/src/lib.rs	fn finish(&mut self, head: &cq::Atom) -> ra::Output	Correspondence location; proof obligation C-Conformance remains.
+C-Ready	implementation	passes/cq-order/src/lib.rs	fn ready(	Inputs bound and, for a guard or binding, the next of its kind in query order.
+C-Constant	implementation	languages/cq-lang-cq/src/normal.rs	prefix.push(binding(&key, ty, quote!(#argument)));	A literal argument becomes a typed binding before every atom.
+C-Guard	implementation	passes/cq-elaborate/src/lib.rs	valuation::Step::Guard(filter, _) => {	Correspondence location; proof obligation C-Conformance remains.
+C-Bind	implementation	passes/cq-elaborate/src/lib.rs	valuation::Step::Let(binding, _) => state.extend(binding),	Correspondence location; proof obligation C-Conformance remains.
+A-Constant	implementation	languages/cq-lang-cq/src/normal.rs	} else if rust::literal(argument) {	Correspondence location; proof obligation C-Conformance remains.
+A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	if seen.insert(symbol_name(variable)) {	Correspondence location; proof obligation C-Conformance remains.
+A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	after.push(guard(quote!(#key == #variable)));	A repeated variable becomes a fresh column and an equality guard after the atom.
+A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	if matches!(argument, syn::Expr::Infer(_)) {	Correspondence location; proof obligation C-Conformance remains.
+A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	before.push(binding(&key, ty, quote!(#argument)));	An expression over earlier names becomes a binding before its atom.
+A-Local	implementation	languages/cq-lang-cq/src/normal.rs	after.push(guard(quote!(#key.eq(&(#argument)))));	An expression over same-atom variables becomes an equality guard after its atom.
+C-Match	implementation	passes/cq-elaborate/src/lib.rs	valuation::Step::Atom(subatom, _) => state.subatom(subatom, introduces.is_empty()),	A full subatom renames its relation and joins the prefix; normalization supplies the argument cases.
+C-Finish	implementation	passes/cq-elaborate/src/lib.rs	fn finish(&mut self, head: &cq::Atom) -> ra::Output	Correspondence location; proof obligation C-Conformance remains.
+ST-Entry	implementation	facade/mini-linq/src/lib.rs	pub fn mini_linq(	Representative entry; the caller-relative composition table is in staging.tex.
 ST-Hole	abstract	-	-	Metalinguistic context rule; resolution/contextual adequacy is an explicit obligation.

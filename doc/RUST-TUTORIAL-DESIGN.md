@@ -479,7 +479,7 @@ crate graph, not Rust Analyzer type-checked modules. Compare:
 2. RelationalPlan to the index overlay.
 
 The stepper stops at IX; read the Physical, Structures and printed Rust
-stages from the [full-chain test](../crates/mini-linq/tests/physical_query.rs).
+stages from the [full-chain test](../facade/mini-linq/tests/physical_query.rs).
 
 Students should compare each result with the authoritative DSL artifacts,
 not inspect only the final expansion. They can stop early with, for example,

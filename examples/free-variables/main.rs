@@ -1,4 +1,5 @@
-use cq_ir::cq::{self, BodyItem};
+use cq_lang_cq as cq;
+use cq_lang_cq::BodyItem;
 
 fn report(position: &str, expression: &syn::Expr) {
     let free = cq::rust::free_variables(expression);

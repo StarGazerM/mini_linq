@@ -49,7 +49,7 @@ later extension; supplying syntax does not make those semantic tests pass.
 
 ## Collecting free variables
 
-Use `cq_ir::cq::rust::free_variables(&expression)`. It returns:
+Use `cq_syntax::rust::free_variables(&expression)`. It returns:
 
 ```rust
 pub struct FreeVariables {
@@ -69,7 +69,7 @@ const generic arguments are visited.
 
 ```rust
 use std::collections::BTreeSet;
-use cq_ir::cq::rust::free_variables;
+use cq_syntax::rust::free_variables;
 
 let expression: syn::Expr = syn::parse_quote!({
     let x = y;
@@ -120,7 +120,7 @@ assert_eq!(free.dependencies(&logical), logical);
 
 ## Bindings and clause dependencies are different questions
 
-`cq_ir::cq::rust::bindings(&pattern)` supplies the syntactic names declared by
+`cq_syntax::rust::bindings(&pattern)` supplies the syntactic names declared by
 a Rust pattern, in source order. Rust still checks refutability, types, and
 ambiguous constant patterns. Use this helper for a `let` or aggregate result
 pattern. A result binding is not in scope while its initializer is evaluated.
@@ -139,7 +139,8 @@ is implemented by this helper.
 
 ```text
 cargo run --example free-variables
-cargo test -p cq-ir --test expression_syntax --test free_variables --test free_variables_execution
+cargo test -p cq-lang-cq --test expression_syntax --test free_variables_execution
+cargo test -p cq-syntax --test free_variables
 ```
 
 The first tests compare known free-variable sets and structural syntax

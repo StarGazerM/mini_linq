@@ -4,7 +4,9 @@ use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
-use cq_ir::{cq, index_requirements, relational_plan};
+use cq_lang_cq as cq;
+use cq_lang_ix as index_requirements;
+use cq_lang_ra as relational_plan;
 use cq_workloads::QueryCase;
 use quote::ToTokens;
 
@@ -125,7 +127,7 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
 
     let logical = artifacts.attempt("CQ -> RelationalPlan", || compile_cq(&source))?;
     artifacts.attempt("RelationalPlan local contract", || {
-        relational_plan::contract::check(&logical)
+        relational_plan::contract::check_module(&logical)
     })?;
     artifacts.write_stage(Stage::RelationalPlan, &render_relational_plan(&logical))?;
     if through == Stage::RelationalPlan {
@@ -136,7 +138,7 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
         cq_index_policy::compile(&logical)
     })?;
     artifacts.attempt("IndexRequirements local contract", || {
-        index_requirements::contract::check(&indexes)
+        index_requirements::contract::check_module(&indexes)
     })?;
     artifacts.write_stage(
         Stage::IndexRequirements,
@@ -532,7 +534,7 @@ mod tests {
                     .unwrap(),
                 indexes
             );
-            index_requirements::contract::check(&indexes).unwrap();
+            index_requirements::contract::check_module(&indexes).unwrap();
         }
     }
 
@@ -571,3 +573,39 @@ mod tests {
     }
 }
 
+
+#[allow(unused_imports, dead_code)]
+mod cq_order {
+    pub use ::cq_order::*;
+    pub fn compile(source: &cq_lang_cq::Module, options: &::cq_order::Options) -> syn::Result<cq_lang_vo::Module> {
+        Ok(cq_lang_vo::Module::new(source.program.clone(), ::cq_order::compile(source, options)?))
+    }
+    pub fn check(source: &cq_lang_cq::Module, target: &cq_lang_vo::Module, options: &::cq_order::Options) -> bool {
+        target.program == source.program
+            && ::cq_order::check(source, &target.section, options)
+    }
+}
+
+#[allow(unused_imports, dead_code)]
+mod cq_elaborate {
+    pub use ::cq_elaborate::*;
+    pub fn compile(source: &cq_lang_vo::Module) -> syn::Result<cq_lang_ra::Module> {
+        Ok(cq_lang_ra::Module::new(source.program.clone(), ::cq_elaborate::compile(source)?))
+    }
+    pub fn check(source: &cq_lang_vo::Module, target: &cq_lang_ra::Module) -> bool {
+        target.program == source.program
+            && ::cq_elaborate::check(source, &target.section)
+    }
+}
+
+#[allow(unused_imports, dead_code)]
+mod cq_index_policy {
+    pub use ::cq_index_policy::*;
+    pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
+        Ok(cq_lang_ix::Module::new(source.clone(), ::cq_index_policy::compile(source)?))
+    }
+    pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
+        target.relational_plan == *source
+            && ::cq_index_policy::check(source, &target.section)
+    }
+}

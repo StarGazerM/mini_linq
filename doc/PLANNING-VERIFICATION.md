@@ -9,12 +9,12 @@ realization has a separate, narrower acceptance domain.
 
 | Suite | Current evidence |
 |---|---|
-| [`cq-ir/tests/valuation_language.rs`](../crates/cq-ir/tests/valuation_language.rs) | Normalization, kernels up to renaming, coarse/fine VO coverage, reduction placement, and malformed-plan rejection |
-| [`cq-ir/tests/hypergraph_analysis.rs`](../crates/cq-ir/tests/hypergraph_analysis.rs) | Incidence, GYO join trees, chordality, elimination order, width, and distinct occurrences on selected shapes |
-| [`cq-order/tests/order.rs`](../crates/cq-order/tests/order.rs) | Written, Prefix and Elimination ordering with Coarse/Fine splits; VO contracts, pinned sequences, and kernel equality |
-| [`cq-reduce/tests/reduce.rs`](../crates/cq-reduce/tests/reduce.rs) | Guard pushdown, acyclic tree schedules, cyclic rejection, pass correspondence, and CQ/RA answers over the shared cases |
-| [`cq-elaborate/tests/elaborate.rs`](../crates/cq-elaborate/tests/elaborate.rs) | Named RA shapes, pass correspondence, kernel preservation, and selected generated-database comparisons |
-| [`cq-ir/tests/relational_plan.rs`](../crates/cq-ir/tests/relational_plan.rs) | RA contract and erasure checks |
+| [`cq-lang-vo/tests/valuation_language.rs`](../languages/cq-lang-vo/tests/valuation_language.rs) | Normalization, kernels up to renaming, coarse/fine VO coverage, reduction placement, and malformed-plan rejection |
+| [`cq-lang-cq/tests/hypergraph_analysis.rs`](../languages/cq-lang-cq/tests/hypergraph_analysis.rs) | Incidence, GYO join trees, chordality, elimination order, width, and distinct occurrences on selected shapes |
+| [`cq-order/tests/order.rs`](../passes/cq-order/tests/order.rs) | Written, Prefix and Elimination ordering with Coarse/Fine splits; VO contracts, pinned sequences, and kernel equality |
+| [`cq-reduce/tests/reduce.rs`](../passes/cq-reduce/tests/reduce.rs) | Guard pushdown, acyclic tree schedules, cyclic rejection, pass correspondence, and CQ/RA answers over the shared cases |
+| [`cq-elaborate/tests/elaborate.rs`](../passes/cq-elaborate/tests/elaborate.rs) | Named RA shapes, pass correspondence, kernel preservation, and selected generated-database comparisons |
+| [`cq-lang-ra/tests/relational_plan.rs`](../languages/cq-lang-ra/tests/relational_plan.rs) | RA contract and erasure checks |
 
 The [25 authored `.ra` files](../test-support/relational/plans),
 [case data](../test-support/relational/cases.rs), and
@@ -137,7 +137,9 @@ reductions and partial subatom checks; Physical can realize it as `semi`
 ## Reproduce current checks
 
 ```sh
-cargo test -p cq-ir --test valuation_language --test hypergraph_analysis --test relational_plan
+cargo test -p cq-lang-vo --test valuation_language
+cargo test -p cq-lang-cq --test hypergraph_analysis
+cargo test -p cq-lang-ra --test relational_plan
 cargo test -p cq-order
 cargo test -p cq-reduce
 cargo test -p cq-elaborate
@@ -149,7 +151,7 @@ These commands name the current pass and integration suites. They are
 reproduction commands, not a claim that every authored RA shape is produced
 by each heuristic.
 
-The [full-chain test](../crates/mini-linq/tests/physical_query.rs) exercises
+The [full-chain test](../facade/mini-linq/tests/physical_query.rs) exercises
 every stage after IX: hosts read in place through their declared keys,
 compiler-built hash indexes, a user-defined index type through
 `#[index(Type)]`, merge joins over built ordered maps, Yannakakis semijoin

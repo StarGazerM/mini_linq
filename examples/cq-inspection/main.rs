@@ -1,6 +1,7 @@
 //! Parse one query into the typed CQ source IR and inspect its structure.
 
-use cq_ir::{cq, symbol_name};
+use cq_lang_cq as cq;
+use cq_syntax::symbol_name;
 
 fn main() {
     let source: cq::Module = syn::parse2(quote::quote! {

@@ -20,7 +20,7 @@ Read the [compiler structure](doc/COMPILER-STRUCTURE.md), the
 [language grammars](doc/DSL.md), the [formal specification](doc/formal/README.md),
 or the [executable composition](examples/composition/README.md).
 
-The [full-chain test](crates/mini-linq/tests/physical_query.rs) covers hosts
+The [full-chain test](facade/mini-linq/tests/physical_query.rs) covers hosts
 read in place through their declared keys, compiler-built hash indexes, a
 user-defined index type, merge joins over built ordered maps, Yannakakis
 semijoin passes as membership tests, bounded scans of an ordered host, and a

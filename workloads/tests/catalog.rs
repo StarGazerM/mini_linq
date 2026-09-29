@@ -153,7 +153,7 @@ fn classic_catalog_sources_parse_and_satisfy_the_cq_contract() {
         let source = case
             .module()
             .unwrap_or_else(|error| panic!("classic case `{}` did not parse: {error}", case.name));
-        cq_ir::cq::contract::check(&source).unwrap_or_else(|error| {
+        cq_lang_cq::contract::check(&source).unwrap_or_else(|error| {
             panic!(
                 "classic case `{}` violates the CQ contract: {error}",
                 case.name
@@ -186,7 +186,7 @@ fn retail_catalog_sources_parse_and_satisfy_the_cq_contract() {
         let source = case
             .module()
             .unwrap_or_else(|error| panic!("retail case `{}` did not parse: {error}", case.name));
-        cq_ir::cq::contract::check(&source).unwrap_or_else(|error| {
+        cq_lang_cq::contract::check(&source).unwrap_or_else(|error| {
             panic!(
                 "retail case `{}` violates the CQ contract: {error}",
                 case.name
@@ -268,14 +268,14 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
             "Rust query module `{}` uses the wrong query macro",
             expected_path.display(),
         );
-        let direct: cq_ir::cq::Module =
+        let direct: cq_lang_cq::Module =
             syn::parse2(query.mac.tokens.clone()).unwrap_or_else(|error| {
                 panic!(
                     "mini_linq::workload_query! body in `{}` is not a CQ module: {error}",
                     expected_path.display()
                 )
             });
-        cq_ir::cq::contract::check(&direct).unwrap_or_else(|error| {
+        cq_lang_cq::contract::check(&direct).unwrap_or_else(|error| {
             panic!(
                 "mini_linq::workload_query! body in `{}` violates the CQ contract: {error}",
                 expected_path.display()
