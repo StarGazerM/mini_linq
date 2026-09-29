@@ -196,18 +196,16 @@ fn the_fine_triangle_plan_semijoins_checks_and_keeps_the_kernel() {
             r0 = rename R { a -> a, b -> b };
             r1 = project r0 keep { a };
             r2 = rename T { a -> a, c -> c };
-            r3 = project r2 keep { a };
-            r4 = semijoin r1 with r3;
-            r5 = select r4 if (a > 0);
-            r6 = natural_join r5 with r0;
-            r7 = rename S { b -> b, c -> c };
-            r8 = project r7 keep { b };
-            r9 = semijoin r6 with r8;
-            r10 = natural_join r9 with r7;
-            r11 = natural_join r10 with r2;
-            r12 = extend r11 with { d: i32 } value ({ let d: i32 = a + c; (d,) });
-            r13 = project r12 keep { r#a, r#b, r#c };
-            output r13 as answer(a, b, c);
+            r3 = semijoin r1 with r2;
+            r4 = select r3 if (a > 0);
+            r5 = natural_join r4 with r0;
+            r6 = rename S { b -> b, c -> c };
+            r7 = semijoin r5 with r6;
+            r8 = natural_join r7 with r6;
+            r9 = natural_join r8 with r2;
+            r10 = extend r9 with { d: i32 } value ({ let d: i32 = a + c; (d,) });
+            r11 = project r10 keep { r#a, r#b, r#c };
+            output r11 as answer(a, b, c);
         },
     );
     // The check is about what is computed: the coarse plan's erasure is the

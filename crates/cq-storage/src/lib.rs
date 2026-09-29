@@ -21,6 +21,8 @@
 //! - `α(ordered) = bag of (key, item)`, enumerated in key order from any
 //!   bound; [`merge`] is the one co-iteration primitive; [`sorted_by`]
 //!   presents an already key-ordered stream as such a cursor.
+//! - `α(trie) = { (k, r) | r ∈ α(inner[k]) }`: a [`Trie`] is a curried
+//!   index; each level is applied in turn and inner levels build lazily.
 //! - [`Canonical`] marks a collection that is a set of its keys by
 //!   construction.
 //!
@@ -31,12 +33,14 @@ mod hash_index;
 mod host;
 mod membership;
 mod ordered;
+mod trie;
 
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
 pub use membership::{Canonical, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
+pub use trie::Trie;
 
 pub mod require {
     pub fn seek<T: super::IndexRead>(_: T) {}

@@ -14,8 +14,9 @@
 //! rustc where the generated program performs it; nothing here claims a
 //! capability. Contract: every Physical premise is discharged —
 //!
-//! - `probe[C] a, r` / `semi[C] a, r`: a built entry on `r` keyed on `C`, or
-//!   `r` renames a host keyed on the columns `C` translates to;
+//! - `probe[C] a, r` / `semi[C] a, r`: a built entry on `r` whose key — or,
+//!   for a leveled entry, the union of some prefix of its levels — is `C`,
+//!   or `r` renames a host keyed on the columns `C` translates to;
 //! - `range[c]` over `r`: the same, ordered;
 //! - `merge[C] l, r`: each side ordered on `C` — a host key `ordered`, a
 //!   built entry (rustc checks `OrderedRead`), or a pipe whose own merge is
@@ -29,8 +30,14 @@
 //! ```text
 //! Module ::= Physical "structures" "{" (Entry ";")* "}"
 //! Entry  ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"]
-//!          | Ident "=" RustType "[" Ident,* "]"
+//!          | Ident "=" RustType ("[" Ident,* "]")+
 //! ```
+//!
+//! A built entry with several bracketed levels is a curried index: level
+//! `i` is keyed on its columns given every earlier level. By the exponential
+//! law `(A × B → C) ≅ (A → B → C)` one such value answers a read on every
+//! prefix `K₁ ∪ … ∪ Kᵢ`, which is how a trie serves `[a]`, `[a, b]` and
+//! `[a, b, c]` at once. Level order is representation; IX demands stay sets.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -103,15 +110,43 @@ pub struct Key {
     pub ordered: Option<kw::ordered>,
 }
 
-/// `Type [a, b]`: a Rust type built over the result, keyed on these columns.
+/// `Type [a, b]` or `Type [a][b]`: a Rust type built over the result, keyed
+/// on these columns, one bracket per level.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Keyed {
     pub ty: syn::Type,
+    #[parse(parse_levels)]
+    #[to_tokens(|tokens, levels| quote::TokenStreamExt::append_all(tokens, levels))]
+    pub levels: Vec<Level>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Level {
     #[syn(bracketed)]
     pub bracket: token::Bracket,
     #[syn(in = bracket)]
     #[parse(CommaList::parse_terminated)]
     pub columns: CommaList<Ident>,
+}
+
+fn parse_levels(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Level>> {
+    let mut levels = vec![input.parse()?];
+    while input.peek(token::Bracket) {
+        levels.push(input.parse()?);
+    }
+    Ok(levels)
+}
+
+impl Keyed {
+    /// Every column across all levels, level by level.
+    pub fn columns(&self) -> impl Iterator<Item = &Ident> {
+        self.levels.iter().flat_map(|l| l.columns.iter())
+    }
+
+    /// Sorted column names of each level.
+    pub fn level_names(&self) -> Vec<Vec<String>> {
+        self.levels.iter().map(|l| names(&l.columns)).collect()
+    }
 }
 
 fn names(columns: &CommaList<Ident>) -> Vec<String> {
@@ -139,6 +174,9 @@ pub struct KeyFact {
     pub ordered: bool,
 }
 
+/// A built structure: the sorted columns of each level, and its type.
+pub type Built = (Vec<Vec<String>>, syn::Type);
+
 /// What the contract establishes for later stages.
 #[derive(Clone, Debug)]
 pub struct Analysis {
@@ -149,8 +187,8 @@ pub struct Analysis {
     pub host_keys: BTreeMap<String, Option<KeyFact>>,
     /// Hosts declared canonical.
     pub host_canon: BTreeSet<String>,
-    /// Built structures per result: (sorted key columns, type).
-    pub built: BTreeMap<String, Vec<(Vec<String>, syn::Type)>>,
+    /// Built structures per result: (sorted columns of each level, type).
+    pub built: BTreeMap<String, Vec<Built>>,
     /// Results that are canonical (a set) by inference or flag, with the key
     /// that makes them so when inferred.
     pub unique: BTreeMap<String, Vec<String>>,
@@ -168,15 +206,29 @@ impl Analysis {
         (translated == fact.columns).then_some(fact)
     }
 
-    pub fn built_on(&self, result: &str, columns: &[String]) -> Option<&syn::Type> {
+    /// The structure answering a read of `result` on `columns`, and how
+    /// many of its levels the read applies.
+    pub fn built_on(&self, result: &str, columns: &[String]) -> Option<(&syn::Type, usize)> {
         let mut wanted = columns.to_vec();
         wanted.sort();
         self.built
             .get(result)?
             .iter()
-            .find(|(c, _)| *c == wanted)
-            .map(|(_, ty)| ty)
+            .find_map(|(levels, ty)| prefix_depth(levels, &wanted).map(|depth| (ty, depth)))
     }
+}
+
+/// The number of leading levels whose union is exactly `wanted`, if any.
+pub fn prefix_depth(levels: &[Vec<String>], wanted: &[String]) -> Option<usize> {
+    let mut union: Vec<String> = Vec::new();
+    for (depth, level) in levels.iter().enumerate() {
+        union.extend(level.iter().cloned());
+        union.sort();
+        if union == wanted {
+            return Some(depth + 1);
+        }
+    }
+    None
 }
 
 fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> syn::Result<T> {
@@ -239,9 +291,13 @@ fn analyze(module: &Module, physical: physical::Analysis) -> syn::Result<Analysi
                 let Some(heading) = analysis.physical.headings.get(&name) else {
                     return error(&entry.name, "structure must name an RA result");
                 };
-                for column in &keyed.columns {
+                let mut all = BTreeSet::new();
+                for column in keyed.columns() {
                     if !heading.contains(&symbol_name(column)) {
                         return error(column, format!("`{name}` has no column `{column}`"));
+                    }
+                    if !all.insert(symbol_name(column)) {
+                        return error(column, format!("`{column}` appears in two levels"));
                     }
                 }
                 if analysis.physical.modes[&name] != ModeKind::Let {
@@ -250,8 +306,8 @@ fn analyze(module: &Module, physical: physical::Analysis) -> syn::Result<Analysi
                         format!("`{name}` is a pipe; a structure is built only over a `let`"),
                     );
                 }
-                let columns = names(&keyed.columns);
-                if !seen.insert((name.clone(), Some(columns.clone()))) {
+                let columns = keyed.level_names();
+                if !seen.insert((name.clone(), Some(columns.concat()))) {
                     return error(&entry.name, "duplicate structure on these columns");
                 }
                 analysis

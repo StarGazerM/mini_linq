@@ -55,6 +55,27 @@ pub fn cq_to_ra(input: TokenStream) -> TokenStream {
     )
 }
 
+/// CQ → RA variable at a time (generic join): normalize, schedule clauses
+/// as written, bind one variable per step and check every other atom that
+/// holds it before enumerating further, elaborate to named RA.
+#[cfg(feature = "written-order")]
+#[proc_macro]
+pub fn cq_to_ra_generic(input: TokenStream) -> TokenStream {
+    entry::stage(
+        input,
+        Some(syn::parse_quote!(mini_linq::choose_index_policy)),
+        |source: &cq_ir::cq::Module| {
+            let normal = cq_ir::cq::normal::normalize(source)?;
+            let options = cq_order::Options {
+                split: cq_order::Split::Fine,
+                ..cq_order::Options::default()
+            };
+            let plan = cq_order::compile(&normal, &options)?;
+            cq_elaborate::compile(&plan)
+        },
+    )
+}
+
 /// CQ → RA with Yannakakis reduction: normalize, schedule clauses as
 /// written, push single-atom guards onto their atoms, semijoin-reduce along
 /// the GYO join tree when the query is acyclic, elaborate to named RA.

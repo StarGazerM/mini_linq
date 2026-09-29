@@ -17,6 +17,9 @@ pub(super) struct HostAccess {
 pub(super) enum Access {
     Host(HostAccess),
     Built(Ident),
+    /// A curried structure read on a proper prefix of its levels: the
+    /// structure and the prefix's levels.
+    Prefix(Ident, Vec<Vec<String>>),
 }
 
 /// One side of a merge.
@@ -81,6 +84,10 @@ impl<'a> Printer<'a> {
         if let Some(structure) = self.built(&name, columns) {
             return Ok(Access::Built(structure));
         }
+        if let Some((levels, depth)) = self.built_levels(&name, columns) {
+            let prefix = levels[..depth].to_vec();
+            return Ok(Access::Prefix(self.built_ident(&name, levels), prefix));
+        }
         if self.analysis.host_key_for(&name, columns).is_some() {
             return Ok(Access::Host(self.host_access(&name)));
         }
@@ -91,13 +98,35 @@ impl<'a> Printer<'a> {
     }
 
     pub(super) fn built(&self, name: &str, columns: &[String]) -> Option<Ident> {
+        self.built_levels(name, columns)
+            .filter(|(levels, depth)| levels.len() == *depth)
+            .map(|(levels, _)| self.built_ident(name, levels))
+    }
+
+    /// A built structure whose leading levels' union is `columns`: its
+    /// levels and how many of them a read on `columns` applies.
+    pub(super) fn built_levels(
+        &self,
+        name: &str,
+        columns: &[String],
+    ) -> Option<(&Vec<Vec<String>>, usize)> {
         let Some(Repr::Let { structures, .. }) = self.reprs.get(name) else {
             return None;
         };
+        structures.iter().find_map(|(levels, _)| {
+            structures::prefix_depth(levels, columns).map(|depth| (levels, depth))
+        })
+    }
+
+    pub(super) fn built_ident(&self, name: &str, levels: &[Vec<String>]) -> Ident {
+        let Some(Repr::Let { structures, .. }) = self.reprs.get(name) else {
+            unreachable!("built_levels found it");
+        };
         structures
             .iter()
-            .find(|(c, _)| c == columns)
+            .find(|(l, _)| l == levels)
             .map(|(_, s)| s.clone())
+            .expect("built_levels found it")
     }
 
     /// `&(k…,)`: the key a host map is entered with, constructed from the

@@ -428,3 +428,122 @@ fn computed_columns_follow_the_head_order() {
         vec![(&1, "1".to_string(), &3)]
     );
 }
+
+/// Canonical prefixes enumerate each a once before the remaining triangle
+/// variables are bound, even when several R rows share that prefix.
+mod generic_canon {
+    use std::cell::Cell;
+
+    macro_rules! policy {
+        ($($ix:tt)*) => {
+            ::mini_linq::lower_physical! {
+                $($ix)*
+                policy { R; S; T; project = canon; }
+            }
+        };
+    }
+    pub(crate) use policy as physical_policy;
+    mod wiring {
+        pub(crate) use super::physical_policy;
+        pub(crate) use ::mini_linq::{
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
+        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
+    }
+    use wiring as mini_linq;
+
+    fn observe(_a: &i32, visits: &Cell<usize>) -> bool {
+        visits.set(visits.get() + 1);
+        true
+    }
+
+    #[allow(non_snake_case)]
+    pub(super) fn run<'a>(
+        R: &'a [(i32, i32)],
+        S: &'a [(i32, i32)],
+        T: &'a [(i32, i32)],
+        visits: &Cell<usize>,
+    ) -> Vec<(&'a i32, &'a i32, &'a i32)> {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
+            struct Triangle;
+            relation R(a: i32, b: i32);
+            relation S(b: i32, c: i32);
+            relation T(a: i32, c: i32);
+            answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if observe(a, visits);
+        })
+    }
+}
+
+#[test]
+fn generic_join_canonicalizes_prefixes_before_enumerating_further() {
+    let r = [(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
+    let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
+    let t = [(1, 3), (1, 4), (2, 1), (4, 7)];
+    let visits = std::cell::Cell::new(0);
+    let actual = generic_canon::run(&r, &s, &t, &visits);
+    let mut expected = HashSet::new();
+    for (a, b) in &r {
+        for (sb, c) in &s {
+            if sb == b && t.iter().any(|(ta, tc)| ta == a && tc == c) {
+                expected.insert((a, b, c));
+            }
+        }
+    }
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual.into_iter().collect::<HashSet<_>>(), expected);
+    assert_eq!(visits.get(), 3, "each distinct a prefix is enumerated once");
+}
+
+/// Generic join: one variable at a time, every atom holding it checked
+/// before enumeration continues. `T` is read on `[a]` and then `[a, c]` —
+/// one chain of keys — so a single curried structure answers both.
+mod generic {
+    macro_rules! policy {
+        ($($ix:tt)*) => {
+            ::mini_linq::lower_physical! {
+                $($ix)*
+                policy { R; S; T; }
+            }
+        };
+    }
+    pub(crate) use policy as physical_policy;
+    mod wiring {
+        pub(crate) use super::physical_policy;
+        pub(crate) use ::mini_linq::{
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
+        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
+    }
+    use wiring as mini_linq;
+
+    #[allow(non_snake_case)]
+    pub(super) fn run<'a>(
+        R: &'a [(i32, i32)],
+        S: &'a [(i32, i32)],
+        T: &'a [(i32, i32)],
+    ) -> std::collections::HashSet<(&'a i32, &'a i32, &'a i32)> {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
+            struct Triangle;
+            relation R(a: i32, b: i32);
+            relation S(b: i32, c: i32);
+            relation T(a: i32, c: i32);
+            answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+        })
+    }
+}
+
+#[test]
+fn generic_join_reads_a_chain_of_keys_through_one_curried_structure() {
+    let r = [(1, 2), (1, 3), (2, 3), (4, 5)];
+    let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
+    let t = [(1, 3), (1, 4), (2, 1), (4, 7)];
+    let mut expected = HashSet::new();
+    for (a, b) in &r {
+        for (sb, c) in &s {
+            if sb == b && t.iter().any(|(ta, tc)| ta == a && tc == c) {
+                expected.insert((a, b, c));
+            }
+        }
+    }
+    assert_eq!(generic::run(&r, &s, &t), expected);
+}

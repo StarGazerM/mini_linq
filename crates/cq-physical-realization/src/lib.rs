@@ -111,7 +111,7 @@ enum Repr {
     /// keyed on sorted column names.
     Let {
         rows: Option<Ident>,
-        structures: Vec<(Vec<String>, Ident)>,
+        structures: Vec<(Vec<Vec<String>>, Ident)>,
     },
 }
 
@@ -316,11 +316,15 @@ impl<'a> Printer<'a> {
     pub(crate) fn materialize(&mut self, name: &str, canon: bool, source: TokenStream) -> Repr {
         let heading = self.heading(name);
         let scanned = self.analysis.physical.scanned.contains(name);
-        let mut structures: Vec<(Vec<String>, syn::Type)> =
+        let mut structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
-        if canon && !structures.iter().any(|(c, _)| c == heading) {
+        if canon
+            && !structures
+                .iter()
+                .any(|(c, _)| c.len() == 1 && c[0] == heading)
+        {
             structures.push((
-                heading.to_vec(),
+                vec![heading.to_vec()],
                 syn::parse_quote!(::std::collections::HashSet<_>),
             ));
         }
@@ -340,15 +344,30 @@ impl<'a> Printer<'a> {
         };
         let pattern = self.pattern(name);
         let mut built = Vec::new();
-        for (columns, ty) in &structures {
-            let key = columns.iter().map(|c| self.ident(name, c));
+        for (levels, ty) in &structures {
+            let columns: Vec<String> = levels.concat();
             let payload = heading
                 .iter()
                 .filter(|c| !columns.contains(c))
                 .map(|c| self.ident(name, c));
-            let structure = format_ident!("__cq_{}_on_{}", name, columns.join("_"));
+            // A curried value is built from nested pairs, one per level:
+            // `((k₁,), ((k₂,), (payload,)))`.
+            let mut nested = quote!((#(#payload,)*));
+            for level in levels.iter().rev() {
+                let key = level.iter().map(|c| self.ident(name, c));
+                nested = quote!(((#(#key,)*), #nested));
+            }
+            let structure = format_ident!(
+                "__cq_{}_on_{}",
+                name,
+                levels
+                    .iter()
+                    .map(|l| l.join("_"))
+                    .collect::<Vec<_>>()
+                    .join("__")
+            );
             let pairs = quote! {
-                ::core::iter::Iterator::map(#source, |#pattern| ((#(#key,)*), (#(#payload,)*)))
+                ::core::iter::Iterator::map(#source, |#pattern| #nested)
             };
             // A bare path lets Rust infer the type's generics from the pairs;
             // written arguments (or holes) select the qualified form.
@@ -362,10 +381,10 @@ impl<'a> Printer<'a> {
             statements.push(syn::parse_quote! { let #structure = &#build; });
             // A type lacking a trait a read uses on it fails at a one-line
             // call naming the trait, rather than inside a closure.
-            for guard in self.guards(name, columns, canon && columns == heading) {
+            for guard in self.guards(name, &columns, canon && columns == heading) {
                 statements.push(syn::parse_quote! { ::cq_storage::require::#guard(#structure); });
             }
-            built.push((columns.clone(), structure));
+            built.push((levels.clone(), structure));
         }
         self.bound |= !statements.is_empty();
         self.statements.extend(statements);
@@ -431,7 +450,7 @@ impl<'a> Printer<'a> {
                 let heading = self.heading(&name);
                 let set = structures
                     .iter()
-                    .find(|(c, _)| c == heading)
+                    .find(|(c, _)| c.len() == 1 && c[0] == heading)
                     .map(|(_, s)| s);
                 let source = match (self.analysis.physical.canon.contains(&name), set, rows) {
                     (true, Some(set), _) => set,

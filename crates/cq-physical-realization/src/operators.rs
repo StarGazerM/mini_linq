@@ -89,10 +89,16 @@ impl<'a> Printer<'a> {
                     true,
                 )
             }
+            Access::Prefix(..) => {
+                return error(
+                    &keyed.right,
+                    "a probe needs the payload; it reads a curried structure only at its full depth",
+                );
+            }
             Access::Built(structure) => {
-                let key = columns.iter().map(|c| self.ident(&left, c));
+                let lookup = self.chained_lookup(&left, structure, &right, &columns);
                 (
-                    quote!(::cq_storage::IndexRead::lookup(&#structure, &(#(#key,)*))),
+                    lookup,
                     self.heading(&right)
                         .iter()
                         .filter(|c| !columns.contains(c))
@@ -142,9 +148,10 @@ impl<'a> Printer<'a> {
                 quote!(::cq_storage::ExactMembership::contains(&#value, #key))
             }
             Access::Built(structure) => {
-                let key = columns.iter().map(|c| self.ident(&left, c));
-                quote!(::cq_storage::ExactMembership::contains(&#structure, &(#(#key,)*)))
+                let levels = self.levels_of(&symbol_name(&keyed.right), &structure);
+                self.chained_contains(&left, &structure, &levels)
             }
+            Access::Prefix(structure, levels) => self.chained_contains(&left, &structure, &levels),
         };
         Ok(quote! {
             ::core::iter::Iterator::filter(#input, move |&(#(#binders,)*)| #test)
@@ -350,5 +357,82 @@ impl<'a> Printer<'a> {
                 move |#[allow(unused_variables)] #pattern| #residual
             )
         })
+    }
+
+    /// The levels a built structure of `result` was declared with.
+    fn levels_of(&self, result: &str, structure: &Ident) -> Vec<Vec<String>> {
+        let Some(Repr::Let { structures, .. }) = self.reprs.get(result) else {
+            unreachable!("a built structure belongs to a let");
+        };
+        structures
+            .iter()
+            .find(|(_, s)| s == structure)
+            .map(|(l, _)| l.clone())
+            .expect("the structure is declared")
+    }
+
+    /// Apply every level of a curried structure in turn to the bound columns
+    /// of `left`; the items of the last application are the payloads.
+    fn chained_lookup(
+        &self,
+        left: &str,
+        structure: &Ident,
+        right: &str,
+        columns: &[String],
+    ) -> TokenStream {
+        let levels = self.levels_of(right, structure);
+        debug_assert_eq!(
+            structures::prefix_depth(&levels, columns),
+            Some(levels.len())
+        );
+        let key = |level: &Vec<String>| {
+            let key = level.iter().map(|c| self.ident(left, c));
+            quote!(&(#(#key,)*))
+        };
+        let first = key(&levels[0]);
+        let mut chain = quote!(::cq_storage::IndexRead::lookup(&#structure, #first));
+        for level in &levels[1..] {
+            let key = key(level);
+            chain = quote! {
+                ::core::iter::Iterator::flat_map(#chain, move |__cq_level| {
+                    ::cq_storage::IndexRead::lookup(&__cq_level, #key)
+                })
+            };
+        }
+        chain
+    }
+
+    /// Membership on a prefix of a curried structure: every level but the
+    /// last is applied, the last is tested.
+    fn chained_contains(
+        &self,
+        left: &str,
+        structure: &Ident,
+        levels: &[Vec<String>],
+    ) -> TokenStream {
+        let key = |level: &Vec<String>| {
+            let key = level.iter().map(|c| self.ident(left, c));
+            quote!(&(#(#key,)*))
+        };
+        let (last, init) = levels.split_last().expect("at least one level");
+        let last = key(last);
+        if init.is_empty() {
+            return quote!(::cq_storage::ExactMembership::contains(&#structure, #last));
+        }
+        let first = key(&init[0]);
+        let mut chain = quote!(::cq_storage::IndexRead::lookup(&#structure, #first));
+        for level in &init[1..] {
+            let key = key(level);
+            chain = quote! {
+                ::core::iter::Iterator::flat_map(#chain, move |__cq_level| {
+                    ::cq_storage::IndexRead::lookup(&__cq_level, #key)
+                })
+            };
+        }
+        quote! {
+            ::core::iter::Iterator::any(&mut #chain, |__cq_level| {
+                ::cq_storage::ExactMembership::contains(__cq_level, #last)
+            })
+        }
     }
 }

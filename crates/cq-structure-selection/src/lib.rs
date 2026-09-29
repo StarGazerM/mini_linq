@@ -66,6 +66,39 @@ fn sorted(columns: &[String]) -> Vec<String> {
     columns
 }
 
+/// Chain cover: when a result's demanded keys form one chain `K₁ ⊂ K₂ ⊂ …`
+/// and every key but the longest is only tested for membership, one curried
+/// value answers them all — levels `K₁, K₂∖K₁, …` — instead of one structure
+/// per key. A probe needs the payload, so it may read only the full chain;
+/// an order need keeps its own structure.
+fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> {
+    if reads.len() < 2 {
+        return None;
+    }
+    let mut keys: Vec<&(&Vec<String>, &BTreeSet<Need>)> = reads.iter().collect();
+    keys.sort_by_key(|(c, _)| c.len());
+    let mut levels = Vec::new();
+    let mut previous: Vec<String> = Vec::new();
+    for (i, (columns, needs)) in keys.iter().enumerate() {
+        let last = i + 1 == keys.len();
+        if needs.contains(&Need::Ordered) || (!last && needs.iter().any(|n| *n != Need::Contains)) {
+            return None;
+        }
+        if columns.len() == previous.len() || !previous.iter().all(|c| columns.contains(c)) {
+            return None;
+        }
+        levels.push(
+            columns
+                .iter()
+                .filter(|c| !previous.contains(c))
+                .cloned()
+                .collect(),
+        );
+        previous = columns.to_vec();
+    }
+    Some(levels)
+}
+
 pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<structures::Module> {
     let analysis = physical::contract::check(source)?;
     let ra_module = &source.index_requirements.relational_plan;
@@ -216,8 +249,32 @@ pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<struct
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
         let ident = &definition.name;
-        for ((_, columns), needs) in needs.iter().filter(|((n, _), _)| *n == name) {
-            let advised = analysis.hosts.get(&name).and_then(|host| advice.get(host));
+        let reads: Vec<(&Vec<String>, &BTreeSet<Need>)> = needs
+            .iter()
+            .filter(|((n, _), _)| *n == name)
+            .map(|((_, columns), needs)| (columns, needs))
+            .collect();
+        let advised = analysis.hosts.get(&name).and_then(|host| advice.get(host));
+        if advised.is_none() {
+            if let Some(chain) = chain(&reads) {
+                let (_, needs) = reads
+                    .iter()
+                    .max_by_key(|(c, _)| c.len())
+                    .expect("a chain has a longest key");
+                let mut ty = needs.iter().max().expect("nonempty").default_type();
+                let mut levels = TokenStream::new();
+                for level in chain.iter().rev() {
+                    let columns = level.iter().map(|c| format_ident!("{c}"));
+                    levels = quote! { [#(#columns),*] #levels };
+                }
+                for _ in 1..chain.len() {
+                    ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
+                }
+                entries.extend(quote! { #ident = #ty #levels; });
+                continue;
+            }
+        }
+        for (columns, needs) in reads {
             let ty = match advised {
                 Some(ty) => ty.clone(),
                 None => needs.iter().max().expect("nonempty").default_type(),

@@ -11,7 +11,9 @@
 //! - A subatom `R@i(x, …)` is the clause's relation, restricted by
 //!   `project … keep { x, … }` when it drops columns. It is the prefix when
 //!   there is none, else `natural_join P with it`; a partial subatom that
-//!   binds no new variable only checks the prefix, `semijoin P with it`.
+//!   binds no new variable only checks the prefix: `semijoin P with rC` on
+//!   the clause's whole relation, whose shared heading with the prefix is
+//!   exactly the bound columns the subatom lists.
 //! - A reduction restricts the clause's relation itself, before the prefix
 //!   sees it: `reduce C with D(cols)` is `semijoin rC with rD` over the two
 //!   clauses' current relations — the RA semijoin keeps the tuples of the
@@ -130,6 +132,17 @@ impl State<'_> {
         let clause = subatom.clause();
         let mut right = self.relation(clause);
         let partial = subatom.columns.len() != subatom.variables().count();
+        // A check binds nothing: it lists every bound column of its clause,
+        // which is exactly the heading it shares with the prefix, so it is a
+        // semijoin with the clause's own relation. Reading the relation — not
+        // a projection of it — lets every prefix check of one clause land on
+        // one result, where one curried structure answers them all.
+        if partial && check {
+            if let Some(left) = self.prefix.take() {
+                self.prefix = Some(self.semijoin(left, right));
+                return;
+            }
+        }
         if partial {
             let variables: Vec<&Ident> = self.atoms[&clause].variables().collect();
             let attributes = subatom
@@ -140,7 +153,6 @@ impl State<'_> {
         }
         self.prefix = Some(match self.prefix.take() {
             None => right,
-            Some(left) if partial && check => self.semijoin(left, right),
             Some(left) => self.emit(ra::Operator::NaturalJoin(Box::new(ra::NaturalJoin {
                 natural_join_token: Default::default(),
                 left,
