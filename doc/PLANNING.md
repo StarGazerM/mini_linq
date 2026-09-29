@@ -1,67 +1,79 @@
 # Logical planning and its compiler boundary
 
-The logical planners produce RA. They do not choose structures or an execution
-model. The [verification guide](PLANNING-VERIFICATION.md) describes independent
-logical oracles and authored plans. Post-IX compilation follows
-[Compiler ownership and composition](COMPILER-STRUCTURE.md).
+CQ reaches RA through `CQ → CQ-NF → VO → VO → RA`. These passes choose a
+valuation order, optional reductions, and named RA; they do not choose
+structures or an execution model. The [verification guide](PLANNING-VERIFICATION.md)
+describes logical checks and authored reference plans. Post-IX compilation
+follows [Compiler ownership and composition](COMPILER-STRUCTURE.md).
 
 ## Ownership and composition
 
 | Operation | Implementation |
 |---|---|
-| Written-order CQ → RA | `cq_query_lowering::written_order::compile` |
-| Dependency-aware clause-prefix CQ → RA | `cq_query_lowering::clause_prefix::compile` |
-| Graph-planned CQ → RA, including YA | `cq_query_lowering::hypergraph::compile` |
-| Typed planner selection/report/replay | `cq_query_lowering::composition` |
+| CQ → CQ-NF; make atom arguments distinct variables | `cq_ir::cq::normal::normalize` |
+| CQ-NF hypergraph facts: incidence, GYO join tree, elimination order and width | `cq_ir::cq::hypergraph::Analysis` |
+| CQ-NF → VO; choose valuation order and granularity | `cq_order::compile` |
+| VO → VO; push single-atom guards and optionally apply tree semijoins | `cq_reduce::compile` |
+| VO → named RA | `cq_elaborate::compile` |
 | RA → named index demands and uses | `cq_index_policy::compile` |
 | IX plus policy → Physical | `cq_physical_lowering::compile` |
 | Physical plus policy → Structures | `cq_structure_selection::compile` |
 | Structures → Rust | `cq_physical_realization::compile` |
 
-`choose_graph_or_prefix!` dispatches through caller-bound
-`cq_to_ra_hypergraph!` or `cq_to_ra_clause_prefix!`. Each planner passes its RA to
-`mini_linq::choose_index_policy!`; a caller can import `index_demands` under that
-name. IX then goes to the caller's `physical_policy!`, which appends a
-query-independent `policy { … }` and invokes `lower_physical!`; Physical
-records one operator and mode per result, and Structures records what
-answers each read. There is no default whole-query hash backend.
+`mini_linq!` selects `cq_to_ra!`: normalization, Written/Coarse ordering,
+and elaboration. `cq_to_ra_hypergraph!` uses the same order, then
+`Pushdown::Atoms` and `Reductions::Tree` when the body is acyclic before
+elaboration. These facades pass RA to `mini_linq::choose_index_policy!`; a
+caller can import `index_demands` under that name. IX then goes to the
+caller's `physical_policy!`, which appends a query-independent `policy { … }`
+and invokes `lower_physical!`; Physical records one operator and mode per
+result, and Structures records what answers each read.
 
-Planning can be tested through the typed API without any policy. The
-[full-chain test](../crates/mini-linq/tests/physical_query.rs) follows the
-planners through the supported physical domain. The
+Planning can be tested through the typed pass APIs without a physical policy.
+The [full-chain test](../crates/mini-linq/tests/physical_query.rs) follows the
+supported path into execution. The
 [runnable composition example](../examples/composition/README.md) starts from
 explicit RA.
 
-The policies are Written, Connected, GreedyWidth and Auto. They use source order,
-connectivity or heading arity; they do not estimate cardinalities or perform
-global cost search. Auto uses GYO and a join tree for alpha-acyclic bodies,
-performs YA reduction, then assembles the result; cyclic bodies use binary
-planning. YA is a reduction schedule, not a claim of cost-based join ordering.
+`cq_order::Heuristic` selects `Written`, `Prefix(Connected)`,
+`Prefix(GreedyWidth)`, `Prefix(Auto)`, or `Elimination`. `Split::Coarse`
+places one full subatom per atom, giving a binary join plan;
+`Split::Fine` places one new variable per subatom, giving a generic join
+plan. Prefix rankings use bound-variable connectivity and heading arity;
+Elimination uses the hypergraph analysis's variable order. They do not
+estimate cardinalities or perform global cost search. The GYO join tree
+belongs to analysis and optional reduction, not to a cost model.
 
-Within `cq-query-lowering`, `dependencies.rs` derives D-* judgments;
-`hypergraph/structure.rs` implements G-* reductions; `hypergraph/ya.rs`
-schedules the two sweeps; `hypergraph/rules.rs` implements P-* and Y-* rules.
-`clause_prefix/rules.rs` implements C-* rules and the A-* argument judgments.
-Each `strategy.rs` chooses among applicable commands. The
-[expression specification](RUST-EXPRESSIONS.md) states dependency and movement
-premises and the graph planner's admitted domain.
+`cq::normal::normalize` converts constants, repeated variables, wildcards,
+and expression arguments into `let` and `if` items around atoms. The
+[expression guide](RUST-EXPRESSIONS.md) describes how those expressions are
+kept available. `cq_order` places guards and bindings when their variables
+are bound, preserving query order within each kind. `cq_reduce` can turn a
+guard over one atom into a reduction on that atom; opaque guards remain
+steps. Rust lexical scope remains in `cq::rust::free_variables`;
+type ascriptions belong to `Let::binding_types`.
 
-The checkers inspect actual emitted RA separately from emission. Expression
-checking shares dependency analysis, so authored dependency facts and legal
-orders test that analysis separately. Rust lexical scope remains in
-`cq::rust::free_variables`; type ascriptions belong to `Let::binding_types`.
-RA retains its source program annotation, but downstream passes consume the
-written algebra instead of rebuilding a plan from that annotation.
+`cq::normal::check(module)` validates CQ-NF.
+`cq_order::check(source, target, options)` and
+`cq_reduce::check(source, target, options)` check their VO boundaries;
+`cq_elaborate::check(source, target)` checks RA correspondence. VO and RA
+erase to the same CQ-NF `Kernel`, compared up to variable renaming;
+`relational_plan::kernel` reads the query back from the emitted RA, rather
+than trusting its source annotation. Downstream passes consume the written
+algebra.
 
 ## Languages used by planning
 
-- RA Semijoin denotes a natural join followed by projection to the left heading,
-  including composite and empty separators. Logical YA preserves exact relation
-  versions through both sweeps; physical pruning is a separate choice.
-- CQ atom arguments, `if`, and `let` preserve Rust syntax. Select and Extend
-  retain the corresponding computations. The movable comparison fragment uses
-  primitive-i32 operands and six comparisons; arbitrary Rust calls/arithmetic
-  remain barriers.
+- CQ-NF atoms have distinct variable arguments. `Kernel` records atoms,
+  guards, bindings and head after normalization.
+- VO records subatom steps, guard and binding steps, and optional reductions.
+  A subatom identifies its source clause, so duplicate-looking occurrences
+  remain distinct. A semijoin reduction or pushed guard restricts a clause's
+  relation before its first join and erases under set semantics.
+- RA Semijoin denotes a natural join followed by projection to the left
+  heading, including composite and empty separators. `cq_elaborate` emits
+  renames, joins or semijoins, selections, extensions and a final projection
+  from the VO steps.
 - IX names indexes on exact RA versions: `i = @r[0,2]` uses ordinals in `r`'s
   sorted logical heading, and `j.right = i` records consumption. Empty shared
   headings still require an explicit `[]` demand. No structure is chosen by IX.
@@ -71,64 +83,50 @@ written algebra instead of rebuilding a plan from that annotation.
 
 ## Administrative rules and contracts
 
-Occurrence IDs never merge duplicate-looking atoms. GYO updates a residual
-analysis graph and attachment forest; it never deletes executable atoms.
-Reduction and assembly have separate invariants. Reduction uses immutable
-RA versions with a current-reference map, child-before-parent upward steps,
-parent-before-child downward steps, and an explicit completed freeze.
-Independent sibling steps may be reordered.
+`cq_ir::cq::hypergraph::Analysis` records each atom occurrence's variables
+and incidence, the primal graph, GYO steps and join tree when acyclic,
+maximum-cardinality-search elimination order (perfect when the primal
+graph is chordal), and width. Guards and bindings are not hyperedges. GYO
+works on residual analysis edges; it does not delete executable atoms. The
+join tree used for reductions differs from the VO step order and the RA
+dependency DAG.
 
-Assembly frontier coverages partition all occurrences. Retention is
-`vars(C) ∩ (head ∪ vars(outside C) ∪ vars(pending predicates))`. Ready
-predicates are consumed before pruning; exact boundary pruning precedes the
-next combine. Every combine checks all shared attributes. Output requires
-complete occurrence and predicate coverage and exactly the original head.
+`cq_order::compile` schedules the normalized clauses according to its
+heuristic and split. Every atom is fully covered by the resulting subatoms;
+an already-bound variable appears in any subatom that tests it. A guard or
+binding waits for its inputs. `cq_reduce::compile` preserves the step order
+and split while inserting selected reductions. Tree reduction visits the
+join tree upward and downward before the first atom step; it requires an
+acyclic body. `cq_elaborate::compile` turns each VO step into named RA over
+the current relation of partial valuations, then projects for the head.
 
-The derivation checker reads actual emitted RA definitions and checks rule
-premises, dependencies, and facts. It must not call the strategy or emitting
-rule implementation to regenerate the expected program. Graph recognition
-also has an independent running-intersection check and a bounded tree oracle.
-Arity bounds concern every named RA result, not cardinality or fractional
-hypertree width. A greedy arity policy makes no global optimality claim.
+After normalization, the order, reduction and elaboration passes check their
+source/target correspondence; order and reduction take options as well.
+VO and RA kernels must agree with the CQ-NF kernel up to renaming. These
+checks concern logical content and well-formed steps; they do not measure
+runtime cost. The [pass tests](PLANNING-VERIFICATION.md) also compare selected
+plans with independently evaluated query answers.
 
-The rule-to-code correspondence is explicit:
-
-| Formal operation | Administrative command and implementation |
+| Concept | Current location |
 |---|---|
-| G-PRIVATE / G-ABSORB | `GyoRule::Private` / `Absorb`; `GyoState::remove_private` / `absorb` in [structure.rs](../crates/cq-query-lowering/src/hypergraph/structure.rs) |
-| P-START | `Introduce`; `JoinState::introduce` |
-| P-SELECT | `Select`; `JoinState::select` |
-| P-BEGIN | `Begin`; `JoinState::begin` |
-| Y-UP / Y-DOWN | `Up` / `Down`; `JoinState::up` / `down`, each with its own premises |
-| Y-FREEZE | `Freeze`; `JoinState::freeze` |
-| P-COMBINE / P-TRIM | `Combine` / `Trim`; `JoinState::combine` / `trim`, using `retained_heading` for K(C,P) |
-| P-OUTPUT | `Output`; `JoinState::output` |
-| D-ATOM / D-GUARD / D-BIND / D-MOVE / D-GRAPH | `ClauseDependencies::analyze` and `ClauseFacts::atom` in [dependencies.rs](../crates/cq-query-lowering/src/dependencies.rs) |
-| C-READY | `ClauseState::require_ready`; `apply` checks normalization and matches the source clause |
-| C-CONSTANT | `Constant`; `ClauseState::normalize_constant` |
-| C-MATCH | `Match`; `ClauseState::match_clause`, composed from A-* in `AtomBindings::match_argument` |
-| C-GUARD / C-BIND | `Guard` / `Bind`; `ClauseState::guard_clause` / `bind_clause` |
-| C-FINISH | `Finish`; `ClauseState::finish` establishes the output |
-
-The graph transitions are in [rules.rs](../crates/cq-query-lowering/src/hypergraph/rules.rs);
-the prefix transitions are in [rules.rs](../crates/cq-query-lowering/src/clause_prefix/rules.rs).
-The [graph strategy](../crates/cq-query-lowering/src/hypergraph/strategy.rs) selects frontier pairs;
-the [prefix strategy](../crates/cq-query-lowering/src/clause_prefix/strategy.rs) selects ready clauses.
-Their [graph](../crates/cq-query-lowering/src/hypergraph/check.rs) and
-[prefix](../crates/cq-query-lowering/src/clause_prefix/check/mod.rs) checkers consume actual emitted
-definitions and reports. Downstream passes consume
-only their RA/index languages, with no dependency on graph state, policy, or reports.
+| Normalization and kernel | [normal.rs](../crates/cq-ir/src/cq/normal.rs) |
+| Incidence, GYO, join tree, elimination order and width | [hypergraph.rs](../crates/cq-ir/src/cq/hypergraph.rs) |
+| VO syntax, contract and kernel | [valuation.rs](../crates/cq-ir/src/valuation.rs) |
+| Order, heuristic and split | [cq-order](../crates/cq-order/src/lib.rs) |
+| Guard pushdown and tree reductions | [cq-reduce](../crates/cq-reduce/src/lib.rs) |
+| VO elaboration and correspondence | [cq-elaborate](../crates/cq-elaborate/src/lib.rs) |
+| RA erasure and kernel | [relational_plan/kernel.rs](../crates/cq-ir/src/relational_plan/kernel.rs) |
 
 ## Scope and evidence
 
-Logical width is heading arity, not cardinality, bytes, treewidth or fractional
-hypertree width. The greedy policy makes no global optimality claim. WCOJ,
-cardinality estimation, general Rust purity analysis and projected-output-linear
-YA complexity are outside the implemented planning claims.
+The analysis's width is elimination width plus one over the primal graph;
+RA heading arity, cardinality, bytes, treewidth and fractional hypertree
+width are different measures. No cardinality estimator, global cost
+optimizer, or maximum-arity rejection policy is claimed here.
 
-The current [planning tests](PLANNING-VERIFICATION.md) cover independent
-valuation/RA equality, intermediate YA support, derivation mutation and expression
-scheduling. They do not certify generated execution for expression-rich or YA
-programs after removal of the old physical backends. Physical lowering,
-structure selection and realization have
-their own narrower integration tests.
+The current [planning tests](PLANNING-VERIFICATION.md) cover normal form,
+hypergraph facts, VO contracts, pass correspondence, guard pushdown,
+reduction schedules, and selected CQ/RA answer comparisons. They do not
+certify generated execution for every authored reference plan. Physical
+lowering, structure selection and realization have their own narrower
+integration tests.

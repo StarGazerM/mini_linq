@@ -1,9 +1,11 @@
 # Homework 1: CQ to RelationalPlan
 
-Homework 1 implements one typed compiler edge:
+Homework 1 follows the typed CQ-to-RelationalPlan pass chain:
 
 ```text
-cq::Module -- cq_query_lowering::written_order::compile --> relational_plan::Module
+cq::Module -- cq::normal::normalize --> CQ-NF
+           -- cq_order::compile (Written, Coarse) --> valuation::Module
+           -- cq_elaborate::compile --> relational_plan::Module
 ```
 
 Start from the immutable `hw1` release and create a submission branch:
@@ -16,9 +18,11 @@ git switch -c submission/hw1
 Do not start from `main` after a later homework has been announced. The
 [branch policy](../BRANCHES.md) keeps every assignment's starter stable.
 
-The assigned edge is `cq_query_lowering::written_order::compile`, implemented in this checkout at
-`crates/cq-query-lowering/src/written_order/lower.rs`. The parsers, local
-contracts, independent edge checker, fixtures and lower stages are supplied.
+The current route lives in `crates/cq-ir/src/cq/normal.rs`,
+`crates/cq-order/src/lib.rs`, and `crates/cq-elaborate/src/lib.rs`.
+The parsers, local contracts, pass correspondence checks, fixtures and lower
+stages are supplied in this checkout. A released starter identifies which
+parts students complete.
 Index selection and physical construction belong to later assignments.
 Use the starter branch's corresponding source file when working on that release.
 
@@ -28,18 +32,22 @@ Compare the complete [CQ](DSL.md#cq-and-rust-leaves) and
 [RelationalPlan](DSL.md#named-relational-algebra) Triangle programs.
 Ignore the later languages until later homework.
 
-The output preserves the complete source program and adds a named
-relational-algebra fragment. Each `rN` is a serialized DAG reference to a
-logical set-valued result, not an algebra operator, Rust iterator, materialized
+The output carries the complete normalized program and adds a named
+relational-algebra fragment. For a variable-only query such as Triangle, the
+normalized program is the written source. Each `rN` is a serialized DAG
+reference to a logical set-valued result, not an algebra operator, Rust iterator, materialized
 collection, or assumed SSA prerequisite.
 
 ## Required lowering
 
 CQ arguments are positional against each relation declaration's ordered named
-columns. Walk the positive CQ body from left to right and maintain the next
-unused `rN` number.
+columns. Normalization gives each atom distinct variable arguments, using
+`let` and `if` items for the constraints introduced by constants, repeats
+and expressions; wildcards receive fresh witness variables. `Written` with
+`Coarse` then schedules one full subatom per atom in body order. Elaborate
+that valuation plan while maintaining the next unused `rN` number.
 
-For every body occurrence:
+For each atom in a variable-only positive body such as Triangle:
 
 1. Emit a fresh `rename` directly from its declared relation name, even when
    that relation appeared earlier.
@@ -47,12 +55,14 @@ For every body occurrence:
    occurrence's positional query variable.
 3. Use the first Rename as the initial current result.
 4. For each later Rename, emit `natural_join current with renamed_occurrence`.
-   Do this even when the right heading is wholly shared; membership is a later
-   physical choice.
+   Do this even when the right heading is wholly shared; a full subatom
+   elaborates to NaturalJoin under `Coarse`.
 5. Make the NaturalJoin result current.
 
-Finally emit exactly one `project` keeping the source-head attributes, then
-write separate `output result as head.` metadata. Triangle must become:
+For Triangle's variable-only head, finish with one `project` keeping the head
+attributes, then write separate `output result as head.` metadata. A computed
+head instead keeps the whole heading so its expression can read its inputs.
+Triangle must become:
 
 ```text
 r0 = rename R {c0 -> x, c1 -> y};
@@ -64,10 +74,9 @@ r5 = project r4 keep {x, y, z};
 output r5 as triangle(x, y, z);
 ```
 
-Construct the typed result with `quote!` and `syn::parse2`; do not build a
-string. The supplied RelationalPlan language includes `unit` for a later
-extension, but a positive Homework 1 query always starts with `rename` and
-must not emit `unit`.
+Ordering and elaboration preserve the normalized program. The supplied
+RelationalPlan language includes `unit` to seed a guard or binding before any atom; the
+variable-only Triangle plan starts with `rename`.
 
 Homework 1 does **not** choose indexes, collections, join algorithms, Rust
 access expressions, or iterator combinators.
@@ -83,7 +92,7 @@ cargo xtask list
 cargo xtask explain triangle --through cq
 ```
 
-After implementing `compile_cq`, inspect the two whole programs side by side:
+After changing the CQ-to-RA stages, inspect the two whole programs side by side:
 
 ```text
 cargo xtask explain triangle --through relational-plan
@@ -95,20 +104,23 @@ query**; the Homework 1 starter defaults to `relational-plan`.
 
 ## Definition of done
 
-Run the Homework 1 edge test and formatting check:
+Run the normal-form, ordering and elaboration tests and formatting check:
 
 ```text
-cargo test -p cq-query-lowering --test written_order
+cargo test -p cq-ir --test valuation_language
+cargo test -p cq-order --test order
+cargo test -p cq-elaborate --test elaborate
 cargo fmt --all --check
 ```
 
 You are done when:
 
-- the exact CQ-to-RelationalPlan fixtures pass;
+- the CQ-NF, VO and RelationalPlan checks pass, with VO and RA erasing to the
+  normalized kernel up to variable renaming;
 - every source occurrence has its own complete Rename;
 - source attributes map positionally to the occurrence variables;
-- body occurrences fold through source-order left-deep NaturalJoins;
-- the source program is unchanged;
+- `Written`/`Coarse` schedules one full subatom per atom in source order;
+- VO and RA retain the normalized program;
 - the final Project and output metadata are exact; and
 - Homework 2 and Homework 3 remain untouched.
 

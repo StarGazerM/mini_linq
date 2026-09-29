@@ -3,7 +3,7 @@
 MiniLinq is a Rust query compiler with replaceable macro boundaries:
 
 ```text
-CQ → RA → IX → Physical → Structures → Rust
+CQ → NF → VO → RA → IX → Physical → Structures → Rust
 ```
 
 IX names the indexes required by the fixed RA plan and records their uses.
@@ -16,7 +16,7 @@ caller's and query-independent: host facts, a join strategy, and
 dispatch or fallback backend.
 
 Read the [compiler structure](doc/COMPILER-STRUCTURE.md), the
-[language grammars](doc/DSL.md), the [paper](doc/formal/build/compiler.pdf),
+[language grammars](doc/DSL.md), the [formal specification](doc/formal/README.md),
 or the [executable composition](examples/composition/README.md).
 
 The [full-chain test](crates/mini-linq/tests/physical_query.rs) covers hosts
@@ -25,8 +25,12 @@ user-defined index type, merge joins over built ordered maps, Yannakakis
 semijoin passes as membership tests, bounded scans of an ordered host, and a
 computed head column, each against an independent oracle. The printed program
 copies no binding: hosts and built structures yield references, and the head
-expression alone decides what the result owns. Logical YA planning and its
-independent relational oracle tests remain in `cq-query-lowering`.
+expression alone decides what the result owns. The logical prefix normalizes
+CQ to NF, orders valuations in VO, optionally adds guard and semijoin
+reductions, and elaborates VO to RA. Normal form has a contract check; order,
+reduction, and elaboration have correspondence checks. Reductions erase to
+the input VO plan, and VO and RA plans erase to the CQ-NF kernel up to variable
+renaming.
 
 ```sh
 cargo run --manifest-path examples/composition/Cargo.toml --offline

@@ -15,8 +15,9 @@ lowering and independent checker that owns each required change.
 
 The existing `cq::BodyItem` used by `cq::Query` already supplies the clause
 syntax; there is no second query parser or second query macro. This is a
-cumulative checkpoint: students extend the contracts and the same three typed
-passes, and completed extended queries continue to enter through
+cumulative checkpoint: students extend CQ normalization, valuation ordering,
+RA elaboration and the later typed passes, and completed extended queries
+continue to enter through
 `mini_linq!`. The `hw4` Cargo feature gates only this extension's test targets; it
 does not install production syntax, swap a pass implementation, or select a
 backend. The supplied
@@ -186,9 +187,11 @@ check and reject cycles through negation or aggregation.
 
 ## RelationalPlan extension
 
-Do not lower the extended CQ directly to indexes. Basic HW1 remains a real
-logical boundary. RelationalPlan already supplies `Unit`, the singleton
-zero-column relation used to seed a global clause. Extend its operator sum with
+Do not lower the extended CQ directly to indexes. Basic HW1 still crosses
+CQ-NF and VO before RelationalPlan. Current normalization accepts positive
+queries, so this optional extension must define the new clauses through those
+stages. RelationalPlan already supplies `Unit`, the singleton zero-column
+relation used to seed a global clause. Extend its operator sum with
 `AntiSemijoin` and `AggregateApply`, then emit a named `rN` result for every
 source occurrence and operator. Do not redesign or reimplement `Unit`.
 
@@ -252,15 +255,18 @@ later CQ clause, but each complete Rename must retain them until aggregation.
 Otherwise set projection would collapse the three distinct Purchase tuples
 carrying value `5` into one `(person, amount)` row and produce the wrong sum.
 Generated anonymous names must be collision-free within the plan. The
-CQ-to-plan edge maps each source `_` to its generated anonymous target in the
-Rename for that occurrence; no logical Scan operator is added.
+extended CQ → NF → VO → RA chain maps each source `_` to its generated
+anonymous target in the Rename for that occurrence; no logical Scan operator
+is added.
 
 The extended RelationalPlan checker keeps the baseline local DAG rules: every
 result ID is unique, every operand is earlier, and inferred headings are exact. It also checks that AntiSemijoin preserves the left heading and that
 AggregateApply produces `left heading + fresh output`, consumes its value
 exactly once, and does not expose a right-local or anonymous attribute. The
-cross-stage HW4 contract separately checks that this complete plan is the
-exact expansion of the extended CQ; local well-formedness alone is not enough.
+extension must first define kernel and erasure coverage for negation and
+aggregation, which the current positive-query kernel omits. Each extended
+pass then checks its source and target correspondence; RA and VO kernels
+compare up to variable renaming. Local well-formedness alone is not enough.
 
 `Unit` and an AntiSemijoin over its empty heading naturally have an empty
 heading. AggregateApply then appends its fresh output, so its global result has
@@ -337,8 +343,8 @@ relational {
 indexes {}
 ```
 
-Both the student pass and the staff contract predicate must implement the same
-extended judgment. They share the numbered `STUDENT 4/6` region.
+Extend the RA → IX correspondence check for these operators as well as the
+local IndexRequirements contract.
 
 ## Physical, Structures and printed Rust extension
 
@@ -393,7 +399,7 @@ must update each affected language contract and its corresponding lowering.
 |---|---|---|
 | Supplied CQ syntax | `crates/cq-ir/src/cq.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
 | CQ validity | `crates/cq-ir/src/cq.rs` | Implement the left-to-right safety rules |
-| Logical lowering | `crates/cq-ir/src/relational_plan.rs`, `crates/cq-query-lowering/src/written_order/lower.rs`, and `crates/cq-query-lowering/src/clause_prefix/rules.rs` | Add `AntiSemijoin`/`AggregateApply`, inferred-heading rules and CQ lowering; extend the independent source correspondence in the owning logical implementation module |
+| CQ → NF → VO → RA | `crates/cq-ir/src/cq/normal.rs`, `crates/cq-ir/src/valuation.rs`, `crates/cq-order/src/lib.rs`, `crates/cq-elaborate/src/lib.rs`, and `crates/cq-ir/src/relational_plan.rs` | Define the extended clauses across normalization and valuation planning; add `AntiSemijoin`/`AggregateApply` and their inferred-heading rules; extend each pass's correspondence check |
 | Index selection | `crates/cq-index-policy/src/lib.rs` and its `correspondence.rs` check | Extend key derivation over the complete RelationalPlan and its independent check |
 | Physical lowering | `crates/cq-ir/src/physical.rs` and `crates/cq-physical-lowering/src/lib.rs` | Carry the new operators through Physical and extend its contract and correspondence check |
 | Structures and printer | `crates/cq-ir/src/structures.rs`, `crates/cq-structure-selection/src/lib.rs`, and `crates/cq-physical-realization/src/lib.rs` | Answer the negative and aggregate reads and print the concrete negative and aggregate Rust accesses |
@@ -410,16 +416,18 @@ local contracts and logical operators first:
 cargo test -p cq-ir --features hw4 --test hw4_optional
 ```
 
-Then isolate the exact pass edges—extended CQ to RelationalPlan, that
-complete plan to IndexRequirements, and IX to Physical—before testing printed Rust:
+Then isolate the CQ → NF → VO → RA chain, that complete plan to
+IndexRequirements, and IX to Physical before testing printed Rust:
 
 ```text
-cargo test -p cq-query-lowering --test written_order
+cargo test -p cq-ir --test valuation_language
+cargo test -p cq-order --test order
+cargo test -p cq-elaborate --test elaborate
 cargo test -p cq-index-policy --test index_demands
 cargo test -p cq-physical-lowering --test lowering
 ```
 
-After all three completed basic passes support the cumulative extension, run
+After all affected basic stages support the cumulative extension, run
 the normal `mini_linq!` endpoint tests in both debug and release modes:
 
 ```text
@@ -433,7 +441,7 @@ an observable aggregate source to assert that the aggregate fold runs only
 when its row is requested. The ordinary basic-checkpoint commands do not enable
 `hw4`, so this extension cannot block a basic submission.
 
-Include the global example in all three IR/pass suites. Test the exact single
+Include the global example in the affected IR/pass suites. Test the exact single
 `Unit`, both empty inferred correlations, the empty index overlay, empty and
 nonempty `Blocked`, and empty and nonempty `Purchase`.
 
@@ -446,7 +454,7 @@ nonempty `Blocked`, and empty and nonempty `Purchase`.
   aggregate-result shadowing.
 - The complete RelationalPlan contains exact named `AntiSemijoin` and
   `AggregateApply` results, preserves wildcard source columns needed by
-  aggregation, and passes both its local and cross-stage contracts.
+  aggregation, and passes its local and pass correspondence checks.
 - A global first clause produces exactly one supplied `Unit`; global
   AntiSemijoin and AggregateApply infer an empty correlation intersection, and
   AntiSemijoin preserves Unit's empty heading.

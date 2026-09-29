@@ -110,13 +110,15 @@ implementation assignment.
 
 Students work individually or in pairs in a supplied Rust codebase. The
 current physical-lowering checkpoint contains one `mini-linq` proc-macro crate,
-Syn-backed CQ, RelationalPlan, IndexRequirements, Physical, Structures,
-local language checks, and tests. Its basic
-route assigns three typed compilation edges. Their implementations live in
-`crates/cq-query-lowering/src/written_order/lower.rs`, `crates/cq-index-policy/src/lib.rs`, and
-the `cq-physical-lowering`, `cq-structure-selection`, and `cq-physical-realization` crates:
+Syn-backed CQ, CQ-NF, VO, RelationalPlan, IndexRequirements, Physical,
+Structures, local language checks, and tests. Its basic route has three
+homework boundaries. The CQ-to-RA chain lives in `crates/cq-ir/src/cq/normal.rs`,
+`crates/cq-order/src/lib.rs`, and `crates/cq-elaborate/src/lib.rs`; later stages
+live in `crates/cq-index-policy/src/lib.rs` and the `cq-physical-lowering`,
+`cq-structure-selection`, and `cq-physical-realization` crates:
 
-1. **Basic HW1:** CQ to a complete named RelationalPlan;
+1. **Basic HW1:** CQ normalization, written-order coarse valuation planning,
+   then elaboration to a complete named RelationalPlan;
 2. **Basic HW2:** RelationalPlan to IndexRequirements, preserving that entire
    plan while adding exact first-use keys; and
 3. **Basic HW3:** IndexRequirements plus a query-independent policy to
@@ -140,7 +142,7 @@ stages:
 
 | Stage | Required implementation | Points |
 |---|---|---:|
-| 1. Logical and physical lowering | Complete Basic HW1 (CQ → RelationalPlan), HW2 (RelationalPlan → IndexRequirements), and HW3 (requirements → Physical → Structures → Rust) | 6 |
+| 1. Logical and physical lowering | Complete Basic HW1 (CQ → NF → VO → RelationalPlan), HW2 (RelationalPlan → IndexRequirements), and HW3 (requirements → Physical → Structures → Rust) | 6 |
 | 2. Execution control | Study the supplied pull program, then lower the same Structures to a staff-supplied push target without changing the chosen structures | 4 |
 | 3. Semijoin reduction | Implement a semijoin and both Yannakakis passes over a supplied join tree | 8 |
 | 4. Triejoin | Implement leapfrog intersection and variable-at-a-time enumeration using a supplied **variable order** and tries | 12 |
@@ -154,8 +156,8 @@ end of Week 14. Required recursion will be bounded to linear positive rules
 unless the starter code supplies general delta-rule generation.
 
 Every release consists of code and tests—no proposal or long report. The
-current Stage-1 gate checks each intermediate module against its language
-contract and the previous stage's correspondence check, compiles each
+current Stage-1 gate checks intermediate modules against their language
+contracts and checks pass correspondence, compiles each
 fixed fixture with rustc, runs it, and checks expected rows. The fixtures
 include self-join and multiple-index reuse, a proper multi-column map, a used
 input consumed once, an unused input never iterated, lazy partial consumption,
@@ -213,16 +215,17 @@ credit.
 
 The project uses Rust with a procedural-macro CQ frontend. Staff supplies the
 crate configuration and direct Syn syntax definitions, including derived
-parsing and token emission. Staff also supplies the direct `mini_linq`,
-`index_demands`, `lower_physical`, `select_structures`, and `structures_to_rust`
-proc-macro entries. Each
-entry parses one `TokenStream` into its typed source and calls the corresponding
-typed compiler function directly. Grammar failures become span-aware `syn::Error`
-diagnostics emitted as `compile_error!`. The typed compiler function checks
-source semantics and returns the same diagnostic type; the macro entry does
-not duplicate that check. Students implement the typed functions behind those entries.
-`cq_query_lowering::written_order::compile(&cq::Module)` returns
-`syn::Result<relational_plan::Module>` for CQ to the exact named logical plan.
+parsing and token emission. Staff also supplies the `mini_linq!`, `cq_to_ra!`,
+`index_demands!`, `lower_physical!`, `select_structures!`, and
+`structures_to_rust!` proc-macro entries. `mini_linq!` selects `cq_to_ra!`;
+the direct entries parse a `TokenStream` into the typed source for the next
+stage. Grammar failures become span-aware `syn::Error` diagnostics emitted as
+`compile_error!`. The typed functions check source semantics and return the
+same diagnostic type; macro entries do not duplicate those checks. Students
+implement the designated typed stages behind those entries.
+`cq_ir::cq::normal::normalize(&cq::Module)` produces CQ-NF;
+`cq_order::compile` with `Written` and `Coarse` produces a valuation plan;
+`cq_elaborate::compile` produces the named `relational_plan::Module`.
 `cq_index_policy::compile(&relational_plan::Module)` returns
 `syn::Result<index_requirements::Module>` preserving that full plan and adding
 the exact requirements.
@@ -234,12 +237,13 @@ physical operators and the structures that answer each read, and
 the borrowed source and construct the complete target with `quote!` and
 `syn::parse2`.
 
-The open-source `contracts` crate, pinned at 0.6.10, attaches debug
-postconditions where an edge has a compact query-domain
-relation. The exact CQ-to-RelationalPlan and
-RelationalPlan-to-IndexRequirements relations and the physical edge's
-covered-input/`Ok` definedness predicate compile out in release builds. The
-generated physical Rust is inspected structurally by staged fixtures.
+The CQ-to-RA chain validates normal form before ordering. Its subsequent
+planning boundaries have local validity and correspondence checks: ordering
+and reduction include the selected options, while elaboration compares RA
+and VO kernels by erasure, up to variable renaming. The later
+RelationalPlan-to-IndexRequirements and physical edges
+have their own correspondence checks. The generated physical Rust is
+inspected structurally by staged fixtures.
 The Basic-HW3 harness checks Physical and Structures against their language
 contracts and correspondence checks, prints Rust, compiles
 the resulting standalone file with rustc, executes it, and checks fixed fixture-specific
@@ -255,8 +259,11 @@ judgment. Every public typed compilation entry calls its source's diagnostic
 in debug and release builds. Macro entries do not repeat this check. Tests and
 tools may also call it directly. Debug postconditions check the transformation
 separately; they are not the source-validation gate.
-`cq_query_lowering::written_order::compile`, `cq_index_policy::compile`, `cq_physical_lowering::compile`, and `cq_structure_selection::compile` own nominal target
-well-formedness in postconditions. The realization endpoint returns a typed Rust AST node, while each
+`cq_order::compile`, `cq_elaborate::compile`, `cq_index_policy::compile`,
+`cq_physical_lowering::compile`, and `cq_structure_selection::compile` own
+target well-formedness at their boundaries. VO and RA are checked against the
+normalized CQ kernel by erasure, comparing kernels up to variable renaming.
+The realization endpoint returns a typed Rust AST node, while each
 proc-macro entry parses its embedded module before calling the matching
 typed function. Malformed grammar and invalid source semantics both produce
 `syn::Error` diagnostics; a debug edge-contract failure means a lowering
@@ -275,7 +282,7 @@ sources. The later push
 checkpoint targets an explicit staff-supplied Rust mechanism; students do not
 have to invent the callback/channel IR or runtime shell.
 
-The current starter supplies the logical syntax, `relational_plan::Module`,
+The current starter supplies CQ-NF and VO syntax, `relational_plan::Module`,
 `index_requirements::Module`, `physical::Module`, `structures::Module`, their local `contract`
 modules, the supplied structure selection and pull-program printer, and the compiler test
 harness. Later releases add richer workload,

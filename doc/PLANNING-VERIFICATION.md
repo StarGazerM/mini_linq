@@ -1,56 +1,65 @@
 # Logical planning verification
 
-These checks stop at RA. They verify denotation, intermediate reduction support,
-and derivation rules without compiling the retired whole-query physical routes.
-The [planner map](PLANNING.md) describes implementation ownership; Physical
+The logical pass checks stop at RA. They cover normal form, hypergraph
+analysis, valuation plans, reductions, and elaboration. The
+[pass map](PLANNING.md) describes implementation ownership; Physical
 realization has a separate, narrower acceptance domain.
 
 ## Active suites and independent oracles
 
-| Suite in `crates/cq-query-lowering/tests` | Current evidence |
+| Suite | Current evidence |
 |---|---|
-| `composition.rs` | Typed planner selection, domain rejection, and derivation replay |
-| `planned_semantics.rs` | All 25 patterns under Written/Connected/GreedyWidth/Auto on authored plus 64 generated databases; CQ/RA equality and full YA support when selected |
-| `planned_derivations.rs` | Missing/repeated commands, phase dependencies, latest versions, alternative sibling schedules, selection/pruning and arity-bound checks |
-| `expression_planning.rs` | Twelve expression shapes under four policies, expected occurrence orders, a handwritten RA normalization, all 120 orders of a five-clause example, and width/replay rejection |
-| `rust_expression_contracts.rs` | Independent source/target checks for changed expressions, reordered guards, missing equalities, opaque-macro liveness, and legal re-entry |
-| `relational_reference.rs` and `relational_reference/` | Authored known plans, fixed answers, semantic counterexamples, occurrence/heading/arity contracts and graph classifications |
+| [`cq-ir/tests/valuation_language.rs`](../crates/cq-ir/tests/valuation_language.rs) | Normalization, kernels up to renaming, coarse/fine VO coverage, reduction placement, and malformed-plan rejection |
+| [`cq-ir/tests/hypergraph_analysis.rs`](../crates/cq-ir/tests/hypergraph_analysis.rs) | Incidence, GYO join trees, chordality, elimination order, width, and distinct occurrences on selected shapes |
+| [`cq-order/tests/order.rs`](../crates/cq-order/tests/order.rs) | Written, Prefix and Elimination ordering with Coarse/Fine splits; VO contracts, pinned sequences, and kernel equality |
+| [`cq-reduce/tests/reduce.rs`](../crates/cq-reduce/tests/reduce.rs) | Guard pushdown, acyclic tree schedules, cyclic rejection, pass correspondence, and CQ/RA answers over the shared cases |
+| [`cq-elaborate/tests/elaborate.rs`](../crates/cq-elaborate/tests/elaborate.rs) | Named RA shapes, pass correspondence, kernel preservation, and selected generated-database comparisons |
+| [`cq-ir/tests/relational_plan.rs`](../crates/cq-ir/tests/relational_plan.rs) | RA contract and erasure checks |
 
 The [25 authored `.ra` files](../test-support/relational/plans),
 [case data](../test-support/relational/cases.rs), and
-[semantic evaluators](../test-support/relational/semantics.rs) remain checked in.
-Expected plans are not produced by the planner under test. The separate
-[reference verifier](../crates/cq-query-lowering/tests/relational_reference/verifier.rs)
-and [authored contracts](../crates/cq-query-lowering/tests/relational_reference/contracts.rs)
-check actual intermediates and structure, not just final outputs.
+[semantic evaluators](../test-support/relational/semantics.rs) remain checked
+in. The reduction tests read the authored files as query sources and compare
+their generated RA with fixed answers and CQ valuations on generated
+databases. The authored RA shapes remain useful reference examples; the
+current suite does not compare every generated intermediate with those
+shapes.
 
 The oracles use different algorithms:
 
 - CQ evaluation enumerates complete active-domain valuations and checks atoms.
 - RA evaluation interprets the DAG with nested-loop natural joins and set
   projection, retaining every intermediate.
-- [Join-tree enumeration](../test-support/relational/join_trees.rs) uses Prüfer
-  codes and checks running intersection directly, independently of GYO.
+- [Join-tree enumeration](../test-support/relational/join_trees.rs) is retained
+  as a reference helper; current hypergraph tests check selected join trees
+  and analysis facts.
 
-The CQ/RA evaluators share integer/set carriers and name normalization, but do
-not share the planner's scheduling or index analysis. Fixed authored answers
-and deliberately wrong plans help expose shared misunderstandings.
-Production GYO tests compare all 4,680 ordered hypergraphs on one to four
-occurrences over three variables against independent tree enumeration. The
-seven-occurrence barbell reference enumerates 16,807 labeled trees.
+The CQ/RA evaluators share integer/set carriers and name normalization, but
+do not share ordering, reduction or index analysis. Fixed authored answers
+help expose shared misunderstandings. The current hypergraph tests cover
+specific chain, star, cycle and self-join cases; they do not claim exhaustive
+enumeration of small hypergraphs.
 
-The active equality chain is:
+The checked correspondences are:
 
 ```text
-fixed authored answers
-    = CQ valuation
-    = interpretation of the known RA plan
-    = interpretation of the planner-produced RA plan
+CQ-NF kernel
+    = VO kernel
+    = RA kernel
+
+authored answer on shared cases
+    = interpretation of the reduced, elaborated RA plan
+
+CQ valuation on generated databases
+    = interpretation of the reduced, elaborated RA plan
 ```
 
-This is logical validation. The removed compiled-backend/public-query matrices
-and their runtime effect counters are not current evidence. No existing golden
-RA fixture alone proves that a new physical policy can execute it.
+`cq::normal::check` validates CQ-NF. `cq_order::check(source, target, options)`
+and `cq_reduce::check(source, target, options)` check their VO boundaries;
+`cq_elaborate::check(source, target)` checks RA correspondence. The
+erasure-based kernel comparison is up to variable renaming. This is logical
+validation; an authored RA fixture alone does not show that a physical
+policy can execute it.
 
 ## Twenty-five known query patterns
 
@@ -59,7 +68,7 @@ The linked files spell out the actual typed syntax. `pi` denotes set
 projection; parentheses fix the reference combination tree. `YA` expands
 semijoins into join/project for interpretation only.
 
-| Pattern / full known RA | Reference shape | Distinguishing assertion |
+| Pattern / full known RA | Reference shape | Distinguishing point |
 |---|---|---|
 | [1. Scan](../test-support/relational/plans/scan.ra) | `R(x)` | Repeated input rows have set meaning |
 | [2. Projection and reordered head](../test-support/relational/plans/projection.ra) | `pi_{x,y} R(x,y,z)`, output `(y,x)` | Existential witnesses collapse; heading order does not reorder the answer |
@@ -80,70 +89,65 @@ semijoins into join/project for interpretation only.
 | [17. Full delivery reduction DAG](../test-support/relational/plans/ya_delivery.ra) | Two upward filters, two downward filters, then `S,N,D` assembly | Shared intermediates, fresh versions, complete support, and safe forgetting |
 | [18. Oriented self-joined chain](../test-support/relational/plans/oriented_chain.ra) | `pi_{a,d}(Edge(a,b) join Edge(b,c) join Edge(d,c))` | Three occurrences of one input, including lookup through the last atom's second source column |
 | [19. Spade](../test-support/relational/plans/spade.ra) | `(R(x,y) join S(y,z) join T(x,z)) join H(x,w)` | A cyclic core with an acyclic appendage; graph reduction must not erase the tail from execution |
-| [20. Barbell](../test-support/relational/plans/barbell.ra) | Join two independently formed triangles through `Bridge(x,u)` | Seven occurrences, two cyclic regions, and a bridge; validates a larger bushy reference plan |
+| [20. Barbell](../test-support/relational/plans/barbell.ra) | Join two independently formed triangles through `Bridge(x,u)` | Seven occurrences, two cyclic regions, and a bridge in a larger bushy reference plan |
 | [21. Loomis–Whitney-4](../test-support/relational/plans/loomis_whitney_4.ra) | `ABC(a,b,c) join BCD(b,c,d) join ACD(a,c,d) join ABD(a,b,d)` | A cyclic hypergraph of ternary atoms; one composite extension followed by two full ternary tests |
 | [22. Deep Yannakakis schedule](../test-support/relational/plans/ya_deep.ra) | Four-edge chain rooted at an endpoint; three upward and three downward filters | Propagation through depth three; ancestors must use reduced children and descendants must use the latest parents |
 | [23. Composite Yannakakis separators](../test-support/relational/plans/ya_composite.ra) | `R(a,b,u), S(a,b,c), T(b,c,v)`, rooted at `S` | Both passes use entire two-column separators `{a,b}` and `{b,c}` |
 | [24. Disconnected Yannakakis schedule](../test-support/relational/plans/ya_disconnected.ra) | `R(x), S(y,z)` with an empty-separator tree edge | Both reduction directions propagate emptiness; the head-free component remains an existence obligation |
-| [25. Cartesian-first connected chain](../test-support/relational/plans/cartesian_first.ra) | `pi_{a,d}((R(a,b) cross T(c,d)) join S(b,c))` | A legal disconnected first combination inside a connected query; its row-volume proxy is lower on the authored input |
+| [25. Cartesian-first connected chain](../test-support/relational/plans/cartesian_first.ra) | `pi_{a,d}((R(a,b) cross T(c,d)) join S(b,c))` | A legal disconnected first combination inside a connected query |
 
-The triangle, four-cycle, spade, barbell, and Loomis–Whitney-4 are alpha-cyclic;
-the other 20 bodies are alpha-acyclic. The test suite
-checks those authored classifications by independent tree enumeration.
-An additional test repeats an identical occurrence and retains both nodes.
-The small graph oracle cannot replace broader production GYO testing.
+The triangle, four-cycle, spade, barbell, and Loomis–Whitney-4 are
+alpha-cyclic; the other 20 bodies are alpha-acyclic. Current hypergraph
+tests check selected shapes and preserve distinct occurrence identities.
+The full catalog is a reference corpus, not an exhaustive graph oracle.
 
 All ten families in the [classic workload catalog](../workloads/src/catalog/classic.rs)
-have counterparts in this reference suite.
+have counterparts in this reference catalog.
 This is family coverage, not 25 distinct topologies or exhaustive coverage of
 all possible join graphs. Intersection uses an all-columns-shared variant here;
 some fixtures also choose a different head projection from the catalog.
 
 ## Stronger checks than final answers
 
-The reference suite also checks duplicate occurrences, complete composite
-agreement, empty-heading existence, and all four authored YA reduction
-schedules. Frozen occurrence versions are compared with their projections from
-the complete query valuation on authored/generated databases.
+The VO contract rejects uncovered atom clauses, a subatom that omits an
+already-bound column, early guards, and reductions placed after their
+clause's first step. The order tests pin representative Written, Prefix,
+and Elimination sequences for both splits. The reduction tests pin an
+acyclic two-pass schedule, guard pushdown, and refusal of tree reduction
+on a cyclic query.
 
-Eight deliberately wrong plans cover reversed self-join positions, a dropped
-joined column, premature projection, erased disconnected existence, replacing
-a ternary constraint with pairwise witnesses, and stale reduction versions.
-All first pass local RA validity. Some stale versions retain correct final
-answers but fail full intermediate support, so result equality cannot replace
-the reduction invariant.
+After normalization, the order, reduction and elaboration boundaries use
+`check(source, target)`, with options supplied to order and reduction. These
+checks establish the target contract and erasure-based correspondence;
+kernels compare up to renaming. Selected tests also compare elaborated RA
+output with authored answers or independent CQ valuations. Final answer
+equality alone does not inspect every intermediate reduction relation.
 
-The derivation verifier checks exact remaining-use sets across bushy cuts,
-complete upward/downward schedules, running intersection, eager pruning and
-bounds on every named heading. It allows legal independent sibling reorderings.
-The canonical chain and a pruned plan can have equal answers but different
-peak arity and policy compliance.
+The graph tests distinguish a chordal but nonconformal triangle from
+acyclic chains and stars, and keep repeated relation occurrences distinct.
+GYO removes residual analysis edges without removing executable atoms.
+The Cartesian-first reference demonstrates that connectivity alone is not
+a universal cost argument.
 
-The graph tests distinguish alpha-acyclicity from stronger/head-sensitive
-properties: removing the full ternary atom from `ternary_guard` exposes a cyclic
-triangle; the endpoint-only self-chain is body-acyclic but not free-connex.
-These checks do not authorize removing an atom from the executable query or
-claim output-linear enumeration. The Cartesian-first reference demonstrates
-that connectivity alone is not a universal cost argument.
-
-The authored reduction plans spell semijoins using join/project so their
-construction can be interpreted independently. Production RA also has an
-explicit Semijoin operator, which Physical realizes as `semi` (membership on
-the key).
+The authored reduction plans spell semijoins using join/project as
+reference shapes. Elaborated RA has an explicit Semijoin operator for VO
+reductions and partial subatom checks; Physical can realize it as `semi`
+(membership on the key).
 
 ## Reproduce current checks
 
 ```sh
-cargo test -p cq-query-lowering --all-features
-cargo test -p cq-query-lowering --all-features --release
+cargo test -p cq-ir --test valuation_language --test hypergraph_analysis --test relational_plan
+cargo test -p cq-order
+cargo test -p cq-reduce
+cargo test -p cq-elaborate
 cargo test -p cq-index-policy
 cargo test -p mini-linq --test physical_query
-cargo test --workspace
 ```
 
-`cq-query-lowering --all-features` selects its three implemented planner families;
-it does not enable the separate unfinished `cq-ir/hw4` exercise. Workspace
-`--all-features` is not the ordinary completion gate.
+These commands name the current pass and integration suites. They are
+reproduction commands, not a claim that every authored RA shape is produced
+by each heuristic.
 
 The [full-chain test](../crates/mini-linq/tests/physical_query.rs) exercises
 every stage after IX: hosts read in place through their declared keys,

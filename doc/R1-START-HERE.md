@@ -1,10 +1,13 @@
 # Basic query-lowering checkpoint: Start Here
 
-Implement exactly three typed passes:
+The checkpoint follows three homework boundaries. Basic HW1 composes the
+CQ-to-RA nanopasses:
 
 ```text
 CQ
-  -- Basic HW1 --> RelationalPlan
+  -- Basic HW1: normalize --> CQ-NF
+  -- order (Written, Coarse) --> VO
+  -- elaborate --> RelationalPlan
   -- Basic HW2 --> IndexRequirements preserving the complete RelationalPlan
   -- Basic HW3 --> Physical (IX plus one physical operator and mode per result)
   -- supplied selection --> Structures (what answers each read)
@@ -21,16 +24,18 @@ provides the broader routes listed in
 
 ## What students write
 
-The assignments follow three semantic compilation edges. Their implementations
-in this checkout live in separate implementation modules:
+The assignments follow these semantic compilation boundaries. Their
+implementations in this checkout live in separate modules:
 
-- CQ lowering: `crates/cq-query-lowering/src/written_order/lower.rs`;
+- CQ normalization: `crates/cq-ir/src/cq/normal.rs`;
+- valuation ordering: `crates/cq-order/src/lib.rs`;
+- RA elaboration: `crates/cq-elaborate/src/lib.rs`;
 - input-index selection: `crates/cq-index-policy/src/lib.rs`;
 - physical lowering: `crates/cq-physical-lowering/src/lib.rs`.
 
 | Homework | Typed function | Successful result |
 |---|---|---|
-| Basic HW1 | `cq_query_lowering::written_order::compile(&cq::Module)` | `syn::Result<relational_plan::Module>` containing the unchanged source `Program` and a complete named relational plan |
+| Basic HW1 | `cq_ir::cq::normal::normalize` → `cq_order::compile` (`Written`, `Coarse`) → `cq_elaborate::compile` | `syn::Result<relational_plan::Module>` containing the normalized `Program` and a complete named relational plan |
 | Basic HW2 | `cq_index_policy::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
 | Basic HW3 | `cq_physical_lowering::compile(&index_requirements::Module, &Policy)` | `syn::Result<physical::Module>` containing the unchanged IX plus one physical operator, mode, and `canon` flag per result |
 
@@ -47,11 +52,12 @@ proc macro: TokenStream -> parse exact source type -> call typed compile_* -> To
 compiler:   &TypedSource -> Result<TypedTarget>
 ```
 
-The proc-macro entry owns grammar parsing. The typed function owns one
-transformation and calls the source `contract::check`, returning span-aware
-semantic errors in debug and release. Its debug postconditions describe the
-edge to the target. A public macro entry does not repeat the source check.
-Tests and tools can also call `contract::check` directly.
+The proc-macro entry owns grammar parsing. Each typed stage checks its input
+and returns span-aware semantic errors. Pass correspondence checks verify
+their source and target: ordering and reduction include their selected
+options, while elaboration compares the RA and VO kernels up to variable
+renaming. A public macro entry does not repeat source validation.
+Tests and tools can also call local `contract::check` directly.
 
 ## Basic HW1: CQ to RelationalPlan
 
@@ -61,8 +67,12 @@ atomic declared relation name. Every later operator names the exact earlier
 result it consumes.
 
 CQ arguments are positional against each declaration's ordered named columns.
-Walk the positive CQ body from left to right while maintaining the current
-result and the next unused `rN` number.
+`cq::normal::normalize` first puts each atom in kernel form with distinct
+variable arguments, using bindings and guards for constants, repeats and
+expressions and fresh witness variables for wildcards. `cq_order::compile` with `Written` and
+`Coarse` schedules one full subatom per atom in body order. For a variable-only
+body such as Triangle, elaboration maintains the current result and the next
+unused `rN` number.
 
 For each body occurrence:
 
@@ -70,13 +80,14 @@ For each body occurrence:
 2. map every declared source attribute, in declaration order, to the
    occurrence's positional query variable;
 3. if it is the first occurrence, make its Rename the current result;
-4. otherwise emit `natural_join current with renamed_occurrence`, even if the
-   complete right heading is already bound; and
+4. otherwise emit `natural_join current with renamed_occurrence`, even if
+   the complete right heading is already bound; and
 5. make the NaturalJoin result current.
 
-Finally emit one `project` keeping the source-head attributes, then separate
-`output result as head;` metadata. For Triangle this creates six logical
-results:
+For Triangle's variable-only head, finish with one `project` keeping the head
+attributes, then separate `output result as head;` metadata. A computed head
+instead keeps the whole heading for its expression. For Triangle this creates
+six logical results:
 
 ```text
 r0 = rename R {c0 -> x, c1 -> y};
@@ -90,20 +101,18 @@ output r5 as triangle(x, y, z);
 
 `rN` is a serialized DAG reference to a logical set relation, not an algebra
 operator or assumed SSA prerequisite. It does not choose a row store, hash
-index, Rust source expression, or iterator combinator. Construct the typed
-result with `quote!` and `syn::parse2`; do not format a string and parse it
-back.
+index, Rust source expression, or iterator combinator. Construct typed values
+at each IR boundary; do not format a string and parse it back.
 
 RelationalPlan also contains the staff-supplied `rN = unit;`, which denotes
-the singleton zero-attribute relation. The implemented expression route uses
-it to seed a prefix before any atom; it can also seed optional global clauses.
-A positive baseline CQ always begins with a Rename, so Basic HW1 must not
-emit `Unit`.
+the singleton zero-attribute relation. Elaboration uses it to seed a guard or
+binding before any atom; it can also seed optional global clauses. The
+variable-only Triangle plan starts with a Rename.
 
-The local contract accepts arbitrary unique result identifiers and checks only
-local heading rules, earlier operands, output, and reachability. It does
-not enforce CQ occurrence or source order. The separate exact pass contract
-defines the canonical `r0`, `r1`, and so on sequence above.
+The local RA contract checks headings, earlier operands, output and
+reachability. The ordering check verifies its selected VO plan; elaboration
+compares the RA and VO kernels up to variable renaming. `Written` with
+`Coarse` gives the Triangle sequence above.
 
 ## Basic HW2: RelationalPlan to IndexRequirements
 
@@ -135,12 +144,12 @@ occurrences, and several different indexes on one declared relation. The
 output still contains all six Triangle `rN` definitions; see the complete
 third artifact in `DSL.md`.
 
-If a locally well-formed relational plan is not in the basic backend's
-supported left-deep form—for example, a NaturalJoin's right operand is not a
-direct Rename, or the plan contains `Unit`—return a span-aware `syn::Error`.
-The implemented expression-prefix route accepts `Unit`, and the materialized
-backend accepts bushy plans through a separate physical lowering. Neither
-extends the basic homework's required domain.
+If a locally well-formed relational plan is outside Basic HW2's stated
+left-deep subset—for example, a join's right operand is not a direct Rename,
+or the plan contains `Unit`—return a span-aware `syn::Error` for that
+assignment. The current normalization/VO/elaboration chain can emit `Unit`
+when a guard or binding precedes every atom, and other VO splits can produce
+other RA shapes. Those cases lie outside the basic homework's required domain.
 
 ## Basic HW3: IndexRequirements to Physical
 
@@ -203,11 +212,13 @@ this pass.
 6. Run formatting, contracts, structural tests, rustc-backed tests, and the
    independent workload oracle.
 
-Do not put physical storage decisions back into RelationalPlan. In particular,
-a fully bound later atom remains a NaturalJoin logically; membership is chosen
-only during physical lowering. Do not reconstruct NaturalJoin structure during
-index selection. If one pass becomes responsible for both logical and physical
-decisions, its source or target IR is missing an explicit fact.
+Do not put physical storage decisions back into RelationalPlan. A full
+`Coarse` subatom remains a NaturalJoin even when all its variables are bound;
+only a partial consistency check elaborates to a logical Semijoin. Physical
+lowering decides how to implement membership. Do not reconstruct NaturalJoin
+structure during index selection. If one pass becomes responsible for both
+logical and physical decisions, its source or target IR is missing an explicit
+fact.
 
 ## Inspect one query, one pass at a time
 
@@ -286,7 +297,9 @@ Start with the smallest edge under construction:
 
 ```text
 cargo test -p cq-ir --test relational_plan
-cargo test -p cq-query-lowering --test written_order
+cargo test -p cq-ir --test valuation_language
+cargo test -p cq-order --test order
+cargo test -p cq-elaborate --test elaborate
 cargo test -p cq-index-policy --test index_demands
 cargo test -p cq-physical-lowering --test lowering
 cargo test -p cq-structure-selection --test selection
