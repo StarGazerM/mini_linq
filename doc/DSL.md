@@ -78,8 +78,22 @@ Likewise the policy states facts about host values, never capabilities:
 `R keyed [a]` means the host is a map keyed on column `a` (so a demand on `a`
 is answered in place), `R keyed [a] ordered` that the key has an order;
 `L;` is a plain collection. Strategy (`join = merge`, `semijoin =
-prefer_lazy`) is the policy's decision, and every operation it leads the
-program to perform is a trait bound rustc checks on the host value.
+prefer_lazy`, `project = canon`) is the policy's decision, and every operation
+it leads the program to perform is a trait bound rustc checks on the host value.
+
+```ebnf
+Policy ::= "policy" "{" Host* ["join" "=" ("seek" | "merge") ";"]
+           ["semijoin" "=" ("eager" | "prefer_lazy") ";"]
+           ["project" "=" ("keep" | "canon") ";"] "}"
+Host   ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"] ";"
+```
+
+`project = keep` is the default. `project = canon` flags every projection
+whose kept columns do not contain an inferred input key, including atom
+prefix projections in Fine valuation plans. A flagged projection read through
+a key is a `let` materialized as a set; a single-use scanned projection stays
+a `pipe` and deduplicates through the distinct wrapper. Shared results still
+use `let`. The returned definition's canonicalization rule is unchanged.
 
 CQ validity and expression scheduling preserve these facts:
 

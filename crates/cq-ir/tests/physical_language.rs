@@ -58,6 +58,29 @@ fn hash_chain_is_well_formed_and_reads_are_recorded() {
 }
 
 #[test]
+fn canon_is_admitted_on_intermediate_aliases_lets_and_pipes() {
+    let module = module(quote! {
+        l = alias canon rename;
+        r = let canon rename;
+        s = let canon rename;
+        j0 = pipe canon probe[a] l, r;
+        j1 = pipe canon probe[b] j0, s;
+        x = pipe canon semi[a] j1, l;
+        p = pipe canon project;
+        return p;
+    })
+    .unwrap();
+    let analysis = physical::contract::check(&module).unwrap();
+    assert_eq!(
+        analysis.canon,
+        ["l", "r", "s", "j0", "j1", "x", "p"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    );
+}
+
+#[test]
 fn merge_records_both_sides_and_allows_a_typed_pipe_side() {
     let mut module = module(quote! {
         l = let rename;

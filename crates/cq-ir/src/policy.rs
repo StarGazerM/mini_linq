@@ -1,5 +1,5 @@
 //! The caller's query-independent configuration, read by the structure
-//! selection and Stream lowering passes.
+//! selection and Physical lowering passes.
 //!
 //! Hosts are facts, not claims: `R keyed [a]` says the host value is keyed
 //! on column `a` (so a demand on `a` is answered in place), `ordered` that
@@ -9,7 +9,8 @@
 //!
 //! ```text
 //! Policy ::= "policy" "{" Host* ["join" "=" ("seek" | "merge") ";"]
-//!            ["semijoin" "=" ("eager" | "prefer_lazy") ";"] "}"
+//!            ["semijoin" "=" ("eager" | "prefer_lazy") ";"]
+//!            ["project" "=" ("keep" | "canon") ";"] "}"
 //! Host   ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"] ";"
 //! ```
 
@@ -28,6 +29,8 @@ pub mod kw {
     syn::custom_keyword!(merge);
     syn::custom_keyword!(eager);
     syn::custom_keyword!(prefer_lazy);
+    syn::custom_keyword!(project);
+    syn::custom_keyword!(keep);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -45,11 +48,18 @@ pub struct Policy {
     #[syn(in = brace)]
     #[syn(optional, peek = kw::semijoin)]
     pub semijoin: Option<SemijoinChoice>,
+    #[syn(in = brace)]
+    #[syn(optional, peek = kw::project)]
+    pub project: Option<ProjectChoice>,
 }
 
 fn parse_hosts(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Host>> {
     let mut hosts = Vec::new();
-    while input.peek(Ident) && !input.peek(kw::join) && !input.peek(kw::semijoin) {
+    while input.peek(Ident)
+        && !input.peek(kw::join)
+        && !input.peek(kw::semijoin)
+        && !input.peek(kw::project)
+    {
         hosts.push(input.parse()?);
     }
     Ok(hosts)
@@ -109,7 +119,35 @@ pub enum SemijoinRule {
     PreferLazy(kw::prefer_lazy),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct ProjectChoice {
+    pub project_token: kw::project,
+    pub eq_token: Token![=],
+    pub rule: ProjectRule,
+    pub semi_token: Token![;],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum ProjectRule {
+    #[parse(peek = kw::keep)]
+    Keep(kw::keep),
+    #[parse(peek = kw::canon)]
+    Canon(kw::canon),
+}
+
 impl Policy {
+    /// Deduplicate projections unless their kept columns retain an inferred
+    /// input key. Defaults to `false` (`project = keep`).
+    pub fn canon_projections(&self) -> bool {
+        matches!(
+            self.project,
+            Some(ProjectChoice {
+                rule: ProjectRule::Canon(_),
+                ..
+            })
+        )
+    }
+
     pub fn merge_joins(&self) -> bool {
         matches!(
             self.join,

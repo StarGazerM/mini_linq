@@ -45,6 +45,217 @@ fn chain_ix() -> ix::Module {
     )
 }
 
+/// Fine subatoms project the triangle's atoms to each variable prefix.
+fn triangle_ix() -> ix::Module {
+    let source: cq::Module = syn::parse_quote! {
+        struct Triangle;
+        relation R(a: i32, b: i32);
+        relation S(b: i32, c: i32);
+        relation T(a: i32, c: i32);
+        answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let plan = cq_order::compile(
+        &normal,
+        &cq_order::Options {
+            heuristic: cq_order::Heuristic::Written,
+            split: cq_order::Split::Fine,
+        },
+    )
+    .unwrap();
+    let target = cq_elaborate::compile(&plan).unwrap();
+    cq_index_policy::compile(&target).unwrap()
+}
+
+#[test]
+fn fine_triangle_keeps_intermediate_projections_by_default() {
+    // Pin the original Fine triangle RA independently of elaboration's
+    // elimination of redundant projections on semijoin right operands.
+    let mut plan = triangle_ix().relational_plan;
+    plan.plan = syn::parse_quote! {
+        r0 = rename R {a -> a, b -> b};
+        r1 = project r0 keep {a};
+        r2 = rename T {a -> a, c -> c};
+        r3 = project r2 keep {a};
+        r4 = semijoin r1 with r3;
+        r5 = natural_join r4 with r0;
+        r6 = rename S {b -> b, c -> c};
+        r7 = project r6 keep {b};
+        r8 = semijoin r5 with r7;
+        r9 = natural_join r8 with r6;
+        r10 = natural_join r9 with r2;
+        r11 = project r10 keep {a, b, c};
+        output r11 as answer(a, b, c);
+    };
+    let source = cq_index_policy::compile(&plan).unwrap();
+    let policy = parse_policy(quote! { policy { R; S; T; } });
+    let (target, _) = lower(&source, &policy);
+    let keep = parse_policy(quote! { policy { R; S; T; project = keep; } });
+    assert_eq!(target, lower(&source, &keep).0);
+    assert_program(
+        &target,
+        quote! {
+            r0 = let rename;
+            r1 = pipe project;
+            r2 = let rename;
+            r3 = let project;
+            r4 = pipe semi[a] r1, r3;
+            r5 = pipe probe[a] r4, r0;
+            r6 = let rename;
+            r7 = let project;
+            r8 = pipe semi[b] r5, r7;
+            r9 = pipe probe[b] r8, r6;
+            r10 = pipe probe[a, c] r9, r2;
+            r11 = pipe canon project;
+            return r11;
+        },
+    );
+    let canon = parse_policy(quote! { policy { R; S; T; project = canon; } });
+    let (canonical, _) = lower(&source, &canon);
+    let mut expected = target;
+    for index in [1, 3, 7] {
+        expected.program.definitions[index].canon = Some(Default::default());
+    }
+    assert_eq!(canonical, expected);
+}
+
+#[test]
+fn fine_triangle_canonicalizes_every_key_dropping_projection() {
+    let source = triangle_ix();
+    let keep = parse_policy(quote! { policy { R; S; T; } });
+    let (kept, _) = lower(&source, &keep);
+    let explicit_keep = parse_policy(quote! { policy { R; S; T; project = keep; } });
+    assert_eq!(kept, lower(&source, &explicit_keep).0);
+    for policy in [
+        quote! { policy { R; S; T; project = canon; } },
+        quote! { policy { R canon; S canon; T canon; project = canon; } },
+    ] {
+        let policy = parse_policy(policy);
+        let (target, _) = lower(&source, &policy);
+        let infos = cq_ir::relational_plan::check_in(
+            source.relational_plan.program.inputs(),
+            &source.relational_plan.plan,
+        )
+        .unwrap();
+        let mut dropping = 0;
+        for (logical, definition) in source
+            .relational_plan
+            .plan
+            .definitions
+            .iter()
+            .zip(&target.program.definitions)
+        {
+            if let cq_ir::relational_plan::Operator::Project(project) = &logical.operator {
+                let input = &infos[&cq_ir::symbol_name(&project.input)].heading;
+                let kept = &infos[&cq_ir::symbol_name(&logical.result)].heading;
+                if kept != input {
+                    dropping += 1;
+                    assert!(definition.canon.is_some(), "{}", definition.name);
+                }
+            }
+        }
+        assert!(dropping > 0);
+        for (definition, kept) in target
+            .program
+            .definitions
+            .iter()
+            .zip(&kept.program.definitions)
+        {
+            assert_eq!(definition.mode, kept.mode);
+            assert_eq!(definition.operator, kept.operator);
+            if !matches!(definition.operator, physical::Operator::Project(_)) {
+                assert_eq!(definition.canon, kept.canon);
+            }
+        }
+        // Canonicalizing a prefix does not change the returned definition.
+        assert_eq!(
+            target.program.definitions.last(),
+            kept.program.definitions.last()
+        );
+        assert!(!check(&source, &target, &keep));
+
+        let mut tampered = target.clone();
+        tampered.program.definitions[1].canon = None;
+        physical::contract::check(&tampered).unwrap();
+        assert!(!check(&source, &tampered, &policy));
+        let mut tampered = target;
+        tampered.program.definitions[1].mode = syn::parse_quote!(let);
+        physical::contract::check(&tampered).unwrap();
+        assert!(!check(&source, &tampered, &policy));
+    }
+}
+
+#[test]
+fn a_keyed_projection_is_a_canonical_let() {
+    let plan = syn::parse_quote! {
+        struct Projected;
+        relation L(a: i32);
+        relation R(a: i32, b: i32);
+        answer(a) :- L(a), R(a, b);
+        relational {
+            l = rename L {a -> a};
+            r = rename R {a -> a, b -> b};
+            p = project r keep {a};
+            j = natural_join l with p;
+            output j as answer(a);
+        }
+    };
+    let source = cq_index_policy::compile(&plan).unwrap();
+    for policy in [
+        quote! { policy { L; R; project = canon; } },
+        quote! { policy { L canon; R keyed [a] canon; project = canon; } },
+    ] {
+        let policy = parse_policy(policy);
+        let (target, _) = lower(&source, &policy);
+        // A host's storage key [a] is not a uniqueness key: R can contain
+        // several distinct b values for one a even when its rows are canonical.
+        assert_program(
+            &target,
+            quote! {
+                l = alias rename; r = alias rename; p = let canon project;
+                j = pipe canon probe[a] l, p; return j;
+            },
+        );
+    }
+}
+
+#[test]
+fn projection_canon_uses_the_inferred_key_instead_of_the_whole_input_heading() {
+    for (host, columns, canon) in [
+        (quote! { R canon; }, quote! { a }, false),
+        (quote! { R canon; }, quote! { a, b }, false),
+        (quote! { R canon; }, quote! { b }, true),
+        (quote! { R; }, quote! { a, b }, true),
+    ] {
+        let plan = syn::parse_quote! {
+            struct Extended;
+            relation R(a: i32);
+            answer(#columns) :- R(a), let b: i32 = 0;
+            relational {
+                r = rename R {a -> a};
+                e = extend r with {b: i32} value ((0,));
+                p = project e keep {#columns};
+                s = select p if (true);
+                output s as answer(#columns);
+            }
+        };
+        let source = cq_index_policy::compile(&plan).unwrap();
+        let policy = parse_policy(quote! { policy { #host project = canon; } });
+        let (target, _) = lower(&source, &policy);
+        assert_eq!(target.program.definitions[2].canon.is_some(), canon);
+        assert!(matches!(
+            target.program.definitions[2].mode,
+            physical::Mode::Pipe(_)
+        ));
+        let keep = parse_policy(quote! { policy { #host project = keep; } });
+        let (kept, _) = lower(&source, &keep);
+        assert_eq!(
+            target.program.definitions.last(),
+            kept.program.definitions.last()
+        );
+    }
+}
+
 /// The pass's output, its contract checked, as the authored program text.
 fn lower(source: &ix::Module, policy: &Policy) -> (physical::Module, String) {
     let target = compile(source, policy).unwrap();

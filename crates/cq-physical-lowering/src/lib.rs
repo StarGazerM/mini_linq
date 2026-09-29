@@ -1,5 +1,5 @@
 //! IX → Physical: one physical operator per RA result, the mode its reads
-//! allow, and whether the return must be made canonical.
+//! allow, and which results must be made canonical.
 //!
 //! This pass decides three things and nothing else:
 //!
@@ -21,7 +21,11 @@
 //! - the **canon** flag: on the returned result when uniqueness does not
 //!   follow from the policy's `canon` hosts through joins, semijoins,
 //!   selects, extends and key-keeping projections — the same inference
-//!   Structures repeats with the built values it adds.
+//!   Structures repeats with the built values it adds. Under
+//!   `policy { project = canon; }`, every projection whose kept columns do
+//!   not retain an inferred input key is also flagged. Its reads still
+//!   decide its mode: a canon pipe deduplicates its stream, a canon let
+//!   materializes a set.
 //!
 //! No Rust type is named here (Structures binds every keyed read to a
 //! value), and `policy { semijoin = prefer_lazy; }` is not read: whether a
@@ -74,7 +78,7 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<physical::Mo
 
     let (operators, reads) = operators(source, &infos, &hosts, policy)?;
     let modes = modes(plan, &operators, &reads, &hosts);
-    let canon = !canonical(plan, &infos, &hosts).contains(&returned);
+    let unique = canonical(plan, &infos, &hosts);
 
     let definitions = plan
         .definitions
@@ -85,7 +89,11 @@ pub fn compile(source: &ix::Module, policy: &Policy) -> syn::Result<physical::Mo
             name: definition.result.clone(),
             eq_token: Default::default(),
             mode,
-            canon: (canon && symbol_name(&definition.result) == returned).then(Default::default),
+            canon: (!unique.contains(&symbol_name(&definition.result))
+                && (symbol_name(&definition.result) == returned
+                    || (policy.canon_projections()
+                        && matches!(definition.operator, ra::Operator::Project(_)))))
+            .then(Default::default),
             operator,
             semi_token: Default::default(),
         })
