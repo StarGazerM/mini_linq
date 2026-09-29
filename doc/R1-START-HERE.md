@@ -35,9 +35,9 @@ implementations in this checkout live in separate modules:
 
 | Homework | Typed function | Successful result |
 |---|---|---|
-| Basic HW1 | `cq_lang_cq::normal::normalize` → `cq_order::compile` (`Written`, `Coarse`) → `cq_elaborate::compile` | `syn::Result<relational_plan::Module>` containing the normalized `Program` and a complete named relational plan |
-| Basic HW2 | `cq_index_policy::compile(&relational_plan::Module)` | `syn::Result<index_requirements::Module>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
-| Basic HW3 | `cq_physical_lowering::compile(&index_requirements::Module, &Policy)` | `syn::Result<physical::Module>` containing the unchanged IX plus one physical operator, mode, and `canon` flag per result |
+| Basic HW1 | `cq_lang_cq::normal::normalize` → `cq_order::compile` (`Written`, `Coarse`) → `cq_elaborate::compile` | `syn::Result<ra::Program>` containing declarations, the complete named relational plan and output metadata |
+| Basic HW2 | `cq_index_policy::compile(&ra::Program)` | `syn::Result<ix::Program>` containing the exact unchanged RelationalPlan plus its canonical equality keys |
+| Basic HW3 | `cq_physical_lowering::compile(&ix::Program, &Policy)` | `syn::Result<physical::Program>` containing declarations, full physical operators, modes, canon flags and output metadata |
 
 Staff supplies the syntax definitions, parsers, local contracts, edge
 contracts, direct proc-macro entries, `cq_structure_selection::compile`,
@@ -154,7 +154,7 @@ other RA shapes. Those cases lie outside the basic homework's required domain.
 ## Basic HW3: IndexRequirements to Physical
 
 This pass consumes the logical plan with demands and a query-independent policy
-and returns a `physical::Module`: the unchanged IX plus, for every result,
+and returns a `physical::Program`: declarations and output metadata plus, for every result,
 one physical operator and one mode:
 
 - a natural join becomes `probe` (the right result read through a key) or,
@@ -179,7 +179,7 @@ supplied structure selection.
 
 ## Supplied bindings Γ and printer
 
-The `structures` section records the bindings Γ: the value answering each
+The Structures program records the bindings Γ: the value answering each
 keyed read.
 
 `cq_structure_selection::compile` (Physical → Γ) binds every keyed
@@ -299,7 +299,7 @@ pass code, while `cargo xtask explain` remains the source-level IR stepper.
 Start with the smallest edge under construction:
 
 ```text
-cargo test -p cq-lang-ra --test relational_plan
+cargo test -p cq-lang-ra --test relational_program
 cargo test -p cq-lang-vo --test valuation_language
 cargo test -p cq-order --test order
 cargo test -p cq-elaborate --test elaborate

@@ -1,249 +1,115 @@
-//! Authored Physical modules check the contract: one physical form per RA
-//! result, join columns by name, pipes read exactly once, keyed reads on lets.
 use cq_lang_physical as physical;
-use cq_lang_physical::ModeKind;
-use quote::quote;
-
-fn module(definitions: proc_macro2::TokenStream) -> syn::Result<physical::Module> {
-    syn::parse2(quote! {
-        struct Chain;
-        relation L(a: i32);
-        relation R(b: i32, a: i32);
-        relation S(b: i32, c: i32);
-        answer(a, c) :- L(a), R(b, a), S(b, c);
-        relational {
-            l = rename L {a -> a};
-            r = rename R {b -> b, a -> a};
-            s = rename S {b -> b, c -> c};
-            j0 = natural_join l with r;
-            j1 = natural_join j0 with s;
-            x = semijoin j1 with l;
-            p = project x keep {a, c};
-            output p as answer(a, c);
-        }
-        indexes { i0 = @r[0]; i1 = @s[0]; i2 = @l[0]; }
-        physical { #definitions }
-    })
+use quote::ToTokens;
+const SOURCE: &str = "physical {
+    relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+    r = alias rename R {a -> x,b -> y}; s = let rename S {b -> y,c -> z};
+    j = pipe probe[y] r,s; f = pipe select j if (x < z);
+    e = pipe extend f with {w:i32} value (x + z);
+    p = pipe canon project e keep {x,w}; return p as answer(x,w);
+}";
+#[test]
+fn complete_program_round_trip_and_analysis() {
+    let source: physical::Program = syn::parse_str(SOURCE).unwrap();
+    let a = physical::contract::check(&source).unwrap();
+    assert_eq!(
+        syn::parse2::<physical::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    assert_eq!(a.headings["p"], ["w", "x"]);
+    assert_eq!(a.hosts["r"], "R");
+    assert_eq!(a.renames["r"]["x"], "a");
+    assert_eq!(a.rows["p"].bindings["x"], "x");
+    assert!(a.rows["p"].computed.contains("w"));
+    assert_eq!(a.key_reads["s"], [("j".into(), vec!["y".into()])]);
+    assert!(a.scanned.contains("r"));
+    assert!(!a.scanned.contains("s"));
+}
+#[test]
+fn invalid_operators_modes_and_heads_report_the_construct() {
+    for (before, after, construct) in [
+        ("rename R", "rename Missing", "Missing"),
+        ("a -> x,b -> y", "a -> x,a -> y", "r"),
+        ("a -> x,b -> y", "a -> x,b -> x", "r"),
+        ("a -> x,b -> y", "a -> x", "r"),
+        ("a -> x,b -> y", "a -> x,q -> y", "r"),
+        ("r,s", "r,missing", "missing"),
+        ("s = let", "r = let", "r"),
+        ("probe[y]", "probe[x]", "j"),
+        ("probe[y]", "probe[y,y]", "j"),
+        ("s = let", "s = pipe", "s"),
+        ("f = pipe", "f = alias", "f"),
+        ("value (x + z)", "value (q + w)", "e"),
+        ("{w:i32}", "{x:i32}", "e"),
+        ("keep {x,w}", "keep {x,missing}", "p"),
+        ("keep {x,w}", "keep {x,x}", "p"),
+        ("answer(x,w)", "answer(x)", "p"),
+        ("return p", "return missing", "missing"),
+        (
+            "return p",
+            "unused = alias rename R {a -> a,b -> b}; return p",
+            "unused",
+        ),
+        ("select j if (x < z)", "select p if (x < z)", "p"),
+    ] {
+        let changed: physical::Program = syn::parse_str(&SOURCE.replace(before, after)).unwrap();
+        let error = physical::contract::check(&changed).unwrap_err().to_string();
+        assert!(error.contains(construct), "{construct}: {error}");
+    }
+}
+#[test]
+fn merge_and_range_record_ordered_reads() {
+    let source: physical::Program = syn::parse_str("physical { relation R(a:i32); relation S(a:i32); r = let rename R {a -> x}; s = let rename S {a -> x}; j = let merge[x] r,s; f = pipe range[x] j if (x > 1); return f as answer(x); }").unwrap();
+    let a = physical::contract::check(&source).unwrap();
+    assert_eq!(a.merge_reads["r"][0].0, "j");
+    assert_eq!(a.merge_reads["s"][0].0, "j");
+    assert_eq!(a.range_reads["j"], [("f".into(), "x".into())]);
+    let mut invalid = source.clone();
+    invalid.program.definitions[2].mode = syn::parse_quote!(pipe);
+    assert!(physical::contract::check(&invalid).is_err());
 }
 
-#[test]
-fn hash_chain_is_well_formed_and_reads_are_recorded() {
-    let module = module(quote! {
-        l = alias rename;
-        r = let rename;
-        s = let rename;
-        j0 = pipe probe[a] l, r;
-        j1 = pipe probe[b] j0, s;
-        x = pipe semi[a] j1, l;
-        p = pipe canon project;
-        return p;
-    })
-    .unwrap();
-    let analysis = physical::contract::check_module(&module).unwrap();
-    assert_eq!(analysis.modes["j0"], ModeKind::Pipe);
-    assert_eq!(
-        analysis.key_reads["r"],
-        vec![("j0".to_string(), vec!["a".to_string()])]
-    );
-    assert_eq!(
-        analysis.key_reads["l"],
-        vec![("x".to_string(), vec!["a".to_string()])]
-    );
-    assert_eq!(analysis.hosts["r"], "R");
-    assert_eq!(analysis.renames["r"]["a"], "a");
-    assert!(analysis.canon.contains("p"));
-    assert!(analysis.scanned.contains("l") && analysis.scanned.contains("p"));
-    assert!(!analysis.scanned.contains("r"));
-    assert_eq!(physical::ordinals(&analysis, "r", &["a".into()]), vec![0]);
-    assert_eq!(physical::erase(&module), module.index_requirements);
-}
+const HASH_CHAIN: &str = "physical {
+    relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
+    l = alias canon rename L {a -> a};
+    r = let canon rename R {a -> a, b -> b};
+    s = let canon rename S {b -> b, c -> c};
+    j0 = pipe canon probe[a] l, r;
+    j1 = pipe canon probe[b] j0, s;
+    x = pipe canon semi[a] j1, l;
+    p = pipe canon project x keep {a, c}; return p as answer(a, c);
+}";
 
 #[test]
-fn canon_is_admitted_on_intermediate_aliases_lets_and_pipes() {
-    let module = module(quote! {
-        l = alias canon rename;
-        r = let canon rename;
-        s = let canon rename;
-        j0 = pipe canon probe[a] l, r;
-        j1 = pipe canon probe[b] j0, s;
-        x = pipe canon semi[a] j1, l;
-        p = pipe canon project;
-        return p;
-    })
-    .unwrap();
-    let analysis = physical::contract::check_module(&module).unwrap();
+fn intermediate_aliases_lets_and_pipes_admit_canon_and_semijoins_record_key_reads() {
+    let source: physical::Program = syn::parse_str(HASH_CHAIN).unwrap();
+    let analysis = physical::contract::check(&source).unwrap();
     assert_eq!(
         analysis.canon,
         ["l", "r", "s", "j0", "j1", "x", "p"]
-            .into_iter()
             .map(String::from)
-            .collect()
+            .into()
     );
+    assert_eq!(analysis.key_reads["l"], [("x".into(), vec!["a".into()])]);
+    assert_eq!(physical::ordinals(&analysis, "r", &["a".into()]), [0]);
 }
 
 #[test]
-fn merge_records_both_sides_and_allows_a_typed_pipe_side() {
-    let mut module = module(quote! {
-        l = let rename;
-        r = let rename;
-        s = let rename;
-        j0 = pipe merge[a] l, r;
+fn a_merge_result_read_by_key_stays_materialized() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
+        l = let rename L {a -> a};
+        r = let rename R {a -> a, b -> b};
+        s = let rename S {b -> b, c -> c};
+        j0 = let merge[a] l, r;
         j1 = let merge[b] j0, s;
-        x = pipe semi[a] j1, l;
-        p = pipe canon project;
-        return p;
-    })
-    .unwrap();
-    // Only the semi needs a demand; merge operands carry their own ordered reads.
-    module.index_requirements.indexes = syn::parse_quote! { i2 = @l[0]; };
-    let analysis = physical::contract::check_module(&module).unwrap();
-    assert_eq!(
-        analysis.merge_reads["j0"],
-        vec![("j1".to_string(), vec!["b".to_string()])]
-    );
-    assert_eq!(
-        analysis.merge_reads["r"],
-        vec![("j0".to_string(), vec!["a".to_string()])]
-    );
-    // j1 is read through a key by x, so it is a let even though merged once.
-    assert_eq!(analysis.modes["j1"], ModeKind::Let);
-}
-
-#[test]
-fn probe_and_semi_demands_are_derived_from_operands() {
-    let valid = module(quote! {
-        l = alias rename; r = let rename; s = let rename;
-        j0 = pipe probe[a] l, r; j1 = pipe probe[b] j0, s;
-        x = pipe semi[a] j1, l; p = pipe canon project; return p;
-    })
-    .unwrap();
-    for (index, expected) in [
-        ("i0", "probe `j0` needs demand `@r[a]`"),
-        ("i1", "probe `j1` needs demand `@s[b]`"),
-        ("i2", "probe `x` needs demand `@l[a]`"),
-    ] {
-        let mut missing = valid.clone();
-        missing.index_requirements.section.indexes = missing
-            .index_requirements
-            .section
-            .indexes
-            .into_iter()
-            .filter(|i| i.name != index)
-            .collect();
-        missing
-            .index_requirements
-            .indexes
-            .push_punct(Default::default());
-        cq_lang_ix::contract::check_module(&missing.index_requirements).unwrap();
-        assert_eq!(
-            physical::contract::check_module(&missing)
-                .unwrap_err()
-                .to_string(),
-            expected
-        );
-    }
-
-    let mut renamed = valid;
-    renamed.index_requirements.indexes = syn::parse_quote! {
-        membership = @l[0]; second = @s[0]; first = @r[0];
-    };
-    physical::contract::check_module(&renamed).unwrap();
-}
-
-#[test]
-fn composite_and_empty_probe_demands_use_logical_heading_ordinals() {
-    for (left_mapping, columns, ordinals, expected) in [
-        (
-            quote! { a -> z, b -> a },
-            quote! { a,z },
-            quote! { 0,1 },
-            "@r[a,z]",
-        ),
-        (
-            quote! { a -> z, b -> a },
-            quote! { z,a },
-            quote! { 0,1 },
-            "@r[a,z]",
-        ),
-        (quote! { a -> x, b -> y }, quote! {}, quote! {}, "@r[]"),
-    ] {
-        let mut module: physical::Module = syn::parse_quote! {
-            struct Keys;
-            relation L(a:i32,b:i32);
-            relation R(z:i32,a:i32);
-            answer(a,z) :- L(z,a), R(z,a);
-            relational {
-                l = rename L { #left_mapping };
-                r = rename R { z -> z, a -> a };
-                j = natural_join l with r;
-                p = project j keep {a,z};
-                output p as answer(a,z);
-            }
-            indexes { demand = @r[#ordinals]; }
-            physical {
-                l = alias rename; r = let rename;
-                j = pipe probe[#columns] l, r;
-                p = pipe canon project; return p;
-            }
-        };
-        physical::contract::check_module(&module).unwrap();
-        module.index_requirements.indexes.clear();
-        assert_eq!(
-            physical::contract::check_module(&module)
-                .unwrap_err()
-                .to_string(),
-            format!("probe `j` needs demand `{expected}`")
-        );
-    }
-}
-
-#[test]
-fn contract_rejects_wrong_forms() {
-    let rejects = |definitions, needle: &str| {
-        let error = module(definitions)
-            .and_then(|m| physical::contract::check_module(&m))
-            .expect_err("rejected")
-            .to_string();
-        assert!(error.contains(needle), "{error}");
-    };
-    rejects(
-        quote! {
-            l = alias rename; r = pipe rename; s = let rename;
-            j0 = pipe probe[a] l, r; j1 = pipe probe[b] j0, s;
-            x = pipe semi[a] j1, l; p = pipe canon project; return p;
-        },
-        "read through a key, so it must be `let`",
-    );
-    rejects(
-        quote! {
-            l = alias rename; r = let rename; s = let rename;
-            j0 = pipe probe[b] l, r; j1 = pipe probe[b] j0, s;
-            x = pipe semi[a] j1, l; p = pipe canon project; return p;
-        },
-        "join columns are",
-    );
-    rejects(
-        quote! {
-            l = alias rename; r = let rename; s = let rename;
-            j0 = pipe select; j1 = pipe probe[b] j0, s;
-            x = pipe semi[a] j1, l; p = pipe canon project; return p;
-        },
-        "is a natural join in RA",
-    );
-    rejects(
-        quote! {
-            l = alias rename; r = let rename; s = let rename;
-            j0 = pipe probe[a] l, r; j1 = pipe probe[b] j0, s;
-            x = pipe semi[a] j1, l; p = pipe canon project; return x;
-        },
-        "RA outputs `p`",
-    );
-    rejects(
-        quote! {
-            l = alias rename; r = let rename; s = let rename;
-            j0 = alias probe[a] l, r; j1 = pipe probe[b] j0, s;
-            x = pipe semi[a] j1, l; p = pipe canon project; return p;
-        },
-        "only a rename of a host",
-    );
+        x = pipe semi[a] l, j1;
+        p = pipe canon project x keep {a}; return p as answer(a);
+    }};
+    let analysis = physical::contract::check(&source).unwrap();
+    assert_eq!(analysis.modes["j1"], physical::ModeKind::Let);
+    assert_eq!(analysis.key_reads["j1"], [("x".into(), vec!["a".into()])]);
+    let mut invalid = source;
+    invalid.program.definitions[4] = syn::parse_quote!(j1 = pipe merge[b] j0, s;);
+    let error = physical::contract::check(&invalid).unwrap_err().to_string();
+    assert!(error.contains("j1"), "{error}");
 }

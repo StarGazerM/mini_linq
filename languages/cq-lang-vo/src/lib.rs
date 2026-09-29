@@ -45,22 +45,19 @@
 //! ```
 //!
 //! ```text
-//! Module    ::= CQ "valuation" "{" Step* "}"
+//! Program   ::= CQ "valuation" "{" Step* "}"
 //! Step      ::= Subatom ";" | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
 //!             | "reduce" Ident "@" Int Reduction ";"
 //! Reduction ::= "with" Subatom | "if" Expr
 //! Subatom   ::= Ident "@" Int "(" (Ident | "_"),* ")"
 //! ```
 
-#[cfg(feature = "reference-prefix")]
 pub use cq_lang_cq as cq;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Ident, LitInt, Token, token};
 
-#[cfg(feature = "reference-prefix")]
-use cq::normal::Kernel;
 use cq_syntax::rust;
 pub use cq_syntax::{CommaList, symbol_name};
 
@@ -71,7 +68,7 @@ pub mod kw {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Section {
+pub struct Valuation {
     pub valuation_token: kw::valuation,
     #[syn(braced)]
     pub brace: token::Brace,
@@ -174,38 +171,16 @@ pub struct Analysis {
 
 /// A normalized source clause; indices retain their source ordering.
 #[derive(Clone, Debug)]
-pub enum Clause {
+enum Clause {
     Atom(cq_syntax::Atom),
     Guard(cq_syntax::Filter),
     Let(Box<cq_syntax::Let>),
 }
 
-/// The normalized source clauses scheduled by a valuation section.
-pub trait CqEnv {
-    fn clauses(&self) -> syn::Result<Vec<Clause>>;
-}
-
 pub mod contract {
-    pub fn check(
-        section: &super::Section,
-        env: &impl super::CqEnv,
-    ) -> syn::Result<super::Analysis> {
-        super::analyze(section, env)
-    }
-    pub fn well_formed(section: &super::Section, env: &impl super::CqEnv) -> bool {
-        check(section, env).is_ok()
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn check_module(module: &super::Module) -> syn::Result<super::Analysis> {
-        let source = super::cq::Module {
-            program: module.program.clone(),
-        };
-        super::cq::normal::check(&source)?;
-        check(&module.section, &source)
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn well_formed_module(module: &super::Module) -> bool {
-        check_module(module).is_ok()
+    pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
+        super::cq::normal::check(&program.cq)?;
+        super::analyze(program)
     }
 }
 
@@ -213,11 +188,26 @@ fn error<T>(
     spanned: &(impl quote::ToTokens + ?Sized),
     message: impl std::fmt::Display,
 ) -> syn::Result<T> {
-    Err(syn::Error::new_spanned(spanned, message))
+    Err(syn::Error::new_spanned(
+        spanned,
+        format!("{}: {message}", spanned.to_token_stream()),
+    ))
 }
 
-fn analyze(module: &Section, env: &impl CqEnv) -> syn::Result<Analysis> {
-    let clauses = env.clauses()?;
+fn analyze(program: &Program) -> syn::Result<Analysis> {
+    let module = &program.valuation;
+    let clauses = program
+        .cq
+        .query
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            cq::BodyItem::Positive { atom } => Some(Clause::Atom(atom.clone())),
+            cq::BodyItem::Filter(f) => Some(Clause::Guard(f.clone())),
+            cq::BodyItem::Let(l) => Some(Clause::Let(l.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let mut analysis = Analysis::default();
     let mut clause_variables: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut guards: Vec<&cq_syntax::Filter> = Vec::new();
@@ -462,41 +452,19 @@ fn analyze(module: &Section, env: &impl CqEnv) -> syn::Result<Analysis> {
         guards_seen += 1;
     }
     if guards_seen != guards.len() {
-        return error(&module.valuation_token, "every guard must be placed");
+        return error(guards[guards_seen], "every guard must be placed");
     }
     if lets_seen != lets.len() {
-        return error(&module.valuation_token, "every binding must be placed");
+        return error(lets[lets_seen], "every binding must be placed");
     }
     Ok(analysis)
 }
 
-/// Erase the plan: the normal-form query it schedules.
-#[cfg(feature = "reference-prefix")]
-pub fn erase(module: &Module) -> cq::Module {
-    cq::Module {
-        program: module.program.clone(),
-    }
+/// A query and the complete schedule of its valuations.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Program {
+    pub cq: cq::Program,
+    pub valuation: Valuation,
 }
 
-/// The kernel a plan computes; equal to the kernel of its query by construction.
-#[cfg(feature = "reference-prefix")]
-pub fn kernel(module: &Module) -> Kernel {
-    Kernel::of(&erase(module))
-}
-
-/// Shared syntax used by this language.
 pub use cq_syntax as syntax;
-
-#[cfg(feature = "reference-prefix")]
-pub mod reference;
-#[cfg(feature = "reference-prefix")]
-pub use reference::Module;
-
-/// Facts consumed by VO passes, in addition to section validation.
-pub trait Env: CqEnv {
-    fn inputs(&self) -> Vec<cq_syntax::RelationDecl>;
-    fn head(&self) -> &cq_syntax::Atom;
-    /// GYO join tree over atom clause indices, or None for a cyclic query.
-    /// As with headings in later Envs, correctness is a producer obligation.
-    fn join_tree(&self) -> Option<Vec<(usize, Option<usize>)>>;
-}

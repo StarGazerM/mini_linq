@@ -4,33 +4,38 @@
 //! selections and semijoins on the clause's relation, and `check` holds on
 //! every output.
 #[allow(dead_code)]
+#[path = "../../../test-support/relational/cq_semantics.rs"]
+mod cq_oracle;
+#[allow(dead_code)]
 #[path = "../../../test-support/relational/databases.rs"]
 mod databases;
 #[allow(dead_code)]
 #[path = "../../../test-support/relational/semantics.rs"]
 mod oracle;
+#[allow(dead_code)]
+#[path = "../../../test-support/relational/values.rs"]
+mod values;
 
 use cq_elaborate::{check, compile};
-use cq_lang_cq as cq;
-use cq_lang_cq::normal::Kernel;
 use cq_lang_ra as ra;
 use cq_lang_vo as valuation;
+use cq_lang_vo::cq;
+use cq_lang_vo::cq::normal::Kernel;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
-fn cq(tokens: TokenStream) -> cq::Module {
+fn cq(tokens: TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
 }
 
-fn vo(source: &cq::Module, steps: TokenStream) -> valuation::Module {
-    let program = &source.program;
+fn vo(source: &cq::Program, steps: TokenStream) -> valuation::Program {
+    let program = &source;
     syn::parse2(quote! { #program valuation { #steps } }).unwrap()
 }
 
 /// One full subatom per atom, guards and bindings where written.
-fn coarse(source: &cq::Module) -> valuation::Module {
+fn coarse(source: &cq::Program) -> valuation::Program {
     let steps = source
-        .program
         .query
         .body
         .iter()
@@ -49,17 +54,18 @@ fn coarse(source: &cq::Module) -> valuation::Module {
     vo(source, quote!(#(#steps)*))
 }
 
-fn text(target: &ra::Module) -> String {
+fn text(target: &ra::Program) -> String {
     target.plan.to_token_stream().to_string()
 }
 
-fn assert_plan(target: &ra::Module, plan: TokenStream) {
-    let program = &target.program;
-    let expected: ra::Module = syn::parse2(quote! { #program relational { #plan } }).unwrap();
-    assert_eq!(text(target), text(&expected));
+fn assert_plan(target: &ra::Program, plan: TokenStream) {
+    let declarations = &target.plan.declarations;
+    let expected: ra::Program =
+        syn::parse2(quote! { relational { #(#declarations)* #plan } }).unwrap();
+    assert_eq!(target, &expected);
 }
 
-fn chain() -> cq::Module {
+fn chain() -> cq::Program {
     cq(quote! {
         struct Chain;
         relation L(a: i32);
@@ -69,7 +75,7 @@ fn chain() -> cq::Module {
     })
 }
 
-fn triangle() -> cq::Module {
+fn triangle() -> cq::Program {
     cq(quote! {
         struct Triangle;
         relation R(a: i32, b: i32);
@@ -83,7 +89,7 @@ fn triangle() -> cq::Module {
 fn coarse_plans_elaborate_relation_at_a_time() {
     let plan = vo(&chain(), quote! { L@0(a); R@1(a, b); S@2(b, c); });
     let target = compile(&plan).unwrap();
-    assert!(check(&plan, &target));
+    assert!(check(&plan, &target).is_ok());
     assert_plan(
         &target,
         quote! {
@@ -92,13 +98,13 @@ fn coarse_plans_elaborate_relation_at_a_time() {
             r2 = natural_join r0 with r1;
             r3 = rename S { b -> b, c -> c };
             r4 = natural_join r2 with r3;
-            r5 = project r4 keep { r#a, r#c };
+            r5 = project r4 keep { a, c };
             output r5 as answer(a, c);
         },
     );
     let plan = vo(&triangle(), quote! { R@0(a, b); S@1(b, c); T@2(a, c); });
     let target = compile(&plan).unwrap();
-    assert!(check(&plan, &target));
+    assert!(check(&plan, &target).is_ok());
     assert_plan(
         &target,
         quote! {
@@ -107,7 +113,7 @@ fn coarse_plans_elaborate_relation_at_a_time() {
             r2 = natural_join r0 with r1;
             r3 = rename T { a -> a, c -> c };
             r4 = natural_join r2 with r3;
-            r5 = project r4 keep { r#a, r#b, r#c };
+            r5 = project r4 keep { a, b, c };
             output r5 as triangle(a, b, c);
         },
     );
@@ -124,7 +130,7 @@ fn a_normalized_query_binds_its_constants_before_their_atoms() {
     let normal = cq::normal::normalize(&source).unwrap();
     let plan = coarse(&normal);
     let target = compile(&plan).unwrap();
-    assert!(check(&plan, &target));
+    assert!(check(&plan, &target).is_ok());
     assert_plan(
         &target,
         quote! {
@@ -137,7 +143,7 @@ fn a_normalized_query_binds_its_constants_before_their_atoms() {
             r6 = select r5 if (__cq_1_1 == x);
             r7 = select r6 if (x > 0);
             r8 = extend r7 with { y: i32 } value ({ let y: i32 = x + 1; (y,) });
-            r9 = project r8 keep { r#x, r#y };
+            r9 = project r8 keep { x, y };
             output r9 as answer(x, y);
         },
     );
@@ -154,20 +160,20 @@ fn a_computed_head_retains_the_whole_heading() {
     });
     let plan = coarse(&source);
     let target = compile(&plan).unwrap();
-    assert!(check(&plan, &target));
+    assert!(check(&plan, &target).is_ok());
     assert_plan(
         &target,
         quote! {
             r0 = rename R { a -> a, b -> b };
             r1 = rename S { b -> b, c -> c };
             r2 = natural_join r0 with r1;
-            r3 = project r2 keep { r#a, r#b, r#c };
+            r3 = project r2 keep { a, b, c };
             output r3 as answer(a + c);
         },
     );
 }
 
-fn guarded_triangle() -> cq::Module {
+fn guarded_triangle() -> cq::Program {
     cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
@@ -189,9 +195,9 @@ fn the_fine_triangle_plan_semijoins_checks_and_keeps_the_kernel() {
         },
     );
     let target = compile(&plan).unwrap();
-    ra::contract::check_module(&target).unwrap();
-    assert_eq!(ra::kernel(&target), Kernel::of(&source));
-    assert!(check(&plan, &target));
+    ra::contract::check(&target).unwrap();
+    assert_eq!(cq_elaborate::kernel(&target, &source), Kernel::of(&source));
+    assert!(check(&plan, &target).is_ok());
     assert_plan(
         &target,
         quote! {
@@ -206,19 +212,18 @@ fn the_fine_triangle_plan_semijoins_checks_and_keeps_the_kernel() {
             r8 = natural_join r7 with r6;
             r9 = natural_join r8 with r2;
             r10 = extend r9 with { d: i32 } value ({ let d: i32 = a + c; (d,) });
-            r11 = project r10 keep { r#a, r#b, r#c };
+            r11 = project r10 keep { a, b, c };
             output r11 as answer(a, b, c);
         },
     );
     // The check is about what is computed: the coarse plan's erasure is the
     // same query, and an RA that drops the guard is not.
     let coarse = coarse(&source);
-    assert!(check(&coarse, &target));
-    assert!(check(&plan, &compile(&coarse).unwrap()));
-    let program = &source.program;
-    let unguarded: ra::Module = syn::parse2(quote! {
-        #program
-        relational {
+    assert!(check(&coarse, &target).is_ok());
+    assert!(check(&plan, &compile(&coarse).unwrap()).is_ok());
+    let declarations = &source.declarations;
+    let unguarded: ra::Program = syn::parse2(quote! {
+        relational { #(#declarations)*
             r0 = rename R { a -> a, b -> b };
             r1 = rename S { b -> b, c -> c };
             r2 = natural_join r0 with r1;
@@ -230,8 +235,8 @@ fn the_fine_triangle_plan_semijoins_checks_and_keeps_the_kernel() {
         }
     })
     .unwrap();
-    assert!(ra::contract::well_formed_module(&unguarded));
-    assert!(!check(&plan, &unguarded));
+    assert!(ra::contract::check(&unguarded).is_ok());
+    assert!(check(&plan, &unguarded).is_err());
 }
 
 #[test]
@@ -251,12 +256,12 @@ fn fine_plans_compute_the_query_on_binary_databases() {
     for steps in plans {
         let plan = vo(&source, steps);
         let target = compile(&plan).unwrap();
-        assert!(check(&plan, &target));
+        assert!(check(&plan, &target).is_ok());
         for seed in 0..64 {
-            let database = databases::binary_database(&source.program, seed);
+            let database = databases::binary_database(&source, seed);
             assert_eq!(
                 oracle::evaluate_ra(&target, &database).output,
-                oracle::evaluate_cq(&source.program, &database),
+                cq_oracle::evaluate_cq(&source, &database),
                 "seed {seed}: {}",
                 text(&target)
             );
@@ -279,8 +284,8 @@ fn reductions_restrict_the_clause_relation_before_its_first_join() {
         },
     );
     let target = compile(&plan).unwrap();
-    assert!(check(&plan, &target));
-    assert_eq!(ra::kernel(&target), Kernel::of(&source));
+    assert!(check(&plan, &target).is_ok());
+    assert_eq!(cq_elaborate::kernel(&target, &source), Kernel::of(&source));
     assert_plan(
         &target,
         quote! {
@@ -293,7 +298,7 @@ fn reductions_restrict_the_clause_relation_before_its_first_join() {
             r6 = semijoin r1 with r5;
             r7 = natural_join r6 with r5;
             r8 = natural_join r7 with r4;
-            r9 = project r8 keep { r#a, r#c };
+            r9 = project r8 keep { a, c };
             output r9 as answer(a, c);
         },
     );
@@ -314,8 +319,8 @@ fn reductions_restrict_the_clause_relation_before_its_first_join() {
         },
     );
     let target = compile(&plan).unwrap();
-    assert!(check(&plan, &target));
-    assert_eq!(ra::kernel(&target), Kernel::of(&source));
+    assert!(check(&plan, &target).is_ok());
+    assert_eq!(cq_elaborate::kernel(&target, &source), Kernel::of(&source));
     assert_plan(
         &target,
         quote! {
@@ -328,31 +333,95 @@ fn reductions_restrict_the_clause_relation_before_its_first_join() {
             r6 = rename S { b -> b, c -> c };
             r7 = natural_join r5 with r6;
             r8 = natural_join r7 with r2;
-            r9 = project r8 keep { r#a, r#b, r#c };
+            r9 = project r8 keep { a, b, c };
             output r9 as answer(a, b, c);
         },
     );
     for seed in 0..64 {
-        let database = databases::binary_database(&source.program, seed);
+        let database = databases::binary_database(&source, seed);
         assert_eq!(
             oracle::evaluate_ra(&target, &database).output,
-            oracle::evaluate_cq(&source.program, &database),
+            cq_oracle::evaluate_cq(&source, &database),
             "seed {seed}"
         );
     }
 }
 
-#[allow(unused_imports, dead_code)]
-mod cq_elaborate {
-    pub use ::cq_elaborate::*;
-    pub fn compile(source: &cq_lang_vo::Module) -> syn::Result<cq_lang_ra::Module> {
-        Ok(cq_lang_ra::Module::new(
-            source.program.clone(),
-            ::cq_elaborate::reference::compile(source)?,
-        ))
+#[path = "../../../test-support/relational/scenarios.rs"]
+mod scenarios;
+#[test]
+fn shared_scenarios_and_mutated_output_correspondence() {
+    for case in scenarios::SCENARIOS {
+        let source: valuation::Program = syn::parse_str(case.vo).unwrap();
+        let target = compile(&source).unwrap();
+        assert_eq!(
+            target,
+            syn::parse_str::<ra::Program>(case.ra).unwrap(),
+            "{}",
+            case.name
+        );
+        check(&source, &target).unwrap();
+        for seed in 0..4 {
+            let database = databases::binary_database(&source.cq, seed);
+            assert_eq!(
+                oracle::evaluate_ra(&target, &database).output,
+                cq_oracle::evaluate_cq(&source.cq, &database),
+                "{}",
+                case.name
+            );
+        }
+        let mut changed = target.clone();
+        changed.plan.output.head.relation = syn::parse_quote!(other);
+        ra::contract::check(&changed).unwrap();
+        assert!(check(&source, &changed).is_err());
+        let mut changed = target;
+        changed.plan.declarations[0].columns[0].ty = syn::parse_quote!(u32);
+        assert!(check(&source, &changed).is_err());
     }
-    pub fn check(source: &cq_lang_vo::Module, target: &cq_lang_ra::Module) -> bool {
-        target.program == source.program
-            && ::cq_elaborate::reference::check(source, &target.section)
-    }
+}
+
+#[test]
+fn erasure_restores_query_order_collapses_renames_and_handles_non_block_extends() {
+    let source: cq::Program = syn::parse_quote! {
+        struct P;
+        relation R(a: i32, b: i32);
+        relation S(b: i32, c: i32);
+        answer(x, k) :- R(x, y), S(y, z), R(z, x), if x != z, let k: i32 = x + z;
+    };
+    let plan: ra::Program = syn::parse_quote! { relational {
+        relation R(a: i32, b: i32);
+        relation S(b: i32, c: i32);
+        last = rename R {a -> z, b -> x};
+        first = rename R {a -> x, b -> y};
+        only_x = project first keep {x};
+        seed = natural_join last with only_x;
+        again = rename R {a -> x, b -> y};
+        both = natural_join seed with again;
+        mid = rename S {b -> y, c -> z};
+        all = natural_join both with mid;
+        kept = select all if (x != z);
+        wide = extend kept with {k: i32} value ((x + z,));
+        done = project wide keep {x, k};
+        output done as answer(x, k);
+    }};
+    ra::contract::check(&plan).unwrap();
+    let mut expected = source.clone();
+    expected.query = syn::parse_quote! {
+        answer(x, k) :- R(x, y), S(y, z), R(z, x), if x != z, let (k,) = (x + z,);
+    };
+    // syn prints the required comma for a singleton tuple pattern even when
+    // its constructed Punctuated has no trailing separator. Compare the
+    // consumer-visible, reparsed AST with the authored query.
+    let erased = cq_elaborate::erase(&plan, &source);
+    assert_eq!(
+        syn::parse2::<cq::Program>(erased.to_token_stream()).unwrap(),
+        expected
+    );
+    assert_eq!(cq_elaborate::kernel(&plan, &source), Kernel::of(&expected));
+    let mut fewer = plan;
+    fewer.plan.definitions.retain(|d| d.result != "kept");
+    fewer.plan.definitions[8].operator =
+        syn::parse_quote!(extend all with {k: i32} value ((x + z,)));
+    ra::contract::check(&fewer).unwrap();
+    assert!(cq_elaborate::kernel(&fewer, &source).guards.is_empty());
 }

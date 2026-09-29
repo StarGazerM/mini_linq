@@ -4,7 +4,7 @@ use cq_lang_cq as cq;
 use cq_syntax::symbol_name;
 
 fn main() {
-    let source: cq::Module = syn::parse2(quote::quote! {
+    let source: cq::Program = syn::parse2(quote::quote! {
         struct TriangleProgram;
         relation R(c0: i32, c1: i32);
         relation S(c0: i32, c1: i32);
@@ -15,11 +15,11 @@ fn main() {
 
     println!(
         "result: {}/{}",
-        symbol_name(&source.program.query.head.relation),
-        source.program.query.head.args.len()
+        symbol_name(&source.query.head.relation),
+        source.query.head.args.len()
     );
 
-    for (position, item) in source.program.query.body.iter().enumerate() {
+    for (position, item) in source.query.body.iter().enumerate() {
         #[allow(irrefutable_let_patterns)]
         let cq::BodyItem::Positive { atom } = item else {
             continue;

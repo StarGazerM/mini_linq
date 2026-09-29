@@ -27,10 +27,8 @@
 //! - The plan ends with `project P keep { … }` retaining the head variables
 //!   — the whole heading under a computed head — then `output … as head`.
 //!
-//! Results are `r0, r1, …` in emission order. A relation-at-a-time plan in
-//! written order elaborates to exactly the RA the clause planner emitted, so
-//! later passes see nothing new. A plan's erasure is its query:
-//! [`check`] compares [`ra::kernel`] with [`valuation::kernel`].
+//! Results are `r0, r1, …` in emission order. [`check`] compares the RA
+//! kernel with the source CQ kernel and checks declarations and output head.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,17 +40,17 @@ use quote::format_ident;
 use syn::Ident;
 
 /// Elaborate a valuation plan into named RA, then check the RA contract.
-pub fn compile(source: &valuation::Section, env: &impl valuation::Env) -> syn::Result<ra::Section> {
-    let analysis = valuation::contract::check(source, env)?;
+pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
+    let analysis = valuation::contract::check(source)?;
     let mut state = State {
-        inputs: &env.inputs(),
+        inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
         atoms: &analysis.atoms,
         definitions: Vec::new(),
         relations: BTreeMap::new(),
         prefix: None,
         heading: BTreeSet::new(),
     };
-    for (step, introduces) in source.steps.iter().zip(&analysis.introduces) {
+    for (step, introduces) in source.valuation.steps.iter().zip(&analysis.introduces) {
         match step {
             valuation::Step::Atom(subatom, _) => state.subatom(subatom, introduces.is_empty()),
             valuation::Step::Reduce(reduce, _) => state.reduce(reduce),
@@ -64,46 +62,37 @@ pub fn compile(source: &valuation::Section, env: &impl valuation::Env) -> syn::R
         }
         state.heading.extend(introduces.iter().cloned());
     }
-    let output = state.finish(env.head());
-    let section = ra::Section {
+    let output = state.finish(&source.cq.query.head);
+    let target = ra::Program {
         relational_token: Default::default(),
         relational_brace: Default::default(),
         plan: ra::Plan {
+            declarations: source.cq.declarations.clone(),
             definitions: state.definitions,
             output,
         },
     };
-    ra::contract::check(&section, &Env::new(env))?;
-    Ok(section)
+    ra::contract::check(&target)?;
+    Ok(target)
 }
 
-/// VO → RA correspondence: the program preserved, the RA contract holds,
-/// and the plan computes the query the valuation schedules.
-pub fn check(source: &valuation::Section, env: &impl valuation::Env, target: &ra::Section) -> bool {
-    ra::contract::well_formed(target, &Env::new(env))
-        && compile(source, env).is_ok_and(|expected| expected == *target)
-}
+mod kernel;
+pub use kernel::{erase, kernel};
 
-/// RA schema and head inherited from the VO environment.
-pub struct Env<'a, E> {
-    source: &'a E,
-    inputs: Vec<cq::RelationDecl>,
-}
-impl<'a, E: valuation::Env> Env<'a, E> {
-    pub fn new(source: &'a E) -> Self {
-        Self {
-            source,
-            inputs: source.inputs(),
-        }
+/// The RA definitions compute the query scheduled by VO.
+pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
+    valuation::contract::check(source)?;
+    ra::contract::check(target)?;
+    if target.plan.declarations != source.cq.declarations
+        || target.plan.output.head != source.cq.query.head
+        || kernel(target, &source.cq) != valuation::cq::normal::Kernel::of(&source.cq)
+    {
+        return Err(syn::Error::new_spanned(
+            &target.plan.output,
+            "output does not compute the source query",
+        ));
     }
-}
-impl<E: valuation::Env> ra::Env for Env<'_, E> {
-    fn inputs(&self) -> &[cq::RelationDecl] {
-        &self.inputs
-    }
-    fn head(&self) -> &cq::Atom {
-        self.source.head()
-    }
+    Ok(())
 }
 
 /// The definitions so far, each clause's current relation, the prefix
@@ -301,7 +290,27 @@ impl State<'_> {
                 .filter(|v| self.heading.contains(v))
                 .collect()
         };
-        let attributes = retained.iter().map(|v| format_ident!("r#{v}")).collect();
+        let mut bindings = BTreeMap::new();
+        for definition in &self.definitions {
+            match &definition.operator {
+                ra::Operator::Rename(r) => {
+                    for m in &r.mapping {
+                        bindings
+                            .entry(symbol_name(&m.target))
+                            .or_insert_with(|| m.target.clone());
+                    }
+                }
+                ra::Operator::Extend(e) => {
+                    for c in &e.columns {
+                        bindings
+                            .entry(symbol_name(&c.name))
+                            .or_insert_with(|| c.name.clone());
+                    }
+                }
+                _ => (),
+            }
+        }
+        let attributes = retained.iter().map(|v| bindings[v].clone()).collect();
         let input = self.prefix_or_unit();
         let result = self.project(input, attributes);
         ra::Output {
@@ -343,19 +352,5 @@ impl State<'_> {
             semi_token: Default::default(),
         });
         result
-    }
-}
-
-#[cfg(feature = "reference")]
-pub mod reference {
-    use super::*;
-    pub fn compile(source: &valuation::Module) -> syn::Result<ra::Section> {
-        super::compile(source, &valuation::erase(source))
-    }
-    /// Reference semantic correspondence retains the independent kernel check.
-    pub fn check(source: &valuation::Module, target: &ra::Section) -> bool {
-        let target = ra::Module::new(source.program.clone(), target.clone());
-        ra::contract::well_formed_module(&target)
-            && ra::kernel(&target) == valuation::kernel(source)
     }
 }

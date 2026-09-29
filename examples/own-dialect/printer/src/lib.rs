@@ -4,8 +4,8 @@ use cq_print::{Context, Repr, access::Access, error, index, sorted};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as Tokens;
 use quote::{ToTokens, quote};
-use structures::execution::Operator;
-use structures::physical::{self, ra};
+use structures::physical;
+use structures::physical::Operator;
 use structures::syntax::symbol_name;
 
 #[proc_macro]
@@ -26,7 +26,7 @@ pub fn push(input: TokenStream) -> TokenStream {
     cq_stage::stage(
         input.into(),
         None,
-        |source: &cq_stage::Policed<structures::Module, physical::policy::Policy>| {
+        |source: &cq_stage::Policed<structures::Program, physical::policy::Policy>| {
             compile(&source.language)
         },
     )
@@ -35,7 +35,6 @@ pub fn push(input: TokenStream) -> TokenStream {
 
 struct Push<'a> {
     context: Context<'a>,
-    module: &'a structures::Module,
 }
 impl<'a> std::ops::Deref for Push<'a> {
     type Target = Context<'a>;
@@ -44,13 +43,10 @@ impl<'a> std::ops::Deref for Push<'a> {
     }
 }
 
-fn compile(module: &structures::Module) -> syn::Result<syn::Expr> {
-    let analysis = structures::contract::check_module(module)?;
-    let env = structures::reference::Env::new(&module.physical)?;
-    let logical = &module.physical.index_requirements.relational_plan;
+fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
+    let analysis = structures::contract::check(module)?;
     let mut push = Push {
-        context: Context::new(&module.section, &env, &analysis),
-        module,
+        context: Context::new(module, &analysis),
     };
     for p in &module.physical.program.definitions {
         let name = symbol_name(&p.name);
@@ -76,7 +72,7 @@ fn compile(module: &structures::Module) -> syn::Result<syn::Expr> {
     let returned = &module.physical.program.returned;
     let name = symbol_name(returned);
     let mut fields = Vec::new();
-    for expression in &logical.plan.output.head.args {
+    for expression in &module.physical.program.head.args {
         let Some(variable) = structures::syntax::rust::variable(expression) else {
             return error(
                 expression,
@@ -109,7 +105,7 @@ impl Push<'_> {
                 .iter()
                 .find(|(levels, _)| levels.len() == 1 && levels[0] == heading)
                 .map(|(_, s)| s);
-            let storage = match (definition.canon, set, rows) {
+            let storage = match (definition.canon.is_some(), set, rows) {
                 (true, Some(set), _) => set,
                 (_, _, Some(rows)) => rows,
                 _ => return error(&definition.name, "unmaterialized scan"),
@@ -119,7 +115,7 @@ impl Push<'_> {
                 quote!(#[allow(unused_variables)] for &#pattern in #storage.iter() { #sink }),
             );
         }
-        if definition.canon {
+        if definition.canon.is_some() {
             let row = self.pattern(result);
             let id = &definition.name;
             let body = self.operator(result, quote!(
@@ -134,28 +130,20 @@ impl Push<'_> {
     }
 
     fn operator(&self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
-        let logical = &self.module.physical.index_requirements.relational_plan.plan;
-        let r = logical
-            .definitions
-            .iter()
-            .find(|d| symbol_name(&d.result) == result)
-            .unwrap();
         let p = self.physical[result];
-        match (&p.operator, &r.operator) {
-            (Operator::Unit, _) => Ok(sink),
-            (Operator::Rename, _) => {
+        match &p.operator {
+            Operator::Unit(_) => Ok(sink),
+            Operator::Rename(_) => {
                 let rows = self.host_scan(result);
                 let pattern = self.pattern(result);
                 Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
             }
-            (Operator::Project, ra::Operator::Project(project)) => {
-                self.emit(&symbol_name(&project.input), sink)
-            }
-            (Operator::Select, ra::Operator::Select(select)) => {
+            Operator::Project(project) => self.emit(&symbol_name(&project.input), sink),
+            Operator::Select(select) => {
                 let condition = cq_print::expressions::deref_predicates(&select.condition);
                 self.emit(&symbol_name(&select.input), quote!(if #condition { #sink }))
             }
-            (Operator::Probe(k), _) => {
+            Operator::Probe(_, k) => {
                 let left = symbol_name(&k.left);
                 let right = symbol_name(&k.right);
                 let columns = sorted(&k.columns);
@@ -199,7 +187,7 @@ impl Push<'_> {
                 let pattern = self.pattern(result);
                 self.emit(&left, quote!(for __push_v in #lookup { #[allow(unused_variables)] let #pattern = #row; #sink }))
             }
-            (Operator::Semi(k), _) => {
+            Operator::Semi(_, k) => {
                 let left = symbol_name(&k.left);
                 let right = symbol_name(&k.right);
                 let test = match self.keyed(&k.right, &sorted(&k.columns))? {

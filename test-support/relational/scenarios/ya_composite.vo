@@ -1,0 +1,10 @@
+struct YaComposite;
+relation R(first: i32, second: i32, value: i32);
+relation S(first: i32, second: i32, third: i32);
+relation T(first: i32, second: i32, value: i32);
+answer(u, v) :- R(a, b, u), S(a, b, c), T(b, c, v);
+valuation {
+    R@0(a, b, u);
+    S@1(a, b, c);
+    T@2(b, c, v);
+}

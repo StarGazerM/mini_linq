@@ -1,1 +1,1 @@
-//! Insert and erase an independent Trace section between Physical and Structures.
+//! Insert and erase an independent Trace annotation between Physical and Structures.

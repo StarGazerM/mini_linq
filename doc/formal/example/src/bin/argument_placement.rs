@@ -9,7 +9,7 @@ use mini_linq_paper_overview::{boundaries, directory};
 use quote::ToTokens;
 
 fn main() {
-    let source: cq::Module = syn::parse_quote! {
+    let source: cq::Program = syn::parse_quote! {
         struct Placement;
         relation R(a:i32,b:i32,c:i32);
         answer(x) :- R(x, f(x), g());
@@ -18,7 +18,7 @@ fn main() {
     let planned = boundaries(&directory, "planned", &source, true);
     // Normalization binds the closed `g()` before the atom and guards the
     // bound `f(x)` after it; written order keeps both where they are.
-    let expected_vo: valuation::Module = syn::parse_quote! {
+    let expected_vo: valuation::Program = syn::parse_quote! {
         struct Placement;
         relation R(a:i32,b:i32,c:i32);
         answer(x) :- let __cq_0_2: i32 = g(), R(x, __cq_0_1, __cq_0_2), if __cq_0_1.eq(&(f(x)));

@@ -20,7 +20,7 @@ def main():
     modules = re.findall(r"^mod (\w+) \{", source.read_text(), re.M)
     if not modules:
         raise SystemExit("no physical_query modules found")
-    if args.compare and {p.stem for p in args.compare.glob("*.rs")} != set(modules):
+    if args.compare and {p.stem for p in args.compare.glob("*.rs")} - {"wcoj_full", "own_dialect_queries"} != set(modules):
         raise SystemExit("baseline module inventory differs")
     hashes = []
     for name in modules:

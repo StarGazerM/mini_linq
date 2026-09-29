@@ -120,7 +120,7 @@ reductions when acyclic, between ordering and elaboration.
 Normalization checks CQ-NF. The order and reduction passes provide
 `check(source, target, options)` correspondence checks; elaboration provides
 `check(source, target)`. Their targets must satisfy their language contracts;
-VO reductions erase to the unreduced plan, and `relational_plan::kernel`
+VO reductions erase to the unreduced plan, and `cq_elaborate::kernel`
 compares RA with the VO kernel up to variable renaming. These checks concern
 the logical plan under set semantics; they do not prove purity of arbitrary
 Rust expressions.

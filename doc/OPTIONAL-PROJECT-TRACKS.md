@@ -26,7 +26,7 @@ baseline.
 
 The synchronous push warm-up below is part of the required execution-control
 core. Tokio channels and the IVM continuation are separate pick-one options.
-Push branches from the bindings Γ (the `structures` section) rather than
+Push branches from the bindings Γ (the Structures program) rather than
 translating the pull-specific printed program. Async tasks and channels are a
 second push realization, not a pull variant.
 
@@ -132,8 +132,8 @@ disabled without removing source validation. Tests and tools can also call
 The terminology is precise:
 
 - CQ, RelationalPlan, IndexRequirements, Physical, and `structures` name
-  reference payloads. Later payloads compose a local section with its prefix;
-  the `structures` section records the bindings Γ.
+  reference payloads. Each payload is one complete program;
+  the Structures program records the bindings Γ.
 - The Rust block printed by `structures_to_rust!` is the **printed pull
   program**.
 - `structures_to_rust`, `push`, and `push_tokio` name transformations. They are not names for
@@ -161,7 +161,7 @@ method's consumer with one output row. The student implements only:
 
 ```rust
 fn compile_push(
-    source: &structures::Module,
+    source: &structures::Program,
 ) -> syn::Result<rust_callback_nest::Nest>;
 ```
 
@@ -320,7 +320,7 @@ Tokio plumbing. The only student transformation is:
 
 ```rust
 fn compile_push_tokio(
-    source: &structures::Module,
+    source: &structures::Program,
 ) -> syn::Result<tokio_channel_plan::Plan>;
 ```
 
@@ -507,7 +507,7 @@ Student-owned functions are expected to be:
 
 ```rust
 fn compile_index_requirements_parallel(
-    source: &index_requirements::Module,
+    source: &ix::Program,
 ) -> syn::Result<syn::File>;
 
 fn compile_rayon_fold_plan(

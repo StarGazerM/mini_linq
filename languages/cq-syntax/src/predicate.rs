@@ -1,8 +1,6 @@
 //! A deliberately total selection fragment: comparisons of i32 variables/literals.
 //! This is an optimizer recognizer, not the CQ expression grammar. CQ and RA
 //! retain syn::Expr; only this proven total subset is eligible for movement.
-use crate::symbol_name;
-use std::collections::BTreeSet;
 use syn::{Ident, Token};
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
@@ -88,27 +86,5 @@ impl Predicate {
             comparison,
             right: Term::from_expr(&expr.right)?,
         })
-    }
-
-    pub fn variables(&self) -> BTreeSet<String> {
-        [&self.left, &self.right]
-            .into_iter()
-            .filter_map(|term| match term {
-                Term::Variable(v) => Some(symbol_name(v)),
-                Term::Integer(_) => None,
-            })
-            .collect()
-    }
-    /// Name availability is local. As with join keys, Rust resolves column
-    /// types and aliases. Lowering explicitly requires primitive i32 operands,
-    /// so overloaded comparisons cannot make a movable predicate effectful.
-    pub fn check_scope(&self, bound: &BTreeSet<String>) -> syn::Result<()> {
-        if let Some(variable) = self.variables().difference(bound).next() {
-            return Err(syn::Error::new_spanned(
-                self,
-                format!("predicate variable `{variable}` is unavailable"),
-            ));
-        }
-        Ok(())
     }
 }

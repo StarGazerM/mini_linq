@@ -1,78 +1,35 @@
-//! Physical: IX with one physical operator per result, in linear graded ANF.
+//! Complete physical programs with detailed operators and linear read modes.
 //!
-//! The definitions restate IX's results by name with the physical form the
-//! policy chose for each: a natural join is a `probe` (the right result read
-//! through a key), a `merge` (both sides co-iterated in key order), a
-//! semijoin is `semi` (membership on the key), a select whose input is read
-//! through an ordered key may be a `range`. Every other operator keeps its
-//! logical name; its detail (mapping, condition, value, kept columns) lives
-//! in the RA definition of the same name and is not repeated.
-//! Each probe/semi's right operand and join columns must have a matching IX
-//! demand. These uses are derived from operands, without separate use syntax.
-//!
-//! Denotation is the set IX denotes. What this language adds is the
-//! representation discipline that a printer relies on:
-//!
-//! - **mode**: a `pipe` is a stream read exactly once by the operator that
-//!   consumes it as its input; a `let` is a value that structures are built
-//!   over and read through a key; an `alias` is a host relation read in
-//!   place. Any result read through a key, or read twice, is a `let`.
-//! - **canon**: a result flagged `canon` is inserted into a canonical index
-//!   (a set) — in `pipe` mode by the endpoint's sink, in `let` mode as a
-//!   materialized set. The returned result must be canonical, by this flag or
-//!   by key inference under the structures chosen later.
-//! - **grades** (order on a key, uniqueness by a key) are premises of
-//!   `merge` and of the return; they are discharged by the Structures stage,
-//!   which knows the hosts. This language only fixes where they are needed.
-//!
-//! Nothing here names a Rust type, a loop, or a variable: operands are
-//! result names, columns are attribute names.
+//! `contract::check` derives headings, source identifier bindings, computed
+//! columns, hosts, renames, reads and modes from this program alone. A pipe
+//! has exactly one stream read; keyed and repeated reads require retained
+//! storage or a host alias. Structures discharges order and uniqueness
+//! premises. IX demands and relational erasure belong to the lowering pass.
 //!
 //! ```text
-//! physical {
-//!     r0 = alias rename;
-//!     r1 = let rename;
-//!     r2 = pipe probe[y] r0, r1;
-//!     r3 = pipe select r2;
-//!     r4 = pipe canon project r3;
-//!     return r4;
-//! }
-//! ```
-//!
-//! ```text
-//! Module     ::= IX "physical" "{" Definition* "return" Ident ";" "}"
+//! Program ::= "physical" "{" RelationDecl* Definition* "return" Ident "as" Atom ";" "}"
 //! Definition ::= Ident "=" Mode ["canon"] Operator ";"
-//! Mode       ::= "pipe" | "let" | "alias"
-//! Operator   ::= "unit" | "rename" | "select" | "extend" | "project"
-//!              | "probe" "[" Ident,* "]" Ident "," Ident
-//!              | "merge" "[" Ident,* "]" Ident "," Ident
-//!              | "semi"  "[" Ident,* "]" Ident "," Ident
-//!              | "range" "[" Ident "]"
+//! Mode ::= "pipe" | "let" | "alias"
+//! Operator ::= Unit | Rename | Select | Extend | Project
+//!            | "probe" "[" Ident,* "]" Ident "," Ident
+//!            | "merge" "[" Ident,* "]" Ident "," Ident
+//!            | "semi" "[" Ident,* "]" Ident "," Ident
+//!            | "range" "[" Ident "]" Ident "if" "(" Expr ")"
 //! ```
-
-#[cfg(feature = "reference-prefix")]
-pub use cq_lang_ix as ix;
+//!
+//! Unit, Rename, Select, Extend and Project are shared algebra syntax.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Ident, Token, token};
 
 pub use cq_syntax::{CommaList, symbol_name};
-#[cfg(feature = "reference-prefix")]
-pub use ix::relational_plan as ra;
-#[cfg(feature = "reference-prefix")]
-pub use ra::cq;
-
 pub mod kw {
+    pub use cq_syntax::algebra::kw::*;
     syn::custom_keyword!(physical);
     syn::custom_keyword!(pipe);
     syn::custom_keyword!(alias);
     syn::custom_keyword!(canon);
-    syn::custom_keyword!(unit);
-    syn::custom_keyword!(rename);
-    syn::custom_keyword!(select);
-    syn::custom_keyword!(extend);
-    syn::custom_keyword!(project);
     syn::custom_keyword!(probe);
     syn::custom_keyword!(merge);
     syn::custom_keyword!(semi);
@@ -80,20 +37,25 @@ pub mod kw {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Section {
+pub struct Program {
     pub physical_token: kw::physical,
     #[syn(braced)]
     pub brace: token::Brace,
     #[syn(in = brace)]
-    pub program: Program,
+    pub program: Body,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Program {
+pub struct Body {
+    #[parse(cq_syntax::parse_declarations)]
+    #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
+    pub declarations: Vec<cq_syntax::RelationDecl>,
     #[syn(repeat, until = Token![return])]
     pub definitions: Vec<Definition>,
     pub return_token: Token![return],
     pub returned: Ident,
+    pub as_token: Token![as],
+    pub head: cq_syntax::Atom,
     pub return_semi: Token![;],
 }
 
@@ -120,15 +82,15 @@ pub enum Mode {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Operator {
     #[parse(peek = kw::unit)]
-    Unit(kw::unit),
+    Unit(cq_syntax::algebra::Unit),
     #[parse(peek = kw::rename)]
-    Rename(kw::rename),
+    Rename(Box<cq_syntax::algebra::Rename>),
     #[parse(peek = kw::select)]
-    Select(kw::select),
+    Select(Box<cq_syntax::algebra::Select>),
     #[parse(peek = kw::extend)]
-    Extend(kw::extend),
+    Extend(Box<cq_syntax::algebra::Extend>),
     #[parse(peek = kw::project)]
-    Project(kw::project),
+    Project(Box<cq_syntax::algebra::Project>),
     #[parse(peek = kw::probe)]
     Probe(kw::probe, Keyed),
     #[parse(peek = kw::merge)]
@@ -152,25 +114,30 @@ pub struct Keyed {
     pub right: Ident,
 }
 
-/// `[c]`: the ordered column the select's bounds apply to.
+/// `[c] input if (condition)`: a bounded read on an ordered column.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Ranged {
     #[syn(bracketed)]
     pub bracket: token::Bracket,
     #[syn(in = bracket)]
     pub column: Ident,
+    pub input: Ident,
+    pub if_token: Token![if],
+    #[syn(parenthesized)]
+    pub condition_paren: token::Paren,
+    #[syn(in = condition_paren)]
+    pub condition: syn::Expr,
 }
 
 impl Operator {
     /// The result read as this operator's input stream, if any.
-    pub fn input(&self, logical: &LogicalOp) -> Option<String> {
-        match (self, logical) {
-            (Operator::Probe(_, k) | Operator::Merge(_, k) | Operator::Semi(_, k), _) => {
-                Some(symbol_name(&k.left))
-            }
-            (_, LogicalOp::Select { input, .. }) => Some(input.clone()),
-            (_, LogicalOp::Extend { input, .. }) => Some(input.clone()),
-            (_, LogicalOp::Project { input, .. }) => Some(input.clone()),
+    pub fn input(&self) -> Option<&Ident> {
+        match self {
+            Self::Probe(_, k) | Self::Merge(_, k) | Self::Semi(_, k) => Some(&k.left),
+            Self::Select(s) => Some(&s.input),
+            Self::Extend(e) => Some(&e.input),
+            Self::Project(p) => Some(&p.input),
+            Self::Range(_, r) => Some(&r.input),
             _ => None,
         }
     }
@@ -189,7 +156,8 @@ impl Operator {
 /// How a result's grades and reads are known once the contract holds.
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
-    /// Sorted heading of every result, from RA.
+    pub rows: BTreeMap<String, Row>,
+    /// Sorted heading of every result.
     pub headings: BTreeMap<String, Vec<String>>,
     /// The host relation behind every `rename`, by result name.
     pub hosts: BTreeMap<String, String>,
@@ -228,48 +196,26 @@ impl From<&Mode> for ModeKind {
     }
 }
 
-/// Exactly the logical facts inspected by the Physical contract.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LogicalOp {
-    Unit,
-    Rename,
-    Select { input: String },
-    Extend { input: String },
-    Project { input: String, keep: Vec<String> },
-    Join { left: String, right: String },
-    Semijoin { left: String, right: String },
+/// Column binders retain the source identifiers and their macro hygiene.
+#[derive(Clone, Debug, Default)]
+pub struct Row {
+    pub bindings: BTreeMap<String, Ident>,
+    pub computed: BTreeSet<String>,
+    pub types: BTreeMap<String, syn::Type>,
 }
 
-/// A producer supplies facts; no producer language type crosses this boundary.
-pub trait IxEnv {
-    fn results(&self) -> Vec<(String, LogicalOp)>;
-    fn heading(&self, result: &str) -> Option<&[String]>;
-    fn output(&self) -> String;
-    fn demands(&self) -> BTreeSet<(String, Vec<usize>)>;
-    fn host_of(&self, result: &str) -> Option<(String, BTreeMap<String, String>)>;
-    fn select_condition(&self, result: &str) -> Option<&syn::Expr>;
+impl Program {
+    pub fn inputs(&self) -> impl Iterator<Item = &cq_syntax::RelationDecl> {
+        self.program
+            .declarations
+            .iter()
+            .filter(|d| symbol_name(&d.name) != symbol_name(&self.program.head.relation))
+    }
 }
 
 pub mod contract {
-    pub fn check(
-        section: &super::Section,
-        env: &impl super::IxEnv,
-    ) -> syn::Result<super::Analysis> {
-        super::analyze(section, env)
-    }
-    pub fn well_formed(section: &super::Section, env: &impl super::IxEnv) -> bool {
-        check(section, env).is_ok()
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn check_module(module: &super::Module) -> syn::Result<super::Analysis> {
-        check(
-            &module.section,
-            &super::reference::Env::new(&module.index_requirements)?,
-        )
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn well_formed_module(module: &super::Module) -> bool {
-        check_module(module).is_ok()
+    pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
+        super::analyze(program)
     }
 }
 
@@ -277,115 +223,105 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
     Err(syn::Error::new_spanned(spanned, message))
 }
 
-fn analyze(module: &Section, env: &impl IxEnv) -> syn::Result<Analysis> {
-    let results = env.results();
-    let demands = env.demands();
-    let mut headings = BTreeMap::new();
-    for (name, _) in &results {
-        let Some(heading) = env.heading(name) else {
-            return error(
-                &module.physical_token,
-                format!("result `{name}` has no heading"),
-            );
-        };
-        headings.insert(name.clone(), heading.to_vec());
-    }
-    let mut analysis = Analysis {
-        headings,
-        ..Analysis::default()
-    };
+fn analyze(module: &Program) -> syn::Result<Analysis> {
     let program = &module.program;
-
-    // One physical definition per logical result, same order.
-    if program.definitions.len() != results.len() {
-        return error(
-            &module.physical_token,
-            format!(
-                "physical restates every RA result: {} logical, {} physical",
-                results.len(),
-                program.definitions.len()
-            ),
-        );
-    }
+    let declarations = cq_syntax::check_input_declarations(&program.declarations)?;
+    let logical: BTreeSet<String> = program
+        .definitions
+        .iter()
+        .flat_map(|d| match &d.operator {
+            Operator::Rename(r) => r.mapping.iter().map(|m| symbol_name(&m.target)).collect(),
+            Operator::Extend(e) => e.columns.iter().map(|c| symbol_name(&c.name)).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let mut analysis = Analysis::default();
     let mut readers: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (definition, (logical_name, ra_op)) in program.definitions.iter().zip(&results) {
+    let mut operands: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for definition in &program.definitions {
         let name = symbol_name(&definition.name);
-        if name != *logical_name {
+        if analysis.rows.contains_key(&name) {
             return error(
                 &definition.name,
-                format!("expected `{}` here, in RA order", logical_name),
+                format!("result `{name}` is defined twice"),
             );
         }
-        let mode = ModeKind::from(&definition.mode);
-        analysis.modes.insert(name.clone(), mode);
-        if definition.canon.is_some() {
-            analysis.canon.insert(name.clone());
-        }
-        let mismatch = |what: &str| -> syn::Result<()> {
-            error(
-                &definition.operator,
-                format!("`{name}` is {what} in RA; the physical form must match"),
-            )
+        let of = |id: &Ident| -> syn::Result<Row> {
+            analysis.rows.get(&symbol_name(id)).cloned().ok_or_else(|| {
+                syn::Error::new_spanned(
+                    id,
+                    format!("operand `{id}` must be defined before `{name}`"),
+                )
+            })
         };
-        match (&definition.operator, ra_op) {
-            (Operator::Unit(_), LogicalOp::Unit) => {}
-            (Operator::Rename(_), LogicalOp::Rename) => {
-                let Some((host, mapping)) = env.host_of(&name) else {
-                    return error(&definition.name, "rename has no host layout");
+        let check_uses = |expr: &syn::Expr, row: &Row| -> syn::Result<()> {
+            let heading = row.bindings.keys().cloned().collect();
+            if let Some(missing) = cq_syntax::rust::known_uses(expr, &logical)
+                .difference(&heading)
+                .next()
+            {
+                return error(
+                    expr,
+                    format!("`{name}` uses unavailable attribute `{missing}`"),
+                );
+            }
+            Ok(())
+        };
+        let mut deps = Vec::new();
+        let row = match &definition.operator {
+            Operator::Unit(_) => Row::default(),
+            Operator::Rename(r) => {
+                let host = symbol_name(&r.relation);
+                let Some(declaration) = declarations.get(&host) else {
+                    return error(r, format!("`{name}` renames undeclared relation `{host}`"));
                 };
-                analysis.hosts.insert(name.clone(), host);
-                analysis.renames.insert(name.clone(), mapping);
-            }
-            (Operator::Select(_), LogicalOp::Select { .. }) => {
-                if env
-                    .select_condition(&name)
-                    .and_then(cq_syntax::predicate::Predicate::from_expr)
-                    .is_some()
-                {
-                    analysis.fragment.insert(name.clone());
+                let mut row = Row::default();
+                let mut mapping = BTreeMap::new();
+                let mut sources = BTreeSet::new();
+                for m in &r.mapping {
+                    let source = symbol_name(&m.source);
+                    let target = symbol_name(&m.target);
+                    let Some(column) = declaration
+                        .columns
+                        .iter()
+                        .find(|c| symbol_name(&c.name) == source)
+                    else {
+                        return error(
+                            m,
+                            format!("rename `{name}`: `{host}` has no column `{source}`"),
+                        );
+                    };
+                    if !sources.insert(source.clone())
+                        || row
+                            .bindings
+                            .insert(target.clone(), m.target.clone())
+                            .is_some()
+                    {
+                        return error(m, format!("rename `{name}` must be one-to-one"));
+                    }
+                    row.types.insert(target.clone(), column.ty.clone());
+                    mapping.insert(target, source);
                 }
-            }
-            (Operator::Range(_, ranged), LogicalOp::Select { input }) => {
-                let column = symbol_name(&ranged.column);
-                let input = input.clone();
-                if !analysis
-                    .headings
-                    .get(&input)
-                    .is_some_and(|h| h.contains(&column))
-                {
+                if sources.len() != declaration.columns.len() {
                     return error(
-                        &ranged.column,
-                        format!("`{input}` has no column `{column}`"),
+                        r,
+                        format!("rename `{name}` must map every column of `{host}`"),
                     );
                 }
-                analysis
-                    .range_reads
-                    .entry(input)
-                    .or_default()
-                    .push((name.clone(), column));
+                analysis.hosts.insert(name.clone(), host);
+                analysis.renames.insert(name.clone(), mapping);
+                row
             }
-            (Operator::Extend(_), LogicalOp::Extend { .. }) => {}
-            (Operator::Project(_), LogicalOp::Project { .. }) => {}
-            (Operator::Probe(_, k) | Operator::Merge(_, k), LogicalOp::Join { left, right }) => {
-                check_operands(k, left, right)?;
-                let columns =
-                    join_columns(
-                        k,
-                        analysis.headings.get(left).ok_or_else(|| {
-                            syn::Error::new_spanned(&k.left, "unknown left result")
-                        })?,
-                        analysis.headings.get(right).ok_or_else(|| {
-                            syn::Error::new_spanned(&k.right, "unknown right result")
-                        })?,
-                    )?;
-                let right = symbol_name(&k.right);
-                if matches!(definition.operator, Operator::Probe(..)) {
-                    analysis
-                        .key_reads
-                        .entry(right)
-                        .or_default()
-                        .push((name.clone(), columns));
-                } else {
+            Operator::Probe(_, k) | Operator::Merge(_, k) | Operator::Semi(_, k) => {
+                let left = of(&k.left)?;
+                let right = of(&k.right)?;
+                let lh = left.bindings.keys().cloned().collect::<Vec<_>>();
+                let rh = right.bindings.keys().cloned().collect::<Vec<_>>();
+                let columns = join_columns(k, &lh, &rh).map_err(|e| {
+                    syn::Error::new_spanned(&definition.name, format!("`{name}`: {e}"))
+                })?;
+                deps.extend([symbol_name(&k.left), symbol_name(&k.right)]);
+                if matches!(definition.operator, Operator::Merge(..)) {
                     for side in [&k.left, &k.right] {
                         analysis
                             .merge_reads
@@ -393,91 +329,169 @@ fn analyze(module: &Section, env: &impl IxEnv) -> syn::Result<Analysis> {
                             .or_default()
                             .push((name.clone(), columns.clone()));
                     }
+                } else {
+                    analysis
+                        .key_reads
+                        .entry(symbol_name(&k.right))
+                        .or_default()
+                        .push((name.clone(), columns));
+                }
+                if matches!(definition.operator, Operator::Semi(..)) {
+                    left
+                } else {
+                    let mut row = right;
+                    row.bindings.extend(left.bindings);
+                    row.computed.extend(left.computed);
+                    row.types.extend(left.types);
+                    row
                 }
             }
-            (Operator::Semi(_, k), LogicalOp::Semijoin { left, right }) => {
-                check_operands(k, left, right)?;
-                let columns =
-                    join_columns(
-                        k,
-                        analysis.headings.get(left).ok_or_else(|| {
-                            syn::Error::new_spanned(&k.left, "unknown left result")
-                        })?,
-                        analysis.headings.get(right).ok_or_else(|| {
-                            syn::Error::new_spanned(&k.right, "unknown right result")
-                        })?,
-                    )?;
-                analysis
-                    .key_reads
-                    .entry(symbol_name(&k.right))
-                    .or_default()
-                    .push((name.clone(), columns));
+            Operator::Select(s) => {
+                let row = of(&s.input)?;
+                check_uses(&s.condition, &row)?;
+                if cq_syntax::predicate::Predicate::from_expr(&s.condition).is_some() {
+                    analysis.fragment.insert(name.clone());
+                }
+                deps.push(symbol_name(&s.input));
+                row
             }
-            (_, LogicalOp::Unit) => mismatch("unit")?,
-            (_, LogicalOp::Rename) => mismatch("a rename")?,
-            (_, LogicalOp::Select { .. }) => mismatch("a select")?,
-            (_, LogicalOp::Extend { .. }) => mismatch("an extend")?,
-            (_, LogicalOp::Project { .. }) => mismatch("a project")?,
-            (_, LogicalOp::Join { .. }) => mismatch("a natural join")?,
-            (_, LogicalOp::Semijoin { .. }) => mismatch("a semijoin")?,
+            Operator::Range(_, r) => {
+                let row = of(&r.input)?;
+                check_uses(&r.condition, &row)?;
+                let column = symbol_name(&r.column);
+                if !row.bindings.contains_key(&column) {
+                    return error(
+                        r,
+                        format!("range `{name}`: `{}` has no column `{column}`", r.input),
+                    );
+                }
+                analysis
+                    .range_reads
+                    .entry(symbol_name(&r.input))
+                    .or_default()
+                    .push((name.clone(), column));
+                deps.push(symbol_name(&r.input));
+                row
+            }
+            Operator::Extend(e) => {
+                let mut row = of(&e.input)?;
+                check_uses(&e.value, &row)?;
+                for column in &e.columns {
+                    let c = symbol_name(&column.name);
+                    if row
+                        .bindings
+                        .insert(c.clone(), column.name.clone())
+                        .is_some()
+                    {
+                        return error(e, format!("extend `{name}` repeats attribute `{c}`"));
+                    }
+                    row.computed.insert(c.clone());
+                    row.types.insert(c, column.ty.clone());
+                }
+                deps.push(symbol_name(&e.input));
+                row
+            }
+            Operator::Project(p) => {
+                let mut row = of(&p.input)?;
+                let mut kept = BTreeSet::new();
+                for c in &p.attributes {
+                    let column = symbol_name(c);
+                    if !row.bindings.contains_key(&column) || !kept.insert(column.clone()) {
+                        return error(
+                            p,
+                            format!("project `{name}` has invalid attribute `{column}`"),
+                        );
+                    }
+                }
+                row.bindings.retain(|c, _| kept.contains(c));
+                row.types.retain(|c, _| kept.contains(c));
+                row.computed.retain(|c| kept.contains(c));
+                deps.push(symbol_name(&p.input));
+                row
+            }
+        };
+        analysis
+            .headings
+            .insert(name.clone(), row.bindings.keys().cloned().collect());
+        analysis.rows.insert(name.clone(), row);
+        operands.insert(name.clone(), deps.clone());
+        for input in deps {
+            readers.entry(input).or_default().push(name.clone());
         }
-        // Reads: the input stream, and merge sides, are enumerated.
-        if let Some(input) = definition.operator.input(ra_op) {
-            readers.entry(input.clone()).or_default().push(name.clone());
-            analysis.scanned.insert(input);
+        if let Some(input) = definition.operator.input() {
+            analysis.scanned.insert(symbol_name(input));
         }
         if let Operator::Merge(_, k) = &definition.operator {
-            // A merge side is read through its order: a `let` side through a
-            // structure, a pipe side as the stream itself.
             analysis.scanned.remove(&symbol_name(&k.left));
-            for side in [&k.left, &k.right] {
-                let side = symbol_name(side);
-                if side != symbol_name(&k.left) {
-                    readers.entry(side.clone()).or_default().push(name.clone());
-                }
-            }
         }
-        if let Some((right, mut columns)) = definition.operator.keyed() {
-            let right_name = symbol_name(right);
-            columns.sort();
-            columns.dedup();
-            if !demands.contains(&(
-                right_name.clone(),
-                ordinals(&analysis, &right_name, &columns),
-            )) {
-                return error(
-                    &definition.operator,
-                    format!(
-                        "probe `{name}` needs demand `@{right_name}[{}]`",
-                        columns.join(",")
-                    ),
-                );
-            }
-            readers
-                .entry(symbol_name(right))
-                .or_default()
-                .push(name.clone());
+        let mode = ModeKind::from(&definition.mode);
+        if mode == ModeKind::Alias && !matches!(definition.operator, Operator::Rename(_)) {
+            return error(
+                &definition.name,
+                format!("alias `{name}` must rename a host"),
+            );
         }
-        // Alias only over a host rename.
-        if mode == ModeKind::Alias && !matches!(ra_op, LogicalOp::Rename) {
-            return error(&definition.mode, "only a rename of a host can be an alias");
+        analysis.modes.insert(name.clone(), mode);
+        if definition.canon.is_some() {
+            analysis.canon.insert(name);
         }
     }
     let returned = symbol_name(&program.returned);
-    if !analysis.modes.contains_key(&returned) {
-        return error(&program.returned, "return names no result");
+    let Some(row) = analysis.rows.get(&returned) else {
+        return error(
+            &program.returned,
+            format!("return `{returned}` names no result"),
+        );
+    };
+    let heading: BTreeSet<_> = row.bindings.keys().cloned().collect();
+    for expr in &program.head.args {
+        if let Some(c) = cq_syntax::rust::known_uses(expr, &logical)
+            .difference(&heading)
+            .next()
+        {
+            return error(
+                expr,
+                format!("return `{returned}` uses unavailable attribute `{c}`"),
+            );
+        }
     }
-    if returned != env.output() {
-        return error(&program.returned, format!("RA outputs `{}`", env.output()));
+    let output: BTreeSet<_> = program
+        .head
+        .args
+        .iter()
+        .flat_map(|e| cq_syntax::rust::free_variables(e).dependencies(&heading))
+        .collect();
+    if program.head.variables().count() == program.head.args.len() && output != heading {
+        return error(
+            &program.head,
+            format!("return `{returned}` head must match its heading"),
+        );
+    }
+    let mut reachable = BTreeSet::new();
+    let mut pending = vec![returned.clone()];
+    while let Some(name) = pending.pop() {
+        if reachable.insert(name.clone()) {
+            pending.extend(operands[&name].iter().cloned());
+        }
+    }
+    if let Some(unused) = program
+        .definitions
+        .iter()
+        .find(|d| !reachable.contains(&symbol_name(&d.name)))
+    {
+        return error(
+            &unused.name,
+            format!(
+                "result `{}` does not contribute to return `{returned}`",
+                unused.name
+            ),
+        );
     }
     readers
         .entry(returned.clone())
         .or_default()
         .push("return".into());
-    analysis.scanned.insert(returned.clone());
-
-    // Modes: a pipe is read exactly once, as a stream; anything read
-    // through a key or read twice is a let (or a host alias).
+    analysis.scanned.insert(returned);
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
         let mode = analysis.modes[&name];
@@ -487,9 +501,7 @@ fn analyze(module: &Section, env: &impl IxEnv) -> syn::Result<Analysis> {
                 if reads != 1 {
                     return error(
                         &definition.name,
-                        format!(
-                            "pipe `{name}` must be read exactly once; it is read {reads} times"
-                        ),
+                        format!("pipe `{name}` must be read exactly once; read {reads} times"),
                     );
                 }
                 if analysis.key_reads.contains_key(&name)
@@ -497,47 +509,29 @@ fn analyze(module: &Section, env: &impl IxEnv) -> syn::Result<Analysis> {
                 {
                     return error(
                         &definition.name,
-                        format!("`{name}` is read through a key, so it must be `let`"),
+                        format!("`{name}` is read through a key and must be let"),
                     );
                 }
             }
-            ModeKind::Let => {
-                if reads == 0 {
-                    return error(&definition.name, format!("`{name}` is never read"));
-                }
+            ModeKind::Let if reads == 0 => {
+                return error(&definition.name, format!("`{name}` is never read"));
             }
-            ModeKind::Alias => {}
+            _ => (),
         }
     }
     Ok(analysis)
 }
 
-fn check_operands(keyed: &Keyed, left: &str, right: &str) -> syn::Result<()> {
-    if symbol_name(&keyed.left) != left || symbol_name(&keyed.right) != right {
-        return error(
-            &keyed.left,
-            format!("operands must be `{left}, {right}` as in RA"),
-        );
-    }
-    Ok(())
-}
-
 fn join_columns(keyed: &Keyed, left: &[String], right: &[String]) -> syn::Result<Vec<String>> {
     let shared: BTreeSet<String> = left.iter().filter(|c| right.contains(c)).cloned().collect();
     let written: BTreeSet<String> = keyed.columns.iter().map(symbol_name).collect();
-    if written != shared {
+    if written != shared || written.len() != keyed.columns.len() {
         return Err(syn::Error::new(
             keyed.bracket.span.join(),
             format!("join columns are {shared:?}, written {written:?}"),
         ));
     }
     Ok(shared.into_iter().collect())
-}
-
-/// Erase physical forms: the IX module every Physical program restates.
-#[cfg(feature = "reference-prefix")]
-pub fn erase(module: &Module) -> ix::Module {
-    module.index_requirements.clone()
 }
 
 /// The join columns of a keyed read, as sorted-heading ordinals of `result`.
@@ -603,21 +597,3 @@ pub mod policy;
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
-
-#[cfg(feature = "reference-prefix")]
-pub mod reference;
-#[cfg(feature = "reference-prefix")]
-pub use reference::Module;
-
-/// Source facts read by Physical consumers, including the Rust expressions
-/// carried through to execution. No producer language types occur here.
-pub trait Env: IxEnv {
-    /// Declared host layouts, types and structure-selection advice.
-    fn inputs(&self) -> Vec<cq_syntax::RelationDecl>;
-    fn head(&self) -> &cq_syntax::Atom;
-    /// Logical column to Rust binder, retaining the caller's identifier hygiene.
-    fn bindings(&self, result: &str) -> BTreeMap<String, Ident>;
-    /// Columns owned because they were introduced by an Extend.
-    fn computed(&self, result: &str) -> BTreeSet<String>;
-    fn extension(&self, result: &str) -> Option<(Vec<cq_syntax::ColumnDecl>, syn::Expr)>;
-}

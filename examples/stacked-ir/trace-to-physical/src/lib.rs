@@ -1,6 +1,5 @@
-//! Erase a Trace annotation, preserving the Physical section exactly.
-pub fn compile(
-    source: &cq_lang_trace::Staged<cq_lang_physical::Section, cq_lang_trace::Section>,
-) -> syn::Result<cq_lang_physical::Section> {
-    Ok(source.prefix.clone())
+//! Discard the Trace annotation, preserving Physical execution.
+pub fn compile(source: &cq_lang_trace::Program) -> syn::Result<cq_lang_physical::Program> {
+    cq_lang_trace::contract::check(source)?;
+    Ok(source.physical.clone())
 }

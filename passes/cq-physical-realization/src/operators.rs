@@ -9,12 +9,10 @@ impl<'a> Printer<'a> {
         name: &str,
         definition: &physical::Definition,
     ) -> syn::Result<TokenStream> {
-        let row = self.infos[name].clone();
         match &definition.operator {
-            Operator::Unit => Ok(quote!(::core::iter::once(()))),
-            Operator::Rename => Ok(self.host_scan(name)),
-            Operator::Select => {
-                let select = row.select.as_ref().expect("select facts");
+            Operator::Unit(_) => Ok(quote!(::core::iter::once(()))),
+            Operator::Rename(_) => Ok(self.host_scan(name)),
+            Operator::Select(select) => {
                 let input = self.scan(&select.input)?;
                 let pattern = self.borrowed_pattern(&symbol_name(&select.input));
                 let condition = deref_predicates(&select.condition);
@@ -25,14 +23,10 @@ impl<'a> Printer<'a> {
                     )
                 })
             }
-            Operator::Range(column) => self.range(
-                name,
-                &definition.name,
-                column,
-                row.select.as_ref().expect("select facts"),
-            ),
-            Operator::Extend => {
-                let extend = row.extend.as_ref().expect("extend facts");
+            Operator::Range(_, ranged) => {
+                self.range(name, &definition.name, &ranged.column, ranged)
+            }
+            Operator::Extend(extend) => {
                 let input = self.scan(&extend.input)?;
                 let input_name = symbol_name(&extend.input);
                 let pattern = self.pattern(&input_name);
@@ -48,8 +42,8 @@ impl<'a> Printer<'a> {
                     })
                 })
             }
-            Operator::Project => {
-                let project = row.project.as_ref().expect("project facts");
+            Operator::Project(p) => {
+                let project = &p.input;
                 let input = self.scan(project)?;
                 let input_name = symbol_name(project);
                 let kept = self.heading(name);
@@ -65,9 +59,9 @@ impl<'a> Printer<'a> {
                     ::core::iter::Iterator::map(#input, move |(#(#binders,)*)| #row)
                 })
             }
-            Operator::Probe(keyed) => self.probe(name, keyed),
-            Operator::Semi(keyed) => self.semi(keyed),
-            Operator::Merge(keyed) => self.merge(name, &definition.name, keyed),
+            Operator::Probe(_, keyed) => self.probe(name, keyed),
+            Operator::Semi(_, keyed) => self.semi(keyed),
+            Operator::Merge(_, keyed) => self.merge(name, &definition.name, keyed),
         }
     }
 
@@ -286,7 +280,7 @@ impl<'a> Printer<'a> {
         name: &str,
         reader: &Ident,
         column: &Ident,
-        select: &physical::Select,
+        select: &physical::Ranged,
     ) -> syn::Result<TokenStream> {
         let input = symbol_name(&select.input);
         let column_name = symbol_name(column);

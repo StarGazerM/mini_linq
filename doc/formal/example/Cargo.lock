@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-ra",
  "cq-lang-vo",
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
@@ -49,7 +50,6 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
- "cq-lang-cq",
  "cq-syntax",
  "proc-macro2",
  "quote",

@@ -1,0 +1,12 @@
+physical {
+    relation A(origin: i32, endpoint: i32);
+    relation B(origin: i32, endpoint: i32);
+    relation C(origin: i32, endpoint: i32);
+    r0 = alias rename A { origin -> h, endpoint -> a };
+    r1 = let rename B { origin -> h, endpoint -> b };
+    r2 = pipe probe[h] r0, r1;
+    r3 = let rename C { origin -> h, endpoint -> c };
+    r4 = pipe probe[h] r2, r3;
+    r5 = pipe canon project r4 keep { a, b, c };
+    return r5 as answer(a, b, c);
+}

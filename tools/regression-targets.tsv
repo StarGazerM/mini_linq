@@ -3,12 +3,10 @@ cq-lang-cq	test	expression_syntax	languages/cq-lang-cq/tests/expression_syntax.r
 cq-syntax	test	free_variables	languages/cq-syntax/tests/free_variables.rs
 cq-lang-cq	test	free_variables_execution	languages/cq-lang-cq/tests/free_variables_execution.rs
 cq-lang-ix	test	index_join_requirements	languages/cq-lang-ix/tests/index_join_requirements.rs
-cq-lang-cq	test	languages	languages/cq-lang-cq/tests/languages.rs
-cq-lang-ra	test	relational_plan	languages/cq-lang-ra/tests/relational_plan.rs
+cq-lang-ra	test	relational_program	languages/cq-lang-ra/tests/relational_program.rs
 cq-lang-cq	test	rust_expressions	languages/cq-lang-cq/tests/rust_expressions.rs
 cq-lang-physical	test	physical_language	languages/cq-lang-physical/tests/physical_language.rs
 cq-lang-structures	test	structures_language	languages/cq-lang-structures/tests/structures_language.rs
-cq-lang-cq	test	syntax_boundaries	languages/cq-lang-cq/tests/syntax_boundaries.rs
 cq-lang-vo	test	valuation_language	languages/cq-lang-vo/tests/valuation_language.rs
 cq-lang-cq	test	hypergraph_analysis	languages/cq-lang-cq/tests/hypergraph_analysis.rs
 cq-storage	test	access_laws	runtime/cq-storage/tests/access_laws.rs
@@ -30,3 +28,7 @@ mini-linq-composition-example	manifest-run	composition	examples/composition/Carg
 own-dialect	manifest-test	queries	examples/own-dialect/Cargo.toml
 stacked-ir	scenario	expansions	examples/stacked-ir/check_expansions.py
 diverged-ra	scenario	downstream-reuse	examples/diverged-ra/check.py
+cq-reduce	test	ya_schedule	teaching/ya/ya_schedule.rs
+cq-print	test	expressions	passes/cq-print/tests/expressions.rs
+cq-lang-cq	test	program	languages/cq-lang-cq/tests/program.rs
+cq-lang-cq	test	normal	languages/cq-lang-cq/tests/normal.rs

@@ -3,9 +3,9 @@
 Homework 1 follows the typed CQ-to-RelationalPlan pass chain:
 
 ```text
-cq::Module -- cq::normal::normalize --> CQ-NF
-           -- cq_order::compile (Written, Coarse) --> valuation::Module
-           -- cq_elaborate::compile --> relational_plan::Module
+cq::Program -- cq::normal::normalize --> CQ-NF
+           -- cq_order::compile (Written, Coarse) --> vo::Program
+           -- cq_elaborate::compile --> ra::Program
 ```
 
 Start from the immutable `hw1` release and create a submission branch:
@@ -87,7 +87,7 @@ These commands inspect syntax and fixtures without invoking CQ lowering:
 
 ```text
 cargo run --example cq-inspection
-cargo test -p cq-lang-ra --test relational_plan
+cargo test -p cq-lang-ra --test relational_program
 cargo xtask list
 cargo xtask explain triangle --through cq
 ```

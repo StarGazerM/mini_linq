@@ -1,5 +1,5 @@
 //! Deterministic binary-domain databases shared by independent test consumers.
-use cq_lang_cq as cq;
+use crate::cq;
 
 pub fn binary_database(
     program: &cq::Program,

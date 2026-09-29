@@ -8,7 +8,7 @@ use cq_lang_structures as structures;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use std::collections::BTreeMap;
-use structures::execution::{self, Operator};
+use structures::physical::{self, Operator};
 use structures::syntax::symbol_name;
 use syn::{Expr, Ident, Stmt};
 
@@ -39,9 +39,9 @@ pub enum Repr {
 
 pub struct Context<'a> {
     pub analysis: &'a structures::Analysis,
-    pub physical_analysis: &'a structures::PhysicalFacts,
-    pub infos: BTreeMap<String, execution::Row>,
-    pub physical: BTreeMap<String, &'a execution::Definition>,
+    pub physical_analysis: &'a physical::Analysis,
+    pub infos: BTreeMap<String, physical::Row>,
+    pub physical: BTreeMap<String, &'a physical::Definition>,
     pub hosts: BTreeMap<String, Host>,
     /// The identifier every result binds each of its columns to.
     pub idents: BTreeMap<String, BTreeMap<String, Ident>>,
@@ -66,15 +66,11 @@ pub fn index(i: usize) -> syn::Index {
 }
 
 impl<'a> Context<'a> {
-    /// Construct printer state from a section, its source environment and checked analysis.
-    pub fn new(
-        module: &structures::Section,
-        env: &'a impl structures::Env,
-        analysis: &'a structures::Analysis,
-    ) -> Self {
-        let mut hosts: BTreeMap<String, Host> = env
+    /// Construct printer state from the complete program and its checked analysis.
+    pub fn new(module: &'a structures::Program, analysis: &'a structures::Analysis) -> Self {
+        let mut hosts: BTreeMap<String, Host> = module
+            .physical
             .inputs()
-            .iter()
             .map(|input| {
                 let name = symbol_name(&input.name);
                 let host = Host {
@@ -86,7 +82,7 @@ impl<'a> Context<'a> {
             })
             .collect();
         let mut statements = Vec::new();
-        for entry in &module.entries {
+        for entry in &module.structures.entries {
             if let structures::Structure::Host(host) = &entry.structure {
                 let name = symbol_name(&entry.name);
                 if let Some(key) = &host.key {
@@ -104,16 +100,11 @@ impl<'a> Context<'a> {
         Context {
             physical_analysis: &analysis.physical,
             analysis,
-            infos: env
-                .definitions()
-                .iter()
-                .map(|d| {
-                    let name = symbol_name(&d.name);
-                    (name.clone(), env.row(&name).clone())
-                })
-                .collect(),
-            physical: env
-                .definitions()
+            infos: analysis.physical.rows.clone(),
+            physical: module
+                .physical
+                .program
+                .definitions
                 .iter()
                 .map(|d| (symbol_name(&d.name), d))
                 .collect(),
@@ -377,18 +368,5 @@ impl<'a> Context<'a> {
                 ::cq_storage::ExactMembership::contains(__cq_level, #last)
             })
         }
-    }
-}
-
-/// Reference composition adapter for callers that carry the standard prefix.
-#[cfg(feature = "reference")]
-pub mod reference {
-    use super::*;
-    pub fn context<'a>(
-        module: &structures::Module,
-        env: &'a structures::reference::Env<'a>,
-        analysis: &'a structures::Analysis,
-    ) -> Context<'a> {
-        Context::new(&module.section, env, analysis)
     }
 }

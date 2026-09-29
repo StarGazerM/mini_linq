@@ -86,15 +86,15 @@ impl Printer<'_> {
                 ::core::iter::Iterator::chain(#from_a, #from_b)
             })
         }};
-        let repr = match second.mode {
-            structures::ModeKind::Pipe => {
-                if second.canon {
+        let repr = match physical::ModeKind::from(&second.mode) {
+            physical::ModeKind::Pipe => {
+                if second.canon.is_some() {
                     rows = self.distinct(&second.name, rows);
                 }
                 Repr::Pipe(Some(rows))
             }
-            structures::ModeKind::Let => self.materialize(&name, second.canon, rows),
-            structures::ModeKind::Alias => unreachable!("a check is not an alias"),
+            physical::ModeKind::Let => self.materialize(&name, second.canon.is_some(), rows),
+            physical::ModeKind::Alias => unreachable!("a check is not an alias"),
         };
         self.reprs.insert(first_name, Repr::Pipe(None));
         self.reprs.insert(name, repr);

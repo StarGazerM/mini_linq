@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use cq_lang_cq as cq;
 use cq_lang_ix as index_requirements;
-use cq_lang_ra as relational_plan;
+use cq_lang_ra as ra;
 use cq_workloads::QueryCase;
 use quote::ToTokens;
 
@@ -30,7 +30,7 @@ impl Stage {
             "cq" => Ok(Self::Cq),
             "relational-plan" => Ok(Self::RelationalPlan),
             "index-requirements" => Ok(Self::IndexRequirements),
-            "physical" | "rust-access-plan" | "iterator-pipeline" | "final-rust" => Err(
+            "physical" | "final-rust" => Err(
                 "explain stops at IX: workload-wide physical provider assignments and the new host input/output contract are not specified; the retired whole-query backend cannot be used".into()
             ),
             _ => Err(format!(
@@ -125,9 +125,9 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
 
     let logical = artifacts.attempt("CQ -> RelationalPlan", || compile_cq(&source))?;
     artifacts.attempt("RelationalPlan local contract", || {
-        relational_plan::contract::check_module(&logical)
+        ra::contract::check(&logical)
     })?;
-    artifacts.write_stage(Stage::RelationalPlan, &render_relational_plan(&logical))?;
+    artifacts.write_stage(Stage::RelationalPlan, &render_ra(&logical))?;
     if through == Stage::RelationalPlan {
         return artifacts.finish(through);
     }
@@ -136,7 +136,7 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
         cq_index_policy::compile(&logical)
     })?;
     artifacts.attempt("IndexRequirements local contract", || {
-        index_requirements::contract::check_module(&indexes)
+        index_requirements::contract::check(&indexes)
     })?;
     artifacts.write_stage(
         Stage::IndexRequirements,
@@ -306,33 +306,25 @@ fn panic_diagnostic(payload: &(dyn std::any::Any + Send)) -> String {
 
 /// CQ → RA in written order: normalize, schedule the clauses as written, one
 /// full subatom per atom, elaborate to named RA.
-fn compile_cq(source: &cq::Module) -> syn::Result<relational_plan::Module> {
+fn compile_cq(source: &cq::Program) -> syn::Result<ra::Program> {
     let normal = cq::normal::normalize(source)?;
     let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
     cq_elaborate::compile(&plan)
 }
 
-fn render_cq(source: &cq::Module) -> String {
-    format!("{}\n", format_cq_program(&source.program))
+fn render_cq(source: &cq::Program) -> String {
+    format!("{}\n", format_cq_program(source))
 }
 
-fn render_relational_plan(source: &relational_plan::Module) -> String {
-    let body = format!(
-        "{}\n{}",
-        format_cq_program(&source.program),
-        format_relational_block(&source.plan),
-    );
-    format!("{body}\n")
+fn render_ra(source: &ra::Program) -> String {
+    format!("{}\n", format_relational_block(&source.plan))
 }
-
-fn render_index_requirements(source: &index_requirements::Module) -> String {
-    let body = format!(
-        "{}\n{}\n{}",
-        format_cq_program(&source.relational_plan.program),
-        format_relational_block(&source.relational_plan.plan),
-        format_index_block(source),
-    );
-    format!("{body}\n")
+fn render_index_requirements(source: &index_requirements::Program) -> String {
+    format!(
+        "{}\n{}\n",
+        format_relational_block(&source.ra.plan),
+        format_index_block(source)
+    )
 }
 
 fn format_cq_program(program: &cq::Program) -> String {
@@ -389,7 +381,7 @@ fn format_cq_program(program: &cq::Program) -> String {
         .join("\n")
 }
 
-fn format_relational_block(plan: &relational_plan::Plan) -> String {
+fn format_relational_block(plan: &ra::Plan) -> String {
     let definitions = plan.definitions.iter().map(|definition| {
         format!(
             "{} = {};",
@@ -402,31 +394,33 @@ fn format_relational_block(plan: &relational_plan::Plan) -> String {
         plan.output.input,
         format_atom(&plan.output.head),
     );
-    let body = definitions
+    let declarations = plan.declarations.iter().map(|d| compact_tokens(d));
+    let body = declarations
+        .chain(definitions)
         .chain(std::iter::once(output))
         .collect::<Vec<_>>()
         .join("\n");
     format!("relational {{\n{}\n}}", indent_lines(&body, "    "))
 }
 
-fn format_relational_operator(operator: &relational_plan::Operator) -> String {
+fn format_relational_operator(operator: &ra::Operator) -> String {
     match operator {
-        relational_plan::Operator::Unit(_) => "unit".to_owned(),
-        relational_plan::Operator::Semijoin(operator) => {
+        ra::Operator::Unit(_) => "unit".to_owned(),
+        ra::Operator::Semijoin(operator) => {
             format!("semijoin {} with {}", operator.left, operator.right)
         }
-        relational_plan::Operator::Select(operator) => format!(
+        ra::Operator::Select(operator) => format!(
             "select {} if ({})",
             operator.input,
             quote::ToTokens::to_token_stream(&operator.condition)
         ),
-        relational_plan::Operator::Extend(operator) => format!(
+        ra::Operator::Extend(operator) => format!(
             "extend {} with {{{}}} value ({})",
             operator.input,
             quote::ToTokens::to_token_stream(&operator.columns),
             quote::ToTokens::to_token_stream(&operator.value)
         ),
-        relational_plan::Operator::Rename(operator) => {
+        ra::Operator::Rename(operator) => {
             let mapping = operator
                 .mapping
                 .iter()
@@ -435,10 +429,10 @@ fn format_relational_operator(operator: &relational_plan::Operator) -> String {
                 .join(", ");
             format!("rename {} {{{mapping}}}", operator.relation)
         }
-        relational_plan::Operator::NaturalJoin(operator) => {
+        ra::Operator::NaturalJoin(operator) => {
             format!("natural_join {} with {}", operator.left, operator.right)
         }
-        relational_plan::Operator::Project(operator) => format!(
+        ra::Operator::Project(operator) => format!(
             "project {} keep {{{}}}",
             operator.input,
             format_identifiers(&operator.attributes),
@@ -454,7 +448,7 @@ fn format_identifiers<'a>(identifiers: impl IntoIterator<Item = &'a syn::Ident>)
         .join(", ")
 }
 
-fn format_index_block(module: &index_requirements::Module) -> String {
+fn format_index_block(module: &index_requirements::Program) -> String {
     let definitions = module
         .indexes
         .iter()
@@ -517,28 +511,27 @@ mod tests {
         for case in cq_workloads::catalog::all() {
             let source = case.module().unwrap();
             assert_eq!(
-                syn::parse_str::<cq::Module>(&render_cq(&source)).unwrap(),
+                syn::parse_str::<cq::Program>(&render_cq(&source)).unwrap(),
                 source
             );
             let logical = compile_cq(&source).unwrap();
             assert_eq!(
-                syn::parse_str::<relational_plan::Module>(&render_relational_plan(&logical))
-                    .unwrap(),
+                syn::parse_str::<ra::Program>(&render_ra(&logical)).unwrap(),
                 logical
             );
             let indexes = cq_index_policy::compile(&logical).unwrap();
             assert_eq!(
-                syn::parse_str::<index_requirements::Module>(&render_index_requirements(&indexes))
+                syn::parse_str::<index_requirements::Program>(&render_index_requirements(&indexes))
                     .unwrap(),
                 indexes
             );
-            index_requirements::contract::check_module(&indexes).unwrap();
+            index_requirements::contract::check(&indexes).unwrap();
         }
     }
 
     #[test]
     fn embedded_rust_literals_are_preserved() {
-        let source: cq::Module = syn::parse_quote! {
+        let source: cq::Program = syn::parse_quote! {
             struct Expressions;
             relation R(value: i32);
             relation answer(value: String);
@@ -546,7 +539,7 @@ mod tests {
                 R(x), let label = " :: ( & * ! >".to_owned(), if *x > 0 && !label.is_empty();
         };
         assert_eq!(
-            syn::parse_str::<cq::Module>(&render_cq(&source)).unwrap(),
+            syn::parse_str::<cq::Program>(&render_cq(&source)).unwrap(),
             source
         );
     }
@@ -568,57 +561,5 @@ mod tests {
                 .exists()
         );
         fs::remove_dir_all(directory).unwrap();
-    }
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_order {
-    pub use ::cq_order::*;
-    pub fn compile(
-        source: &cq_lang_cq::Module,
-        options: &::cq_order::Options,
-    ) -> syn::Result<cq_lang_vo::Module> {
-        Ok(cq_lang_vo::Module::new(
-            source.program.clone(),
-            ::cq_order::reference::compile(source, options)?,
-        ))
-    }
-    pub fn check(
-        source: &cq_lang_cq::Module,
-        target: &cq_lang_vo::Module,
-        options: &::cq_order::Options,
-    ) -> bool {
-        target.program == source.program
-            && ::cq_order::reference::check(source, &target.section, options)
-    }
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_elaborate {
-    pub use ::cq_elaborate::*;
-    pub fn compile(source: &cq_lang_vo::Module) -> syn::Result<cq_lang_ra::Module> {
-        Ok(cq_lang_ra::Module::new(
-            source.program.clone(),
-            ::cq_elaborate::reference::compile(source)?,
-        ))
-    }
-    pub fn check(source: &cq_lang_vo::Module, target: &cq_lang_ra::Module) -> bool {
-        target.program == source.program
-            && ::cq_elaborate::reference::check(source, &target.section)
-    }
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_index_policy {
-    pub use ::cq_index_policy::*;
-    pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
-        Ok(cq_lang_ix::Module::new(
-            source.clone(),
-            ::cq_index_policy::reference::compile(source)?,
-        ))
-    }
-    pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
-        target.relational_plan == *source
-            && ::cq_index_policy::reference::check(source, &target.section)
     }
 }

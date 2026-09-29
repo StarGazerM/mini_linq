@@ -107,7 +107,7 @@ pub struct Dataset {
 impl Dataset {
     /// Construct and validate generated data against the exact CQ schema.
     pub fn new(
-        module: &cq::Module,
+        module: &cq::Program,
         suite: Suite,
         case: impl Into<String>,
         config: GenerationConfig,
@@ -133,7 +133,7 @@ impl Dataset {
     }
 
     /// Enforce exact declaration order, names, arities, row widths, and counts.
-    pub fn validate(&self, module: &cq::Module) -> Result<(), DatasetError> {
+    pub fn validate(&self, module: &cq::Program) -> Result<(), DatasetError> {
         cq::contract::check(module).map_err(DatasetError::InvalidQuery)?;
         validate_manifest_token("case name", &self.manifest.case)?;
         if self.manifest.generator_version != GENERATOR_VERSION {
@@ -143,7 +143,7 @@ impl Dataset {
             )));
         }
 
-        let declarations = module.program.inputs();
+        let declarations = module.inputs();
         let declaration_count = declarations.clone().count();
         if self.relations.len() != declaration_count {
             return Err(DatasetError::Schema(format!(
@@ -254,7 +254,7 @@ impl Dataset {
     /// Write deterministic headerless CSV and a deterministic line manifest.
     pub fn write_to_dir(
         &self,
-        module: &cq::Module,
+        module: &cq::Program,
         directory: impl AsRef<Path>,
     ) -> Result<(), DatasetError> {
         self.validate(module)?;
@@ -282,7 +282,7 @@ impl Dataset {
 
     /// Read a dataset directory and reject any drift from the CQ schema.
     pub fn read_from_dir(
-        module: &cq::Module,
+        module: &cq::Program,
         directory: impl AsRef<Path>,
     ) -> Result<Self, DatasetError> {
         cq::contract::check(module).map_err(DatasetError::InvalidQuery)?;
@@ -777,7 +777,7 @@ mod tests {
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
-    fn module() -> cq::Module {
+    fn module() -> cq::Program {
         syn::parse_str(
             "struct Data; relation r#type(c0: i32); relation Edge(c0: i32, c1: i32); answer(x, z) :- r#type(x), Edge(x, z);",
         )
@@ -826,7 +826,7 @@ mod tests {
 
     #[test]
     fn positional_files_preserve_case_distinct_relation_names() {
-        let module: cq::Module = syn::parse_str(
+        let module: cq::Program = syn::parse_str(
             "struct CaseNames; relation R(c0: i32); relation r(c0: i32); q(x) :- R(x), r(x);",
         )
         .unwrap();

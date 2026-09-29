@@ -1,14 +1,12 @@
 # Stack an independent IR
 
-The reference pipeline's Physical → Γ continuation (selection of the bindings Γ
-in the `structures` section) is replaced with
-Physical → Trace → Physical → Γ. `cq-lang-trace` owns `trace {}` and
-depends only on shared syntax. Two ordinary library passes add and erase it;
-`trace-bridge` uses `cq-stage` and `Staged` to compose the token payloads.
-Erasure preserves the Physical section exactly. No reference crate is edited
-to register or dispatch the new language.
+The caller replaces the Physical → Structures continuation with
+Physical → Trace → Physical → Structures. Trace extends Physical with an empty
+`trace {}` annotation; its complete `Program` owns the Physical program.
+Two ordinary passes add and erase the annotation. The bridge uses the same
+`cq-stage::Policed` macro ABI as the compiler.
 
-All nine `physical_query` execution tests run through both chains.
-`python3 examples/stacked-ir/check_expansions.py` additionally expands all ten
-`run` functions and compares the reference and stacked bytes. This command is
-part of `tools/test_regressions.sh`.
+The reference test target points directly to the facade's `physical_query.rs`.
+The stacked target executes the same scenarios through the bridge.
+`python3 examples/stacked-ir/check_expansions.py` compares all ten expanded
+`run` functions byte for byte. The regression runner includes this check.

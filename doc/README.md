@@ -1,7 +1,7 @@
 # Documentation map
 
 The current compiler architecture is `CQ → NF → VO → RA → IX → Physical → Γ → Rust`.
-IX records demands; the `structures` section records the bindings Γ answering
+IX records demands; the Structures program records the bindings Γ answering
 each keyed read.
 Start with the [crate and module ownership](COMPILER-STRUCTURE.md), then the
 [language syntax and contracts](DSL.md).

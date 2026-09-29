@@ -21,9 +21,6 @@ pub type CommaList<Item> = SyntaxList<Item, Token![,]>;
 /// A syntax-preserving semicolon-separated list.
 pub type SemicolonList<Item> = SyntaxList<Item, Token![;]>;
 
-/// The typed relation declarations supplied as inputs by the host program.
-pub type InputList = Vec<RelationDecl>;
-
 /// A zero-based relation-column number written as a Rust integer literal.
 pub type Column = Index;
 
@@ -107,27 +104,6 @@ impl RelationDecl {
             advice = Some(attr);
         }
         Ok(advice)
-    }
-}
-
-/// Two consecutive language sections, with no delimiter or added tokens.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Staged<Prefix, Section> {
-    pub prefix: Prefix,
-    pub section: Section,
-}
-impl<P: syn::parse::Parse, S: syn::parse::Parse> syn::parse::Parse for Staged<P, S> {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        Ok(Self {
-            prefix: input.parse()?,
-            section: input.parse()?,
-        })
-    }
-}
-impl<P: quote::ToTokens, S: quote::ToTokens> quote::ToTokens for Staged<P, S> {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        self.prefix.to_tokens(tokens);
-        self.section.to_tokens(tokens);
     }
 }
 
@@ -240,4 +216,15 @@ pub fn check_input_declarations<'a>(
         }
     }
     Ok(schema)
+}
+
+pub mod algebra;
+
+/// Parse declarations while the next token starts a relation declaration.
+pub fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<RelationDecl>> {
+    let mut declarations = Vec::new();
+    while input.peek(syn::Token![#]) || input.peek(kw::relation) {
+        declarations.push(input.parse()?);
+    }
+    Ok(declarations)
 }

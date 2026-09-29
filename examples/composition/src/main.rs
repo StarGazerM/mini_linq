@@ -37,12 +37,10 @@ fn query<'a>(
     S: &'a BTreeMap<(i32,), Vec<(i32,)>>,
 ) -> HashSet<(&'a i32, &'a i32, &'a i32)> {
     ::core::iter::Iterator::collect(::mini_linq::index_demands! {
-        struct Heterogeneous;
+        relational {
         relation L(a: i32);
         relation R(a: i32, b: i32);
         relation S(b: i32, c: i32);
-        answer(a, b, c) :- L(a), R(a, b), S(b, c);
-        relational {
             l = rename L {a -> a};
             r = rename R {a -> a, b -> b};
             s = rename S {b -> b, c -> c};
@@ -56,7 +54,11 @@ fn query<'a>(
 fn main() {
     let left = [(1,), (1,), (2,), (9,)];
     let middle = HashMap::from([((1,), vec![(10,), (11,)]), ((2,), vec![(20,)])]);
-    let right = BTreeMap::from([((10,), vec![(100,), (101,)]), ((11,), vec![]), ((20,), vec![(200,)])]);
+    let right = BTreeMap::from([
+        ((10,), vec![(100,), (101,)]),
+        ((11,), vec![]),
+        ((20,), vec![(200,)]),
+    ]);
     let borrowed = query(&left, &middle, &right);
     // Copy only for deterministic display; the query itself returns references.
     let mut rows: Vec<_> = borrowed.into_iter().map(|(a, b, c)| (*a, *b, *c)).collect();

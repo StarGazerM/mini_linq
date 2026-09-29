@@ -2,12 +2,8 @@
 
 [main.rs](main.rs) is an executable specification for the optional HW4
 extension. Negation and aggregation are **not implemented in the current
-basic/reference compiler**. The target is gated by the existing `hw4` feature;
-it becomes runnable after that extension is implemented:
-
-```text
-cargo run -p mini-linq --example negation-aggregation --features hw4
-```
+compiler**. This file is a specification and is not a registered executable
+target. Its assertions describe the extension to implement.
 
 | Query | Case | Required logical order | Expected result |
 | --- | --- | --- | --- |

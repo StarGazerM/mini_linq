@@ -1,0 +1,6 @@
+policy {
+    A;
+    B;
+    C;
+    Stock;
+}

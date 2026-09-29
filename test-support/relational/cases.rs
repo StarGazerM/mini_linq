@@ -1,17 +1,17 @@
 pub struct Case {
     pub name: &'static str,
-    pub plan: &'static str,
+    pub cq: &'static str,
     pub inputs: &'static [(&'static str, &'static [&'static [i32]])],
     pub expected: &'static [&'static [i32]],
 }
 
-// CQ, known RA, input tables, and expected rows are authored independently.
-// No expected plan is produced by a compiler pass under test.
+// Input tables and expected rows are authored independently of every pass;
+// the query text is the scenario corpus's CQ stage.
 macro_rules! case {
     ($name:literal, $inputs:expr, $expected:expr) => {
         Case {
             name: $name,
-            plan: include_str!(concat!("plans/", $name, ".ra")),
+            cq: include_str!(concat!("scenarios/", $name, ".cq")),
             inputs: $inputs,
             expected: $expected,
         }

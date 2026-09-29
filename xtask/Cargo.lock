@@ -335,6 +335,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-ra",
  "cq-lang-vo",
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
@@ -376,7 +377,6 @@ dependencies = [
 name = "cq-lang-physical"
 version = "0.1.0"
 dependencies = [
- "cq-lang-ix",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -388,7 +388,6 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
- "cq-lang-cq",
  "cq-syntax",
  "proc-macro2",
  "quote",

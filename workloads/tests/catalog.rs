@@ -268,7 +268,7 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
             "Rust query module `{}` uses the wrong query macro",
             expected_path.display(),
         );
-        let direct: cq_lang_cq::Module =
+        let direct: cq_lang_cq::Program =
             syn::parse2(query.mac.tokens.clone()).unwrap_or_else(|error| {
                 panic!(
                     "mini_linq::workload_query! body in `{}` is not a CQ module: {error}",
@@ -346,7 +346,7 @@ fn checked_in_tiny_scenarios_are_an_exact_fresh_generator_bijection() {
 
     for case in all_cases() {
         let module = case.module().unwrap();
-        let output_arity = module.program.query.head.args.len();
+        let output_arity = module.query.head.args.len();
         for scenario in Scenario::ALL {
             let config = GenerationConfig {
                 scenario,

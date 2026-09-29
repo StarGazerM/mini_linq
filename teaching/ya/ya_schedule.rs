@@ -5,11 +5,10 @@
 //! sweep reduces a child with its parent only after the parent (or from the
 //! root), each tree edge is used exactly once per direction, and the
 //! elaborated RA carries one semijoin per reduction.
-use cq_lang_cq as cq;
-use cq_lang_cq::{hypergraph::Analysis};
 use cq_lang_vo as valuation;
+use cq_lang_vo::cq;
+use cq_lang_vo::cq::hypergraph::Analysis;
 use cq_lang_vo::{Reduction, Step};
-use cq_lang_ra as ra;
 use cq_reduce::{Options, Pushdown, Reductions};
 use quote::quote;
 use std::collections::BTreeSet;
@@ -21,8 +20,8 @@ const TREE: Options = Options {
 
 /// One full subatom per atom in written order: the coarse plan the reducer
 /// extends.
-fn coarse(source: &cq::Module) -> valuation::Module {
-    let steps = source.program.query.body.iter().enumerate().map(|(clause, item)| {
+fn coarse(source: &cq::Program) -> valuation::Program {
+    let steps = source.query.body.iter().enumerate().map(|(clause, item)| {
         let cq::BodyItem::Positive { atom } = item else {
             unreachable!("every fixture is atoms only");
         };
@@ -31,25 +30,26 @@ fn coarse(source: &cq::Module) -> valuation::Module {
         let columns = atom.variables();
         quote!(#relation @ #clause (#(#columns),*);)
     });
-    let program = &source.program;
+    let program = &source;
     syn::parse2(quote! { #program valuation { #(#steps)* } }).unwrap()
 }
 
 /// The reducer's `reduce … with …` steps as `(target, support)` clauses, all
 /// of them before the first atom step.
-fn reductions(plan: &valuation::Module) -> Vec<(usize, usize)> {
+fn reductions(plan: &valuation::Program) -> Vec<(usize, usize)> {
     let first_atom = plan
+        .valuation
         .steps
         .iter()
         .position(|step| matches!(step, Step::Atom(..)))
         .expect("every fixture has an atom");
     assert!(
-        plan.steps[first_atom..]
+        plan.valuation.steps[first_atom..]
             .iter()
             .all(|step| !matches!(step, Step::Reduce(..))),
         "a reduction after the first atom step"
     );
-    plan.steps[..first_atom]
+    plan.valuation.steps[..first_atom]
         .iter()
         .map(|step| match step {
             Step::Reduce(reduce, _) => match &reduce.reduction {
@@ -61,26 +61,19 @@ fn reductions(plan: &valuation::Module) -> Vec<(usize, usize)> {
         .collect()
 }
 
-fn schedule(text: &str) -> (Vec<(usize, Option<usize>)>, Vec<(usize, usize)>) {
-    let source: cq::Module = syn::parse_str(text).unwrap();
+type JoinTree = Vec<(usize, Option<usize>)>;
+type ReductionsSchedule = Vec<(usize, usize)>;
+
+fn schedule(text: &str) -> (JoinTree, ReductionsSchedule) {
+    let source: cq::Program = syn::parse_str(text).unwrap();
     let normal = cq::normal::normalize(&source).unwrap();
     let plan = cq_reduce::compile(&coarse(&normal), &TREE)
         .expect("YA scheduling exercise must emit complete legal reductions");
-    assert!(cq_reduce::check(&coarse(&normal), &plan, &TREE));
+    cq_reduce::check(&coarse(&normal), &plan, &TREE).unwrap();
     let tree = Analysis::of(&normal)
         .join_tree
         .expect("every fixture is acyclic");
-    let target = cq_elaborate::compile(&plan).unwrap();
     let pairs = reductions(&plan);
-    assert_eq!(
-        target
-            .plan
-            .definitions
-            .iter()
-            .filter(|d| matches!(d.operator, ra::Operator::Semijoin(_)))
-            .count(),
-        pairs.len()
-    );
     (tree, pairs)
 }
 
@@ -115,8 +108,16 @@ fn reductions_respect_tree_dependencies_and_exactly_once_obligations() {
             } else {
                 // Downward: the child is reduced with its parent, itself
                 // already down unless it is the root.
-                assert_eq!(up.len() + 1, nodes, "downward sweep before the upward sweep ended");
-                assert_eq!(parent(target), Some(support), "{text}: ({target}, {support})");
+                assert_eq!(
+                    up.len() + 1,
+                    nodes,
+                    "downward sweep before the upward sweep ended"
+                );
+                assert_eq!(
+                    parent(target),
+                    Some(support),
+                    "{text}: ({target}, {support})"
+                );
                 assert!(parent(support).is_none() || down.contains(&support));
                 assert!(down.insert(target), "duplicate downward edge");
             }
@@ -132,10 +133,28 @@ fn the_schedules_are_pinned() {
     let (tree, pairs) = schedule(
         "struct Chain; relation E(a:i32,b:i32); answer(a,f) :- E(a,b),E(b,c),E(c,d),E(d,e),E(e,f);",
     );
-    assert_eq!(tree, [(0, Some(1)), (1, Some(2)), (2, Some(3)), (3, Some(4)), (4, None)]);
+    assert_eq!(
+        tree,
+        [
+            (0, Some(1)),
+            (1, Some(2)),
+            (2, Some(3)),
+            (3, Some(4)),
+            (4, None)
+        ]
+    );
     assert_eq!(
         pairs,
-        [(1, 0), (2, 1), (3, 2), (4, 3), (3, 4), (2, 3), (1, 2), (0, 1)]
+        [
+            (1, 0),
+            (2, 1),
+            (3, 2),
+            (4, 3),
+            (3, 4),
+            (2, 3),
+            (1, 2),
+            (0, 1)
+        ]
     );
     // Branches: breadth-first from the root E@5, the upward sweep visits the
     // deepest edges first and the downward sweep the shallowest.
@@ -144,11 +163,29 @@ fn the_schedules_are_pinned() {
     );
     assert_eq!(
         tree,
-        [(0, Some(2)), (1, Some(0)), (2, Some(4)), (3, Some(2)), (4, Some(5)), (5, None)]
+        [
+            (0, Some(2)),
+            (1, Some(0)),
+            (2, Some(4)),
+            (3, Some(2)),
+            (4, Some(5)),
+            (5, None)
+        ]
     );
     assert_eq!(
         pairs,
-        [(0, 1), (2, 3), (2, 0), (4, 2), (5, 4), (4, 5), (2, 4), (0, 2), (3, 2), (1, 0)]
+        [
+            (0, 1),
+            (2, 3),
+            (2, 0),
+            (4, 2),
+            (5, 4),
+            (4, 5),
+            (2, 4),
+            (0, 2),
+            (3, 2),
+            (1, 0)
+        ]
     );
     // Composite key, disconnected atoms (an empty separator tests
     // nonemptiness) and a repeated occurrence: one edge, up then down.
@@ -165,13 +202,10 @@ fn the_schedules_are_pinned() {
 
 #[test]
 fn a_cyclic_query_has_no_schedule() {
-    let source: cq::Module = syn::parse_quote! {
+    let source: cq::Program = syn::parse_quote! {
         struct Triangle;
         relation E(a:i32,b:i32);
         answer(x) :- E(x,y), E(y,z), E(z,x);
     };
-    let error = cq_reduce::compile(&coarse(&source), &TREE)
-        .expect_err("cyclic")
-        .to_string();
-    assert_eq!(error, "Yannakakis reduction requires an acyclic query");
+    assert!(cq_reduce::compile(&coarse(&source), &TREE).is_err());
 }

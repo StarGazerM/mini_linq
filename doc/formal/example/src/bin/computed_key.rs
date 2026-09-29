@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 fn main() {
     let directory = directory("logical-computed-key");
-    let source: cq::Module = syn::parse_quote! {
+    let source: cq::Program = syn::parse_quote! {
         pub struct Overview;
         relation R(a:i32,b:i32);
         relation S(a:i32,b:i32);
@@ -16,7 +16,7 @@ fn main() {
     let written = boundaries(&directory, "written", &source, false);
     boundaries(&directory, "planned", &source, true);
     // The computed key `next` is bound once `k` is, before S is matched on it.
-    let expected_vo: valuation::Module = syn::parse_quote! {
+    let expected_vo: valuation::Program = syn::parse_quote! {
         pub struct Overview;
         relation R(a:i32,b:i32);
         relation S(a:i32,b:i32);

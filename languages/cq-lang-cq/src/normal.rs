@@ -21,20 +21,23 @@ use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, format_ident, quote};
 use syn::Ident;
 
-use super::{Atom, BodyItem, Filter, Let, Module, Query, rust};
+use super::{Atom, BodyItem, Filter, Let, Program, Query, rust};
 use crate::symbol_name;
 
 /// Whether a module is in normal form.
-pub fn check(module: &Module) -> syn::Result<()> {
+pub fn check(module: &Program) -> syn::Result<()> {
     super::contract::check(module)?;
-    let query = &module.program.query;
+    let query = &module.query;
     for item in &query.body {
         match item {
             BodyItem::Positive { atom } if atom.is_normalized() => {}
             BodyItem::Positive { atom } => {
                 return Err(syn::Error::new_spanned(
                     atom,
-                    "normal form: atom arguments are distinct variables",
+                    format!(
+                        "normal form: `{}` atom arguments are distinct variables",
+                        atom.relation
+                    ),
                 ));
             }
             BodyItem::Filter(_) | BodyItem::Let(_) => {}
@@ -56,9 +59,9 @@ pub fn check(module: &Module) -> syn::Result<()> {
 }
 
 /// Canonicalize a positive query into normal form.
-pub fn normalize(module: &Module) -> syn::Result<Module> {
+pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
-    let program = &module.program;
+    let program = &module;
     let declarations: BTreeMap<String, &super::RelationDecl> = program
         .inputs()
         .map(|d| (symbol_name(&d.name), d))
@@ -129,7 +132,7 @@ pub fn normalize(module: &Module) -> syn::Result<Module> {
     }
     prefix.extend(body);
     let mut normal = module.clone();
-    normal.program.query.body = prefix.into_iter().collect();
+    normal.query.body = prefix.into_iter().collect();
     check(&normal)?;
     Ok(normal)
 }
@@ -165,7 +168,7 @@ fn path(ident: &Ident) -> syn::Expr {
 }
 
 /// Every identifier the module mentions, so fresh names never capture.
-pub fn reserved(module: &Module) -> BTreeSet<String> {
+fn reserved(module: &Program) -> BTreeSet<String> {
     fn visit(tokens: TokenStream, names: &mut BTreeSet<String>) {
         for token in tokens {
             match token {
@@ -183,7 +186,7 @@ pub fn reserved(module: &Module) -> BTreeSet<String> {
 }
 
 /// `__cq_<clause>_<argument>`, extended until unused.
-pub fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident {
+fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident {
     let mut name = format!("__cq_{clause}_{argument}");
     while !names.insert(name.clone()) {
         name.push('_');
@@ -209,11 +212,11 @@ pub struct Kernel {
 }
 
 impl Kernel {
-    pub fn of(module: &Module) -> Kernel {
-        Kernel::of_query(&module.program.query)
+    pub fn of(module: &Program) -> Kernel {
+        Kernel::of_query(&module.query)
     }
 
-    pub fn of_query(query: &Query) -> Kernel {
+    fn of_query(query: &Query) -> Kernel {
         let mut renaming = Renaming::default();
         // Atom variables are named first, in atom order, so a plan that moves
         // a binding earlier or later than the query wrote it keeps its kernel.

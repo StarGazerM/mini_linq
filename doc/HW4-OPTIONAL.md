@@ -349,12 +349,12 @@ local IndexRequirements contract.
 ## Physical, the bindings Γ and printed Rust extension
 
 The stages after IX must consume the extended IndexRequirements object and
-continue to produce the same shape as Basic HW3: a `physical::Module`, a
-`structures::Module`, and one Rust block printed by `structures_to_rust!`
+continue to produce the same shape as Basic HW3: a `physical::Program`, a
+`structures::Program`, and one Rust block printed by `structures_to_rust!`
 over the `cq-storage` traits, not another negation/aggregation or storage
 descriptor IR. `AntiSemijoin` and `AggregateApply` keep their logical names
 in Physical; the physical form they need is fixed by the already-derived key
-shape and answered by the bindings Γ in the `structures` section in the usual way.
+shape and answered by the bindings Γ in the Structures program in the usual way.
 
 The physical choice follows that key shape:
 
@@ -413,7 +413,7 @@ The syntax and lexical helper tests run in the ordinary suite. Complete the
 local contracts and logical operators first:
 
 ```text
-cargo test -p cq-lang-cq --features hw4 --test hw4_optional
+cargo test -p mini-linq-course --features hw4 --test hw4_optional
 ```
 
 Then isolate the CQ → NF → VO → RA chain, that complete plan to
@@ -431,8 +431,8 @@ After all affected basic stages support the cumulative extension, run
 the normal `mini_linq!` endpoint tests in both debug and release modes:
 
 ```text
-cargo test -p mini-linq --features hw4 --test hw4_optional
-cargo test -p mini-linq --release --features hw4 --test hw4_optional
+cargo test -p mini-linq-course --features hw4 --test hw4_optional
+cargo test -p mini-linq-course --release --features hw4 --test hw4_optional
 ```
 
 The endpoint checks duplicate elimination, safe negation, correlated sum,
@@ -448,7 +448,7 @@ nonempty `Blocked`, and empty and nonempty `Purchase`.
 ## Definition of done
 
 - The extended query parses, re-emits, reparses, and compares structurally.
-- The `Query` and `Module` EBNF comments describe `BodyItem`, not the old
+- The `Query` and `Program` EBNF comments describe `BodyItem`, not the old
   positive-only body.
 - `cq::contract::check` returns `syn::Error` for unsafe correlation and
   aggregate-result shadowing.

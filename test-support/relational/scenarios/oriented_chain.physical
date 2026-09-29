@@ -1,0 +1,10 @@
+physical {
+    relation Edge(src: i32, dst: i32);
+    r0 = alias rename Edge { src -> a, dst -> b };
+    r1 = let rename Edge { src -> b, dst -> c };
+    r2 = pipe probe[b] r0, r1;
+    r3 = let rename Edge { src -> d, dst -> c };
+    r4 = pipe probe[c] r2, r3;
+    r5 = pipe canon project r4 keep { a, d };
+    return r5 as answer(a, d);
+}

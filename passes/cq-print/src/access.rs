@@ -168,7 +168,7 @@ impl<'a> Context<'a> {
             }
             return Ok(Side::Host(access));
         }
-        if let Some(Operator::Merge(k)) = self.physical.get(&name).map(|d| &d.operator) {
+        if let Some(Operator::Merge(_, k)) = self.physical.get(&name).map(|d| &d.operator) {
             if sorted(&k.columns) == columns {
                 if let Some(rows) = self.take_pipe(&name) {
                     return Ok(Side::Pipe(rows));

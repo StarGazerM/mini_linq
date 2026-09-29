@@ -3,8 +3,8 @@
 //! A normal query's atoms form a hypergraph: the vertices are the variables
 //! that occur in atoms and every atom is a hyperedge over its variables. The
 //! [`Analysis`] records what that hypergraph *is*; it decides nothing. The
-//! order pass reads it to rank clauses and variables, and the elaboration
-//! pass to name join columns.
+//! order pass reads it to rank clauses and variables; reduction computes
+//! its Yannakakis schedule from the join tree.
 //!
 //! Every fact is defined on the atoms only. Guards and bindings are not
 //! hyperedges: a variable bound by a `let` and used in no atom is not a
@@ -44,7 +44,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{BodyItem, Module, normal};
+use super::{BodyItem, Program, normal};
 use crate::symbol_name;
 
 /// One GYO ear-removal step, kept as the certificate of [`Analysis::acyclic`].
@@ -85,7 +85,7 @@ pub struct Analysis {
 }
 
 /// Check normal form, then analyze.
-pub fn check(module: &Module) -> syn::Result<Analysis> {
+pub fn check(module: &Program) -> syn::Result<Analysis> {
     normal::check(module)?;
     Ok(Analysis::of(module))
 }
@@ -93,9 +93,9 @@ pub fn check(module: &Module) -> syn::Result<Analysis> {
 impl Analysis {
     /// The facts of a normal-form module; see [`check`] to establish normal
     /// form first. Non-variable atom arguments are not vertices.
-    pub fn of(module: &Module) -> Analysis {
+    pub fn of(module: &Program) -> Analysis {
         let mut analysis = Analysis::default();
-        for (clause, item) in module.program.query.body.iter().enumerate() {
+        for (clause, item) in module.query.body.iter().enumerate() {
             let BodyItem::Positive { atom } = item else {
                 continue;
             };

@@ -1,6 +1,6 @@
 //! Logical planning and an independently authored RA; no physical execution.
 use cq_lang_cq as cq;
-use cq_lang_ra as relational_plan;
+use cq_lang_ra as ra;
 use mini_linq_paper_overview::{boundaries, directory, write};
 use std::collections::BTreeSet;
 
@@ -40,8 +40,38 @@ fn oracle(input: &Input) -> Vec<(i32, i32)> {
 }
 
 fn main() {
-    let authored: relational_plan::Module = syn::parse_quote! {
+    let authored: ra::Program = syn::parse_quote! {
 
+            relational {
+    relation R(a:i32,b:i32);
+    relation S(a:i32,b:i32);
+    relation T(a:i32,b:i32);
+    relation U(a:i32,b:i32,c:i32);
+    relation V(a:i32);
+    relation answer(a:i32,b:i32);
+                r_r = rename R {a -> a, b -> x};
+                r_a = select r_r if (*x > 0);
+                r_s = rename S {a -> a, b -> y};
+                r_rs = natural_join r_a with r_s;
+                r_b = extend r_rs with {k:i32} value ((combine(*x,*y),));
+                r_t = rename T {a -> y, b -> z};
+                r_bt = natural_join r_b with r_t;
+                r_c = select r_bt if (permitted(k,*z));
+                r_keys = extend r_c with {p:i32,q:i32}
+                    value ((left_key(k,*y),right_key(*x,*z)));
+                r_d = project r_keys keep {a,p,q};
+                r_u = rename U {a -> p, b -> q, c -> w};
+                r_v = rename V {a -> w};
+                r_uv = semijoin r_u with r_v;
+                r_join = natural_join r_d with r_uv;
+                r_out = project r_join keep {a,w};
+                output r_out as answer(a,w);
+            }
+        };
+    ra::contract::check(&authored).unwrap();
+    let ix = cq_index_policy::compile(&authored).unwrap();
+    cq_lang_ix::contract::check(&ix).unwrap();
+    let source: cq::Program = syn::parse_quote! {
         struct Authored;
         relation R(a:i32,b:i32); relation S(a:i32,b:i32);
         relation T(a:i32,b:i32); relation U(a:i32,b:i32,c:i32);
@@ -50,31 +80,6 @@ fn main() {
             let k:i32 = combine(*x,*y),
             U(left_key(k,*y),right_key(*x,*z),w),
             if *x > 0, if permitted(k,*z), V(w);
-        relational {
-            r_r = rename R {a -> a, b -> x};
-            r_a = select r_r if (*x > 0);
-            r_s = rename S {a -> a, b -> y};
-            r_rs = natural_join r_a with r_s;
-            r_b = extend r_rs with {k:i32} value ((combine(*x,*y),));
-            r_t = rename T {a -> y, b -> z};
-            r_bt = natural_join r_b with r_t;
-            r_c = select r_bt if (permitted(k,*z));
-            r_keys = extend r_c with {p:i32,q:i32}
-                value ((left_key(k,*y),right_key(*x,*z)));
-            r_d = project r_keys keep {a,p,q};
-            r_u = rename U {a -> p, b -> q, c -> w};
-            r_v = rename V {a -> w};
-            r_uv = semijoin r_u with r_v;
-            r_join = natural_join r_d with r_uv;
-            r_out = project r_join keep {a,w};
-            output r_out as answer(a,w);
-        }
-    };
-    relational_plan::contract::check_module(&authored).unwrap();
-    let ix = cq_index_policy::compile(&authored).unwrap();
-    cq_lang_ix::contract::check_module(&ix).unwrap();
-    let source = cq::Module {
-        program: authored.program.clone(),
     };
     let directory = directory("logical-constraint-planning");
     boundaries(&directory, "written", &source, false);
@@ -121,19 +126,4 @@ fn main() {
     println!(
         "PASS: automatic and authored RA/IX contracts; independent whole-tuple oracle and duplicate/empty fixtures. No generated-query equivalence or intermediate runtime counts are claimed."
     );
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_index_policy {
-    pub use ::cq_index_policy::*;
-    pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
-        Ok(cq_lang_ix::Module::new(
-            source.clone(),
-            ::cq_index_policy::reference::compile(source)?,
-        ))
-    }
-    pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
-        target.relational_plan == *source
-            && ::cq_index_policy::reference::check(source, &target.section)
-    }
 }

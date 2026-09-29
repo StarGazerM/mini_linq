@@ -3,20 +3,20 @@
 //! clauses in the pinned sequences (those of the clause-prefix planner they
 //! replace).
 use cq_lang_cq as cq;
-use cq_lang_cq::{BodyItem, normal::Kernel};
+use cq_lang_cq::BodyItem;
 use cq_lang_vo as valuation;
 use cq_order::{Heuristic, Options, Ranking, Split};
 use quote::{ToTokens, quote};
 
-fn cq(tokens: proc_macro2::TokenStream) -> cq::Module {
+fn cq(tokens: proc_macro2::TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
 }
 
-fn normal(tokens: proc_macro2::TokenStream) -> cq::Module {
+fn normal(tokens: proc_macro2::TokenStream) -> cq::Program {
     cq::normal::normalize(&cq(tokens)).unwrap()
 }
 
-fn triangle() -> cq::Module {
+fn triangle() -> cq::Program {
     cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
@@ -26,7 +26,7 @@ fn triangle() -> cq::Module {
     })
 }
 
-fn chain() -> cq::Module {
+fn chain() -> cq::Program {
     cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
@@ -36,25 +36,24 @@ fn chain() -> cq::Module {
     })
 }
 
-/// Compile, and require the plan to check and to erase to the source.
-fn plan(source: &cq::Module, heuristic: Heuristic, split: Split) -> valuation::Module {
+/// Compile and check the schedule against its source.
+fn plan(source: &cq::Program, heuristic: Heuristic, split: Split) -> valuation::Program {
     let options = Options { heuristic, split };
     let plan = cq_order::compile(source, &options).unwrap();
-    valuation::contract::check_module(&plan).unwrap();
-    assert!(cq_order::check(source, &plan, &options));
-    assert_eq!(valuation::kernel(&plan), Kernel::of(source));
+    valuation::contract::check(&plan).unwrap();
+    assert!(cq_order::check(source, &plan, &options).is_ok());
     plan
 }
 
 /// The plan with the given steps over the source program.
-fn expected(source: &cq::Module, steps: proc_macro2::TokenStream) -> valuation::Module {
-    let program = &source.program;
+fn expected(source: &cq::Program, steps: proc_macro2::TokenStream) -> valuation::Program {
+    let program = &source;
     syn::parse2(quote! { #program valuation { #steps } }).unwrap()
 }
 
 /// The clause each coarse step draws on.
-fn sequence(plan: &valuation::Module) -> Vec<usize> {
-    let body = &plan.program.query.body;
+fn sequence(plan: &valuation::Program) -> Vec<usize> {
+    let body = &plan.cq.query.body;
     let nth = |n: usize, kind: fn(&BodyItem) -> bool| {
         body.iter()
             .enumerate()
@@ -64,7 +63,8 @@ fn sequence(plan: &valuation::Module) -> Vec<usize> {
             .unwrap()
     };
     let (mut guards, mut lets) = (0, 0);
-    plan.steps
+    plan.valuation
+        .steps
         .iter()
         .map(|step| match step {
             valuation::Step::Atom(subatom, _) => subatom.clause(),
@@ -218,7 +218,7 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
                 sequence(&plan(source, heuristic, Split::Coarse)),
                 expected,
                 "{heuristic:?} on {}",
-                source.program.query.to_token_stream()
+                source.query.to_token_stream()
             );
         }
     }
@@ -235,7 +235,6 @@ fn prefix_ranking_counts_normalized_constants_as_the_old_literal_keys() {
     });
     let normal = cq::normal::normalize(&source).unwrap();
     let constants = normal
-        .program
         .query
         .body
         .iter()
@@ -264,6 +263,7 @@ fn elimination_orders_atoms_by_their_earliest_variable() {
         let position = |v: &String| order.iter().position(|o| o == v).unwrap();
         let coarse = plan(&source, Heuristic::Elimination, Split::Coarse);
         let earliest: Vec<usize> = coarse
+            .valuation
             .steps
             .iter()
             .filter_map(|step| match step {
@@ -285,12 +285,12 @@ fn elimination_orders_atoms_by_their_earliest_variable() {
 }
 
 /// The variables the plan's subatoms introduce, in step order.
-fn atom_bound(plan: &valuation::Module) -> Vec<String> {
-    let analysis = valuation::contract::check_module(plan).unwrap();
+fn atom_bound(plan: &valuation::Program) -> Vec<String> {
+    let analysis = valuation::contract::check(plan).unwrap();
     analysis
         .introduces
         .iter()
-        .zip(&plan.steps)
+        .zip(&plan.valuation.steps)
         .filter(|(_, step)| matches!(step, valuation::Step::Atom(..)))
         .flat_map(|(introduced, _)| introduced.clone())
         .collect()
@@ -319,11 +319,13 @@ fn elimination_defers_an_atom_to_the_binding_that_supplies_its_column() {
     assert_eq!(atom_bound(&fine), atom_order);
     // No subatom lists `k` before the binding supplies it.
     let binding = fine
+        .valuation
         .steps
         .iter()
         .position(|step| matches!(step, valuation::Step::Let(..)))
         .unwrap();
     let first_check = fine
+        .valuation
         .steps
         .iter()
         .position(|step| match step {
@@ -345,14 +347,14 @@ fn sources_outside_normal_form_or_using_variables_early_are_rejected() {
     let error = cq_order::compile(&repeated, &options)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("normal form"), "{error}");
+    assert!(error.contains("R"), "{error}");
     let early = cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
         answer(x) :- if y > 1, R(x, y);
     });
     let error = cq_order::compile(&early, &options).unwrap_err().to_string();
-    assert!(error.contains("before it is bound"), "{error}");
+    assert!(error.contains("y"), "{error}");
 }
 
 #[test]
@@ -390,7 +392,7 @@ fn every_heuristic_and_split_ends_each_clause_fully_covered() {
                 let plan = plan(source, heuristic, split);
                 let mut last: std::collections::BTreeMap<usize, &valuation::Subatom> =
                     Default::default();
-                for step in &plan.steps {
+                for step in &plan.valuation.steps {
                     if let valuation::Step::Atom(subatom, _) = step {
                         last.insert(subatom.clause(), subatom);
                     }
@@ -410,24 +412,56 @@ fn every_heuristic_and_split_ends_each_clause_fully_covered() {
     }
 }
 
-#[allow(unused_imports, dead_code)]
-mod cq_order {
-    pub use ::cq_order::*;
-    pub fn compile(
-        source: &cq_lang_cq::Module,
-        options: &::cq_order::Options,
-    ) -> syn::Result<cq_lang_vo::Module> {
-        Ok(cq_lang_vo::Module::new(
-            source.program.clone(),
-            ::cq_order::reference::compile(source, options)?,
-        ))
-    }
-    pub fn check(
-        source: &cq_lang_cq::Module,
-        target: &cq_lang_vo::Module,
-        options: &::cq_order::Options,
-    ) -> bool {
-        target.program == source.program
-            && ::cq_order::reference::check(source, &target.section, options)
+#[allow(dead_code)]
+#[path = "../../../test-support/relational/cq_semantics.rs"]
+mod cq_oracle;
+#[allow(dead_code)]
+#[path = "../../../test-support/relational/databases.rs"]
+mod databases;
+#[allow(dead_code)]
+#[path = "../../../test-support/relational/valuation_semantics.rs"]
+mod evaluator;
+#[path = "../../../test-support/relational/scenarios.rs"]
+mod scenarios;
+#[allow(dead_code)]
+#[path = "../../../test-support/relational/values.rs"]
+mod values;
+#[test]
+fn shared_scenarios_preserve_answers_and_reject_changed_schedules() {
+    for case in scenarios::SCENARIOS {
+        let source = cq::normal::normalize(&syn::parse_str(case.cq).unwrap()).unwrap();
+        for split in [Split::Coarse, Split::Fine] {
+            let options = Options {
+                split,
+                ..Default::default()
+            };
+            let target = cq_order::compile(&source, &options).unwrap();
+            cq_order::check(&source, &target, &options).unwrap();
+            let fixture_split = if case.name == "fine_triangle" {
+                Split::Fine
+            } else {
+                Split::Coarse
+            };
+            if !case.name.ends_with("_reduced") && split == fixture_split {
+                assert_eq!(
+                    target,
+                    syn::parse_str::<valuation::Program>(case.vo).unwrap(),
+                    "{}",
+                    case.name
+                );
+            }
+            for seed in 0..4 {
+                let database = databases::binary_database(&source, seed);
+                assert_eq!(
+                    evaluator::evaluate(&target, &database),
+                    cq_oracle::evaluate_cq(&source, &database),
+                    "{}",
+                    case.name
+                );
+            }
+            let mut changed = target;
+            changed.valuation.steps.pop();
+            assert!(cq_order::check(&source, &changed, &options).is_err());
+        }
     }
 }

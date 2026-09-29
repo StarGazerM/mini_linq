@@ -1,0 +1,9 @@
+structures {
+    ABC;
+    BCD;
+    ACD;
+    ABD;
+    r1 = ::cq_storage::HashIndex<_, _> [b, c];
+    r3 = ::cq_storage::HashIndex<_, _> [a, c, d];
+    r5 = ::cq_storage::HashIndex<_, _> [a, b, d];
+}

@@ -34,7 +34,7 @@ use cq_lang_physical::syntax::symbol_name;
 use cq_lang_physical::{ModeKind, Operator};
 use cq_lang_structures as structures;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 
 /// What a read needs on a key: the strongest need picks the default type.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -101,15 +101,10 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
     Some(levels)
 }
 
-pub fn compile(
-    source: &physical::Section,
-    env: &impl physical::Env,
-    policy: &Policy,
-) -> syn::Result<structures::Section> {
-    let analysis = physical::contract::check(source, env)?;
-    let layouts: BTreeMap<String, Vec<String>> = env
+pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<structures::Program> {
+    let analysis = physical::contract::check(source)?;
+    let layouts: BTreeMap<String, Vec<String>> = source
         .inputs()
-        .iter()
         .map(|input| {
             (
                 symbol_name(&input.name),
@@ -182,7 +177,7 @@ pub fn compile(
 
     // Advice declared on the host relation applies to its renames.
     let mut advice: BTreeMap<String, syn::Type> = BTreeMap::new();
-    for input in env.inputs() {
+    for input in source.inputs() {
         if let Some(attr) = input.index_advice()? {
             advice.insert(symbol_name(&input.name), attr.parse_args()?);
         }
@@ -318,8 +313,10 @@ pub fn compile(
             let tail = full
                 .iter()
                 .filter(|c| !prefix.contains(c))
-                .map(|c| format_ident!("{c}"));
-            let columns = prefix.iter().map(|c| format_ident!("{c}"));
+                .map(|c| analysis.rows[&name].bindings[c].clone());
+            let columns = prefix
+                .iter()
+                .map(|c| analysis.rows[&name].bindings[c].clone());
             let inner = needs[&(name.clone(), full.clone())]
                 .iter()
                 .max()
@@ -339,7 +336,9 @@ pub fn compile(
                 let mut ty = needs.iter().max().expect("nonempty").default_type();
                 let mut levels = TokenStream::new();
                 for level in chain.iter().rev() {
-                    let columns = level.iter().map(|c| format_ident!("{c}"));
+                    let columns = level
+                        .iter()
+                        .map(|c| analysis.rows[&name].bindings[c].clone());
                     levels = quote! { [#(#columns),*] #levels };
                 }
                 for _ in 1..chain.len() {
@@ -354,41 +353,32 @@ pub fn compile(
                 Some(ty) => ty.clone(),
                 None => needs.iter().max().expect("nonempty").default_type(),
             };
-            let columns = columns.iter().map(|c| format_ident!("{c}"));
+            let columns = columns
+                .iter()
+                .map(|c| analysis.rows[&name].bindings[c].clone());
             entries.extend(quote! { #ident = #ty [#(#columns),*]; });
         }
     }
-    let target: structures::Section = syn::parse2(quote! { structures { #hosts #entries } })?;
-    structures::contract::check(&target, &Env::new(source, env)?)?;
+    let target = structures::Program {
+        physical: source.clone(),
+        structures: syn::parse2(quote! { structures { #hosts #entries } })?,
+    };
+    structures::contract::check(&target)?;
     Ok(target)
 }
 
-/// Physical → Structures correspondence: Physical preserved, the contract
-/// holds, and the module is exactly the selection under `policy`.
+/// Check physical execution and the storage choices requested by policy.
 pub fn check(
-    source: &physical::Section,
-    env: &impl physical::Env,
-    target: &structures::Section,
+    source: &physical::Program,
+    target: &structures::Program,
     policy: &Policy,
-) -> bool {
-    Env::new(source, env).is_ok_and(|env| structures::contract::well_formed(target, &env))
-        && compile(source, env, policy).is_ok_and(|expected| expected == *target)
-}
-
-mod env;
-pub use env::Env;
-#[cfg(feature = "reference")]
-pub mod reference {
-    use super::*;
-    pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<structures::Section> {
-        super::compile(
-            source,
-            &physical::reference::Env::new(&source.index_requirements)?,
-            policy,
-        )
+) -> syn::Result<()> {
+    structures::contract::check(target)?;
+    if compile(source, policy)? != *target {
+        return Err(syn::Error::new_spanned(
+            &target.physical.program.returned,
+            "structures differ from the requested policy",
+        ));
     }
-    pub fn check(source: &physical::Module, target: &structures::Section, policy: &Policy) -> bool {
-        physical::reference::Env::new(&source.index_requirements)
-            .is_ok_and(|env| super::check(source, &env, target, policy))
-    }
+    Ok(())
 }

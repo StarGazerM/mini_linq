@@ -297,8 +297,8 @@ and route or emit the returned type:
 
 ```text
 mini_linq(TokenStream)
-  -> parse cq::Module
-  -> compile_cq(&cq::Module)
+  -> parse cq::Program
+  -> compile_cq(&cq::Program)
   -> quote choose_index_policy! { target }
 ```
 
@@ -309,12 +309,11 @@ wrapper because the proc-macro entry already owns the only token-level work.
 ## Sequence 8: local contracts and edge contracts
 
 A parser answers whether tokens match a grammar. A local contract answers
-whether an object is meaningful inside a language. The two APIs make that
-choice explicit:
+whether an object is meaningful inside a language. The contract and correspondence APIs make those obligations explicit:
 
 ```text
-contract::check(&value)       -> syn::Result<()>
-contract::well_formed(&value) -> bool
+contract::check(&program)             -> syn::Result<Analysis>
+pass::check(&source, &target, options) -> syn::Result<()>
 ```
 
 The public typed pass calls its source's `contract::check` before lowering and
@@ -380,7 +379,7 @@ physical {
 ```
 
 That module states the physical operator and dataflow structure, but not the
-host-language spelling. The bindings Γ in the `structures` section then name
+host-language spelling. The bindings Γ in the Structures program then name
 the value answering each keyed read, and `cq_physical_realization::compile`
 is the printer that maps them to `map`, `flat_map`, and `filter`. This keeps the final emitter
 honest: it does not invent a join or intermediate result while printing.

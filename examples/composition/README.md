@@ -8,7 +8,7 @@ A host composes the compiler stages by binding macro slots:
    join columns — and invokes `lower_physical!` (IX → Physical): one
    physical operator per result, modes from use.
 3. `select_structures!` (Physical → Γ) produces the bindings Γ in the
-   `structures` section, binding every keyed read to a
+   Structures program, binding every keyed read to a
    host key fact or a Rust type built over the result; here every read is
    answered by a host key, so nothing is built.
 4. `structures_to_rust!` prints one pull program over the `cq_storage`

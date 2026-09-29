@@ -9,7 +9,7 @@
 //!
 //! Denotation: a host entry is the host value with its abstraction function;
 //! a built entry is `Type` constructed through `cq_storage::Build` from
-//! `(key, payload)` pairs of the RA set, so `α(built) = ⟦r⟧`. Whether `Type`
+//! `(key, payload)` pairs of the result set, so `α(built) = ⟦r⟧`. Whether `Type`
 //! or the host value implements the trait behind each read is checked by
 //! rustc where the generated program performs it; nothing here claims a
 //! capability. Contract: every Physical premise is discharged —
@@ -28,7 +28,7 @@
 //! every input has one host entry; no entry is duplicated.
 //!
 //! ```text
-//! Module ::= Physical "structures" "{" (Entry ";")* "}"
+//! Program ::= physical::Program "structures" "{" (Entry ";")* "}"
 //! Entry  ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"]
 //!          | Ident "=" RustType ("[" Ident,* "]")+
 //! ```
@@ -39,7 +39,6 @@
 //! prefix `K₁ ∪ … ∪ Kᵢ`, which is how a trie serves `[a]`, `[a, b]` and
 //! `[a, b, c]` at once. Level order is representation; IX demands stay sets.
 
-#[cfg(feature = "reference-prefix")]
 pub use cq_lang_physical as physical;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,8 +46,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use syn::{Ident, Token, token};
 
 pub use cq_syntax::{CommaList, symbol_name};
-#[cfg(feature = "reference-prefix")]
-pub use physical::ra;
 
 pub mod kw {
     syn::custom_keyword!(structures);
@@ -58,7 +55,7 @@ pub mod kw {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Section {
+pub struct Structures {
     pub structures_token: kw::structures,
     #[syn(braced)]
     pub brace: token::Brace,
@@ -158,70 +155,20 @@ fn names(columns: &CommaList<Ident>) -> Vec<String> {
     names
 }
 
-/// The Structures contract in diagnostic and predicate form.
+/// Physical execution paired with all required storage choices.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Program {
+    pub physical: physical::Program,
+    pub structures: Structures,
+}
+
 pub mod contract {
-    pub fn check(
-        section: &super::Section,
-        env: &impl super::PhysicalEnv,
-    ) -> syn::Result<super::Analysis> {
-        super::analyze(section, env)
-    }
-    pub fn well_formed(section: &super::Section, env: &impl super::PhysicalEnv) -> bool {
-        check(section, env).is_ok()
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn check_module(module: &super::Module) -> syn::Result<super::Analysis> {
-        check(
-            &module.section,
-            &super::reference::Env::new(&module.physical)?,
-        )
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn well_formed_module(module: &super::Module) -> bool {
-        check_module(module).is_ok()
+    pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
+        super::analyze(program)
     }
 }
 
-/// The representation modes used by the Structures contract.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ModeKind {
-    Pipe,
-    Let,
-    Alias,
-}
-
-/// Physical facts consumed by structure validation, owned by this language.
-#[derive(Clone, Debug, Default)]
-pub struct PhysicalFacts {
-    pub scanned: BTreeSet<String>,
-    pub headings: BTreeMap<String, Vec<String>>,
-    pub hosts: BTreeMap<String, String>,
-    pub renames: BTreeMap<String, BTreeMap<String, String>>,
-    pub key_reads: BTreeMap<String, Vec<(String, Vec<String>)>>,
-    pub merge_reads: BTreeMap<String, Vec<(String, Vec<String>)>>,
-    pub range_reads: BTreeMap<String, Vec<(String, String)>>,
-    pub modes: BTreeMap<String, ModeKind>,
-    pub canon: BTreeSet<String>,
-}
-
-/// Only the logical facts needed for uniqueness inference.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum UniqueOp {
-    Unit,
-    Rename { host: String },
-    Join { left: String, right: String },
-    Preserve { input: String },
-    Project { input: String },
-}
-
-/// Facts from a checked producer; alternate producers implement this locally.
-pub trait PhysicalEnv {
-    fn physical(&self) -> &PhysicalFacts;
-    fn host_layouts(&self) -> BTreeMap<String, Vec<String>>;
-    fn results(&self) -> Vec<(String, UniqueOp)>;
-    fn merge_keys(&self) -> BTreeMap<String, Vec<String>>;
-    fn output(&self) -> String;
-}
+use physical::{ModeKind, Operator};
 
 /// A key a value is stored under, and what that key answers.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -236,7 +183,7 @@ pub type Built = (Vec<Vec<String>>, syn::Type);
 /// What the contract establishes for later stages.
 #[derive(Clone, Debug)]
 pub struct Analysis {
-    pub physical: PhysicalFacts,
+    pub physical: physical::Analysis,
     /// Declared column order of every host relation.
     pub host_layouts: BTreeMap<String, Vec<String>>,
     /// Key facts of every host, in the host's own attribute names.
@@ -288,13 +235,26 @@ pub fn prefix_depth(levels: &[Vec<String>], wanted: &[String]) -> Option<usize> 
 }
 
 fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> syn::Result<T> {
-    Err(syn::Error::new_spanned(spanned, message))
+    Err(syn::Error::new_spanned(
+        spanned,
+        format!("{}: {message}", spanned.to_token_stream()),
+    ))
 }
 
-fn analyze(module: &Section, env: &impl PhysicalEnv) -> syn::Result<Analysis> {
+fn analyze(program: &Program) -> syn::Result<Analysis> {
+    let module = &program.structures;
     let mut analysis = Analysis {
-        physical: env.physical().clone(),
-        host_layouts: env.host_layouts(),
+        physical: physical::contract::check(&program.physical)?,
+        host_layouts: program
+            .physical
+            .inputs()
+            .map(|r| {
+                (
+                    symbol_name(&r.name),
+                    r.columns.iter().map(|c| symbol_name(&c.name)).collect(),
+                )
+            })
+            .collect(),
         host_keys: BTreeMap::new(),
         host_canon: BTreeSet::new(),
         built: BTreeMap::new(),
@@ -338,7 +298,7 @@ fn analyze(module: &Section, env: &impl PhysicalEnv) -> syn::Result<Analysis> {
                     );
                 }
                 let Some(heading) = analysis.physical.headings.get(&name) else {
-                    return error(&entry.name, "structure must name an RA result");
+                    return error(&entry.name, "structure must name a Physical result");
                 };
                 let mut all = BTreeSet::new();
                 for column in keyed.columns() {
@@ -413,7 +373,16 @@ fn analyze(module: &Section, env: &impl PhysicalEnv) -> syn::Result<Analysis> {
         }
     }
     // Merge sides: ordered on the key by Γ, or a pipe sorted on it by its own merge.
-    let merge_key = env.merge_keys();
+    let merge_key: BTreeMap<String, Vec<String>> = program
+        .physical
+        .program
+        .definitions
+        .iter()
+        .filter_map(|d| match &d.operator {
+            Operator::Merge(_, k) => Some((symbol_name(&d.name), names(&k.columns))),
+            _ => None,
+        })
+        .collect();
     for (side, reads) in &analysis.physical.merge_reads {
         for (reader, columns) in reads {
             let by_structure = analysis
@@ -434,7 +403,9 @@ fn analyze(module: &Section, env: &impl PhysicalEnv) -> syn::Result<Analysis> {
     }
 
     // Uniqueness by key inference, then the canonical return.
-    for (name, op) in env.results() {
+    for definition in &program.physical.program.definitions {
+        let name = symbol_name(&definition.name);
+        let op = &definition.operator;
         let Some(heading) = analysis.physical.headings.get(&name).cloned() else {
             return error(
                 &module.structures_token,
@@ -442,13 +413,17 @@ fn analyze(module: &Section, env: &impl PhysicalEnv) -> syn::Result<Analysis> {
             );
         };
         let key = match op {
-            UniqueOp::Unit => Some(Vec::new()),
-            UniqueOp::Rename { host } => {
+            Operator::Unit(_) => Some(Vec::new()),
+            Operator::Rename(r) => {
                 let full_by_structure = analysis.built_on(&name, &heading).is_some();
-                (analysis.host_canon.contains(&host) || full_by_structure).then(|| heading.clone())
+                (analysis.host_canon.contains(&symbol_name(&r.relation)) || full_by_structure)
+                    .then(|| heading.clone())
             }
-            UniqueOp::Join { left, right } => {
-                match (analysis.unique.get(&left), analysis.unique.get(&right)) {
+            Operator::Probe(_, k) | Operator::Merge(_, k) => {
+                match (
+                    analysis.unique.get(&symbol_name(&k.left)),
+                    analysis.unique.get(&symbol_name(&k.right)),
+                ) {
                     (Some(kl), Some(kr)) => {
                         let mut key: Vec<String> = kl.iter().chain(kr).cloned().collect();
                         key.sort();
@@ -458,10 +433,13 @@ fn analyze(module: &Section, env: &impl PhysicalEnv) -> syn::Result<Analysis> {
                     _ => None,
                 }
             }
-            UniqueOp::Preserve { input } => analysis.unique.get(&input).cloned(),
-            UniqueOp::Project { input } => analysis
+            Operator::Semi(_, k) => analysis.unique.get(&symbol_name(&k.left)).cloned(),
+            Operator::Select(s) => analysis.unique.get(&symbol_name(&s.input)).cloned(),
+            Operator::Range(_, r) => analysis.unique.get(&symbol_name(&r.input)).cloned(),
+            Operator::Extend(e) => analysis.unique.get(&symbol_name(&e.input)).cloned(),
+            Operator::Project(p) => analysis
                 .unique
-                .get(&input)
+                .get(&symbol_name(&p.input))
                 .filter(|key| key.iter().all(|k| heading.contains(k)))
                 .cloned(),
         };
@@ -474,7 +452,7 @@ fn analyze(module: &Section, env: &impl PhysicalEnv) -> syn::Result<Analysis> {
             analysis.unique.insert(name, key);
         }
     }
-    let returned = env.output();
+    let returned = symbol_name(&program.physical.program.returned);
     if !analysis.unique.contains_key(&returned) {
         return error(
             &module.structures_token,
@@ -488,18 +466,3 @@ fn analyze(module: &Section, env: &impl PhysicalEnv) -> syn::Result<Analysis> {
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
-
-#[cfg(feature = "reference-prefix")]
-pub mod reference;
-#[cfg(feature = "reference-prefix")]
-pub use reference::Module;
-
-pub mod execution;
-/// Source environment for a Structures printer.
-pub trait Env: PhysicalEnv {
-    fn inputs(&self) -> Vec<cq_syntax::RelationDecl>;
-    fn definitions(&self) -> &[execution::Definition];
-    fn row(&self, result: &str) -> &execution::Row;
-    fn returned(&self) -> &Ident;
-    fn head(&self) -> &cq_syntax::Atom;
-}

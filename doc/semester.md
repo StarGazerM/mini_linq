@@ -125,7 +125,7 @@ live in `passes/cq-index-policy/src/lib.rs` and the `cq-physical-lowering`,
    Physical, then Γ, then Rust.
 
 The third edge is three recorded decisions. Physical fixes one physical
-operator per result and the mode of every read; the `structures` section
+operator per result and the mode of every read; the Structures program
 records the bindings Γ, the host or built value answering each keyed read;
 `structures_to_rust!` prints one Rust block over the `cq-storage` traits (`Build`, `IndexRead`,
 `ExactMembership`, `OrderedRead`, `Canonical`) that evaluates to an
@@ -223,16 +223,16 @@ stage. Grammar failures become span-aware `syn::Error` diagnostics emitted as
 `compile_error!`. The typed functions check source semantics and return the
 same diagnostic type; macro entries do not duplicate those checks. Students
 implement the designated typed stages behind those entries.
-`cq_lang_cq::normal::normalize(&cq::Module)` produces CQ-NF;
+`cq_lang_cq::normal::normalize(&cq::Program)` produces CQ-NF;
 `cq_order::compile` with `Written` and `Coarse` produces a valuation plan;
-`cq_elaborate::compile` produces the named `relational_plan::Module`.
-`cq_index_policy::compile(&relational_plan::Module)` returns
-`syn::Result<index_requirements::Module>` preserving that full plan and adding
+`cq_elaborate::compile` produces the named `ra::Program`.
+`cq_index_policy::compile(&ra::Program)` returns
+`syn::Result<ix::Program>` preserving that full plan and adding
 the exact requirements.
-`cq_physical_lowering::compile(&index_requirements::Module, &Policy)` and
-`cq_structure_selection::compile(&physical::Module, &Policy)` record the
+`cq_physical_lowering::compile(&ix::Program, &Policy)` and
+`cq_structure_selection::compile(&physical::Program, &Policy)` record the
 physical operators and the bindings Γ answering each keyed read, and
-`cq_physical_realization::compile(&structures::Module, &Endpoints)` returns
+`cq_physical_realization::compile(&structures::Program, &Endpoints)` returns
 `syn::Result<syn::Expr>`: one Rust block over the `cq-storage` traits. Inside each body they inspect
 the borrowed source and construct the complete target with `quote!` and
 `syn::parse2`.
@@ -271,7 +271,7 @@ violated its specified transformation.
 Students do not write a parser, printer, procedural-macro entry point, or
 parallel Rust builder API. The final pass emits actual Rust collection
 construction and access expressions rather than another descriptor language.
-Supplied `cq_physical_realization::compile` consumes a `structures::Module`
+Supplied `cq_physical_realization::compile` consumes a `structures::Program`
 and returns one ordinary Rust block whose value is an iterator of answer
 tuples. The reference payload retains operator and intermediate-result boundaries, while the emitted
 combinators retain resumable state. Calling `next()` or a consumer such as
@@ -282,8 +282,8 @@ sources. The later push
 checkpoint targets an explicit staff-supplied Rust mechanism; students do not
 have to invent the callback/channel IR or runtime shell.
 
-The current starter supplies CQ-NF and VO syntax, `relational_plan::Module`,
-`index_requirements::Module`, `physical::Module`, `structures::Module`, their local `contract`
+The current starter supplies CQ-NF and VO syntax, `ra::Program`,
+`ix::Program`, `physical::Program`, `structures::Program`, their local `contract`
 modules, the supplied structure selection and pull-program printer, and the compiler test
 harness. Later releases add richer workload,
 reference, and benchmark infrastructure.

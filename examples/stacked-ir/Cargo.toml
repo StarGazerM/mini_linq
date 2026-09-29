@@ -12,3 +12,7 @@ mini-linq = { path = "../../facade/mini-linq" }
 cq-state-providers = { path = "../../runtime/cq-state-providers" }
 cq-storage = { path = "../../runtime/cq-storage" }
 trace-bridge = { path = "bridge" }
+
+[[test]]
+name = "reference"
+path = "../../facade/mini-linq/tests/physical_query.rs"

@@ -86,36 +86,24 @@ def check(data, announce=True):
         package = packages[name]
         internal = {d["name"] for d in production(package) if "path" in d or d["name"] in packages}
         if name in LANGUAGES:
-            prefixes = [d for d in production(package) if d["name"] in LANGUAGES and d["name"] != "cq-syntax"]
-            if len(prefixes) > 1: raise ValueError(f"language has multiple reference prefixes: {name}")
-            allowed = {"cq-syntax"} - {name}
-            for dep in prefixes:
-                if not dep["optional"] or package["features"].get("reference-prefix") != ["dep:" + dep["name"]] + ([dep["name"] + "/reference-prefix"] if dep["name"] != "cq-lang-cq" else []):
-                    raise ValueError(f"language dependency must be optional and owned by reference-prefix: {name} -> {dep['name']}")
-                if package["features"].get("default") != ["reference-prefix"]:
-                    raise ValueError(f"reference-prefix must be the default adapter: {name}")
-                allowed.add(dep["name"])
+            base = {"cq-lang-vo": "cq-lang-cq", "cq-lang-ix": "cq-lang-ra", "cq-lang-structures": "cq-lang-physical"}.get(name)
+            allowed = ({"cq-syntax", base} - {None, name})
+            if package["features"]:
+                raise ValueError(f"language features are forbidden: {name}")
         elif name in FAMILIES:
             edge = EDGES[name]
             required = {edge["source"], edge["target"]} - {"rust"}
-            if not required <= set(LANGUAGES): raise ValueError(f"pass endpoints are not language crates: {name}")
-            if edge["target"] == "rust" and not edge.get("printer"):
-                raise ValueError(f"Rust target must declare a printer: {name}")
-            allowed = required | ({"cq-print"} if edge.get("printer") and name != "cq-print" else set())
-            if internal & set(LANGUAGES) != required:
+            if not required <= set(LANGUAGES): raise ValueError(f"pass endpoints are not languages: {name}")
+            allowed = required | {"cq-syntax"} | ({"cq-print"} if name == "cq-physical-realization" else set())
+            if internal & (set(LANGUAGES) - {"cq-syntax"}) != required:
                 raise ValueError(f"pass must depend on exactly its source and target languages: {name}: {internal}")
-            for dep in production(package):
-                if dep["name"] in LANGUAGES and dep["uses_default_features"]:
-                    raise ValueError(f"pass enables language defaults: {name} -> {dep['name']}")
-            expected_reference = {d + "/reference-prefix" for d in required if d != "cq-lang-cq"}
-            if name == "cq-physical-realization": expected_reference.add("cq-print/reference")
-            if set(package["features"].get("reference", [])) != expected_reference or package["features"].get("default") != ["reference"]:
-                raise ValueError(f"pass reference feature must own its prefix adapters: {name}")
+            if package["features"]:
+                raise ValueError(f"pass features are forbidden: {name}")
         elif name in RUNTIME:
             allowed = {"cq-syntax", "cq-protocol"} - {name}
         else:
             allowed = set(packages)
-        for dep in production(package):
+        for dep in package["dependencies"]:
             target = dep["name"]
             if "path" not in dep and target not in packages: continue
             expected = Path(packages[target]["manifest_path"]).parent if target in packages else None
@@ -142,6 +130,7 @@ def negative_dependency_checks(data):
                  ("cq-physical-lowering", "cq-lang-ra", None, False),
                  ("cq-lang-ix", "cq-storage", None, False),
                  ("cq-lang-ix", "cq-lang-physical", None, False),
+                 ("cq-physical-lowering", "cq-lang-vo", "dev", False),
                  ("cq-physical-realization", "cq-storage", None, True)]
     for owner, target, kind, remote in mutations:
         altered = copy.deepcopy(data)
@@ -152,16 +141,12 @@ def negative_dependency_checks(data):
         try: check(altered, announce=False)
         except ValueError: pass
         else: raise ValueError(f"guard accepted forbidden edge: {owner} -> {target}")
-    for feature_mutation in ("language-defaults", "reference-leak"):
+    for owner in ("cq-lang-ra", "cq-physical-lowering"):
         altered = copy.deepcopy(data)
-        package = next(p for p in altered["packages"] if p["name"] == "cq-physical-lowering")
-        if feature_mutation == "language-defaults":
-            next(d for d in package["dependencies"] if d["name"] == "cq-lang-ix")["uses_default_features"] = True
-        else:
-            package["features"]["reference"] = []
+        next(p for p in altered["packages"] if p["name"] == owner)["features"]["hidden"] = []
         try: check(altered, announce=False)
         except ValueError: pass
-        else: raise ValueError(f"guard accepted isolation mutation: {feature_mutation}")
+        else: raise ValueError(f"guard accepted language/pass feature: {owner}")
     print(f"PASS: {len(mutations)} forbidden dependency and 2 feature mutations rejected", flush=True)
 
 
@@ -186,39 +171,25 @@ def write_workspace(destination, selected):
     shutil.copy2(ROOT / "rust-toolchain.toml", destination / "rust-toolchain.toml")
 
 
-def copy_component(destination, name, selected, standalone):
+def copy_component(destination, name, selected):
     base = ROOT / PATHS[name]
     output = destination / PATHS[name]
     shutil.copytree(base / "src", output / "src")
+    if (base / "tests").exists(): shutil.copytree(base / "tests", output / "tests")
     manifest = tomllib.loads((base / "Cargo.toml").read_text())
-    manifest.pop("dev-dependencies", None)
     tests = manifest.pop("test", [])
     manifest["package"].pop("metadata", None)
-    manifest["package"]["autotests"] = False
-    # Cargo resolves optional path manifests even when disabled. Remove only
-    # unavailable optional prefixes from this physically isolated copy.
-    for dep in list(manifest.get("dependencies", {})):
-        if dep in PATHS and dep not in selected:
-            spec = manifest["dependencies"][dep]
-            if not spec.get("optional"): raise ValueError(f"missing non-optional dependency: {name} -> {dep}")
-            del manifest["dependencies"][dep]
-            for feature in manifest.get("features", {}).values():
-                feature[:] = [f for f in feature if f != "dep:" + dep and not f.startswith(dep + "/")]
+    for kind in ("dependencies", "dev-dependencies", "build-dependencies"):
+        for dep in manifest.get(kind, {}):
+            if dep in PATHS and dep not in selected:
+                raise ValueError(f"isolated {name} test adds an undeclared language or pass: {dep}")
     lines = []
     for section, values in manifest.items():
         lines.append(f"[{section}]")
         lines.extend(f"{k} = {toml(v)}" for k, v in values.items())
         lines.append("")
-    if name in FAMILIES and (base / "tests").exists():
-        shutil.copytree(base / "tests", output / "tests")
-        registered = {t["name"]: t for t in tests}
-        for path in sorted((base / "tests").glob("*.rs")):
-            test = registered.get(path.stem, {"name": path.stem})
-            lines += ["[[test]]"] + [f"{k} = {toml(v)}" for k, v in test.items()]
-    if standalone and (base / "tests/section.rs").exists():
-        (output / "tests").mkdir()
-        shutil.copy2(base / "tests/section.rs", output / "tests/section.rs")
-        lines += ['[[test]]', 'name = "section"', 'path = "tests/section.rs"']
+    for test in tests:
+        lines += ["[[test]]"] + [f"{k} = {toml(v)}" for k, v in test.items()]
     (output / "Cargo.toml").write_text("\n".join(lines) + "\n")
 
 
@@ -226,40 +197,32 @@ def isolate(packages, only=()):
     logdir = ROOT / "target/component-logs"; logdir.mkdir(parents=True, exist_ok=True)
     for name in LANGUAGES | RUNTIME | FAMILIES:
         if only and name not in only: continue
-        standalone = name in LANGUAGES
-        if name in FAMILIES:
-            edge = EDGES[name]
-            selected = {name, "cq-syntax", edge["source"], edge["target"]} - {"rust"}
-            if edge.get("printer"): selected.add("cq-print")
-        else:
-            selected = ({name, "cq-syntax"} if standalone else closure(packages, name))
+        selected = closure(packages, name) | {"cq-syntax"}
         with tempfile.TemporaryDirectory(prefix=f"mini-linq-{name}-") as temporary:
             destination = Path(temporary)
             write_workspace(destination, selected)
-            for package in selected: copy_component(destination, package, selected, standalone and package == name)
+            for package in selected: copy_component(destination, package, selected)
+            shutil.copytree(ROOT / "test-support", destination / "test-support")
+            shutil.copytree(ROOT / "teaching", destination / "teaching")
+            # Runtime source is a generated-code execution fixture, never a compiler dependency.
+            shutil.copytree(ROOT / "runtime/cq-storage/src", destination / "runtime/cq-storage/src", dirs_exist_ok=True)
             env = os.environ.copy(); env["CARGO_TARGET_DIR"] = str(ROOT / "target/component-isolation"); env["CARGO_TERM_COLOR"] = "never"
             command = ["cargo", "test", "-p", name, "--no-default-features", "--offline"]
             with (logdir / f"{name}.log").open("w") as log:
                 result = subprocess.run(command, cwd=destination, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"isolation failed: {name}; see {logdir / (name + '.log')}")
-            if name in FAMILIES:
-                # Check resolved features as well as physically absent directories.
-                resolved = json.loads(subprocess.check_output(["cargo", "metadata", "--format-version=1", "--no-default-features", "--offline"], cwd=destination, text=True, stderr=subprocess.PIPE))
-                by_id = {p["id"]: p["name"] for p in resolved["packages"]}
-                for node in resolved["resolve"]["nodes"]:
-                    if by_id[node["id"]] in LANGUAGES and "reference-prefix" in node["features"]:
-                        raise ValueError(f"isolation enabled a reference prefix: {name}")
+            if name in FAMILIES | LANGUAGES:
                 if not re.search(r"test result: ok\. [1-9][0-9]* passed", (logdir / f"{name}.log").read_text()):
                     raise ValueError(f"isolation executed no tests: {name}")
-            detail = "without any reference prefix" if standalone else "with only: " + ", ".join(sorted(selected - {name}))
+            detail = "with only: " + ", ".join(sorted(selected - {name}))
             print(f"PASS: {name} {detail}", flush=True)
 
 
 CQ = 'struct Q; relation R(a:i32); answer(x) :- R(x);'
-RA = CQ + ' relational { r = rename R {a -> x}; output r as answer(x); }'
+RA = 'relational { relation R(a:i32); r = rename R {a -> x}; output r as answer(x); }'
 IX = RA + ' indexes {}'
 POLICED_IX = IX + ' policy { R canon; }'
-PHYSICAL = IX + ' physical { r = alias rename; return r; }'
+PHYSICAL = 'physical { relation R(a:i32); r = alias rename R {a -> x}; return r as answer(x); }'
 POLICED_PHYSICAL = PHYSICAL + ' policy { R canon; }'
 STRUCTURES = PHYSICAL + ' structures { R canon; }'
 

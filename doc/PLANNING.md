@@ -27,7 +27,7 @@ elaboration. These facades pass RA to `mini_linq::choose_index_policy!`; a
 caller can import `index_demands` under that name. IX then goes to the
 caller's `physical_policy!`, which appends a query-independent `policy { … }`
 and invokes `lower_physical!`; Physical records one operator and mode per
-result, and the `structures` section records the bindings Γ: the value answering
+result, and the Structures program records the bindings Γ: the value answering
 each keyed read.
 
 Planning can be tested through the typed pass APIs without a physical policy.
@@ -59,7 +59,7 @@ type ascriptions belong to `Let::binding_types`.
 `cq_reduce::check(source, target, options)` check their VO boundaries;
 `cq_elaborate::check(source, target)` checks RA correspondence. VO and RA
 erase to the same CQ-NF `Kernel`, compared up to variable renaming;
-`relational_plan::kernel` reads the query back from the emitted RA, rather
+`cq_elaborate::kernel` reads the query back from the emitted RA, rather
 than trusting its source annotation. Downstream passes consume the written
 algebra.
 
@@ -116,7 +116,7 @@ plans with independently evaluated query answers.
 | Order, heuristic and split | [cq-order](../passes/cq-order/src/lib.rs) |
 | Guard pushdown and tree reductions | [cq-reduce](../passes/cq-reduce/src/lib.rs) |
 | VO elaboration and correspondence | [cq-elaborate](../passes/cq-elaborate/src/lib.rs) |
-| RA erasure and kernel | [relational_plan/kernel.rs](../languages/cq-lang-ra/src/kernel.rs) |
+| RA erasure and kernel | [ra/kernel.rs](../passes/cq-elaborate/src/kernel.rs) |
 
 ## Scope and evidence
 

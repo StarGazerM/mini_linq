@@ -1,0 +1,9 @@
+structures {
+    R;
+    S;
+    T;
+    r1 = ::std::collections::HashSet<_> [a, b];
+    r2 = ::std::collections::HashSet<_> [b, c];
+    r4 = ::cq_storage::HashIndex<_, _> [b, c];
+    r5 = ::cq_storage::HashIndex<_, _> [a, b];
+}

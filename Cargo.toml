@@ -84,5 +84,15 @@ name = "free-variables"
 path = "examples/free-variables/main.rs"
 
 [dev-dependencies]
+cq-lang-ra.workspace = true
+proc-macro2.workspace = true
 cq-state-providers.workspace = true
 cq-storage.workspace = true
+
+[features]
+hw4 = []
+
+[[test]]
+name = "hw4_optional"
+path = "languages/cq-lang-cq/tests/hw4_optional.rs"
+required-features = ["hw4"]

@@ -1,10 +1,10 @@
 # Own printer dialect
 
-`own-push` consumes the reference `structures` payload, the bindings Γ, and
+`own-push` consumes only `structures::Program`, the bindings Γ, and
 emits nested `for` loops into a set sink. It uses `cq-print` for row layouts
 and host/built index access, `cq-protocol` for its sink requests, and `cq-stage` for its proc-macro
-entry. The application chooses the earlier reference passes and supplies
-`cq-storage`; it never depends on the reference pull printer.
+entry. The application chooses the earlier passes and supplies
+`cq-storage`; it never depends on the pull printer.
 
 The tests reuse the `built` and `generic` queries from `physical_query.rs` and
 compare their answers with independent nested-loop oracles, including empty

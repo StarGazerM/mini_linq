@@ -1,0 +1,4 @@
+structures {
+    Road;
+    r1 = ::cq_storage::HashIndex<_, _> [a, b];
+}

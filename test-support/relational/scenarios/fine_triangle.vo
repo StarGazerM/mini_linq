@@ -1,0 +1,13 @@
+struct Triangle;
+relation R(first: i32, second: i32);
+relation S(first: i32, second: i32);
+relation T(first: i32, second: i32);
+answer(a, b, c) :- R(a, b), S(b, c), T(c, a);
+valuation {
+    R@0(a, _);
+    T@2(_, a);
+    R@0(a, b);
+    S@1(b, _);
+    S@1(b, c);
+    T@2(c, a);
+}

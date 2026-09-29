@@ -91,7 +91,7 @@ pub struct QueryCase {
     pub purpose: &'static str,
     /// Honest scope note for derived rather than standards-compliant cases.
     pub scope_note: &'static str,
-    module: fn() -> syn::Result<cq::Module>,
+    module: fn() -> syn::Result<cq::Program>,
 }
 
 impl QueryCase {
@@ -101,7 +101,7 @@ impl QueryCase {
         rust_path: &'static str,
         purpose: &'static str,
         scope_note: &'static str,
-        module: fn() -> syn::Result<cq::Module>,
+        module: fn() -> syn::Result<cq::Program>,
     ) -> Self {
         Self {
             suite,
@@ -114,7 +114,7 @@ impl QueryCase {
     }
 
     /// Construct the exact typed CQ owned by this Rust query module.
-    pub fn module(self) -> syn::Result<cq::Module> {
+    pub fn module(self) -> syn::Result<cq::Program> {
         (self.module)()
     }
 }

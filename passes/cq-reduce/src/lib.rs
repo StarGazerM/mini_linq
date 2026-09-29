@@ -13,13 +13,11 @@
 //!   placed before that clause's first step; the guard's `if` step goes. A
 //!   guard the lexical analysis cannot see through (`opaque`) stays a step.
 //! - `Reductions::Tree` is the Yannakakis full reducer over the GYO join tree
-//!   of the source environment, so the query must be acyclic: an upward
+//!   computed from the source program's CQ, so the query must be acyclic: an upward
 //!   pass, leaves toward the root, `reduce parent with child(shared)`, then a
 //!   downward pass, root toward the leaves, `reduce child with parent(shared)`,
-//!   the edges visited in breadth-first order from the root — the Y-UP and
-//!   Y-DOWN schedule of the old hypergraph planner. The whole reducer sits
-//!   before the first atom step, and so do the pushed guards then, in query
-//!   order ahead of it, as that planner selected before it reduced.
+//!   the edges visited in breadth-first order from the root. Pushed guards
+//!   precede the reducer, and the reducer precedes the first atom step.
 //!
 //! `None`/`None` is the identity. A plan that already carries reductions is
 //! refused rather than reduced twice.
@@ -59,13 +57,10 @@ pub enum Reductions {
 }
 
 /// Insert the reductions `options` ask for, then check the VO contract.
-pub fn compile(
-    source: &valuation::Section,
-    env: &impl valuation::Env,
-    options: &Options,
-) -> syn::Result<valuation::Section> {
-    let analysis = valuation::contract::check(source, env)?;
+pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
+    let analysis = valuation::contract::check(source)?;
     if let Some(step) = source
+        .valuation
         .steps
         .iter()
         .find(|step| matches!(step, Step::Reduce(..)))
@@ -76,21 +71,22 @@ pub fn compile(
         ));
     }
     let first_atom = source
+        .valuation
         .steps
         .iter()
         .position(|step| matches!(step, Step::Atom(..)));
-    let first_step = |clause: usize| {
-        source
-            .steps
-            .iter()
-            .position(|step| matches!(step, Step::Atom(subatom, _) if subatom.clause() == clause))
-    };
+    let first_step =
+        |clause: usize| {
+            source.valuation.steps.iter().position(
+                |step| matches!(step, Step::Atom(subatom, _) if subatom.clause() == clause),
+            )
+        };
     // The reductions to insert before each step, and the guard steps that
     // become reductions.
     let mut before: BTreeMap<usize, Vec<Step>> = BTreeMap::new();
     let mut pushed: BTreeSet<usize> = BTreeSet::new();
     if options.guards == Pushdown::Atoms {
-        for (position, step) in source.steps.iter().enumerate() {
+        for (position, step) in source.valuation.steps.iter().enumerate() {
             let Step::Guard(filter, _) = step else {
                 continue;
             };
@@ -120,14 +116,15 @@ pub fn compile(
         }
     }
     if options.semijoins == Reductions::Tree {
-        let reducer = tree(source, env, &analysis)?;
+        let reducer = tree(source, &analysis)?;
         if let Some(first) = first_atom {
             before.entry(first).or_default().extend(reducer);
         }
     }
-    let mut steps =
-        Vec::with_capacity(source.steps.len() + before.values().map(Vec::len).sum::<usize>());
-    for (position, step) in source.steps.iter().enumerate() {
+    let mut steps = Vec::with_capacity(
+        source.valuation.steps.len() + before.values().map(Vec::len).sum::<usize>(),
+    );
+    for (position, step) in source.valuation.steps.iter().enumerate() {
         if let Some(reductions) = before.remove(&position) {
             steps.extend(reductions);
         }
@@ -135,35 +132,42 @@ pub fn compile(
             steps.push(step.clone());
         }
     }
-    let section = valuation::Section {
-        valuation_token: source.valuation_token,
-        brace: Default::default(),
-        steps,
+    let program = valuation::Program {
+        cq: source.cq.clone(),
+        valuation: valuation::Valuation {
+            valuation_token: source.valuation.valuation_token,
+            brace: Default::default(),
+            steps,
+        },
     };
-    valuation::contract::check(&section, env)?;
-    Ok(section)
+    valuation::contract::check(&program)?;
+    Ok(program)
 }
 
-/// The program is preserved, the target satisfies the VO contract, erasing
-/// its reductions gives the source back — a pushed guard returns to the
-/// step it was — and it is what `compile` records under `options`.
+/// Check the reduction schedule and its erasure against the input plan.
 pub fn check(
-    source: &valuation::Section,
-    env: &impl valuation::Env,
-    target: &valuation::Section,
+    source: &valuation::Program,
+    target: &valuation::Program,
     options: &Options,
-) -> bool {
+) -> syn::Result<()> {
+    valuation::contract::check(target)?;
     let (steps, guards) = erase(target);
-    valuation::contract::well_formed(target, env)
-        && steps == without_guards(&source.steps, &guards)
-        && compile(source, env, options).is_ok_and(|expected| expected == *target)
+    if steps != without_guards(&source.valuation.steps, &guards)
+        || compile(source, options)? != *target
+    {
+        return Err(syn::Error::new_spanned(
+            &target.cq.name,
+            "reduction changes the source valuation",
+        ));
+    }
+    Ok(())
 }
 
 /// The plan's steps without its reductions, and the guards those placed.
-fn erase(module: &valuation::Section) -> (Vec<Step>, Vec<cq::Filter>) {
+fn erase(module: &valuation::Program) -> (Vec<Step>, Vec<cq::Filter>) {
     let mut steps = Vec::new();
     let mut guards = Vec::new();
-    for step in &module.steps {
+    for step in &module.valuation.steps {
         match step {
             Step::Reduce(
                 Reduce {
@@ -202,14 +206,10 @@ fn without_guards(steps: &[Step], placed: &[cq::Filter]) -> Vec<Step> {
 
 /// The Yannakakis full reducer: Y-UP over every tree edge, leaves first,
 /// then Y-DOWN, root first, both in breadth-first order from the root.
-fn tree(
-    source: &valuation::Section,
-    env: &impl valuation::Env,
-    analysis: &valuation::Analysis,
-) -> syn::Result<Vec<Step>> {
-    let Some(join_tree) = env.join_tree() else {
+fn tree(source: &valuation::Program, analysis: &valuation::Analysis) -> syn::Result<Vec<Step>> {
+    let Some(join_tree) = valuation::cq::hypergraph::Analysis::of(&source.cq).join_tree else {
         return Err(syn::Error::new_spanned(
-            source.valuation_token,
+            source.valuation.valuation_token,
             "Yannakakis reduction requires an acyclic query",
         ));
     };
@@ -286,22 +286,4 @@ fn reduce(clause: usize, atom: &cq::Atom, reduction: Reduction) -> Step {
 
 fn index(clause: usize) -> LitInt {
     LitInt::new(&clause.to_string(), Span::call_site())
-}
-
-#[cfg(feature = "reference")]
-pub mod reference {
-    use super::*;
-    pub fn compile(
-        source: &valuation::Module,
-        options: &Options,
-    ) -> syn::Result<valuation::Section> {
-        super::compile(source, &valuation::erase(source), options)
-    }
-    pub fn check(
-        source: &valuation::Module,
-        target: &valuation::Section,
-        options: &Options,
-    ) -> bool {
-        super::check(source, &valuation::erase(source), target, options)
-    }
 }

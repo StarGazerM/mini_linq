@@ -1,0 +1,6 @@
+structures {
+    R;
+    S;
+    r1 = ::std::collections::HashSet<_> [];
+    r2 = ::cq_storage::HashIndex<_, _> [];
+}

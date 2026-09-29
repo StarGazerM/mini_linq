@@ -1,0 +1,8 @@
+physical {
+    relation Road(src: i32, dst: i32);
+    r0 = alias rename Road { src -> a, dst -> b };
+    r1 = let rename Road { src -> b, dst -> a };
+    r2 = pipe probe[a, b] r0, r1;
+    r3 = pipe canon project r2 keep { a };
+    return r3 as answer(a);
+}

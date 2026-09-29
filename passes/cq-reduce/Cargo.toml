@@ -5,9 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[features]
-default = ["reference"]
-reference = ["cq-lang-vo/reference-prefix"]
 
 [dependencies]
 cq-lang-vo = { workspace = true, default-features = false }
@@ -16,10 +13,7 @@ syn.workspace = true
 
 [dev-dependencies]
 cq-syntax.workspace = true
-cq-lang-cq = { workspace = true, default-features = false }
 
-cq-lang-ra = { workspace = true, default-features = false, features = ["reference-prefix"] }
-cq-elaborate = { workspace = true, features = ["reference"] }
 quote.workspace = true
 
 [package.metadata.cq]
@@ -28,4 +22,7 @@ target = "cq-lang-vo"
 
 [[test]]
 name = "reduce"
-required-features = ["reference"]
+
+[[test]]
+name = "ya_schedule"
+path = "../../teaching/ya/ya_schedule.rs"

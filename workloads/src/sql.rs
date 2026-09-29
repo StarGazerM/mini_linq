@@ -24,21 +24,20 @@ fn normalized_table_name(input_index: usize) -> String {
 }
 
 /// Translate one well-formed positive CQ without consulting either compiler pass.
-pub fn translate(module: &cq::Module) -> Result<String, SqlError> {
+pub fn translate(module: &cq::Program) -> Result<String, SqlError> {
     cq::contract::check(module).map_err(SqlError::InvalidQuery)?;
-    if !module.program.query.is_basic() {
+    if !module.query.is_basic() {
         return Err(SqlError::UnsupportedBodyItem);
     }
 
-    let atoms = positive_atoms(&module.program.query)?;
+    let atoms = positive_atoms(&module.query)?;
     let mut output = String::from("WITH\n");
     let input_positions = module
-        .program
         .inputs()
         .enumerate()
         .map(|(input_index, input)| (symbol_name(&input.name), input_index))
         .collect::<BTreeMap<_, _>>();
-    for (input_index, input) in module.program.inputs().enumerate() {
+    for (input_index, input) in module.inputs().enumerate() {
         if input_index != 0 {
             output.push_str(",\n");
         }
@@ -73,7 +72,7 @@ pub fn translate(module: &cq::Module) -> Result<String, SqlError> {
     }
 
     output.push_str("\nSELECT DISTINCT\n");
-    for (position, variable) in module.program.query.head.variables().enumerate() {
+    for (position, variable) in module.query.head.variables().enumerate() {
         if position != 0 {
             output.push_str(",\n");
         }
@@ -113,7 +112,7 @@ pub fn translate(module: &cq::Module) -> Result<String, SqlError> {
     }
 
     output.push_str("\nORDER BY ");
-    for position in 1..=module.program.query.head.args.len() {
+    for position in 1..=module.query.head.args.len() {
         if position != 1 {
             output.push_str(", ");
         }
@@ -208,7 +207,7 @@ impl StdError for SqlError {
 mod tests {
     use super::*;
 
-    fn parse(source: &str) -> cq::Module {
+    fn parse(source: &str) -> cq::Program {
         syn::parse_str(source).unwrap()
     }
 

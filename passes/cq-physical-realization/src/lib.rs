@@ -37,8 +37,8 @@
 //!   evaluates to the lazy iterator itself.
 
 use cq_lang_structures as structures;
-use cq_lang_structures::execution as physical;
-use cq_lang_structures::execution::Operator;
+use cq_lang_structures::physical;
+use cq_lang_structures::physical::Operator;
 use cq_lang_structures::syntax as cq;
 use cq_lang_structures::syntax::symbol_name;
 use proc_macro2::TokenStream;
@@ -62,17 +62,13 @@ pub struct Endpoints {
 }
 
 /// The pull program of a Structures module.
-pub fn compile(
-    module: &structures::Section,
-    env: &impl structures::Env,
-    endpoints: &Endpoints,
-) -> syn::Result<Expr> {
-    let analysis = structures::contract::check(module, env)?;
+pub fn compile(module: &structures::Program, endpoints: &Endpoints) -> syn::Result<Expr> {
+    let analysis = structures::contract::check(module)?;
     let mut printer = Printer {
-        context: Context::new(module, env, &analysis),
+        context: Context::new(module, &analysis),
         endpoints,
     };
-    let definitions = env.definitions();
+    let definitions = &module.physical.program.definitions;
     let mut position = 0;
     while position < definitions.len() {
         if endpoints.intersect
@@ -85,9 +81,9 @@ pub fn compile(
             position += 1;
         }
     }
-    let returned = env.returned();
+    let returned = &module.physical.program.returned;
     let rows = printer.scan(returned)?;
-    let output = printer.head(&symbol_name(returned), env.head(), rows);
+    let output = printer.head(&symbol_name(returned), &module.physical.program.head, rows);
     let statements = &printer.statements;
     let value = if !printer.bound {
         output
@@ -101,14 +97,19 @@ pub fn compile(
     syn::parse2(quote! { { #(#statements)* #value } })
 }
 
-/// Whether `target` is the program this pass prints for `source`.
+/// Check that the emitted expression is the requested realization.
 pub fn check(
-    source: &structures::Section,
-    env: &impl structures::Env,
+    source: &structures::Program,
     target: &Expr,
     endpoints: &Endpoints,
-) -> bool {
-    compile(source, env, endpoints).is_ok_and(|expected| expected == *target)
+) -> syn::Result<()> {
+    if compile(source, endpoints)? != *target {
+        return Err(syn::Error::new_spanned(
+            target,
+            "Rust expression differs from the requested realization",
+        ));
+    }
+    Ok(())
 }
 
 struct Printer<'a> {
@@ -130,18 +131,18 @@ impl Printer<'_> {
     pub(crate) fn define(&mut self, definition: &physical::Definition) -> syn::Result<()> {
         let name = symbol_name(&definition.name);
         self.register(&name);
-        let repr = match definition.mode {
-            structures::ModeKind::Alias => Repr::Alias,
-            structures::ModeKind::Pipe => {
+        let repr = match physical::ModeKind::from(&definition.mode) {
+            physical::ModeKind::Alias => Repr::Alias,
+            physical::ModeKind::Pipe => {
                 let mut rows = self.produce(&name, definition)?;
-                if definition.canon {
+                if definition.canon.is_some() {
                     rows = self.distinct(&definition.name, rows);
                 }
                 Repr::Pipe(Some(rows))
             }
-            structures::ModeKind::Let => {
+            physical::ModeKind::Let => {
                 let rows = self.produce(&name, definition)?;
-                self.materialize(&name, definition.canon, rows)
+                self.materialize(&name, definition.canon.is_some(), rows)
             }
         };
         self.reprs.insert(name, repr);
@@ -238,21 +239,5 @@ impl Printer<'_> {
                 (#(#output,)*)
             })
         }
-    }
-}
-
-#[cfg(feature = "reference")]
-pub mod reference {
-    use super::*;
-    pub fn compile(source: &structures::Module, endpoints: &Endpoints) -> syn::Result<Expr> {
-        super::compile(
-            source,
-            &structures::reference::Env::new(&source.physical)?,
-            endpoints,
-        )
-    }
-    pub fn check(source: &structures::Module, target: &Expr, endpoints: &Endpoints) -> bool {
-        structures::reference::Env::new(&source.physical)
-            .is_ok_and(|env| super::check(source, &env, target, endpoints))
     }
 }

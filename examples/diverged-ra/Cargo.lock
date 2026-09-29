@@ -6,6 +6,7 @@ version = 4
 name = "cq-lang-ix"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-ra",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -25,9 +26,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-lang-ra"
+version = "0.1.0"
+dependencies = [
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "syn_derive",
+]
+
+[[package]]
 name = "cq-lang-structures"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-physical",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -131,6 +144,7 @@ name = "ra-theta"
 version = "0.0.0"
 dependencies = [
  "cq-lang-ix",
+ "quote",
  "syn 2.0.119",
 ]
 

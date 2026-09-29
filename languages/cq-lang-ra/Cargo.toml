@@ -6,17 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-cq-lang-cq = { workspace = true, optional = true }
 cq-syntax.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 syn_derive.workspace = true
 
-[features]
-default = ["reference-prefix"]
-reference-prefix = ["dep:cq-lang-cq"]
 
 [[test]]
-name = "relational_plan"
-required-features = ["reference-prefix"]
+name = "relational_program"

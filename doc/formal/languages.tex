@@ -137,7 +137,8 @@ Order and granularity are the only choices: one full subatom per atom is
 relation-at-a-time, one new variable per subatom is generic join.
 
 \subsection{Named relational algebra}
-This IR represents named SPJR using immutable definitions, adding explicit
+The complete program owns its relation declarations $\Sigma$, named SPJR
+using immutable definitions, and explicit
 Unit/Semijoin and Rust Select/Extend:
 \[
 \begin{aligned}
@@ -182,8 +183,8 @@ must establish concrete type compatibility.
 Names/listed attributes are unique; operands precede uses and every definition
 is reachable from output. Output expressions pass visible-use checks; a bare
 head's attribute set equals its sort, while computed heads may use a subset.
-Physical lowering requires nameable output types. CQ annotations supply schema
-and API metadata, never permission to re-plan.
+Declarations and output metadata are part of RA. Elaboration checks agreement
+with the source CQ head and kernel; the RA contract checks only this program.
 Evaluation folds definitions into $\mathcal E$, using the operators of
 Section~\ref{sec:scope} and positional Rename, then returns
 $\{\bar e(t)\mid t\in\mathcal E(r)\}$. References denote the same immutable
@@ -198,8 +199,8 @@ separately. An empty $C$ requests the unit-valued index for a Cartesian product.
 
 Local validity checks source versions, column ranges, unique descriptors,
 and that every demand matches a join's right operand and join columns.
-The analysis correspondence requires complete demand coverage; Physical derives
-uses from probe/semi operands and checks that each has a matching demand.
+The analysis correspondence requires complete demand coverage. Physical lowering
+checks that its probe/semi operands have matching IX demands.
 An empty annotation does not authorize a repeated-scan fallback.
 The full judgment is $\mathsf{WF}_{IX}(A,D)$
 of Section~\ref{sec:ix}, and
@@ -207,8 +208,9 @@ of Section~\ref{sec:ix}, and
  \sem{A,D}_{IX}=\sem A_{RA}.
 \]
 \subsection{Physical and Structures}
-Physical restates IX with one physical operator and read mode per result, and
-Structures binds every keyed read to a host key fact or a built Rust type;
-both erase to IX and preserve its meaning. Their contracts are specified by
+Physical is a complete standalone program with declarations, detailed operators,
+read modes and output metadata. Lowering reads those operators back as RA and
+checks correspondence with the RA contained in IX. Structures extends Physical
+and binds every keyed read to a host key fact or a built Rust type. Their contracts are specified by
 the \code{cq-lang-*} module documentation and \path{doc/DSL.md}
 (Section~\ref{sec:ix}); this paper does not yet give them inference rules.

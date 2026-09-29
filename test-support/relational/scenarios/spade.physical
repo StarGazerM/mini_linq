@@ -1,0 +1,15 @@
+physical {
+    relation R(first: i32, second: i32);
+    relation S(first: i32, second: i32);
+    relation T(first: i32, second: i32);
+    relation H(first: i32, second: i32);
+    r0 = alias rename R { first -> x, second -> y };
+    r1 = let rename S { first -> y, second -> z };
+    r2 = pipe probe[y] r0, r1;
+    r3 = let rename T { first -> x, second -> z };
+    r4 = pipe probe[x, z] r2, r3;
+    r5 = let rename H { first -> x, second -> w };
+    r6 = pipe probe[x] r4, r5;
+    r7 = pipe canon project r6 keep { w, x, y, z };
+    return r7 as answer(x, y, z, w);
+}

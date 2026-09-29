@@ -1,0 +1,3 @@
+struct ReturnTrip;
+relation Road(src: i32, dst: i32);
+answer(a) :- Road(a, b), Road(b, a);

@@ -8,7 +8,7 @@ use cq_lang_cq::hypergraph::Analysis;
 use quote::quote;
 
 fn analyze(tokens: proc_macro2::TokenStream) -> Analysis {
-    let module: cq::Module = syn::parse2(tokens).unwrap();
+    let module: cq::Program = syn::parse2(tokens).unwrap();
     cq::hypergraph::check(&module).unwrap()
 }
 
@@ -231,7 +231,7 @@ fn absorbed_and_bound_variables_keep_the_tree_and_the_facts_honest() {
 
 #[test]
 fn analysis_requires_normal_form() {
-    let module: cq::Module = syn::parse2(quote! {
+    let module: cq::Program = syn::parse2(quote! {
         struct Q;
         relation R(a: i32, b: i32);
         answer(x) :- R(x, 5);

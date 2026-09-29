@@ -11,16 +11,10 @@
 //! selected realization decides whether those uses recompute or share retained
 //! data; each independent traversal needs its own cursor state.
 //!
-//! [`erase`] and [`kernel`] read back the normal-form query a plan computes,
-//! so a plan can be checked against the valuation it elaborates.
+//! `contract::check` derives headings, types and source identifier bindings
+//! entirely from this program. VO correspondence belongs to cq-elaborate.
 
-#[cfg(feature = "reference-prefix")]
-mod kernel;
-#[cfg(feature = "reference-prefix")]
-pub use kernel::{erase, kernel};
-
-#[cfg(feature = "reference-prefix")]
-pub use cq_lang_cq as cq;
+pub use cq_syntax::algebra::{AttributeRename, Extend, Project, Rename, Select, Unit};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,44 +24,20 @@ pub use cq_syntax::{CommaList, symbol_name};
 
 /// Keywords owned only by the relational-plan language.
 pub mod kw {
-    syn::custom_keyword!(keep);
+    pub use cq_syntax::algebra::kw::*;
     syn::custom_keyword!(natural_join);
     syn::custom_keyword!(output);
-    syn::custom_keyword!(project);
     syn::custom_keyword!(relational);
-    syn::custom_keyword!(rename);
-    syn::custom_keyword!(unit);
     syn::custom_keyword!(semijoin);
-    syn::custom_keyword!(select);
-    syn::custom_keyword!(with);
-    syn::custom_keyword!(extend);
-    syn::custom_keyword!(value);
 }
 
-/// A complete CQ program followed by its named relational-algebra residual.
-///
-/// The source program remains present so this stage is independently
-/// inspectable and its local contract can check declared inputs, inferred
-/// headings, and output metadata.
+/// A complete named relational program.
 ///
 /// ```text
-/// struct TwoHopRoads;
-/// relation road(src: City, dst: City);
-/// two_hop(from, to) :- road(from, via), road(via, to);
-/// relational {
-///     r0 = rename road {src -> from, dst -> via};
-///     r1 = rename road {src -> via, dst -> to};
-///     r2 = natural_join r0 with r1;
-///     r3 = project r2 keep {from, to};
-///     output r3 as two_hop(from, to);
-/// }
-/// ```
-///
-/// ```text
-/// Module ::= Program "relational" "{" Plan "}"
+/// Program ::= "relational" "{" RelationDecl* Definition* Output "}"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Section {
+pub struct Program {
     pub relational_token: kw::relational,
     #[syn(braced)]
     pub relational_brace: token::Brace,
@@ -78,12 +48,15 @@ pub struct Section {
 /// A named relational-algebra dataflow ending in output metadata.
 ///
 /// ```text
-/// Plan       ::= Definition* Output
+/// Plan       ::= RelationDecl* Definition* Output
 /// Definition ::= RelationId "=" Operator ";"
 /// Output     ::= "output" RelationId "as" Atom ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Plan {
+    #[parse(cq_syntax::parse_declarations)]
+    #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
+    pub declarations: Vec<cq_syntax::RelationDecl>,
     #[syn(repeat, until = kw::output)]
     pub definitions: Vec<Definition>,
     pub output: Output,
@@ -128,47 +101,6 @@ pub enum Operator {
     Extend(Box<Extend>),
 }
 
-/// The singleton zero-column relation used to seed a global logical clause.
-///
-/// ```text
-/// Unit ::= "unit"
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Unit {
-    pub unit_token: kw::unit,
-}
-
-/// One source-attribute to query-variable rename.
-///
-/// ```text
-/// AttributeRename ::= Ident "->" Ident
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct AttributeRename {
-    pub source: Ident,
-    pub minus_token: Token![-],
-    pub gt_token: Token![>],
-    pub target: Ident,
-}
-
-/// A complete one-to-one rename of one declared relation occurrence.
-///
-/// ```text
-/// Rename ::= "rename" RelationName "{"
-///              AttributeRename ("," AttributeRename)* [","]
-///            "}"
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Rename {
-    pub rename_token: kw::rename,
-    pub relation: Ident,
-    #[syn(braced)]
-    pub mapping_brace: token::Brace,
-    #[syn(in = mapping_brace)]
-    #[parse(CommaList::parse_terminated)]
-    pub mapping: CommaList<AttributeRename>,
-}
-
 /// A binary natural join of two earlier relation results.
 ///
 /// Shared attributes and their equality condition are inferred from headings.
@@ -192,58 +124,6 @@ pub struct Semijoin {
     pub right: Ident,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Select {
-    pub select_token: kw::select,
-    pub input: Ident,
-    pub if_token: Token![if],
-    #[syn(parenthesized)]
-    pub condition_paren: token::Paren,
-    #[syn(in = condition_paren)]
-    pub condition: syn::Expr,
-}
-
-/// Compute one tuple of fresh attributes for each input tuple. Rust owns the
-/// expression and its types; `_` permits local Rust inference for a binding.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Extend {
-    pub extend_token: kw::extend,
-    pub input: Ident,
-    pub with_token: kw::with,
-    #[syn(braced)]
-    pub columns_brace: token::Brace,
-    #[syn(in = columns_brace)]
-    #[parse(CommaList::parse_terminated)]
-    pub columns: CommaList<cq_syntax::ColumnDecl>,
-    pub value_token: kw::value,
-    #[syn(parenthesized)]
-    pub value_paren: token::Paren,
-    #[syn(in = value_paren)]
-    pub value: syn::Expr,
-}
-
-/// Set projection of an earlier result to a distinct subset of attributes.
-///
-/// The attribute braces denote a set. Ordered output tuple layout belongs to
-/// the separate [`Output`] metadata.
-///
-/// ```text
-/// Project ::= "project" RelationId "keep" "{"
-///               Ident ("," Ident)* [","]
-///             "}"
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Project {
-    pub project_token: kw::project,
-    pub input: Ident,
-    pub keep_token: kw::keep,
-    #[syn(braced)]
-    pub attributes_brace: token::Brace,
-    #[syn(in = attributes_brace)]
-    #[parse(CommaList::parse_terminated)]
-    pub attributes: CommaList<Ident>,
-}
-
 /// The result selected for the source head's ordered tuple layout.
 ///
 /// Output is metadata, not a relational operator.
@@ -260,31 +140,11 @@ pub struct Output {
     pub semi_token: Token![;],
 }
 
-/// The RelationalPlan contract in diagnostic and predicate form.
-/// Input declarations and expected output supplied by a source language.
-pub trait CqEnv {
-    fn inputs(&self) -> &[cq_syntax::RelationDecl];
-    fn head(&self) -> &cq_syntax::Atom;
-}
+/// Checked headings and column types of all named results.
+pub type Analysis = BTreeMap<String, RelationInfo>;
 pub mod contract {
-    pub fn check(section: &super::Section, env: &impl super::CqEnv) -> syn::Result<()> {
-        super::check_output_head(env.head(), &section.plan.output.head)?;
-        super::check_in(env.inputs(), &section.plan).map(|_| ())
-    }
-    pub fn well_formed(section: &super::Section, env: &impl super::CqEnv) -> bool {
-        check(section, env).is_ok()
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn check_module(module: &super::Module) -> syn::Result<()> {
-        super::cq::check_program(&module.program)?;
-        check(
-            &module.section,
-            &super::reference::Env::new(&module.program),
-        )
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn well_formed_module(module: &super::Module) -> bool {
-        check_module(module).is_ok()
+    pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
+        super::check_in(&program.plan.declarations, &program.plan)
     }
 }
 
@@ -292,6 +152,7 @@ type Heading = BTreeSet<String>;
 
 #[derive(Clone, Debug)]
 pub struct RelationInfo {
+    pub bindings: BTreeMap<String, Ident>,
     pub heading: Heading,
     pub types: BTreeMap<String, syn::Type>,
     /// Columns introduced by Extend. This records provenance, not the ownership
@@ -300,22 +161,7 @@ pub struct RelationInfo {
     operands: Vec<String>,
 }
 
-/// A proc macro cannot infer a Rust function's return type; A declared result
-/// schema supplies that public API boundary; simple projections inherit types.
-#[cfg(feature = "reference-prefix")]
-pub fn output_types(program: &cq::Program, input: &RelationInfo) -> syn::Result<Vec<syn::Type>> {
-    if let Some(output) = &program.output() {
-        return Ok(output.columns.iter().map(|c| c.ty.clone()).collect());
-    }
-    program.query.head.args.iter().map(|arg| {
-        cq_syntax::rust::variable(arg).and_then(|v| input.types.get(&symbol_name(v)))
-            .filter(|ty| !matches!(ty, syn::Type::Infer(_))).cloned()
-            .ok_or_else(|| syn::Error::new_spanned(arg,
-                "declare the result relation's column types for a computed head, e.g. relation answer(value: String);"))
-    }).collect()
-}
-
-pub fn check_in<'a>(
+fn check_in<'a>(
     inputs: impl IntoIterator<Item = &'a cq_syntax::RelationDecl>,
     plan: &Plan,
 ) -> syn::Result<BTreeMap<String, RelationInfo>> {
@@ -414,7 +260,10 @@ pub fn check_in<'a>(
                     if !heading.insert(symbol_name(&column.name)) {
                         return Err(syn::Error::new_spanned(
                             column,
-                            "extend requires fresh, distinct attributes",
+                            format!(
+                                "extend `{result_name}` requires fresh, distinct attributes: `{}`",
+                                column.name
+                            ),
                         ));
                     }
                 }
@@ -458,9 +307,31 @@ pub fn check_in<'a>(
                 computed.insert(symbol_name(&column.name));
             }
         }
+        let mut bindings = BTreeMap::new();
+        for operand in operands.iter().rev() {
+            for (name, id) in &relations[operand].bindings {
+                if heading.contains(name) {
+                    bindings.insert(name.clone(), id.clone());
+                }
+            }
+        }
+        match &definition.operator {
+            Operator::Rename(r) => {
+                for m in &r.mapping {
+                    bindings.insert(symbol_name(&m.target), m.target.clone());
+                }
+            }
+            Operator::Extend(e) => {
+                for c in &e.columns {
+                    bindings.insert(symbol_name(&c.name), c.name.clone());
+                }
+            }
+            _ => (),
+        }
         relations.insert(
             result_name,
             RelationInfo {
+                bindings,
                 heading,
                 types,
                 computed,
@@ -493,7 +364,7 @@ pub fn check_in<'a>(
     {
         return Err(syn::Error::new_spanned(
             &plan.output,
-            "output tuple attributes must exactly match its input heading",
+            format!("output `{output_name}` tuple attributes must exactly match its input heading"),
         ));
     }
 
@@ -577,22 +448,6 @@ fn earlier_relation<'a>(
     Ok((name, info))
 }
 
-fn check_output_head(expected: &cq_syntax::Atom, actual: &cq_syntax::Atom) -> syn::Result<()> {
-    let same_relation = symbol_name(&expected.relation) == symbol_name(&actual.relation);
-    let expected_variables = expected.variables().map(symbol_name).collect::<Vec<_>>();
-    if same_relation && expected.args == actual.args {
-        return Ok(());
-    }
-    Err(syn::Error::new_spanned(
-        actual,
-        format!(
-            "output head must be the source query head `{}({})`",
-            expected.relation,
-            expected_variables.join(", ")
-        ),
-    ))
-}
-
 fn check_all_reachable(
     plan: &Plan,
     relations: &BTreeMap<String, RelationInfo>,
@@ -626,11 +481,3 @@ fn check_all_reachable(
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
-
-#[cfg(feature = "reference-prefix")]
-pub mod reference;
-#[cfg(feature = "reference-prefix")]
-pub use reference::Module;
-
-/// Source environment of an RA pass.
-pub use CqEnv as Env;

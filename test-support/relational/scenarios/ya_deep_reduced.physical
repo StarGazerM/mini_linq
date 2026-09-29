@@ -1,0 +1,21 @@
+physical {
+    relation R(first: i32, second: i32);
+    relation S(first: i32, second: i32);
+    relation T(first: i32, second: i32);
+    relation U(first: i32, second: i32);
+    r0 = alias rename S { first -> b, second -> c };
+    r1 = let rename R { first -> a, second -> b };
+    r2 = let semi[b] r0, r1;
+    r3 = alias rename T { first -> c, second -> d };
+    r4 = let semi[c] r3, r2;
+    r5 = alias rename U { first -> d, second -> e };
+    r6 = let semi[d] r5, r4;
+    r7 = let semi[d] r4, r6;
+    r8 = let semi[c] r2, r7;
+    r9 = pipe semi[b] r1, r8;
+    r10 = pipe probe[b] r9, r8;
+    r11 = pipe probe[c] r10, r7;
+    r12 = pipe probe[d] r11, r6;
+    r13 = pipe canon project r12 keep { a, e };
+    return r13 as answer(a, e);
+}

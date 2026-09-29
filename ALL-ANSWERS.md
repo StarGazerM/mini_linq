@@ -35,11 +35,8 @@ columns against an independent oracle.
 
 ## Inspect actual expansions
 
-`tools/trace_macros.py` captures every real procedural macro invocation of a
-test target into a new output directory; `steps.md` contains the actual inputs
-and outputs and `calls.json` identifies their packages and invocation sequence.
-The tool instruments an isolated copy, returns the original TokenStreams, and
-verifies that the source checkout stayed unchanged.
+`tools/check_expansions.py` captures the ten physical query expansions and
+compares them byte for byte with a saved baseline.
 
 For the workload catalog's typed logical prefix, use:
 

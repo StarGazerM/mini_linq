@@ -28,18 +28,20 @@ pub fn generate(case: &QueryCase, config: GenerationConfig) -> Result<Dataset, G
 /// Check whether a catalog case admits a scenario without materializing rows.
 pub fn check_scenario(case: &QueryCase, scenario: Scenario) -> Result<(), GenerateError> {
     let module = case.module().map_err(GenerateError::InvalidQuery)?;
-    check_module_scenario(&module, scenario)
+    check_program_scenario(&module, scenario)
 }
 
 /// Check whether a parsed CQ admits a scenario without materializing rows.
-pub fn check_module_scenario(module: &cq::Module, scenario: Scenario) -> Result<(), GenerateError> {
+pub fn check_program_scenario(
+    module: &cq::Program,
+    scenario: Scenario,
+) -> Result<(), GenerateError> {
     cq::contract::check(module).map_err(GenerateError::InvalidQuery)?;
-    if !module.program.query.is_basic() {
+    if !module.query.is_basic() {
         return Err(GenerateError::UnsupportedBodyItem);
     }
-    let atoms = positive_atoms(&module.program.query)?;
+    let atoms = positive_atoms(&module.query)?;
     let input_positions = module
-        .program
         .inputs()
         .enumerate()
         .map(|(position, input)| (symbol_name(&input.name), position))
@@ -54,21 +56,20 @@ pub fn check_module_scenario(module: &cq::Module, scenario: Scenario) -> Result<
 
 /// Generate data for a parsed CQ. This is also useful for focused tests and tools.
 pub fn generate_module(
-    module: &cq::Module,
+    module: &cq::Program,
     suite: Suite,
     case_name: &str,
     config: GenerationConfig,
 ) -> Result<Dataset, GenerateError> {
     cq::contract::check(module).map_err(GenerateError::InvalidQuery)?;
-    if !module.program.query.is_basic() {
+    if !module.query.is_basic() {
         return Err(GenerateError::UnsupportedBodyItem);
     }
-    let atoms = positive_atoms(&module.program.query)?;
+    let atoms = positive_atoms(&module.query)?;
     let components = connected_components(&atoms);
     let limits = Limits::for_shape(config.scale, components);
 
     let input_positions = module
-        .program
         .inputs()
         .enumerate()
         .map(|(position, input)| (symbol_name(&input.name), position))
@@ -87,7 +88,6 @@ pub fn generate_module(
         config.scenario,
     )?;
     let mut rows = module
-        .program
         .inputs()
         .map(|_| BTreeSet::<Vec<i32>>::new())
         .collect::<Vec<_>>();
@@ -102,7 +102,7 @@ pub fn generate_module(
         membership_occurrences.len(),
         edge_marker_count,
     )?;
-    let mut active_duplicates = vec![None; module.program.inputs().count()];
+    let mut active_duplicates = vec![None; module.inputs().count()];
 
     if config.scenario != Scenario::NoMatch {
         plant_coverage(
@@ -152,7 +152,7 @@ fn check_scenario_analysis(
 
 #[allow(clippy::too_many_arguments)]
 fn plant_coverage(
-    module: &cq::Module,
+    module: &cq::Program,
     atoms: &[&cq::Atom],
     accesses: &[AccessPattern],
     variables: &[String],
@@ -170,7 +170,7 @@ fn plant_coverage(
     let projected = project_assignment(
         atoms,
         input_positions,
-        module.program.inputs().count(),
+        module.inputs().count(),
         &primary,
         None,
     )?;
@@ -195,7 +195,7 @@ fn plant_coverage(
         let projected = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs().count(),
+            module.inputs().count(),
             &assignment,
             Some(omitted_occurrence),
         )?;
@@ -227,7 +227,7 @@ fn plant_coverage(
         let prefix = project_prefix(
             atoms,
             input_positions,
-            module.program.inputs().count(),
+            module.inputs().count(),
             &assignment,
             access.occurrence,
         )?;
@@ -250,7 +250,7 @@ fn plant_coverage(
             let mut projected = project_assignment(
                 atoms,
                 input_positions,
-                module.program.inputs().count(),
+                module.inputs().count(),
                 &assignment,
                 Some(access.occurrence),
             )?;
@@ -287,14 +287,14 @@ fn plant_coverage(
         let first_rows = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs().count(),
+            module.inputs().count(),
             &first,
             None,
         )?;
         let second_rows = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs().count(),
+            module.inputs().count(),
             &second,
             None,
         )?;
@@ -315,14 +315,14 @@ fn plant_coverage(
         let first_rows = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs().count(),
+            module.inputs().count(),
             &first,
             None,
         )?;
         let second_rows = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs().count(),
+            module.inputs().count(),
             &second,
             None,
         )?;
@@ -349,7 +349,7 @@ fn plant_coverage(
         let projected = project_assignment(
             atoms,
             input_positions,
-            module.program.inputs().count(),
+            module.inputs().count(),
             &assignment,
             None,
         )?;
@@ -363,19 +363,18 @@ fn plant_coverage(
 }
 
 fn fill_noise(
-    module: &cq::Module,
+    module: &cq::Program,
     limits: Limits,
     rng: &mut SplitMix64,
     rows: &mut [BTreeSet<Vec<i32>>],
 ) -> Result<(), GenerateError> {
     let total_columns = module
-        .program
         .inputs()
         .map(|input| input.columns.len())
         .sum::<usize>();
     ensure_noise_space(total_columns)?;
     let mut next_namespace = 0;
-    for (relation_index, input) in module.program.inputs().enumerate() {
+    for (relation_index, input) in module.inputs().enumerate() {
         let arity = input.columns.len();
         let parameters = (0..arity)
             .map(|_| {
@@ -400,14 +399,14 @@ fn fill_noise(
 }
 
 fn materialize_relations(
-    module: &cq::Module,
+    module: &cq::Program,
     rows: Vec<BTreeSet<Vec<i32>>>,
     active_duplicates: Vec<Option<Vec<i32>>>,
     rng: &mut SplitMix64,
 ) -> Result<Vec<RelationData>, GenerateError> {
-    let mut relations = Vec::with_capacity(module.program.inputs().count());
+    let mut relations = Vec::with_capacity(module.inputs().count());
     for ((input, distinct_rows), active_duplicate) in
-        module.program.inputs().zip(rows).zip(active_duplicates)
+        module.inputs().zip(rows).zip(active_duplicates)
     {
         let mut relation_rows = distinct_rows.into_iter().collect::<Vec<_>>();
         let duplicate_count = relation_rows.len() / 20;
@@ -538,9 +537,8 @@ fn access_patterns(atoms: &[&cq::Atom]) -> Vec<AccessPattern> {
         .collect()
 }
 
-fn existential_variables(module: &cq::Module, variables: &[String]) -> Vec<String> {
+fn existential_variables(module: &cq::Program, variables: &[String]) -> Vec<String> {
     let head = module
-        .program
         .query
         .head
         .variables()
@@ -1103,7 +1101,7 @@ mod tests {
     }
 
     fn evaluate(
-        module: &cq::Module,
+        module: &cq::Program,
         dataset: &Dataset,
         omitted_occurrence: Option<usize>,
     ) -> Evaluation {
@@ -1111,12 +1109,12 @@ mod tests {
     }
 
     fn evaluate_with_fault(
-        module: &cq::Module,
+        module: &cq::Program,
         dataset: &Dataset,
         omitted_occurrence: Option<usize>,
         ignored_equality: Option<(usize, usize)>,
     ) -> Evaluation {
-        let atoms = positive_atoms(&module.program.query).unwrap();
+        let atoms = positive_atoms(&module.query).unwrap();
         let relations = dataset
             .relations
             .iter()
@@ -1141,7 +1139,6 @@ mod tests {
             .iter()
             .map(|assignment| {
                 module
-                    .program
                     .query
                     .head
                     .variables()
@@ -1214,8 +1211,8 @@ mod tests {
         }
     }
 
-    fn candidate_counts(module: &cq::Module, dataset: &Dataset) -> Vec<BTreeSet<usize>> {
-        let atoms = positive_atoms(&module.program.query).unwrap();
+    fn candidate_counts(module: &cq::Program, dataset: &Dataset) -> Vec<BTreeSet<usize>> {
+        let atoms = positive_atoms(&module.query).unwrap();
         let relations = dataset
             .relations
             .iter()
@@ -1264,11 +1261,11 @@ mod tests {
     }
 
     fn successful_rows_by_key(
-        module: &cq::Module,
+        module: &cq::Program,
         evaluation: &Evaluation,
         access: &AccessPattern,
     ) -> BTreeMap<Vec<i32>, BTreeSet<Vec<i32>>> {
-        let atoms = positive_atoms(&module.program.query).unwrap();
+        let atoms = positive_atoms(&module.query).unwrap();
         let atom = atoms[access.occurrence];
         let mut by_key = BTreeMap::<Vec<i32>, BTreeSet<Vec<i32>>>::new();
         for assignment in &evaluation.assignments {
@@ -1281,8 +1278,8 @@ mod tests {
         by_key
     }
 
-    fn assert_memberships_are_observable(label: &str, module: &cq::Module, dataset: &Dataset) {
-        let atoms = positive_atoms(&module.program.query).unwrap();
+    fn assert_memberships_are_observable(label: &str, module: &cq::Program, dataset: &Dataset) {
+        let atoms = positive_atoms(&module.query).unwrap();
         let memberships = full_bound_occurrences(&atoms);
         let variables = variable_order(&atoms);
         let accesses = access_patterns(&atoms);
@@ -1309,7 +1306,6 @@ mod tests {
             )
             .unwrap();
             let anti_output = module
-                .program
                 .query
                 .head
                 .variables()
@@ -1375,7 +1371,7 @@ mod tests {
                     .all(|relation| relation.distinct_rows
                         == Limits::for_shape(
                             Scale::Tiny,
-                            connected_components(&positive_atoms(&module.program.query).unwrap())
+                            connected_components(&positive_atoms(&module.query).unwrap())
                         )
                         .distinct_rows),
                 "{} did not preserve the exact distinct-row scale target",
@@ -1391,7 +1387,7 @@ mod tests {
             let dataset = generate(case, config(Scenario::Coverage, Scale::Tiny, 7)).unwrap();
             let target = Limits::for_shape(
                 Scale::Tiny,
-                connected_components(&positive_atoms(&module.program.query).unwrap()),
+                connected_components(&positive_atoms(&module.query).unwrap()),
             )
             .distinct_rows;
             assert!(
@@ -1411,7 +1407,7 @@ mod tests {
     fn coverage_scenario_makes_every_advertised_edge_observable() {
         for case in CLASSIC.iter().chain(RETAIL) {
             let module = case.module().unwrap();
-            let atoms = positive_atoms(&module.program.query).unwrap();
+            let atoms = positive_atoms(&module.query).unwrap();
             let accesses = access_patterns(&atoms);
             let variables = variable_order(&atoms);
             let dataset = generate(case, config(Scenario::Coverage, Scale::Tiny, 31))
@@ -1457,7 +1453,6 @@ mod tests {
                     BTreeMap::<Vec<i32>, usize>::new(),
                     |mut counts, assignment| {
                         let head = module
-                            .program
                             .query
                             .head
                             .variables()
@@ -1485,7 +1480,6 @@ mod tests {
                     access,
                     &atoms,
                     &module
-                        .program
                         .inputs()
                         .enumerate()
                         .map(|(position, input)| (symbol_name(&input.name), position))
@@ -1614,7 +1608,7 @@ mod tests {
 
     #[test]
     fn role_playing_self_join_does_not_refill_the_omitted_tuple() {
-        let module = syn::parse_str::<cq::Module>(
+        let module = syn::parse_str::<cq::Program>(
             r#"
 struct ReverseEdgeProgram;
 relation Edge(c0: i32, c1: i32);
@@ -1631,7 +1625,7 @@ reverse_edge(x, y) :- Edge(x, y), Edge(y, x);
         .unwrap();
 
         assert_eq!(
-            full_bound_occurrences(&positive_atoms(&module.program.query).unwrap()),
+            full_bound_occurrences(&positive_atoms(&module.query).unwrap()),
             vec![1]
         );
         assert_memberships_are_observable("reverse-edge", &module, &dataset);
@@ -1639,7 +1633,7 @@ reverse_edge(x, y) :- Edge(x, y), Edge(y, x);
 
     #[test]
     fn exact_duplicate_membership_is_reported_as_indistinguishable() {
-        let module = syn::parse_str::<cq::Module>(
+        let module = syn::parse_str::<cq::Program>(
             r#"
 struct DuplicateMembershipProgram;
 relation R(c0: i32);

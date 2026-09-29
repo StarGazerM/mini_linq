@@ -7,3 +7,4 @@ publish = false
 [dependencies]
 cq-lang-ix = { path = "../../../languages/cq-lang-ix", default-features = false }
 syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"

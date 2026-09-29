@@ -1,0 +1,5 @@
+struct Claw;
+relation A(origin: i32, endpoint: i32);
+relation B(origin: i32, endpoint: i32);
+relation C(origin: i32, endpoint: i32);
+answer(a, b, c) :- A(h, a), B(h, b), C(h, c);

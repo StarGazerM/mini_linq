@@ -1,0 +1,18 @@
+struct YaDeep;
+relation R(first: i32, second: i32);
+relation S(first: i32, second: i32);
+relation T(first: i32, second: i32);
+relation U(first: i32, second: i32);
+answer(a, e) :- R(a, b), S(b, c), T(c, d), U(d, e);
+valuation {
+    reduce S@1 with R@0(_, b);
+    reduce T@2 with S@1(_, c);
+    reduce U@3 with T@2(_, d);
+    reduce T@2 with U@3(d, _);
+    reduce S@1 with T@2(c, _);
+    reduce R@0 with S@1(b, _);
+    R@0(a, b);
+    S@1(b, c);
+    T@2(c, d);
+    U@3(d, e);
+}

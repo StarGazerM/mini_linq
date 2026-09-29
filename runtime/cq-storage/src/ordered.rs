@@ -123,7 +123,7 @@ impl<'a, K: Ord> OrderedRead for &'a BTreeSet<K> {
 
 /// A key-ordered iterator of `(key, item)` pairs presented as a cursor.
 ///
-/// The order is asserted by the caller (the compiler's grade on the stream),
+/// The order is asserted by the caller (the compiler's ordering guarantee of the iterator),
 /// never checked: `seek` skips pairs while their key is below the bound,
 /// which is exact precisely when the input is nondecreasing.
 pub fn sorted_by<I>(pairs: I) -> Sorted<I::IntoIter>

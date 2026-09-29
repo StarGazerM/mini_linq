@@ -24,10 +24,8 @@
 //! Readiness is availability only: an atom waits for the bindings that
 //! supply its columns, a guard or binding for the variables it uses, and
 //! guards (bindings) keep their query order among themselves as VO
-//! requires. Normal form has no expression arguments and VO lets a guard
-//! move earlier than written, never later than its variables, so the old
-//! "Rust evaluation boundary" of the clause-prefix planner has no
-//! counterpart here.
+//! requires. Normal form has no expression arguments; availability is
+//! derived from the complete query carried by the resulting VO program.
 
 use std::collections::BTreeSet;
 
@@ -219,7 +217,7 @@ fn prefix_rank<'a>(
 
 /// Atoms in the order of their earliest variable in the elimination order.
 fn elimination(
-    source: &cq::Module,
+    source: &cq::Program,
     clauses: &[Clause<'_>],
 ) -> syn::Result<(Vec<usize>, Vec<String>)> {
     let order = cq::hypergraph::Analysis::of(source).elimination_order;
@@ -235,7 +233,7 @@ fn elimination(
             earliest[clause] = earliest[clause].min(position);
         }
     }
-    let sequence = schedule(&source.program.query, clauses, |clause, _| {
+    let sequence = schedule(&source.query, clauses, |clause, _| {
         if clauses[clause].is_atom() {
             (true, false, earliest[clause], clause)
         } else {
@@ -401,13 +399,9 @@ fn atom(item: &BodyItem) -> &cq::Atom {
 }
 
 /// Order the normal-form query under `options`, then check the VO contract.
-pub fn compile(
-    source: &cq::Section,
-    _env: &impl cq::Env,
-    options: &Options,
-) -> syn::Result<valuation::Section> {
+pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
-    let query = &source.program.query;
+    let query = &source.query;
     let clauses = clauses(query);
     let (sequence, variables) = match options.heuristic {
         Heuristic::Written => {
@@ -426,66 +420,30 @@ pub fn compile(
         Split::Coarse => coarse(&clauses, &sequence),
         Split::Fine => fine(query, &clauses, &sequence, &variables)?,
     };
-    let section = valuation::Section {
-        valuation_token: Default::default(),
-        brace: Default::default(),
-        steps,
+    let program = valuation::Program {
+        cq: source.clone(),
+        valuation: valuation::Valuation {
+            valuation_token: Default::default(),
+            brace: Default::default(),
+            steps,
+        },
     };
-    valuation::contract::check(&section, &Env(source))?;
-    Ok(section)
+    valuation::contract::check(&program)?;
+    Ok(program)
 }
 
-/// The plan schedules exactly the source query, satisfies the VO contract,
-/// and is what `compile` records under `options`.
+/// Check the selected schedule against the source query and options.
 pub fn check(
-    source: &cq::Section,
-    env: &impl cq::Env,
-    target: &valuation::Section,
+    source: &cq::Program,
+    target: &valuation::Program,
     options: &Options,
-) -> bool {
-    cq::normal::check(source).is_ok()
-        && valuation::contract::well_formed(target, &Env(source))
-        && compile(source, env, options).is_ok_and(|expected| expected == *target)
-}
-
-/// VO environment produced by the root CQ section.
-pub struct Env<'a>(pub &'a cq::Section);
-impl valuation::CqEnv for Env<'_> {
-    fn clauses(&self) -> syn::Result<Vec<valuation::Clause>> {
-        cq::normal::check(self.0)?;
-        Ok(self
-            .0
-            .program
-            .query
-            .body
-            .iter()
-            .filter_map(|item| match item {
-                cq::BodyItem::Positive { atom } => Some(valuation::Clause::Atom(atom.clone())),
-                cq::BodyItem::Filter(f) => Some(valuation::Clause::Guard(f.clone())),
-                cq::BodyItem::Let(l) => Some(valuation::Clause::Let(l.clone())),
-                _ => None,
-            })
-            .collect())
+) -> syn::Result<()> {
+    valuation::contract::check(target)?;
+    if compile(source, options)? != *target {
+        return Err(syn::Error::new_spanned(
+            &target.cq.name,
+            "valuation differs from the requested schedule",
+        ));
     }
-}
-impl valuation::Env for Env<'_> {
-    fn inputs(&self) -> Vec<cq::RelationDecl> {
-        self.0.program.inputs().cloned().collect()
-    }
-    fn head(&self) -> &cq::Atom {
-        &self.0.program.query.head
-    }
-    fn join_tree(&self) -> Option<Vec<(usize, Option<usize>)>> {
-        cq::hypergraph::Analysis::of(self.0).join_tree
-    }
-}
-#[cfg(feature = "reference")]
-pub mod reference {
-    use super::*;
-    pub fn compile(source: &cq::Module, options: &Options) -> syn::Result<valuation::Section> {
-        super::compile(source, &(), options)
-    }
-    pub fn check(source: &cq::Module, target: &valuation::Section, options: &Options) -> bool {
-        super::check(source, &(), target, options)
-    }
+    Ok(())
 }

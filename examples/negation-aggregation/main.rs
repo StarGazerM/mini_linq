@@ -1,5 +1,4 @@
 //! Optional HW4 specification: requires the negation/aggregation implementation.
-//! Run after completing HW4: cargo run -p mini-linq --example negation-aggregation --features hw4
 use mini_linq::mini_linq;
 
 mini_linq! {

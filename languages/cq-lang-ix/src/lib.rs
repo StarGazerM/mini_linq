@@ -1,19 +1,14 @@
 //! IX records exact index demands over RA results.
 //!
 //! The complete relational plan is retained unchanged. Index descriptors use
-//! sorted logical headings of named RA results. Physical derives demand uses
-//! from its operands and checks them against these descriptors.
+//! sorted logical headings of named RA results. Physical lowering checks its probe and semijoin reads against these demands.
 
-#[cfg(feature = "reference-prefix")]
-pub use cq_lang_ra as relational_plan;
+pub use cq_lang_ra as ra;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use cq_syntax::{Column, CommaList, SemicolonList, kw, symbol_name};
 use syn::{Ident, Token, token};
-
-mod joins;
-pub use joins::result_join_columns;
 
 /// An exact RA result version and its ordered logical column ordinals.
 ///
@@ -59,10 +54,11 @@ pub fn signature(index: &IndexRequirement) -> Signature {
 /// A complete RA program followed by named index demands.
 ///
 /// ```text
-/// Module ::= RA "indexes" "{" (IndexDefinition ";")* "}"
+/// Program ::= ra::Program "indexes" "{" (IndexDefinition ";")* "}"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Section {
+pub struct Program {
+    pub ra: ra::Program,
     pub indexes_token: crate::kw::indexes,
     #[syn(braced)]
     pub indexes_brace: token::Brace,
@@ -71,46 +67,21 @@ pub struct Section {
     pub indexes: SemicolonList<IndexDefinition>,
 }
 
-/// A binary logical operation whose right operand can demand an index.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Join {
-    pub result: String,
-    pub left: String,
-    pub right: String,
-    pub semi: bool,
-}
-
-/// The RA facts needed to validate an indexes section.
-pub trait RaEnv {
-    fn heading(&self, result: &str) -> Option<&[String]>;
-    fn joins(&self) -> Vec<Join>;
-}
-
 pub mod contract {
-    pub fn check(section: &super::Section, env: &impl super::RaEnv) -> syn::Result<()> {
-        super::check_indexes(section, env)
-    }
-    pub fn well_formed(section: &super::Section, env: &impl super::RaEnv) -> bool {
-        check(section, env).is_ok()
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn check_module(module: &super::Module) -> syn::Result<()> {
-        check(
-            &module.section,
-            &super::reference::Env::new(&module.relational_plan)?,
-        )
-    }
-    #[cfg(feature = "reference-prefix")]
-    pub fn well_formed_module(module: &super::Module) -> bool {
-        check_module(module).is_ok()
+    pub fn check(program: &super::Program) -> syn::Result<()> {
+        super::check_indexes(program)
     }
 }
 
-fn check_indexes(module: &Section, env: &impl RaEnv) -> syn::Result<()> {
+fn check_indexes(module: &Program) -> syn::Result<()> {
+    let info = ra::contract::check(&module.ra)?;
     if !module.indexes.is_empty() && !module.indexes.trailing_punct() {
         return Err(syn::Error::new_spanned(
             module.indexes.last().unwrap(),
-            "index definitions must end with a semicolon",
+            format!(
+                "index `{}` must end with a semicolon",
+                module.indexes.last().unwrap().name
+            ),
         ));
     }
     let mut indexes = BTreeMap::new();
@@ -118,7 +89,7 @@ fn check_indexes(module: &Section, env: &impl RaEnv) -> syn::Result<()> {
     for index in &module.indexes {
         let requirement = &index.requirement;
         let (relation, columns) = signature(requirement);
-        let Some(info) = env.heading(&relation) else {
+        let Some(info) = info.get(&relation).map(|i| &i.heading) else {
             return Err(syn::Error::new_spanned(
                 requirement,
                 format!("index source `@{relation}` must name an exact RA result"),
@@ -136,38 +107,44 @@ fn check_indexes(module: &Section, env: &impl RaEnv) -> syn::Result<()> {
         if columns.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(syn::Error::new_spanned(
                 requirement,
-                "index columns must be strictly increasing logical heading ordinals",
+                format!(
+                    "index `{}` on `{relation}` columns must be strictly increasing logical heading ordinals",
+                    index.name
+                ),
             ));
         }
         if indexes.insert(symbol_name(&index.name), index).is_some() {
             return Err(syn::Error::new_spanned(
                 &index.name,
-                "duplicate index identity",
+                format!("duplicate index identity `{}`", index.name),
             ));
         }
         if !descriptors.insert((relation, columns)) {
             return Err(syn::Error::new_spanned(
                 requirement,
-                "duplicate index descriptor: uses of the same version and columns must share one index identity",
+                format!(
+                    "duplicate index descriptor `{}` for `{}`",
+                    index.name, index.requirement.relation
+                ),
             ));
         }
     }
 
     let mut expected = BTreeSet::new();
-    for join in env.joins() {
-        let Some(left) = env.heading(&join.left) else {
-            return Err(syn::Error::new_spanned(
-                module.indexes_token,
-                "join's left result has no heading",
-            ));
+    for definition in &module.ra.plan.definitions {
+        let (left, right) = match &definition.operator {
+            ra::Operator::NaturalJoin(j) => (&j.left, &j.right),
+            ra::Operator::Semijoin(j) => (&j.left, &j.right),
+            _ => continue,
         };
-        let Some(right) = env.heading(&join.right) else {
-            return Err(syn::Error::new_spanned(
-                module.indexes_token,
-                "join's right result has no heading",
-            ));
-        };
-        expected.insert((join.right, result_join_columns(left, right)));
+        let lh = &info[&symbol_name(left)].heading;
+        let rh = &info[&symbol_name(right)].heading;
+        let columns = rh
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| lh.contains(c).then_some(i))
+            .collect();
+        expected.insert((symbol_name(right), columns));
     }
 
     for (name, index) in indexes {
@@ -183,12 +160,3 @@ fn check_indexes(module: &Section, env: &impl RaEnv) -> syn::Result<()> {
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
-
-#[cfg(feature = "reference-prefix")]
-pub mod reference;
-#[cfg(feature = "reference-prefix")]
-pub use reference::Module;
-
-mod env;
-pub use env::{Env, Operation};
-pub use env::{RowFacts, rows};

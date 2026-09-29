@@ -15,7 +15,7 @@ fn report(position: &str, expression: &syn::Expr) {
 }
 
 fn main() {
-    let source: cq::Module = syn::parse_quote! {
+    let source: cq::Program = syn::parse_quote! {
         struct Inspect; relation R(value:i32);
         answer(x) :- R(transform(x)),
             if { let threshold = limit; x > threshold },
@@ -23,7 +23,7 @@ fn main() {
             !R(offset(x)),
             agg total = (factory(config))(amount) in R(amount);
     };
-    for clause in &source.program.query.body {
+    for clause in &source.query.body {
         match clause {
             BodyItem::Positive { atom } => {
                 for expression in &atom.args {

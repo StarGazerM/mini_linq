@@ -124,7 +124,7 @@ fn golden(
                 cq_workloads::dataset::write_result_rows(
                     &path,
                     &expected,
-                    module.program.query.head.args.len(),
+                    module.query.head.args.len(),
                 )?;
                 println!(
                     "wrote {:<28} {:<11} {}",
@@ -133,7 +133,7 @@ fn golden(
                     path.display()
                 );
             } else {
-                let arity = module.program.query.head.args.len();
+                let arity = module.query.head.args.len();
                 let tracked = cq_workloads::dataset::read_result_rows(&path, arity)?;
                 compare_rows(
                     case,
@@ -183,7 +183,7 @@ fn read_generated(
     case: &QueryCase,
     config: GenerationConfig,
     expected: Option<&cq_workloads::dataset::Dataset>,
-) -> Result<(cq_lang_cq::Module, cq_workloads::dataset::Dataset)> {
+) -> Result<(cq_lang_cq::Program, cq_workloads::dataset::Dataset)> {
     let directory = data_directory(case, config.scenario, config.scale);
     if !directory.join("manifest.txt").is_file() {
         return Err(format!(
@@ -599,4 +599,3 @@ mod tests {
         assert!(!check_or_skip_scenario(case, Scenario::NoMatch, true).unwrap());
     }
 }
-

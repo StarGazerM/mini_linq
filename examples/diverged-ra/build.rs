@@ -2,7 +2,7 @@ use quote::quote;
 fn main() {
     println!("cargo:rerun-if-changed=query.theta");
     let query: ra_theta::Query = syn::parse_str(include_str!("query.theta")).unwrap();
-    let indexes: cq_lang_ix::Section = query.indexes().unwrap();
+    let indexes: cq_lang_ix::Program = query.indexes().unwrap();
     let mut functions = Vec::new();
     for (name, policy) in [
         (
@@ -16,14 +16,11 @@ fn main() {
     ] {
         let name: syn::Ident = name;
         let policy: cq_lang_physical::policy::Policy = policy;
-        let physical = cq_physical_lowering::compile(&indexes, &query, &policy).unwrap();
-        let physical_env = cq_physical_lowering::Env::new(&indexes, &query).unwrap();
-        let structures: cq_lang_structures::Section =
-            cq_structure_selection::compile(&physical, &physical_env, &policy).unwrap();
-        let structures_env = cq_structure_selection::Env::new(&physical, &physical_env).unwrap();
+        let physical = cq_physical_lowering::compile(&indexes, &policy).unwrap();
+        let structures: cq_lang_structures::Program =
+            cq_structure_selection::compile(&physical, &policy).unwrap();
         let expression = cq_physical_realization::compile(
             &structures,
-            &structures_env,
             &cq_physical_realization::Endpoints {
                 distinct_state: syn::parse_quote!(distinct_state),
                 intersect: false,

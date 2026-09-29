@@ -1,3 +1,5 @@
+//! Complete CQ programs, local contracts, normalization and hypergraph analysis.
+
 pub use cq_syntax::predicate::{Comparison, Predicate, Term};
 pub mod hypergraph;
 pub mod normal;
@@ -13,7 +15,7 @@ pub use cq_syntax::{CommaList, kw, symbol_name};
 ///
 /// ```text
 /// Program ::= RustVisibility? "struct" Ident ";"
-///             RelationDecl+
+///             RelationDecl*
 ///             Query
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -29,7 +31,7 @@ pub struct Program {
 }
 
 fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<RelationDecl>> {
-    let mut declarations = vec![input.parse()?];
+    let mut declarations = Vec::new();
     while input.peek(Token![#]) || input.peek(kw::relation) {
         declarations.push(input.parse()?);
     }
@@ -164,45 +166,16 @@ impl BodyItem {
             _ => None,
         }
     }
-    pub fn positive_atom(&self) -> syn::Result<&Atom> {
-        match self {
-            Self::Positive { atom } => Ok(atom),
-            _ => Err(syn::Error::new_spanned(
-                self,
-                "this R1 route supports positive atoms only; use the Stage I route for selections",
-            )),
-        }
-    }
 }
 
-/// A complete positive conjunctive-query language object.
-///
-/// ```text
-/// struct TriangleProgram;
-/// relation R(src: i32, dst: i32);
-/// relation S(src: i32, dst: i32);
-/// relation T(src: i32, dst: i32);
-/// triangle(x, y, z) :- R(x, y), S(y, z), T(z, x);
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Module {
-    pub program: Program,
-}
-
-/// The CQ language contract in diagnostic and predicate form.
+/// The CQ contract checks declarations, scope, and output types.
 pub mod contract {
-    /// Check the CQ language contract and retain precise diagnostic spans.
-    pub fn check(module: &super::Module) -> syn::Result<()> {
-        super::check_program(&module.program)
-    }
-
-    /// Whether a parsed module satisfies the CQ language contract.
-    pub fn well_formed(module: &super::Module) -> bool {
-        check(module).is_ok()
+    pub fn check(program: &super::Program) -> syn::Result<()> {
+        super::check_program(program)
     }
 }
 
-pub fn check_program(program: &Program) -> syn::Result<()> {
+fn check_program(program: &Program) -> syn::Result<()> {
     let mut schema = check_input_declarations(&program.declarations)?;
     if let Some(output) = schema.remove(&symbol_name(&program.query.head.relation)) {
         if output.arity() != program.query.head.args.len() {
@@ -381,9 +354,3 @@ fn check_input_atom<'a>(
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
-
-/// CQ is the root language; its section contains its whole program.
-pub type Section = Module;
-/// The root language has no upstream facts.
-pub trait Env {}
-impl Env for () {}

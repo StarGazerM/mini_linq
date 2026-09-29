@@ -1,0 +1,12 @@
+structures {
+    R;
+    S;
+    T;
+    U;
+    r1 = ::std::collections::HashSet<_> [b];
+    r2 = ::std::collections::HashSet<_> [c];
+    r4 = ::std::collections::HashSet<_> [d];
+    r6 = ::cq_storage::HashIndex<_, _> [d];
+    r7 = ::cq_storage::HashIndex<_, _> [c];
+    r8 = ::cq_storage::HashIndex<_, _> [b];
+}

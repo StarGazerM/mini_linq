@@ -1,6 +1,6 @@
 //! The paper's YA example stops at verified VO, RA and IX boundaries.
 use cq_lang_cq as cq;
-use cq_lang_ra as relational_plan;
+use cq_lang_ra as ra;
 use cq_lang_vo as valuation;
 use mini_linq_paper_overview::{boundaries, directory};
 use std::collections::BTreeSet;
@@ -22,7 +22,7 @@ fn oracle(r: &[(i32, i32, i32, i32)], s: &[(i32, i32, i32)], t: &[(i32, i32)]) -
 
 fn main() {
     let directory = directory("logical-overview");
-    let source: cq::Module = syn::parse_quote! {
+    let source: cq::Program = syn::parse_quote! {
         pub struct Overview;
         relation R(a:i32,b:i32,c:i32,d:i32);
         relation S(a:i32,b:i32,c:i32);
@@ -39,7 +39,7 @@ fn main() {
     );
     // The guard on T is pushed onto T; the reducer goes up from R through S
     // to T and down again, before the first atom step.
-    let expected_vo: valuation::Module = syn::parse_quote! {
+    let expected_vo: valuation::Program = syn::parse_quote! {
         pub struct Overview;
         relation R(a:i32,b:i32,c:i32,d:i32);
         relation S(a:i32,b:i32,c:i32);
@@ -58,7 +58,9 @@ fn main() {
         }
     };
     assert_eq!(planned.valuation, expected_vo);
-    let expected_ra: relational_plan::Plan = syn::parse_quote! {
+    let declarations = &source.declarations;
+    let expected_ra: ra::Plan = syn::parse_quote! {
+        #(#declarations)*
         r0 = rename T { a -> z, b -> y };
         r1 = select r0 if (y > 0);
         r2 = rename S { a -> k, b -> tag, c -> z };
@@ -69,22 +71,23 @@ fn main() {
         r7 = semijoin r3 with r6;
         r8 = natural_join r7 with r6;
         r9 = natural_join r8 with r5;
-        r10 = project r9 keep { r#x, r#y };
+        r10 = project r9 keep { x, y };
         output r10 as answer(x, y);
     };
     assert_eq!(planned.relational.plan, expected_ra);
-    let expected_written: relational_plan::Plan = syn::parse_quote! {
+    let expected_written: ra::Plan = syn::parse_quote! {
+        #(#declarations)*
         r0 = rename R { a -> x, b -> k, c -> tag, d -> unused };
         r1 = rename S { a -> k, b -> tag, c -> z };
         r2 = natural_join r0 with r1;
         r3 = rename T { a -> z, b -> y };
         r4 = natural_join r2 with r3;
         r5 = select r4 if (y > 0);
-        r6 = project r5 keep { r#x, r#y };
+        r6 = project r5 keep { x, y };
         output r6 as answer(x, y);
     };
     assert_eq!(written.relational.plan, expected_written);
-    let descriptors = |ix: &cq_lang_ix::Module| {
+    let descriptors = |ix: &cq_lang_ix::Program| {
         ix.indexes
             .iter()
             .map(|index| {

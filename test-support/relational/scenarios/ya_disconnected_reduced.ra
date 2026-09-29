@@ -1,0 +1,11 @@
+relational {
+    relation R(value: i32);
+    relation S(first: i32, second: i32);
+    r0 = rename S { first -> y, second -> z };
+    r1 = rename R { value -> x };
+    r2 = semijoin r0 with r1;
+    r3 = semijoin r1 with r2;
+    r4 = natural_join r3 with r2;
+    r5 = project r4 keep { x };
+    output r5 as answer(x);
+}

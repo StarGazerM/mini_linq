@@ -1,256 +1,340 @@
-//! IX → Physical: the pass's output equals independently authored Physical
-//! programs, and every output satisfies the Physical contract.
-use cq_lang_cq as cq;
-use cq_lang_ix as ix;
-use cq_lang_physical as physical;
-use cq_lang_physical::policy::Policy;
-use cq_physical_lowering::{check, compile};
-use quote::{ToTokens, quote};
-
-fn parse_policy(tokens: proc_macro2::TokenStream) -> Policy {
-    syn::parse2(tokens).unwrap()
+use cq_lang_ix::{self as ix, ra};
+use cq_lang_physical::{self as physical, policy::Policy};
+use cq_physical_lowering::{check, compile, erase};
+#[allow(dead_code)]
+#[path = "../../../test-support/relational/cases.rs"]
+mod cases;
+#[allow(dead_code)]
+#[path = "../../../test-support/relational/semantics.rs"]
+mod oracle;
+#[path = "../../../test-support/relational/scenarios.rs"]
+mod scenarios;
+#[allow(dead_code)]
+#[path = "../../../test-support/relational/values.rs"]
+mod values;
+#[test]
+fn scenarios_preserve_relational_answers_under_probe_and_merge() {
+    for case in scenarios::SCENARIOS {
+        let source: ix::Program = syn::parse_str(&case.ix()).unwrap();
+        for merge in [false, true] {
+            let policy_text = if merge {
+                case.policy.replacen("}", "join = merge; }", 1)
+            } else {
+                case.policy.into()
+            };
+            let policy: Policy = syn::parse_str(&policy_text).unwrap();
+            let target = compile(&source, &policy).unwrap();
+            check(&source, &target, &policy).unwrap();
+            if !merge {
+                assert_eq!(
+                    target,
+                    syn::parse_str::<physical::Program>(case.physical).unwrap(),
+                    "{}",
+                    case.name
+                );
+            }
+            assert_eq!(erase(&target), source.ra);
+            let mut changed = target.clone();
+            changed.program.head.relation = syn::parse_quote!(wrong);
+            assert!(check(&source, &changed, &policy).is_err());
+            if let Some(data) = cases::CASES.iter().find(|c| c.name == case.name) {
+                let database = data
+                    .inputs
+                    .iter()
+                    .map(|(n, rows)| ((*n).into(), rows.iter().map(|r| r.to_vec()).collect()))
+                    .collect();
+                let expected = data
+                    .expected
+                    .iter()
+                    .map(|r| r.to_vec())
+                    .collect::<values::Rows>();
+                assert_eq!(
+                    oracle::evaluate_ra(&erase(&target), &database).output,
+                    expected,
+                    "{}",
+                    case.name
+                );
+            }
+        }
+    }
+}
+#[test]
+fn demands_are_a_pass_obligation_and_policy_is_checked() {
+    let case = scenarios::SCENARIOS
+        .iter()
+        .find(|c| c.name == "triangle")
+        .unwrap();
+    let source: ix::Program = syn::parse_str(&case.ix()).unwrap();
+    let policy = syn::parse_str(case.policy).unwrap();
+    let target = compile(&source, &policy).unwrap();
+    let mut missing = source.clone();
+    missing.indexes.clear();
+    ix::contract::check(&missing).unwrap();
+    physical::contract::check(&target).unwrap();
+    assert!(check(&missing, &target, &policy).is_err());
+    assert!(compile(&missing, &policy).is_err());
+    for text in [
+        "policy { R; S; }",
+        "policy { R; S; T; R; }",
+        "policy { R keyed [missing]; S; T; }",
+    ] {
+        assert!(compile(&source, &syn::parse_str(text).unwrap()).is_err());
+    }
+    let changed: Policy = syn::parse_str("policy { R; S; T; join = merge; }").unwrap();
+    assert!(check(&source, &target, &changed).is_err());
+}
+#[test]
+fn ordered_host_range_and_canon_follow_policy() {
+    let source: ix::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32);
+        r = rename R {a -> x,b -> y};
+        s = select r if (x >= 2 && x < 9 && y != 5);
+        p = project s keep {x}; output p as answer(x);
+    } indexes {} };
+    let policy: Policy = syn::parse_quote!(policy { R keyed [a] ordered canon; project = canon; });
+    let target = compile(&source, &policy).unwrap();
+    assert_body(
+        &target,
+        "
+        r = alias rename R {a -> x, b -> y};
+        s = pipe range[x] r if (x >= 2 && x < 9 && y != 5);
+        p = pipe canon project s keep {x}; return p as answer(x);
+    ",
+    );
+    check(&source, &target, &policy).unwrap();
+    for condition in ["x != 2", "x < y", "x > 2147483647"] {
+        let mut changed = source.clone();
+        if let ra::Operator::Select(s) = &mut changed.ra.plan.definitions[1].operator {
+            s.condition = syn::parse_str(condition).unwrap();
+        }
+        let result = compile(&changed, &policy).unwrap();
+        assert_definition(
+            &result,
+            "s",
+            &format!("s = pipe select r if ({condition});"),
+        );
+    }
 }
 
-/// No reductions: relation-at-a-time joins in written order.
-const UNREDUCED: cq_reduce::Options = cq_reduce::Options {
-    guards: cq_reduce::Pushdown::None,
-    semijoins: cq_reduce::Reductions::None,
-};
+const CHAIN: &str = "relational {
+    relation L(a: i32);
+    relation R(a: i32, b: i32);
+    relation S(b: i32, c: i32);
+    r0 = rename L {a -> a};
+    r1 = rename R {a -> a, b -> b};
+    r2 = natural_join r0 with r1;
+    r3 = rename S {b -> b, c -> c};
+    r4 = natural_join r2 with r3;
+    r5 = project r4 keep {a, c};
+    output r5 as answer(a, c);
+} indexes { i0 = @r1[0]; i1 = @r3[0]; }";
 
-/// Single-atom guards pushed onto their atoms and the Yannakakis full reducer.
-const REDUCED: cq_reduce::Options = cq_reduce::Options {
-    guards: cq_reduce::Pushdown::Atoms,
-    semijoins: cq_reduce::Reductions::Tree,
-};
-
-/// CQ text → NF → VO in written order → reduced under `options` → RA → IX.
-fn ix_of(tokens: proc_macro2::TokenStream, options: &cq_reduce::Options) -> ix::Module {
-    let source: cq::Module = syn::parse2(tokens).unwrap();
-    let normal = cq::normal::normalize(&source).unwrap();
-    let plan = cq_order::compile(&normal, &cq_order::Options::default()).unwrap();
-    let plan = cq_reduce::compile(&plan, options).unwrap();
-    let target = cq_elaborate::compile(&plan).unwrap();
-    cq_index_policy::compile(&target).unwrap()
+fn lower(source: &ix::Program, policy: &str) -> physical::Program {
+    let policy = syn::parse_str(policy).unwrap();
+    let target = compile(source, &policy).unwrap();
+    check(source, &target, &policy).unwrap();
+    target
 }
 
-/// `r0 = L; r1 = R; r2 = r0 ⋈ r1; r3 = S; r4 = r2 ⋈ r3; r5 = π r4`.
-fn chain_ix() -> ix::Module {
-    ix_of(
-        quote! {
-            struct Chain;
-            relation L(a: i32);
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
-        },
-        &UNREDUCED,
-    )
+fn assert_body(target: &physical::Program, body: &str) {
+    use quote::quote;
+    let declarations = &target.program.declarations;
+    let body: proc_macro2::TokenStream = body.parse().unwrap();
+    let expected: physical::Program = syn::parse2(quote! {
+        physical { #(#declarations)* #body }
+    })
+    .unwrap();
+    assert_eq!(target, &expected);
 }
 
-/// Fine subatoms project the triangle's atoms to each variable prefix.
-fn triangle_ix() -> ix::Module {
-    let source: cq::Module = syn::parse_quote! {
-        struct Triangle;
-        relation R(a: i32, b: i32);
-        relation S(b: i32, c: i32);
-        relation T(a: i32, c: i32);
-        answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
-    };
-    let normal = cq::normal::normalize(&source).unwrap();
-    let plan = cq_order::compile(
-        &normal,
-        &cq_order::Options {
-            heuristic: cq_order::Heuristic::Written,
-            split: cq_order::Split::Fine,
-        },
+fn assert_definition(target: &physical::Program, name: &str, expected: &str) {
+    let actual = target
+        .program
+        .definitions
+        .iter()
+        .find(|d| d.name == name)
+        .unwrap();
+    assert_eq!(
+        actual,
+        &syn::parse_str::<physical::Definition>(expected).unwrap()
+    );
+}
+
+#[test]
+fn merge_materializes_changed_keys_and_uses_ordered_hosts_in_place() {
+    let chain = syn::parse_str(CHAIN).unwrap();
+    let target = lower(&chain, "policy { L; R; S; join = merge; }");
+    assert_body(
+        &target,
+        "
+        r0 = let rename L {a -> a};
+        r1 = let rename R {a -> a, b -> b};
+        r2 = let merge[a] r0, r1;
+        r3 = let rename S {b -> b, c -> c};
+        r4 = pipe merge[b] r2, r3;
+        r5 = pipe canon project r4 keep {a, c};
+        return r5 as answer(a, c);",
+    );
+    let star = syn::parse_str(
+        &CHAIN
+            .replace("S(b:", "S(a:")
+            .replace("S {b -> b", "S {a -> a"),
     )
     .unwrap();
-    let target = cq_elaborate::compile(&plan).unwrap();
-    cq_index_policy::compile(&target).unwrap()
-}
-
-#[test]
-fn fine_triangle_keeps_intermediate_projections_by_default() {
-    // Pin the original Fine triangle RA independently of elaboration's
-    // elimination of redundant projections on semijoin right operands.
-    let mut plan = triangle_ix().relational_plan;
-    plan.plan = syn::parse_quote! {
-        r0 = rename R {a -> a, b -> b};
-        r1 = project r0 keep {a};
-        r2 = rename T {a -> a, c -> c};
-        r3 = project r2 keep {a};
-        r4 = semijoin r1 with r3;
-        r5 = natural_join r4 with r0;
-        r6 = rename S {b -> b, c -> c};
-        r7 = project r6 keep {b};
-        r8 = semijoin r5 with r7;
-        r9 = natural_join r8 with r6;
-        r10 = natural_join r9 with r2;
-        r11 = project r10 keep {a, b, c};
-        output r11 as answer(a, b, c);
-    };
-    let source = cq_index_policy::compile(&plan).unwrap();
-    let policy = parse_policy(quote! { policy { R; S; T; } });
-    let (target, _) = lower(&source, &policy);
-    let keep = parse_policy(quote! { policy { R; S; T; project = keep; } });
-    assert_eq!(target, lower(&source, &keep).0);
-    assert_program(
-        &target,
-        quote! {
-            r0 = let rename;
-            r1 = pipe project;
-            r2 = let rename;
-            r3 = let project;
-            r4 = pipe semi[a] r1, r3;
-            r5 = pipe probe[a] r4, r0;
-            r6 = let rename;
-            r7 = let project;
-            r8 = pipe semi[b] r5, r7;
-            r9 = pipe probe[b] r8, r6;
-            r10 = pipe probe[a, c] r9, r2;
-            r11 = pipe canon project;
-            return r11;
-        },
-    );
-    let canon = parse_policy(quote! { policy { R; S; T; project = canon; } });
-    let (canonical, _) = lower(&source, &canon);
-    let mut expected = target;
-    for index in [1, 3, 7] {
-        expected.program.definitions[index].canon = Some(Default::default());
-    }
-    assert_eq!(canonical, expected);
-}
-
-#[test]
-fn fine_triangle_canonicalizes_every_key_dropping_projection() {
-    let source = triangle_ix();
-    let keep = parse_policy(quote! { policy { R; S; T; } });
-    let (kept, _) = lower(&source, &keep);
-    let explicit_keep = parse_policy(quote! { policy { R; S; T; project = keep; } });
-    assert_eq!(kept, lower(&source, &explicit_keep).0);
-    for policy in [
-        quote! { policy { R; S; T; project = canon; } },
-        quote! { policy { R canon; S canon; T canon; project = canon; } },
-    ] {
-        let policy = parse_policy(policy);
-        let (target, _) = lower(&source, &policy);
-        let infos = cq_lang_ra::check_in(
-            source.relational_plan.program.inputs(),
-            &source.relational_plan.plan,
-        )
-        .unwrap();
-        let mut dropping = 0;
-        for (logical, definition) in source
-            .relational_plan
-            .plan
-            .definitions
-            .iter()
-            .zip(&target.program.definitions)
-        {
-            if let cq_lang_ra::Operator::Project(project) = &logical.operator {
-                let input = &infos[&cq_syntax::symbol_name(&project.input)].heading;
-                let kept = &infos[&cq_syntax::symbol_name(&logical.result)].heading;
-                if kept != input {
-                    dropping += 1;
-                    assert!(definition.canon.is_some(), "{}", definition.name);
-                }
-            }
-        }
-        assert!(dropping > 0);
-        for (definition, kept) in target
-            .program
-            .definitions
-            .iter()
-            .zip(&kept.program.definitions)
-        {
-            assert_eq!(definition.mode, kept.mode);
-            assert_eq!(definition.operator, kept.operator);
-            if !matches!(definition.operator, physical::Operator::Project(_)) {
-                assert_eq!(definition.canon, kept.canon);
-            }
-        }
-        // Canonicalizing a prefix does not change the returned definition.
-        assert_eq!(
-            target.program.definitions.last(),
-            kept.program.definitions.last()
+    for (left, mode) in [("L keyed [a] ordered", "alias"), ("L keyed [a]", "let")] {
+        let target = lower(
+            &star,
+            &format!(
+                "policy {{ {left}; R keyed [a] ordered; S keyed [a] ordered; join = merge; }}"
+            ),
         );
-        assert!(!check(&source, &target, &keep));
-
-        let mut tampered = target.clone();
-        tampered.program.definitions[1].canon = None;
-        physical::contract::check_module(&tampered).unwrap();
-        assert!(!check(&source, &tampered, &policy));
-        let mut tampered = target;
-        tampered.program.definitions[1].mode = syn::parse_quote!(let);
-        physical::contract::check_module(&tampered).unwrap();
-        assert!(!check(&source, &tampered, &policy));
-    }
-}
-
-#[test]
-fn a_keyed_projection_is_a_canonical_let() {
-    let plan = syn::parse_quote! {
-        struct Projected;
-        relation L(a: i32);
-        relation R(a: i32, b: i32);
-        answer(a) :- L(a), R(a, b);
-        relational {
-            l = rename L {a -> a};
-            r = rename R {a -> a, b -> b};
-            p = project r keep {a};
-            j = natural_join l with p;
-            output j as answer(a);
-        }
-    };
-    let source = cq_index_policy::compile(&plan).unwrap();
-    for policy in [
-        quote! { policy { L; R; project = canon; } },
-        quote! { policy { L canon; R keyed [a] canon; project = canon; } },
-    ] {
-        let policy = parse_policy(policy);
-        let (target, _) = lower(&source, &policy);
-        // A host's storage key [a] is not a uniqueness key: R can contain
-        // several distinct b values for one a even when its rows are canonical.
-        assert_program(
+        assert_body(
             &target,
-            quote! {
-                l = alias rename; r = alias rename; p = let canon project;
-                j = pipe canon probe[a] l, p; return j;
-            },
+            &format!(
+                "
+            r0 = {mode} rename L {{a -> a}};
+            r1 = alias rename R {{a -> a, b -> b}};
+            r2 = pipe merge[a] r0, r1;
+            r3 = alias rename S {{a -> a, c -> c}};
+            r4 = pipe merge[a] r2, r3;
+            r5 = pipe canon project r4 keep {{a, c}};
+            return r5 as answer(a, c);
+        "
+            ),
         );
     }
 }
 
 #[test]
-fn projection_canon_uses_the_inferred_key_instead_of_the_whole_input_heading() {
-    for (host, columns, canon) in [
-        (quote! { R canon; }, quote! { a }, false),
-        (quote! { R canon; }, quote! { a, b }, false),
-        (quote! { R canon; }, quote! { b }, true),
-        (quote! { R; }, quote! { a, b }, true),
+fn keyed_hosts_alias_and_canon_hosts_avoid_only_redundant_return_canon() {
+    let chain = syn::parse_str(CHAIN).unwrap();
+    let target = lower(
+        &chain,
+        "policy { L canon; R keyed [a] canon; S keyed [b] canon; }",
+    );
+    assert_body(
+        &target,
+        "
+        r0 = alias rename L {a -> a};
+        r1 = alias rename R {a -> a, b -> b};
+        r2 = pipe probe[a] r0, r1;
+        r3 = alias rename S {b -> b, c -> c};
+        r4 = pipe probe[b] r2, r3;
+        r5 = pipe canon project r4 keep {a, c};
+        return r5 as answer(a, c);",
+    );
+    let full: ix::Program = syn::parse_quote! { relational {
+        relation L(a: i32); relation R(a: i32, b: i32);
+        r0 = rename L {a -> a}; r1 = rename R {a -> a, b -> b};
+        r2 = natural_join r0 with r1;
+        r3 = project r2 keep {a, b}; output r3 as answer(a, b);
+    } indexes { i0 = @r1[0]; }};
+    for (host, canon) in [("R keyed [a] canon", ""), ("R keyed [a]", "canon")] {
+        let target = lower(&full, &format!("policy {{ L canon; {host}; }}"));
+        assert_body(
+            &target,
+            &format!(
+                "
+            r0 = alias rename L {{a -> a}};
+            r1 = alias rename R {{a -> a, b -> b}};
+            r2 = pipe probe[a] r0, r1;
+            r3 = pipe {canon} project r2 keep {{a, b}};
+            return r3 as answer(a, b);
+        "
+            ),
+        );
+    }
+}
+
+#[test]
+fn fine_triangle_canon_policy_pins_intermediate_projection_and_mode() {
+    let case = scenarios::SCENARIOS
+        .iter()
+        .find(|c| c.name == "fine_triangle")
+        .unwrap();
+    let source = syn::parse_str(&case.ix()).unwrap();
+    let keep = lower(&source, "policy { R; S; T; project = keep; }");
+    assert_eq!(lower(&source, case.policy), keep);
+    assert_eq!(
+        keep,
+        syn::parse_str::<physical::Program>(case.physical).unwrap()
+    );
+    let policy: Policy = syn::parse_quote!(policy { R; S; T; project = canon; });
+    let target = compile(&source, &policy).unwrap();
+    // The entire program is pinned: no other operator or mode changes.
+    let expected = case
+        .physical
+        .replace("r1 = pipe project", "r1 = pipe canon project");
+    assert_eq!(
+        target,
+        syn::parse_str::<physical::Program>(&expected).unwrap()
+    );
+    for change_mode in [false, true] {
+        let mut changed = target.clone();
+        if change_mode {
+            changed.program.definitions[1].mode = syn::parse_quote!(let);
+        } else {
+            changed.program.definitions[1].canon = None;
+        }
+        physical::contract::check(&changed).unwrap();
+        assert!(check(&source, &changed, &policy).is_err());
+    }
+}
+
+#[test]
+fn keyed_projection_is_a_canonical_let_even_with_canonical_hosts() {
+    let source: ix::Program = syn::parse_quote! { relational {
+        relation L(a: i32); relation R(a: i32, b: i32);
+        l = rename L {a -> a}; r = rename R {a -> a, b -> b};
+        p = project r keep {a}; j = natural_join l with p;
+        output j as answer(a);
+    } indexes { i0 = @p[0]; }};
+    for policy in [
+        "policy { L; R; project = canon; }",
+        "policy { L canon; R keyed [a] canon; project = canon; }",
     ] {
-        let plan = syn::parse_quote! {
-            struct Extended;
+        assert_body(
+            &lower(&source, policy),
+            "
+            l = alias rename L {a -> a};
+            r = alias rename R {a -> a, b -> b};
+            p = let canon project r keep {a};
+            j = pipe canon probe[a] l, p;
+            return j as answer(a);",
+        );
+    }
+}
+
+#[test]
+fn projection_canon_uses_the_inferred_key_after_extend() {
+    for (host, columns, canon) in [
+        ("R canon", "a", ""),
+        ("R canon", "a, b", ""),
+        ("R canon", "b", "canon"),
+        ("R", "a, b", "canon"),
+    ] {
+        let source = syn::parse_str(&format!(
+            "relational {{
             relation R(a: i32);
-            answer(#columns) :- R(a), let b: i32 = 0;
-            relational {
-                r = rename R {a -> a};
-                e = extend r with {b: i32} value ((0,));
-                p = project e keep {#columns};
-                s = select p if (true);
-                output s as answer(#columns);
-            }
-        };
-        let source = cq_index_policy::compile(&plan).unwrap();
-        let policy = parse_policy(quote! { policy { #host project = canon; } });
-        let (target, _) = lower(&source, &policy);
-        assert_eq!(target.program.definitions[2].canon.is_some(), canon);
-        assert!(matches!(
-            target.program.definitions[2].mode,
-            physical::Mode::Pipe(_)
-        ));
-        let keep = parse_policy(quote! { policy { #host project = keep; } });
-        let (kept, _) = lower(&source, &keep);
+            r = rename R {{a -> a}};
+            e = extend r with {{b: i32}} value ((0,));
+            p = project e keep {{{columns}}};
+            s = select p if (true); output s as answer({columns});
+        }} indexes {{}}"
+        ))
+        .unwrap();
+        let target = lower(&source, &format!("policy {{ {host}; project = canon; }}"));
+        assert_definition(
+            &target,
+            "p",
+            &format!("p = pipe {canon} project e keep {{{columns}}};"),
+        );
+        let kept = lower(&source, &format!("policy {{ {host}; project = keep; }}"));
+        assert_definition(
+            &kept,
+            "p",
+            &format!("p = pipe project e keep {{{columns}}};"),
+        );
         assert_eq!(
             target.program.definitions.last(),
             kept.program.definitions.last()
@@ -258,451 +342,187 @@ fn projection_canon_uses_the_inferred_key_instead_of_the_whole_input_heading() {
     }
 }
 
-/// The pass's output, its contract checked, as the authored program text.
-fn lower(source: &ix::Module, policy: &Policy) -> (physical::Module, String) {
-    let target = compile(source, policy).unwrap();
-    physical::contract::check_module(&target).unwrap();
-    assert!(check(source, &target, policy));
-    let text = target.program.to_token_stream().to_string();
-    (target, text)
-}
-
-fn assert_program(target: &physical::Module, program: proc_macro2::TokenStream) {
-    let source = &target.index_requirements;
-    let expected: physical::Module = syn::parse2(quote! { #source physical { #program } }).unwrap();
-    assert_eq!(
-        target.program.to_token_stream().to_string(),
-        expected.program.to_token_stream().to_string()
-    );
-    assert_eq!(*target, expected);
-}
-
 #[test]
-fn seek_policy_probes_the_hash_chain_and_flags_the_projected_return() {
-    let source = chain_ix();
-    let policy = parse_policy(quote! { policy { L; R; S; } });
-    let (target, _) = lower(&source, &policy);
-    assert_program(
-        &target,
-        quote! {
-            r0 = alias rename;
-            r1 = let rename;
-            r2 = pipe probe[a] r0, r1;
-            r3 = let rename;
-            r4 = pipe probe[b] r2, r3;
-            r5 = pipe canon project;
-            return r5;
-        },
-    );
-    // The merge policy decides a different program.
-    let merge = parse_policy(quote! { policy { L; R; S; join = merge; } });
-    assert!(!check(&source, &target, &merge));
-}
-
-#[test]
-fn missing_demands_name_the_ra_join_and_do_not_fall_back_to_scans() {
-    let policy = parse_policy(quote! { policy { L; R; S; } });
-    let mut source = chain_ix();
-    source.indexes.pop();
-    ix::contract::check_module(&source).unwrap();
-    assert_eq!(
-        compile(&source, &policy).unwrap_err().to_string(),
-        "natural join `r4` has no index use"
-    );
-
-    let mut semi: ix::Module = syn::parse_quote! {
-        struct Semi;
-        relation L(a:i32); relation R(a:i32);
-        answer(a) :- L(a), R(a);
-        relational {
-            l = rename L {a -> a}; r = rename R {a -> a};
-            j = semijoin l with r;
-            output j as answer(a);
-        }
-        indexes {}
-    };
-    let policy = parse_policy(quote! { policy { L; R; } });
-    ix::contract::check_module(&semi).unwrap();
-    assert_eq!(
-        compile(&semi, &policy).unwrap_err().to_string(),
-        "semijoin `j` has no index use"
-    );
-    semi.indexes = syn::parse_quote! { arbitrary_name = @r[0]; };
-    let (target, _) = lower(&semi, &policy);
-    assert_program(
-        &target,
-        quote! {
-            l = alias rename; r = let rename;
-            j = pipe canon semi[a] l, r; return j;
-        },
-    );
-}
-
-#[test]
-fn keyed_hosts_answer_probes_in_place_and_canon_hosts_make_the_return_unique() {
-    let source = chain_ix();
-    let policy = parse_policy(quote! {
-        policy { L canon; R keyed [a] canon; S keyed [b] canon; }
-    });
-    let (target, _) = lower(&source, &policy);
-    // `project` keeps `a` and `c` but drops the key column `b`: not unique.
-    assert_program(
-        &target,
-        quote! {
-            r0 = alias rename;
-            r1 = alias rename;
-            r2 = pipe probe[a] r0, r1;
-            r3 = alias rename;
-            r4 = pipe probe[b] r2, r3;
-            r5 = pipe canon project;
-            return r5;
-        },
-    );
-
-    // `r3 = project r2 keep {a, b}` keeps the whole key of L ⋈ R.
-    let full = ix_of(
-        quote! {
-            struct Full;
-            relation L(a: i32);
-            relation R(a: i32, b: i32);
-            answer(a, b) :- L(a), R(a, b);
-        },
-        &UNREDUCED,
-    );
-    let policy = parse_policy(quote! { policy { L canon; R keyed [a] canon; } });
-    let (_, text) = lower(&full, &policy);
-    assert!(text.contains("r3 = pipe project ;"), "{text}");
-    let policy = parse_policy(quote! { policy { L canon; R keyed [a]; } });
-    let (_, text) = lower(&full, &policy);
-    assert!(text.contains("r3 = pipe canon project ;"), "{text}");
-}
-
-#[test]
-fn merge_policy_merges_every_join_and_materializes_the_side_whose_key_changes() {
-    let source = chain_ix();
-    let policy = parse_policy(quote! { policy { L; R; S; join = merge; } });
-    let (target, _) = lower(&source, &policy);
-    assert_program(
-        &target,
-        quote! {
-            r0 = let rename;
-            r1 = let rename;
-            r2 = let merge[a] r0, r1;
-            r3 = let rename;
-            r4 = pipe merge[b] r2, r3;
-            r5 = pipe canon project;
-            return r5;
-        },
-    );
-
-    // Ordered hosts are merged in place; a merge sorted on the next key
-    // stays a pipe.
-    let same_key = ix_of(
-        quote! {
-            struct SameKey;
-            relation L(a: i32);
-            relation R(a: i32, b: i32);
-            relation S(a: i32, c: i32);
-            answer(a, b, c) :- L(a), R(a, b), S(a, c);
-        },
-        &UNREDUCED,
-    );
-    let policy = parse_policy(quote! {
-        policy { L keyed [a] ordered; R keyed [a] ordered; S keyed [a] ordered; join = merge; }
-    });
-    let (target, _) = lower(&same_key, &policy);
-    assert_program(
-        &target,
-        quote! {
-            r0 = alias rename;
-            r1 = alias rename;
-            r2 = pipe merge[a] r0, r1;
-            r3 = alias rename;
-            r4 = pipe merge[a] r2, r3;
-            r5 = pipe canon project;
-            return r5;
-        },
-    );
-    // An unordered key does not answer a merge: the rename is built over.
-    let unordered = parse_policy(quote! {
-        policy { L keyed [a]; R keyed [a] ordered; S keyed [a] ordered; join = merge; }
-    });
-    let (_, text) = lower(&same_key, &unordered);
-    assert!(text.contains("r0 = let rename ;"), "{text}");
-    assert!(text.contains("r1 = alias rename ;"), "{text}");
-}
-
-#[test]
-fn a_cartesian_join_is_a_unit_probe_under_either_join_rule() {
-    let source = ix_of(
-        quote! {
-            struct Cross;
-            relation L(a: i32);
-            relation R(b: i32);
-            answer(a, b) :- L(a), R(b);
-        },
-        &UNREDUCED,
-    );
+fn cartesian_join_is_a_unit_probe_under_either_join_policy() {
+    let case = scenarios::SCENARIOS
+        .iter()
+        .find(|c| c.name == "cartesian")
+        .unwrap();
+    let source = syn::parse_str(&case.ix()).unwrap();
     for policy in [
-        parse_policy(quote! { policy { L; R; } }),
-        parse_policy(quote! { policy { L; R; join = merge; } }),
+        case.policy.to_string(),
+        case.policy.replace('}', "join = merge; }"),
     ] {
-        let (target, text) = lower(&source, &policy);
-        assert!(text.contains("r2 = pipe probe [] r0 , r1 ;"), "{text}");
-        let analysis = physical::contract::check_module(&target).unwrap();
-        assert_eq!(analysis.key_reads["r1"], vec![("r2".to_string(), vec![])]);
+        let target = lower(&source, &policy);
+        assert_eq!(
+            target,
+            syn::parse_str::<physical::Program>(case.physical).unwrap()
+        );
+        assert_definition(&target, "r2", "r2 = pipe probe[] r0, r1;");
+        assert_eq!(
+            physical::contract::check(&target).unwrap().key_reads["r1"],
+            [("r2".into(), vec![])]
+        );
     }
 }
 
 #[test]
-fn comparisons_on_the_ordered_host_key_become_a_range() {
-    let source = ix_of(
-        quote! {
-            struct Windowed;
-            relation R(a: i32, b: i32);
-            answer(a, b) :- R(a, b), if a >= 2 && 9 > a && b != 5, if b >= 0;
-        },
-        &UNREDUCED,
-    );
-    let ordered = parse_policy(quote! { policy { R keyed [a] ordered; } });
-    let (target, _) = lower(&source, &ordered);
-    // The second select's input is not a host rename: it keeps its guard.
-    assert_program(
+fn full_reduction_uses_membership_and_materializes_shared_results() {
+    let source: ix::Program = syn::parse_quote! { relational {
+        relation L(a: i32, b: i32); relation R(b: i32, c: i32);
+        r0 = rename R {b -> b, c -> c}; r1 = rename L {a -> a, b -> b};
+        r2 = semijoin r0 with r1; r3 = semijoin r1 with r2;
+        r4 = natural_join r3 with r2;
+        r5 = project r4 keep {a}; output r5 as answer(a);
+    } indexes { i0 = @r1[1]; i1 = @r2[0]; }};
+    let target = lower(&source, "policy { L keyed [b]; R; }");
+    assert_body(
         &target,
-        quote! {
-            r0 = alias rename;
-            r1 = pipe range[a];
-            r2 = pipe select;
-            r3 = pipe canon project;
-            return r3;
-        },
+        "
+        r0 = alias rename R {b -> b, c -> c};
+        r1 = alias rename L {a -> a, b -> b};
+        r2 = let semi[b] r0, r1;
+        r3 = pipe semi[b] r1, r2;
+        r4 = pipe probe[b] r3, r2;
+        r5 = pipe canon project r4 keep {a}; return r5 as answer(a);",
     );
-    let analysis = physical::contract::check_module(&target).unwrap();
-    assert_eq!(
-        analysis.range_reads["r0"],
-        vec![("r1".to_string(), "a".to_string())]
-    );
-
-    // The key must be ordered, single, and bounded by the condition.
-    let unordered = parse_policy(quote! { policy { R keyed [a]; } });
-    let (_, text) = lower(&source, &unordered);
-    assert!(text.contains("r1 = pipe select ;"), "{text}");
-    let other_column = parse_policy(quote! { policy { R keyed [b] ordered; } });
-    let (_, text) = lower(&source, &other_column);
-    assert!(text.contains("r1 = pipe select ;"), "{text}");
-    let unbounded = ix_of(
-        quote! {
-            struct Unbounded;
-            relation R(a: i32, b: i32);
-            answer(a, b) :- R(a, b), if a != 3 && b < 4;
-        },
-        &UNREDUCED,
-    );
-    let (_, text) = lower(&unbounded, &ordered);
-    assert!(text.contains("r1 = pipe select ;"), "{text}");
-    let reversed = ix_of(
-        quote! {
-            struct Reversed;
-            relation R(a: i32, b: i32);
-            answer(a, b) :- R(a, b), if b < 4 && 7 <= a;
-        },
-        &UNREDUCED,
-    );
-    let (_, text) = lower(&reversed, &ordered);
-    assert!(text.contains("r1 = pipe range [a] ;"), "{text}");
-    // A strict bound past the end of `i32` is no window.
-    let overflowing = ix_of(
-        quote! {
-            struct Overflowing;
-            relation R(a: i32, b: i32);
-            answer(a, b) :- R(a, b), if a > 2147483647;
-        },
-        &UNREDUCED,
-    );
-    let (_, text) = lower(&overflowing, &ordered);
-    assert!(text.contains("r1 = pipe select ;"), "{text}");
-}
-
-#[test]
-fn full_reduction_semijoins_test_membership_and_shared_results_are_lets() {
-    // r0 = R; r1 = L; r2 = r0 ⋉ r1; r3 = r1 ⋉ r2; r4 = r3 ⋈ r2; r5 = π r4.
-    let source = ix_of(
-        quote! {
-            struct Reduced;
-            relation L(a: i32, b: i32);
-            relation R(b: i32, c: i32);
-            answer(a) :- L(a, b), R(b, c);
-        },
-        &REDUCED,
-    );
-    let policy = parse_policy(quote! { policy { L keyed [b]; R; } });
-    let (target, _) = lower(&source, &policy);
-    assert_program(
-        &target,
-        quote! {
-            r0 = alias rename;
-            r1 = alias rename;
-            r2 = let semi[b] r0, r1;
-            r3 = pipe semi[b] r1, r2;
-            r4 = pipe probe[b] r3, r2;
-            r5 = pipe canon project;
-            return r5;
-        },
-    );
-    let analysis = physical::contract::check_module(&target).unwrap();
-    assert_eq!(
-        analysis.key_reads["r1"],
-        vec![("r2".to_string(), vec!["b".to_string()])]
-    );
+    let analysis = physical::contract::check(&target).unwrap();
+    assert_eq!(analysis.key_reads["r1"], [("r2".into(), vec!["b".into()])]);
     assert_eq!(
         analysis.key_reads["r2"],
-        vec![
-            ("r3".to_string(), vec!["b".to_string()]),
-            ("r4".to_string(), vec!["b".to_string()])
+        [
+            ("r3".into(), vec!["b".into()]),
+            ("r4".into(), vec!["b".into()])
         ]
     );
-
-    // Without the key, L is built over; with canonical hosts the return is
-    // still flagged because `r5` projects the join key away.
-    let policy = parse_policy(quote! { policy { L canon; R canon; } });
-    let (_, text) = lower(&source, &policy);
-    assert!(text.contains("r1 = let rename ;"), "{text}");
-    assert!(text.contains("r5 = pipe canon project ;"), "{text}");
+    let target = lower(&source, "policy { L canon; R canon; }");
+    assert_definition(&target, "r1", "r1 = let rename L {a -> a, b -> b};");
+    assert_definition(&target, "r5", "r5 = pipe canon project r4 keep {a};");
 }
 
 #[test]
-fn every_output_of_the_chain_query_satisfies_the_contract_under_each_policy() {
-    let source = ix_of(
-        quote! {
-            struct Chain;
-            relation L(a: i32);
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
-        },
-        &REDUCED,
-    );
-    for policy in [
-        quote! { policy { L; R; S; } },
-        quote! { policy { L; R; S; join = merge; } },
-        quote! { policy { L keyed [a] ordered canon; R keyed [a]; S keyed [b] ordered; } },
-        quote! { policy { L keyed [a] ordered canon; R keyed [b] ordered canon; S keyed [b] ordered canon; join = merge; semijoin = prefer_lazy; } },
+fn range_requires_a_bounded_ordered_host_key_and_preserves_non_host_selects() {
+    for (key, condition, operator) in [
+        ("[a] ordered", "a >= 2 && 9 > a && b != 5", "range[a]"),
+        ("[a]", "a >= 2 && 9 > a && b != 5", "select"),
+        ("[b] ordered", "a >= 2 && 9 > a && b != 5", "select"),
+        ("[a] ordered", "a != 3 && b < 4", "select"),
+        ("[a] ordered", "b < 4 && 7 <= a", "range[a]"),
+        ("[a] ordered", "a > 2147483647", "select"),
     ] {
-        let policy = parse_policy(policy);
-        let (target, _) = lower(&source, &policy);
-        assert!(physical::contract::check_module(&target).is_ok());
+        let source = syn::parse_str(&format!(
+            "relational {{
+            relation R(a: i32, b: i32);
+            r0 = rename R {{a -> a, b -> b}};
+            r1 = select r0 if ({condition});
+            r2 = select r1 if (b >= 0);
+            r3 = project r2 keep {{a, b}}; output r3 as answer(a, b);
+        }} indexes {{}}"
+        ))
+        .unwrap();
+        let target = lower(&source, &format!("policy {{ R keyed {key}; }}"));
+        assert_body(
+            &target,
+            &format!(
+                "
+            r0 = alias rename R {{a -> a, b -> b}};
+            r1 = pipe {operator} r0 if ({condition});
+            r2 = pipe select r1 if (b >= 0);
+            r3 = pipe canon project r2 keep {{a, b}}; return r3 as answer(a, b);
+        "
+            ),
+        );
+        let analysis = physical::contract::check(&target).unwrap();
+        if operator == "range[a]" {
+            assert_eq!(analysis.range_reads["r0"], [("r1".into(), "a".into())]);
+        } else {
+            assert!(analysis.range_reads.is_empty());
+        }
     }
 }
 
 #[test]
-fn the_policy_must_describe_exactly_the_declared_hosts() {
-    let source = chain_ix();
-    let missing = parse_policy(quote! { policy { L; R; } });
-    let error = compile(&source, &missing).unwrap_err().to_string();
-    assert!(error.contains("`S`"), "{error}");
-    let extra = parse_policy(quote! { policy { L; R; S; T; } });
-    let error = compile(&source, &extra).unwrap_err().to_string();
+fn reduced_chain_satisfies_the_contract_under_mixed_policies() {
+    let source: ix::Program = syn::parse_quote! { relational {
+        relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
+        r0 = rename R {a -> a, b -> b}; r1 = rename L {a -> a};
+        r2 = semijoin r0 with r1; r3 = rename S {b -> b, c -> c};
+        r4 = semijoin r3 with r2; r5 = semijoin r2 with r4;
+        r6 = semijoin r1 with r5; r7 = natural_join r6 with r5;
+        r8 = natural_join r7 with r4; r9 = project r8 keep {a, c};
+        output r9 as answer(a, c);
+    } indexes { i0 = @r1[0]; i1 = @r2[1]; i2 = @r4[0]; i3 = @r5[0]; }};
+    for (policy, host_mode, join_mode, join) in [
+        ("policy { L; R; S; }", "let", "pipe", "probe"),
+        ("policy { L; R; S; join = merge; }", "let", "let", "merge"),
+        (
+            "policy { L keyed [a] ordered canon; R keyed [a]; S keyed [b] ordered; }",
+            "alias",
+            "pipe",
+            "probe",
+        ),
+        (
+            "policy { L keyed [a] ordered canon; R keyed [b] ordered canon; S keyed [b] ordered canon; join = merge; semijoin = prefer_lazy; }",
+            "alias",
+            "let",
+            "merge",
+        ),
+    ] {
+        assert_body(
+            &lower(&source, policy),
+            &format!(
+                "
+            r0 = alias rename R {{a -> a, b -> b}};
+            r1 = {host_mode} rename L {{a -> a}};
+            r2 = let semi[a] r0, r1;
+            r3 = alias rename S {{b -> b, c -> c}};
+            r4 = let semi[b] r3, r2;
+            r5 = let semi[b] r2, r4;
+            r6 = {join_mode} semi[a] r1, r5;
+            r7 = {join_mode} {join}[a] r6, r5;
+            r8 = pipe {join}[b] r7, r4;
+            r9 = pipe canon project r8 keep {{a, c}}; return r9 as answer(a, c);
+        "
+            ),
+        );
+    }
+}
+
+#[test]
+fn missing_demands_name_the_reader_and_arbitrary_demand_names_are_accepted() {
+    let mut source: ix::Program = syn::parse_str(CHAIN).unwrap();
+    source.indexes.pop();
+    let error = compile(&source, &syn::parse_quote!(policy { L; R; S; }))
+        .unwrap_err()
+        .to_string();
+    for name in ["`r4`", "`@r3[b]`"] {
+        assert!(error.contains(name), "{error}");
+    }
+    let mut source: ix::Program = syn::parse_quote! { relational {
+        relation L(a: i32); relation R(a: i32);
+        l = rename L {a -> a}; r = rename R {a -> a};
+        j = semijoin l with r; output j as answer(a);
+    } indexes {} };
+    let error = compile(&source, &syn::parse_quote!(policy { L; R; }))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("`j`"), "{error}");
+    source.indexes = syn::parse_quote!(arbitrary_name = @r[0];);
+    assert_body(
+        &lower(&source, "policy { L; R; }"),
+        "
+        l = alias rename L {a -> a}; r = let rename R {a -> a};
+        j = pipe canon semi[a] l, r; return j as answer(a);",
+    );
+    let case = scenarios::SCENARIOS
+        .iter()
+        .find(|c| c.name == "triangle")
+        .unwrap();
+    let error = compile(
+        &syn::parse_str(&case.ix()).unwrap(),
+        &syn::parse_quote!(policy { R; S; T; Extra; }),
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("undeclared"), "{error}");
-    let column = parse_policy(quote! { policy { L; R keyed [z]; S; } });
-    let error = compile(&source, &column).unwrap_err().to_string();
-    assert!(error.contains("no column `z`"), "{error}");
-    let twice = parse_policy(quote! { policy { L; R; S; S; } });
-    let error = compile(&source, &twice).unwrap_err().to_string();
-    assert!(error.contains("twice"), "{error}");
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_order {
-    pub use ::cq_order::*;
-    pub fn compile(
-        source: &cq_lang_cq::Module,
-        options: &::cq_order::Options,
-    ) -> syn::Result<cq_lang_vo::Module> {
-        Ok(cq_lang_vo::Module::new(
-            source.program.clone(),
-            ::cq_order::reference::compile(source, options)?,
-        ))
-    }
-    pub fn check(
-        source: &cq_lang_cq::Module,
-        target: &cq_lang_vo::Module,
-        options: &::cq_order::Options,
-    ) -> bool {
-        target.program == source.program
-            && ::cq_order::reference::check(source, &target.section, options)
-    }
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_reduce {
-    pub use ::cq_reduce::*;
-    pub fn compile(
-        source: &cq_lang_vo::Module,
-        options: &::cq_reduce::Options,
-    ) -> syn::Result<cq_lang_vo::Module> {
-        Ok(cq_lang_vo::Module::new(
-            source.program.clone(),
-            ::cq_reduce::reference::compile(source, options)?,
-        ))
-    }
-    pub fn check(
-        source: &cq_lang_vo::Module,
-        target: &cq_lang_vo::Module,
-        options: &::cq_reduce::Options,
-    ) -> bool {
-        target.program == source.program
-            && ::cq_reduce::reference::check(source, &target.section, options)
-    }
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_elaborate {
-    pub use ::cq_elaborate::*;
-    pub fn compile(source: &cq_lang_vo::Module) -> syn::Result<cq_lang_ra::Module> {
-        Ok(cq_lang_ra::Module::new(
-            source.program.clone(),
-            ::cq_elaborate::reference::compile(source)?,
-        ))
-    }
-    pub fn check(source: &cq_lang_vo::Module, target: &cq_lang_ra::Module) -> bool {
-        target.program == source.program
-            && ::cq_elaborate::reference::check(source, &target.section)
-    }
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_index_policy {
-    pub use ::cq_index_policy::*;
-    pub fn compile(source: &cq_lang_ra::Module) -> syn::Result<cq_lang_ix::Module> {
-        Ok(cq_lang_ix::Module::new(
-            source.clone(),
-            ::cq_index_policy::reference::compile(source)?,
-        ))
-    }
-    pub fn check(source: &cq_lang_ra::Module, target: &cq_lang_ix::Module) -> bool {
-        target.relational_plan == *source
-            && ::cq_index_policy::reference::check(source, &target.section)
-    }
-}
-
-#[allow(unused_imports, dead_code)]
-mod cq_physical_lowering {
-    pub use ::cq_physical_lowering::*;
-    pub fn compile(
-        source: &cq_lang_ix::Module,
-        policy: &cq_lang_physical::policy::Policy,
-    ) -> syn::Result<cq_lang_physical::Module> {
-        Ok(cq_lang_physical::Module::new(
-            source.clone(),
-            ::cq_physical_lowering::reference::compile(source, policy)?,
-        ))
-    }
-    pub fn check(
-        source: &cq_lang_ix::Module,
-        target: &cq_lang_physical::Module,
-        policy: &cq_lang_physical::policy::Policy,
-    ) -> bool {
-        target.index_requirements == *source
-            && ::cq_physical_lowering::reference::check(source, &target.section, policy)
-    }
 }

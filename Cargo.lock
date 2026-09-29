@@ -17,7 +17,6 @@ dependencies = [
 name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
- "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-syntax",
@@ -41,8 +40,6 @@ dependencies = [
 name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
- "cq-lang-ix",
- "cq-lang-ra",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -66,7 +63,6 @@ dependencies = [
 name = "cq-lang-physical"
 version = "0.1.0"
 dependencies = [
- "cq-lang-ix",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -78,7 +74,6 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
- "cq-lang-cq",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -126,15 +121,8 @@ dependencies = [
 name = "cq-physical-lowering"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
- "cq-index-policy",
- "cq-lang-cq",
  "cq-lang-ix",
  "cq-lang-physical",
- "cq-lang-ra",
- "cq-lang-vo",
- "cq-order",
- "cq-reduce",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -145,13 +133,9 @@ dependencies = [
 name = "cq-physical-realization"
 version = "0.1.0"
 dependencies = [
- "cq-lang-cq",
- "cq-lang-physical",
- "cq-lang-ra",
  "cq-lang-structures",
  "cq-print",
  "cq-syntax",
- "mini-linq",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -181,9 +165,6 @@ dependencies = [
 name = "cq-reduce"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
- "cq-lang-cq",
- "cq-lang-ra",
  "cq-lang-vo",
  "cq-syntax",
  "proc-macro2",
@@ -218,10 +199,7 @@ version = "0.1.0"
 name = "cq-structure-selection"
 version = "0.1.0"
 dependencies = [
- "cq-index-policy",
- "cq-lang-ix",
  "cq-lang-physical",
- "cq-lang-ra",
  "cq-lang-structures",
  "cq-syntax",
  "proc-macro2",
@@ -282,10 +260,12 @@ name = "mini-linq-course"
 version = "0.1.0"
 dependencies = [
  "cq-lang-cq",
+ "cq-lang-ra",
  "cq-state-providers",
  "cq-storage",
  "cq-syntax",
  "mini-linq",
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]

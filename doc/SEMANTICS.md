@@ -12,8 +12,10 @@ how that set is *presented*, never what it is. Correspondence between
 adjacent languages is therefore an erasure: CQ-NF is the kernel every plan
 erases to (`Kernel`, compared up to renaming of variables), VO reductions
 erase to the unreduced plan, RA erases back to the kernel
-(`relational_plan::kernel`), IX/Physical/Γ erase by dropping their
-section.
+(`cq_elaborate::kernel` with the source CQ ordering), IX drops its demands,
+Structures drops its storage declarations, and Physical lowering reads its
+operators back as RA. Each language contains its own complete program; the
+pass checks correspondence between source and target.
 
 | language | presentation | decision recorded |
 |---|---|---|
@@ -74,6 +76,6 @@ Generic join is not a separate algorithm here. It is: `split = Fine` in the
 order pass (bind one variable at a time), `project = canon` (enumerate each
 prefix as a set), prefix checks as semijoins on the clause relation (so one
 curried structure serves them), and `intersect = smallest` (enumerate the
-smaller candidate set, test the other). `crates/mini-linq/tests/wcoj.rs`
+smaller candidate set, test the other). `facade/mini-linq/tests/wcoj.rs`
 measures it on the fan instance: binary and first-only plans do Θ(n²) hash
 work, the smallest-first plan Θ(n).

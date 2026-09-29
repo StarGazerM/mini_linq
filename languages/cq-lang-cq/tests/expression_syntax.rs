@@ -26,9 +26,9 @@ fn all_rust_expression_positions_parse_and_roundtrip() {
         "r#agg(x)",
     ] {
         let text = format!("struct P; relation R(a:i32); answer(f(x)) :- {body};");
-        let parsed: cq::Module = syn::parse_str(&text).unwrap_or_else(|e| panic!("{body}: {e}"));
+        let parsed: cq::Program = syn::parse_str(&text).unwrap_or_else(|e| panic!("{body}: {e}"));
         assert_eq!(
-            syn::parse2::<cq::Module>(parsed.to_token_stream()).unwrap(),
+            syn::parse2::<cq::Program>(parsed.to_token_stream()).unwrap(),
             parsed
         );
     }
@@ -36,23 +36,23 @@ fn all_rust_expression_positions_parse_and_roundtrip() {
 
 #[test]
 fn clauses_expose_typed_rust_leaves_to_the_supplied_helper() {
-    let source: cq::Module = syn::parse_quote! {
+    let source: cq::Program = syn::parse_quote! {
         struct P; relation R(a:i32);
         answer(x) :- R(transform(x)),
             if { let local = limit; local > x },
             let y = build(x),
             agg total = (factory(config))(value) in R(combine(x, value));
     };
-    let BodyItem::Positive { atom } = &source.program.query.body[0] else {
+    let BodyItem::Positive { atom } = &source.query.body[0] else {
         panic!()
     };
-    let BodyItem::Filter(filter) = &source.program.query.body[1] else {
+    let BodyItem::Filter(filter) = &source.query.body[1] else {
         panic!()
     };
-    let BodyItem::Let(binding) = &source.program.query.body[2] else {
+    let BodyItem::Let(binding) = &source.query.body[2] else {
         panic!()
     };
-    let BodyItem::Aggregate(aggregate) = &source.program.query.body[3] else {
+    let BodyItem::Aggregate(aggregate) = &source.query.body[3] else {
         panic!()
     };
     let cq::Aggregator::Expression { expression, .. } = &aggregate.aggregator else {
@@ -89,7 +89,7 @@ fn malformed_present_syntax_is_rejected() {
         "R(x), agg y = sum(value) R(value)",
     ] {
         let text = format!("struct P; relation R(a:i32); answer(x) :- {body};");
-        assert!(syn::parse_str::<cq::Module>(&text).is_err(), "{body}");
+        assert!(syn::parse_str::<cq::Program>(&text).is_err(), "{body}");
     }
 }
 
@@ -103,7 +103,7 @@ fn parsing_extensions_does_not_bypass_the_semantic_contracts() {
         "agg y = sum(x) in R(x)",
     ] {
         let text = format!("struct P; relation R(a:i32); answer(x) :- {body};");
-        let source: cq::Module = syn::parse_str(&text).unwrap();
+        let source: cq::Program = syn::parse_str(&text).unwrap();
         assert!(cq::contract::check(&source).is_err(), "{body}");
     }
 }

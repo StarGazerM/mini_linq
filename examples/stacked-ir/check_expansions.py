@@ -9,7 +9,7 @@ root = base.parents[1]
 env = os.environ.copy()
 env["CARGO_TARGET_DIR"] = str(root / "target/scenario-examples")
 subprocess.run(["cargo", "test", "--manifest-path", str(base / "Cargo.toml"), "--locked"], env=env, check=True)
-mods = re.findall(r"^mod (\w+) \{", (base / "tests/reference.rs").read_text(), re.M)
+mods = re.findall(r"^mod (\w+) \{", (root / "facade/mini-linq/tests/physical_query.rs").read_text(), re.M)
 for name in mods:
     outputs = []
     for target in ["reference", "stacked"]:

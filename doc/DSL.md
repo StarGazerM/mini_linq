@@ -5,6 +5,10 @@ The common query path is `CQ → NF → VO → RA → IX → Physical → Γ →
 owner. The syntax below distinguishes language validity from the narrower
 domain a caller's policy admits.
 
+Every language exports `Program` and `contract::check(&Program)`. Only VO, IX,
+and Structures extend another grammar, respectively CQ, RA and Physical.
+All other programs contain their own declarations and output metadata.
+
 ## Typed boundaries
 
 | Transformation | Typed owner |
@@ -24,8 +28,7 @@ The policy and the distinct-state provider are caller-resolved macro slots
 `distinct_state!`). Syntax types and validity checks live in the language crates under `languages/`.
 
 The printer emits a Rust block in a caller-written host. Input identifiers
-refer to bindings in that scope. The CQ `struct Name;` is retained program
-metadata; it does not promise a generated `build/run/query` API.
+refer to bindings in that scope. The CQ `struct Name;` is metadata through VO; it does not promise a generated `build/run/query` API.
 
 ## CQ and Rust leaves
 
@@ -35,8 +38,7 @@ classify them without changing the syntax. Typed `let` retains its annotation
 beside its pattern. Rust expressions are parsed without token rewriting.
 
 ```ebnf
-CQModule       ::= Program
-Program        ::= RustVisibility? "struct" Ident ";" RelationDecl+ Query
+Program        ::= RustVisibility? "struct" Ident ";" RelationDecl* Query
 RelationDecl   ::= IndexAdvice? "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
 IndexAdvice    ::= "#" "[" "index" "(" Ident ")" "]"
 ColumnDecl     ::= Ident ":" RustType
@@ -177,7 +179,7 @@ Under set semantics a reduction changes nothing the plan denotes, so the
 erasure ignores reductions.
 
 ```ebnf
-Module    ::= CQ "valuation" "{" Step* "}"
+Program   ::= cq::Program "valuation" "{" Step* "}"
 Step      ::= Subatom ";" | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
             | "reduce" Ident "@" Int Reduction ";"
 Reduction ::= "with" Subatom | "if" Expr
@@ -204,7 +206,7 @@ below chooses them.
 ## Named relational algebra
 
 ```ebnf
-RelationalModule ::= Program "relational" "{" RelationalPlan "}"
+Program          ::= "relational" "{" RelationDecl* RelationalPlan "}"
 RelationalPlan   ::= RelDefinition* RelOutput
 RelDefinition    ::= RelId "=" RelOperator ";"
 RelOperator      ::= "unit"
@@ -231,13 +233,17 @@ NaturalJoin equates shared attributes and returns the heading union, including
 when every right attribute is already shared. Semijoin keeps exactly the left
 heading with an existential matching right row. Project retains a distinct
 subset. Select retains its condition; Extend introduces fresh computed columns.
-Output preserves the source head and its required dependencies. Ordered output
+Output checks its required dependencies and the input heading. The elaboration
+pass checks that it preserves the CQ head. Ordered output
 layout belongs to this metadata, not the set-valued Project operator.
 
 For example, this logical fragment expresses a triangle:
 
 ```text
 relational {
+    relation R(c0:i32,c1:i32);
+    relation S(c0:i32,c1:i32);
+    relation T(c0:i32,c1:i32);
     r0 = rename R {c0 -> x, c1 -> y};
     r1 = rename S {c0 -> y, c1 -> z};
     r2 = natural_join r0 with r1;
@@ -259,10 +265,10 @@ recomputation decision; they do not make one iterator reusable.
 ## IX: demands
 
 An IX entry is a demand: the key set a plan applies a result at. The syntax
-retains the section name `indexes`; its entries do not select storage.
+uses the keyword `indexes`; its entries do not select storage.
 
 ```ebnf
-IX              ::= RelationalModule
+Program         ::= ra::Program
                     "indexes" "{" (IndexDefinition ";")* "}"
 IndexDefinition ::= Ident "=" "@" RelId "[" [Column ("," Column)* [","]] "]"
 ```
@@ -279,28 +285,28 @@ of `r2` and `r4`. IX validity checks distinct identities and descriptors, exact
 RA result versions, and strictly increasing in-range ordinals. Every demand must
 match some RA natural join or semijoin's right operand and join columns; otherwise
 it reports ``index `i0` is demanded by no join``. IX permits partial demand sets;
-demand-derivation correspondence requires the complete set in first-use order.
-Physical checks that each probe/semi's right operand and join columns have a
+demand-derivation correspondence requires the complete set with canonical names chosen in first-use order.
+Physical lowering correspondence checks that each probe/semi's right operand and join columns have a
 matching demand. Index allocation and data structure selection have not occurred.
 
 ## Physical: one physical operator per result
 
 ```ebnf
-Physical   ::= IX "physical" "{" (Definition ";")* "return" RelId ";" "}"
+Program    ::= "physical" "{" RelationDecl* (Definition ";")* "return" RelId "as" Atom ";" "}"
 Definition ::= RelId "=" Mode ["canon"] Operator
 Mode       ::= "pipe" | "let" | "alias"
-Operator   ::= "unit" | "rename" | "select" | "extend" | "project"
+Operator   ::= Unit | Rename | Select | Extend | Project
              | "probe" "[" Ident,* "]" RelId "," RelId
              | "merge" "[" Ident,* "]" RelId "," RelId
              | "semi"  "[" Ident,* "]" RelId "," RelId
-             | "range" "[" Ident "]"
+             | "range" "[" Ident "]" RelId "if" "(" RustExpr ")"
 ```
 
 Physical restates every RA result, by name and in RA order, with the
 physical form the caller's policy chose: a natural join is a `probe` of the
 RA right operand or a `merge` of both sides in key order, a semijoin is `semi`,
 a select bounding an ordered host key is a `range`; the other operators keep
-their logical name and their detail stays in the RA definition. Join columns
+their full logical operator detail inside Physical. Join columns
 are attribute names. Denotation is IX's set.
 
 What Physical fixes is representation discipline, in linear ANF: a `pipe` is
@@ -315,13 +321,13 @@ them.
 
 ## The bindings Γ: what answers each keyed read
 
-The `structures` section records the bindings Γ: the value answering each
+The Structures program records the bindings Γ: the value answering each
 keyed read.
 
 ```ebnf
-Structures ::= Physical "structures" "{" (Entry ";")* "}"
+Program    ::= physical::Program "structures" "{" (Entry ";")* "}"
 Entry      ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"]
-             | Ident "=" RustType "[" Ident,* "]"
+             | Ident "=" RustType ("[" Ident,* "]")+
 ```
 
 A host entry states facts about the host value: the key it is stored under

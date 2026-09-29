@@ -16,7 +16,7 @@ Generated data, oracle SQL, and golden results are derived artifacts.
 Generation reads the typed CQ factory but never rewrites a query module.
 
 `workload_query!` is not another query language or IR parser. Its input is the
-same `cq::Module` grammar accepted by `mini_linq!`; its workload-only role is to
+same `cq::Program` grammar accepted by `mini_linq!`; its workload-only role is to
 emit catalog metadata. Logical compilation is inspected separately through
 `cargo xtask explain`.
 

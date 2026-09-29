@@ -6,21 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-cq-lang-ix = { workspace = true, optional = true }
 cq-syntax.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 syn_derive.workspace = true
 
-[features]
-default = ["reference-prefix"]
-reference-prefix = ["dep:cq-lang-ix", "cq-lang-ix/reference-prefix"]
 
 [[test]]
 name = "physical_language"
-required-features = ["reference-prefix"]
-
 [[test]]
 name = "policy"
-required-features = ["reference-prefix"]

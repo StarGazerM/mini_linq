@@ -5,8 +5,7 @@
 //! under a caller-supplied, query-independent policy; Structures answers
 //! every keyed read with a host key fact or a Rust type built over the
 //! result, with per-relation `#[index]` advice; realization prints one pull
-//! program over the runtime's traits. Access and Pipeline remain as
-//! hand-staged entry points into the execution endpoints. Caller import
+//! program over the runtime's traits. Caller import
 //! aliases bind policy and provider slots. No global storage default or
 //! fallback whole-query backend is supplied.
 
@@ -33,7 +32,7 @@ pub fn workload_query(input: TokenStream) -> TokenStream {
 #[cfg(feature = "logical-selection")]
 #[proc_macro]
 pub fn mini_linq(input: TokenStream) -> TokenStream {
-    entry::stage(input, None, |source: &cq_lang_cq::Module| {
+    entry::stage(input, None, |source: &cq_lang_cq::Program| {
         cq_lang_cq::contract::check(source)?;
         Ok(quote::quote!(mini_linq::cq_to_ra! { #source }))
     })
@@ -47,14 +46,10 @@ pub fn cq_to_ra(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::choose_index_policy)),
-        |source: &cq_lang_cq::Module| {
+        |source: &cq_lang_cq::Program| {
             let normal = cq_lang_cq::normal::normalize(source)?;
-            let plan = cq_lang_vo::Module::new(
-                normal.program.clone(),
-                cq_order::compile(&normal, &(), &cq_order::Options::default())?,
-            );
-            let section = cq_elaborate::compile(&plan.section, &normal)?;
-            Ok(cq_lang_ra::Module::new(plan.program.clone(), section))
+            let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
+            cq_elaborate::compile(&plan)
         },
     )
 }
@@ -68,18 +63,14 @@ pub fn cq_to_ra_generic(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::choose_index_policy)),
-        |source: &cq_lang_cq::Module| {
+        |source: &cq_lang_cq::Program| {
             let normal = cq_lang_cq::normal::normalize(source)?;
             let options = cq_order::Options {
                 split: cq_order::Split::Fine,
                 ..cq_order::Options::default()
             };
-            let plan = cq_lang_vo::Module::new(
-                normal.program.clone(),
-                cq_order::compile(&normal, &(), &options)?,
-            );
-            let section = cq_elaborate::compile(&plan.section, &normal)?;
-            Ok(cq_lang_ra::Module::new(plan.program.clone(), section))
+            let plan = cq_order::compile(&normal, &options)?;
+            cq_elaborate::compile(&plan)
         },
     )
 }
@@ -93,28 +84,22 @@ pub fn cq_to_ra_hypergraph(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::choose_index_policy)),
-        |source: &cq_lang_cq::Module| {
+        |source: &cq_lang_cq::Program| {
             let normal = cq_lang_cq::normal::normalize(source)?;
-            let plan = cq_lang_vo::Module::new(
-                normal.program.clone(),
-                cq_order::compile(&normal, &(), &cq_order::Options::default())?,
-            );
+            let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
             let semijoins = if cq_lang_cq::hypergraph::Analysis::of(&normal).acyclic {
                 cq_reduce::Reductions::Tree
             } else {
                 cq_reduce::Reductions::None
             };
-            let reduced_section = cq_reduce::compile(
-                &plan.section,
-                &normal,
+            let reduced = cq_reduce::compile(
+                &plan,
                 &cq_reduce::Options {
                     guards: cq_reduce::Pushdown::Atoms,
                     semijoins,
                 },
             )?;
-            let reduced = cq_lang_vo::Module::new(plan.program.clone(), reduced_section);
-            let section = cq_elaborate::compile(&reduced.section, &normal)?;
-            Ok(cq_lang_ra::Module::new(reduced.program.clone(), section))
+            cq_elaborate::compile(&reduced)
         },
     )
 }
@@ -129,16 +114,7 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::physical_policy)),
-        |source: &cq_lang_ra::Module| {
-            cq_lang_ra::contract::check_module(source)?;
-            Ok(cq_lang_ix::Module::new(
-                source.clone(),
-                cq_index_policy::compile(
-                    &source.section,
-                    &cq_lang_ra::reference::Env::new(&source.program),
-                )?,
-            ))
-        },
+        |source: &cq_lang_ra::Program| cq_index_policy::compile(source),
     )
 }
 
@@ -155,15 +131,8 @@ pub fn lower_physical(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::select_structures)),
-        |source: &entry::Policed<cq_lang_ix::Module, cq_lang_physical::policy::Policy>| {
-            let target = cq_lang_physical::Module::new(
-                source.language.clone(),
-                cq_physical_lowering::compile(
-                    &source.language.section,
-                    &cq_lang_ix::reference::Env::new(&source.language.relational_plan)?,
-                    &source.policy,
-                )?,
-            );
+        |source: &entry::Policed<cq_lang_ix::Program, cq_lang_physical::policy::Policy>| {
+            let target = cq_physical_lowering::compile(&source.language, &source.policy)?;
             let policy = &source.policy;
             Ok(quote::quote! { #target #policy })
         },
@@ -184,15 +153,8 @@ pub fn select_structures(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         Some(syn::parse_quote!(mini_linq::structures_to_rust)),
-        |source: &entry::Policed<cq_lang_physical::Module, cq_lang_physical::policy::Policy>| {
-            let target = cq_lang_structures::Module::new(
-                source.language.clone(),
-                cq_structure_selection::compile(
-                    &source.language.section,
-                    &cq_lang_physical::reference::Env::new(&source.language.index_requirements)?,
-                    &source.policy,
-                )?,
-            );
+        |source: &entry::Policed<cq_lang_physical::Program, cq_lang_physical::policy::Policy>| {
+            let target = cq_structure_selection::compile(&source.language, &source.policy)?;
             let policy = &source.policy;
             Ok(quote::quote! { #target #policy })
         },
@@ -209,16 +171,12 @@ pub fn structures_to_rust(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
         None,
-        |source: &entry::Policed<cq_lang_structures::Module, cq_lang_physical::policy::Policy>| {
+        |source: &entry::Policed<cq_lang_structures::Program, cq_lang_physical::policy::Policy>| {
             let endpoints = cq_physical_realization::Endpoints {
                 distinct_state: syn::parse_quote!(mini_linq::distinct_state),
                 intersect: source.policy.smallest_intersections(),
             };
-            cq_physical_realization::compile(
-                &source.language.section,
-                &cq_lang_structures::reference::Env::new(&source.language.physical)?,
-                &endpoints,
-            )
+            cq_physical_realization::compile(&source.language, &endpoints)
         },
     )
 }
