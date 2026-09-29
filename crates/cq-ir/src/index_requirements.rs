@@ -1,8 +1,8 @@
-//! IX records exact index demands and the join positions that use them.
+//! IX records exact index demands over RA results.
 //!
 //! The complete relational plan is retained unchanged. Index descriptors use
-//! sorted logical headings of named RA results; physical providers consume
-//! the recorded identities instead of deriving join columns again.
+//! sorted logical headings of named RA results. Physical derives demand uses
+//! from its operands and checks them against these descriptors.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -11,11 +11,6 @@ use syn::{Ident, Token, token};
 
 mod joins;
 pub use joins::result_join_columns;
-
-pub mod kw {
-    syn::custom_keyword!(uses);
-    syn::custom_keyword!(right);
-}
 
 /// An exact RA result version and its ordered logical column ordinals.
 ///
@@ -44,16 +39,6 @@ pub struct IndexDefinition {
     pub requirement: IndexRequirement,
 }
 
-/// `j.right = i`, identifying the indexed operand of one binary RA operation.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct IndexUse {
-    pub result: Ident,
-    pub dot_token: Token![.],
-    pub right_token: kw::right,
-    pub eq_token: Token![=],
-    pub index: Ident,
-}
-
 /// Semantic identity of an index demand; index names form a separate namespace.
 pub type Signature = (String, Vec<usize>);
 
@@ -68,11 +53,10 @@ pub fn signature(index: &IndexRequirement) -> Signature {
     )
 }
 
-/// A complete RA program followed by named index definitions and use references.
+/// A complete RA program followed by named index demands.
 ///
 /// ```text
 /// Module ::= RA "indexes" "{" (IndexDefinition ";")* "}"
-///               "uses" "{" (IndexUse ";")* "}"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Module {
@@ -83,16 +67,10 @@ pub struct Module {
     #[syn(in = indexes_brace)]
     #[parse(SemicolonList::parse_terminated)]
     pub indexes: SemicolonList<IndexDefinition>,
-    pub uses_token: kw::uses,
-    #[syn(braced)]
-    pub uses_brace: token::Brace,
-    #[syn(in = uses_brace)]
-    #[parse(SemicolonList::parse_terminated)]
-    pub uses: SemicolonList<IndexUse>,
 }
 
 pub mod contract {
-    /// Check RA, unique descriptors, exact join-use coverage, and no unused index.
+    /// Check RA, unique descriptors, valid ordinals, and no unused demand.
     pub fn check(module: &super::Module) -> syn::Result<()> {
         super::relational_plan::contract::check(&module.relational_plan)?;
         super::check_indexes(module)
@@ -108,12 +86,6 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
         return Err(syn::Error::new_spanned(
             module.indexes.last().unwrap(),
             "index definitions must end with a semicolon",
-        ));
-    }
-    if !module.uses.is_empty() && !module.uses.trailing_punct() {
-        return Err(syn::Error::new_spanned(
-            module.uses.last().unwrap(),
-            "index uses must end with a semicolon",
         ));
     }
     let plan = &module.relational_plan;
@@ -158,7 +130,7 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
         }
     }
 
-    let mut expected = BTreeMap::new();
+    let mut expected = BTreeSet::new();
     for definition in &plan.plan.definitions {
         let (left, right) = match &definition.operator {
             relational_plan::Operator::NaturalJoin(join) => (&join.left, &join.right),
@@ -171,59 +143,14 @@ fn check_indexes(module: &Module) -> syn::Result<()> {
         };
         let columns =
             result_join_columns(&results[&symbol_name(left)], &results[&symbol_name(right)]);
-        expected.insert(
-            symbol_name(&definition.result),
-            (symbol_name(right), columns),
-        );
+        expected.insert((symbol_name(right), columns));
     }
 
-    let mut positions = BTreeSet::new();
-    let mut referenced = BTreeSet::new();
-    for index_use in &module.uses {
-        let result = symbol_name(&index_use.result);
-        if !positions.insert(result.clone()) {
-            return Err(syn::Error::new_spanned(
-                index_use,
-                "duplicate indexed operand use",
-            ));
-        }
-        let Some(required) = expected.get(&result) else {
-            return Err(syn::Error::new_spanned(
-                &index_use.result,
-                "index use must name a NaturalJoin or Semijoin result",
-            ));
-        };
-        let name = symbol_name(&index_use.index);
-        let Some(index) = indexes.get(&name) else {
-            return Err(syn::Error::new_spanned(
-                &index_use.index,
-                "index use names an undefined index",
-            ));
-        };
-        if signature(&index.requirement) != *required {
-            return Err(syn::Error::new_spanned(
-                index_use,
-                format!(
-                    "`{result}.right` requires the exact RHS version @{} on logical columns {:?}",
-                    required.0, required.1,
-                ),
-            ));
-        }
-        referenced.insert(name);
-    }
-    for result in expected.keys() {
-        if !positions.contains(result) {
-            return Err(syn::Error::new_spanned(
-                module,
-                format!("missing index use `{result}.right`"),
-            ));
-        }
-    }
     for (name, index) in indexes {
-        if !referenced.contains(&name) {
+        if !expected.contains(&signature(&index.requirement)) {
             return Err(syn::Error::new_spanned(
                 &index.name,
-                "unused index definition",
+                format!("index `{name}` is demanded by no join"),
             ));
         }
     }

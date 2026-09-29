@@ -240,8 +240,8 @@ cargo xtask explain retail_h21_positive
 
 `--through` accepts `cq`, `relational-plan`, or `index-requirements`; its default
 is `index-requirements`. The command calls the typed CQ → RA → IX passes and
-checks their local contracts. IX records named demands and explicit references
-from each indexed join position.
+checks their local contracts. IX records named demands over exact RA results;
+Physical derives demand uses from its operands.
 
 Complete typed payloads are written under `target/mini-linq-explain/<case>/`:
 
@@ -249,7 +249,7 @@ Complete typed payloads are written under `target/mini-linq-explain/<case>/`:
 |---|---|
 | `01-cq.tokens` | Authored CQ module. |
 | `02-relational-plan.tokens` | Planned named RA module. |
-| `03-index-requirements.tokens` | RA plus index definitions and use references. |
+| `03-index-requirements.tokens` | RA plus named index demands. |
 
 These files are typed pass outputs, not captured individual macro expansions or
 Rust Analyzer type-checked workspace modules. A new run clears stale later

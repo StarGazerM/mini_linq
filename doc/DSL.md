@@ -224,27 +224,29 @@ schedule and the reductions are the earlier passes' decisions. Planning
 precedes IX and storage choices. A logical result's multiple uses require an explicit physical reuse or
 recomputation decision; they do not make one iterator reusable.
 
-## IX: required indexes and exact uses
+## IX: required index demands
 
 ```ebnf
 IX              ::= RelationalModule
                     "indexes" "{" (IndexDefinition ";")* "}"
-                    "uses" "{" (IndexUse ";")* "}"
 IndexDefinition ::= Ident "=" "@" RelId "[" [Column ("," Column)* [","]] "]"
-IndexUse        ::= RelId "." "right" "=" Ident
 ```
 
 `Column` is a nonnegative integer ordinal. IX preserves the whole RA payload.
-For each NaturalJoin/Semijoin it records the right version and the joined-column
+Index analysis records each NaturalJoin/Semijoin's right version and joined-column
 ordinals in that result's sorted logical heading. They are not source-declaration
-positions. Identical `(version, columns)` demands share one identity; each
-consumer refers explicitly to it. Empty shared headings use an explicit `[]`
+positions. Identical `(version, columns)` demands share one identity. Physical
+derives uses from its operands. Empty shared headings use an explicit `[]`
 demand. No scan fallback follows from an empty list.
 
-The triangle above needs `i0 = @r1[0]` and `i1 = @r3[0,1]`, used by `r2.right`
-and `r4.right`. IX validity checks exact demand/use coverage, distinct identities
-and descriptors, strictly increasing in-range ordinals, and absence of unused
-definitions. Index allocation and data structure selection have not occurred.
+The triangle above needs `i0 = @r1[0]` and `i1 = @r3[0,1]` for the right operands
+of `r2` and `r4`. IX validity checks distinct identities and descriptors, exact
+RA result versions, and strictly increasing in-range ordinals. Every demand must
+match some RA natural join or semijoin's right operand and join columns; otherwise
+it reports ``index `i0` is demanded by no join``. IX permits partial demand sets;
+index-policy correspondence requires the complete set in first-use order.
+Physical checks that each probe/semi's right operand and join columns have a
+matching demand. Index allocation and data structure selection have not occurred.
 
 ## Physical: one physical operator per result
 
@@ -261,7 +263,7 @@ Operator   ::= "unit" | "rename" | "select" | "extend" | "project"
 
 Physical restates every RA result, by name and in RA order, with the
 physical form the caller's policy chose: a natural join is a `probe` of the
-IX-used side or a `merge` of both sides in key order, a semijoin is `semi`,
+RA right operand or a `merge` of both sides in key order, a semijoin is `semi`,
 a select bounding an ordered host key is a `range`; the other operators keep
 their logical name and their detail stays in the RA definition. Join columns
 are attribute names. Denotation is IX's set.

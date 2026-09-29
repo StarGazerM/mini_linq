@@ -1,7 +1,7 @@
-\section{IX: required indexes and exact uses}
+\section{IX: required index demands}
 \label{sec:ix}
 Between RA and physical selection, IX records which attribute-keyed accesses
-the fixed plan demands and which operator position uses each one. It performs
+the fixed plan demands. Physical derives uses from its operands. IX performs
 no data-structure selection and emits no runtime construction. The compiled
 chain continues
 \[
@@ -16,24 +16,23 @@ where the two policy steps are caller-resolved macro slots
 \paragraph{Boundary syntax.}
 Let $r,l$ name exact RA versions, $j$ an operator occurrence, $i$ an index,
 and $C$ an ordered list of logical column ordinals. For the present binary
-fragment, $p=j.\mathsf{right}$ is the indexed operand of $j=l\bowtie r$ or
-$j=l\ltimes r$.
+fragment, $r$ is the right operand of $j=l\bowtie r$ or $j=l\ltimes r$.
 \begin{lstlisting}
-IX  ::= RA indexes { Def* } uses { Use* }
+IX  ::= RA indexes { Def* }
 Def ::= i = @r[C];
-Use ::= j.right = i;
 \end{lstlisting}
 IX retains RA unchanged. The listing is the fragment used below; the complete
 grammar is in \path{doc/DSL.md}.
 
 \paragraph{IX meaning and construction.}
-Write IX as $(A,D,U)$, with $D:i\mapsto(r,C)$ and $U:p\mapsto i$.
-Well-formedness requires well-formed RA, unique descriptors, valid ordered
-columns, and exactly one use reference for every admitted indexed position.
-Each use names its exact operand version and RA join columns; there are no unused
-index definitions. Erasure preserves meaning:
-$\sem{A,D,U}_{IX}=\sem A_{RA}$.
-Traverse the fixed RA definitions in order, starting with empty $D,U$:
+Write IX as $(A,D)$, with $D:i\mapsto(r,C)$.
+Well-formedness requires well-formed RA, distinct index identities and
+descriptors, and strictly increasing, in-range logical ordinals over exact RA
+results. Every demand must match some RA natural join or semijoin's right
+operand and join columns. Partial demand sets are locally valid; the analysis
+correspondence additionally requires the complete set in first-use order.
+Erasure preserves meaning: $\sem{A,D}_{IX}=\sem A_{RA}$.
+Traverse the fixed RA definitions in order, starting with empty $D$:
 \begin{mathpar}
 \Rule{IX-Reuse}{D(i)=(r,C)}{D\vdash(r,C)\Downarrow(i,D)}
 
@@ -43,14 +42,16 @@ Traverse the fixed RA definitions in order, starting with empty $D,U$:
 \Rule{IX-Join}{o\in\{\bowtie,\ltimes\}\quad
  C=[c\mid 0\leq c<|H(r)|,\ H(r)_c\in H(l)]_{\rm increasing}\\
  D\vdash(r,C)\Downarrow(i,D')}
- {(D,U)\vdash j=l\mathbin{o}r\Downarrow(D',U[j.\mathsf{right}\mapsto i])}
+ {D\vdash j=l\mathbin{o}r\Downarrow D'}
 
 \Rule{IX-Other}{d\in\{\mathsf{Unit,Rename,Project,Select,Extend}\}}
- {(D,U)\vdash d\Downarrow(D,U)}
+ {D\vdash d\Downarrow D}
 \end{mathpar}
 Fresh $i_n$ prints as \code{i0}, \code{i1}, etc. Unknown operators reject.
 $C=[]$ is the unit tuple for the admitted Cartesian case. Physical lowering
-consumes written $D,U$; it does not repeat this analysis. This binary fragment
+derives operands from RA and checks their required descriptors in $D$;
+the Physical contract checks each probe/semi demand from its operands.
+This binary fragment
 does not yet specify the index demands or planning of WCOJ.
 
 \paragraph{Physical and Structures.}

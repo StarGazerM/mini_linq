@@ -20,7 +20,6 @@ fn index_tokens() -> TokenStream {
             i0 = @r1[0];
             i1 = @r3[0, 1];
         }
-        uses { r2.right = i0; r4.right = i1; }
     }
 }
 
@@ -148,7 +147,7 @@ fn relation_declarations_preserve_full_rust_column_types() {
 fn index_language_contract_is_local_and_separate_from_rust_physicalization() {
     let relational = relational_tokens();
 
-    // IX is physically neutral, but demands and use references are exact.
+    // IX is physically neutral, but demands name exact RA results and columns.
     let indexed: index_requirements::Module = syn::parse2(index_tokens()).unwrap();
     index_requirements::contract::check(&indexed).unwrap();
 
@@ -160,7 +159,6 @@ fn index_language_contract_is_local_and_separate_from_rust_physicalization() {
     ] {
         let module: index_requirements::Module = syn::parse2(quote! {
             #relational indexes { #indexes }
-            uses { r2.right = i0; r4.right = i1; }
         })
         .unwrap();
         assert!(index_requirements::contract::check(&module).is_err());

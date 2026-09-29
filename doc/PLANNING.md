@@ -15,7 +15,7 @@ follows [Compiler ownership and composition](COMPILER-STRUCTURE.md).
 | CQ-NF → VO; choose valuation order and granularity | `cq_order::compile` |
 | VO → VO; push single-atom guards and optionally apply tree semijoins | `cq_reduce::compile` |
 | VO → named RA | `cq_elaborate::compile` |
-| RA → named index demands and uses | `cq_index_policy::compile` |
+| RA → named index demands | `cq_index_policy::compile` |
 | IX plus policy → Physical | `cq_physical_lowering::compile` |
 | Physical plus policy → Structures | `cq_structure_selection::compile` |
 | Structures → Rust | `cq_physical_realization::compile` |
@@ -75,7 +75,7 @@ algebra.
   renames, joins or semijoins, selections, extensions and a final projection
   from the VO steps.
 - IX names indexes on exact RA versions: `i = @r[0,2]` uses ordinals in `r`'s
-  sorted logical heading, and `j.right = i` records consumption. Empty shared
+  sorted logical heading. Physical derives consumption from its operands. Empty shared
   headings still require an explicit `[]` demand. No structure is chosen by IX.
 - Physical fixes one physical operator and mode per result; Structures binds
   every keyed read to a host key or a built type. Neither participates in

@@ -188,7 +188,7 @@ def isolate(packages, only=()):
 
 CQ = 'struct Q; relation R(a:i32); answer(x) :- R(x);'
 RA = CQ + ' relational { r = rename R {a -> x}; output r as answer(x); }'
-IX = RA + ' indexes {} uses {}'
+IX = RA + ' indexes {}'
 POLICED_IX = IX + ' policy { R canon; }'
 PHYSICAL = IX + ' physical { r = alias rename; return r; }'
 POLICED_PHYSICAL = PHYSICAL + ' policy { R canon; }'
@@ -214,7 +214,7 @@ def frontend_source(feature):
         source, continuation, expected = {
             "written-order": (CQ, "choose_index_policy", ["relational", "rename"]),
             "hypergraph": (CQ, "choose_index_policy", ["relational", "rename"]),
-            "index-demands": (RA, "physical_policy", ["indexes", "uses"]),
+            "index-demands": (RA, "physical_policy", ["indexes"]),
             "physical-lowering": (POLICED_IX, "select_structures", ["physical", "alias", "policy"]),
             "structure-selection": (POLICED_PHYSICAL, "structures_to_rust", ["structures", "R"]),
         }[feature]

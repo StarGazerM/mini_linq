@@ -2,7 +2,7 @@
 \label{sec:introduction}
 A conjunctive query specifies satisfying valuations, not a relation container,
 index layout, or access algorithm. MiniLinq constructs a relational plan,
-records required indexes and their uses, and then lets a caller-supplied,
+records required index demands, and then lets a caller-supplied,
 query-independent policy fix one physical operator per result and bind every
 keyed read to a host key fact or a Rust structure built over the result. A
 printer emits one pull program over the runtime operation traits; the compiler
@@ -15,8 +15,8 @@ The compiled chain is
  \xrightarrow{\;\text{policy}\;}\mathsf{Structures}
  \longrightarrow\mathsf{Rust}.
 \]
-IX preserves the RA plan and adds named index definitions plus explicit
-references from access positions. Physical restates each result with one
+IX preserves the RA plan and adds named index demands.
+Physical derives demand uses from its operands and restates each result with one
 physical operator and the mode its reads allow; Structures binds each keyed
 read and discharges order and canonical premises; both erase to IX. This paper
 formalizes CQ, RA, planning and IX. Physical and Structures are specified by

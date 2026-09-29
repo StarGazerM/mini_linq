@@ -3,47 +3,40 @@
 use cq_ir::{index_requirements as ix, relational_plan as ra, symbol_name};
 use std::collections::BTreeSet;
 
-/// The IX contract verifies exact columns/versions/use coverage. This relation
-/// additionally requires unchanged RA and deterministic first-use serialization.
+/// IX checks that each demand is used. This relation additionally requires
+/// unchanged RA, complete demands, and deterministic first-use serialization.
 pub fn check(source: &ra::Module, target: &ix::Module) -> bool {
     if target.relational_plan != *source || !ix::contract::well_formed(target) {
         return false;
     }
-    let positions = source
+    let Ok(info) = ra::check_in(source.program.inputs(), &source.plan) else {
+        return false;
+    };
+    let mut seen = BTreeSet::new();
+    let demands = source
         .plan
         .definitions
         .iter()
-        .filter(|definition| {
-            matches!(
-                definition.operator,
-                ra::Operator::NaturalJoin(_) | ra::Operator::Semijoin(_)
-            )
+        .filter_map(|definition| {
+            let (left, right) = match &definition.operator {
+                ra::Operator::NaturalJoin(join) => (&join.left, &join.right),
+                ra::Operator::Semijoin(join) => (&join.left, &join.right),
+                _ => return None,
+            };
+            Some((
+                symbol_name(right),
+                ix::result_join_columns(&info[&symbol_name(left)], &info[&symbol_name(right)]),
+            ))
         })
-        .map(|definition| symbol_name(&definition.result));
-    if !target
-        .uses
+        .filter(|demand| seen.insert(demand.clone()));
+    target
+        .indexes
         .iter()
-        .map(|u| symbol_name(&u.result))
-        .eq(positions)
-    {
-        return false;
-    }
-    let mut seen = BTreeSet::new();
-    let first_uses = target
-        .uses
-        .iter()
-        .filter_map(|u| {
-            let name = symbol_name(&u.index);
-            seen.insert(name.clone()).then_some(name)
-        })
-        .collect::<Vec<_>>();
-    first_uses
-        .iter()
-        .enumerate()
-        .all(|(i, name)| *name == format!("i{i}"))
+        .map(|index| ix::signature(&index.requirement))
+        .eq(demands)
         && target
             .indexes
             .iter()
-            .map(|i| symbol_name(&i.name))
-            .eq(first_uses)
+            .enumerate()
+            .all(|(i, index)| symbol_name(&index.name) == format!("i{i}"))
 }

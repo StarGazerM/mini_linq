@@ -6,10 +6,11 @@
 \maketitle
 \begin{abstract}
 MiniLinq compiles conjunctive queries through named relational algebra and IX,
-which records both required indexes and explicit references from relation-access
-positions. A caller-supplied, query-independent policy then fixes one physical
+which records required index demands over exact RA results.
+A caller-supplied, query-independent policy then fixes one physical
 operator per result (Physical) and binds every keyed read to a host key fact or
-a built Rust structure (Structures); a printer emits one pull program over the
+a built Rust structure (Structures). Physical derives demand uses from its
+operands; a printer emits one pull program over the
 runtime operation traits. We specify CQ, RA, planning and IX with syntax,
 semantics and algorithmic inference rules; Physical and Structures are
 specified by the \code{cq-ir} module documentation and \path{doc/DSL.md} until

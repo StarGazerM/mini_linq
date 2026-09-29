@@ -14,8 +14,8 @@ cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin constrain
 The first four programs write typed `.tokens` payloads and derivation reports
 under `doc/formal/build/logical-*/`. An optional argument chooses the output
 directory. These files are typed pass outputs, not captured macro expansions.
-Each retained logical route emits CQ, RA and IX; IX includes named index demands
-and explicit use references. The source remains unchanged across the boundaries.
+Each retained logical route emits CQ, RA and IX; IX includes named index demands.
+The source remains unchanged across the boundaries.
 
 - The default program checks the YA join tree, exact derivation, complete RA,
   and index descriptors for the `R--S--T` query. Its independent whole-tuple

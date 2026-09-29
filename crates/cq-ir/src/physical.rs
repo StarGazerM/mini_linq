@@ -7,6 +7,8 @@
 //! through an ordered key may be a `range`. Every other operator keeps its
 //! logical name; its detail (mapping, condition, value, kept columns) lives
 //! in the RA definition of the same name and is not repeated.
+//! Each probe/semi's right operand and join columns must have a matching IX
+//! demand. These uses are derived from operands, without separate use syntax.
 //!
 //! Denotation is the set IX denotes. What this language adds is the
 //! representation discipline that a printer relies on:
@@ -239,6 +241,11 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
     let ix = &module.index_requirements;
     let plan = &ix.relational_plan.plan;
     let results = ra::check_in(ix.relational_plan.program.inputs(), plan)?;
+    let demands: BTreeSet<_> = ix
+        .indexes
+        .iter()
+        .map(|index| ix::signature(&index.requirement))
+        .collect();
     let mut analysis = Analysis {
         headings: results
             .iter()
@@ -378,7 +385,22 @@ fn analyze(module: &Module) -> syn::Result<Analysis> {
                 }
             }
         }
-        if let Some((right, _)) = definition.operator.keyed() {
+        if let Some((right, mut columns)) = definition.operator.keyed() {
+            let right_name = symbol_name(right);
+            columns.sort();
+            columns.dedup();
+            if !demands.contains(&(
+                right_name.clone(),
+                ordinals(&analysis, &right_name, &columns),
+            )) {
+                return error(
+                    &definition.operator,
+                    format!(
+                        "probe `{name}` needs demand `@{right_name}[{}]`",
+                        columns.join(",")
+                    ),
+                );
+            }
             readers
                 .entry(symbol_name(right))
                 .or_default()

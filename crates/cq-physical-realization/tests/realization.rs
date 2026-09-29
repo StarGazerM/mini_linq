@@ -42,7 +42,7 @@ fn chain(physical: TokenStream, entries: TokenStream) -> structures::Module {
             output p as answer(c, a);
         }
         indexes { i0 = @r[0]; i1 = @s[0]; }
-        uses { j0.right = i0; j1.right = i1; }
+
         physical { #physical }
         structures { #entries }
     }
@@ -168,7 +168,7 @@ fn keyed_hosts_scan_their_groups_and_semijoins_test_membership() {
             output x as answer(a, b);
         }
         indexes { i0 = @l[0]; }
-        uses { x.right = i0; }
+
         physical { r = alias rename; l = let rename; x = pipe canon semi[a] r, l; return x; }
         structures { L; R keyed [b]; l = ::std::collections::HashSet<_> [a]; }
     };
@@ -220,7 +220,7 @@ fn merge_chain_co_iterates_native_cursors_and_sorts_a_pipe_side() {
             output p as answer(a, c);
         }
         indexes { i0 = @r[1]; i1 = @s[0]; }
-        uses { j0.right = i0; j1.right = i1; }
+
         physical {
             l = let rename; r = let rename; s = alias rename;
             j0 = pipe merge[b] l, r; j1 = pipe merge[b] j0, s;
@@ -288,7 +288,7 @@ fn range_enters_an_ordered_host_at_the_bounds_and_keeps_the_residual() {
             output w as answer(a, b);
         }
         indexes { }
-        uses { }
+
         physical { r = alias rename; w = pipe range[a]; return w; }
         structures { R keyed [a] ordered canon; }
     };
@@ -328,7 +328,7 @@ fn range_over_a_built_ordered_map_uses_reference_keys() {
             output w as answer(a, b);
         }
         indexes { }
-        uses { }
+
         physical { r = let rename; w = pipe canon range[a]; return w; }
         structures { R; r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [a]; }
     };
@@ -364,7 +364,7 @@ fn extend_binds_the_declared_columns_and_the_head_orders_them() {
             output p as answer(a, s, c);
         }
         indexes { i0 = @s[0]; }
-        uses { j.right = i0; }
+
         physical {
             r = alias rename; s = let rename; j = pipe probe[b] r, s;
             e = pipe extend; p = pipe canon project; return p;
@@ -414,7 +414,7 @@ fn computed_head_arguments_see_columns_as_references() {
             output e as answer(a, b + b);
         }
         indexes { }
-        uses { }
+
         physical { r = alias rename; e = pipe canon extend; return e; }
         structures { R; }
     };
@@ -458,7 +458,7 @@ fn a_canonical_let_is_a_set_of_its_rows_and_scans_read_it() {
             output x as answer(a);
         }
         indexes { i0 = @s[0]; }
-        uses { x.right = i0; }
+
         physical { r = alias rename; s = alias rename; x = let canon semi[a] r, s; return x; }
         structures { R; S keyed [a]; }
     };
@@ -494,7 +494,7 @@ fn unserved_reads_are_errors_not_fallbacks() {
             output j as answer(a, b);
         }
         indexes { i0 = @r[0, 1]; }
-        uses { j.right = i0; }
+
         physical { l = alias rename; r = alias rename; j = pipe canon merge[a, b] l, r; return j; }
         structures { L keyed [a, b] ordered; R keyed [b, a] ordered; }
     };
@@ -514,7 +514,7 @@ fn unserved_reads_are_errors_not_fallbacks() {
             output w as answer(a, b);
         }
         indexes { }
-        uses { }
+
         physical { r = alias rename; w = pipe range[a]; return w; }
         structures { R keyed [a] ordered canon; }
     };

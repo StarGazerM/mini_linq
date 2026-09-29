@@ -16,7 +16,7 @@ Yannakakis semijoin reductions; `cq-elaborate` turns VO into named RA. Normal
 form has a contract check; order, reduction, and elaboration have correspondence
 checks. Reductions erase to the input VO plan, and VO and RA plans erase to the
 CQ-NF kernel up to variable renaming. `cq-index-policy` records exact-version
-index demands and join-use references. `cq-physical-lowering` restates every
+index demands. `cq-physical-lowering` restates every
 IX result with one physical operator and read mode from the caller's policy.
 `cq-structure-selection` binds every keyed read to a host key fact or a Rust
 type built over the result.

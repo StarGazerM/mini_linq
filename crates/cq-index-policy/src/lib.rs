@@ -1,9 +1,9 @@
-//! RA → IX: name exact index demands and record every indexed join use.
+//! RA → IX: name exact index demands for joins and semijoins.
 //!
 //! This analysis preserves the relational plan and makes no representation,
 //! physical algorithm, or continuation choice.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use cq_ir::{index_requirements as ix, relational_plan as ra, symbol_name};
 
@@ -14,9 +14,8 @@ pub use correspondence::check;
 pub fn compile(source: &ra::Module) -> syn::Result<ix::Module> {
     ra::contract::check(source)?;
     let info = ra::check_in(source.program.inputs(), &source.plan)?;
-    let mut names = BTreeMap::<ix::Signature, syn::Ident>::new();
+    let mut seen = BTreeSet::new();
     let mut indexes = cq_ir::SemicolonList::new();
-    let mut uses = cq_ir::SemicolonList::new();
 
     for definition in &source.plan.definitions {
         let (left, right) = match &definition.operator {
@@ -31,12 +30,10 @@ pub fn compile(source: &ra::Module) -> syn::Result<ix::Module> {
         let columns =
             ix::result_join_columns(&info[&symbol_name(left)], &info[&symbol_name(right)]);
         let descriptor = (symbol_name(right), columns.clone());
-        let name = if let Some(name) = names.get(&descriptor) {
-            name.clone()
-        } else {
+        if seen.insert(descriptor) {
             let name = syn::Ident::new(&format!("i{}", indexes.len()), right.span());
             indexes.push(ix::IndexDefinition {
-                name: name.clone(),
+                name,
                 eq_token: Default::default(),
                 requirement: ix::IndexRequirement {
                     at_token: Default::default(),
@@ -46,17 +43,7 @@ pub fn compile(source: &ra::Module) -> syn::Result<ix::Module> {
                 },
             });
             indexes.push_punct(Default::default());
-            names.insert(descriptor, name.clone());
-            name
-        };
-        uses.push(ix::IndexUse {
-            result: definition.result.clone(),
-            dot_token: Default::default(),
-            right_token: Default::default(),
-            eq_token: Default::default(),
-            index: name,
-        });
-        uses.push_punct(Default::default());
+        }
     }
 
     let target = ix::Module {
@@ -64,9 +51,6 @@ pub fn compile(source: &ra::Module) -> syn::Result<ix::Module> {
         indexes_token: Default::default(),
         indexes_brace: Default::default(),
         indexes,
-        uses_token: Default::default(),
-        uses_brace: Default::default(),
-        uses,
     };
     if !check(source, &target) {
         return Err(syn::Error::new_spanned(

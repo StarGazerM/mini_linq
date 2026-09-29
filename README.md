@@ -6,7 +6,8 @@ MiniLinq is a Rust query compiler with replaceable macro boundaries:
 CQ → NF → VO → RA → IX → Physical → Structures → Rust
 ```
 
-IX names the indexes required by the fixed RA plan and records their uses.
+IX names the index demands of the fixed RA plan. Physical derives their uses
+from its operands and checks that each probe/semi has a matching demand.
 Physical restates every result with one physical operator and the mode its
 reads allow; Structures binds every keyed read to a host key fact or a Rust
 type built over the result; a printer emits one pull program over the

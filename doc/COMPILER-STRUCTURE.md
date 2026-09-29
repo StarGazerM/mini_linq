@@ -14,7 +14,7 @@ See [DSL.md](DSL.md) for the grammars.
 | `cq-order` | NF → VO; the order of the steps: a `Heuristic` (`Written`, `Prefix(Ranking)`, `Elimination`) fixes the clause order, a `Split` (`Coarse`, `Fine`) the granularity | `compile`, `check` |
 | `cq-reduce` | VO → VO; the reductions a plan carries: `Pushdown::Atoms` pushes single-atom guards onto their atoms, `Reductions::Tree` is the Yannakakis full reducer over the GYO join tree (acyclic queries) | `compile`, `check` |
 | `cq-elaborate` | VO → RA; rename per clause at first mention, join/semijoin per subatom, select/extend per guard/binding, semijoin/select per reduction, one final projection | `compile`, `check` |
-| `cq-index-policy` | RA → IX; derive required join-column indexes and their uses | `compile`; `correspondence` checks the edge |
+| `cq-index-policy` | RA → IX; derive required join-column index demands | `compile`; `correspondence` checks the edge |
 | `cq-physical-lowering` | IX + policy → Physical; one physical operator per result, modes from use, `canon` on the return when uniqueness is not inferred | `compile`, `check` |
 | `cq-structure-selection` | Physical + policy → Structures; host facts from the policy, a built type for every read no host key answers, `#[index(Type)]` advice | `compile`, `check` |
 | `cq-physical-realization` | Structures → Rust; builds the chosen structures, guards the traits each read needs, prints the pull program | `compile` |

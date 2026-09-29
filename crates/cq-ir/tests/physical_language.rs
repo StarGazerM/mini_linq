@@ -21,7 +21,6 @@ fn module(definitions: proc_macro2::TokenStream) -> syn::Result<physical::Module
             output p as answer(a, c);
         }
         indexes { i0 = @r[0]; i1 = @s[0]; i2 = @l[0]; }
-        uses { j0.right = i0; j1.right = i1; x.right = i2; }
         physical { #definitions }
     })
 }
@@ -60,7 +59,7 @@ fn hash_chain_is_well_formed_and_reads_are_recorded() {
 
 #[test]
 fn merge_records_both_sides_and_allows_a_typed_pipe_side() {
-    let module = module(quote! {
+    let mut module = module(quote! {
         l = let rename;
         r = let rename;
         s = let rename;
@@ -71,6 +70,8 @@ fn merge_records_both_sides_and_allows_a_typed_pipe_side() {
         return p;
     })
     .unwrap();
+    // Only the semi needs a demand; merge operands carry their own ordered reads.
+    module.index_requirements.indexes = syn::parse_quote! { i2 = @l[0]; };
     let analysis = physical::contract::check(&module).unwrap();
     assert_eq!(
         analysis.merge_reads["j0"],
@@ -82,6 +83,89 @@ fn merge_records_both_sides_and_allows_a_typed_pipe_side() {
     );
     // j1 is read through a key by x, so it is a let even though merged once.
     assert_eq!(analysis.modes["j1"], ModeKind::Let);
+}
+
+#[test]
+fn probe_and_semi_demands_are_derived_from_operands() {
+    let valid = module(quote! {
+        l = alias rename; r = let rename; s = let rename;
+        j0 = pipe probe[a] l, r; j1 = pipe probe[b] j0, s;
+        x = pipe semi[a] j1, l; p = pipe canon project; return p;
+    })
+    .unwrap();
+    for (index, expected) in [
+        ("i0", "probe `j0` needs demand `@r[a]`"),
+        ("i1", "probe `j1` needs demand `@s[b]`"),
+        ("i2", "probe `x` needs demand `@l[a]`"),
+    ] {
+        let mut missing = valid.clone();
+        missing.index_requirements.indexes = missing
+            .index_requirements
+            .indexes
+            .into_iter()
+            .filter(|i| i.name != index)
+            .collect();
+        missing
+            .index_requirements
+            .indexes
+            .push_punct(Default::default());
+        cq_ir::index_requirements::contract::check(&missing.index_requirements).unwrap();
+        assert_eq!(
+            physical::contract::check(&missing).unwrap_err().to_string(),
+            expected
+        );
+    }
+
+    let mut renamed = valid;
+    renamed.index_requirements.indexes = syn::parse_quote! {
+        membership = @l[0]; second = @s[0]; first = @r[0];
+    };
+    physical::contract::check(&renamed).unwrap();
+}
+
+#[test]
+fn composite_and_empty_probe_demands_use_logical_heading_ordinals() {
+    for (left_mapping, columns, ordinals, expected) in [
+        (
+            quote! { a -> z, b -> a },
+            quote! { a,z },
+            quote! { 0,1 },
+            "@r[a,z]",
+        ),
+        (
+            quote! { a -> z, b -> a },
+            quote! { z,a },
+            quote! { 0,1 },
+            "@r[a,z]",
+        ),
+        (quote! { a -> x, b -> y }, quote! {}, quote! {}, "@r[]"),
+    ] {
+        let mut module: physical::Module = syn::parse_quote! {
+            struct Keys;
+            relation L(a:i32,b:i32);
+            relation R(z:i32,a:i32);
+            answer(a,z) :- L(z,a), R(z,a);
+            relational {
+                l = rename L { #left_mapping };
+                r = rename R { z -> z, a -> a };
+                j = natural_join l with r;
+                p = project j keep {a,z};
+                output p as answer(a,z);
+            }
+            indexes { demand = @r[#ordinals]; }
+            physical {
+                l = alias rename; r = let rename;
+                j = pipe probe[#columns] l, r;
+                p = pipe canon project; return p;
+            }
+        };
+        physical::contract::check(&module).unwrap();
+        module.index_requirements.indexes.clear();
+        assert_eq!(
+            physical::contract::check(&module).unwrap_err().to_string(),
+            format!("probe `j` needs demand `{expected}`")
+        );
+    }
 }
 
 #[test]

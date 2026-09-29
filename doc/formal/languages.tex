@@ -188,22 +188,23 @@ Evaluation folds definitions into $\mathcal E$, using the operators of
 Section~\ref{sec:scope} and positional Rename, then returns
 $\{\bar e(t)\mid t\in\mathcal E(r)\}$. References denote the same immutable
 result; this denotation imposes no physical materialization schedule.
-\subsection{Indexes and their uses}
+\subsection{Index demands}
 The normative syntax and construction rules are in
-Section~\ref{sec:ix}. IX is $(A,D,U)$: the unchanged RA
-plan $A$, named index definitions $D(i)=(r,C)$, and references
-$U(j.\mathsf{right})=i$ from consuming operator positions. Here $r$ is an
+Section~\ref{sec:ix}. IX is $(A,D)$: the unchanged RA
+plan $A$ and named index definitions $D(i)=(r,C)$. Here $r$ is an
 exact immutable result version. $C$ records its required join-column ordinals
 in the logical heading $H(r)=\ord(\Delta(r).V)$; physical row layout is supplied
 separately. An empty $C$ requests the unit-valued index for a Cartesian product.
 
 Local validity checks source versions, column ranges, unique descriptors,
-and exact coverage of every admitted join position. In particular, it does
-not accept an empty annotation as permission to rediscover requirements or
-execute a repeated-scan join. The full judgment is $\mathsf{WF}_{IX}(A,D,U)$
+and that every demand matches a join's right operand and join columns.
+The analysis correspondence requires complete demand coverage; Physical derives
+uses from probe/semi operands and checks that each has a matching demand.
+An empty annotation does not authorize a repeated-scan fallback.
+The full judgment is $\mathsf{WF}_{IX}(A,D)$
 of Section~\ref{sec:ix}, and
 \[
- \sem{A,D,U}_{IX}=\sem A_{RA}.
+ \sem{A,D}_{IX}=\sem A_{RA}.
 \]
 \subsection{Physical and Structures}
 Physical restates IX with one physical operator and read mode per result, and

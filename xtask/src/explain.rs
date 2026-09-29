@@ -59,7 +59,7 @@ impl Stage {
             Self::Cq => "the complete source conjunctive query",
             Self::RelationalPlan => "the complete named logical relational-algebra plan",
             Self::IndexRequirements => {
-                "the logical plan plus named index demands and explicit use references"
+                "the logical plan plus named index demands"
             }
         }
     }
@@ -473,17 +473,7 @@ fn format_index_block(module: &index_requirements::Module) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let uses = module
-        .uses
-        .iter()
-        .map(|usage| format!("{}.right = {};", usage.result, usage.index))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "indexes {{\n{}\n}}\nuses {{\n{}\n}}",
-        indent_lines(&definitions, "    "),
-        indent_lines(&uses, "    ")
-    )
+    format!("indexes {{\n{}\n}}", indent_lines(&definitions, "    "))
 }
 
 fn format_atom(atom: &cq::Atom) -> String {

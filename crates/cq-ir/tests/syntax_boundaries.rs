@@ -49,7 +49,7 @@ fn nested_plans_reject_missing_output_and_tokens_after_output() {
         );
     }
     let source = format!(
-        "{prefix} relational {{ r0 = rename R {{a -> x}}; output r0 as answer(x); }} indexes {{}} uses {{}}"
+        "{prefix} relational {{ r0 = rename R {{a -> x}}; output r0 as answer(x); }} indexes {{}}"
     );
     syn::parse_str::<cq_ir::index_requirements::Module>(&source).unwrap();
 }

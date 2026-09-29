@@ -1,6 +1,6 @@
 //! Procedural entry points at the compiler's explicit language boundaries.
 //!
-//! CQ planning produces RA; IX records index demands and uses; Physical
+//! CQ planning produces RA; IX records index demands; Physical
 //! fixes one physical operator per result and the mode its reads allow,
 //! under a caller-supplied, query-independent policy; Structures answers
 //! every keyed read with a host key fact or a Rust type built over the
@@ -84,7 +84,7 @@ pub fn cq_to_ra_hypergraph(input: TokenStream) -> TokenStream {
     )
 }
 
-/// Construct exact-version index definitions and references from every join use.
+/// Construct exact-version index demands for every natural join and semijoin.
 ///
 /// The caller binds `mini_linq::physical_policy` to a macro that appends its
 /// query-independent `policy { … }` block and invokes [`lower_physical!`].
@@ -101,7 +101,7 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
 /// Fix one physical operator per RA result under the appended policy.
 ///
 /// Input is `IX policy { … }`. Every natural join becomes a `probe` of the
-/// IX-used side (or a `merge` under `join = merge`), every semijoin a
+/// RA join's right operand (or a `merge` under `join = merge`), every semijoin a
 /// `semi`, a select bounding an ordered host key a `range`; modes follow
 /// from use; the return is flagged `canon` unless uniqueness is inferred
 /// from `canon` hosts. The policy is re-appended for [`select_structures!`].

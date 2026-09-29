@@ -11,11 +11,11 @@ arbitrary user types.
 \toprule
 Obligation & Current evidence\\
 \midrule
-IX & Named $D,U$, exact versions, canonical column ordinals, reused demands,
-missing and incorrect use-reference rejection
+IX & Named $D$, exact versions, canonical column ordinals, reused demands,
+complete demand coverage and first-use numbering
 (\path{crates/cq-index-policy/tests/index_demands.rs}).\\
-Physical & One operator per result, modes checked by use, \code{canon} on the
-return when uniqueness is not inferred
+Physical & One operator per result, operand-derived probe/semi demand checks,
+modes checked by use, \code{canon} on the return when uniqueness is not inferred
 (\path{crates/cq-physical-lowering/tests/lowering.rs}).\\
 Structures & Every keyed read answered by a host key fact or a built type,
 merge sides ordered, canonical return

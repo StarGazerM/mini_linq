@@ -37,14 +37,6 @@ fn first_use_names_share_only_exact_version_and_columns_including_empty_columns(
             i3 = @t[0];
             i4 = @right[1,2];
         }
-        uses {
-            seed.right = i0;
-            left.right = i1;
-            right.right = i2;
-            again.right = i1;
-            restricted.right = i3;
-            joined.right = i4;
-        }
     };
     let target = cq_index_policy::compile(&source).unwrap();
     assert_eq!(target, expected);
@@ -72,13 +64,12 @@ fn logical_heading_coordinates_are_independent_of_input_declaration_and_rename_o
     let expected: ix::Module = syn::parse_quote! {
         #source
         indexes { i0 = @first[1,2]; i1 = @second[1,2]; }
-        uses { joined.right = i0; repeated.right = i1; }
     };
     assert_eq!(cq_index_policy::compile(&source).unwrap(), expected);
 }
 
 #[test]
-fn join_free_plan_keeps_both_tables_explicitly_empty() {
+fn join_free_plan_keeps_demands_explicitly_empty() {
     let source: ra::Module = syn::parse_quote! {
         struct Read;
         relation R(a:i32);
@@ -88,7 +79,7 @@ fn join_free_plan_keeps_both_tables_explicitly_empty() {
             output r as answer(x);
         }
     };
-    let expected: ix::Module = syn::parse_quote! { #source indexes {} uses {} };
+    let expected: ix::Module = syn::parse_quote! { #source indexes {} };
     assert_eq!(cq_index_policy::compile(&source).unwrap(), expected);
 }
 
@@ -101,13 +92,17 @@ fn correspondence_rejects_changes_in_plan_and_noncanonical_serialization() {
     let mut reordered = exact.clone();
     reordered.indexes = reordered.indexes.iter().rev().cloned().collect();
     reordered.indexes.push_punct(Default::default());
-    let mut reordered_uses = exact.clone();
-    reordered_uses.uses = reordered_uses.uses.iter().rev().cloned().collect();
-    reordered_uses.uses.push_punct(Default::default());
+    let mut swapped = exact.clone();
+    let first = swapped.indexes[0].requirement.clone();
+    swapped.indexes[0].requirement = swapped.indexes[1].requirement.clone();
+    swapped.indexes[1].requirement = first;
+    let mut missing = exact.clone();
+    missing.indexes.pop();
+    let mut empty = exact.clone();
+    empty.indexes.clear();
     let mut renamed = exact.clone();
     renamed.indexes[0].name = syn::parse_quote!(other);
-    renamed.uses[0].index = syn::parse_quote!(other);
-    for mutation in [changed_source, reordered, reordered_uses, renamed] {
+    for mutation in [changed_source, reordered, swapped, missing, empty, renamed] {
         ix::contract::check(&mutation).unwrap();
         assert!(!cq_index_policy::check(&source, &mutation));
     }

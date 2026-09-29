@@ -87,6 +87,45 @@ fn seek_policy_probes_the_hash_chain_and_flags_the_projected_return() {
 }
 
 #[test]
+fn missing_demands_name_the_ra_join_and_do_not_fall_back_to_scans() {
+    let policy = parse_policy(quote! { policy { L; R; S; } });
+    let mut source = chain_ix();
+    source.indexes.pop();
+    ix::contract::check(&source).unwrap();
+    assert_eq!(
+        compile(&source, &policy).unwrap_err().to_string(),
+        "natural join `r4` has no index use"
+    );
+
+    let mut semi: ix::Module = syn::parse_quote! {
+        struct Semi;
+        relation L(a:i32); relation R(a:i32);
+        answer(a) :- L(a), R(a);
+        relational {
+            l = rename L {a -> a}; r = rename R {a -> a};
+            j = semijoin l with r;
+            output j as answer(a);
+        }
+        indexes {}
+    };
+    let policy = parse_policy(quote! { policy { L; R; } });
+    ix::contract::check(&semi).unwrap();
+    assert_eq!(
+        compile(&semi, &policy).unwrap_err().to_string(),
+        "semijoin `j` has no index use"
+    );
+    semi.indexes = syn::parse_quote! { arbitrary_name = @r[0]; };
+    let (target, _) = lower(&semi, &policy);
+    assert_program(
+        &target,
+        quote! {
+            l = alias rename; r = let rename;
+            j = pipe canon semi[a] l, r; return j;
+        },
+    );
+}
+
+#[test]
 fn keyed_hosts_answer_probes_in_place_and_canon_hosts_make_the_return_unique() {
     let source = chain_ix();
     let policy = parse_policy(quote! {

@@ -25,7 +25,6 @@ fn module(
             output p as answer(a, c);
         }
         indexes { i0 = @r[0]; i1 = @s[0]; i2 = @l[0]; }
-        uses { j0.right = i0; j1.right = i1; x.right = i2; }
         physical { #physical }
         structures { #entries }
     }

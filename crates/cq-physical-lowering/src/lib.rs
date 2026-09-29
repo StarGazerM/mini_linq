@@ -114,7 +114,17 @@ fn operators(
     policy: &Policy,
 ) -> syn::Result<(Vec<physical::Operator>, BTreeMap<String, Reads>)> {
     let plan = &source.relational_plan.plan;
-    let indexed = indexed_sides(source);
+    let demands: BTreeSet<_> = source
+        .indexes
+        .iter()
+        .map(|index| ix::signature(&index.requirement))
+        .collect();
+    let has_demand = |left: &Ident, right: &Ident| {
+        demands.contains(&(
+            symbol_name(right),
+            ix::result_join_columns(&infos[&symbol_name(left)], &infos[&symbol_name(right)]),
+        ))
+    };
     let renames: BTreeMap<String, &ra::Rename> = plan
         .definitions
         .iter()
@@ -144,12 +154,13 @@ fn operators(
             ra::Operator::Rename(_) => physical::Operator::Rename(Default::default()),
             ra::Operator::NaturalJoin(join) => {
                 let columns = shared(&join.left, &join.right);
-                let Some(right) = indexed.get(&name) else {
+                let right = &join.right;
+                if !has_demand(&join.left, right) {
                     return Err(syn::Error::new_spanned(
                         &definition.result,
                         format!("natural join `{name}` has no index use"),
                     ));
-                };
+                }
                 scan(&mut reads, &join.left);
                 let keyed = keyed(&columns, &join.left, right);
                 if policy.merge_joins() && !columns.is_empty() {
@@ -162,12 +173,13 @@ fn operators(
             }
             ra::Operator::Semijoin(join) => {
                 let columns = shared(&join.left, &join.right);
-                let Some(right) = indexed.get(&name) else {
+                let right = &join.right;
+                if !has_demand(&join.left, right) {
                     return Err(syn::Error::new_spanned(
                         &definition.result,
                         format!("semijoin `{name}` has no index use"),
                     ));
-                };
+                }
                 scan(&mut reads, &join.left);
                 let keyed = keyed(&columns, &join.left, right);
                 probe(&mut reads, right, columns);
@@ -402,24 +414,6 @@ fn ordered_column(hosts: &Hosts, rename: Option<&ra::Rename>) -> Option<String> 
         [column] if ordered => Some(column.clone()),
         _ => None,
     }
-}
-
-/// The indexed operand of every binary result, as IX names it.
-fn indexed_sides(source: &ix::Module) -> BTreeMap<String, &Ident> {
-    let indexes: BTreeMap<String, &Ident> = source
-        .indexes
-        .iter()
-        .map(|i| (symbol_name(&i.name), &i.requirement.relation))
-        .collect();
-    source
-        .uses
-        .iter()
-        .filter_map(|u| {
-            indexes
-                .get(&symbol_name(&u.index))
-                .map(|relation| (symbol_name(&u.result), *relation))
-        })
-        .collect()
 }
 
 fn scan(reads: &mut BTreeMap<String, Reads>, operand: &Ident) {
