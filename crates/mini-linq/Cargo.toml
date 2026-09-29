@@ -46,3 +46,7 @@ syn = { workspace = true, features = ["visit-mut"] }
 [[test]]
 name = "physical_query"
 required-features = ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]
+
+[[test]]
+name = "wcoj"
+required-features = ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]

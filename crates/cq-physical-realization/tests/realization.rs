@@ -9,6 +9,7 @@ use quote::{ToTokens, quote};
 
 fn endpoints() -> Endpoints {
     Endpoints {
+        intersect: false,
         distinct_state: syn::parse_quote!(mini_linq::distinct_state),
     }
 }

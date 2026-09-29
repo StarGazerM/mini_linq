@@ -89,11 +89,27 @@ impl<'a> Printer<'a> {
                     true,
                 )
             }
-            Access::Prefix(..) => {
-                return error(
-                    &keyed.right,
-                    "a probe needs the payload; it reads a curried structure only at its full depth",
-                );
+            Access::Prefix(structure, levels) => {
+                let all = self.levels_of(&right, structure);
+                // The opt-in binary case has exactly one remaining key,
+                // which is the entire payload of this prefix read.
+                if !self.endpoints.intersect
+                    || levels.len() != 1
+                    || all.len() != 2
+                    || all[1].len() != 1
+                    || all.concat().len() != self.heading(&right).len()
+                {
+                    return error(
+                        &keyed.right,
+                        "a probe needs the payload; it reads a curried structure only at its full depth",
+                    );
+                }
+                let key = levels[0].iter().map(|c| self.ident(&left, c));
+                (
+                    quote!(::cq_storage::Candidates::keys(&#structure, &(#(#key,)*))),
+                    all[1].clone(),
+                    false,
+                )
             }
             Access::Built(structure) => {
                 let lookup = self.chained_lookup(&left, structure, &right, &columns);
@@ -360,7 +376,7 @@ impl<'a> Printer<'a> {
     }
 
     /// The levels a built structure of `result` was declared with.
-    fn levels_of(&self, result: &str, structure: &Ident) -> Vec<Vec<String>> {
+    pub(super) fn levels_of(&self, result: &str, structure: &Ident) -> Vec<Vec<String>> {
         let Some(Repr::Let { structures, .. }) = self.reprs.get(result) else {
             unreachable!("a built structure belongs to a let");
         };
@@ -404,7 +420,7 @@ impl<'a> Printer<'a> {
 
     /// Membership on a prefix of a curried structure: every level but the
     /// last is applied, the last is tested.
-    fn chained_contains(
+    pub(super) fn chained_contains(
         &self,
         left: &str,
         structure: &Ident,

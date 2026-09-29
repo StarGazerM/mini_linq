@@ -245,6 +245,59 @@ pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<struct
         }
     }
 
+    // The binary smallest-candidate rewrite also reads each relation at
+    // prefix + new-column for membership. Keep these two-level demands
+    // local: advice, hosts, other keys and ordered reads retain their paths.
+    let mut intersections = BTreeMap::new();
+    if policy.smallest_intersections() {
+        for pair in program.definitions.windows(2) {
+            let Some((a, b, variable)) =
+                physical::binary_intersection(&pair[0], &pair[1], &analysis)
+            else {
+                continue;
+            };
+            let ak = sorted(&a.columns.iter().map(symbol_name).collect::<Vec<_>>());
+            let bk = sorted(
+                &b.columns
+                    .iter()
+                    .map(symbol_name)
+                    .filter(|c| c != &variable)
+                    .collect::<Vec<_>>(),
+            );
+            let sides = [(symbol_name(&a.right), ak), (symbol_name(&b.right), bk)];
+            let eligible = sides.iter().all(|(name, prefix)| {
+                !analysis
+                    .hosts
+                    .get(name)
+                    .is_some_and(|h| advice.contains_key(h))
+                    && !analysis.key_reads[name]
+                        .iter()
+                        .any(|(_, c)| host_key_for(name, c).is_some())
+                    && needs
+                        .iter()
+                        .filter(|((n, _), _)| n == name)
+                        .all(|((_, c), ns)| {
+                            !ns.contains(&Need::Ordered)
+                                && (*c == *prefix || *c == analysis.headings[name])
+                        })
+                    && intersections.get(name).is_none_or(|p| p == prefix)
+            });
+            if eligible {
+                for (name, prefix) in sides {
+                    needs
+                        .entry((name.clone(), prefix.clone()))
+                        .or_default()
+                        .insert(Need::Contains);
+                    needs
+                        .entry((name.clone(), analysis.headings[&name].clone()))
+                        .or_default()
+                        .insert(Need::Contains);
+                    intersections.insert(name, prefix);
+                }
+            }
+        }
+    }
+
     let mut entries = TokenStream::new();
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
@@ -255,6 +308,23 @@ pub fn compile(source: &physical::Module, policy: &Policy) -> syn::Result<struct
             .map(|((_, columns), needs)| (columns, needs))
             .collect();
         let advised = analysis.hosts.get(&name).and_then(|host| advice.get(host));
+        if let Some(prefix) = intersections.get(&name) {
+            let full = &analysis.headings[&name];
+            let tail = full
+                .iter()
+                .filter(|c| !prefix.contains(c))
+                .map(|c| format_ident!("{c}"));
+            let columns = prefix.iter().map(|c| format_ident!("{c}"));
+            let inner = needs[&(name.clone(), full.clone())]
+                .iter()
+                .max()
+                .expect("nonempty")
+                .default_type();
+            entries.extend(
+                quote! { #ident = ::cq_storage::Trie<'_, _, #inner> [#(#columns),*][#(#tail),*]; },
+            );
+            continue;
+        }
         if advised.is_none() {
             if let Some(chain) = chain(&reads) {
                 let (_, needs) = reads

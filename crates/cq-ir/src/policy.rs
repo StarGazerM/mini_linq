@@ -10,7 +10,8 @@
 //! ```text
 //! Policy ::= "policy" "{" Host* ["join" "=" ("seek" | "merge") ";"]
 //!            ["semijoin" "=" ("eager" | "prefer_lazy") ";"]
-//!            ["project" "=" ("keep" | "canon") ";"] "}"
+//!            ["project" "=" ("keep" | "canon") ";"]
+//!            ["intersect" "=" ("first" | "smallest") ";"] "}"
 //! Host   ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"] ";"
 //! ```
 
@@ -31,6 +32,9 @@ pub mod kw {
     syn::custom_keyword!(prefer_lazy);
     syn::custom_keyword!(project);
     syn::custom_keyword!(keep);
+    syn::custom_keyword!(intersect);
+    syn::custom_keyword!(first);
+    syn::custom_keyword!(smallest);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -51,6 +55,9 @@ pub struct Policy {
     #[syn(in = brace)]
     #[syn(optional, peek = kw::project)]
     pub project: Option<ProjectChoice>,
+    #[syn(in = brace)]
+    #[syn(optional, peek = kw::intersect)]
+    pub intersect: Option<IntersectChoice>,
 }
 
 fn parse_hosts(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Host>> {
@@ -59,6 +66,7 @@ fn parse_hosts(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Host>> {
         && !input.peek(kw::join)
         && !input.peek(kw::semijoin)
         && !input.peek(kw::project)
+        && !input.peek(kw::intersect)
     {
         hosts.push(input.parse()?);
     }
@@ -163,6 +171,35 @@ impl Policy {
             self.semijoin,
             Some(SemijoinChoice {
                 rule: SemijoinRule::PreferLazy(_),
+                ..
+            })
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct IntersectChoice {
+    pub intersect_token: kw::intersect,
+    pub eq_token: Token![=],
+    pub rule: IntersectRule,
+    pub semi_token: Token![;],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum IntersectRule {
+    #[parse(peek = kw::first)]
+    First(kw::first),
+    #[parse(peek = kw::smallest)]
+    Smallest(kw::smallest),
+}
+
+impl Policy {
+    /// Compare candidate counts for supported binary intersections. Default: first.
+    pub fn smallest_intersections(&self) -> bool {
+        matches!(
+            self.intersect,
+            Some(IntersectChoice {
+                rule: IntersectRule::Smallest(_),
                 ..
             })
         )

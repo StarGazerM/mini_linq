@@ -46,6 +46,7 @@ use syn::{Expr, Ident, Stmt};
 
 mod access;
 mod expressions;
+mod intersection;
 mod operators;
 
 use access::{Access, Side};
@@ -55,6 +56,8 @@ use expressions::{deref_predicates, window};
 pub struct Endpoints {
     /// Distinct-state provider ([`cq_ir::state_protocol`]): `new`, `insert`.
     pub distinct_state: syn::Path,
+    /// Enumerate the smaller candidate set for supported binary intersections.
+    pub intersect: bool,
 }
 
 /// The pull program of a Structures module.
@@ -63,14 +66,26 @@ pub fn compile(module: &structures::Module, endpoints: &Endpoints) -> syn::Resul
     let ra_module = &module.physical.index_requirements.relational_plan;
     let infos = ra::check_in(ra_module.program.inputs(), &ra_module.plan)?;
     let mut printer = Printer::new(module, &analysis, infos, endpoints);
-    for (definition, ra_definition) in module
-        .physical
-        .program
-        .definitions
-        .iter()
-        .zip(&ra_module.plan.definitions)
-    {
-        printer.define(definition, ra_definition)?;
+    let definitions = &module.physical.program.definitions;
+    let mut position = 0;
+    while position < definitions.len() {
+        if endpoints.intersect
+            && position + 1 < definitions.len()
+            && printer.intersection(
+                &definitions[position],
+                &definitions[position + 1],
+                &ra_module.plan.definitions[position],
+                &ra_module.plan.definitions[position + 1],
+            )?
+        {
+            position += 2;
+        } else {
+            printer.define(
+                &definitions[position],
+                &ra_module.plan.definitions[position],
+            )?;
+            position += 1;
+        }
     }
     let returned = &module.physical.program.returned;
     let rows = printer.scan(returned)?;

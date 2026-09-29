@@ -53,6 +53,8 @@ FRONTEND_MACROS = {
     "physical-realization": "structures_to_rust",
 }
 CONSUMERS = {
+    "wcoj": ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection",
+             "physical-realization"],
     "physical_query": ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection",
                        "physical-realization"],
 }
@@ -231,7 +233,7 @@ fn main() {{ {checks} }}
     return STATE_BINDINGS + f'''
 fn main() {{
     let R: &::std::collections::BTreeSet<(i32,)> = &[(1,), (2,)].into_iter().collect();
-    let rows: Vec<_> = raw::{implementation}! {{ {STRUCTURES} }}.collect();
+    let rows: Vec<_> = raw::{implementation}! {{ {STRUCTURES} policy {{ R canon; }} }}.collect();
     assert_eq!(rows.len(), 2);
 }}
 '''

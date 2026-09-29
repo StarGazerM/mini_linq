@@ -84,7 +84,8 @@ it leads the program to perform is a trait bound rustc checks on the host value.
 ```ebnf
 Policy ::= "policy" "{" Host* ["join" "=" ("seek" | "merge") ";"]
            ["semijoin" "=" ("eager" | "prefer_lazy") ";"]
-           ["project" "=" ("keep" | "canon") ";"] "}"
+           ["project" "=" ("keep" | "canon") ";"]
+           ["intersect" "=" ("first" | "smallest") ";"] "}"
 Host   ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"] ";"
 ```
 
@@ -94,6 +95,23 @@ prefix projections in Fine valuation plans. A flagged projection read through
 a key is a `let` materialized as a set; a single-use scanned projection stays
 a `pipe` and deduplicates through the distinct wrapper. Shared results still
 use `let`. The returned definition's canonicalization rule is unchanged.
+
+`intersect = first` is the default and preserves the written enumerator.
+`intersect = smallest` compares candidate counts at runtime for a local binary
+case: a pipe probe introducing one column, immediately consumed by a probe or
+semijoin that only checks that column. Both relations must be materialized,
+with nonempty prefixes and the new column completing each relation's heading.
+Selection extends each demand to `[prefix][new column]`, using a `Trie` for
+both enumeration and exact membership. The printer enumerates the smaller
+candidate set (ties choose the first) and tests the other. Advised structures,
+host-only access, ordered reads, incompatible additional keys, and intervening
+operators keep their existing realization. This is a binary intersection
+optimization, not a general multi-atom smallest-set implementation.
+For generic plans, combine `project = canon` with `intersect = smallest`:
+repeated prefix rows otherwise repeat the later candidate work. The fan
+regression checks the growth bound with both policies enabled.
+`Candidates::keys` enumerates distinct next values; trie counts are exact,
+while flat bag indexes report bucket length as an upper bound.
 
 CQ validity and expression scheduling preserve these facts:
 

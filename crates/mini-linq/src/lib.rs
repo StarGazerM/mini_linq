@@ -155,7 +155,9 @@ pub fn select_structures(input: TokenStream) -> TokenStream {
         input,
         Some(syn::parse_quote!(mini_linq::structures_to_rust)),
         |source: &entry::Policed<cq_ir::physical::Module, cq_ir::policy::Policy>| {
-            cq_structure_selection::compile(&source.language, &source.policy)
+            let target = cq_structure_selection::compile(&source.language, &source.policy)?;
+            let policy = &source.policy;
+            Ok(quote::quote! { #target #policy })
         },
     )
 }
@@ -167,10 +169,15 @@ pub fn select_structures(input: TokenStream) -> TokenStream {
 #[cfg(feature = "physical-realization")]
 #[proc_macro]
 pub fn structures_to_rust(input: TokenStream) -> TokenStream {
-    entry::stage(input, None, |source: &cq_ir::structures::Module| {
-        let endpoints = cq_physical_realization::Endpoints {
-            distinct_state: syn::parse_quote!(mini_linq::distinct_state),
-        };
-        cq_physical_realization::compile(source, &endpoints)
-    })
+    entry::stage(
+        input,
+        None,
+        |source: &entry::Policed<cq_ir::structures::Module, cq_ir::policy::Policy>| {
+            let endpoints = cq_physical_realization::Endpoints {
+                distinct_state: syn::parse_quote!(mini_linq::distinct_state),
+                intersect: source.policy.smallest_intersections(),
+            };
+            cq_physical_realization::compile(&source.language, &endpoints)
+        },
+    )
 }

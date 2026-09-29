@@ -84,6 +84,28 @@ impl<K: Eq + Hash, Inner> ExactMembership<K> for Trie<'_, K, Inner> {
     }
 }
 
+impl<'a, K: Eq + Hash, Inner: crate::Keys> crate::Candidates for &'a Trie<'_, K, Inner> {
+    type Key = K;
+    type Item = &'a Inner::Key;
+    type Iter = std::iter::FlatMap<
+        std::option::IntoIter<&'a Inner>,
+        Inner::Iter<'a>,
+        fn(&'a Inner) -> Inner::Iter<'a>,
+    >;
+    fn count(&self, key: &K) -> usize {
+        self.buckets
+            .get(key)
+            .map_or(0, |bucket| bucket.get().key_count())
+    }
+    fn keys(&self, key: &K) -> Self::Iter {
+        self.buckets
+            .get(key)
+            .map(Bucket::get)
+            .into_iter()
+            .flat_map(Inner::distinct_keys)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

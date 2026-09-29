@@ -88,7 +88,17 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
     type Item = V;
     type Cursor = BucketCursor<V>;
     fn lookup(&self, key: &K) -> Self::Cursor {
-        let buckets = self.state.buckets.get_or_init(|| {
+        let buckets = self.buckets();
+        BucketCursor {
+            bucket: buckets.get(key).cloned(),
+            position: 0,
+        }
+    }
+}
+
+impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
+    fn buckets(&self) -> &HashMap<K, Rc<Vec<V>>> {
+        self.state.buckets.get_or_init(|| {
             let source = self
                 .state
                 .source
@@ -103,11 +113,33 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
                 .into_iter()
                 .map(|(key, values)| (key, Rc::new(values)))
                 .collect()
-        });
-        BucketCursor {
-            bucket: buckets.get(key).cloned(),
-            position: 0,
-        }
+        })
+    }
+}
+
+impl<K: Eq + Hash, V> crate::Keys for HashIndex<'_, K, V> {
+    type Key = K;
+    type Iter<'a>
+        = std::collections::hash_map::Keys<'a, K, Rc<Vec<V>>>
+    where
+        Self: 'a;
+    fn key_count(&self) -> usize {
+        self.buckets().len()
+    }
+    fn distinct_keys(&self) -> Self::Iter<'_> {
+        self.buckets().keys()
+    }
+}
+
+impl<K: Eq + Hash, V: Copy + Eq + Hash> crate::Candidates for &HashIndex<'_, K, V> {
+    type Key = K;
+    type Item = V;
+    type Iter = crate::candidates::Distinct<BucketCursor<V>>;
+    fn count(&self, key: &K) -> usize {
+        self.buckets().get(key).map_or(0, |v| v.len())
+    }
+    fn keys(&self, key: &K) -> Self::Iter {
+        crate::candidates::Distinct::new(self.lookup(key))
     }
 }
 

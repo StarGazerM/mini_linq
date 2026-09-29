@@ -509,3 +509,48 @@ pub fn ordinals(analysis: &Analysis, result: &str, columns: &[String]) -> Vec<us
         })
         .collect()
 }
+
+/// The local binary intersection recognized by selection and realization:
+/// one pipe probe introduces one column, immediately followed by a probe
+/// or semijoin that only checks it. Both candidate relations are materialized,
+/// the prefixes are nonempty, and the new column completes each heading.
+/// This intentionally excludes wider intersections, intervening operators,
+/// canonicalization of the intermediate pipe, and host-only access.
+pub fn binary_intersection<'a>(
+    first: &'a Definition,
+    second: &'a Definition,
+    analysis: &Analysis,
+) -> Option<(&'a Keyed, &'a Keyed, String)> {
+    let Operator::Probe(_, a) = &first.operator else {
+        return None;
+    };
+    let (Operator::Probe(_, b) | Operator::Semi(_, b)) = &second.operator else {
+        return None;
+    };
+    if !matches!(first.mode, Mode::Pipe(_)) || first.canon.is_some() || b.left != first.name {
+        return None;
+    }
+    let left = &analysis.headings[&symbol_name(&a.left)];
+    let ah = &analysis.headings[&symbol_name(&a.right)];
+    let bh = &analysis.headings[&symbol_name(&b.right)];
+    let added: Vec<_> = ah.iter().filter(|c| !left.contains(c)).collect();
+    if added.len() != 1 {
+        return None;
+    }
+    let v = added[0];
+    let ak: Vec<_> = a.columns.iter().map(symbol_name).collect();
+    let bk: Vec<_> = b.columns.iter().map(symbol_name).collect();
+    if ak.is_empty()
+        || bk.len() < 2
+        || !bk.contains(v)
+        || ah.len() != ak.len() + 1
+        || bh.len() != bk.len()
+        || !bh.iter().all(|c| left.contains(c) || c == v)
+        || [&a.right, &b.right]
+            .iter()
+            .any(|r| analysis.modes[&symbol_name(r)] != ModeKind::Let)
+    {
+        return None;
+    }
+    Some((a, b, v.clone()))
+}

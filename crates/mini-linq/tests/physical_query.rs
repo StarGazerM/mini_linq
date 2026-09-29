@@ -532,6 +532,41 @@ mod generic {
     }
 }
 
+mod generic_smallest {
+    macro_rules! policy {
+        ($($ix:tt)*) => {
+            ::mini_linq::lower_physical! {
+                $($ix)*
+                policy { R; S; T; intersect = smallest; }
+            }
+        };
+    }
+    pub(crate) use policy as physical_policy;
+    mod wiring {
+        pub(crate) use super::physical_policy;
+        pub(crate) use ::mini_linq::{
+            index_demands as choose_index_policy, select_structures, structures_to_rust,
+        };
+        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
+    }
+    use wiring as mini_linq;
+
+    #[allow(non_snake_case)]
+    pub(super) fn run<'a>(
+        R: &'a [(i32, i32)],
+        S: &'a [(i32, i32)],
+        T: &'a [(i32, i32)],
+    ) -> std::collections::HashSet<(&'a i32, &'a i32, &'a i32)> {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
+            struct Triangle;
+            relation R(a: i32, b: i32);
+            relation S(b: i32, c: i32);
+            relation T(a: i32, c: i32);
+            answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+        })
+    }
+}
+
 #[test]
 fn generic_join_reads_a_chain_of_keys_through_one_curried_structure() {
     let r = [(1, 2), (1, 3), (2, 3), (4, 5)];
@@ -546,4 +581,5 @@ fn generic_join_reads_a_chain_of_keys_through_one_curried_structure() {
         }
     }
     assert_eq!(generic::run(&r, &s, &t), expected);
+    assert_eq!(generic_smallest::run(&r, &s, &t), expected);
 }

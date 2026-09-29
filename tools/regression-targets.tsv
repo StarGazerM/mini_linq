@@ -21,6 +21,7 @@ cq-structure-selection	test	selection	crates/cq-structure-selection/tests/select
 cq-physical-lowering	test	lowering	crates/cq-physical-lowering/tests/lowering.rs
 cq-physical-realization	test	realization	crates/cq-physical-realization/tests/realization.rs
 mini-linq	test	physical_query	crates/mini-linq/tests/physical_query.rs
+mini-linq	test	wcoj	crates/mini-linq/tests/wcoj.rs
 mini-linq	lib	macro_inputs	crates/mini-linq/src/lib.rs
 mini-linq-course	example	cq-inspection	examples/cq-inspection/main.rs
 mini-linq-course	example	free-variables	examples/free-variables/main.rs
