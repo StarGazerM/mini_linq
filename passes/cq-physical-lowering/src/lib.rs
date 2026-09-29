@@ -541,6 +541,7 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
     }
 }
 
+/// Formal rule CK-Demands: Require each probe or semi right-operand descriptor in source IX.
 fn check_demands(source: &ix::Program, target: &physical::Program) -> syn::Result<()> {
     let analysis = physical::contract::check(target)?;
     let demands: BTreeSet<_> = source

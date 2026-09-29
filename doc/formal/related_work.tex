@@ -14,13 +14,15 @@ neither semantic adequacy nor hygiene~\cite{host-hygiene}.
 
 Nanopass organizes compilation around small languages and focused
 transformations~\cite{paper-nanopass}. MiniLinq additionally exposes lower
-macro entries and emits Rust with local quotations. Its replacement theorem
+macro entries and composes them through next-slot invocations before printing
+a Rust expression. Its replacement theorem
 therefore assumes contextual adequacy, following the distinction between
 whole-program and compositional compiler correctness~\cite{paper-ccc}.
 
 Ascent BYODS formalizes custom representations and their interaction with
 evaluation~\cite{paper-byods}; our boundaries expose algorithm, access and
 observation contracts. Predicate optimization relates placement to dependencies
-and costs~\cite{paper-udp}. Push/pull fusion and multiway
-joins~\cite{paper-pushpull,paper-lftj} require changes to the appropriate compiler
-segment; those additional backends remain unimplemented here.
+and costs~\cite{paper-udp}. Generic variable-at-a-time plans and optional binary
+candidate intersections are implemented. The cited push/pull fusion and LFTJ
+complexity results~\cite{paper-pushpull,paper-lftj} are not established by this
+implementation.

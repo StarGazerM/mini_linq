@@ -178,6 +178,7 @@ enum Clause {
 }
 
 pub mod contract {
+    /// Formal rule WF-VO: Check NF and the local valuation schedule with coverage and reduction premises.
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
         super::cq::normal::check(&program.cq)?;
         super::analyze(program)

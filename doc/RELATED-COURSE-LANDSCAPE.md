@@ -273,10 +273,12 @@ eventually submit.
 | MiniLinq staff source subset | same working tree | `cq-ir/src`, `cq-compiler/src`, and `mini-linq/src` | 1,614 |
 | MiniLinq public tests subset | same working tree | test directories of the three crates | 1,355 |
 
-The MiniLinq working tree contained uncommitted development when measured, so
-its numbers are a design snapshot rather than a released checkpoint. External
-dependencies such as Rust's standard library, `syn`, `quote`, and `contracts`
-are not included in any course-owned machinery budget.
+The MiniLinq rows are a past snapshot (August 8, 2026) of an earlier crate
+layout (`crates/`, `cq-ir`, `cq-compiler`) that no longer exists; they are not
+facts about the current checkout, and the working tree then contained
+uncommitted development. External dependencies such as Rust's standard
+library, `syn`, `quote`, and `contracts` are not included in any course-owned
+machinery budget.
 
 ## 6. Positioning the proposed course
 
@@ -326,13 +328,13 @@ the following acceptance conditions:
 
 ## 8. MiniLinq checkpoint scope
 
-The implemented canonical compiler follows
+The implemented compiler follows
 
 ```text
-CQ -> RelationalPlan -> IndexRequirements -> Physical -> Γ -> Rust
+CQ -> CQ-NF -> VO -> RA -> IX -> Physical -> Structures -> Rust
 ```
 
-Each typed edge lives in its semantic module; the [compiler structure guide](COMPILER-STRUCTURE.md)
+Each typed edge is one pass crate; the [compiler structure guide](COMPILER-STRUCTURE.md)
 records the current ownership. A course checkpoint can assign selected edges
 while supplying the other stages. The exact starter-to-reference diff must be
 measured for that release before claiming a student-code budget. Historical

@@ -31,6 +31,7 @@ pub fn workload_query(input: TokenStream) -> TokenStream {
 /// Select a logical planner without bypassing its caller-resolved macro binding.
 #[cfg(feature = "logical-selection")]
 #[proc_macro]
+/// Formal rule ST-Entry: Check and dispatch unchanged CQ to the caller-resolved logical slot.
 pub fn mini_linq(input: TokenStream) -> TokenStream {
     entry::stage(input, None, |source: &cq_lang_cq::Program| {
         cq_lang_cq::contract::check(source)?;
@@ -42,6 +43,7 @@ pub fn mini_linq(input: TokenStream) -> TokenStream {
 /// full subatom per atom, elaborate to named RA.
 #[cfg(feature = "written-order")]
 #[proc_macro]
+/// Formal rule Plan-Prefix: Normalize, order Written/Coarse, elaborate and continue with RA.
 pub fn cq_to_ra(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
@@ -59,6 +61,7 @@ pub fn cq_to_ra(input: TokenStream) -> TokenStream {
 /// holds it before enumerating further, elaborate to named RA.
 #[cfg(feature = "written-order")]
 #[proc_macro]
+/// Formal rule Plan-Generic: Normalize, order Written/Fine, elaborate and continue with RA.
 pub fn cq_to_ra_generic(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
@@ -80,6 +83,7 @@ pub fn cq_to_ra_generic(input: TokenStream) -> TokenStream {
 /// the GYO join tree when the query is acyclic, elaborate to named RA.
 #[cfg(feature = "hypergraph")]
 #[proc_macro]
+/// Formal rule Plan-Graph: Normalize, Written/Coarse order, Atoms pushdown, Tree iff acyclic, elaborate.
 pub fn cq_to_ra_hypergraph(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
@@ -120,9 +124,10 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
 
 /// Fix one physical operator per RA result under the appended policy.
 ///
-/// Input is `IX policy { … }`. Every natural join becomes a `probe` of the
-/// RA join's right operand (or a `merge` under `join = merge`), every semijoin a
-/// `semi`, a select bounding an ordered host key a `range`; modes follow
+/// Input is `IX policy { … }`. A natural join becomes a right-side `probe`,
+/// or a `merge` under `join = merge` when the shared heading is nonempty;
+/// Cartesian joins remain `probe[]`. Every semijoin becomes `semi`, a select
+/// bounding an ordered host key a `range`; modes follow
 /// from use; the return is flagged `canon` unless uniqueness is inferred
 /// from `canon` hosts. The policy is re-appended for [`select_structures!`].
 #[cfg(feature = "physical-lowering")]
@@ -163,10 +168,12 @@ pub fn select_structures(input: TokenStream) -> TokenStream {
 
 /// Print Structures as one pull program: a block that builds the chosen
 /// structures, guards the traits each read needs, and evaluates to an
-/// iterator of the answer tuples in head order. A `canon` return
-/// deduplicates through the caller's `mini_linq::distinct_state!` provider.
+/// iterator of the answer tuples in head order. A `canon` pipe or alias return
+/// uses the caller's `mini_linq::distinct_state!` provider; a `canon` let return
+/// reads canonical materialized storage.
 #[cfg(feature = "physical-realization")]
 #[proc_macro]
+/// Formal rule ST-Terminal: Realize the policed Structures payload with no next continuation.
 pub fn structures_to_rust(input: TokenStream) -> TokenStream {
     entry::stage(
         input,

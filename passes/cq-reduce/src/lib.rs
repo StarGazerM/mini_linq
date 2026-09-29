@@ -4,10 +4,11 @@
 //! This pass decides one thing: which `reduce` steps the plan carries, and
 //! where. The order and the granularity of the input plan are kept as they
 //! are. A reduction is a semijoin or a selection that, under set semantics,
-//! changes nothing the plan denotes, so [`check`] erases them — drops the
-//! semijoins and returns each pushed guard to a step — and requires the
-//! input plan back. The checker validates tree edges and dependency order
-//! independently of the scheduler; sibling orders and guard hosts are free.
+//! preserves the completed query answer under the relational host assumptions.
+//! [`check`] removes target reductions and removes their pushed guards from the
+//! source-step comparison. It independently checks tree edges and dependency
+//! order; sibling orders and eligible guard hosts are free. It does not compare
+//! the target with `compile(source, options)`.
 //!
 //! - `Pushdown::Atoms` turns every guard whose variables all belong to one
 //!   atom clause into `reduce C@k if (e);` on the earliest such clause,
@@ -58,6 +59,8 @@ pub enum Reductions {
 }
 
 /// Insert the reductions `options` ask for, then check the VO contract.
+/// Formal rule R-Guard: Push transparent guards to the earliest eligible atom and remove their steps.
+/// Formal rule R-Tree: Insert the tree schedule before the first atom after pushed guards.
 pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
     let analysis = valuation::contract::check(source)?;
     if let Some(step) = source
@@ -190,7 +193,9 @@ fn without_guards(steps: &[Step], placed: &[cq::Filter]) -> Vec<Step> {
 }
 
 /// The Yannakakis full reducer: Y-UP over every tree edge, leaves first,
-/// then Y-DOWN, root first, both in breadth-first order from the root.
+/// then Y-DOWN, root first: reverse BFS upward, BFS downward.
+/// Formal rule Y-Up: Produce upward parent-with-child VO steps in reverse BFS order.
+/// Formal rule Y-Down: Produce downward child-with-parent VO steps in BFS order.
 fn tree(source: &valuation::Program, analysis: &valuation::Analysis) -> syn::Result<Vec<Step>> {
     let Some(join_tree) = valuation::cq::hypergraph::Analysis::of(&source.cq).join_tree else {
         return Err(syn::Error::new_spanned(

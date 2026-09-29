@@ -44,7 +44,7 @@ fn main() {
         answer.into_iter().collect::<Vec<_>>(),
         [(1, 11), (2, 11), (3, 5)]
     );
-    let evidence = "PASS: computed argument CQ→VO→RA→IX with kernel-preserving plans; independent oracle answer [(1,11),(2,11),(3,5)]. Generated query execution remains unimplemented for this domain.\n";
+    let evidence = "PASS: computed argument CQ→VO→RA→IX with kernel-preserving plans; independent oracle answer [(1,11),(2,11),(3,5)]. This driver does not exercise generated-query execution.\n";
     std::fs::write(directory.join("validation.txt"), evidence).unwrap();
     print!("{evidence}");
 }

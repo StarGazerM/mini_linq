@@ -88,11 +88,11 @@ and $U\bowtie V=U\ltimes V$ when $V$ contributes only $w$; after key
 computation and filtering, $x,y,z,k$ have no remaining use.
 \end{proof}
 
-The \code{constraint_planning} executable compares both public CQ routes
-and this independently authored RA against a whole-tuple oracle on 14 input
-presentations (42 query executions). Its total wrapping arithmetic makes the
-pure premises concrete. The current prefix planner checks readiness and
-barriers, then filters its current prefix; it does not search these subtree
-transformations. The existing RA quotation nevertheless compiles the authored
-plan, demonstrating that lower-language use is independent of upper-planner
-coverage.
+The \code{constraint_planning} executable checks automatic and independently
+authored RA/IX contracts, and separately checks an independent whole-tuple oracle
+on eight input presentations: base, duplicate, all-empty and five individually
+empty inputs. It does not compare generated query execution with that oracle.
+The oracle uses total wrapping arithmetic. Ordering checks bound inputs and
+same-kind guard/binding order; elaboration follows VO and does not search these
+subtree transformations. The authored RA is checked and analyzed into IX,
+demonstrating a lower-language entry independent of upper-planner coverage.

@@ -38,7 +38,7 @@ pub struct AttributeRename {
 ///
 /// ```text
 /// Rename ::= "rename" RelationName "{"
-///              AttributeRename ("," AttributeRename)* [","]
+///              [AttributeRename ("," AttributeRename)* [","]]
 ///            "}"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -89,7 +89,7 @@ pub struct Extend {
 ///
 /// ```text
 /// Project ::= "project" RelationId "keep" "{"
-///               Ident ("," Ident)* [","]
+///               [Ident ("," Ident)* [","]]
 ///             "}"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]

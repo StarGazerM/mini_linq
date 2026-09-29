@@ -6,6 +6,7 @@ use cq_lang_ra::syntax::symbol_name;
 
 /// Check RA preservation and the IX-Join/Other/New/Reuse derivation in order.
 /// Demand names are fixed by the rules; no compiler decisions are replayed.
+/// Formal rule CK-Index: Check unchanged RA and complete first-use descriptors with iN names.
 pub fn check(source: &ra::Program, target: &ix::Program) -> syn::Result<()> {
     let info = ra::contract::check(source)?;
     ix::contract::check(target)?;

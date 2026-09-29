@@ -54,8 +54,11 @@ pub fn signature(index: &IndexRequirement) -> Signature {
 /// A complete RA program followed by named index demands.
 ///
 /// ```text
-/// Program ::= ra::Program "indexes" "{" (IndexDefinition ";")* "}"
+/// Program ::= ra::Program "indexes" "{" [IndexDefinition (";" IndexDefinition)* [";"]] "}"
 /// ```
+///
+/// This is the parser grammar. The contract requires every definition,
+/// including the last, to end with a semicolon.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Program {
     pub ra: ra::Program,
@@ -73,6 +76,7 @@ pub mod contract {
     }
 }
 
+/// Formal rule WF-IX: Check valid unique used descriptors; complete coverage is a pass obligation.
 fn check_indexes(module: &Program) -> syn::Result<()> {
     let info = ra::contract::check(&module.ra)?;
     if !module.indexes.is_empty() && !module.indexes.trailing_punct() {

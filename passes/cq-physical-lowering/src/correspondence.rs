@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Check source/target contracts, logical erasure, IX demands, and policy.
 /// Materialization is free whenever the language and policy premises hold.
+/// Formal rule CK-Physical: Check local contracts, RA erasure, IX demands and independent policy premises.
 pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) -> syn::Result<()> {
     ix::contract::check(source)?;
     let facts = physical::contract::check(target)?;

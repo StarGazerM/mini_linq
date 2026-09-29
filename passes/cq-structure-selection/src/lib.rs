@@ -16,12 +16,15 @@
 //!    `seek`/`contains`, so probes get `cq_storage::HashIndex` and semijoins
 //!    a `HashSet` of keys. An ordered structure (`BTreeMap`, O(log n)) is
 //!    chosen only where a read needs key order — a merge side or a range.
-//!    One structure per (result, columns): the strongest need picks the type.
+//!    Independent demands share one structure per (result, columns), with
+//!    the strongest read need selecting its type. Compatible membership-prefix
+//!    chains can share a curried structure; supported smallest-intersection
+//!    pairs use two-level candidate structures.
 //! 3. Advice. A relation declared `#[index(Type)]` fixes the type of every
 //!    structure built over it (through renames): any Rust type implementing
 //!    `cq_storage::Build` and the traits the reads use, which rustc checks.
 //!    Query-specific choices for derived results are authored directly in
-//!    the Structures module.
+//!    a complete Structures program.
 //! 4. Chained membership keys use one `Trie` level per successive key
 //!    difference, with the strongest full-key default at the leaf; a probe
 //!    can read only the full chain. Ordered reads retain separate maps.

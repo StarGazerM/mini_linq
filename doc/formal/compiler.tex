@@ -1,7 +1,7 @@
 \input{common}
 \title{MiniLinq: Relational Planning and Index Requirements}
 \author{Syntax, semantics, compilation rules, and expansion expectations}
-\date{18 September 2026}
+\date{29 September 2026}
 \begin{document}
 \maketitle
 \begin{abstract}
@@ -11,10 +11,10 @@ A caller-supplied, query-independent policy then fixes one physical
 operator per result (Physical) and binds every keyed read to a host key fact or
 a built Rust structure (Structures). Physical derives demand uses from its
 operands; a printer emits one pull program over the
-runtime operation traits. We specify CQ, RA, planning and IX with syntax,
-semantics and algorithmic inference rules; Physical and Structures are
-specified by the \code{cq-lang-*} module documentation and \path{doc/DSL.md} until
-a formal treatment is written.
+runtime operation traits. We specify CQ, CQ-NF, VO, RA and IX with syntax,
+semantics and algorithmic rules, and give local contract rules for Physical and
+Structures. Separate pass correspondence judgments state the implemented checks;
+realization is supported by oracle tests, rustc trait guards and expansion fixtures.
 \end{abstract}
 \input{introduction}
 \input{research_contract}
@@ -23,6 +23,7 @@ a formal treatment is written.
 \input{constraint_planning}
 \input{planning}
 \input{ix_physical_contract}
+\input{pass_contracts}
 \input{staging}
 \input{evaluation}
 \input{related_work}

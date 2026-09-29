@@ -1,118 +1,133 @@
 # Rust tutorial design for MiniLinq
 
 The Rust material should make the compiler architecture feel inevitable. Start
-with concrete values, moves, borrows, and iterator objects; only then name
-syntax trees, proc macros, and pass contracts. The central bridge is:
+with concrete values, borrows, and iterator objects; only then name syntax
+trees, proc macros, and pass contracts. The central bridge is:
 
 > A program can be represented as a value, transformed into another value,
 > and finally emitted as an ordinary Rust expression.
 
-The Triangle example in [DSL.md](DSL.md) is the
-running example. It shows the program after every transformation, so no
-concept depends on an invisible compiler stage.
+Triangle is the running example. Its complete program at every stage is a
+checked-in scenario: [CQ](../test-support/relational/scenarios/triangle.cq),
+[VO](../test-support/relational/scenarios/triangle.vo),
+[RA](../test-support/relational/scenarios/triangle.ra),
+[IX](../test-support/relational/scenarios/triangle.ix),
+[Physical](../test-support/relational/scenarios/triangle.physical),
+[policy](../test-support/relational/scenarios/triangle.policy), and
+[Structures](../test-support/relational/scenarios/triangle.structures). The
+`.ix` and `.structures` files hold only the `indexes { … }` and
+`structures { … }` suffixes; [`Scenario::ix` and
+`Scenario::structured`](../test-support/relational/scenarios.rs) append them to
+the RA and Physical programs they extend.
 
 ## Learning outcomes
 
 After the tutorial, students should be able to explain and implement:
 
-1. the difference between an input iterator, an owned relation, and a borrowed
-   query cursor;
+1. the difference between a caller-owned host relation, a structure the
+   printed block builds over borrowed rows, and a lazy query cursor;
 2. why a proc-macro function accepts `TokenStream` while compiler passes accept
-   typed IR syntax;
-3. how `syn::parse2` and `quote!` turn values into the next typed language;
-4. why `rN` is a logical relation result and `iterN` is a lazy cursor result;
-5. how Rust's `once`, `map`, `flat_map`, and `filter` encode a pull pipeline;
-6. why the final `syn::Expr` is the concrete target IR rather than a
+   typed IR programs;
+3. how typed construction, `quote!`, and `syn::parse2` produce the next
+   language;
+4. why an RA `rN` is a logical set while a Physical `pipe` result is a cursor
+   and a `let` result is retained storage;
+5. how Rust's `map`, `flat_map`, and `filter` encode a pull pipeline;
+6. why the final `syn::Expr` is the concrete target rather than a
    pretty-printing hint; and
-7. where ownership permits a move, requires a borrow, or deliberately clones
-   fields into an additional physical object.
+7. where the printed program borrows, where a host key type forces a clone,
+   and where the query head computes owned values.
 
-## Sequence 1: a public input is a one-shot value
+## Sequence 1: the caller owns the relations
 
-Begin with a normal generic function:
+A declaration is a schema whose column types are real Rust types:
 
 ```text
 relation Road(src: City, dst: City);
 ```
 
-This declaration is a schema: its two entries are real Rust column types. It
-does not contain road facts. The host supplies a particular `Road` relation
-instance to the generated `build` or `run` argument, whose row type is the
-always-trailing tuple `(City, City,)`.
+It contains no facts, and the compiler generates no `build` or `run` API. The
+caller writes an ordinary function whose parameters are the relation values,
+then places a macro invocation in its body. The expansion is one Rust block
+expression evaluated in that scope, naming each relation as a local variable
+([composition example](../examples/composition/src/main.rs)):
 
 ```rust
-type City = String;
-
-fn normalize(
-    input: impl IntoIterator<Item = (City, City,)>,
-) -> std::collections::HashSet<(City, City,)> {
-    input.into_iter().collect()
+#[allow(non_snake_case)]
+fn query<'a>(
+    L: &'a [(i32,)],
+    R: &'a HashMap<(i32,), Vec<(i32,)>>,
+    S: &'a BTreeMap<(i32,), Vec<(i32,)>>,
+) -> HashSet<(&'a i32, &'a i32, &'a i32)> {
+    ::core::iter::Iterator::collect(::mini_linq::index_demands! {
+        relational {
+            relation L(a: i32);
+            relation R(a: i32, b: i32);
+            relation S(b: i32, c: i32);
+            l = rename L { a -> a };
+            r = rename R { a -> a, b -> b };
+            s = rename S { b -> b, c -> c };
+            j0 = natural_join l with r;
+            j1 = natural_join j0 with s;
+            output j1 as answer(a, b, c);
+        }
+    })
 }
 ```
 
-`IntoIterator` is not a fixed collection type. It names a value that can be
-consumed to produce rows. Calling `into_iter()` takes that value. This matters
-because a structure built through `cq_storage::Build` consumes its source
-rows exactly once, regardless of whether the caller supplied a `Vec`, array, set,
-or user-defined iterator.
+The caller's query-independent policy, appended by the local macro the
+example binds as `mini_linq::physical_policy`, states each host's shape. An unkeyed
+host (`L;`) is read as `L.iter()` over full-row tuples. A keyed host
+(`R keyed [a];`) is a map `Map<(key…,), Coll<(rest…,)>>` in the declared column
+order, probed in place. There is no input normalization step: the host value
+is used exactly as supplied.
 
-Normalizing to `HashSet<Row>` establishes set semantics before storage layout
-is chosen. It also creates a borrowable intermediate owner from which several
-physical structures may be constructed.
+Ask students to predict what happens if `query` returns the lazy iterator
+instead of collecting it, and then if `L` is passed by value. The borrow
+checker, not a MiniLinq rule, explains both answers.
 
-Ask students to predict the result of trying to call `input.into_iter()` a
-second time. The compiler error introduces ownership as an observable design
-constraint, not an abstract rule.
+## Sequence 2: built structures borrow host rows
 
-## Sequence 2: move versus clone during storage construction
+When the policy says a relation is only scanned but a probe needs a key,
+Structures binds a structure for that read. Triangle's policy declares `R`,
+`S`, and `T` unkeyed, so its Structures suffix is:
 
-A single physical owner can consume an owned normalized relation:
-
-```rust
-fn row_store(
-    relation: std::collections::HashSet<(City, City,)>,
-) -> Vec<(City, City,)> {
-    relation.into_iter().collect()
+```text
+structures {
+    R;
+    S;
+    T;
+    r1 = ::cq_storage::HashIndex<_, _> [b];
+    r3 = ::cq_storage::HashIndex<_, _> [a, c];
 }
 ```
 
-A full-row key remains a `HashSet<Row>`, so the correct construction is just a
-move:
+The printer binds each structure at the top of the block through
+`cq_storage::Build`, from `((key…,), (rest…,))` pairs of **references** in
+sorted column order, then emits a `cq_storage::require` guard naming the trait
+every read on it uses. A [realization
+fixture](../passes/cq-physical-realization/tests/realization.rs) pins this
+shape:
 
 ```rust
-fn full_index(
-    relation: std::collections::HashSet<(City, City,)>,
-) -> std::collections::HashSet<(City, City,)> {
-    relation
-}
+let __cq_r_on_a = &{
+    use ::cq_storage::Build as _;
+    ::cq_storage::HashIndex::build(::core::iter::Iterator::map(
+        ::core::iter::Iterator::map(R.iter(), move |(b, a,)| (a, b,)),
+        |(a, b,)| ((a,), (b,))
+    ))
+};
+::cq_storage::require::seek(__cq_r_on_a);
 ```
 
-Recollecting that same set would perform work with no representation change.
-This is the first practical compiler lesson: generated Rust should respect the
-host language's ownership model rather than mechanically clone every input.
+Nothing is cloned: the structure is keyed by `(&T, …)` and stores reference
+payloads. The only clone the printer ever emits is the owned key used to probe
+a keyed host map, because that map's key type is `(T, …)`. Whether the chosen
+type actually implements the required traits is rustc's check at the guard.
 
-If one relation needs two physical objects, the earlier builder must borrow
-while creating owned values for the additional object:
-
-```rust
-fn proper_index(
-    relation: &std::collections::HashSet<(City, City,)>,
-) -> std::collections::HashMap<(City,), Vec<(City,)>> {
-    let mut index = std::collections::HashMap::<(City,), Vec<(City,)>>::new();
-    for (key, payload,) in relation.iter() {
-        index
-            .entry((std::clone::Clone::clone(key),))
-            .or_default()
-            .push((std::clone::Clone::clone(payload),));
-    }
-    index
-}
-```
-
-The field clones here are deliberate: the new `HashMap` owns a separate key
-and payload representation. After that borrowing builder finishes, the final
-consumer may move the original set. Distinguish these build-time clones from
-query traversal, where stored tuples remain borrowed.
+`cq_storage::HashIndex` defers bucket construction until its first lookup;
+`HashSet` and `BTreeMap` build eagerly. Construction timing belongs to the
+selected structure type, not to the printer.
 
 ## Sequence 3: a cursor borrows storage
 
@@ -135,121 +150,95 @@ the owner is alive, but it cannot outlive storage. Calling `query()` creates an
 ordinary compiled value with a hidden concrete type; it does not materialize
 the values and it does not create a thread or task.
 
-This matches database-driver language: building the result cursor is a query
-step, while built structures are created at the top of the printed block.
-
 Then show partial consumption:
 
 ```rust
-fn first_two(rows: &Rows) -> Vec<(City, City,)> {
+fn first_two(rows: &Rows) -> Vec<&(City, City,)> {
     let mut cursor = rows.query();
-    let first = cursor.next().cloned();
-    let second = cursor.next().cloned();
-    [first, second].into_iter().flatten().collect()
+    [cursor.next(), cursor.next()].into_iter().flatten().collect()
 }
 ```
 
-The iterator object holds resumable state. There is no outer `for` loop hidden
-in the surrounding application; the cursor itself is the whole result-set
-protocol.
+The iterator object holds resumable state. There is no hidden outer `for`
+loop; the cursor itself is the whole result-set protocol.
 
-## Sequence 4: source access should borrow stored tuples
+## Sequence 4: the head decides ownership
 
-A generated scan should be:
+Rows flow between operators as tuples of `&T` host columns plus any owned
+values an `extend` computed. The head does not add clones:
 
-```rust
-fn scan(rows: &[(City, City,)]) -> impl Iterator<Item = &(City, City,)> {
-    rows.iter()
-}
-```
+- a bare head variable forwards its borrowed column, so
+  `answer(c, a)` over heading `[a, c]` prints
+  `move |(a, c,)| (c, a,)` and yields `(&T, &T)`;
+- a computed head expression such as `answer(a + c)` is evaluated per row
+  with every column in scope as `&T`, and its value is whatever that Rust
+  expression produces.
 
-An indexed lookup can also remain borrowed:
-
-```rust
-fn lookup<'a>(
-    index: &'a std::collections::HashMap<(City,), Vec<(City,)>>,
-    key: &City,
-) -> impl Iterator<Item = &'a (City,)> {
-    index.get(&(std::clone::Clone::clone(key),)).into_iter().flatten()
-}
-```
-
-Appending `.cloned()` would produce an owned tuple for every candidate. The
-baseline instead borrows all stored rows and payloads, clones only the fields
-needed to construct an owned lookup key, and creates one owned result tuple at
-successful projection.
-
-Rust match ergonomics explain the generated patterns. For a borrowed scan,
-the body of
-
-```rust
-fn enumerate(rows: &[(City, City,)]) -> Vec<(City, City,)> {
-    let mut output = Vec::new();
-    for (x, y,) in rows.iter() {
-        output.push((
-            std::clone::Clone::clone(x),
-            std::clone::Clone::clone(y),
-        ));
-    }
-    output
-}
-```
-
-receives `x: &City` and `y: &City`; cloning those selected fields constructs
-the owned output row.
+Owned output therefore requires an authored operation: a computed head
+expression, or a caller-side copy such as the composition example's
+`.map(|(a, b, c)| (*a, *b, *c))` for display.
 
 ## Sequence 5: programs become typed values
 
-Only after ownership is concrete, introduce a small value that represents a
-query plan:
+Only after ownership is concrete, introduce the value that represents a
+logical plan. An RA definition is a result name and one operator:
 
 ```rust
-struct Definition {
-    result: syn::Ident,
-    operator: Operator,
+pub struct Definition {
+    pub result: syn::Ident,
+    pub eq_token: syn::Token![=],
+    pub operator: Operator,
+    pub semi_token: syn::Token![;],
 }
-
-type Heading = std::collections::BTreeSet<String>;
 ```
 
-A definition serializes its result identity and operator. The RelationalPlan
-checker infers its attribute-set heading from complete Renames and earlier
-results; it does not duplicate an ordered schema in the syntax:
+`cq_lang_ra::contract::check` infers each result's attribute-set heading from
+the declarations, complete renames, and earlier results; the syntax carries no
+duplicate schema:
 
 ```text
 r2 = natural_join r0 with r1;
 ```
 
-This is not yet Rust execution. `r2` denotes a set relation, and later logical
-operators may name it. Shared attributes and natural-join equality follow from
-the intersection of the inferred headings.
+This is not Rust execution. `r2` denotes a set relation; shared attributes and
+natural-join equality follow from the intersection of the inferred headings.
 
-The supplied definition `r0 = unit;` is the useful zero-heading exception. It
-denotes a relation containing one empty binding, analogous to an identity
-value from which a global logical clause can proceed. The positive basic pass
-does not emit it; Optional HW4 uses it before an uncorrelated negation or
-aggregation.
-
-Contrast it with a physical cursor identity:
+`r0 = unit;` denotes the relation containing one empty binding. Elaboration
+seeds the prefix with it whenever a guard or binding precedes the first atom,
+including the constant bindings normalization introduces:
 
 ```text
-iter1 = join iter0 as (x, y,) with (z,) in (source) yield (x, y, z,);
+relational {
+    relation R(a: i32, b: i32);
+    r0 = unit;
+    r1 = extend r0 with { __cq_0_1: i32 } value ({ let __cq_0_1: i32 = 5; (__cq_0_1,) });
+    r2 = rename R { a -> x, b -> __cq_0_1 };
+    r3 = natural_join r1 with r2;
+    r4 = project r3 keep { x };
+    output r4 as answer(x);
+}
 ```
 
-`iter1` denotes a lazy Rust-compatible stream. The input pattern and binding
-record describe the iterator item passed across one physical operator boundary.
-Using separate names prevents `r2` from being mistaken for an allocated
-intermediate relation or `iter1` from being confused with set semantics.
+Physical reuses the `rN` names but adds a mode to each definition:
 
-## Sequence 6: parse and quote values, not strings
+```text
+r2 = pipe probe[b] r0, r1;
+```
 
-`syn` gives the compiler typed Rust-backed syntax values. `quote!` is a typed
-construction aid, and `syn::parse2` ensures the constructed tokens belong to
-the target language:
+A `pipe` result is a lazy stream read exactly once; a `let` result is retained
+so it can be keyed or read repeatedly; an `alias` is a host read in place. The
+mode, not the name, says whether a result is a cursor or storage.
+
+## Sequence 6: construct typed values, not strings
+
+`syn` gives the compiler typed Rust-backed syntax values. A pass may build
+its target struct directly, as `cq_index_policy::compile` builds each
+`ix::IndexDefinition`, or use `quote!` with `syn::parse2` where tokens are the
+natural form, particularly for Rust expressions:
 
 ```rust
 fn make_identifier(number: usize) -> syn::Ident {
-    quote::format_ident!("rel{number}")
+    quote::format_ident!("r{number}")
 }
 
 fn make_expression(left: &syn::Ident, right: &syn::Ident) -> syn::Expr {
@@ -261,19 +250,9 @@ fn make_expression(left: &syn::Ident, right: &syn::Ident) -> syn::Expr {
 Do not build a formatted string and parse it. Strings lose spans, make
 identifier hygiene obscure, and create a second untyped surface grammar.
 
-The student pass follows the same pattern at a larger scale:
-
-```rust
-fn preserve_expression(source: &syn::Expr) -> syn::Expr {
-    syn::parse2(quote::quote!(#source))
-        .expect("an existing expression is still valid Rust")
-}
-```
-
-In the real pass, the target is a nominal MiniLinq IR or complete `syn::File`,
-not merely an expression. The important principle is unchanged: borrow the
-input syntax value, construct the complete next value, then parse into the
-declared target type.
+Every pass borrows its source program and returns its complete target
+program; realization returns a `syn::Expr`. Tests may wrap that expression in a
+Rust file, but the pass itself produces only the expression.
 
 ## Sequence 7: why proc macros take TokenStream
 
@@ -290,49 +269,65 @@ pub fn example(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 ```
 
-This does not imply that the query compiler itself should accept a token
-stream. Token transport belongs at the Rust language boundary. MiniLinq's
-direct entries parse exactly one source type, call one typed compiler function,
-and route or emit the returned type:
+This does not imply that the query compiler should accept a token stream.
+Token transport belongs at the Rust language boundary. Each facade entry
+parses one source program, calls typed functions, and forwards the result to
+the next macro through a path the caller resolves (usually by aliasing a local
+module as `mini_linq`):
 
 ```text
-mini_linq(TokenStream)
-  -> parse cq::Program
-  -> compile_cq(&cq::Program)
-  -> quote choose_index_policy! { target }
+mini_linq! { CQ }                     cq_lang_cq::contract::check, then emit
+  -> mini_linq::cq_to_ra! { CQ }      caller picks cq_to_ra / cq_to_ra_generic /
+                                      cq_to_ra_hypergraph: normalize, order,
+                                      [reduce], elaborate
+  -> mini_linq::choose_index_policy! { RA }
+                                      caller binds to index_demands!
+  -> mini_linq::physical_policy! { IX }
+                                      caller macro appends `policy { … }` and
+                                      invokes lower_physical!
+  -> mini_linq::select_structures! { Physical policy { … } }
+  -> mini_linq::structures_to_rust! { Structures policy { … } }
+                                      prints through mini_linq::distinct_state!
+  -> one Rust block expression
 ```
 
-The same pattern repeats for RelationalPlan, IndexRequirements,
-Physical, and the `structures` payload carrying the bindings Γ. There is no extra public `expand_*`
-wrapper because the proc-macro entry already owns the only token-level work.
+There is no extra public `expand_*` wrapper because each proc-macro entry
+already owns the only token-level work.
 
-## Sequence 8: local contracts and edge contracts
+## Sequence 8: local contracts and correspondence checks
 
 A parser answers whether tokens match a grammar. A local contract answers
-whether an object is meaningful inside a language. The contract and correspondence APIs make those obligations explicit:
+whether a program is meaningful inside its language. A correspondence check
+answers whether a target program implements its source:
 
 ```text
-contract::check(&program)             -> syn::Result<Analysis>
-pass::check(&source, &target, options) -> syn::Result<()>
+contract::check(&program)                -> syn::Result<Analysis>
+pass::compile(&source[, options])        -> syn::Result<Target>
+pass::check(&source, &target[, options]) -> syn::Result<()>
 ```
 
-The public typed pass calls its source's `contract::check` before lowering and
-returns a span-aware `syn::Error` for invalid input in both debug and release
-builds. The proc-macro entry forwards that error as `compile_error!` without
-repeating the semantic check. Debug postconditions separately check the
-specified source-to-target relation; disabling them does not disable source
-validation. Tests and tools can also call the diagnostic form directly.
+`compile` checks its source contract (CQ's `Analysis` is `()`), constructs
+the target, and ends by checking the target contract. Errors are span-aware
+`syn::Error`s in debug and release builds; the proc-macro entry emits them as
+`compile_error!`. `compile` does not call `check`: tests and tools invoke
+`pass::check` explicitly, and it derives its verdict independently rather
+than re-running the compiler.
 
-An edge contract is stronger than target well-formedness. For example, any
-locally valid compiler-produced RelationalPlan is not enough: Basic HW1 must
-produce one complete Rename per source occurrence, source-order left-deep
-NaturalJoins, the final Project, output metadata, and `rN` numbering for its
-source CQ. Basic HW2 must preserve that exact plan while adding exactly the
-canonical keys inferred from heading intersections and Rename inversion.
+Keep a compiler's output conventions separate from what its checker accepts.
+`cq_elaborate::compile` emits renames at first mention and numbers results
+`r0, r1, …`; the pass tests pin that exact output against the scenario `.ra`
+file. `cq_elaborate::check` accepts any RA program with the VO program's
+declarations and head whose erased kernel equals that CQ's kernel.
+`cq_index_policy::check` is exact: the RA must be preserved unchanged, and the
+demands must be the first-use descriptors `@rN[ordinals]` named `i0, i1, …`,
+where the ordinals index the right operand's sorted heading. A join sharing no
+attribute records an empty key, as in
+[`cartesian.ix`](../test-support/relational/scenarios/cartesian.ix).
 
-The physical target is a complete Rust AST, so tests inspect its individual
-Rust items, storage builders, local macro, and runtime behavior. Re-parsing the
-whole `syn::File` into a second shadow plan would duplicate the compiler.
+Realization has no `check`. Its evidence is oracle tests over executed output,
+the `cq_storage::require` trait guards rustc checks, and the expansion
+fixtures; re-parsing the printed block into a shadow plan would duplicate the
+printer.
 
 ## Sequence 9: ordinary iterators express pull
 
@@ -341,207 +336,186 @@ Introduce the physical operations through values students already know:
 ```rust
 fn joined<'a>(
     left: &'a [(City,)],
-    right: &'a std::collections::HashMap<(City,), Vec<(City,)>>,
-) -> impl Iterator<Item = (City, City,)> + 'a {
+    right: &'a std::collections::HashMap<(&'a City,), Vec<(&'a City,)>>,
+) -> impl Iterator<Item = (&'a City, &'a City)> + 'a {
     left.iter().flat_map(move |(x,)| {
         right
-            .get(&(std::clone::Clone::clone(x),))
+            .get(&(x,))
             .into_iter()
             .flatten()
-            .map(move |(y,)| {
-                (
-                    std::clone::Clone::clone(x),
-                    std::clone::Clone::clone(y),
-                )
-            })
+            .map(move |&(y,)| (x, y))
     })
 }
 ```
 
-The `flat_map` closure retains the left value while the inner cursor produces
-rows. It is the Rust-native bind-shaped operation for a parameterized nested
-loop. `std::iter::once` plays the pure/return-shaped role when a standalone
-empty binding is needed. Rust's standard library does not define a general
-higher-kinded `Monad` or monad-transformer trait, and this compiler does not
-need one.
+The `flat_map` closure retains the left binding while the inner cursor
+produces rows. It is the Rust-native bind-shaped operation for a parameterized
+nested loop. Rust's standard library does not define a general `Monad` trait,
+and this compiler does not need one.
 
-The explicit Physical module appears before these concrete combinators:
+The Triangle Physical program states the operator and dataflow structure
+before any Rust spelling:
 
 ```text
 physical {
-    r0 = alias rename;
-    r1 = let rename;
-    r2 = pipe probe[y] r0, r1;
-    r3 = pipe select r2;
-    r4 = pipe canon project r3;
-    return r4;
+    relation R(first: i32, second: i32);
+    relation S(first: i32, second: i32);
+    relation T(first: i32, second: i32);
+    r0 = alias rename R { first -> a, second -> b };
+    r1 = let rename S { first -> b, second -> c };
+    r2 = pipe probe[b] r0, r1;
+    r3 = let rename T { first -> c, second -> a };
+    r4 = pipe probe[a, c] r2, r3;
+    r5 = pipe canon project r4 keep { a, b, c };
+    return r5 as answer(a, b, c);
 }
 ```
 
-That module states the physical operator and dataflow structure, but not the
-host-language spelling. The bindings Γ in the Structures program then name
-the value answering each keyed read, and `cq_physical_realization::compile`
-is the printer that maps them to `map`, `flat_map`, and `filter`. This keeps the final emitter
-honest: it does not invent a join or intermediate result while printing.
+Structures appends the bindings Γ naming the value that answers each keyed
+read (Sequence 2), and `cq_physical_realization::compile` prints them as
+`map`, `flat_map`, and `filter` over `cq_storage` traits. The printer invents
+no join or intermediate result.
 
-## Sequence 10: root laziness and distinct state
+## Sequence 10: laziness and distinct state
 
-If the source expression itself can perform work, merely creating adapters
-outside a closure may evaluate it too early. `once_with` defers a source:
+A program over hosts alone evaluates to the lazy iterator itself. A program
+that binds any built structure collects its answers inside the block and
+evaluates to `Vec::into_iter`, because the structures live only for the
+block. Triangle under its policy is the second kind; the composition example
+is the first.
 
-```rust
-fn deferred() -> impl Iterator<Item = i32> {
-    Iterator::flatten(std::iter::once_with(move || {
-        let iter0 = std::iter::once(1);
-        let iter1 = Iterator::map(iter0, |value| value + 1);
-        iter1
-    }))
-}
-```
-
-The closure is invoked only when the outer iterator is first advanced. The
-printed program over hosts alone evaluates to a lazy iterator of the same
-kind; a program that builds structures collects its answers inside the
-block, since the structures live only for the block.
-
-Building the outer iterator still constructs closure and adapter state.
-Advancement by `next()` or `any()` performs query work without collecting any
-result collection. `collect()` both consumes the cursor and stores its outputs;
-it is one possible consumer, not the trigger required for all iterator execution.
-The nested adapter types persist even when each construction has a `let` name.
+Building the outer iterator constructs closure and adapter state. Advancing
+it with `next()` or `any()` performs query work without collecting a result;
+`collect()` is one possible consumer, not the trigger for execution.
 
 CQ projection has set semantics, while a join cursor may enumerate several
-witnesses for the same result. Physical therefore flags the returned result
-`canon` when uniqueness is not inferred. Its Rust implementation owns state:
+witnesses for the same answer. Physical therefore flags a returned result
+`canon` unless uniqueness is inferred. The printer deduplicates it through
+the caller's provider, requesting `mini_linq::distinct_state! { operator r5;
+new }` once and `insert(__cq_seen, __cq_row)` per row. With
+`cq_state_providers::hash_distinct` this is equivalent to:
 
 ```rust
-fn distinct_rows(
-    rows: impl Iterator<Item = (City, City,)>,
-) -> impl Iterator<Item = (City, City,)> {
+fn distinct_rows<'a>(
+    rows: impl Iterator<Item = (&'a City, &'a City)>,
+) -> impl Iterator<Item = (&'a City, &'a City)> {
     let mut seen = std::collections::HashSet::new();
     rows.filter(move |row| seen.insert(std::clone::Clone::clone(row)))
 }
 ```
 
-The filter is still lazy, but memory grows with first-seen results. It clones
-the owned result tuple into `seen`; this is not a clone of an input row or an
-index payload. Collecting only stores this already
-distinct result cursor.
+The filter is still lazy, but memory grows with first-seen answers. The clone
+copies a tuple of references, not host data.
 
 ## Mapping Rust topics to homework passes
 
 | Rust idea | Compiler use |
 |---|---|
-| borrowed typed syntax | every `compile_*(&Source)` input |
-| `Vec`, `BTreeSet`, and maps as compiler state | left-to-right relation binding, stable requirement union, name lookup |
-| `quote!` interpolation | complete target construction |
-| `syn::parse2` | target grammar check and typed return value |
-| moves | final ownership-taking storage consumer |
-| borrows | earlier builders and all query traversal |
-| `impl Iterator + '_` | cursor borrowing generated storage |
-| `flat_map` | binary parameterized nested-loop join |
+| borrowed typed syntax | every `compile(&Source, …)` input |
+| `Vec`, `BTreeSet`, and maps as compiler state | clause binding, first-use demand order, name lookup |
+| typed struct construction | target programs such as `ix::Program` |
+| `quote!` and `syn::parse2` | Rust expressions and the printed block |
+| borrows | host reads, structure builds, and all query traversal |
+| `impl Iterator + '_` | cursor borrowing caller hosts |
+| `flat_map` | `probe`: parameterized nested-loop join |
 | closure capture | saved left bindings and distinct state |
-| `syn::File` and `syn::Expr` | concrete Rust target IRs |
+| `syn::Expr` | realization's concrete Rust target |
 | proc-macro `TokenStream` | language boundary only |
 
 ## Suggested guided labs
 
 ### Lab A: ownership trace
 
-Give students the Triangle `build` method and ask them to mark:
+Give students Triangle's Physical, policy, and Structures programs and ask
+them to predict the printed block, marking:
 
-- where each public input is consumed;
-- which normalized relation each builder borrows or moves;
-- why the full-key index is a direct move; and
-- why query-time `.cloned()` would be unnecessary.
+- which host each read borrows, and why no host is consumed;
+- which reads need a built structure, and over which borrowed rows;
+- why `r3` is keyed on both of `T`'s columns; and
+- why no `Clone` appears, and which policy change would introduce one.
 
 ### Lab B: logical exhaustiveness
 
-In the complete RelationalPlan, ask why fully bound `T(z, x)` remains a
-NaturalJoin while its physical access becomes membership, and have students
-calculate every inferred attribute-set heading by hand.
+In the Triangle RA program, ask why fully bound `T(c, a)` remains a
+`natural_join` while its Physical read becomes `probe[a, c]` with an empty
+payload, and have students calculate every inferred heading by hand.
 
 ### Lab C: two namespaces
 
-Place the Triangle RelationalPlan and Physical module side by side. Ask which
-names denote sets, which are `pipe` cursors, where duplicate derivations can arise,
-and why only the returned result needs `canon`.
+Place the Triangle RA and Physical programs side by side. Ask which names
+denote sets, which are `pipe` cursors or `let` storage, where duplicate
+derivations can arise, and why only the returned result needs `canon`.
 
 ### Lab D: inspect one compiler layer at a time
 
 Run `cargo xtask explain triangle`, then open the generated `.tokens` files
-under `target/mini-linq-explain/triangle/`. Use the editor's compare command on
-adjacent files to inspect them. They are syntax/diff snapshots outside Cargo's
-crate graph, not Rust Analyzer type-checked modules. Compare:
+under `target/mini-linq-explain/triangle/`. Use the editor's compare command
+on adjacent files. They are syntax/diff snapshots outside Cargo's crate graph,
+not type-checked modules. Compare:
 
-1. `mini_linq!` to RelationalPlan; and
-2. RelationalPlan to the demand overlay.
+1. `01-cq.tokens` with `02-relational-plan.tokens` (RA); and
+2. `02-relational-plan.tokens` with `03-index-requirements.tokens` (IX).
 
-The stepper stops at IX; read the Physical, Γ and printed Rust
-stages from the [full-chain test](../facade/mini-linq/tests/physical_query.rs).
-
-Students should compare each result with the authoritative DSL artifacts,
-not inspect only the final expansion. They can stop early with, for example,
-`cargo xtask explain triangle --through relational-plan`; a later failure
-leaves the successful earlier artifacts and an `ERROR.md` diagnostic.
+The stepper stops at IX; read the Physical and Structures stages from the
+scenario files and the printed Rust from the
+[full-chain test](../facade/mini-linq/tests/physical_query.rs). Students can
+stop early with `cargo xtask explain triangle --through relational-plan`; a
+later failure leaves the earlier artifacts and an `ERROR.md` diagnostic.
 
 Rust Analyzer's **Expand macro recursively at caret** is only a final-code
-view. It cannot pause after an individual pass, and `workload_query!` directly
-calls the first three typed functions rather than exposing their results as
-nested macros. Do not re-expand its virtual `[EXPANSION].rs` buffer. For an
-optional implementation-level debugging exercise, set a breakpoint in the
-relevant pass and use Rust Analyzer's test CodeLens with CodeLLDB; the course
-does not require that debugger.
+view. It cannot pause after an individual pass, and `workload_query!` only
+captures the CQ source and a `module()` factory; `xtask` invokes the typed
+planning passes. For optional implementation-level debugging, set a
+breakpoint in the relevant pass and use Rust Analyzer's test CodeLens with
+CodeLLDB; the course does not require that debugger.
 
 ### Lab E: partial cursor consumption
 
-Evaluate the printed Triangle block over host maps, request one row, pause,
-request a second row, and then drop the cursor. Instrument a source
-expression to verify that constructing the cursor performs zero source work
-and that dropping it does not scan remaining rows.
+Change the composition example to return its lazy iterator, request one row,
+pause, request a second, and drop the cursor. Wrap `L` in a host type whose
+`iter()` counts advanced rows to show that constructing the cursor scans
+nothing and dropping it scans no further. Repeat with Triangle's policy and
+observe that collection inside the block removes this effect.
 
 ## Common misconceptions to surface
 
 - **“A proc macro takes tokens, so the compiler pass should too.”** Rust fixes
-  the outer ABI; the internal compiler should use typed values.
-- **“IndexRequirements can replace the logical plan.”** The overlay must carry
-  the complete logical dataflow because later physical lowering now consumes
-  that plan.
-- **“`r2` is an intermediate table.”** It is a set-valued mapping in logical
-  algebra. No materialization decision exists at that layer.
-- **“`iter2` is a `for` loop.”** It is a lazy cursor value with resumable state.
-- **“An iterator runs only when materialized.”** `next()` and short-circuit
-  consumers also execute it; collecting outputs is optional.
-- **“A Physical `probe` already means `flat_map`.”** It names the operator edge;
-  the printer chooses the exact Rust combinator.
-- **“Quoting is code generation.”** Once the final target is `syn::Expr`, the
-  quoting step is pure token emission. Semantic work must already be done.
-- **“Laziness means indexes are built on first `next()`.”** In this teaching
-  composition, the printed block builds its structures at the top; query
-  traversal follows. Resource construction timing belongs to the selected realization.
-- **“Materialization provides set semantics.”** The explicit `canon` flag and
-  the caller's distinct-state provider do; materialization only collects.
+  the outer ABI; the internal compiler uses typed programs.
+- **“IX can replace RA.”** An `ix::Program` is the complete RA program plus
+  its `indexes { … }` block, because physical lowering consumes both.
+- **“`r2` is an intermediate table.”** In RA it is a set-valued result; no
+  materialization decision exists at that layer.
+- **“A `pipe` is a `for` loop.”** It is a lazy cursor value with resumable
+  state.
+- **“An iterator runs only when collected.”** `next()` and short-circuit
+  consumers also execute it.
+- **“A Physical `probe` already means `flat_map`.”** It names the operator;
+  the printer chooses the exact Rust combinators.
+- **“Quoting is code generation.”** Semantic decisions are already fixed in
+  Structures; printing only chooses Rust spelling.
+- **“The compiler owns the input.”** The caller owns every host; the printed
+  block only borrows.
+- **“Materialization provides set semantics.”** The `canon` flag and the
+  caller's distinct-state provider do; collection only stores.
 - **“Async makes pull more lazy.”** Async adds suspension for waiting, not the
   demand-driven iterator semantics used by finite in-memory execution.
 
 ## Optional Homework 4 transition
 
-After the basic tutorial, Optional HW4 asks students to change semantic IR
-design rather than only generated Rust. They extend the CQ body, then add
-logical `AntiSemijoin` and `AggregateApply` operators before deciding indexes
-and concrete accesses. Numbered comments point to each required syntax,
-contract, pass, and test region.
+After the basic tutorial, [Optional HW4](HW4-OPTIONAL.md) asks students to
+change semantic IR design rather than only generated Rust. The CQ parser
+already accepts negation and aggregation body items, but the baseline CQ
+contract rejects them. Students make them valid, then add logical
+`AntiSemijoin` and `AggregateApply` operators before deciding indexes and
+physical reads.
 
-Staff already supplies logical `Unit`. When a global extended clause appears
-before a positive atom, students use that empty-heading singleton as the left
-input. Correlation is inferred from heading intersection, so a global clause
-has an empty intersection rather than a serialized `()` key. AntiSemijoin may
-preserve that empty heading; the following global aggregate appends its owned
-output. The empty intersection creates no demand entry.
+When a global extended clause appears before a positive atom, students use
+the supplied `unit` as the left input. Correlation is inferred from heading
+intersection, so a global clause has an empty intersection. Where the
+extension derives a demand for it, the IX rule records the empty key `[]`,
+exactly as the baseline already does for a cartesian join.
 
-Students cumulatively edit the production grammar and passes on that
-checkpoint. The `hw4` feature gates only the optional test targets; it does
-not change the meaning of `mini_linq!` or select an execution backend. This
-reinforces the same lesson as the baseline: new semantics belong in an
-explicit typed language and pass, not in a hidden configuration-dependent
+The `hw4` feature gates only the optional test targets; it does not change the
+meaning of `mini_linq!` or select an execution backend. New semantics belong
+in an explicit typed language and pass, not in a configuration-dependent
 printer.

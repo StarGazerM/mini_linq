@@ -4,10 +4,12 @@
 //! SemanticAgreement against oracle answers and rustc's generated trait
 //! guards; authored expansion fixtures separately pin the emitted syntax.
 //!
-//! Nothing about the query is decided here: every physical operator, mode,
-//! host fact and built type is fixed by Structures. This pass decides only
-//! the Rust shape of each read and the layout of the values flowing between
-//! operators:
+//! The printer preserves the physical operator graph and storage choices. It
+//! chooses Rust control flow and layout. When `Endpoints.intersect` is enabled,
+//! supported adjacent probe/check pairs enumerate the smaller runtime candidate
+//! set without changing RA/VO order.
+//!
+//! Representation and execution:
 //!
 //! - Rows flow as tuples in sorted-heading order, each column bound to the
 //!   RA heading's own identifier so user Rust inside nested macros resolves.
@@ -25,9 +27,9 @@
 //!   it read that set.
 //! - A host keyed `[k…]` is `Map<(k…,), Coll<(rest…,)>>` with tuples in the
 //!   host's declared column order; an unkeyed host iterates full rows. Its
-//!   key is constructed from the bound columns by `Clone::clone`, the one
-//!   copy the type imposes; built structures are keyed by `(&T, …)` and
-//!   nothing else is ever cloned.
+//!   owned key is constructed from the bound columns by `Clone::clone`;
+//!   built structures are keyed by `(&T, …)`. Distinct-state providers
+//!   separately own retained copies and may clone rows.
 //! - `merge` co-iterates native cursors when both sides are hosts or both
 //!   are built structures; otherwise (a sorted pipe, or a mixed pair) each
 //!   side is presented through `cq_storage::sorted_by` with its key
@@ -65,7 +67,7 @@ pub struct Endpoints {
     pub intersect: bool,
 }
 
-/// The pull program of a Structures module.
+/// Print a complete Structures program as a Rust pull expression.
 pub fn compile(module: &structures::Program, endpoints: &Endpoints) -> syn::Result<Expr> {
     let analysis = structures::contract::check(module)?;
     let mut printer = Printer {

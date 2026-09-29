@@ -241,6 +241,10 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
     ))
 }
 
+/// Formal rule WF-Structures: Check entries, read coverage and inferred canonical return.
+/// Formal rule STR-Key: Answer probe and semi reads by an exact host key or built level prefix.
+/// Formal rule STR-Range: Answer a range by an ordered host key or a built entry on its column.
+/// Formal rule STR-Merge: Answer each merge side by ordered storage or a same-key merge pipe.
 fn analyze(program: &Program) -> syn::Result<Analysis> {
     let module = &program.structures;
     let mut analysis = Analysis {

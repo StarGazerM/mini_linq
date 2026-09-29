@@ -7,9 +7,9 @@ small current task without losing a stable starting point.
 
 | Branch | Starting state | Student-owned work |
 |---|---|---|
-| `hw1` | All three common pass bodies unfinished | `CQ -> RelationalPlan` only |
-| `hw2` | HW1 reference complete | `RelationalPlan -> IndexRequirements` only |
-| `hw3` | HW1 and HW2 references complete | `IndexRequirements -> staged Rust` only |
+| `hw1` | All three common pass bodies unfinished | CQ → RA (`cq-elaborate`) only |
+| `hw2` | HW1 reference complete | RA → IX (`cq-index-policy`) only |
+| `hw3` | HW1 and HW2 references complete | IX + policy → Physical (`cq-physical-lowering`) only; supplied structure selection and realization continue to Rust |
 
 The `main` branch advances to the latest announced common starter. Numbered
 branches do not move after release. Students create their own submission branch

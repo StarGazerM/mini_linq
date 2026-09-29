@@ -1,13 +1,14 @@
 # Documentation map
 
-The current compiler architecture is `CQ → NF → VO → RA → IX → Physical → Γ → Rust`.
-IX records demands; the Structures program records the bindings Γ answering
-each keyed read.
+The current compiler architecture is `CQ → NF → VO → RA → IX → Physical → Structures → Rust`.
+IX records demands; the Structures program extends Physical with the bindings
+Γ answering each keyed read.
 Start with the [crate and module ownership](COMPILER-STRUCTURE.md), then the
 [language syntax and contracts](DSL.md).
 
 - [Language syntax and contracts](DSL.md)
 - [Semantics of the chain](SEMANTICS.md)
+- [What is established](ESTABLISHED.md): the design decisions the code enforces, with evidence, and what is open
 - [Crate and module ownership](COMPILER-STRUCTURE.md)
 - [Logical planning](PLANNING.md) and [verification](PLANNING-VERIFICATION.md)
 - [Rust expression semantics](RUST-EXPRESSIONS.md)

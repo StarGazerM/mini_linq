@@ -1,19 +1,18 @@
-//! CQ-NF: the kernel form every plan erases to.
+//! CQ-NF: normalized CQ used by valuation planning.
 //!
-//! A normal query has one variable per atom argument, distinct within the
-//! atom; constants, repeated variables, wildcards and expression arguments
-//! have been moved out of atoms into `let` bindings and `if` guards. That
-//! makes every atom a relation applied to a tuple of distinct variables, so
-//! each later language can be checked against this one by *erasure*: the
-//! [`Kernel`] of a plan is its atoms, guards, bindings and head, and two
-//! programs agree iff their kernels agree up to renaming of variables.
+//! Atom arguments become distinct variables: literals and suitable expressions
+//! introduce bindings, repeated variables and dependent expressions introduce
+//! guards, and wildcards become fresh unconstrained witness variables.
 //!
-//! [`normalize`] is the canonicalization: it records no decision. Where a
-//! moved constraint is placed follows the source clause it came from — a
-//! constant's binding goes before every atom (it is a join key), an
-//! equality or expression guard right after its atom — and the order pass
-//! may still move guards and bindings earlier, never later than their
-//! variables.
+//! [`Kernel`] equality is elaboration's structural correspondence criterion,
+//! modulo its variable renaming. It is not a complete semantic-equivalence
+//! test for arbitrary programs, nor a local contract shared by all later IRs.
+//!
+//! [`normalize`] preserves declarations and head and rewrites a cloned body.
+//! Literal bindings precede the body; expression bindings independent of names
+//! newly supplied by their atom precede that atom; repeated-variable equalities
+//! and dependent-expression guards follow it. Ordering subsequently schedules
+//! bindings and guards subject to inputs and same-kind source order.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +23,8 @@ use syn::Ident;
 use super::{Atom, BodyItem, Filter, Let, Program, Query, rust};
 use crate::symbol_name;
 
-/// Whether a module is in normal form.
+/// Whether a complete CQ program is in normal form.
+/// Formal rule WF-NF: Check CQ plus distinct bare atom arguments and distinct all-bare head names.
 pub fn check(module: &Program) -> syn::Result<()> {
     super::contract::check(module)?;
     let query = &module.query;
@@ -59,6 +59,12 @@ pub fn check(module: &Program) -> syn::Result<()> {
 }
 
 /// Canonicalize a positive query into normal form.
+/// Formal rule A-Variable: Keep a first bare argument and record its name.
+/// Formal rule A-Repeat: Replace a repeated bare argument and append its equality guard.
+/// Formal rule A-Wildcard: Replace a wildcard by a fresh unconstrained atom variable.
+/// Formal rule A-Constant: Replace a literal and prepend its typed CQ binding.
+/// Formal rule A-Prefix: Emit a CQ binding before the atom when no new atom variable is needed.
+/// Formal rule A-Local: Emit a CQ equality guard after the atom for dependent expressions.
 pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
     let program = &module;
@@ -194,7 +200,7 @@ fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident 
     format_ident!("{name}", span = Span::call_site())
 }
 
-/// The erasure of a plan: what it computes, independent of how.
+/// Structural query content compared by elaboration after RA erasure.
 ///
 /// Variables are renamed by first occurrence (`v0`, `v1`, …) so kernels
 /// compare up to α-equivalence; embedded expressions are compared as token

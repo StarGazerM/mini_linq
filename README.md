@@ -3,14 +3,15 @@
 MiniLinq is a Rust query compiler with replaceable macro boundaries:
 
 ```text
-CQ → NF → VO → RA → IX → Physical → Γ → Rust
+CQ → NF → VO → RA → IX → Physical → Structures → Rust
 ```
 
 An IX entry is a demand: the key set a plan applies a result at.
 IX records these demands for the fixed RA plan. Physical derives their uses
-from its operands and checks that each probe/semi has a matching demand.
+from its operands; the lowering check requires each probe/semi to have a
+matching demand.
 Physical restates every result with one physical operator and the mode its
-reads allow. The `structures` section records the bindings Γ: the value
+reads allow. Structures extends Physical with the bindings Γ: the value
 answering each keyed read, supplied by a host or built over the result.
 A printer emits one pull program over the `cq-storage` operation traits.
 The policy that fixes those choices is the
@@ -19,7 +20,7 @@ caller's and query-independent: host facts, a join strategy, and
 dispatch or fallback backend.
 
 Read the [compiler structure](doc/COMPILER-STRUCTURE.md), the
-[language grammars](doc/DSL.md), the [semantics of the chain](doc/SEMANTICS.md),
+[language grammars](doc/DSL.md), the [semantics of the chain](doc/SEMANTICS.md), [what is established](doc/ESTABLISHED.md),
 the [formal specification](doc/formal/README.md), or the
 [executable composition](examples/composition/README.md).
 
@@ -31,10 +32,11 @@ computed head column, each against an independent oracle. The printed program
 copies no binding: hosts and built structures yield references, and the head
 expression alone decides what the result owns. The logical prefix normalizes
 CQ to NF, orders valuations in VO, optionally adds guard and semijoin
-reductions, and elaborates VO to RA. Normal form has a contract check; order,
-reduction, and elaboration have correspondence checks. Reductions erase to
-the input VO plan, and VO and RA plans erase to the CQ-NF kernel up to variable
-renaming.
+reductions, and elaborates VO to RA. Every language checks its own complete
+program; every pass except the printer has an independent correspondence
+check between its source and target programs; the printer is held to oracle
+answers and rustc's trait guards. See
+[contracts and evidence](doc/COMPILER-STRUCTURE.md#contracts-and-evidence).
 
 ```sh
 cargo run --manifest-path examples/composition/Cargo.toml --offline
@@ -48,7 +50,7 @@ make -C doc/formal pdf
 The [workload catalog](workloads/README.md) keeps authored queries, deterministic
 datasets, and SQL oracles independently of executable composition.
 `cargo xtask explain` inspects the logical/IX prefix; it does not supply a
-policy for the Physical and Γ stages. Ordinary workspace checks do not build DuckDB.
+policy for the Physical and Structures stages. Ordinary workspace checks do not build DuckDB.
 
 The [documentation map](doc/README.md) separates the current compiler design
 from teaching tasks and research proposals.

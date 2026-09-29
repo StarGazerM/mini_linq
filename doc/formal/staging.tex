@@ -1,43 +1,71 @@
 \section{Quotation and composition obligations}
 \label{sec:staging}
-Let $C[\square^L_\Gamma]$ be a Rust context containing a quotation in language
-$L$, with the runtime bindings supplied by $\Gamma$. A typed pass $f:L\to M$
-has the local expansion rule
+Immediate macro expansions distinguish dispatch, intermediate continuation and
+terminal realization. Let $T$ be tokens, $s,t$ complete typed payloads, and
+$\mathsf{quote}$ their token serialization.
 \begin{mathpar}
-\Rule{ST-Entry}{\operatorname{parse}_L(T)=s\quad f(s)=t}
- {\mathsf{entry}_f\{T\}\longrightarrow\operatorname{quote}_M(t)}
 
-\Rule{ST-Hole}{\Gamma\vdash s:L\quad f(s)=t\quad\Gamma\vdash t:M}
- {C[\square^L_\Gamma(s)]\longrightarrow C[\square^M_\Gamma(t)]}
+\Rule{ST-Entry}{\operatorname{parse}_{CQ}(T)=s\quad\mathsf{WF}_{CQ}(s)}
+ {\code{mini_linq!}\{T\}\longrightarrow\code{mini_linq::cq_to_ra!}\{\mathsf{quote}(s)\}}
+
+\Rule{ST-Next}{\operatorname{parse}_L(T)=s\quad f(s)=t\quad next=\mathsf{Some}(k)}
+ {\mathsf{stage}(T,next,f)\longrightarrow k!\{\mathsf{quote}(t)\}}
+
+\Rule{ST-Terminal}{\operatorname{parse}_{Structures+Policy}(T)=(s,\chi)\\
+ e=\mathsf{realize}(s,\mathsf{Endpoints}(\code{mini_linq::distinct_state},\chi.intersect))}
+ {\code{structures_to_rust!}\{T\}\longrightarrow\mathsf{quote}_{Rust}(e)}
 \end{mathpar}
-These rules describe composition, not permission to insert a redundant language.
-The post-IX boundary has two policy steps and one printer. \code{lower_physical!}
-consumes IX and the caller's query-independent policy and produces Physical;
-\code{select_structures!} consumes Physical and the same policy and produces
-Structures; \code{structures_to_rust!} prints one pull program and rejects
-unmet premises. No pass repairs an invalid choice by selecting another one.
+ST-Entry validates CQ and dispatches it unchanged. ST-Next is the shared
+\code{cq-stage} continuation path; parse or transform failures become
+\code{compile_error!}. ST-Terminal uses \code{next=None} and emits a Rust
+expression. Its intersect flag is true precisely for \code{intersect=smallest}.
 
-\paragraph{Wire slots and immediate expansions.}
-The caller-resolved slots are \code{choose_index_policy!} (RA $\to$ IX),
-\code{physical_policy!} (IX $\to$ Physical, the caller macro appends its
-\texttt{policy \{\ldots\}} and invokes \code{lower_physical!}),
-\code{select_structures!}, \code{structures_to_rust!} and
-\code{distinct_state!} (the canonical return's distinct provider). Import
-aliases select their implementations, without adding wrapper macros; the
-composition example in \path{examples/composition/} binds every slot.
+\paragraph{Wire slots and policy transport.}
+The caller binds these slots:
+\begin{center}\small
+\begin{tabular}{ll}
+\toprule
+Slot & Input or request\\
+\midrule
+\code{cq_to_ra!} & CQ\\
+\code{choose_index_policy!} & RA\\
+\code{physical_policy!} & IX\\
+\code{select_structures!} & Physical with policy\\
+\code{structures_to_rust!} & Structures with policy\\
+\code{distinct_state!} & Runtime distinct-state request\\
+\bottomrule
+\end{tabular}
+\end{center}
+The logical planner implementations are \path{cq_to_ra},
+\path{cq_to_ra_generic} and \path{cq_to_ra_hypergraph}.
+The supplied RA-to-IX implementation is \path{index_demands}. Each logical route emits
+\path{choose_index_policy!} with standalone RA; \path{index_demands!} emits
+\path{physical_policy!} with IX.
 
-ST-Entry describes the immediate replacement produced by one entry expansion.
-Each entry emits the next slot's invocation around its complete typed payload,
-so a completed compilation takes several steps, $\longrightarrow^{*}$, and the
-compiler can stop at any boundary for inspection.
+A caller policy wrapper appends \code{policy \{...\}} to IX and invokes
+\code{lower_physical!}. The two entries forward the same policy:
+\begin{lstlisting}
+select_structures!  { Physical   policy { ... } }
+structures_to_rust! { Structures policy { ... } }
+\end{lstlisting}
+Terminal realization consumes that payload and the caller's provider
+path. Canon pipe or alias scans use the provider; canonical materialized storage
+is read directly. The composition example in \path{examples/composition/}
+starts at RA with \code{index_demands!}, defines the policy wrapper, and binds
+the post-RA slots it uses. It does not bind the logical slots.
 
-\paragraph{An edge contract.}
-Each compiler edge declares an admitted source domain, target well-formedness,
-a runtime representation relation, and an observation to preserve. A residual
-quotation additionally declares its required bindings and ownership lifetimes.
-The preceding edge must establish these requirements. The observation may be
-the completed answer set; a claim about lazy execution requires a stronger,
-explicit polling observation. No proof of one automatically proves the other.
+\paragraph{Abstract contexts and edge obligations.}
+Let $C[\square^L_\Gamma]$ be a Rust context containing a quotation in language
+$L$, with runtime bindings supplied by $\Gamma$. This is metalinguistic notation,
+not a residual-hole IR in the implementation:
+\[
+\Rule{ST-Hole}{\Gamma\vdash s:L\quad f(s)=t\quad\Gamma\vdash t:M}
+ {C[\square^L_\Gamma(s)]\longrightarrow C[\square^M_\Gamma(t)]}.
+\]
+ST-Hole is abstract. Each edge declares an admitted source domain, target
+well-formedness, a representation relation and an observation to preserve.
+Closing contexts must supply bindings and ownership lifetimes. A completed
+answer-set observation does not establish a polling or effect-trace observation.
 
 \begin{theorem}[Conditional composition]
 \label{thm:composition}
@@ -47,13 +75,10 @@ and runtime preconditions required by $g$. If both preserve a common observation
 under compatible closing contexts, then $g\circ f$ preserves that observation.
 \end{theorem}
 \begin{proof}
-The first pass establishes the intermediate representation relation; the second
-uses it to establish the final relation. Compose these relations and their
-observation equalities. Domain inclusion establishes that the second pass is
-defined. Closing-context adequacy permits the same argument for quotations.
+Compose the intermediate and final representation relations and their
+observation equalities. Domain inclusion establishes that $g$ is defined.
+Closing-context adequacy permits the same argument for quotations.
 \end{proof}
-
-Semantic preservation and expansion conformance are independent obligations.
-A generated program that returns the expected answer still fails the present
-design if its macro boundaries, index demands, operand uses, or selected
-physical operators and structures differ from the authored expansion contract.
+Semantic preservation and authored expansion agreement remain independent
+obligations. The structural checks in Section~\ref{sec:pass-contracts} do not
+prove host adequacy or reproduce every construction choice.

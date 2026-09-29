@@ -14,8 +14,9 @@ erases to (`Kernel`, compared up to renaming of variables), VO reductions
 erase to the unreduced plan, RA erases back to the kernel
 (`cq_elaborate::kernel` with the source CQ ordering), IX drops its demands,
 Structures drops its storage declarations, and Physical lowering reads its
-operators back as RA. Each language contains its own complete program; the
-pass checks correspondence between source and target.
+operators back as RA. Each language contains its own complete program; each
+pass except the printer has a `check` of this correspondence between source
+and target. A printer's evidence is D1–D6 below, exercised against oracles.
 
 | language | presentation | decision recorded |
 |---|---|---|

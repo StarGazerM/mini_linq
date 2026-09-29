@@ -9,12 +9,11 @@
 //! Joins, semijoins, projections and `unit` say how, not what, and erase to
 //! nothing; the output head is the query head.
 //!
-//! What a plan computes does not depend on the order it visits atoms in,
-//! but a [`Kernel`] names variables by first occurrence, so the erased body
-//! lists its items in the order the plan's own program writes them and any
-//! item the program lacks after those, by first definition. Content comes
-//! only from the plan: an atom, guard or binding it misses or adds changes
-//! the kernel.
+//! Erasure reconstructs atoms, guards and bindings from RA definitions, orders
+//! matches by the separately supplied CQ program's body, and appends unmatched
+//! reconstructed items in definition order. [`Kernel`] then compares that
+//! structural content with variable renaming; this is not a general semantic
+//! equivalence checker.
 
 use std::collections::BTreeSet;
 
@@ -32,7 +31,8 @@ pub fn kernel(module: &Program, source: &cq::Program) -> Kernel {
     Kernel::of(&erase(module, source))
 }
 
-/// Erase the plan: its program with the query the definitions compute.
+/// Reconstruct a CQ body and head from RA definitions within a clone of the
+/// separately supplied source CQ program.
 pub fn erase(module: &Program, source: &cq::Program) -> cq::Program {
     let program = source;
     let mut items: Vec<(String, cq::BodyItem)> = Vec::new();

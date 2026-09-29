@@ -1,8 +1,10 @@
 \section{Conformance and validation}
 \label{sec:evaluation}
 The implemented chain is \code{CQ -> RA -> IX -> Physical -> Structures -> Rust}.
-Each pass has a \code{check} over its source and target, and the languages have
-parser round-trip and contract tests in \code{cq-lang-*}. The evidence below is
+Its CQ-to-RA arrow contains CQ-NF and VO nanopasses. The structural passes have
+separate correspondence checks described in Section~\ref{sec:pass-contracts};
+realization has no \code{check}. The languages have parser round-trip and
+contract tests in \code{cq-lang-*}. The evidence below is
 what the repository exercises; it is not a proof of the runtime trait laws for
 arbitrary user types.
 
@@ -20,7 +22,8 @@ modes checked by use, \code{canon} on the return when uniqueness is not inferred
 Structures & Every keyed read answered by a host key fact or a built type,
 merge sides ordered, canonical return
 (\path{passes/cq-structure-selection/tests/selection.rs}).\\
-Printed program & Structures printed in head order without binding copies
+Printed program & Borrowed host/built fields and head-order output, owned
+host-key cloning, generated trait guards and authored syntax fixtures
 (\path{passes/cq-physical-realization/tests/realization.rs}).\\
 Storage laws & Abstraction functions of \code{HashIndex}, membership and
 ordered cursors against an independent bag oracle
@@ -30,13 +33,15 @@ user-defined \texttt{\#[index(Type)]}, merge joins over built ordered maps,
 Yannakakis semijoin passes as membership tests, bounded ordered scans and a
 computed head column, each compared with an independent oracle
 (\path{facade/mini-linq/tests/physical_query.rs}); the runnable
-\path{examples/composition/} binds every macro slot.\\
+\path{examples/composition/} binds the post-RA slots it uses, with a policy wrapper.\\
 \bottomrule
 \end{tabular}
 \end{center}
 
 Logical YA reduction tests are retained in \code{cq-reduce}, the
 relational oracle and case corpus in \path{test-support/relational/}.
-Recursion, aggregation, negation, incremental
-evaluation, general physical cost search and WCOJ remain outside the language.
+Negation and aggregation syntax parse but fail the CQ contract. Recursion,
+incremental evaluation and general physical cost search are unsupported.
+Generic/Fine planning and optional binary intersections exist; no WCOJ
+complexity guarantee is established.
 No performance or asymptotic claim follows from fixture agreement.

@@ -1,7 +1,7 @@
 //! Inspect where normalization and ordering place a query's expression
-//! arguments: a closed expression before the atom, one over a bound variable
-//! after it. This is a planning check, not an observation of generated Rust
-//! execution.
+//! arguments: a closed or prefix-only expression becomes a binding before
+//! the atom; an expression using a variable first supplied by that atom becomes
+//! a guard after it. This checks planning, not generated Rust execution.
 use cq_lang_cq as cq;
 use cq_lang_ra::Operator;
 use cq_lang_vo as valuation;

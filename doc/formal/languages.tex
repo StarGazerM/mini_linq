@@ -108,17 +108,16 @@ define $\sem q_I$. This agrees with classical $q(I)$ on its domain and gives
 no effectful evaluation-order semantics.
 \subsection{Normal form and valuation plans}
 \label{sec:nf-vo}
-Two intermediate languages sit between CQ and RA; both are specified by the
-\code{cq-lang-*} module documentation (\code{cq::normal}, \code{valuation}).
-\emph{CQ-NF} is the kernel form every plan erases to: one variable per atom
-argument, distinct within the atom; constants, repeated variables, wildcards
-and expression arguments have been moved out of atoms into \code{let}
-bindings and \code{if} guards. \code{normalize} is the canonicalization and
-records no decision: a constant's binding goes before every atom, an
-equality or expression guard right after its atom. The \emph{kernel} of a
-program is its atoms, guards, bindings and head up to renaming of variables;
-two programs agree iff their kernels agree, which is how every later
-language is checked against this one by erasure.
+CQ-NF is a restriction of \code{cq::Program}; VO adds an explicit valuation
+schedule to that normalized program. In NF every atom argument is a distinct
+bare variable. Literals become global typed bindings, prefix-only expressions
+become bindings before their atom, repeated names and same-atom expressions
+become guards after it, and wildcards become unconstrained witnesses
+(Section~\ref{sec:planning}). The structural \emph{kernel} records atoms,
+guards, bindings and head with variable renaming. VO retains NF; elaboration
+compares a recovered RA kernel with it. Kernel equality is not a complete test
+of semantic equivalence. Later checks preserve their immediate source programs;
+there is no universal NF-kernel contract for every language.
 
 \emph{VO} is a valuation plan: a sequence of steps that extend a partial
 valuation. An atom step \code{R@2(a, _)} binds the variables of one
@@ -130,16 +129,18 @@ guards and bindings in query order among themselves. A \emph{reduction}
 \code{reduce R@0 with S@1(b, _)} or \code{reduce R@0 if (e)} restricts a
 clause's relation before its first subatom --- a Yannakakis semijoin over
 exactly the shared variables, or a guard pushed onto one atom --- and changes
-nothing the plan denotes, so the erasure ignores reductions. The contract
-requires every clause fully covered and every guard and binding placed; the
-plan then erases to its normal-form query, and its kernel equals the query's.
+nothing in the completed answer under the relational host assumptions.
+The local contract requires all atom variables covered and every guard and
+binding placed; reduction erasure in the pass checker preserves the remaining
+source steps. Section~\ref{sec:pass-contracts} states the exact checks.
 Order and granularity are the only choices: one full subatom per atom is
 relation-at-a-time, one new variable per subatom is generic join.
 
 \subsection{Named relational algebra}
 The complete program owns its relation declarations $\Sigma$, named SPJR
 using immutable definitions, and explicit
-Unit/Semijoin and Rust Select/Extend:
+Unit/Semijoin and Rust Select/Extend. The following is its mathematical
+operator core, not the complete token grammar:
 \[
 \begin{aligned}
 d&::=r=o;& A&::=d_1;\ldots;d_m;\mathsf{output}\ r\ \mathsf{as}\ h(\bar e),\\
@@ -199,7 +200,8 @@ separately. An empty $C$ requests the unit-valued index for a Cartesian product.
 
 Local validity checks source versions, column ranges, unique descriptors,
 and that every demand matches a join's right operand and join columns.
-The analysis correspondence requires complete demand coverage. Physical lowering
+The analysis correspondence requires complete demand coverage in first-use
+order with \code{iN} names. Physical lowering
 checks that its probe/semi operands have matching IX demands.
 An empty annotation does not authorize a repeated-scan fallback.
 The full judgment is $\mathsf{WF}_{IX}(A,D)$
@@ -211,6 +213,7 @@ of Section~\ref{sec:ix}, and
 Physical is a complete standalone program with declarations, detailed operators,
 read modes and output metadata. Lowering reads those operators back as RA and
 checks correspondence with the RA contained in IX. Structures extends Physical
-and binds every keyed read to a host key fact or a built Rust type. Their contracts are specified by
-the \code{cq-lang-*} module documentation and \path{doc/DSL.md}
-(Section~\ref{sec:ix}); this paper does not yet give them inference rules.
+and binds every keyed read to a host key fact or a built Rust type. Their local
+contract rules and immediate-source correspondence checks are stated separately
+in Section~\ref{sec:pass-contracts}. Complete token grammars are also given in
+the language modules and \path{doc/DSL.md}.

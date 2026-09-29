@@ -91,8 +91,10 @@ pub fn check(module: &Program) -> syn::Result<Analysis> {
 }
 
 impl Analysis {
-    /// The facts of a normal-form module; see [`check`] to establish normal
+    /// The facts of a normal-form CQ program; see [`check`] to establish normal
     /// form first. Non-variable atom arguments are not vertices.
+    /// Formal rule H-Occurrence: Construct atom facts indexed by the complete normal-form body.
+    /// Formal rule H-Incidence: Insert every atom clause into each variable incidence set.
     pub fn of(module: &Program) -> Analysis {
         let mut analysis = Analysis::default();
         for (clause, item) in module.query.body.iter().enumerate() {
@@ -135,6 +137,11 @@ impl Analysis {
 
     /// GYO reduction on the residual edges; fills `gyo_steps`, `acyclic`
     /// and `join_tree`.
+    /// Formal rule G-Private: Delete the least residual variable occurring in one edge.
+    /// Formal rule G-Absorb: Delete the least contained residual edge and record its parent.
+    /// Formal rule G-Accept: Accept a terminal residual with at most one edge, all empty.
+    /// Formal rule G-Reject: Reject every other terminal residual.
+    /// Formal rule H-JoinTree: Return the constructed GYO parent map exactly when acyclic.
     fn reduce(&mut self, mut residual: BTreeMap<usize, BTreeSet<String>>) {
         let mut parent: BTreeMap<usize, Option<usize>> =
             residual.keys().map(|&clause| (clause, None)).collect();

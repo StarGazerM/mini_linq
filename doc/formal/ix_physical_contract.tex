@@ -10,15 +10,15 @@ chain continues
  \xrightarrow{\text{policy}}\mathrm{Structures}
  \longrightarrow\mathrm{Rust},
 \]
-where the two policy steps are caller-resolved macro slots
-(\code{physical_policy!} and \code{select_structures!}).
+The caller resolves the policy steps through \code{physical_policy!}
+and \code{select_structures!}.
 
 \paragraph{Boundary syntax.}
 Let $r,l$ name exact RA versions, $j$ an operator occurrence, $i$ an index,
 and $C$ an ordered list of logical column ordinals. For the present binary
 fragment, $r$ is the right operand of $j=l\bowtie r$ or $j=l\ltimes r$.
 \begin{lstlisting}
-IX  ::= RA indexes { Def* }
+IX  ::= RAProgram indexes { Def* }
 Def ::= i = @r[C];
 \end{lstlisting}
 IX retains RA unchanged. The listing is the fragment used below; the complete
@@ -30,7 +30,9 @@ Well-formedness requires well-formed RA, distinct index identities and
 descriptors, and strictly increasing, in-range logical ordinals over exact RA
 results. Every demand must match some RA natural join or semijoin's right
 operand and join columns. Partial demand sets are locally valid; the analysis
-correspondence additionally requires the complete set in first-use order.
+correspondence additionally requires the complete sequence in first-use order
+and the names \code{i0}, \code{i1}, etc., as independently checked in
+\path{passes/cq-index-policy/src/correspondence.rs}.
 Erasure preserves meaning: $\sem{A,D}_{IX}=\sem A_{RA}$.
 Traverse the fixed RA definitions in order, starting with empty $D$:
 \begin{mathpar}
@@ -47,12 +49,14 @@ Traverse the fixed RA definitions in order, starting with empty $D$:
 \Rule{IX-Other}{d\in\{\mathsf{Unit,Rename,Project,Select,Extend}\}}
  {D\vdash d\Downarrow D}
 \end{mathpar}
-Fresh $i_n$ prints as \code{i0}, \code{i1}, etc. Unknown operators reject.
+Fresh $i_n$ prints as \code{i0}, \code{i1}, etc. These cases cover the current
+RA operator enum.
 $C=[]$ is the unit tuple for the admitted Cartesian case. Physical lowering
 derives operands from RA and checks their required descriptors in $D$;
-the Physical contract checks each probe/semi demand from its operands.
-This binary fragment
-does not yet specify the index demands or planning of WCOJ.
+this demand-membership check belongs to the IX-to-Physical pass. The standalone
+Physical contract derives local headings, reads and modes without IX. Fine
+plans elaborate to RA operators covered by these same demand rules; no WCOJ
+complexity guarantee follows.
 
 \paragraph{Physical and Structures.}
 Physical restates every IX result with one physical operator (probe, merge,
@@ -60,8 +64,8 @@ semi, range, or the logical operator's own name) and the mode its reads allow
 (pipe, let, alias), marking canonical results; Structures binds every keyed
 read to a host key fact or a Rust type built over the result and discharges the
 order and canonical premises. Below Structures a printer emits one pull program
-over the \code{cq-storage} operation traits. These languages have no formal
-treatment in this paper yet; their syntax, contracts and laws are specified by
-the module documentation of \path{languages/cq-lang-physical/src/lib.rs},
+over the \code{cq-storage} operation traits. Their local contract rules and
+pass correspondence judgments appear in Section~\ref{sec:pass-contracts}.
+Complete grammars and representation obligations also appear in \path{languages/cq-lang-physical/src/lib.rs},
 \path{languages/cq-lang-structures/src/lib.rs}, \path{languages/cq-lang-physical/src/policy.rs}, and
-by \path{doc/DSL.md}, until a formal treatment is written.
+\path{doc/DSL.md}.

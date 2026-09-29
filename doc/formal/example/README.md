@@ -1,8 +1,8 @@
 # Executable paper checks
 
-This driver now checks **CQ → RA → IX**. The old whole-query physical backends
-and their generated `run` APIs have been removed. The driver supplies no
-physical policy and does not skip the Physical and Structures stages.
+These drivers exercise **CQ → CQ-NF → VO → RA → IX**, optionally inserting VO
+reductions. They stop at IX and supply no physical policy; they neither exercise
+nor bypass later stages to obtain executable query output.
 
 ```sh
 cargo run --manifest-path doc/formal/example/Cargo.toml --locked
@@ -11,29 +11,27 @@ cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin argument_
 cargo run --manifest-path doc/formal/example/Cargo.toml --locked --bin constraint_planning
 ```
 
-The first four programs write typed `.tokens` payloads and derivation reports
-under `doc/formal/build/logical-*/`. An optional argument chooses the output
-directory. These files are typed pass outputs, not captured macro expansions.
-Each retained logical route emits CQ, RA and IX; IX includes named index demands.
-The source remains unchanged across the boundaries.
+The four programs write typed CQ/NF/VO/RA/IX `.tokens` payloads and print plan
+summaries under `doc/formal/build/logical-*/`; the default and `computed_key`
+programs also write `validation.txt`. An optional argument chooses the output
+directory. These are typed pass outputs, not captured macro expansions.
+The input is borrowed without mutation. NF rewrites a clone, VO embeds NF,
+RA is standalone, and IX retains RA unchanged.
 
-- The default program checks the YA join tree, exact derivation, complete RA,
-  and index descriptors for the `R--S--T` query. Its independent whole-tuple
-  oracle retains the fixed answer and duplicate/empty-input cases.
-- `computed_key` checks the dependency-constrained plan and IX for the computed
-  join argument, plus its independent fixed oracle answer.
-- `argument_placement` checks that `g()` is placed before matching and `f(x)`
-  after `x` becomes available in RA. It makes no runtime evaluation-count claim.
-- `constraint_planning` checks both automatic logical routes and an independently
-  authored RA containing dependent expressions, projection and semijoins.
-  The independent oracle retains duplicate/empty-input cases. It does not claim
-  that the automatic planner discovers the authored plan.
+- The default program checks the YA join tree, exact VO/RA expectations and
+  index descriptors for the `R--S--T` query. Its independent whole-tuple oracle
+  checks a fixed answer and duplicate/empty-input cases.
+- `computed_key` checks an exact VO schedule and IX for a computed join argument,
+  plus a separate fixed oracle answer.
+- `argument_placement` checks VO equality and RA positions: `g()` precedes
+  matching and the `f(x)` guard follows binding `x`. It executes no generated Rust.
+- `constraint_planning` checks automatic and independently authored RA/IX
+  contracts. Its oracle runs on eight input presentations: base, duplicate,
+  all-empty and five individually empty inputs. It does not claim that automatic
+  planning discovers the authored plan.
 
-None of these checks compares compiled query execution with the oracle. Runtime
-intermediate counts, old lazy/materialized comparison results, and six-stage
-backend snapshots are retired. Those queries require a physical policy
-and a host contract before executable compiler comparison can resume.
-
-The integrated chain below IX is exercised by
-`facade/mini-linq/tests/physical_query.rs`; it covers the Physical, Structures
-and printed-program boundaries, not these retired whole-query backends.
+The boundary helper checks local contracts, reduction correspondence when used,
+and elaboration correspondence. It does not call order or index correspondence
+checks. None of these drivers compares generated-query execution with its oracle.
+The integrated runtime chain is exercised separately by
+[physical_query.rs](../../../facade/mini-linq/tests/physical_query.rs).

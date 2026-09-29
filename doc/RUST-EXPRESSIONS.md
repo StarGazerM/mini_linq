@@ -91,8 +91,8 @@ See [valuation plans](DSL.md#valuation-plans) and the
 
 ### Atom arguments through normal form
 
-The atom arguments that formerly needed separate matching cases have already
-become distinct variables before `cq-order` runs. The fresh binding for a
+Atom arguments have already become distinct variables before `cq-order`
+runs. The fresh binding for a
 literal supplies a join key; a repeated argument's equality guard constrains
 its fresh variable; a wildcard's fresh variable keeps its witness. Computed
 arguments retain their Rust expression in a binding or guard, according to
@@ -119,11 +119,12 @@ reductions when acyclic, between ordering and elaboration.
 
 Normalization checks CQ-NF. The order and reduction passes provide
 `check(source, target, options)` correspondence checks; elaboration provides
-`check(source, target)`. Their targets must satisfy their language contracts;
-VO reductions erase to the unreduced plan, and `cq_elaborate::kernel`
-compares RA with the VO kernel up to variable renaming. These checks concern
-the logical plan under set semantics; they do not prove purity of arbitrary
-Rust expressions.
+`check(source, target)`. Each checks the source domain and the target
+contract independently of `compile`; VO reductions erase to the unreduced
+plan, and `cq_elaborate::kernel` reconstructs the CQ-NF kernel from RA and
+compares it with the source kernel up to variable renaming. These checks
+concern the logical plan under set semantics; they do not prove purity of
+arbitrary Rust expressions.
 
 ## Current verification boundary
 
@@ -131,20 +132,21 @@ The [CQ expression tests](../languages/cq-lang-cq/tests/rust_expressions.rs),
 [free-variable tests](../languages/cq-syntax/tests/free_variables.rs), and
 [expression-syntax tests](../languages/cq-lang-cq/tests/expression_syntax.rs) cover
 round trips, lexical shadowing, opaque macros, Rust expression ASTs and
-logical forward-reference rejection. The [valuation-language tests](../languages/cq-lang-vo/tests/valuation_language.rs)
-cover normalization, plan contracts and kernel comparison.
+logical forward-reference rejection. The [normal-form tests](../languages/cq-lang-cq/tests/normal.rs)
+cover normalization and kernels; the [valuation-language tests](../languages/cq-lang-vo/tests/valuation_language.rs)
+cover plan contracts.
 
 The [order tests](../passes/cq-order/tests/order.rs),
 [reduction tests](../passes/cq-reduce/tests/reduce.rs), and
 [elaboration tests](../passes/cq-elaborate/tests/elaborate.rs) inspect the
-planned steps and their RA. The reduction suite also compares CQ and RA
-results on generated databases for its tested queries. The
+planned steps and their RA. The reduction suite compares source and target
+VO answers; elaboration compares CQ and RA answers on generated databases. The
 [full-chain test](../facade/mini-linq/tests/physical_query.rs) exercises its
 admitted physical domain, including a pushed comparison that bounds an
 ordered scan and a computed column.
 
 ```sh
-cargo test -p cq-lang-cq --test rust_expressions --test expression_syntax
+cargo test -p cq-lang-cq --test rust_expressions --test expression_syntax --test normal
 cargo test -p cq-syntax --test free_variables
 cargo test -p cq-lang-vo --test valuation_language
 cargo test -p cq-order --test order

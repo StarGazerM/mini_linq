@@ -8,8 +8,9 @@ use std::{
 
 use crate::ExactMembership;
 
-/// Exact lookup preserves every stored occurrence. The cursor owns its bucket
-/// and remains valid after the index handle is dropped.
+/// Exact lookup preserves stored occurrences. A cursor is independent of the
+/// temporary lookup handle: HashIndex cursors retain an owned bucket reference,
+/// while host and trie cursors borrow their backing value for its lifetime.
 pub trait IndexRead: Clone {
     type Key;
     type Item: Copy;

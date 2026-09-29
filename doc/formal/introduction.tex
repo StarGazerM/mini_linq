@@ -6,7 +6,8 @@ records required index demands, and then lets a caller-supplied,
 query-independent policy fix one physical operator per result and bind every
 keyed read to a host key fact or a Rust structure built over the result. A
 printer emits one pull program over the runtime operation traits; the compiler
-core enumerates no storage families beyond those traits.
+uses open operation traits. Supplied structure selection chooses concrete default
+Rust types when the caller supplies no applicable type advice.
 
 The compiled chain is
 \[
@@ -17,16 +18,17 @@ The compiled chain is
 \]
 IX preserves the RA plan and adds named index demands.
 Physical derives demand uses from its operands and restates each result with one
-physical operator and the mode its reads allow; Structures binds each keyed
-read and discharges order and canonical premises; both erase to IX. This paper
-formalizes CQ, RA, planning and IX. Physical and Structures are specified by
-the \code{cq-lang-*} module documentation and \path{doc/DSL.md}
-(Section~\ref{sec:ix}) until a formal treatment is written.
+physical operator and the mode its reads allow. Lowering erases Physical choices
+to RA and separately checks IX demands; Structures extends Physical unchanged
+and supplies storage bindings. Section~\ref{sec:planning} expands the logical
+arrow into normalization, ordering, optional reduction and elaboration.
+Section~\ref{sec:pass-contracts} specifies each language's local contract,
+including Physical and Structures, and the separate pass correspondence checks.
 
 The retained relational theory covers valuations, named RA, host-expression
 dependencies, GYO and Yannakakis planning. These logical results do not choose
 physical storage. Rust quotations preserve host syntax; moving or duplicating
 host computations additionally requires the totality, purity and binding
 assumptions stated below. Recursive programs, aggregation, negation, general
-physical cost search and the final execution architecture remain outside the
-specified implementation target.
+physical cost search remain outside the supported contracts. Pull realization
+and integrated generated-query execution are implemented.

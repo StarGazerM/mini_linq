@@ -57,7 +57,7 @@ Conversely, compatible valuations have a unique union satisfying both.
 \end{proof}
 A distinct-variable atom is therefore its input relation renamed by argument
 position. Repetitions, constants and computed arguments require additional
-constraints (C/A-*). For distinct head variables $\bar h$ and $H=\set(\bar h)$,
+constraints (normalization rules A-*). For distinct head variables $\bar h$ and $H=\set(\bar h)$,
 \[
  \sem q_I=\operatorname{out}_{\bar h}(\pi_H\Val_I(C)),\qquad
  \operatorname{out}_{\bar h}(L)=
@@ -137,8 +137,8 @@ answer(x) :- R(x), let n:i32 = tick(x), if latest(n);
 \end{lstlisting}
 Lazy evaluation interleaves tick and guard, retaining both rows. Materialized
 evaluation completes both ticks first, retaining only the row assigned 2.
-Lazy build performs no ticks; materialized build performs two. The compiled
-\code{formal_counterexamples.rs} tests witness both differences.
+Lazy build performs no ticks; materialized build performs two. This is an
+abstract counterexample about evaluation strategies.
 \end{counterexample}
 
 Theorems below concern the mathematical rules under their stated premises.
@@ -146,5 +146,7 @@ Rust type/ownership adequacy (C-Rust), binding resolution (C-Resolution),
 simulation of concrete transitions including rejection (C-Conformance), and
 panic/divergence/destruction semantics (C-Effects) remain open obligations.
 The arbitrary-Rust source also lacks a cross-route operational contract.
-Negation and aggregation parse but have no successful lowering; graph-region
-optimization, cardinality estimation and WCOJ remain unimplemented.
+Negation and aggregation parse but the CQ contract rejects them. General
+subtree optimization and cardinality estimation are not implemented.
+Variable-at-a-time generic planning is implemented; no WCOJ complexity guarantee
+is established here.

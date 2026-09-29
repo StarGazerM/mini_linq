@@ -1,6 +1,6 @@
 # MiniLinq languages and compilation boundaries
 
-The common query path is `CQ → NF → VO → RA → IX → Physical → Γ → Rust`. The
+The common query path is `CQ → NF → VO → RA → IX → Physical → Structures → Rust`. The
 [crate map](COMPILER-STRUCTURE.md) identifies each stage's implementation
 owner. The syntax below distinguishes language validity from the narrower
 domain a caller's policy admits.
@@ -19,13 +19,16 @@ All other programs contain their own declarations and output metadata.
 | VO → RA | `cq_elaborate::compile` |
 | RA → IX | `cq_index_policy::compile` |
 | IX + policy → Physical | `cq_physical_lowering::compile` |
-| Physical + policy → Γ | `cq_structure_selection::compile` |
-| Γ → Rust | `cq_physical_realization::compile` |
+| Physical + policy → Structures | `cq_structure_selection::compile` |
+| Structures → Rust | `cq_physical_realization::compile` |
 
 `mini-linq` supplies procedural entries and transports each typed input/output.
-The policy and the distinct-state provider are caller-resolved macro slots
-(`physical_policy!`, `select_structures!`, `structures_to_rust!`,
-`distinct_state!`). Syntax types and validity checks live in the language crates under `languages/`.
+The logical planner, the policy and the distinct-state provider are
+caller-resolved macro slots (`cq_to_ra!`, `choose_index_policy!`,
+`physical_policy!`, `select_structures!`, `structures_to_rust!`,
+`distinct_state!`). Syntax types and validity checks live in the language
+crates under `languages/`; each pass also exports a correspondence `check`
+([contracts and evidence](COMPILER-STRUCTURE.md#contracts-and-evidence)).
 
 The printer emits a Rust block in a caller-written host. Input identifiers
 refer to bindings in that scope. The CQ `struct Name;` is metadata through VO; it does not promise a generated `build/run/query` API.
@@ -39,8 +42,7 @@ beside its pattern. Rust expressions are parsed without token rewriting.
 
 ```ebnf
 Program        ::= RustVisibility? "struct" Ident ";" RelationDecl* Query
-RelationDecl   ::= IndexAdvice? "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
-IndexAdvice    ::= "#" "[" "index" "(" Ident ")" "]"
+RelationDecl   ::= RustOuterAttribute* "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
 ColumnDecl     ::= Ident ":" RustType
 Query          ::= Atom ":-" BodyItem ("," BodyItem)* ";"
 Atom           ::= Ident "(" [RustExpr ("," RustExpr)* [","]] ")"
@@ -56,7 +58,9 @@ The parser accepts negation and aggregation, while the baseline semantic
 contract rejects them pending the optional extension. Aggregate arguments are
 local binder names; Rust expressions occur in the parenthesized aggregator and
 input atom arguments. Parsing an empty column list also does not override the
-input contract's positive-arity requirement.
+input contract's positive-arity requirement. Parsing accepts Rust outer
+attributes on a declaration; the declaration contract admits at most one
+`#[index(...)]` list, whose contents structure selection parses as a `RustType`.
 
 A declaration names Rust columns in positional order. A declaration matching
 the query head supplies result types and is not an input. Variable-only heads
@@ -144,13 +148,15 @@ sorting step.
 ## Normal form
 
 CQ-NF is the kernel form every plan erases to. A normal query has one
-variable per atom argument, distinct within the atom; constants, repeated
-variables, wildcards and expression arguments have been moved out of atoms
-into `let` bindings and `if` guards. `cq::normal::normalize` is the
-canonicalization and records no decision: a constant's binding goes before
-every atom (it is a join key), an equality or expression guard right after
-its atom. The grammar is the CQ grammar restricted so that every `Atom` is a
-relation applied to distinct variables:
+variable per atom argument, distinct within the atom. `cq::normal::normalize`
+is the canonicalization and records no decision: constants and suitable
+expressions introduce `let` bindings, repeated variables and dependent
+expressions introduce `if` guards, and wildcards become fresh witness
+variables. Literal bindings precede the body; an expression binding that does
+not depend on variables newly introduced by its atom precedes that atom;
+repeated-variable equalities and dependent-expression guards follow it. The
+grammar is the CQ grammar restricted so that every `Atom` is a relation
+applied to distinct variables:
 
 ```ebnf
 NormalBody ::= (NormalItem ",")* NormalItem
@@ -158,9 +164,10 @@ NormalItem ::= Ident "(" (Ident ("," Ident)*)? ")" | "if" RustExpr | "let" RustP
 ```
 
 The `Kernel` of a program — its atoms, guards, bindings and head, with
-variables renamed by first occurrence — is how every later language is
-checked against this one by erasure: two programs agree iff their kernels
-agree.
+variables renamed by first occurrence — is the structural correspondence
+criterion elaboration uses to check RA against CQ-NF. It is not a complete
+test of semantic equivalence for arbitrary programs; later boundaries have
+their own preservation and policy checks.
 
 ## Valuation plans
 
@@ -206,16 +213,16 @@ below chooses them.
 ## Named relational algebra
 
 ```ebnf
-Program          ::= "relational" "{" RelationDecl* RelationalPlan "}"
-RelationalPlan   ::= RelDefinition* RelOutput
+Program          ::= "relational" "{" Plan "}"
+Plan             ::= RelationDecl* RelDefinition* RelOutput
 RelDefinition    ::= RelId "=" RelOperator ";"
 RelOperator      ::= "unit"
-                  | "rename" Ident "{" RenameMap ("," RenameMap)* [","] "}"
+                  | "rename" Ident "{" [RenameMap ("," RenameMap)* [","]] "}"
                   | "natural_join" RelId "with" RelId
                   | "project" RelId "keep" "{" [Ident ("," Ident)* [","]] "}"
                   | "semijoin" RelId "with" RelId
                   | "select" RelId "if" "(" RustExpr ")"
-                  | "extend" RelId "with" "{" [ColumnDecl ("," ColumnDecl)*] "}"
+                  | "extend" RelId "with" "{" [ColumnDecl ("," ColumnDecl)* [","]] "}"
                     "value" "(" RustExpr ")"
 RenameMap        ::= Ident "->" Ident
 RelOutput        ::= "output" RelId "as" Atom ";"
@@ -228,7 +235,9 @@ the output. The local language permits acyclic bushy or shared plans; an
 individual planning policy can impose a narrower shape.
 
 `unit` denotes `{()}` and has no operand. A declared input is atomic; Rename
-maps every source attribute exactly once to distinct query variables.
+maps every source attribute exactly once to distinct query variables (the
+parser also accepts an empty map, which that validity rule rejects for a
+positive-arity input).
 NaturalJoin equates shared attributes and returns the heading union, including
 when every right attribute is already shared. Semijoin keeps exactly the left
 heading with an existential matching right row. Project retains a distinct
@@ -269,9 +278,11 @@ uses the keyword `indexes`; its entries do not select storage.
 
 ```ebnf
 Program         ::= ra::Program
-                    "indexes" "{" (IndexDefinition ";")* "}"
+                    "indexes" "{" [IndexDefinition (";" IndexDefinition)* [";"]] "}"
 IndexDefinition ::= Ident "=" "@" RelId "[" [Column ("," Column)* [","]] "]"
 ```
+
+The contract requires every definition, including the last, to end with `;`.
 
 `Column` is a nonnegative integer ordinal. IX preserves the whole RA payload.
 Demand analysis records each NaturalJoin/Semijoin's right version and joined-column
@@ -284,10 +295,12 @@ The triangle above needs `i0 = @r1[0]` and `i1 = @r3[0,1]` for the right operand
 of `r2` and `r4`. IX validity checks distinct identities and descriptors, exact
 RA result versions, and strictly increasing in-range ordinals. Every demand must
 match some RA natural join or semijoin's right operand and join columns; otherwise
-it reports ``index `i0` is demanded by no join``. IX permits partial demand sets;
-demand-derivation correspondence requires the complete set with canonical names chosen in first-use order.
-Physical lowering correspondence checks that each probe/semi's right operand and join columns have a
-matching demand. Index allocation and data structure selection have not occurred.
+it reports ``index `i0` is demanded by no join``. IX validity permits partial
+demand sets. `cq_index_policy::check` requires the unchanged RA and exactly the
+derived demand list: one demand per distinct descriptor, in first-use order,
+named `i0`, `i1`, … . Physical lowering correspondence checks that each
+probe/semi's right operand and join columns have a matching demand. Index
+allocation and data structure selection have not occurred.
 
 ## Physical: one physical operator per result
 
@@ -316,13 +329,13 @@ already sorted on that key) or read more than once; an `alias` is a host
 rename read in place. `canon` marks a result inserted into a canonical index
 — the endpoint's distinct sink on a pipe, a materialized set on a let. The
 returned result must be canonical, by this flag or by key inference from
-`canon` hosts. Order and uniqueness are premises here; Γ discharges
+`canon` hosts. Order and uniqueness are premises here; Structures discharges
 them.
 
-## The bindings Γ: what answers each keyed read
+## Structures: the bindings Γ answering each keyed read
 
-The Structures program records the bindings Γ: the value answering each
-keyed read.
+A Structures program extends Physical with the bindings Γ: the value
+answering each keyed read.
 
 ```ebnf
 Program    ::= physical::Program "structures" "{" (Entry ";")* "}"
@@ -349,10 +362,11 @@ The [full-chain test](../facade/mini-linq/tests/physical_query.rs) and the
 hosts read in place through their declared keys, compiler-built hash indexes,
 a user-defined index type through `#[index(Type)]`, merge joins over built
 ordered maps with a sorted pipe side, Yannakakis semijoin passes as membership
-tests, a bounded scan of an ordered host, and a computed column. Each pass
-also has a `check` over its source and target, and the languages have parser
-round-trip tests in the language crates under `languages/`. The logical grammar and planning-pass tests are not
-evidence of physical implementation.
+tests, a bounded scan of an ordered host, and a computed column. Every pass
+except the printer has a `check` over its source and target, and the
+languages have parser round-trip tests in the language crates under
+`languages/`. The logical grammar and planning-pass tests are not evidence of
+physical implementation.
 
 ```sh
 cargo test -p cq-lang-cq

@@ -40,12 +40,12 @@ answer(format!("{x}")) :-
         in S(key + offset, amount);
 ```
 
-The basic CQ fragment accepts positive atoms with distinct bare variables.
-The default CQ composition selects dependency-constrained prefix lowering
-for Rust argument expressions, `if`, and `let`; the explicit canonical
-implementation retains its basic admitted domain. Negation and aggregation
-parse here but receive explicit unsupported-domain errors during lowering. The opt-in `hw4` tests specify that
-later extension; supplying syntax does not make those semantic tests pass.
+The basic fragment of positive atoms with distinct bare variables is a useful
+restricted subset. The default `cq_to_ra!` normalizes Rust argument
+expressions, guards and lets, orders Written/Coarse and elaborates. Negation
+and aggregation parse here but fail the baseline CQ contract. The opt-in
+`hw4` tests specify that later extension; supplying syntax does not make
+those semantic tests pass.
 
 ## Collecting free variables
 

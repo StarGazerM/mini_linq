@@ -54,11 +54,12 @@ pub struct ColumnDecl {
 /// structures a later pass builds over this relation use the Rust type it
 /// names, with the operations it claims. It is not part of the query's
 /// meaning and names no columns — which columns get indexed is a planner
-/// decision the query cannot see. CQ checks only that the attribute is a
-/// well-formed `index(…)` list; its argument belongs to the pass that reads it.
+/// decision the query cannot see. The declaration contract permits at most
+/// one `#[index(…)]` list attribute; its argument belongs to the pass that reads it.
+/// The parser accepts arbitrary outer attributes; the contract restricts them.
 ///
 /// ```text
-/// RelationDecl ::= ["#" "[" "index" "(" … ")" "]"]
+/// RelationDecl ::= RustOuterAttribute*
 ///                  "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")" ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]

@@ -20,7 +20,7 @@ Rust bindings represent valuation $\nu$. The host boundary is
 Rustc checks the elaborated host context. Under $\mathcal H_{\rm rel}$,
 this boundary induces the function used by Select and Extend.
 
-The lexical helper in \code{cq/rust.rs} returns free simple value names
+The lexical helper in \path{languages/cq-syntax/src/rust.rs} returns free simple value names
 $F$ and opacity bit $o$, before Rust name resolution. It threads binding
 scopes: in \code{|x| x + y}, only $y$ is free. Given available logical names
 $B$, dependencies are $F\cap B$, or all of $B$ when opaque. Diagnostic
@@ -38,13 +38,16 @@ A new bare argument binds, a repeated name constrains equality, and
 \code{_} retains an unnamed witness. Computed arguments require their free
 logical inputs: \code{S(f(k),z)} needs an available $k$, while
 \code{S(k,f(k))} can obtain $k$ from a candidate row and test the second
-position afterward. C-Ready and A-Prefix/A-Local implement these distinctions.
+position afterward. A-Prefix/A-Local normalize these dependencies into CQ
+bindings and guards; C-Ready schedules their inputs separately.
 
 Free variables alone do not justify changing callback counts. For
-$R=\{(1,10),(1,20)\}$, projecting \code{R(x,witness)} to $x$ before
-\code{let y = tick(x)} changes two calls to one. The prefix route therefore
-retains witness columns until its final projection. Argument scope also
-differs from execution order: in \code{R(x,f(x),g())}, A-Prefix evaluates
-$g()$ before candidate-local $f(x)$. The compiled \code{argument_placement}
-example checks one $g$ call followed by two $f$ calls. An atom is a matching
+$R=\{(1,10),(1,20)\}$, set-projecting \code{R(x,witness)} to $x$ before
+\code{let y = tick(x)} changes two calls to one. Coarse elaboration retains
+witness columns until its final projection; Fine can project partial subatoms.
+Neither establishes arbitrary effect-trace equivalence. Argument scope also
+differs from execution order: in \code{R(x,f(x),g())}, A-Prefix places a
+$g()$ binding before the atom and A-Local places the $f(x)$ guard after it. The \code{argument_placement}
+example checks VO equality and RA operator positions: the $g$ binding precedes
+matching and the $f$ guard follows binding $x$. It executes no generated Rust. An atom is a matching
 construct; its runtime schedule is determined by the generated operators.

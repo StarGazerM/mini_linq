@@ -40,6 +40,7 @@ use quote::format_ident;
 use syn::Ident;
 
 /// Elaborate a valuation plan into named RA, then check the RA contract.
+/// Formal rule C-Guard: Select the prefix for a VO guard, seeding Unit if absent.
 pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
     let analysis = valuation::contract::check(source)?;
     let mut state = State {
@@ -80,6 +81,7 @@ mod kernel;
 pub use kernel::{erase, kernel};
 
 /// The RA definitions compute the query scheduled by VO.
+/// Formal rule CK-Elaborate: Check local contracts, declarations, head and recovered kernel.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     valuation::contract::check(source)?;
     ra::contract::check(target)?;
@@ -127,6 +129,7 @@ struct State<'a> {
 impl State<'_> {
     /// The clause's relation: its rename, emitted at first mention, as
     /// reduced so far.
+    /// Formal rule E-Relation: Reuse a clause result or emit its complete positional rename at first use.
     fn relation(&mut self, clause: usize) -> Ident {
         if let Some(result) = self.relations.get(&clause) {
             return result.clone();
@@ -158,6 +161,10 @@ impl State<'_> {
         result
     }
 
+    /// Formal rule E-Check: A partial subatom with no new names semijoins an existing prefix.
+    /// Formal rule E-Project: Project a partial subatom unless it is an existing-prefix check.
+    /// Formal rule B-Root: Install the first full or projected subatom as the prefix.
+    /// Formal rule B-Join: Join a non-check subatom with the current prefix.
     fn subatom(&mut self, subatom: &valuation::Subatom, check: bool) {
         let clause = subatom.clause();
         let mut right = self.relation(clause);
@@ -192,6 +199,8 @@ impl State<'_> {
         });
     }
 
+    /// Formal rule E-ReduceGuard: Select the current clause relation and replace its map entry.
+    /// Formal rule E-ReduceWith: Semijoin current clause relations and replace only the target entry.
     fn reduce(&mut self, reduce: &valuation::Reduce) {
         let clause = reduce.clause();
         let left = self.relation(clause);
@@ -226,6 +235,7 @@ impl State<'_> {
 
     /// `extend P with { v: T, … } value ({ let pat: T = e; (v, …) })`: the
     /// binding evaluated per prefix tuple, its bound variables the columns.
+    /// Formal rule C-Bind: Extend the prefix with the binding block and symbolic column types.
     fn extend(&mut self, binding: &cq::Let) {
         let variables = cq::rust::bindings(&binding.pattern);
         let columns = binding
@@ -299,6 +309,7 @@ impl State<'_> {
 
     /// Retain the head's variables — every column under a computed head, so
     /// embedded Rust observes the whole prefix — and name the output.
+    /// Formal rule C-Finish: Project head dependencies or the full heading under a computed head.
     fn finish(&mut self, head: &cq::Atom) -> ra::Output {
         let retained: BTreeSet<String> = if head.variables().count() < head.args.len() {
             self.heading.clone()
@@ -361,6 +372,7 @@ impl State<'_> {
         unit
     }
 
+    /// Formal rule E-Emit: Append the operator under rN in definition emission order.
     fn emit(&mut self, operator: ra::Operator) -> Ident {
         let result = format_ident!("r{}", self.definitions.len());
         self.definitions.push(ra::Definition {

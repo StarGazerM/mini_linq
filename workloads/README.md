@@ -248,9 +248,9 @@ Complete typed payloads are written under `target/mini-linq-explain/<case>/`:
 
 | File | Boundary |
 |---|---|
-| `01-cq.tokens` | Authored CQ module. |
-| `02-relational-plan.tokens` | Planned named RA module. |
-| `03-index-requirements.tokens` | RA plus named demands. |
+| `01-cq.tokens` | Authored complete CQ program. |
+| `02-relational-plan.tokens` | Planned complete named RA program. |
+| `03-index-requirements.tokens` | Complete IX program: RA plus named demands. |
 
 These files are typed pass outputs, not captured individual macro expansions or
 Rust Analyzer type-checked workspace modules. A new run clears stale later

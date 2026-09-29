@@ -1,583 +1,360 @@
-\section{Current CQ-to-RA administrative algorithms}
+\section{CQ-to-RA nanopasses}
 \label{sec:planning}
-\paragraph{The pass chain.}
-CQ reaches RA through nanopasses over the languages of
-Section~\ref{sec:nf-vo}: \code{cq::normal::normalize} (CQ $\to$ NF),
-\code{cq_order::compile} (NF $\to$ VO; a heuristic --- written order, the
-clause-prefix rankings, or the elimination order of
-\code{cq::hypergraph::Analysis} --- and a split, coarse or fine),
-\code{cq_reduce::compile} (VO $\to$ VO; single-atom guards pushed onto
-their atoms and the Yannakakis full reducer over the GYO join tree when the
-query is acyclic) and \code{cq_elaborate::compile} (VO $\to$ RA). Each pass
-checks its target's contract and has a \code{check} that re-derives the
-source by erasure: the RA kernel equals the VO kernel equals the NF kernel.
-The rules below are the administrative systems of the retired monolithic
-planners; the manifest \path{rules.tsv} pins each rule name whose subject
-survives to the pass that now realizes it, and marks the rest abstract.
+The implemented chain is CQ $\to$ CQ-NF $\to$ VO $\to$ VO $\to$ RA.
+Normalization rewrites a complete CQ program; ordering chooses a valuation
+schedule; optional reduction inserts clause-local restrictions; elaboration
+emits named RA. Each constructor checks its target contract. Separately callable
+correspondence checks are specified in Section~\ref{sec:pass-contracts}.
+Rules in this section describe successful construction on the checked domain;
+abstract laws are explicitly identified and registered as such in
+\path{rules.tsv}. Host purity and totality remain semantic premises, not
+properties inferred by these passes.
 
-D-analysis chooses graph or prefix transitions. Incidence and a GYO join tree
-constrain command selection; commands emit RA and witness binary assembly order.
-\textsc{Apply} checks a command before updating state and appending its trace
-entry. A failed command or nested check aborts the enclosing algorithm.
-These judgments certify the specified strategy families. Eager selection,
-exact trimming and phase order restrict those families beyond semantic
-preservation: a pure plan may legally retain columns or defer a filter.
-The research architecture separates denotation-preserving transformations,
-decidable evidence for their premises, and policy selection. The P/C rules below
-provide concrete restricted instances, rather than a complete calculus of that
-larger design space.
-
-\subsection{Dependencies and graph extraction}
-\label{sec:graph-extraction}
-For clause $c_i$, D-analysis derives
-$\Sigma;B;T\vdash c_i\triangleright(R_i,O_i,m_i,a_i,K_i)$:
-required/provided names, movement bit, optional atom arity, and literal positions.
-$B$ is the written prefix; $T\subseteq B$ contains preceding let bindings.
+\subsection{Normalization: CQ to CQ}
+\label{sec:prefix-planning}
+For an atom at written clause $i$, walk its arguments left to right against the
+declared column types $\tau_j$. Let $B$ contain bare variables and let-bound
+names from earlier source clauses, and $L$ the distinct bare names already seen
+in this atom. Maintain a global literal-binding list $K$, atom-local lists
+$\mathit{before},\mathit{after}$, and rewritten arguments $\bar a'$. Each rule
+appends its resulting argument to $\bar a'$. Generated $k$ starts at
+\code{__cq_i_j}, appending underscores until absent from all source identifiers
+and earlier generated names. The argument cases are tested in the order shown.
 \begin{mathpar}
 
-\Rule{D-Guard}{R=\uses(e,B)}
- {\Sigma;B;T\vdash\mathsf{if}\ e\triangleright(R,\emptyset,m_e,\bot,\emptyset)}
+\Rule{A-Variable}{a_j=x\quad x\notin L}
+ {a_j\leadsto_{NF}x\quad[L:=L\cup\{x\}]}
 
-\Rule{D-Bind}{N=\set(\binds(p))\quad R=\uses(e,B)}
- {\Sigma;B;T\vdash\mathsf{let}\ p[:\tau]=e\triangleright(R,N,m_{p,e},\bot,\emptyset)}
+\Rule{A-Repeat}{a_j=x\in L\quad k\text{ fresh}}
+ {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{if}\ k=x]]}
 
-\Rule{D-Atom}{\operatorname{walk}(\bar a,B)=(L,R,K,m)}
- {\Sigma;B;T\vdash R_0(\bar a)\triangleright(R\cup(L\cap T),L,m,|\bar a|,K)}
+\Rule{A-Wildcard}{a_j=\_\quad k\text{ fresh}}
+ {a_j\leadsto_{NF}k\quad[\text{unconstrained witness}]}
+
+\Rule{A-Constant}{a_j\text{ is a literal}\quad k\text{ fresh}}
+ {a_j\leadsto_{NF}k\quad[K:=K\concat[\mathsf{let}\ k:\tau_j=a_j]]}
+
+\Rule{A-Prefix}{a_j=e\text{ is a remaining expression}\quad
+ \uses(e,L\setminus B)=\emptyset\quad k\text{ fresh}}
+ {a_j\leadsto_{NF}k\quad[\mathit{before}:=\mathit{before}\concat[\mathsf{let}\ k:\tau_j=e]]}
+
+\Rule{A-Local}{a_j=e\text{ is a remaining expression}\quad
+ \uses(e,L\setminus B)\ne\emptyset\quad k\text{ fresh}}
+ {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{if}\ k.\mathsf{eq}(\&(e))]]}
 \end{mathpar}
-The left-to-right argument walk starts with empty $L,R,K$: a bare name enters
-$L$; a literal position enters $K$; a wildcard contributes nothing; an expression
-$e$ adds $\uses(e,B\cup L)\setminus L$ to $R$ and prevents movement.
-After each clause, extend $B$ by $O_i$ and, for let, $T$ by $O_i$.
-Thus atom providers of a shared name are interchangeable; a preceding let is
-an obligatory producer.
+Here literal recognition is \code{rust::literal}, including parenthesized and
+negated literals. A-Repeat uses Rust \code{==}; A-Local emits the displayed
+\code{eq} call. Only first bare variables enter $L$. Replace the atom by
+$\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$ and extend $B$ by $L$.
+Copy original guards and lets, extending $B$ by each original let's binders.
+Finally prepend $K$ to the rewritten body. The constructor clones the source,
+preserves declarations and head, and checks normal form. These transformations
+produce CQ lets and guards; RA operators are produced by elaboration later.
 
-Define $M(c)$ to hold for: an atom with only bare/wildcard/literal arguments;
-a single-identifier let with literal RHS, no reference or subpattern modifier;
-or a recognized variable/integer comparison whose variables have syntactically
-primitive i32 type at every occurrence/binding. Type accumulation precedes
-guard classification; aliases are not resolved. Set $m_i=M(c_i)$.
-This whitelist is sufficient movement evidence for the supplied planner. Failure
-of $M$ is not a semantic proof that a pure expression cannot move; stronger
-host-law evidence can justify additional placements in another planner.
+\subsection{Dependency facts and ordering}
+\label{sec:planning-policy}
+Number \emph{all} normal-form body clauses $0,\ldots,m-1$. Atom identifiers in
+VO and hypergraph analysis use these indices, including gaps occupied by guards
+and lets. Let $T$ be all names supplied by lets in the body, $B_w$ the written
+prefix, and $\bar O_i,R_i$ the provided list and required set of clause $i$.
 \begin{mathpar}
 
-\Rule{D-Move}{M(c)}{\Sigma\vdash c:\mathsf{movable}}
+\Rule{D-Atom}{c_i=A(\bar x)}
+ {B_w;T\vdash c_i\triangleright(\bar x,\set(\bar x)\cap T)}
 
-\Rule{D-Barrier}{\neg M(c)}{\Sigma\vdash c:\mathsf{barrier}}
+\Rule{D-Guard}{R=\uses(e,B_w)}
+ {B_w;T\vdash\mathsf{if}\ e\triangleright([],R)}
 
-\Rule{D-Graph}{\operatorname{distinctBareHead}(q)\quad\operatorname{headBound}(q)\\
- \forall c\in q.\ c\text{ is a distinct-bare atom or primitive guard}}
- {\Sigma\vdash q:\mathsf{graphDomain}}
+\Rule{D-Bind}{\bar N=\binds(p)\quad R=\uses(e,B_w)}
+ {B_w;T\vdash\mathsf{let}\ p[:\tau]=e\triangleright(\bar N,R)}
 \end{mathpar}
-D-Graph allows cyclic/disconnected queries. Other supported queries use the
-prefix algorithm as a whole; negation/aggregation have no implemented D-rule.
-
-Number positive occurrences $A_i$ and guards $p_j$ separately in source order;
-prefix commands instead use full-body positions. CQ well-formedness requires
-$n\ge1$ positive occurrences. Write $O=\{0,\ldots,n-1\}$, $X_i=\vars(A_i)$,
-and normalize raw-identifier spelling. For declared attributes $a_{ij}$:
+Extend $B_w$ by each provided list. For pending indices $U$ in source order and
+currently bound names $B$, readiness is exactly:
+\[
+\Rule{C-Ready}{i\in U\quad R_i\subseteq B\\
+ c_i\text{ atom}\ \lor\ i=\min\{j\in U\mid c_j\text{ has the same guard/let kind as }c_i\}}
+ {U;B\vdash i:\mathsf{ready}}.
+\]
+There is no purity test in this predicate. Prefix and Elimination repeatedly
+choose the least rank among ready clauses, remove that clause from $U$, and
+extend $B$ by its provided names; an empty ready set is an error. Written
+instead takes the body sequence directly. Write $O_i=\set(\bar O_i)$,
+$s_i=|O_i\cap B|$; Boolean ranks order false before true.
 \begin{mathpar}
 
-\Rule{H-Occurrence}{A_i=R_i(\bar x_i)\quad\Sigma(R_i)=(\bar a_i:\bar\tau_i)\\
- m_i=\{a_{ij}\mapsto x_{ij}\}_j\quad X_i=\{x_{ij}\}_j}
- {\Sigma\vdash A_i\leadsto(i,R_i,m_i,X_i)}
+\Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=[0,\ldots,m-1]}
 
-\Rule{H-Incidence}{V_q=\bigcup_{i\in O}X_i\quad\mathcal I=\{(i,x)\mid i\in O,\ x\in X_i\}}
- {\bar A\leadsto\mathcal H_q=(V_q,O,\mathcal I)}
+\Rule{S-Connected}{c_i\text{ atom}\quad s_i=|O_i\cap B|}
+ {\mathsf{rank}_{Connected}(i,B)=(1,[s_i=0],0,i)}
+
+\Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|O_i\cap B|\\
+ r\in\{GreedyWidth,Auto\}}
+ {\mathsf{rank}_{r}(i,B)=(1,[s_i=0],|B|+|O_i|-s_i,i)}
+
+\Rule{S-Elimination}{c_i\text{ atom}\quad E=\mathsf{analysis}(q).\mathit{elimination\_order}\\
+ e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\}\cup\{|E|\})}
+ {\mathsf{rank}_{Elimination}(i,B)=(1,0,e_i,i)}
+\end{mathpar}
+Every ready nonatom ranks $(0,0,0,i)$ under these ranked heuristics.
+Auto is exactly GreedyWidth. Elimination uses reverse maximum-cardinality
+search numbering of the atom primal graph; it need not require acyclicity.
+An atom variable absent from that numbering is diagnosed.
+
+\paragraph{Coarse and Fine.}
+The split is independent of the heuristic. Coarse copies each guard/let in the
+chosen sequence and emits one full subatom for each atom. For Written and
+Prefix, variable order is first provision along that sequence; Elimination
+uses $E$, which contains atom variables only.
+\begin{mathpar}
+
+\Rule{O-Coarse}{\mathit{seq}\text{ chosen}}
+ {\mathsf{coarse}(\mathit{seq})=[\mathsf{fullSubatom}(i)\text{ or the copied guard/let}\mid i\in\mathit{seq}]}
+
+\Rule{O-Fine}{(G_0,B_0)=\mathsf{flush}(B)\quad v\text{ first eligible remaining variable}\\
+ (a,G_1,B_1,J)=\mathsf{introduce}(v,B_0)}
+ {\mathsf{fineStep}(v,B)=G_0\concat a\concat G_1
+   \concat[\mathsf{subatom}(j,B_1)]_{j\in J}}
+\end{mathpar}
+In O-Fine, $\mathsf{flush}$ repeatedly takes the first ready waiting guard/let
+in source order, emitting it and adding its provided names; it returns emitted
+steps and the resulting $B$. A variable is eligible if no let supplies it or it
+is already bound. Let $I_v$ be its holding atom indices in chosen clause order.
+If $v\notin B_0$, $\mathsf{introduce}$ adds $v$, emits subatom $a$ of the first
+holding atom over $B_0\cup\{v\}$, flushes again to obtain $(G_1,B_1)$, and leaves
+$J$ as the remaining holding atoms. Otherwise $a,G_1$ are empty, $B_1=B_0$, and
+$J=I_v$. Each subatom lists the clause's currently bound columns and drops the
+others. A final flush follows all variables. Lets can bind several names.
+If every remaining variable waits for an unavailable let, compilation fails. The final VO contract is always checked. Declared CQ
+relations have positive arity.
+
+\subsection{Hypergraph facts and GYO}
+\label{sec:graph-extraction}\label{sec:gyo-construction}
+For normal-form CQ with at least one atom, let $O$ be its atom clause indices,
+$\bar X_i$ its variables in column order, and $X_i=\set(\bar X_i)$.
+\begin{mathpar}
+
+\Rule{H-Occurrence}{q.body_i=R(\bar x)}
+ {\mathsf{clauses}(q)[i]=\bar x}
+
+\Rule{H-Incidence}{i\in O\quad x\in X_i}
+ {i\in\mathsf{incidence}(q)[x]}
 
 \Rule{H-Adjacency}{i<j\quad S_{ij}=X_i\cap X_j\ne\emptyset}
- {\mathcal H_q\vdash i\xleftrightarrow{S_{ij}}j\in G_q}
-
-\Rule{H-JoinTree}{J\text{ is a rooted tree on }O\quad
- \forall x\in V_q.\ J[\{i\mid x\in X_i\}]\text{ is connected}}
- {\mathcal H_q\vdash J:\mathsf{joinTree}}
+ {i\xleftrightarrow{S_{ij}}j}
 \end{mathpar}
-$\mathcal I$ is also the bipartite occurrence/variable graph; $G_q$ is its SIP
-view (AHV \S6.1), with no guard vertices. Occurrence labels preserve repeated
-and empty edges; identifying duplicates and removing empties recovers AHV's
-hypergraph (\S6.4). H-JoinTree characterizes alpha-acyclicity, using whole
-separators $X_i\cap X_j$, possibly empty between components. An unlabeled
-adjacency triangle can represent either a star or a cyclic query.
+H-Adjacency is an abstract derived view, not another IR. The primal graph
+connects variables sharing an atom. Guards and lets add no hyperedges. Occurrence
+identities preserve repeated and empty edges; identifying duplicate nonempty
+edges gives the usual unlabelled hypergraph.
 
-\subsection{GYO recognition}
-\label{sec:gyo-construction}
-State $(Z,\pi)$ holds residual occurrence sets and an absorption parent map,
-initially $Z(i)=X_i$, $\pi(i)=\bot$. Original incidence is immutable.
+GYO starts with residual sets $Z(i)=X_i$ and parents $\pi(i)=\bot$.
+Original clause facts remain unchanged. It first chooses the lexicographically
+least private pair $(i,x)$, or, if none exists, the least absorb pair $(i,j)$:
 \begin{mathpar}
 
-\Rule{G-Private}{i\in\dom Z\quad x\in Z(i)\quad
- \forall j\in\dom Z\setminus\{i\}.\ x\notin Z(j)}
- {(Z,\pi)\step{G-Private}(Z[i\mapsto Z(i)\setminus\{x\}],\pi)}
+\Rule{G-Private}{i\in\dom Z\quad x\in Z(i)\quad\forall j\in\dom Z\setminus\{i\}.\ x\notin Z(j)}
+ {(Z,\pi)\longrightarrow(Z[i\mapsto Z(i)\setminus\{x\}],\pi)}
 
 \Rule{G-Absorb}{i,j\in\dom Z\quad i\ne j\quad Z(i)\subseteq Z(j)}
- {(Z,\pi)\step{G-Absorb}(Z\setminus\{i\},\pi[i\mapsto j])}
+ {(Z,\pi)\longrightarrow(Z\setminus\{i\},\pi[i\mapsto j])}
 
-\Rule{G-Accept}{\operatorname{terminal}(Z)\quad Z=\{i\mapsto\emptyset\}}
- {(Z,\pi)\Downarrow_{\rm GYO}\mathsf{Some}(\pi)}
+\Rule{G-Accept}{Z\text{ terminal}\quad |\dom Z|\le1\quad\forall i\in\dom Z.\ Z(i)=\emptyset}
+ {(Z,\pi)\Downarrow\mathsf{acyclic}=true}
 
-\Rule{G-Reject}{\operatorname{terminal}(Z)\quad Z\ne\{i\mapsto\emptyset\}\text{ for every }i}
- {(Z,\pi)\Downarrow_{\rm GYO}\mathsf{None}}
+\Rule{G-Reject}{Z\text{ terminal}\quad\neg(|\dom Z|\le1\land\forall i\in\dom Z.\ Z(i)=\emptyset)}
+ {(Z,\pi)\Downarrow\mathsf{acyclic}=false}
+
+\Rule{H-JoinTree}{\mathsf{acyclic}=true}
+ {\mathsf{join\_tree}=\mathsf{Some}([(i,\pi(i))]_{i\in O\text{ increasing}})}
 \end{mathpar}
-Terminal means neither transition applies. Algorithm~\ref{alg:gyo} is
-\code{cq::hypergraph::Analysis::of}; H-JoinTree characterizes its result on original edges.
-\begin{algorithm}[tbp]
-\caption{GYO recognition: $X\mapsto(\alpha,J)$}
-\label{alg:gyo}
-\begin{algorithmic}[1]
-\Function{GYO}{$X$}
- \State $S\gets([i\mapsto X_i],[i\mapsto\bot]);\quad\alpha\gets\emptyseq$
- \Loop
-  \State $P\gets\{(i,x)\mid\mathsf{Private}(i,x)\text{ applies at }S\}$
-  \State $A\gets\{(i,j)\mid\mathsf{Absorb}(i,j)\text{ applies at }S\}$
-  \State \textbf{if} $P=A=\emptyset$ \textbf{then return} $(\alpha,\operatorname{finish}_G(S))$
-  \State $\rho\gets\mathsf{Private}(\min P)$ if $P\ne\emptyset$, else $\mathsf{Absorb}(\min A)$
-  \State \Call{Apply}{$S,\alpha,\rho$}
- \EndLoop
-\EndFunction
-\end{algorithmic}
-\end{algorithm}
-Here $\operatorname{finish}_G$ is G-Accept/G-Reject; minima are lexicographic.
-\begin{lemma}[Ear correspondence]
-On distinct nonempty original edges, each absorption is an AHV ear removal.
-\end{lemma}
-\begin{proof}
-While two original edges containing $x$ remain active, neither residual can
-first delete $x$ by Private. Hence $X_i\cap X_j=Z(i)\cap Z(j)$ for active
-$i,j$. Absorbing $i$ into $j$ therefore satisfies the ear premise
-$X_i\cap\bigcup_{k\in\dom Z\setminus\{i\}}X_k\subseteq X_j$. Duplicate/empty-edge deletions
-stutter after passage to the textbook hypergraph.
-\end{proof}
-\begin{theorem}[GYO termination and recognition]
-Every derivation terminates; it succeeds iff $X$ admits a join tree, and its
-parent map is such a tree for the original occurrences.
+Each deletion is also recorded as a \code{GyoStep}. On the admitted nonempty
+atom domain, acceptance leaves exactly one empty residual edge. Failure gives
+\code{join_tree = None}. H-JoinTree returns the constructed parent map; it is
+not an independent running-intersection test.
+
+\begin{theorem}[Abstract GYO recognition]
+GYO terminates and accepts exactly the occurrence hypergraphs admitting a join
+tree. Its successful parent map has running intersection on original edges.
 \end{theorem}
 \begin{proof}
-$|\dom Z|+\sum_i|Z(i)|$ strictly decreases. Private preserves join-tree
-existence because the removed variable occurs in one active edge. Absorption
-also preserves it: restore a contained edge as a leaf of its parent; to delete
-it, attach each separated component to the containing parent at its former
-neighbor. Every variable crossing these cuts belongs to that parent, preserving
-running intersection. In a join tree, a leaf has either a private variable or
-is contained in its neighbor; a singleton nonempty edge has a private variable.
-Thus an acyclic terminal state is one empty edge. Reversing the reductions
-reconstructs a join tree, with each recorded child attached to its recorded
-parent. This proves both directions, including duplicate/empty edges.
+$|\dom Z|+\sum_i|Z(i)|$ strictly decreases. While two active original edges
+contain $x$, neither can first remove $x$ as private. Hence an absorption's
+shared original variables lie in its container, making it an ear removal.
+Private deletion and absorption preserve join-tree existence. Conversely, a
+leaf of a join tree either has a private variable or is contained in its
+neighbour. Thus a nonempty acyclic terminal state is one empty edge. Reversing
+absorptions attaches each deleted edge to its recorded parent and preserves
+running intersection, including duplicate and empty edges.
 \end{proof}
 
-\subsection{Assembly and retention}
-\label{sec:join-order}\label{sec:retention}
-An ordered binary assembly tree $T::=i\mid(T\bowtie T)$ records occurrence
-coverage independently of the join tree:
+\subsection{Reduction as VO steps}
+\label{sec:yannakakis}
+The reducer checks source VO and rejects an already reduced source.
+With \code{Pushdown::Atoms}, inspect guard steps in order. A nonopaque guard
+is eligible when \emph{all} visible free names lie in one atom's variables;
+choose the least such clause index. This test includes visible host names,
+so it is stricter than intersection with logical names alone.
+\[
+\Rule{R-Guard}{\neg\mathsf{opaque}(e)\quad
+ i=\min\{j\in O\mid\fv(e)\subseteq X_j\}}
+ {\mathsf{if}\ e\ \leadsto\ \mathsf{reduce}\ R_i@i\ \mathsf{if}\ e}.
+\]
+Remove that guard step and insert its reduction before the host clause's first
+subatom, or before the first atom step of the entire plan when Tree is selected.
+Unselected steps keep their order. With \code{Reductions::Tree}, obtain the GYO
+join tree or diagnose cyclic input. Let $B=[o,b_1,\ldots,b_{n-1}]$ be its BFS
+order, children appended in increasing clause-index order. Define
+$\mathsf{red}(i,j)$ as \code{reduce} of $i$ with a subatom of $j$ listing exactly
+$X_i\cap X_j$ in $j$'s column positions and underscores elsewhere.
+\begin{mathpar}
+
+\Rule{Y-Up}{B=\mathsf{BFS}(J)}
+ {\mathsf{up}(J)=[\mathsf{red}(\pi(b),b)\mid b\in\mathsf{reverse}(B[1..])]}
+
+\Rule{Y-Down}{B=\mathsf{BFS}(J)}
+ {\mathsf{down}(J)=[\mathsf{red}(b,\pi(b))\mid b\in B[1..]]}
+
+\Rule{R-Tree}{J=\mathsf{analysis}(q).\mathsf{join\_tree}\ne\mathsf{None}}
+ {\mathsf{Tree}(VO)=\mathsf{insertBeforeFirstAtom}(VO,\mathsf{up}(J)\concat\mathsf{down}(J))}
+\end{mathpar}
+Pushed guards at that position precede the tree steps. None/None copies the
+source schedule. These are VO steps; elaboration subsequently emits semijoins
+against the latest clause relations.
+
+\begin{theorem}[Abstract full-reducer law]
+For finite relations $L_i:X_i$ on a join tree, upward reverse-BFS and downward
+BFS semijoins preserve $Q=\bowtie_i L_i$ and leave each relation equal to
+$\pi_{X_i}Q$. There are $2(n-1)$ semijoin steps.
+\end{theorem}
+\begin{proof}
+For child $c$, running intersection makes the separator $S_c=X_c\cap X_{\pi(c)}$
+exactly the variables crossing its subtree cut. After upward reduction, the
+relation at $i$ is $\pi_{X_i}(\bowtie_{j\in T_i}L_j)$: completed children supply
+compatible subtree witnesses through their whole separators. The root therefore
+has complete support. In the downward sweep a surviving child tuple matches a
+globally supported parent tuple. Its subtree witness and the parent's outside
+witness agree on $S_c$, so they combine into a full witness. Every full witness
+survives every semijoin. Empty separators test nonemptiness; the one-node case
+needs no steps. Local guards may be included in $L_i$; guards spanning several
+atoms are still applied by the remaining VO schedule.
+\end{proof}
+
+\subsection{Elaboration: VO to named RA}
+The state $(D,M,p,B)$ contains emitted definitions, the latest relation name per
+atom clause, an optional prefix, and its bound heading. All start empty.
+\begin{mathpar}
+
+\Rule{E-Emit}{r=\code{r}_{|D|}}
+ {\emit(D,o)=(D\concat[r=o],r)}
+
+\Rule{E-Relation}{i\notin\dom M\quad m_i\text{ maps declared columns positionally to }\bar X_i\\
+ (D',r)=\emit(D,\delta_{m_i}(R_i))}
+ {\mathsf{relation}(i;D,M)=(D',M[i\mapsto r],r)}
+\end{mathpar}
+An existing $M(i)$ is returned unchanged. Thus relations are emitted lazily at
+first mention, whether by reduction or subatom. The following rules use
+$\mathsf{relation}$ implicitly to obtain $r=M(i)$, and $K$ for the subatom's
+listed variables. The source VO contract supplies positional correctness and
+\code{introduces}. Full means no dropped column.
+\begin{mathpar}
+
+\Rule{E-Check}{K\subsetneq X_i\quad\mathsf{introduces}=\emptyset\quad p\ne\bot}
+ {(D,M,p,B)\xrightarrow{i,K}(D',M,s,B)\quad[(D',s)=\emit(D,p\ltimes r)]}
+
+\Rule{E-Project}{K\subsetneq X_i\quad\neg(\mathsf{introduces}=\emptyset\land p\ne\bot)\\
+ (D',s)=\emit(D,\pi_Kr)}
+ {\mathsf{subatomRight}(i,K)=(D',s)}
+
+\Rule{B-Root}{p=\bot\quad s=\mathsf{subatomRight}(i,K)}
+ {(D,M,p,B)\xrightarrow{i,K}(D,M,s,B\cup K)}
+
+\Rule{B-Join}{p\ne\bot\quad\text{E-Check inapplicable}\quad s=\mathsf{subatomRight}(i,K)\\
+ (D',t)=\emit(D,p\bowtie s)}
+ {(D,M,p,B)\xrightarrow{i,K}(D',M,t,B\cup K)}
+\end{mathpar}
+For full subatoms, $\mathsf{subatomRight}(i,X_i)=M(i)$ without projection.
+In B-Root/B-Join, $D,M$ already include any relation/projection emissions.
+A full subatom always joins even when it introduces no new variable. A partial
+check uses the full current clause relation: VO ensures its heading intersection
+with $B$ is exactly $K$.
+
+Let $\mathsf{unitize}$ return $p$ or emit Unit if absent. A VO guard selects that
+prefix. A let extends it with its pattern binders and symbolic types, using
+\code{binding_types()} (including inference holes).
+\begin{mathpar}
+
+\Rule{C-Guard}{\mathsf{step}=\mathsf{Guard}(e)\quad p_0=\mathsf{unitize}(p)\\
+ (D',s)=\emit(D,\sigma_e p_0)}
+ {(D,M,p,B)\longrightarrow(D',M,s,B)}
+
+\Rule{C-Bind}{\mathsf{step}=\mathsf{Let}(pat[:\tau]=e)\quad\bar N=\binds(pat)\\
+ p_0=\mathsf{unitize}(p)\quad v=\{\mathsf{let}\ pat[:\tau]=e;\ (\bar N,)\}}
+ {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))\quad[(D',s)=\emit(D,\operatorname{ext}_{\bar N,v}p_0)]}
+
+\Rule{E-ReduceGuard}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{if}\ e\\
+ (D',s)=\emit(D,\sigma_e M(i))}
+ {(D,M,p,B)\longrightarrow(D',M[i\mapsto s],p,B)}
+
+\Rule{E-ReduceWith}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{with}\ j\\
+ (D',s)=\emit(D,M(i)\ltimes M(j))}
+ {(D,M,p,B)\longrightarrow(D',M[i\mapsto s],p,B)}
+\end{mathpar}
+Relation lookup and unitization emissions precede the displayed emissions.
+The let block omits its tuple tail if the pattern binds no names. Reductions
+update only their target clause; VO has already checked the whole shared key.
+After all checked VO steps, retain bare head names intersected with $B$, or the entire current
+heading if any head argument is not a bare variable. Call that retained set $W$:
+\[
+\Rule{C-Finish}{\text{all VO steps consumed}\\
+ p_0=\mathsf{unitize}(p)\quad(D',r)=\emit(D,\pi_Wp_0)}
+ {(D,M,p,B)\Downarrow(D',\mathsf{output}\ r\ \mathsf{as}\ h(\bar e))}.
+\]
+The complete RA result owns the CQ declarations, $D'$ and output. The constructor
+then checks the RA contract. It returns no CQ annotation or planning report.
+
+\subsection{Abstract retention and set laws}
+\label{sec:join-order}\label{sec:retention}\label{sec:join-arity}
+For disjoint occurrence groups $C,E$, a ghost binary tree over full atoms can
+witness coarse join assembly; it is mathematical notation, not stored IR.
 \begin{mathpar}
 
 \Rule{O-Leaf}{i\in O}{i:\{i\}}
 
 \Rule{O-Join}{T_1:C\quad T_2:E\quad C\cap E=\emptyset}
- {(T_1\bowtie T_2):C\cup E}.
-\end{mathpar}
-Write $\operatorname{occ}(T)=C$ when $T:C$. Frontier $F(g)=(C,V,r)$ records
-coverage, sort, and result; coverages partition introduced occurrences.
-A ghost forest starts with $\mathcal T(i)=i$; Combine replaces its two trees
-by their join, other rules preserve them, and Output covers $O$.
-Interpreting leaves by $L_i$ and joins recursively gives
-$\sem{\mathcal E_L(T)}=\bowtie_{i\in\operatorname{occ}(T)}L_i$ by induction.
-The executable DAG also retains unary and semijoin-support dependencies.
+ {(T_1\bowtie T_2):C\cup E}
 
-Let $H$ be the head's set of names, $P$ pending guards,
-$X(C)=\bigcup_{i\in C}X_i$, and $\bar C=O\setminus C$. Retention requires
-\[
- K(C,P)=X(C)\cap(H\cup X(\bar C)\cup\vars(P))\subseteq V_C\subseteq X(C).
-\]
-Consequently $V_C\cap V_E=X(C)\cap X(E)=S_X(C,E)$ for disjoint groups:
-each shared variable is an outside use on both sides. This is the exact emitted
-join key after pruning. Combine contracts these vertices of the quotient
-adjacency graph. Empty keys give Cartesian product; $V_E\subseteq V_C$ gives
-membership; otherwise the join supplies $V_E\setminus V_C$ from the same matching tuple.
-After introduction, the global invariant is
-\begin{equation}\label{eq:global}
- \operatorname{out}_{\bar h}\!\left(\pi_H\sigma_{\bigwedge P}
-   \left(\mathop{\bowtie}_{(C,V,r)\in F}\sem r\right)\right)=\sem q_I.
-\end{equation}
-Applied guards are already reflected in the frontier relations.
-Initially $D,F$ are empty, $P$ contains all guards, $i=0$, and $\phi=\mathsf{Starting}$.
-Emission appends a fresh named result, checking the graph route's cap first.
+\Rule{L-Retention}{L:V\quad M:W\quad V\cap(W\cup H\cup\fv(P))\subseteq U\subseteq V}
+ {\pi_H\sigma_P(L\bowtie M)=\pi_H\sigma_P(\pi_U L\bowtie M)}
+\end{mathpar}
+All three rules here are abstract. Retention follows by restricting a left
+witness in one direction and choosing its original witness in the other; all
+shared or observed coordinates survive. In occurrence notation its required
+sort is $K(C,P)=X(C)\cap(H\cup X(O\setminus C)\cup\fv(P))$.
+This law justifies potential last-use pruning but the implemented elaborator
+only projects partial subatoms and the final head. Projection and joins here
+have finite-set semantics; the law does not preserve arbitrary callback counts.
+
+Heading arity $|V|$, row cardinality $|\sem r_I|$, physical bytes and elimination
+width are different measures. An abstract row-volume proxy is
+$W_0(D,I)=\sum_{r=l\bowtie s\in D}|\sem r_I|$.
+It is not a runtime statistic or an optimality guarantee. Fine variable-at-a-time
+planning is implemented; this paper establishes no WCOJ complexity bound.
+
+\subsection{Facade compositions}
+Let $N$ be normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction and $E$
+elaboration. Each expression below means fallible composition of constructors.
 \begin{mathpar}
 
-\Rule{P-Start}{\phi=\mathsf{Starting}\quad i<n\quad
- \emit(D,\delta_{m_i}(R_i))=(D',r_i)}
- {(D,F,P,i,\phi)\step{P-Start}
- (D',F[i\mapsto(\{i\},X_i,r_i)],P,i+1,\phi')}
+\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad a=E(v)}
+ {\code{cq_to_ra}(q)=a}
 
-\Rule{P-Select}{\phi\in\{\mathsf{Local},\mathsf{Assembly}\}\quad
- p\in P\quad F(g)=(C,V,r)\quad\vars(p)\subseteq V\\
- \emit(D,\sigma_pr)=(D',s)}
- {(D,F,P,\phi)\step{P-Select}(D',F[g\mapsto(C,V,s)],P\setminus\{p\},\phi)}
+\Rule{Plan-Generic}{n=N(q)\quad v=O_{Written,Fine}(n)\quad a=E(v)}
+ {\code{cq_to_ra_generic}(q)=a}
 
-\Rule{P-Begin}{\phi=\mathsf{Local}\quad i=n\quad\nexists\text{ ready Select}}
- {(D,F,P,\phi)\step{P-Begin}(D,F,P,\phi_J)}
-
-\Rule{P-Combine}{F(g)=(C,V,r)\quad F(h)=(E,W,s)\quad C\cap E=\emptyset\\
- \phi=\mathsf{Assembly}\quad\text{no ready Select/Trim}\quad\emit(D,r\bowtie s)=(D',t)}
- {(D,F,P,\phi)\step{P-Combine}
- (D',(F\setminus\{g,h\})[g\mapsto(C\cup E,V\cup W,t)],P,\phi)}
-
-\Rule{P-Trim}{F(g)=(C,V,r)\quad U=K(C,P)\subsetneq V\quad
- \phi=\mathsf{Assembly}\\\text{no ready Select}\quad\emit(D,\pi_Ur)=(D',s)}
- {(D,F,P,\phi)\step{P-Trim}(D',F[g\mapsto(C,U,s)],P,\phi)}
-
-\Rule{P-Output}{\phi=\mathsf{Assembly}\quad F=\{g\mapsto(O,H,r)\}\quad P=\emptyset}
- {(D,F,P,\phi)\step{P-Output}(D,\mathsf{output}\ r\ \mathsf{as}\ h(\bar h))}
+\Rule{Plan-Graph}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
+ r=\text{if }\mathsf{analysis}(n).acyclic\text{ then Tree else None}\\
+ w=R_{Atoms,r}(v)\quad a=E(w)}
+ {\code{cq_to_ra_hypergraph}(q)=a}
 \end{mathpar}
-$\phi'=\mathsf{Local}$ iff $i+1=n$; otherwise Starting. The completed counter
-is implicit thereafter. $\phi_J$ is Reduction with a checked tree, Assembly
-otherwise. Begin initializes reduction without pruning. Trim uses exact $K$;
-retaining any intermediate superset is semantically safe but fails this eager policy.
-\begin{lemma}[Retention]
-If $V\cap(W\cup H\cup\vars(P))\subseteq U\subseteq V$, then
-$\pi_H\sigma_P(L\bowtie M)=\pi_H\sigma_P(\pi_UL\bowtie M)$
-for $L:V$, $M:W$ and well-scoped head/predicates.
-\end{lemma}
-\begin{proof}
-Restrict a left witness for one inclusion. For the converse choose its original
-witness in $L$: every coordinate shared with $M$ or observed by head/predicates
-is retained, so the witness remains compatible and gives the same output.
-\end{proof}
-\begin{theorem}[Assembly preservation and termination]
-Under $\mathcal H_{\rm rel}$, every complete graph derivation denotes $q$;
-the specified policy terminates or rejects its arity cap.
-\end{theorem}
-\begin{proof}
-Rename establishes the occurrence valuations. Select distributes a conjunct
-into a factor containing its variables; Combine uses join associativity; Trim
-uses retention; all preserve Eq.~\eqref{eq:global}. Complete coverage and no
-pending guards establish Output. The assembly measure
-$(|F|,|P|,\sum_g|V_g|)$ decreases lexicographically. Introduction is finite;
-reduction is justified next.
-\end{proof}
-
-\subsection{Yannakakis reduction}
-\label{sec:yannakakis}
-For occurrence relations $L_i:X_i$, global consistency means
-$L_i=\pi_{X_i}(\bowtie_jL_j)$ for every $i$; pairwise consistency only requires
-$L_i\ltimes L_j=L_i$ for every $i,j$. A full reducer establishes global
-consistency on every instance (AHV \S6.4).
-Fix a checked tree $J$, root $o$, parent $\operatorname{pa}$, children
-$\operatorname{ch}$, nonroot nodes $E_J$, subtrees $T_i$, and separators
-$S_c=X_c\cap X_{\operatorname{pa}(c)}$. Running intersection gives
-\begin{equation}\label{eq:separator-cut}
- X(T_c)\cap X(O\setminus T_c)=S_c.
-\end{equation}
-A variable crossing the cut must occur at both endpoints. Thus
-$a\ltimes_{S_c}b=\{t\in a\mid t\restrict S_c\in\pi_{S_c}b\}$ is the existing
-RA semijoin. For empty separators it tests nonemptiness.
-
-After local selections, fix $F_0(i)=(\{i\},X_i,r_i^0)$, $L_i=\sem{r_i^0}$,
-and pending $P_0$. The reduction context is
-$\mathcal Y(D,\mathbf r,U,Dn)=(D,F_0,P_0,\mathsf{Reduction};J,\mathbf r,U,Dn)$:
-latest result references and completed upward/downward child identities.
-\begin{mathpar}
-
-\Rule{Y-Init}{F_0(i)=(\{i\},X_i,r_i^0)\ (i<n)\quad J\text{ checked}\quad\nexists\text{ ready Select}}
- {(D,F_0,P_0,\mathsf{Local};\bot)\step{P-Begin}
- \mathcal Y(D,(r_i^0)_i,\emptyset,\emptyset)}
-
-\Rule{Y-Up}{c\in E_J\setminus U\quad\operatorname{ch}(c)\subseteq U\quad Dn=\emptyset\\
- p=\operatorname{pa}(c)\quad\emit(D,\mathbf r(p)\ltimes_{S_c}\mathbf r(c))=(D',s)}
- {\mathcal Y(D,\mathbf r,U,Dn)\step{Y-Up}\mathcal Y(D',\mathbf r[p\mapsto s],U\cup\{c\},Dn)}
-
-\Rule{Y-Down}{U=E_J\quad c\in E_J\setminus Dn\quad p=\operatorname{pa}(c)\quad(p=o\lor p\in Dn)\\
- \emit(D,\mathbf r(c)\ltimes_{S_c}\mathbf r(p))=(D',s)}
- {\mathcal Y(D,\mathbf r,U,Dn)\step{Y-Down}\mathcal Y(D',\mathbf r[c\mapsto s],U,Dn\cup\{c\})}
-
-\Rule{Y-Freeze}{U=Dn=E_J\quad F'(i)=(\{i\},X_i,\mathbf r(i))\ (i<n)}
- {\mathcal Y(D,\mathbf r,U,Dn)\step{Y-Freeze}(D,F',P_0,\mathsf{Assembly};\bot)}
-\end{mathpar}
-Y-Init is Begin's tree branch, not another trace event. No sort changes during
-reduction: each step reads both latest versions and replaces only its target
-reference; Freeze transfers references without emission.
-\begin{algorithm}[tbp]
-\caption{Yannakakis sweeps after Y-Init}
-\label{alg:ya}
-\begin{algorithmic}[1]
-\Procedure{Reduce}{$S,\delta,J$}
- \State $B\gets[\operatorname{root}(J)];\quad k\gets0$
- \While{$k<|B|$}
-  \State Append $\operatorname{children}(J,B_k)$ in increasing ID order to $B$; $k\gets k+1$
- \EndWhile
- \State \textbf{for} $c$ in $[B_{n-1},\ldots,B_1]$ \textbf{do} \Call{Apply}{$S,\delta,\mathsf{Up}(c)$}
- \State \textbf{for} $c$ in $[B_1,\ldots,B_{n-1}]$ \textbf{do} \Call{Apply}{$S,\delta,\mathsf{Down}(c)$}
- \State \Call{Apply}{$S,\delta,\mathsf{Freeze}$}
-\EndProcedure
-\end{algorithmic}
-\end{algorithm}
-For $Q=\bowtie_iL_i$, the upward invariant and its completed form are
-\begin{equation}\label{eq:up-support}
- \sem{\mathbf r(i)}=\pi_{X_i}\!\left(\bowtie_{j\in\Omega_i(U)}L_j\right),\quad
- \Omega_i(U)=\{i\}\cup\bigcup_{c\in\operatorname{ch}(i)\cap U}T_c,\quad
- A_i=\pi_{X_i}\!\left(\bowtie_{j\in T_i}L_j\right).
-\end{equation}
-The cut identity gives, with $B_c=\pi_{S_c}(\bowtie_{j\notin T_c}L_j)$,
-\begin{equation}\label{eq:outside-support}
- \pi_{X_c}Q=A_c\ltimes_{S_c}B_c.
-\end{equation}
-During Down, $\{o\}\cup Dn$ is ancestor closed and
-\begin{equation}\label{eq:down-support}
- \sem{\mathbf r(i)}=\begin{cases}\pi_{X_i}Q,&i\in\{o\}\cup Dn,\\A_i,&\text{otherwise}.\end{cases}
-\end{equation}
-\begin{theorem}[Yannakakis full reduction]
-The sweeps preserve $Q$ and emit $2(n-1)$ semijoins unless the cap rejects.
-At Freeze, $\sem{\mathbf r(i)}=\pi_{X_i}Q$ for every occurrence.
-\end{theorem}
-\begin{proof}
-A full-join witness supplies support for every semijoin, so each replacement
-preserves $Q$. In Up, completed children supply $A_c$. Their subtrees intersect
-the accumulated target only through $S_c$; joining their witnesses proves
-Eq.~\eqref{eq:up-support}. On completion the root equals $\pi_{X_o}Q$.
-For Down to $c$, choose a subtree witness for a surviving tuple in $A_c$ and
-a full-join witness for its matching, globally supported parent tuple.
-Restrict the latter to the complement of $T_c$; Eq.~\eqref{eq:separator-cut}
-allows their union. Conversely each full witness survives. This proves
-Eq.~\eqref{eq:down-support}. Reverse/forward BFS supplies the required completed
-children/parent respectively, visiting each nonroot edge once per direction.
-Empty separators and the one-node case satisfy the same argument.
-\end{proof}
-This reducer includes applied local guards, not pending cross-occurrence
-predicates: these still require assembly. \code{cq_reduce::tree} emits the Up
-and Down sweeps as \code{reduce} steps before the first atom step; the VO
-contract validates directions and shared variables, and \code{cq_reduce::check}
-requires the erasure to give the unreduced plan back.
-
-\subsection{Policy, width, and the compilation judgment}
-\label{sec:planning-policy}\label{sec:join-arity}
-Let $G=\dom F$, $|G|>1$. Pair selection emits no RA; minima below are lexicographic.
-\begin{mathpar}
-
-\Rule{S-Written}{g=\min G\quad h=\min(G\setminus\{g\})}
- {\mathsf{pick}_{\rm Written}(F)=(g,h)}
-
-\Rule{S-Connected}{g=\min G\quad N=\{h\in G\setminus\{g\}\mid V_g\cap V_h\ne\emptyset\}\\
- h=\min(\text{if }N\ne\emptyset\text{ then }N\text{ else }G\setminus\{g\})}
- {\mathsf{pick}_{\rm Connected}(F)=(g,h)}
-
-\Rule{S-Greedy}{(w,g,h)=\min\{(|V_i\cup V_j|,i,j)\mid i,j\in G,\ i<j\}}
- {\mathsf{pick}_{\rm GreedyWidth}(F)=(g,h)}
-
-\Rule{S-Tree}{r=\operatorname{root}(J)\quad
- i=\min\{j\in G\setminus\{r\}\mid\operatorname{pa}(j)\in C_r\}}
- {\mathsf{pick}_{\rm Auto,J}(F)=(r,i)}
-\end{mathpar}
-Auto without a tree uses GreedyWidth; other policies use their named rule.
-Written/Connected grow the least group; GreedyWidth admits bushy assembly.
-S-Tree maintains a root-connected coverage and all other groups singleton.
-A path to an uncovered node supplies a candidate; running intersection makes
-the selected join key its parent separator. This ID-based assembly order is
-independent of BFS reduction order.
-
-For $r:V$, let $a(r)=|V|$. Raw join arity, retained arity, and reported peak are
-\[
- \begin{aligned}
- a_{\bowtie}(C,E)&=|V_C\cup V_E|=|V_C|+|V_E|-|S_X(C,E)|,\\
- a_{\rm retained}(C,P)&=|K(C,P)|,\qquad
- w(D)=\max(\{0\}\cup\{a(r)\mid r=o\in D\}).
- \end{aligned}
-\]
-All named results count, including original Renames, reductions, and joins
-before pruning. With optional cap $b$ and sort environment $\Gamma$:
-\begin{mathpar}
-
-\Rule{E-Emit}{\Gamma\vdash o:V\quad r\text{ fresh}\quad(b=\bot\lor |V|\le b)}
- {\Gamma;b\vdash(D,o)\leadsto(D\concat[r=o],\Gamma[r\mapsto V],r)}
-
-\Rule{E-Arity}{\Gamma\vdash o:V\quad b\ne\bot\quad |V|>b}
- {\Gamma;b\vdash(D,o)\leadsto\mathsf{arityError}\quad[D\text{ unchanged}]}
-\end{mathpar}
-Graph emission checks the cap before mutation; prefix planning checks completed
-RA. The checker recomputes $w(D)$. GreedyWidth minimizes only the next raw arity;
-a cap rejection does not establish global infeasibility.
-For $c_I(r)=|\sem r_I|$, the notes' row-volume proxy is
-$W_0(D,I)=\sum_{r=o\in D,\ o\text{ NaturalJoin}}c_I(r)$.
-Materialized \code{stats.results} exposes each count; \code{join_pairs} equals
-$W_0$ under set assumptions, including membership joins but excluding reduction
-and indexing. Bytes and decomposition widths are different measures;
-cardinality/WCOJ optimization remains Stage II.
-
-Let \textsc{Eager} repeatedly apply the least ready Select pair $(p,g)$,
-otherwise the least applicable Trim group, until neither exists.
-\begin{algorithm}[tbp]
-\caption{Graph-domain planning for well-formed $q$: $(D,o,\alpha,J,\delta)$}
-\label{alg:graph-plan}
-\begin{algorithmic}[1]
-\Function{GraphPlan}{$q,s,b$}
- \State $X\gets\operatorname{incidence}(q);\quad(\alpha,J)\gets(\emptyseq,\mathsf{None})$
- \State \textbf{if} $s=\mathsf{Auto}$ \textbf{then} $(\alpha,J)\gets\Call{GYO}{X}$
- \State \textbf{if} $J\ne\mathsf{None}$ \textbf{then} check H-JoinTree on $X$
- \State $S\gets\operatorname{JoinState}(q,J,b);\quad\delta\gets\emptyseq$
- \State \textbf{for} $i=0,\ldots,n-1$ \textbf{do} \Call{Apply}{$S,\delta,\mathsf{Introduce}(i)$}
- \State \textbf{while} a ready Select $\rho$ exists \textbf{do} \Call{Apply}{$S,\delta,\rho$}
- \State \Call{Apply}{$S,\delta,\mathsf{Begin}$}; \textbf{if} $J\ne\mathsf{None}$ \textbf{then} \Call{Reduce}{$S,\delta,J$}
- \State \Call{Eager}{$S,\delta$}
- \While{$|\dom S.F|>1$}
-  \State $(g,h)\gets\mathsf{pick}_{s,J}(S.F)$; \Call{Apply}{$S,\delta,\mathsf{Combine}(g,h)$}
-  \State \Call{Eager}{$S,\delta$}
- \EndWhile
- \State \Call{Apply}{$S,\delta,\mathsf{Output}(\text{sole group})$}; check local RA contract
- \State \Return $(S.D,S.o,\alpha,J,\delta)$
-\EndFunction
-\end{algorithmic}
-\end{algorithm}
-The initial Select loop uses the same least $(p,g)$ choice. $\mathsf{pick}_{s,J}$
-is the dispatcher defined above; \code{cq_order::Heuristic} realizes Written
-and the prefix rankings, and no heuristic reproduces S-Tree.
-With successful D-analysis $\mathcal D$ and the algorithms' return conventions:
-\begin{mathpar}
-
-\Rule{Plan-Graph}{\Sigma\vdash q:\mathsf{wfCQ}\quad\Sigma\vdash q:\mathsf{graphDomain}\\
- \mathsf{GraphPlan}(q,s,b)=(D,o,\alpha,J,\delta)}
- {\Sigma\vdash_s^b q\Downarrow(D,o;\alpha,J,\delta,w(D))}
-
-\Rule{Plan-Prefix}{\Sigma\vdash q:\mathsf{wfCQ}\quad\Sigma\not\vdash q:\mathsf{graphDomain}\\
- \mathsf{PrefixPlan}(q,\mathcal D,s,b)=(D,o,\delta)}
- {\Sigma\vdash_s^b q\Downarrow(D,o;\emptyseq,\mathsf{None},\delta,w(D))}
-\end{mathpar}
-The target retains source annotation and $(D,o)$; other components form the
-report. Checking establishes trace legality; the VO contract accepts other
-legal schedules without enforcing canonical policy choice.
-
-\subsection{Canonical and dependency-constrained prefixes}
-\label{sec:prefix-planning}
-Canonical CQ lowering uses written occurrence order, full joins, and final pruning only.
-For $a_i=\delta_{m_i}(R_i)$, starting at $(\emptyseq,\bot;0)$:
-\begin{mathpar}
-
-\Rule{B-Root}{p=\bot\quad\emit(D,a_i)=(D',r)}
- {(D,p;i)\Rightarrow_B(D',r;i+1)}
-
-\Rule{B-Join}{p\ne\bot\quad\emit(D,a_i)=(D_1,r)\quad\emit(D_1,p\bowtie r)=(D',s)}
- {(D,p;i)\Rightarrow_B(D',s;i+1)}
-
-\Rule{B-Output}{i=n\quad\emit(D,\pi_Hp)=(D',r)}
- {(D,p;i)\Rightarrow_B(D',\mathsf{output}\ r\ \mathsf{as}\ h(\bar h))}
-\end{mathpar}
-Induction gives its complete join followed by head projection. Extended CQ
-uses the following C-* rules, with Written policy for canonical lowering.
-
-For body $c_0,\ldots,c_{m-1}$, D-facts define barrier edges
-$E_{\rm barrier}=\{(i,j)\mid i<j\land(\neg m_i\lor\neg m_j)\}$.
-Availability is additionally a set condition: a required name can have alternative
-atom providers, whereas a computed key has directed inputs. State
-$S=(D,p,B,U,K,o)$ holds definitions, optional prefix, complete sort, pending
-clauses, normalized literal keys, and optional output. Initially $D,B,K$
-are empty, $U$ is the full clause set, and $p,o=\bot$. Fresh-name supply is
-implicit. \textit{unitize} emits $\mathbf1$ only when no prefix exists.
-\begin{mathpar}
-
-\Rule{C-Ready}{\operatorname{normalized}(K)\quad o=\bot\quad i\in U\quad R_i\subseteq B\\
- \forall j\in U.\ j<i\Rightarrow(m_i\land m_j)\quad
- (c_i\text{ is Bind}\Rightarrow O_i\cap B=\emptyset)}
- {S\vdash i:\mathsf{ready}}
-
-\Rule{C-Constant}{(i,j)\text{ next unnormalized literal}\quad U=\{0,\ldots,m-1\}\quad k\text{ fresh}\\
- (D',p')=\operatorname{typedBind}(D,p,k,\tau_{ij},\operatorname{arg}(c_i,j))}
- {(D,p,B,U,K,\bot)\step{C-Constant}(D',p',B\cup\{k\},U,K[(i,j)\mapsto k],\bot)}
-
-\Rule{C-Guard}{S\vdash i:\mathsf{ready}\quad c_i=\mathsf{if}\ e\\
- (D_0,p_0)=\operatorname{unitize}(D,p)\quad\emit(D_0,\sigma_ep_0)=(D',p')}
- {S\step{C-Guard}(D',p',B,U\setminus\{i\},K,\bot)}
-
-\Rule{C-Bind}{S\vdash i:\mathsf{ready}\quad c_i=\mathsf{let}\ p_0[:\tau]=e\\
- N=\binds(p_0)\quad(D',p')=\operatorname{typedBind}(D,p,p_0,\tau,e)}
- {S\step{C-Bind}(D',p',B\cup\set(N),U\setminus\{i\},K,\bot)}
-\end{mathpar}
-Here $\operatorname{arg}(c_i,j)$ and $\tau_{ij}$ are its actual argument and declared type.
-\textit{typedBind} unitizes and emits Extend with
-\code{\{ let PAT: TYPE = EXPR; (BOUND_NAMES,) \}}; annotation is optional,
-and zero bindings omit the tail expression. No rule follows an existing output.
-
-C-Match walks arguments with context $(D,p,\widehat B,L,M,E)$: prospective
-sort, earlier bare names, positional map, and delayed equalities; $B_0$ is the
-original prefix sort. Ordered cases define the A-judgment:
-\begin{mathpar}
-
-\Rule{A-Constant}{K(i,j)=k}{a_j\leadsto_A k\quad[\text{no emission}]}
-
-\Rule{A-Variable}{a_j=x\quad x\notin L}{a_j\leadsto_A x\quad[L:=L\cup\{x\}]}
-
-\Rule{A-Repeat}{a_j=x\in L\quad k\text{ fresh}}
- {a_j\leadsto_A k\quad[E:=E\concat(k=x)]}
-
-\Rule{A-Wildcard}{a_j=\_\quad k\text{ fresh}}
- {a_j\leadsto_A k\quad[\text{distinct witness}]}
-
-\Rule{A-Prefix}{a_j=e\quad\uses(e,L\setminus B_0)=\emptyset\quad k\text{ fresh}}
- {a_j\leadsto_A k\quad[p:=\operatorname{ext}_{\{k:\tau_j\},(e,)}(\operatorname{unitize}(p))]}
-
-\Rule{A-Local}{a_j=e\quad\uses(e,L\setminus B_0)\ne\emptyset\quad k\text{ fresh}}
- {a_j\leadsto_A k\quad[E:=E\concat(k.\mathsf{eq}(\&e))]}
-\end{mathpar}
-Each case requires earlier cases inapplicable, appends its schema-position
-mapping to $M$, and inserts the result name into $\widehat B$.
-A-Prefix extends before matching; A-Local tests after same-atom variables exist.
-Only completed clause states require $B=\sort(p)$.
-\[
-\Rule{C-Match}{S\vdash i:\mathsf{ready}\quad c_i=R(\bar a)\\
- (D,p,B,\emptyset,\emptyset,\emptyseq)\leadsto_A^*(D_1,p_1,B_1,L,M,E)\\
- (D_2,r)=\emit(D_1,\delta_M(R))\quad(D_3,t)=\operatorname{joinPrefix}(D_2,p_1,r)\\
- (D',p')=\operatorname{selectList}(D_3,t,E)}
- {S\step{C-Match}(D',p',B_1,U\setminus\{i\},K,\bot)}.
-\]
-\textit{joinPrefix} joins an existing prefix or returns $r$;
-\textit{selectList} emits equalities in argument order. The trace records Match once.
-Let $\operatorname{keepHead}(B,h)$ be bare-head dependencies, or all $B$ for a
-computed head. Witnesses survive until Finish:
-\[
-\Rule{C-Finish}{\operatorname{normalized}(K)\quad U=\emptyset\quad o=\bot\quad W=\operatorname{keepHead}(B,h)\\
- (D_0,p_0)=\operatorname{unitize}(D,p)\quad\emit(D_0,\pi_Wp_0)=(D',r)}
- {S\step{C-Finish}(D',r,W,\emptyset,K,\mathsf{output}\ r\ \mathsf{as}\ h(\bar e))}.
-\]
-\begin{theorem}[Prefix lowering]
-Under $\mathcal H_{\rm rel}$ and CQ well-scoping, a complete C-derivation
-denotes $q$; its policy terminates or rejects with a diagnostic.
-\end{theorem}
-\begin{proof}
-Induct on written clauses. Constant/Repeat enforce positional equalities,
-Variable joins shared names, and Wildcard retains a witness. Prefix extension
-and Local selection enforce their expression's value after its inputs exist.
-Guard restricts and Bind extends this relation; Finish applies the head.
-For another legal schedule, move each chosen clause left across earlier pending
-clauses. C-Ready requires both sides movable and inputs available: relational
-atoms commute, a fresh literal binding has no inputs, and an available primitive
-guard commutes with extensions. Under $\mathcal H_{\rm rel}$ these exchanges
-preserve denotation. Normalization is finite and every clause removes one pending
-identity; the least pending written clause is ready for valid written scope.
-\end{proof}
-
-For atoms put $j_i=|O_i\cap B|+|K_i|$ and $e_i=|B|+a_i-j_i$ for
-GreedyWidth/Auto, otherwise $e_i=0$. Choose lexicographically by
-\[
- \operatorname{rank}_s(i,B)=\begin{cases}
- (0,0,0,i),&s=\mathsf{Written}\text{ or }c_i\text{ is not an atom},\\
- (1,[j_i=0],e_i,i),&\text{otherwise}.
- \end{cases}
-\]
-Non-Written policies prefer guards/bindings, then shared/literal keys, then
-estimated union arity including anonymous/repeated positional columns.
-\begin{algorithm}[tbp]
-\caption{Prefix planning with successful D-analysis $\mathcal D$}
-\label{alg:prefix}
-\begin{algorithmic}[1]
-\Function{PrefixPlan}{$q,\mathcal D,s,b$}
- \State $S\gets\operatorname{ClauseState}(q,\mathcal D);\quad\delta\gets\emptyseq$
- \State \textbf{for} literal $(i,j)$ in lexicographic order \textbf{do} \Call{Apply}{$S,\delta,\mathsf{Constant}(i,j)$}
- \While{$S.U\ne\emptyset$}
-  \State $R\gets\{i\in S.U\mid S\vdash i:\mathsf{ready}\}$; \textbf{reject} if $R=\emptyset$
-  \State $i\gets\operatorname*{arg\,min}_{i\in R}\operatorname{rank}_s(i,S.B)$
-  \State $\rho\gets\mathsf{Match}(i)$, $\mathsf{Guard}(i)$, or $\mathsf{Bind}(i)$ according to $c_i$
-  \State \textbf{reject} unsupported clause; otherwise \Call{Apply}{$S,\delta,\rho$}
- \EndWhile
- \State \Call{Apply}{$S,\delta,\mathsf{Finish}$}; check local RA contract and $b=\bot\lor w(S.D)\le b$
- \State \Return $(S.D,S.o,\delta)$
-\EndFunction
-\end{algorithmic}
-\end{algorithm}
-The independent RA/trace checker shares D-analysis. Implementation correspondence
-and host adequacy remain separate obligations (Section~\ref{sec:scope}).
+The caller selects the named macro route. Each successful route passes its
+standalone RA program to \code{mini_linq::choose_index_policy!}.

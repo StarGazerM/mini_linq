@@ -26,11 +26,15 @@ printer emits beside the value; those trait laws are stated in
 \path{runtime/cq-storage/src/lib.rs} and checked by its representation tests.
 
 \paragraph{Residual syntax and ownership.}
-An expansion can return $C[h_1,\ldots,h_n]$, an ordinary Rust context containing
-lower-language quotations. Each hole records a remaining compilation task.
-The printed program borrows from hosts and built structures and copies no
-binding; an owned computed value crossing a join is a Rust move error. Rust
-type checking alone does not establish the representation laws.
+Abstract composition uses $C[h_1,\ldots,h_n]$ for an ordinary Rust context
+containing lower-language quotations (ST-Hole). This notation states the
+remaining compilation obligations; it is not an implementation data structure.
+The current macro entries transport complete next-language payloads; terminal
+realization returns a Rust expression. The printed rows borrow host/built fields;
+host-key lookup constructs an owned key with \code{Clone::clone}, while built
+indexes use reference keys. Owned computed values remain subject to Rust move
+and borrow rules, with no general cloning fallback. Distinct-state providers
+may clone retained rows. Rust typing alone does not establish representation laws.
 
 \paragraph{Three independent checks.}
 Acceptance requires
@@ -39,7 +43,9 @@ Acceptance requires
  \mathsf{ExpectedExpansion}(s,t)\ \land\
  \mathsf{SemanticAgreement}(s,t).
 \]
-The first checks compilation premises and conclusions. The second compares
+The first checks the implemented structural premises and conclusions, with the
+scope stated per pass in Section~\ref{sec:pass-contracts}; realization has no
+independent Rust semantic checker. The second compares
 each actual macro output with its authored boundary fixture, ignoring only
 whitespace and source spans. The third checks representation laws and answers
 with independent oracles. Equal answers cannot compensate for hardcoded dispatch,
@@ -51,6 +57,7 @@ RA denotes sets. Physical enumeration may contain multiple witnesses; its
 consumer must implement the requested observation. Pure completed answers do
 not establish equal partial-consumption, callback or destructor traces. Host
 quotation requires binding, typing and lifetime preservation and the assumptions
-of Section~\ref{sec:scope}. Push/pull placement remains unspecified.
+of Section~\ref{sec:scope}. Current realization is pull-based; equivalence for
+arbitrary callback and destructor traces is not established.
 Section~\ref{sec:evaluation} lists the evidence for the implemented chain.
 Documentation checks alone do not establish the runtime trait laws.

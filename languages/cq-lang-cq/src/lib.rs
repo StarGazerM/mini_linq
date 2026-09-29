@@ -102,7 +102,7 @@ impl Query {
 ///
 /// ```text
 /// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
-///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)*] ")" "in" Atom
+///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum BodyItem {
@@ -175,6 +175,7 @@ pub mod contract {
     }
 }
 
+/// Formal rule WF-CQ: Check CQ declarations, positive scope, output arity and symbolic type availability.
 fn check_program(program: &Program) -> syn::Result<()> {
     let mut schema = check_input_declarations(&program.declarations)?;
     if let Some(output) = schema.remove(&symbol_name(&program.query.head.relation)) {

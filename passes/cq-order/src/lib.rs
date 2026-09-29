@@ -94,6 +94,9 @@ impl Clause<'_> {
     }
 }
 
+/// Formal rule D-Atom: Atom provides its columns and requires let-supplied columns.
+/// Formal rule D-Guard: Guard requires dependencies on the written prefix.
+/// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
 fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
     let let_bound: BTreeSet<String> = query
         .body
@@ -145,6 +148,7 @@ fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
 
 /// Whether the clause may be placed: its inputs are bound and, for a guard
 /// or binding, it is the next of its kind in query order.
+/// Formal rule C-Ready: Require inputs and next pending guard or let of the same kind.
 fn ready(
     clauses: &[Clause<'_>],
     pending: &[usize],
@@ -201,6 +205,8 @@ fn schedule(
 
 /// The clause-prefix rank: a ready guard or binding, then an atom sharing a
 /// bound variable, then the narrowest heading, then the earliest clause.
+/// Formal rule S-Connected: Ready atoms rank by shared names then clause index.
+/// Formal rule S-Greedy: GreedyWidth and Auto rank connected atoms before union arity.
 fn prefix_rank<'a>(
     clauses: &'a [Clause<'a>],
     ranking: Ranking,
@@ -220,6 +226,7 @@ fn prefix_rank<'a>(
 }
 
 /// Atoms in the order of their earliest variable in the elimination order.
+/// Formal rule S-Elimination: Rank ready atoms by earliest elimination variable then clause index.
 fn elimination(
     source: &cq::Program,
     clauses: &[Clause<'_>],
@@ -283,6 +290,7 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> valua
     )
 }
 
+/// Formal rule O-Coarse: Copy guards and lets; emit one full subatom per chosen atom.
 fn coarse(clauses: &[Clause<'_>], sequence: &[usize]) -> Vec<valuation::Step> {
     sequence
         .iter()
@@ -338,6 +346,7 @@ impl Fine<'_> {
 /// One variable at a time, in `variables` order: its first atom in plan
 /// order binds it over the bound columns, every other atom holding it
 /// checks; a variable a binding supplies waits for that binding.
+/// Formal rule O-Fine: Iterate variables with ready bindings and guards; introduce then check.
 fn fine(
     query: &cq::Query,
     clauses: &[Clause<'_>],
@@ -403,6 +412,7 @@ fn atom(item: &BodyItem) -> &cq::Atom {
 }
 
 /// Order the normal-form query under `options`, then check the VO contract.
+/// Formal rule S-Written: Written uses the complete normal-form body sequence.
 pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
     let query = &source.query;
@@ -438,6 +448,7 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
 
 /// Check normal form, unchanged CQ, split granularity and explicit order.
 /// Prefix and elimination rankings are expansion choices, not obligations.
+/// Formal rule CK-Order: Validate unchanged CQ, split, coverage and Written introducing order.
 pub fn check(
     source: &cq::Program,
     target: &valuation::Program,

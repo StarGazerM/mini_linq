@@ -50,8 +50,8 @@ printed pages.
 
 ## Compiler-specific notation and differences
 
-- Source names such as `heading` and `retained_heading` remain implementation
-  identifiers. Their mathematical objects are a sort and a retained sort.
+- `heading` denotes a sort; elaboration's `finish` computes a `retained` sort
+  for the output projection.
 - `GreedyWidth` measures logical arity. Its name supplies no cardinality,
   physical-byte-width, or hypergraph-decomposition-width guarantee.
 - The `G-Private`/`G-Absorb` system is a **variant** of AHV Algorithm 6.4.4.
@@ -59,7 +59,7 @@ printed pages.
   remaining original edges; its successful final root is the last isolated
   ear in the textbook presentation. Occurrence duplicates require the stated
   projection to the underlying textbook hypergraph.
-- Administrative frontiers, dependency facts, immutable RA definitions,
+- Dependency facts, valuation schedules, immutable RA definitions,
   host-expression extensions and staged contexts are compiler specification
   constructs. They are not attributed to AHV as textbook definitions.
 - A sort is a set of attribute names. Lexically sorting those names chooses
@@ -67,9 +67,7 @@ printed pages.
   The manuscript's sorted-storage comparison specifies a separate enumeration
   property. The implemented hash representations promise no such row order.
 - The computed-attribute subset in RA typing records field origin for Rust
-  representation. The dynamic provenance record in the extended manuscript
-  is a separate semantic investigation, grounded in the cited provenance
-  literature; it is not an existing analysis result or an AHV definition.
+  representation; it is not an AHV definition.
 
 These correspondences establish which definitions and adaptations are being
 used. They do not discharge the implementation and host-language proof

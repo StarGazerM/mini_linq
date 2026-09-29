@@ -161,6 +161,7 @@ pub struct RelationInfo {
     operands: Vec<String>,
 }
 
+/// Formal rule WF-RA: Check declarations, local operators, output heading and definition reachability.
 fn check_in<'a>(
     inputs: impl IntoIterator<Item = &'a cq_syntax::RelationDecl>,
     plan: &Plan,

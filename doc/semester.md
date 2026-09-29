@@ -109,20 +109,20 @@ implementation assignment.
 ### Cumulative engine project — 50 points
 
 Students work individually or in pairs in a supplied Rust codebase. The
-current physical-lowering checkpoint contains one `mini-linq` proc-macro crate,
-Syn-backed CQ, CQ-NF, VO, RelationalPlan, IndexRequirements, Physical,
-the bindings Γ, local language checks, and tests. Its basic route has three
+current physical-lowering checkpoint contains the `mini-linq` proc-macro
+facade, Syn-backed CQ, CQ-NF, VO, RA, IX, Physical, and Structures programs,
+their local language contracts, and tests. Its basic route has three
 homework boundaries. The CQ-to-RA chain lives in `languages/cq-lang-cq/src/normal.rs`,
 `passes/cq-order/src/lib.rs`, and `passes/cq-elaborate/src/lib.rs`; later stages
 live in `passes/cq-index-policy/src/lib.rs` and the `cq-physical-lowering`,
 `cq-structure-selection`, and `cq-physical-realization` crates:
 
 1. **Basic HW1:** CQ normalization, written-order coarse valuation planning,
-   then elaboration to a complete named RelationalPlan;
-2. **Basic HW2:** RelationalPlan to IndexRequirements, preserving that entire
-   plan while adding exact first-use keys; and
-3. **Basic HW3:** IndexRequirements plus a query-independent policy to
-   Physical, then Γ, then Rust.
+   then elaboration to a complete named RA program;
+2. **Basic HW2:** RA to IX, preserving that entire program while adding
+   exact first-use index demands; and
+3. **Basic HW3:** IX plus a query-independent policy to Physical, then
+   Structures, then Rust.
 
 The third edge is three recorded decisions. Physical fixes one physical
 operator per result and the mode of every read; the Structures program
@@ -142,7 +142,7 @@ stages:
 
 | Stage | Required implementation | Points |
 |---|---|---:|
-| 1. Logical and physical lowering | Complete Basic HW1 (CQ → NF → VO → RelationalPlan), HW2 (RelationalPlan → IndexRequirements), and HW3 (requirements → Physical → Γ → Rust) | 6 |
+| 1. Logical and physical lowering | Complete Basic HW1 (CQ → NF → VO → RA), HW2 (RA → IX), and HW3 (IX → Physical → Structures → Rust) | 6 |
 | 2. Execution control | Study the supplied pull program, then lower the same Γ to a staff-supplied push target without changing the chosen structures | 4 |
 | 3. Semijoin reduction | Implement a semijoin and both Yannakakis passes over a supplied join tree | 8 |
 | 4. Triejoin | Implement leapfrog intersection and variable-at-a-time enumeration using a supplied **valuation order** and tries | 12 |
@@ -155,34 +155,35 @@ Week 5, **R2** (Stages 3–4) at the end of Week 10, and **R3** (Stage 5) at the
 end of Week 14. Required recursion will be bounded to linear positive rules
 unless the starter code supplies general delta-rule generation.
 
-Every release consists of code and tests—no proposal or long report. The
-current Stage-1 gate checks intermediate modules against their language
-contracts and checks pass correspondence, compiles each
-fixed fixture with rustc, runs it, and checks expected rows. The fixtures
-include self-join and multiple-index reuse, a proper multi-column map, a used
-input consumed once, an unused input never iterated, lazy partial consumption,
-and projected duplicates. These are fixed
-per-fixture assertions, not generated-instance comparison with a CQ interpreter
-or DuckDB. Later releases time complete query calls; any per-access or
-algorithm-specific instrumentation is explicit later Rust-to-Rust work.
+Every release consists of code and tests—no proposal or long report. In the
+current checkout, each pass test pins `compile` on the 30-scenario per-stage
+corpus to the checked-in next-stage program, runs the pass's `check`, rejects
+mutated targets, and compares answers on generated databases against an
+oracle (for example, elaboration evaluates both the CQ and the RA). Separate
+full-chain integration tests expand the facade macros over host values,
+compile and run the printed Rust, and compare its answers. Any additional
+release-specific grading harness is specified with that release. Later
+releases time complete query calls; any per-access or algorithm-specific
+instrumentation is explicit later Rust-to-Rust work.
 DuckDB is a diagnostic baseline; the goal is to explain differences, not beat
 it. There is no leaderboard and no novelty requirement. An optional extension
 does not replace a required stage unless a later release-specific rubric says
 so.
 
 The recommended Optional Homework 4 is the guided
-[Ascent-style negation and aggregation extension](HW4-OPTIONAL.md). Students
-extend the CQ body IR and safety judgment, add logical `AntiSemijoin` and
-`AggregateApply` operators to RelationalPlan, extend demand derivation, and lower
-the new operators through Physical and Γ to the printed Rust
-program. HW4 is opt-in and does not
-replace or block a required release stage.
+[Ascent-style negation and aggregation extension](HW4-OPTIONAL.md). The CQ
+parser already accepts negation and aggregation body items, but the baseline
+CQ contract rejects them. Students extend the contract and safety judgment,
+add logical `AntiSemijoin` and `AggregateApply` operators to RA, extend demand
+derivation, and lower the new operators through Physical and Structures to
+the printed Rust program. HW4 is opt-in and does not replace or block a
+required release stage.
 
-Four further advanced-track designs are recorded in
+Further advanced-track designs are recorded in
 [Optional project tracks](OPTIONAL-PROJECT-TRACKS.md): push with Tokio messages
-and a possible IVM continuation, Rayon parallel physical lowering, several
-queries with an exact globally shared demand set, and arbitrary concrete Rust
-column types. Staff supplies any new target IR, checker, emitter, dependencies,
+and a possible IVM continuation, Rayon parallel physical lowering, and several
+queries with an exact globally shared demand set. Concrete Rust column types
+are already baseline. Staff supplies any new target IR, checker, emitter, dependencies,
 and complete residual examples; a student implements the named transformation
 rather than designing an IR from scratch. The document does not assign points
 or promise substitution for a required stage. In particular, replacing later
@@ -217,63 +218,43 @@ The project uses Rust with a procedural-macro CQ frontend. Staff supplies the
 crate configuration and direct Syn syntax definitions, including derived
 parsing and token emission. Staff also supplies the `mini_linq!`, `cq_to_ra!`,
 `index_demands!`, `lower_physical!`, `select_structures!`, and
-`structures_to_rust!` proc-macro entries. `mini_linq!` selects `cq_to_ra!`;
-the direct entries parse a `TokenStream` into the typed source for the next
-stage. Grammar failures become span-aware `syn::Error` diagnostics emitted as
-`compile_error!`. The typed functions check source semantics and return the
-same diagnostic type; macro entries do not duplicate those checks. Students
-implement the designated typed stages behind those entries.
+`structures_to_rust!` proc-macro entries. `mini_linq!` checks the CQ
+contract and forwards to the caller-resolved `cq_to_ra!`; each lowering entry
+parses its `TokenStream` into the typed source for its stage, calls the typed
+functions, and forwards the result to the next caller-resolved macro
+(`structures_to_rust!` emits the final Rust block instead). Grammar
+and contract failures alike become span-aware `syn::Error` diagnostics,
+in debug and release builds, emitted as `compile_error!`. Students implement
+the designated typed stages behind those entries.
 `cq_lang_cq::normal::normalize(&cq::Program)` produces CQ-NF;
-`cq_order::compile` with `Written` and `Coarse` produces a valuation plan;
+`cq_order::compile` with `Written` and `Coarse` produces a VO program;
 `cq_elaborate::compile` produces the named `ra::Program`.
 `cq_index_policy::compile(&ra::Program)` returns
-`syn::Result<ix::Program>` preserving that full plan and adding
-the exact requirements.
+`syn::Result<ix::Program>`, preserving that full program and adding the exact
+index demands.
 `cq_physical_lowering::compile(&ix::Program, &Policy)` and
 `cq_structure_selection::compile(&physical::Program, &Policy)` record the
 physical operators and the bindings Γ answering each keyed read, and
 `cq_physical_realization::compile(&structures::Program, &Endpoints)` returns
-`syn::Result<syn::Expr>`: one Rust block over the `cq-storage` traits. Inside each body they inspect
-the borrowed source and construct the complete target with `quote!` and
-`syn::parse2`.
+`syn::Result<syn::Expr>`: one Rust block over the `cq-storage` traits. Each
+pass borrows its source and constructs its typed target; `quote!` and
+`syn::parse2` are used where appropriate, particularly for Rust expressions.
 
-The CQ-to-RA chain validates normal form before ordering. Its subsequent
-planning boundaries have local validity and correspondence checks: ordering
-and reduction include the selected options, while elaboration compares RA
-and VO kernels by erasure, up to variable renaming. The later
-RelationalPlan-to-IndexRequirements and physical edges
-have their own correspondence checks. The generated physical Rust is
-inspected structurally by staged fixtures.
-The Basic-HW3 harness checks Physical and Γ against their language
-contracts and correspondence checks, prints Rust, compiles
-the resulting standalone file with rustc, executes it, and checks fixed fixture-specific
-results. `cq_physical_realization::check` compares the printed program
-against its Γ source; this structural audit does not prove arbitrary
-embedded Rust or state-provider implementations correct. The fixture harness is
-not a dynamic CQ/DuckDB oracle and not a generic `Pass` or `WellFormedIr` trait
-system.
-For each IR, diagnostic `contract::check` and Boolean
-`contract::well_formed` are two interfaces to the same local language
-judgment. Every public typed compilation entry calls its source's diagnostic
-`contract::check` before lowering, so invalid input returns a span-aware error
-in debug and release builds. Macro entries do not repeat this check. Tests and
-tools may also call it directly. Debug postconditions check the transformation
-separately; they are not the source-validation gate.
-`cq_order::compile`, `cq_elaborate::compile`, `cq_index_policy::compile`,
-`cq_physical_lowering::compile`, and `cq_structure_selection::compile` own
-target well-formedness at their boundaries. VO and RA are checked against the
-normalized CQ kernel by erasure, comparing kernels up to variable renaming.
-The realization endpoint returns a typed Rust AST node, while each
-proc-macro entry parses its embedded module before calling the matching
-typed function. Malformed grammar and invalid source semantics both produce
-`syn::Error` diagnostics; a debug edge-contract failure means a lowering
-violated its specified transformation.
+Each language exposes `contract::check(&Program)`, a span-aware check of
+that program alone. Each pass's `compile` checks its source contract and
+ends by checking its target's. Each pass except realization also exposes a
+separate `check(&source, &target, …)` that verifies correspondence when a
+test or tool calls it: ordering and reduction include the selected options,
+elaboration compares the RA kernel with the source CQ kernel by erasure up to
+variable renaming, and the IX and physical edges check their own preservation
+and choice obligations. Realization has no correspondence checker; its
+evidence is oracle tests, rustc trait guards (`cq_storage::require`), and
+expansion fixtures. There is no generic `Pass` or `WellFormedIr` trait system.
 Students do not write a parser, printer, procedural-macro entry point, or
 parallel Rust builder API. The final pass emits actual Rust collection
 construction and access expressions rather than another descriptor language.
-Supplied `cq_physical_realization::compile` consumes a `structures::Program`
-and returns one ordinary Rust block whose value is an iterator of answer
-tuples. The reference payload retains operator and intermediate-result boundaries, while the emitted
+The printed block is evaluated in the caller's scope over caller-owned host
+values and evaluates to an iterator of answer tuples. The emitted
 combinators retain resumable state. Calling `next()` or a consumer such as
 `any()` executes query traversal; the caller collects the root into
 a collection or drains it without storing the answers.
@@ -284,8 +265,8 @@ have to invent the callback/channel IR or runtime shell.
 
 The current starter supplies CQ-NF and VO syntax, `ra::Program`,
 `ix::Program`, `physical::Program`, `structures::Program`, their local `contract`
-modules, the supplied structure selection and pull-program printer, and the compiler test
-harness. Later releases add richer workload,
+modules, the supplied structure selection and pull-program printer, and the
+pass and integration tests. Later releases add richer workload,
 reference, and benchmark infrastructure.
 Students implement only the named compiler and execution passes; they do not
 build SQL parsing, transactions, a storage manager, a cost-based optimizer, or

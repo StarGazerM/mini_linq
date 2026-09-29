@@ -17,8 +17,8 @@ follows [Compiler ownership and composition](COMPILER-STRUCTURE.md).
 | VO → named RA | `cq_elaborate::compile` |
 | RA → named demands | `cq_index_policy::compile` |
 | IX plus policy → Physical | `cq_physical_lowering::compile` |
-| Physical plus policy → Γ | `cq_structure_selection::compile` |
-| Γ → Rust | `cq_physical_realization::compile` |
+| Physical plus policy → Structures | `cq_structure_selection::compile` |
+| Structures → Rust | `cq_physical_realization::compile` |
 
 `mini_linq!` selects `cq_to_ra!`: normalization, Written/Coarse ordering,
 and elaboration. `cq_to_ra_hypergraph!` uses the same order, then
@@ -54,14 +54,18 @@ guard over one atom into a reduction on that atom; opaque guards remain
 steps. Rust lexical scope remains in `cq::rust::free_variables`;
 type ascriptions belong to `Let::binding_types`.
 
-`cq::normal::check(module)` validates CQ-NF.
-`cq_order::check(source, target, options)` and
-`cq_reduce::check(source, target, options)` check their VO boundaries;
-`cq_elaborate::check(source, target)` checks RA correspondence. VO and RA
-erase to the same CQ-NF `Kernel`, compared up to variable renaming;
-`cq_elaborate::kernel` reads the query back from the emitted RA, rather
-than trusting its source annotation. Downstream passes consume the written
-algebra.
+`cq::normal::check(program)` validates CQ-NF. Each planning pass exports an
+independent correspondence check, invoked explicitly by tests and tools:
+`cq_order::check(source, target, options)` requires a normal source, the
+unchanged CQ inside the target VO, and the split and Written-order
+obligations; `cq_reduce::check(source, target, options)` erases reductions
+(dropping semijoins and returning pushed guards to steps), requires the
+source steps back, and checks each reduction against the options and the
+join tree; `cq_elaborate::check(source, target)` checks declarations and the
+output head and compares the CQ-NF `Kernel` that `cq_elaborate::kernel`
+reconstructs from the RA definitions with the source kernel. RA carries no
+CQ; erasure reads atoms, guards and bindings back from its renames, selects
+and extends. Downstream passes consume the written algebra.
 
 ## Languages used by planning
 
@@ -78,7 +82,7 @@ algebra.
 - IX records demands on exact RA versions: `i = @r[0,2]` uses ordinals in `r`'s
   sorted logical heading. Physical derives consumption from its operands. Empty shared
   headings still require an explicit `[]` demand. No structure is chosen by IX.
-- Physical fixes one physical operator and mode per result; Γ binds
+- Physical fixes one physical operator and mode per result; Structures binds
   every keyed read to a host key or a built type. Neither participates in
   logical join planning.
 
@@ -101,22 +105,21 @@ join tree upward and downward before the first atom step; it requires an
 acyclic body. `cq_elaborate::compile` turns each VO step into named RA over
 the current relation of partial valuations, then projects for the head.
 
-After normalization, the order, reduction and elaboration passes check their
-source/target correspondence; order and reduction take options as well.
-VO and RA kernels must agree with the CQ-NF kernel up to renaming. These
-checks concern logical content and well-formed steps; they do not measure
-runtime cost. The [pass tests](PLANNING-VERIFICATION.md) also compare selected
-plans with independently evaluated query answers.
+`compile` checks source and target language validity; correspondence is the
+separate `check` above. These checks concern logical content and
+well-formed steps; they do not measure runtime cost. The
+[pass tests](PLANNING-VERIFICATION.md) also compare plans with independently
+evaluated query answers.
 
 | Concept | Current location |
 |---|---|
 | Normalization and kernel | [normal.rs](../languages/cq-lang-cq/src/normal.rs) |
 | Incidence, GYO, join tree, elimination order and width | [hypergraph.rs](../languages/cq-lang-cq/src/hypergraph.rs) |
-| VO syntax, contract and kernel | [valuation.rs](../languages/cq-lang-vo/src/lib.rs) |
-| Order, heuristic and split | [cq-order](../passes/cq-order/src/lib.rs) |
-| Guard pushdown and tree reductions | [cq-reduce](../passes/cq-reduce/src/lib.rs) |
+| VO syntax and contract | [cq-lang-vo](../languages/cq-lang-vo/src/lib.rs) |
+| Order, heuristic, split and order check | [cq-order](../passes/cq-order/src/lib.rs) |
+| Guard pushdown and tree reductions | [cq-reduce](../passes/cq-reduce/src/lib.rs) and [its check](../passes/cq-reduce/src/correspondence.rs) |
 | VO elaboration and correspondence | [cq-elaborate](../passes/cq-elaborate/src/lib.rs) |
-| RA erasure and kernel | [ra/kernel.rs](../passes/cq-elaborate/src/kernel.rs) |
+| RA erasure and kernel | [cq-elaborate/src/kernel.rs](../passes/cq-elaborate/src/kernel.rs) |
 
 ## Scope and evidence
 

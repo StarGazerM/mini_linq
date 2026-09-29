@@ -223,6 +223,10 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
     Err(syn::Error::new_spanned(spanned, message))
 }
 
+/// Formal rule WF-Physical: Derive local headings and reads, then check output, reachability and modes.
+/// Formal rule PH-Pipe: Require one read and no keyed or range read for each pipe.
+/// Formal rule PH-Let: Require every let to be read.
+/// Formal rule PH-Alias: Require every alias to rename a declared relation.
 fn analyze(module: &Program) -> syn::Result<Analysis> {
     let program = &module.program;
     let declarations = cq_syntax::check_input_declarations(&program.declarations)?;

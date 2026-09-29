@@ -13,6 +13,7 @@ type Demands = BTreeMap<String, BTreeMap<Key, u8>>;
 
 /// Check unchanged Physical, all read premises, exact host facts, and built
 /// advice/defaults. Entry order is not a storage rule.
+/// Formal rule CK-Structures: Check Physical preservation, exact host facts and independently derived storage rules.
 pub fn check(
     source: &physical::Program,
     target: &structures::Program,

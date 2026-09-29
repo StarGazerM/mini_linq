@@ -41,15 +41,16 @@ the aggregator's output pattern. The relevant implementation is in Ascent's
 [`!R(...)` desugaring](https://github.com/s-arash/ascent/blob/cf5e9a87525bb95268cf6680a59882264b0fe0de/ascent_macro/src/ascent_syntax.rs#L989-L998), and its
 [`sum` and `not` aggregators](https://github.com/s-arash/ascent/blob/cf5e9a87525bb95268cf6680a59882264b0fe0de/ascent/src/aggregators.rs).
 
-This homework implements a deliberately narrow, Ascent-shaped fixed-`i32`
-subset. It keeps MiniLinq's `:-` rule separator and fixed `i32` columns, but
-uses Ascent's negation and aggregation clause syntax and evaluation model. For
-sums that fit in `i32`, its results agree with that subset; MiniLinq
-additionally requires checked overflow so debug and release execution cannot
-disagree. The course keeps the existing `cq` module so the exercise is a
-focused IR extension rather than duplicate parser plumbing. In its internal
-Rust API names, read “CQ” as historical compatibility, not as a claim that
-negation is a positive conjunctive query.
+This homework implements a deliberately narrow, Ascent-shaped subset: the
+summed column and the aggregate result are restricted to `i32`, while baseline
+relation columns keep their declared Rust types. It keeps MiniLinq's `:-` rule
+separator but uses Ascent's negation and aggregation clause syntax and
+evaluation model. For sums that fit in `i32`, its results agree with that
+subset; MiniLinq additionally requires checked overflow so debug and release
+execution cannot disagree. The exercise extends the existing CQ language
+(`cq-lang-cq`) rather than adding parser plumbing; read “CQ” in its API names
+as the source language, not as a claim that negation is a positive
+conjunctive query.
 
 ## Required example
 
@@ -73,13 +74,14 @@ Purchase = {(1, 10, 5,), (1, 20, 5,), (1, 30, 5,), (2, 30, 99,)}
 ```
 
 the result is `{(1, 15,), (3, 0,)}`. Ascent's `sum` produces one zero for an
-empty matching input, so person 3 remains. Input duplicates are removed when
-`inputN` is normalized to `relationN`; different relation tuples that carry
-the same aggregate value still contribute separately. Thus the three distinct
-person-1 tuples each contribute `5`. The second columns of both `Blocked` and
-`Purchase` are intentionally ignored: this fixture makes `_` part of the
-required surface and proves that wildcard and aggregate-value columns do not
-become demand-key columns.
+empty matching input, so person 3 remains. Aggregate input is a set: the
+extension must establish set-valued aggregate input explicitly, because there
+is no generated input-normalization stage to rely on. Different relation
+tuples that carry the same aggregate value still contribute separately, so the
+three distinct person-1 tuples each contribute `5`. The second columns of both
+`Blocked` and `Purchase` are intentionally ignored: this fixture makes `_` part
+of the required surface and proves that wildcard and aggregate-value columns do
+not become demand-key columns.
 
 ### Global-clause example
 
@@ -185,44 +187,45 @@ SCC/stratification framework to this homework. If a future language permits
 derived relations in these clauses, it must then add Ascent's dependency-graph
 check and reject cycles through negation or aggregation.
 
-## RelationalPlan extension
+## RA extension
 
-Do not lower the extended CQ directly to indexes. Basic HW1 still crosses
-CQ-NF and VO before RelationalPlan. Current normalization accepts positive
-queries, so this optional extension must define the new clauses through those
-stages. RelationalPlan already supplies `Unit`, the singleton zero-column
-relation used to seed a global clause. Extend its operator sum with
-`AntiSemijoin` and `AggregateApply`, then emit a named `rN` result for every
-source occurrence and operator. Do not redesign or reimplement `Unit`.
+Do not lower the extended CQ directly to indexes. The CQ → CQ-NF → VO → RA
+chain still applies, but the current CQ contract and `cq::normal::normalize`
+reject negation and aggregation, so this extension must define the new clauses
+through those stages. RA already supplies `unit`, the singleton zero-column
+relation used to seed a global clause. Add `antisemijoin` and
+`aggregate_apply` operators to RA, then emit a named `rN` result for every
+source occurrence and operator. Do not redesign or reimplement `unit`.
 
-The correlated required example is:
+The complete RA program for the correlated example is:
 
 ```text
-r0 = rename Person {c0 -> person};
-r1 = rename Blocked {c0 -> person, c1 -> blocked_anon0};
-r2 = antisemijoin r0 with r1;
-r3 = rename Purchase {c0 -> person, c1 -> purchase_anon0, c2 -> amount};
-r4 = aggregate_apply r2 with r3 value amount using sum into total;
-r5 = project r4 keep {person, total};
-output r5 as spend(person, total);
+relational {
+    relation Person(c0: i32);
+    relation Blocked(c0: i32, c1: i32);
+    relation Purchase(c0: i32, c1: i32, c2: i32);
+    r0 = rename Person { c0 -> person };
+    r1 = rename Blocked { c0 -> person, c1 -> blocked_anon0 };
+    r2 = antisemijoin r0 with r1;
+    r3 = rename Purchase { c0 -> person, c1 -> purchase_anon0, c2 -> amount };
+    r4 = aggregate_apply r2 with r3 value amount using sum into total;
+    r5 = project r4 keep { person, total };
+    output r5 as spend(person, total);
+}
 ```
 
-The complete logical residual for the global-clause example is exactly:
+The complete RA program for the global-clause example is:
 
 ```text
-pub struct GlobalSummaryProgram;
-relation Blocked(c0: i32);
-relation Purchase(c0: i32, c1: i32);
-summary(total) :-
-    !Blocked(_),
-    agg total = sum(amount) in Purchase(_, amount);
 relational {
+    relation Blocked(c0: i32);
+    relation Purchase(c0: i32, c1: i32);
     r0 = unit;
-    r1 = rename Blocked {c0 -> blocked_anon0};
+    r1 = rename Blocked { c0 -> blocked_anon0 };
     r2 = antisemijoin r0 with r1;
-    r3 = rename Purchase {c0 -> purchase_anon0, c1 -> amount};
+    r3 = rename Purchase { c0 -> purchase_anon0, c1 -> amount };
     r4 = aggregate_apply r2 with r3 value amount using sum into total;
-    r5 = project r4 keep {total};
+    r5 = project r4 keep { total };
     output r5 as summary(total);
 }
 ```
@@ -234,7 +237,7 @@ extended body item needs a left input and no positive prefix exists, emit one
 global clauses; do not emit one unit per clause. A positive-first query never
 needs `Unit`.
 
-As with NaturalJoin, correlation is inferred from the intersection of named
+As with `natural_join`, correlation is inferred from the intersection of named
 headings. An empty intersection is semantically significant. The global
 AntiSemijoin keeps `{()}` exactly when the declared `Blocked` input is empty.
 If that binding survives, AggregateApply groups the entire `Purchase` input,
@@ -254,107 +257,73 @@ source columns. They are not user variables and cannot be referenced by a
 later CQ clause, but each complete Rename must retain them until aggregation.
 Otherwise set projection would collapse the three distinct Purchase tuples
 carrying value `5` into one `(person, amount)` row and produce the wrong sum.
-Generated anonymous names must be collision-free within the plan. The
-extended CQ → NF → VO → RA chain maps each source `_` to its generated
+Generated anonymous names must be collision-free within the program. The
+extended CQ → CQ-NF → VO → RA chain maps each source `_` to its generated
 anonymous target in the Rename for that occurrence; no logical Scan operator
 is added.
 
-The extended RelationalPlan checker keeps the baseline local DAG rules: every
-result ID is unique, every operand is earlier, and inferred headings are exact. It also checks that AntiSemijoin preserves the left heading and that
-AggregateApply produces `left heading + fresh output`, consumes its value
-exactly once, and does not expose a right-local or anonymous attribute. The
-extension must first define kernel and erasure coverage for negation and
-aggregation, which the current positive-query kernel omits. Each extended
-pass then checks its source and target correspondence; RA and VO kernels
-compare up to variable renaming. Local well-formedness alone is not enough.
+Extend `ra::contract::check` while keeping its local rules: every result ID is
+unique, every operand is earlier, and inferred headings are exact. It must also
+check that AntiSemijoin preserves the left heading and that AggregateApply
+produces `left heading + fresh output`, consumes its value exactly once, and
+does not expose a right-local or anonymous attribute. A contract checks only
+its own program; each extended pass's `check(&source, &target)` must also
+relate source and target, so first define kernel and erasure coverage for
+negation and aggregation, which the current positive-query kernel omits.
 
 `Unit` and an AntiSemijoin over its empty heading naturally have an empty
 heading. AggregateApply then appends its fresh output, so its global result has
 the heading `{total}`.
 
-## IndexRequirements extension
+## IX demand extension
 
-Retain the existing IndexRequirements target and preserve the complete
-extended RelationalPlan inside it. Basic HW2 now derives keys from the named
-operators rather than repeating a direct CQ-body walk:
+IX appends an `indexes { … }` block to the unchanged RA program. The baseline
+`cq-index-policy` pass walks the RA definitions in order; for every
+`natural_join` and `semijoin` it demands the right operand's exact result
+`@rN`, keyed by the ordinals (in that result's sorted heading) of the
+attributes shared with the left heading. Empty keys are recorded as `@rN[]`,
+identical descriptors are shared, and names `i0, i1, …` follow first use.
+Extend `compile`, the independent `check`, and the IX contract (which
+recomputes the expected demand set) with the same rule for the new operators:
 
-- a `NaturalJoin` uses the baseline heading-intersection and Rename-inversion
-  rule;
-- an `AntiSemijoin` requires all inferred correlated non-wildcard source
-  columns from its right Rename;
-- an `AggregateApply` requires its inferred correlated source columns,
-  excluding its aggregate value and anonymous wildcard attributes;
-- add only nonempty keys, deduplicated by `(relation, columns)` in first-use
-  plan order.
+- an `AntiSemijoin` demands its right result keyed by the correlated
+  attributes;
+- an `AggregateApply` demands its right result keyed by the correlated
+  attributes, which never include the aggregate value or an anonymous wildcard
+  attribute.
 
-The narrow Basic-HW2 assignment does not require Unit. The implemented default
-expression route already admits it; HW4 must also continue the logical walk
-through AntiSemijoin and AggregateApply. For the global example, both
-heading intersections are empty, so neither clause creates a demand.
-An empty key means “enumerate/test the whole relation”; it is not
-written as an empty `R[]` demand.
-
-The complete IndexRequirements target therefore retains both the source and
-logical plan and then appends the two keys:
+In the correlated example, `r1` has the sorted heading
+`{blocked_anon0, person}` and `r3` has `{amount, person, purchase_anon0}`, so
+`person` is ordinal 1 in both. The IX program is that RA program followed by:
 
 ```text
-pub struct SpendProgram;
-relation Person(c0: i32);
-relation Blocked(c0: i32, c1: i32);
-relation Purchase(c0: i32, c1: i32, c2: i32);
-spend(person, total) :-
-    Person(person),
-    !Blocked(person, _),
-    agg total = sum(amount) in Purchase(person, _, amount);
-relational {
-    r0 = rename Person {c0 -> person};
-    r1 = rename Blocked {c0 -> person, c1 -> blocked_anon0};
-    r2 = antisemijoin r0 with r1;
-    r3 = rename Purchase {c0 -> person, c1 -> purchase_anon0, c2 -> amount};
-    r4 = aggregate_apply r2 with r3 value amount using sum into total;
-    r5 = project r4 keep {person, total};
-    output r5 as spend(person, total);
-}
 indexes {
-    Blocked[0];
-    Purchase[0];
+    i0 = @r1[1];
+    i1 = @r3[1];
 }
 ```
 
-The complete demand overlay for the global example preserves its entire plan
-and has no entries:
+In the global example both correlations are empty, so both demands carry an
+explicit empty key, meaning “test or enumerate the whole result”:
 
 ```text
-pub struct GlobalSummaryProgram;
-relation Blocked(c0: i32);
-relation Purchase(c0: i32, c1: i32);
-summary(total) :-
-    !Blocked(_),
-    agg total = sum(amount) in Purchase(_, amount);
-relational {
-    r0 = unit;
-    r1 = rename Blocked {c0 -> blocked_anon0};
-    r2 = antisemijoin r0 with r1;
-    r3 = rename Purchase {c0 -> purchase_anon0, c1 -> amount};
-    r4 = aggregate_apply r2 with r3 value amount using sum into total;
-    r5 = project r4 keep {total};
-    output r5 as summary(total);
+indexes {
+    i0 = @r1[];
+    i1 = @r3[];
 }
-indexes {}
 ```
 
-Extend the RA → IX correspondence check for these operators as well as the
-local IndexRequirements contract.
+## Physical, Structures and printed Rust extension
 
-## Physical, the bindings Γ and printed Rust extension
-
-The stages after IX must consume the extended IndexRequirements object and
-continue to produce the same shape as Basic HW3: a `physical::Program`, a
-`structures::Program`, and one Rust block printed by `structures_to_rust!`
-over the `cq-storage` traits, not another negation/aggregation or storage
-descriptor IR. `AntiSemijoin` and `AggregateApply` keep their logical names
-in Physical; the physical form they need is fixed by the already-derived key
-shape and answered by the bindings Γ in the Structures program in the usual way.
+The stages after IX keep the Basic HW3 shape: a `physical::Program`, a
+`structures::Program` (Physical plus the storage bindings Γ in its
+`structures { … }` block), and one Rust block expression printed by
+`structures_to_rust!` over the `cq-storage` traits. Do not add another
+negation/aggregation or storage-descriptor IR. Physical represents the
+extended operators directly, as detailed operators with read modes beside the
+existing `probe[C]`, `merge[C]` and `semi[C]`; physical lowering checks their
+RA erasure and their keyed reads against the IX demands, and Structures
+retains Physical and binds the structures that answer those reads.
 
 The physical choice follows that key shape:
 
@@ -368,27 +337,26 @@ only by the Rust projection passed to `sum`; do not silently remove them from
 the physical row representation.
 
 The ownership distinction is deliberate. A positive source binds `person`
-by reference. Negation only observes that borrowed value, so its key
-constructs just `person`. The aggregate bucket also yields borrowed payload
+by reference. Negation only observes that borrowed value; its key is built as
+for a baseline probe. The aggregate bucket also yields borrowed payload
 tuples, and its projection reads only the borrowed `amount` needed by `sum`.
-The fold produces the owned scalar `total`; unlike a positive variable, that
-aggregate output is moved into the head tuple. Thus no stored relation row or
-index payload is cloned wholesale during traversal.
+The fold produces the owned scalar `total`; unlike the bare head variable
+`person`, which stays borrowed, that computed output is moved into the head
+tuple. No stored relation row or index payload is cloned wholesale during
+traversal.
 
-Constructing the aggregate source must not run the fold; requesting its one
-row does. The mapped amounts accumulate in `i128`
-and convert to `i32` only once. Do not fold directly in `i32`: a canonical
-set's iteration order is unspecified, and `MAX + 1 - 1` must not
-sometimes overflow before the cancellation is seen.
+Constructing the aggregate source must not run the fold; pulling a surviving
+left row does, once per row, so blocked persons are never folded. The mapped
+amounts accumulate in `i128` and convert to `i32` only once, with a checked
+conversion. Do not fold directly in `i32`: a canonical set's iteration order
+is unspecified, and `MAX + 1 - 1` must not sometimes overflow before the
+cancellation is seen.
 
-HW4 needs no new intermediate language after IX. The printed program remains
-one iterator over all extended-query results: the aggregate fold runs only
-when its row is requested, and the `canon` return removes projected duplicates
-through the caller's `distinct_state!` provider. The
-head constructs an owned result row, and distinctness retains each
-first-seen owned result; that result-level ownership cost is separate from
-borrowing physical tuples. HW4 does not add another operator language or
-special emitter.
+HW4 needs no new intermediate language after IX. A `canon` definition removes
+projected duplicates through the caller's `distinct_state!` provider. As in
+the baseline, a program that binds a built structure collects its answers into
+a `Vec` and returns its iterator, while a hosts-only program returns the lazy
+iterator. HW4 does not add a special emitter.
 
 ## Implementation stages
 
@@ -397,27 +365,29 @@ must update each affected language contract and its corresponding lowering.
 
 | Stage | File | Required change |
 |---|---|---|
-| Supplied CQ syntax | `languages/cq-lang-cq/src/lib.rs` and `cq/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
-| CQ validity | `languages/cq-lang-cq/src/lib.rs` | Implement the left-to-right safety rules |
-| CQ → NF → VO → RA | `languages/cq-lang-cq/src/normal.rs`, `languages/cq-lang-vo/src/lib.rs`, `passes/cq-order/src/lib.rs`, `passes/cq-elaborate/src/lib.rs`, and `languages/cq-lang-ra/src/lib.rs` | Define the extended clauses across normalization and valuation planning; add `AntiSemijoin`/`AggregateApply` and their inferred-heading rules; extend each pass's correspondence check |
-| Demand derivation | `passes/cq-index-policy/src/lib.rs` and its `correspondence.rs` check | Extend key derivation over the complete RelationalPlan and its independent check |
-| Physical lowering | `languages/cq-lang-physical/src/lib.rs` and `passes/cq-physical-lowering/src/lib.rs` | Carry the new operators through Physical and extend its contract and correspondence check |
-| Γ and printer | `languages/cq-lang-structures/src/lib.rs`, `passes/cq-structure-selection/src/lib.rs`, and `passes/cq-physical-realization/src/lib.rs` | Answer the negative and aggregate reads and print the concrete negative and aggregate Rust accesses |
+| Supplied CQ syntax | `languages/cq-lang-cq/src/lib.rs` and `languages/cq-syntax/src/rust.rs` | Read the derived clause syntax and lexical helpers; no parser implementation is assigned |
+| CQ contract | `languages/cq-lang-cq/src/lib.rs` | Implement the left-to-right safety rules in `cq::contract::check` |
+| CQ → CQ-NF → VO → RA | `languages/cq-lang-cq/src/normal.rs`, `languages/cq-lang-vo/src/lib.rs`, `passes/cq-order/src/lib.rs`, `passes/cq-reduce/src/lib.rs`, `passes/cq-elaborate/src/lib.rs`, and `languages/cq-lang-ra/src/lib.rs` | Define the extended clauses across normalization, valuation ordering and reduction; add `AntiSemijoin`/`AggregateApply` and their inferred-heading rules; extend each pass's `check` |
+| Demand derivation | `languages/cq-lang-ix/src/lib.rs`, `passes/cq-index-policy/src/lib.rs` (`compile`) and `passes/cq-index-policy/src/correspondence.rs` (`check`) | Extend exact-result demand derivation over the new operators |
+| Physical lowering | `languages/cq-lang-physical/src/lib.rs` and `passes/cq-physical-lowering/src/lib.rs` | Add the detailed negative and aggregate operators, their contract rules, and their erasure and demand checks |
+| Structures and printer | `languages/cq-lang-structures/src/lib.rs`, `passes/cq-structure-selection/src/lib.rs`, `passes/cq-print/src/lib.rs`, and `passes/cq-physical-realization/src/lib.rs` | Bind structures for the negative and aggregate reads and print the concrete Rust accesses |
 
 You may add private helpers next to these sites. Do not add a generic pass
 trait, a dynamic query interpreter, or a second storage/access descriptor IR.
 
 ## Tests and workflow
 
-The syntax and lexical helper tests run in the ordinary suite. Complete the
-local contracts and logical operators first:
+The ordinary suite already covers the supplied syntax and lexical helpers. The
+opt-in target `languages/cq-lang-cq/tests/hw4_optional.rs` currently covers
+only the CQ contracts and the extended RA syntax and contracts; start there:
 
 ```text
 cargo test -p mini-linq-course --features hw4 --test hw4_optional
 ```
 
-Then isolate the CQ → NF → VO → RA chain, that complete plan to
-IndexRequirements, and IX to Physical before testing printed Rust:
+Then isolate each pass before testing printed Rust. For every pass, pin
+`compile` output, `check` acceptance and rejected mutations, as the baseline
+pass tests do:
 
 ```text
 cargo test -p cq-lang-vo --test valuation_language
@@ -425,49 +395,49 @@ cargo test -p cq-order --test order
 cargo test -p cq-elaborate --test elaborate
 cargo test -p cq-index-policy --test index_demands
 cargo test -p cq-physical-lowering --test lowering
+cargo test -p cq-structure-selection --test selection
+cargo test -p cq-physical-realization --test realization
 ```
 
-After all affected basic stages support the cumulative extension, run
-the normal `mini_linq!` endpoint tests in both debug and release modes:
+Executable `mini_linq!` endpoint, overflow and laziness tests are additional
+required deliverables. Add them to the opt-in target and run it in debug and
+release modes:
 
 ```text
 cargo test -p mini-linq-course --features hw4 --test hw4_optional
 cargo test -p mini-linq-course --release --features hw4 --test hw4_optional
 ```
 
-The endpoint checks duplicate elimination, safe negation, correlated sum,
-empty-input sum behavior, checked overflow, and result rows. It must also use
-an observable aggregate source to assert that the aggregate fold runs only
-when its row is requested. The ordinary basic-checkpoint commands do not enable
-`hw4`, so this extension cannot block a basic submission.
+The endpoint tests check duplicate elimination, safe negation, correlated sum,
+empty-input sum behavior, checked overflow, and result rows, and use an
+observable aggregate source to assert that the fold runs only for pulled
+surviving rows. The ordinary basic-checkpoint commands do not enable `hw4`, so
+this extension cannot block a basic submission.
 
 Include the global example in the affected IR/pass suites. Test the exact single
-`Unit`, both empty inferred correlations, the empty demand overlay, empty and
-nonempty `Blocked`, and empty and nonempty `Purchase`.
+`Unit`, both empty inferred correlations, the explicit empty-key demands, empty
+and nonempty `Blocked`, and empty and nonempty `Purchase`.
 
 ## Definition of done
 
-- The extended query parses, re-emits, reparses, and compares structurally.
-- The `Query` and `Program` EBNF comments describe `BodyItem`, not the old
-  positive-only body.
-- `cq::contract::check` returns `syn::Error` for unsafe correlation and
-  aggregate-result shadowing.
-- The complete RelationalPlan contains exact named `AntiSemijoin` and
-  `AggregateApply` results, preserves wildcard source columns needed by
-  aggregation, and passes its local and pass correspondence checks.
+- The extended CQ program parses, re-emits, reparses, and compares
+  structurally; `cq::contract::check` returns `syn::Error` for unsafe
+  correlation and aggregate-result shadowing.
+- The RA program contains exact named `AntiSemijoin` and `AggregateApply`
+  results, preserves wildcard source columns needed by aggregation, and passes
+  `ra::contract::check` and every affected pass `check`.
 - A global first clause produces exactly one supplied `Unit`; global
   AntiSemijoin and AggregateApply infer an empty correlation intersection, and
   AntiSemijoin preserves Unit's empty heading.
-- IndexRequirements preserves that entire logical plan rather than replacing
-  it with only a key list.
-- The exact requirements are `Blocked[0]` then `Purchase[0]`.
-- The global example has no demands and never writes an empty-key
-  demand entry.
-- Physical and Γ retain and check every extended logical result
-  beside its physical form and the structure that answers it.
+- IX preserves the RA program unchanged; its demands are exactly
+  `i0 = @r1[1]; i1 = @r3[1];` for the correlated example and
+  `i0 = @r1[]; i1 = @r3[];` for the global example.
+- Physical represents the extended operators directly; lowering checks their
+  RA erasure and IX demands, and Structures retains Physical and binds the
+  structures that answer each read.
 - The printed Rust block builds its structures at the top and reads through
-  the `cq-storage` traits; the aggregate fold runs only when its row is
-  requested.
+  the `cq-storage` traits; the aggregate fold runs only when a surviving row is
+  pulled.
 - All opt-in commands above pass.
 - You can explain why this one-rule subset is stratified by construction.
 
