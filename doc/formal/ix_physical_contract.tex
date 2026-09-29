@@ -22,7 +22,7 @@ IX  ::= RAProgram indexes { Def* }
 Def ::= i = @r[C];
 \end{lstlisting}
 IX retains RA unchanged. The listing is the fragment used below; the complete
-grammar is in \path{doc/DSL.md}.
+grammar is in \path{languages/cq-lang-ix/src/lib.rs}.
 
 \paragraph{IX meaning and construction.}
 Write IX as $(A,D)$, with $D:i\mapsto(r,C)$.
@@ -67,5 +67,4 @@ order and canonical premises. Below Structures a printer emits one pull program
 over the \code{cq-storage} operation traits. Their local contract rules and
 pass correspondence judgments appear in Section~\ref{sec:pass-contracts}.
 Complete grammars and representation obligations also appear in \path{languages/cq-lang-physical/src/lib.rs},
-\path{languages/cq-lang-structures/src/lib.rs}, \path{languages/cq-lang-physical/src/policy.rs}, and
-\path{doc/DSL.md}.
+\path{languages/cq-lang-structures/src/lib.rs}, and \path{languages/cq-lang-physical/src/policy.rs}.

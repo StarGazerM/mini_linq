@@ -16,22 +16,6 @@
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": []
-        },
-        {
-            "label": "Notes: Build entire site",
-            "type": "process",
-            "command": "node",
-            "args": [
-                "build-site.mjs"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}/doc/notes"
-            },
-            "problemMatcher": [],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
         }
     ],
     "inputs": [

@@ -1,56 +1,69 @@
 # MiniLinq
 
-MiniLinq is a Rust query compiler with replaceable macro boundaries:
+MiniLinq compiles conjunctive queries written inside Rust into Rust iterator
+programs at macro-expansion time. Each stage is a small language whose
+complete program is checked by its own contract, and every pass except the
+printer has an independent check relating its source and target programs.
+The caller binds every stage boundary, supplies a query-independent policy and
+declares facts about its host data; the compiler contains no data-structure
+dispatch or fallback backend. The printed program is one Rust block over the
+`cq-storage` traits that evaluates to an iterator of answer tuples and borrows
+host data instead of copying it.
 
 ```text
-CQ → NF → VO → RA → IX → Physical → Structures → Rust
+CQ → VO → RA → IX → Physical → Structures → Rust
 ```
 
-An IX entry is a demand: the key set a plan applies a result at.
-IX records these demands for the fixed RA plan. Physical derives their uses
-from its operands; the lowering check requires each probe/semi to have a
-matching demand.
-Physical restates every result with one physical operator and the mode its
-reads allow. Structures extends Physical with the bindings Γ: the value
-answering each keyed read, supplied by a host or built over the result.
-A printer emits one pull program over the `cq-storage` operation traits.
-The policy that fixes those choices is the
-caller's and query-independent: host facts, a join strategy, and
-`#[index(Type)]` advice. The common compiler contains no data-structure
-dispatch or fallback backend.
+[Design principles and invariants](doc/DESIGN.md) ·
+[examples](examples/README.md) · [workload corpus](workloads/README.md) ·
+[formal specification](doc/formal/README.md). Grammars and APIs are documented
+in each crate's `//!` docs.
 
-Read the [compiler structure](doc/COMPILER-STRUCTURE.md), the
-[language grammars](doc/DSL.md), the [semantics of the chain](doc/SEMANTICS.md), [what is established](doc/ESTABLISHED.md),
-the [formal specification](doc/formal/README.md), or the
-[executable composition](examples/composition/README.md).
+## Layout
 
-The [full-chain test](facade/mini-linq/tests/physical_query.rs) covers hosts
-read in place through their declared keys, compiler-built hash indexes, a
-user-defined index type, merge joins over built ordered maps, Yannakakis
-semijoin passes as membership tests, bounded scans of an ordered host, and a
-computed head column, each against an independent oracle. The printed program
-copies no binding: hosts and built structures yield references, and the head
-expression alone decides what the result owns. The logical prefix normalizes
-CQ to NF, orders valuations in VO, optionally adds guard and semijoin
-reductions, and elaborates VO to RA. Every language checks its own complete
-program; every pass except the printer has an independent correspondence
-check between its source and target programs; the printer is held to oracle
-answers and rustc's trait guards. See
-[contracts and evidence](doc/COMPILER-STRUCTURE.md#contracts-and-evidence).
+| Folder | Contents |
+|---|---|
+| `languages/` | One crate per language (CQ, VO, RA, IX, Physical, Structures) plus shared `cq-syntax`: program, parser, printer, local contract |
+| `passes/` | One crate per pass: `compile` and an independent `check`; `cq-print` and `cq-physical-realization` print Rust |
+| `runtime/` | `cq-storage` (access traits, structures, answer sets), `cq-protocol`, `cq-state-providers`; no compiler dependency |
+| `facade/` | `cq-stage` (typed macro continuations) and `mini-linq` (procedural entry points) |
+| `examples/` | Composition, inspection and swapped/stacked/diverged stages |
+| `workloads/` | Authored query corpus, deterministic datasets, SQL oracle and golden answers |
+| `test-support/` | Relational fixtures: per-stage scenarios, databases and set evaluators |
+| `tools/` | Gate scripts and the regression target inventory |
+| `doc/formal/` | Formal specification, rule inventory and executable paper checks |
+
+`xtask/` is the workload tool (`cargo xtask`); `teaching/ya/` holds the
+YA-schedule acceptance test run by `cq-reduce`.
+
+## Gates
+
+CI (`.github/workflows/ci.yml`) runs, in order:
 
 ```sh
-cargo run --manifest-path examples/composition/Cargo.toml --offline
-cargo run --example cq-inspection
-cargo run --example free-variables
-cargo test --workspace --offline
-python3 tools/check_dependencies.py
-make -C doc/formal pdf
+cargo fmt --all -- --check
+python3 tools/check_dependencies.py --isolate
+bash tools/test_regressions.sh
+python3 tools/check_dependencies.py --consumers
+python3 tools/check_features.py
+cargo test --workspace --locked --no-fail-fast
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --manifest-path xtask/Cargo.toml --locked
+cargo run --manifest-path examples/composition/Cargo.toml --locked
+python3 doc/formal/check.py
 ```
 
-The [workload catalog](workloads/README.md) keeps authored queries, deterministic
-datasets, and SQL oracles independently of executable composition.
-`cargo xtask explain` inspects the logical/IX prefix; it does not supply a
-policy for the Physical and Structures stages. Ordinary workspace checks do not build DuckDB.
+`tools/test_regressions.sh` runs every target in
+`tools/regression-targets.tsv` (workspace tests, examples, external manifests
+and scenario scripts), continues past failures, and writes one log per target
+plus `results.tsv` under `target/regression-logs/`.
 
-The [documentation map](doc/README.md) separates the current compiler design
-from teaching tasks and research proposals.
+Other tools:
+
+```sh
+python3 tools/check_dependencies.py --frontends          # invoke each leaf-feature macro
+python3 tools/check_expansions.py DIR [--compare PREV]   # capture/compare physical_query expansions
+make -C doc/formal pdf                                   # build doc/formal/build/compiler.pdf
+```
+
+Ordinary workspace checks do not build DuckDB; only the workload oracle does.

@@ -22,7 +22,7 @@ printed pages.
 
 ## Explicit course adaptations
 
-- [Note 1.3](../notes/03-the-plan-that-meant-the-same-thing.md) labels
+- [Note 1.3][note-1.3] labels
   **valuation relation**, `Val_I(C)`, as course terminology. Its members are
   valuations satisfying a sub-body, viewed as named tuples. The specification
   makes that view precise with a naming map from variables to attributes.
@@ -33,18 +33,18 @@ printed pages.
   constructions using AHV's semantics and algebra, not separately named AHV
   definitions. The specification includes the conjunction proof and the
   explicit conversion from a named projection to ordered head tuples.
-- [Note 2.2](../notes/04-the-picture-that-did-not-choose.md) fixes occurrence
+- [Note 2.2][note-2.2] fixes occurrence
   identities and full shared-variable labels for the **SIP graph**.
-- [Note 2.3](../notes/04-the-variables-inside-the-picture.md) explicitly keeps
+- [Note 2.3][note-2.3] explicitly keeps
   occurrence labels in its **query hypergraph**, including equal variable
   sets. AHV's hyperedges are distinct and nonempty. The specification states
   this adaptation and treats empty residual sets separately.
-- [Note 2.4](../notes/05-the-variables-the-plan-still-needed.md) supplies the
+- [Note 2.4][note-2.4] supplies the
   retained-variable function `keep(C)` and distinguishes **logical arity**,
   **cardinality**, and **physical tuple width**. Its pending-use set is the
   union of variables in our pending predicate identities. Our `K(C,P)` is
   that retained-sort function.
-- [Note 2.5](../notes/06-the-order-the-compiler-chose.md) uses **α-acyclic**
+- [Note 2.5][note-2.5] uses **α-acyclic**
   for the join-tree characterization and explains **complete support** using
   global consistency. The specification retains those connections explicitly.
 
@@ -72,3 +72,9 @@ printed pages.
 These correspondences establish which definitions and adaptations are being
 used. They do not discharge the implementation and host-language proof
 obligations listed in [foundations.tex](foundations.tex).
+
+[note-1.3]: https://github.com/StarGazerM/modern-query-processing-notes/blob/3f971516f8784ead40e8635a85dbe319ba5e4729/03-the-plan-that-meant-the-same-thing.md
+[note-2.2]: https://github.com/StarGazerM/modern-query-processing-notes/blob/3f971516f8784ead40e8635a85dbe319ba5e4729/04-the-picture-that-did-not-choose.md
+[note-2.3]: https://github.com/StarGazerM/modern-query-processing-notes/blob/3f971516f8784ead40e8635a85dbe319ba5e4729/04-the-variables-inside-the-picture.md
+[note-2.4]: https://github.com/StarGazerM/modern-query-processing-notes/blob/3f971516f8784ead40e8635a85dbe319ba5e4729/05-the-variables-the-plan-still-needed.md
+[note-2.5]: https://github.com/StarGazerM/modern-query-processing-notes/blob/3f971516f8784ead40e8635a85dbe319ba5e4729/06-the-order-the-compiler-chose.md

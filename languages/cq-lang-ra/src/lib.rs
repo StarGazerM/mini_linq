@@ -83,8 +83,8 @@ pub struct Definition {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Operator {
     // Unit is supplied for global optional-HW4 clauses. OPTIONAL HW4 —
-    // STUDENT 3/6 (LOGICAL): add AntiSemijoin and AggregateApply as described
-    // in doc/HW4-OPTIONAL.md.
+    // STUDENT 3/6 (LOGICAL): add AntiSemijoin and AggregateApply as
+    // languages/cq-lang-cq/tests/hw4_optional.rs requires.
     #[parse(peek = kw::unit)]
     Unit(Unit),
     #[parse(peek = kw::rename)]
@@ -203,8 +203,8 @@ fn check_in<'a>(
         }
 
         // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): extend the local heading
-        // rules for AntiSemijoin and AggregateApply exactly as specified in
-        // doc/HW4-OPTIONAL.md.
+        // rules for AntiSemijoin and AggregateApply as
+        // languages/cq-lang-cq/tests/hw4_optional.rs requires.
         let (heading, operands) = match &definition.operator {
             Operator::Unit(_) => (Heading::new(), Vec::new()),
             Operator::Rename(rename) => {
