@@ -1,8 +1,2 @@
 structures {
-    R;
-    S;
-    T;
-    r0 = ::cq_storage::HashIndex<_, _> [a];
-    r2 = ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<_, _>> [a][c];
-    r5 = ::cq_storage::HashIndex<_, _> [b];
 }

@@ -38,25 +38,25 @@ where
 }
 
 /// A grouped hash map represents the key set of its groups.
-impl<K, Q: ?Sized, V, S> ExactMembership<Q> for std::collections::HashMap<K, V, S>
+impl<K, Q: ?Sized, V, S> ExactMembership<Q> for std::collections::HashMap<K, Vec<V>, S>
 where
     K: Borrow<Q> + Eq + Hash,
     Q: Eq + Hash,
     S: BuildHasher,
 {
     fn contains(&self, key: &Q) -> bool {
-        std::collections::HashMap::contains_key(self, key)
+        self.get(key).is_some_and(|values| !values.is_empty())
     }
 }
 
 /// A grouped ordered map represents the key set of its groups.
-impl<K, Q: ?Sized, V> ExactMembership<Q> for BTreeMap<K, V>
+impl<K, Q: ?Sized, V> ExactMembership<Q> for BTreeMap<K, Vec<V>>
 where
     K: Borrow<Q> + Ord,
     Q: Ord,
 {
     fn contains(&self, key: &Q) -> bool {
-        BTreeMap::contains_key(self, key)
+        self.get(key).is_some_and(|values| !values.is_empty())
     }
 }
 
@@ -72,5 +72,5 @@ pub trait Canonical {}
 impl<K, S> Canonical for HashSet<K, S> {}
 impl<K> Canonical for BTreeSet<K> {}
 impl<K, V> Canonical for BTreeMap<K, V> {}
-impl<K, V, S> Canonical for std::collections::HashMap<K, V, S> {}
+impl<K, V, S> Canonical for std::collections::HashMap<K, Vec<V>, S> {}
 impl<T: Canonical + ?Sized> Canonical for &T {}

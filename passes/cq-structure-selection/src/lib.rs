@@ -1,41 +1,5 @@
-//! Physical → Structures: bind every keyed read to a value that answers it.
-//!
-//! This pass decides, for each host relation, the facts the declarations state
-//! about its value (key, order, canonicity) and, for each read Physical
-//! makes through a key that no host answers, the Rust type built over the
-//! result. Rules, from mandatory to advisory:
-//!
-//! 1. Admissibility. Every `probe`, `semi`, `range` and `merge` read of `r`
-//!    on columns `C` must be answered: by the host's key when `r` renames a
-//!    host keyed on the columns `C` translates to (ordered, where the read
-//!    needs order), by the stream itself when `r` is a pipe sorted on `C` by
-//!    its own merge, else by a structure built over `r` keyed on `C`. What
-//!    cannot be built — a read of a pipe or an alias no host answers — is
-//!    left to the Structures contract to report: no default hides it.
-//! 2. Guarantee. Defaults preserve the plan's cost premises: O(1) expected
-//!    `seek`/`contains`, so probes get `cq_storage::HashIndex` and semijoins
-//!    a `HashSet` of keys. An ordered structure (`BTreeMap`, O(log n)) is
-//!    chosen only where a read needs key order — a merge side or a range.
-//!    Independent demands share one structure per (result, columns), with
-//!    the strongest read need selecting its type. Compatible membership-prefix
-//!    chains can share a curried structure; supported smallest-intersection
-//!    pairs use two-level candidate structures.
-//! 3. Advice. A relation declared `#[index(Type)]` fixes the type of every
-//!    structure built over it (through renames): any Rust type implementing
-//!    `cq_storage::Build` and the traits the reads use, which rustc checks.
-//!    Query-specific choices for derived results are authored directly in
-//!    a complete Structures program.
-//! 4. Chained membership keys use one `Trie` level per successive key
-//!    difference, with the strongest full-key default at the leaf; a probe
-//!    can read only the full chain. Ordered reads retain separate maps.
-//!    Eligible `intersect = smallest` pairs add prefix/full membership keys
-//!    and use two levels, even when the prefix is also probed.
-//!
-//! [`check`] derives these read obligations independently of selection. It
-//! preserves Physical exactly and accepts any ordering of structure entries.
-//!
-//! The canonical return is Physical's premise (`canon` flag or key
-//! inference); nothing is built to make it hold.
+//! Select provider types for built let reads, independently of host capabilities.
+//! Compatible membership prefixes share trie levels; ordered reads retain their own structure.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -58,19 +22,13 @@ enum Need {
 impl Need {
     fn default_type(self) -> syn::Type {
         match self {
-            Need::Contains => syn::parse_quote!(::std::collections::HashSet<_>),
-            Need::Seek => syn::parse_quote!(::cq_storage::HashIndex<_, _>),
+            Need::Contains => syn::parse_quote!(index_provider!(semi)),
+            Need::Seek => syn::parse_quote!(index_provider!(probe)),
             Need::Ordered => {
-                syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>)
+                syn::parse_quote!(index_provider!(ordered))
             }
         }
     }
-}
-
-/// A host key as its declaration states it: sorted column names and order.
-struct HostKey {
-    columns: Vec<String>,
-    ordered: bool,
 }
 
 fn sorted(columns: &[String]) -> Vec<String> {
@@ -114,50 +72,6 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
 
 pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<structures::Program> {
     let analysis = physical::contract::check(source)?;
-    // Preserve declaration facts, including the host's written key tuple order.
-    let mut host_keys: BTreeMap<String, Option<HostKey>> = BTreeMap::new();
-    let mut hosts = TokenStream::new();
-    for input in source.inputs() {
-        let host = input.host_facts()?;
-        let key = host.key.as_ref().map(|key| {
-            let mut columns: Vec<_> = key.columns.iter().map(symbol_name).collect();
-            columns.sort();
-            HostKey {
-                columns,
-                ordered: key.ordered.is_some(),
-            }
-        });
-        host_keys.insert(symbol_name(&input.name), key);
-        let (ident, key, canon) = (&input.name, &host.key, &host.canon);
-        hosts.extend(quote! { #ident #key #canon; });
-    }
-
-    // The host key answering a read of `result` on `columns` through its
-    // rename, as `structures::Analysis::host_key_for` will see it.
-    let host_key_for = |result: &str, columns: &[String]| -> Option<&HostKey> {
-        let host = analysis.hosts.get(result)?;
-        let key = host_keys[host].as_ref()?;
-        let rename = &analysis.renames[result];
-        let translated = sorted(
-            &columns
-                .iter()
-                .map(|c| rename[c].clone())
-                .collect::<Vec<_>>(),
-        );
-        (translated == key.columns).then_some(key)
-    };
-
-    // Advice declared on the host relation applies to its renames.
-    let mut advice: BTreeMap<String, syn::Type> = BTreeMap::new();
-    for input in source.inputs() {
-        if let Some(attr) = input.index_advice()? {
-            advice.insert(symbol_name(&input.name), attr.parse_args()?);
-        }
-    }
-
-    // What every read requires on (result, key), unless a host or the stream
-    // itself answers it. Only a `let` can carry a structure; anything else
-    // left unanswered is the contract's diagnostic, not a default.
     let program = &source.program;
     let operators: BTreeMap<String, &Operator> = program
         .definitions
@@ -186,9 +100,6 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
     };
     for (result, reads) in &analysis.key_reads {
         for (reader, columns) in reads {
-            if host_key_for(result, columns).is_some() {
-                continue;
-            }
             let need = match operators[reader] {
                 Operator::Semi(..) => Need::Contains,
                 _ => Need::Seek,
@@ -199,18 +110,14 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
     for (result, reads) in &analysis.range_reads {
         for (_, column) in reads {
             let columns = std::slice::from_ref(column);
-            if host_key_for(result, columns).is_some_and(|k| k.ordered) {
-                continue;
-            }
             require(result, columns, Need::Ordered);
         }
     }
     for (side, reads) in &analysis.merge_reads {
         for (_, columns) in reads {
-            let by_host = host_key_for(side, columns).is_some_and(|k| k.ordered);
             let by_stream = analysis.modes[side] == ModeKind::Pipe
                 && merge_key.get(side).is_some_and(|k| *k == sorted(columns));
-            if by_host || by_stream {
+            if by_stream {
                 continue;
             }
             require(side, columns, Need::Ordered);
@@ -219,7 +126,7 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
 
     // The binary smallest-candidate rewrite also reads each relation at
     // prefix + new-column for membership. Keep these two-level demands
-    // local: advice, hosts, other keys and ordered reads retain their paths.
+    // local: host reads, other keys and ordered reads retain their paths.
     let mut intersections = BTreeMap::new();
     if policy.smallest_intersections() {
         for pair in program.definitions.windows(2) {
@@ -238,13 +145,7 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
             );
             let sides = [(symbol_name(&a.right), ak), (symbol_name(&b.right), bk)];
             let eligible = sides.iter().all(|(name, prefix)| {
-                !analysis
-                    .hosts
-                    .get(name)
-                    .is_some_and(|h| advice.contains_key(h))
-                    && !analysis.key_reads[name]
-                        .iter()
-                        .any(|(_, c)| host_key_for(name, c).is_some())
+                analysis.modes[name] == ModeKind::Let
                     && needs
                         .iter()
                         .filter(|((n, _), _)| n == name)
@@ -279,7 +180,6 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
             .filter(|((n, _), _)| *n == name)
             .map(|((_, columns), needs)| (columns, needs))
             .collect();
-        let advised = analysis.hosts.get(&name).and_then(|host| advice.get(host));
         if let Some(prefix) = intersections.get(&name) {
             let full = &analysis.headings[&name];
             let tail = full
@@ -295,11 +195,11 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
                 .expect("nonempty")
                 .default_type();
             entries.extend(
-                quote! { #ident = ::cq_storage::Trie<'_, _, #inner> [#(#columns),*][#(#tail),*]; },
+                quote! { #ident = index_provider!(trie #inner) [#(#columns),*][#(#tail),*]; },
             );
             continue;
         }
-        if advised.is_none() {
+        {
             if let Some(chain) = chain(&reads) {
                 let (_, needs) = reads
                     .iter()
@@ -314,17 +214,14 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
                     levels = quote! { [#(#columns),*] #levels };
                 }
                 for _ in 1..chain.len() {
-                    ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
+                    ty = syn::parse_quote!(index_provider!(trie #ty));
                 }
                 entries.extend(quote! { #ident = #ty #levels; });
                 continue;
             }
         }
         for (columns, needs) in reads {
-            let ty = match advised {
-                Some(ty) => ty.clone(),
-                None => needs.iter().max().expect("nonempty").default_type(),
-            };
+            let ty = needs.iter().max().expect("nonempty").default_type();
             let columns = columns
                 .iter()
                 .map(|c| analysis.rows[&name].bindings[c].clone());
@@ -333,7 +230,7 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
     }
     let target = structures::Program {
         physical: source.clone(),
-        structures: syn::parse2(quote! { structures { #hosts #entries } })?,
+        structures: syn::parse2(quote! { structures { #entries } })?,
     };
     structures::contract::check(&target)?;
     Ok(target)

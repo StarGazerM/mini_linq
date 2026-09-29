@@ -78,6 +78,7 @@ mod hosted {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -92,8 +93,8 @@ mod hosted {
         ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Chain;
             relation L(a: Value);
-            #[host(keyed [a])] relation R(a: Value, b: Value);
-            #[host(keyed [b])] relation S(b: Value, c: Value);
+            relation R(a: Value, b: Value);
+            relation S(b: Value, c: Value);
             answer(a, c) :- L(a), R(a, b), S(b, c);
         })
     }
@@ -124,6 +125,7 @@ mod built {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -155,12 +157,8 @@ fn compiler_built_indexes_feed_the_pull_program() {
     assert_eq!(built::run(&doubled, &r, &s).len(), oracle(&l, &r, &s).len());
 }
 
-/// `#[index(Type)]` on a declaration makes the compiler build that Rust type
-/// — here one defined in this test, unknown to `cq-storage` — over the
-/// relation, reading it through the runtime traits the plan uses; rustc
-/// checks the type implements them. `R`, unadvised, keeps the default hash
-/// index.
-mod advised {
+/// A caller-selected provider builds a user index for materialized results.
+mod custom_indexes {
     use super::*;
 
     /// A user-defined index: rows sorted by key, probed by binary search.
@@ -197,21 +195,17 @@ mod advised {
         }
     }
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
     mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use super::index_provider;
+        pub(crate) use ::mini_linq::structures_to_rust;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
+    macro_rules! indexes {
+        (probe) => { SortedIndex<_, _> };
+        ($($rest:tt)*) => { cq_state_providers::default_indexes!($($rest)*) };
+    }
+    pub(crate) use indexes as index_provider;
     use wiring as mini_linq;
 
     #[allow(non_snake_case)]
@@ -220,13 +214,15 @@ mod advised {
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
-            struct Chain;
-            relation L(a: Value);
-            relation R(a: Value, b: Value);
-            #[index(SortedIndex)]
-            relation S(b: Value, c: Value);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
+        ::core::iter::Iterator::collect(mini_linq::select_structures! {
+            physical {
+                relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
+                l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
+                s = let rename S {b -> b, c -> c};
+                j = pipe probe[a] l, r; p = pipe probe[b] j, s;
+                out = pipe canon project p keep {a, c}; return out as answer(a, c);
+            }
+            policy {}
         })
     }
 }
@@ -234,7 +230,7 @@ mod advised {
 #[test]
 fn a_user_defined_index_type_is_built_and_probed() {
     let (l, r, s) = fixture();
-    let actual: HashSet<_> = advised::run(&l, &r, &s).into_iter().collect();
+    let actual: HashSet<_> = custom_indexes::run(&l, &r, &s).into_iter().collect();
     assert_eq!(actual, oracle(&l, &r, &s));
 }
 
@@ -256,6 +252,7 @@ mod merged {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::ordered_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -263,9 +260,9 @@ mod merged {
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
-        L: &'a [(Value,)],
-        R: &'a [(Value, Value)],
-        S: &'a [(Value, Value)],
+        L: &'a BTreeMap<(Value,), Vec<()>>,
+        R: &'a BTreeMap<(Value,), Vec<(Value,)>>,
+        S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
         ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Chain;
@@ -278,9 +275,12 @@ mod merged {
 }
 
 #[test]
-fn merge_joins_over_built_ordered_maps_agree() {
+fn merge_joins_over_host_and_built_ordered_maps_agree() {
     let (l, r, s) = fixture();
-    let actual: HashSet<_> = merged::run(&l, &r, &s).into_iter().collect();
+    let lm = l.iter().map(|(a,)| ((a.clone(),), vec![()])).collect();
+    let rm = grouped(&r);
+    let sm = grouped(&s);
+    let actual: HashSet<_> = merged::run(&lm, &rm, &sm).into_iter().collect();
     assert_eq!(actual, oracle(&l, &r, &s));
 }
 
@@ -301,6 +301,7 @@ mod reduced {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -344,6 +345,7 @@ mod windowed {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -355,7 +357,7 @@ mod windowed {
     ) -> std::collections::HashSet<(&i32, &i32)> {
         ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Windowed;
-            #[host(keyed [a] ordered)] relation R(a: i32, b: i32);
+            relation R(a: i32, b: i32);
             answer(a, b) :- R(a, b), if a >= 2 && a < 9 && b != 5;
         })
     }
@@ -395,6 +397,7 @@ mod computed {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -439,6 +442,7 @@ mod generic_canon {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -488,7 +492,7 @@ fn generic_join_canonicalizes_prefixes_before_enumerating_further() {
 
 /// Generic join: one variable at a time, every atom holding it checked
 /// before enumeration continues. `T` is read on `[a]` and then `[a, c]` —
-/// one chain of keys — so a single curried structure answers both.
+/// several keys, dispatched independently with shared per-read fallback state.
 mod generic {
     macro_rules! policy {
         ($($ix:tt)*) => {
@@ -502,6 +506,7 @@ mod generic {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -536,6 +541,7 @@ mod generic_smallest {
     mod wiring {
         pub(crate) use super::physical_policy;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
         pub(crate) use trace_bridge::enter as select_structures;
     }
@@ -558,7 +564,7 @@ mod generic_smallest {
 }
 
 #[test]
-fn generic_join_reads_a_chain_of_keys_through_one_curried_structure() {
+fn generic_join_reads_multiple_host_keys_through_dispatch() {
     let r = [(1, 2), (1, 3), (2, 3), (4, 5)];
     let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
     let t = [(1, 3), (1, 4), (2, 1), (4, 7)];

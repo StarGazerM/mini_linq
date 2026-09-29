@@ -1,43 +1,9 @@
-//! Structures: Physical with every keyed read bound to a value that answers it.
-//!
-//! Physical fixes where a key, an order, or uniqueness is needed; this
-//! language names, for each host relation, the facts about its value (the
-//! key it is stored under, whether that key is ordered, whether the value is
-//! a canonical set) and, for each read no host answers, the Rust type built
-//! over the result and the columns it is keyed on. Columns are attribute
-//! names of the result's heading.
-//!
-//! Denotation: a host entry is the host value with its abstraction function;
-//! a built entry is `Type` constructed through `cq_storage::Build` from
-//! `(key, payload)` pairs of the result set, so `α(built) = ⟦r⟧`. Whether `Type`
-//! or the host value implements the trait behind each read is checked by
-//! rustc where the generated program performs it; nothing here claims a
-//! capability. Contract: every Physical premise is discharged —
-//!
-//! - `probe[C] a, r` / `semi[C] a, r`: a built entry on `r` whose key — or,
-//!   for a leveled entry, the union of some prefix of its levels — is `C`,
-//!   or `r` renames a host keyed on the columns `C` translates to;
-//! - `range[c]` over `r`: the same, ordered;
-//! - `merge[C] l, r`: each side ordered on `C` — a host key `ordered`, a
-//!   built entry (rustc checks `OrderedRead`), or a pipe whose own merge is
-//!   on `C` (the stream is sorted by construction);
-//! - the returned result is canonical: flagged `canon`, or unique by key
-//!   inference from `canon` hosts through joins, selects, extends and
-//!   key-keeping projections;
-//!
-//! every input has one host entry; no entry is duplicated.
-//!
+//! Structures records only built let structures, their provider types and trie levels.
+//! Host renames need no entry: type dispatch selects their direct or lazy built reads.
+//! Contracts discharge plan premises, never host capability claims.
 //! ```text
-//! Program ::= physical::Program "structures" "{" (Entry ";")* "}"
-//! Entry  ::= Ident ["keyed" "[" Ident,* "]" ["ordered"]] ["canon"]
-//!          | Ident "=" RustType ("[" Ident,* "]")+
+//! Entry ::= Ident "=" RustType ("[" Ident,* "]")+ ";"
 //! ```
-//!
-//! A built entry with several bracketed levels is a curried index: level
-//! `i` is keyed on its columns given every earlier level. By the exponential
-//! law `(A × B → C) ≅ (A → B → C)` one such value answers a read on every
-//! prefix `K₁ ∪ … ∪ Kᵢ`, which is how a trie serves `[a]`, `[a, b]` and
-//! `[a, b, c]` at once. Level order is representation; IX demands stay sets.
 
 pub use cq_lang_physical as physical;
 
@@ -49,9 +15,6 @@ pub use cq_syntax::{CommaList, symbol_name};
 
 pub mod kw {
     syn::custom_keyword!(structures);
-    syn::custom_keyword!(keyed);
-    syn::custom_keyword!(ordered);
-    syn::custom_keyword!(canon);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -87,27 +50,6 @@ pub enum Structure {
         eq_token: Token![=],
         keyed: Box<Keyed>,
     },
-    Host(Host),
-}
-
-/// Facts about a host value: the key it is stored under, and whether it is
-/// a canonical set of its rows.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Host {
-    #[parse(|input| if input.peek(kw::keyed) { input.parse().map(Some) } else { Ok(None) })]
-    pub key: Option<Key>,
-    pub canon: Option<kw::canon>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Key {
-    pub keyed_token: kw::keyed,
-    #[syn(bracketed)]
-    pub bracket: token::Bracket,
-    #[syn(in = bracket)]
-    #[parse(CommaList::parse_terminated)]
-    pub columns: CommaList<Ident>,
-    pub ordered: Option<kw::ordered>,
 }
 
 /// `Type [a, b]` or `Type [a][b]`: a Rust type built over the result, keyed
@@ -170,13 +112,6 @@ pub mod contract {
 
 use physical::{ModeKind, Operator};
 
-/// A key a value is stored under, and what that key answers.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KeyFact {
-    pub columns: Vec<String>,
-    pub ordered: bool,
-}
-
 /// A built structure: the sorted columns of each level, and its type.
 pub type Built = (Vec<Vec<String>>, syn::Type);
 
@@ -186,10 +121,6 @@ pub struct Analysis {
     pub physical: physical::Analysis,
     /// Declared column order of every host relation.
     pub host_layouts: BTreeMap<String, Vec<String>>,
-    /// Key facts of every host, in the host's own attribute names.
-    pub host_keys: BTreeMap<String, Option<KeyFact>>,
-    /// Hosts declared canonical.
-    pub host_canon: BTreeSet<String>,
     /// Built structures per result: (sorted columns of each level, type).
     pub built: BTreeMap<String, Vec<Built>>,
     /// Results that are canonical (a set) by inference or flag, with the key
@@ -198,15 +129,9 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// The key fact answering reads of `result` on `columns`, if a host
-    /// key does through the rename.
-    pub fn host_key_for(&self, result: &str, columns: &[String]) -> Option<&KeyFact> {
-        let host = self.physical.hosts.get(result)?;
-        let fact = self.host_keys.get(host)?.as_ref()?;
-        let rename = &self.physical.renames[result];
-        let mut translated: Vec<String> = columns.iter().map(|c| rename[c].clone()).collect();
-        translated.sort();
-        (translated == fact.columns).then_some(fact)
+    /// Reusable host reads are selected by runtime type dispatch.
+    pub fn host_read(&self, result: &str) -> bool {
+        self.physical.hosts.contains_key(result) && self.physical.modes[result] == ModeKind::Pipe
     }
 
     /// The structure answering a read of `result` on `columns`, and how
@@ -242,8 +167,8 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 }
 
 /// Formal rule WF-Structures: Check entries, read coverage and inferred canonical return.
-/// Formal rule STR-Key: Answer probe and semi reads by an exact host key or built level prefix.
-/// Formal rule STR-Range: Answer a range by an ordered host key or a built entry on its column.
+/// Formal rule STR-Key: Answer probe and semi reads by host dispatch or a built level prefix.
+/// Formal rule STR-Range: Answer a range by host dispatch or a built entry on its column.
 /// Formal rule STR-Merge: Answer each merge side by ordered storage or a same-key merge pipe.
 fn analyze(program: &Program) -> syn::Result<Analysis> {
     let module = &program.structures;
@@ -259,118 +184,52 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 )
             })
             .collect(),
-        host_keys: BTreeMap::new(),
-        host_canon: BTreeSet::new(),
         built: BTreeMap::new(),
         unique: BTreeMap::new(),
     };
     let mut seen = BTreeSet::new();
     for entry in &module.entries {
         let name = symbol_name(&entry.name);
-        match &entry.structure {
-            Structure::Host(host) => {
-                let Some(layout) = analysis.host_layouts.get(&name) else {
-                    return error(&entry.name, "only a declared host relation is a host");
-                };
-                if !seen.insert((name.clone(), None)) {
-                    return error(&entry.name, "host relation declared twice");
+        let Structure::Built { keyed, .. } = &entry.structure;
+        {
+            if analysis.host_layouts.contains_key(&name) {
+                return error(
+                    &entry.name,
+                    "a host relation is represented by its host value; build over a let result",
+                );
+            }
+            let Some(heading) = analysis.physical.headings.get(&name) else {
+                return error(&entry.name, "structure must name a Physical result");
+            };
+            let mut all = BTreeSet::new();
+            for column in keyed.columns() {
+                if !heading.contains(&symbol_name(column)) {
+                    return error(column, format!("`{name}` has no column `{column}`"));
                 }
-                // Formal rule STR-Facts: Entries must repeat declaration facts exactly.
-                let declaration = program
-                    .physical
-                    .inputs()
-                    .find(|d| symbol_name(&d.name) == name)
-                    .expect("checked host");
-                let declared = declaration.host_facts()?;
-                let written = host.key.as_ref().map(|k| {
-                    (
-                        k.columns.iter().map(symbol_name).collect::<Vec<_>>(),
-                        k.ordered.is_some(),
-                    )
-                });
-                let expected = declared.key.as_ref().map(|k| {
-                    (
-                        k.columns.iter().map(symbol_name).collect::<Vec<_>>(),
-                        k.ordered.is_some(),
-                    )
-                });
-                if written != expected || host.canon.is_some() != declared.canon.is_some() {
-                    return error(
-                        &entry.name,
-                        "Structures host facts differ from declaration (key, order, or canon)",
-                    );
-                }
-                let fact = match &host.key {
-                    Some(key) => {
-                        for column in &key.columns {
-                            if !layout.contains(&symbol_name(column)) {
-                                return error(column, format!("`{name}` has no column `{column}`"));
-                            }
-                        }
-                        Some(KeyFact {
-                            columns: names(&key.columns),
-                            ordered: key.ordered.is_some(),
-                        })
-                    }
-                    None => None,
-                };
-                analysis.host_keys.insert(name.clone(), fact);
-                if host.canon.is_some() {
-                    analysis.host_canon.insert(name);
+                if !all.insert(symbol_name(column)) {
+                    return error(column, format!("`{column}` appears in two levels"));
                 }
             }
-            Structure::Built { keyed, .. } => {
-                if analysis.host_layouts.contains_key(&name) {
-                    return error(
-                        &entry.name,
-                        "a host relation is represented by its host value; declare its key",
-                    );
-                }
-                let Some(heading) = analysis.physical.headings.get(&name) else {
-                    return error(&entry.name, "structure must name a Physical result");
-                };
-                let mut all = BTreeSet::new();
-                for column in keyed.columns() {
-                    if !heading.contains(&symbol_name(column)) {
-                        return error(column, format!("`{name}` has no column `{column}`"));
-                    }
-                    if !all.insert(symbol_name(column)) {
-                        return error(column, format!("`{column}` appears in two levels"));
-                    }
-                }
-                if analysis.physical.modes[&name] != ModeKind::Let {
-                    return error(
-                        &entry.name,
-                        format!("`{name}` is a pipe; a structure is built only over a `let`"),
-                    );
-                }
-                let columns = keyed.level_names();
-                if !seen.insert((name.clone(), Some(columns.concat()))) {
-                    return error(&entry.name, "duplicate structure on these columns");
-                }
-                analysis
-                    .built
-                    .entry(name)
-                    .or_default()
-                    .push((columns, keyed.ty.clone()));
+            if analysis.physical.modes[&name] != ModeKind::Let {
+                return error(
+                    &entry.name,
+                    format!("`{name}` is a pipe; a structure is built only over a `let`"),
+                );
             }
+            let columns = keyed.level_names();
+            if !seen.insert((name.clone(), Some(columns.concat()))) {
+                return error(&entry.name, "duplicate structure on these columns");
+            }
+            analysis
+                .built
+                .entry(name)
+                .or_default()
+                .push((columns, keyed.ty.clone()));
         }
     }
-    if let Some(missing) = analysis
-        .host_layouts
-        .keys()
-        .find(|name| !analysis.host_keys.contains_key(*name))
-    {
-        return error(
-            &module.structures_token,
-            format!("host relation `{missing}` has no entry"),
-        );
-    }
-
     // Keyed reads: probe, semi, range.
     let answered = |result: &str, columns: &[String]| -> bool {
-        analysis.host_key_for(result, columns).is_some()
-            || analysis.built_on(result, columns).is_some()
+        analysis.host_read(result) || analysis.built_on(result, columns).is_some()
     };
     for (result, reads) in &analysis.physical.key_reads {
         for (reader, columns) in reads {
@@ -378,7 +237,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 return error(
                     &module.structures_token,
                     format!(
-                        "`{reader}` reads `{result}` on {columns:?}; no host key or structure answers it"
+                        "`{reader}` reads `{result}` on {columns:?}; no reusable host read or built structure answers it"
                     ),
                 );
             }
@@ -387,10 +246,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     for (result, reads) in &analysis.physical.range_reads {
         for (reader, column) in reads {
             let columns = vec![column.clone()];
-            let ordered = analysis
-                .host_key_for(result, &columns)
-                .is_some_and(|k| k.ordered)
-                || analysis.built_on(result, &columns).is_some();
+            let ordered =
+                analysis.host_read(result) || analysis.built_on(result, &columns).is_some();
             if !ordered {
                 return error(
                     &module.structures_token,
@@ -414,10 +271,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         .collect();
     for (side, reads) in &analysis.physical.merge_reads {
         for (reader, columns) in reads {
-            let by_structure = analysis
-                .host_key_for(side, columns)
-                .is_some_and(|k| k.ordered)
-                || analysis.built_on(side, columns).is_some();
+            let by_structure =
+                analysis.host_read(side) || analysis.built_on(side, columns).is_some();
             let by_stream = analysis.physical.modes[side] == ModeKind::Pipe
                 && merge_key.get(side) == Some(columns);
             if !by_structure && !by_stream {
@@ -443,11 +298,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         };
         let key = match op {
             Operator::Unit(_) => Some(Vec::new()),
-            Operator::Rename(r) => {
-                let full_by_structure = analysis.built_on(&name, &heading).is_some();
-                (analysis.host_canon.contains(&symbol_name(&r.relation)) || full_by_structure)
-                    .then(|| heading.clone())
-            }
+            Operator::Rename(_) => None,
             Operator::Probe(_, k) | Operator::Merge(_, k) => {
                 match (
                     analysis.unique.get(&symbol_name(&k.left)),
@@ -475,7 +326,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         let key = match key {
             Some(key) => Some(key),
             None if analysis.physical.canon.contains(&name) => Some(heading.clone()),
-            None => analysis.built_on(&name, &heading).map(|_| heading.clone()),
+            None => None,
         };
         if let Some(key) = key {
             analysis.unique.insert(name, key);

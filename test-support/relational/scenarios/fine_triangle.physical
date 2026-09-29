@@ -2,12 +2,12 @@ physical {
     relation R(first: i32, second: i32);
     relation S(first: i32, second: i32);
     relation T(first: i32, second: i32);
-    r0 = let rename R { first -> a, second -> b };
+    r0 = pipe rename R { first -> a, second -> b };
     r1 = pipe project r0 keep { a };
-    r2 = let rename T { first -> c, second -> a };
+    r2 = pipe rename T { first -> c, second -> a };
     r3 = pipe semi[a] r1, r2;
     r4 = pipe probe[a] r3, r0;
-    r5 = let rename S { first -> b, second -> c };
+    r5 = pipe rename S { first -> b, second -> c };
     r6 = pipe semi[b] r4, r5;
     r7 = pipe probe[b] r6, r5;
     r8 = pipe probe[a, c] r7, r2;

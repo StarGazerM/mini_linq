@@ -2,7 +2,7 @@ use cq_lang_physical as physical;
 use quote::ToTokens;
 const SOURCE: &str = "physical {
     relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-    r = alias rename R {a -> x,b -> y}; s = let rename S {b -> y,c -> z};
+    r = pipe rename R {a -> x,b -> y}; s = let rename S {b -> y,c -> z};
     j = pipe probe[y] r,s; f = pipe select j if (x < z);
     e = pipe extend f with {w:i32} value (x + z);
     p = pipe canon project e keep {x,w}; return p as answer(x,w);
@@ -36,8 +36,6 @@ fn invalid_operators_modes_and_heads_report_the_construct() {
         ("s = let", "r = let", "r"),
         ("probe[y]", "probe[x]", "j"),
         ("probe[y]", "probe[y,y]", "j"),
-        ("s = let", "s = pipe", "s"),
-        ("f = pipe", "f = alias", "f"),
         ("value (x + z)", "value (q + w)", "e"),
         ("{w:i32}", "{x:i32}", "e"),
         ("keep {x,w}", "keep {x,missing}", "p"),
@@ -46,7 +44,7 @@ fn invalid_operators_modes_and_heads_report_the_construct() {
         ("return p", "return missing", "missing"),
         (
             "return p",
-            "unused = alias rename R {a -> a,b -> b}; return p",
+            "unused = pipe rename R {a -> a,b -> b}; return p",
             "unused",
         ),
         ("select j if (x < z)", "select p if (x < z)", "p"),
@@ -70,7 +68,7 @@ fn merge_and_range_record_ordered_reads() {
 
 const HASH_CHAIN: &str = "physical {
     relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
-    l = alias canon rename L {a -> a};
+    l = let canon rename L {a -> a};
     r = let canon rename R {a -> a, b -> b};
     s = let canon rename S {b -> b, c -> c};
     j0 = pipe canon probe[a] l, r;
@@ -80,7 +78,7 @@ const HASH_CHAIN: &str = "physical {
 }";
 
 #[test]
-fn intermediate_aliases_lets_and_pipes_admit_canon_and_semijoins_record_key_reads() {
+fn intermediate_lets_and_pipes_admit_canon_and_semijoins_record_key_reads() {
     let source: physical::Program = syn::parse_str(HASH_CHAIN).unwrap();
     let analysis = physical::contract::check(&source).unwrap();
     assert_eq!(
@@ -112,4 +110,25 @@ fn a_merge_result_read_by_key_stays_materialized() {
     invalid.program.definitions[4] = syn::parse_quote!(j1 = pipe merge[b] j0, s;);
     let error = physical::contract::check(&invalid).unwrap_err().to_string();
     assert!(error.contains("j1"), "{error}");
+}
+
+#[test]
+fn host_ranges_require_layout_and_canon_host_pipes_require_linear_reads() {
+    let mut p: physical::Program = syn::parse_quote!(physical {
+        relation R(a:i32,b:i32); r = pipe rename R {a -> x,b -> y};
+        w = pipe canon range[x] r if (x >= 2); return w as answer(x,y);
+    });
+    physical::contract::check(&p).unwrap();
+    p.program.definitions[1] = syn::parse_quote!(w = pipe canon range[y] r if (y >= 2););
+    assert!(
+        physical::contract::check(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("leading declared column")
+    );
+    let mut p: physical::Program = syn::parse_str(HASH_CHAIN).unwrap();
+    p.program.definitions[0].mode = syn::parse_quote!(pipe);
+    assert!(physical::contract::check(&p).is_err());
+    p.program.definitions[0].canon = None;
+    physical::contract::check(&p).unwrap();
 }

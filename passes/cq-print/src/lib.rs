@@ -20,13 +20,12 @@ pub mod expressions;
 pub struct Host {
     pub value: Ident,
     pub layout: Vec<String>,
-    pub key: Option<Vec<String>>,
 }
 
 /// Where a result's rows live once printed.
 pub enum Repr {
     /// A rename read in place through its host.
-    Alias,
+    Host,
     /// A stream, inlined into its single reader.
     Pipe(Option<TokenStream>),
     /// Materialized: collected rows and the structures over them, each
@@ -49,6 +48,8 @@ pub struct Context<'a> {
     pub statements: Vec<Stmt>,
     /// Whether a statement binds a value the iterator borrows.
     pub bound: bool,
+    pub intersect: bool,
+    pub candidate_reads: BTreeMap<String, Vec<Vec<String>>>,
 }
 
 pub fn error<T>(spanned: &impl ToTokens, message: impl std::fmt::Display) -> syn::Result<T> {
@@ -86,7 +87,6 @@ impl<'a> Context<'a> {
         let mut used = std::collections::BTreeSet::new();
         names(module.to_token_stream(), &mut used);
         for input in module.physical.inputs() {
-            let facts = input.host_facts().expect("checked declaration");
             let value = if let Some(leaf) = &input.value {
                 // Formal rule IF-Leaf: Bind each leaf once in its enclosing Rust context.
                 let mut n = hosts.len();
@@ -100,7 +100,16 @@ impl<'a> Context<'a> {
                 bound = true;
                 value
             } else {
-                input.name.clone()
+                let mut n = hosts.len();
+                while used.contains(&format!("__cq_input_{n}")) {
+                    n += 1;
+                }
+                let value = format_ident!("__cq_input_{n}", span = proc_macro2::Span::mixed_site());
+                used.insert(value.to_string());
+                let input_name = &input.name;
+                statements.push(syn::parse_quote! { let #value = &#input_name; });
+                bound = true;
+                value
             };
             let name = symbol_name(&input.name);
             hosts.insert(
@@ -108,45 +117,22 @@ impl<'a> Context<'a> {
                 Host {
                     value,
                     layout: analysis.host_layouts[&name].clone(),
-                    key: facts
-                        .key
-                        .map(|k| k.columns.iter().map(symbol_name).collect()),
                 },
             );
         }
-        // Keep named-host guard order identical to the authored Structures order.
-        // Facts themselves come only from the checked declarations.
-        for entry in &module.structures.entries {
-            if !matches!(entry.structure, structures::Structure::Host(_)) {
-                continue;
-            }
-            let input = module
-                .physical
-                .inputs()
-                .find(|d| symbol_name(&d.name) == symbol_name(&entry.name))
-                .expect("checked host");
-            let facts = input.host_facts().expect("checked declaration");
-            let value = &hosts[&symbol_name(&input.name)].value;
-            // Formal rule IF-Facts: rustc checks every declared fact, even on unused access paths.
-            // Formal rule IF-Canon: Require the canonical marker.
-            if facts.canon.is_some() {
-                statements.push(syn::parse_quote! { ::cq_storage::require::canonical(&#value); });
-            }
-            // Formal rule IF-Keyed: Require keyed read at the declared key tuple type.
-            if let Some(key) = &facts.key {
-                let types = key.columns.iter().map(|c| {
-                    &input
-                        .columns
-                        .iter()
-                        .find(|d| symbol_name(&d.name) == symbol_name(c))
-                        .expect("checked column")
-                        .ty
-                });
-                statements.push(syn::parse_quote! { ::cq_storage::require::keyed::<(#(#types,)*), _>(&#value); });
-                // Formal rule IF-Ordered: Require ordered read even when only scanned.
-                if key.ordered.is_some() {
-                    statements.push(syn::parse_quote! { ::cq_storage::require::ordered(&#value); });
-                }
+        let mut candidate_reads: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
+        for pair in module.physical.program.definitions.windows(2) {
+            if let Some((a, b, v)) =
+                physical::binary_intersection(&pair[0], &pair[1], &analysis.physical)
+            {
+                candidate_reads
+                    .entry(symbol_name(&a.right))
+                    .or_default()
+                    .push(sorted(&a.columns));
+                candidate_reads
+                    .entry(symbol_name(&b.right))
+                    .or_default()
+                    .push(sorted(&b.columns).into_iter().filter(|c| *c != v).collect());
             }
         }
         Context {
@@ -165,6 +151,8 @@ impl<'a> Context<'a> {
             reprs: BTreeMap::new(),
             statements,
             bound,
+            candidate_reads,
+            intersect: false,
         }
     }
 
@@ -220,28 +208,16 @@ impl<'a> Context<'a> {
     pub fn register(&mut self, name: &str) {
         self.idents
             .insert(name.to_owned(), self.infos[name].bindings.clone());
+        self.prepare_host(name);
     }
 
     /// Build the selected structures over a result and append their statements.
-    pub fn materialize(&mut self, name: &str, canon: bool, source: TokenStream) -> Repr {
+    pub fn materialize(&mut self, name: &str, _canon: bool, source: TokenStream) -> Repr {
         let heading = self.heading(name);
         let scanned = self.physical_analysis.scanned.contains(name);
-        let mut structures: Vec<(Vec<Vec<String>>, syn::Type)> =
+        let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
-        if canon
-            && !structures
-                .iter()
-                .any(|(c, _)| c.len() == 1 && c[0] == heading)
-        {
-            structures.push((
-                vec![heading.to_vec()],
-                syn::parse_quote!(::std::collections::HashSet<_>),
-            ));
-        }
-        // Rows are kept only when scanned as a bag (a `canon` scan reads the
-        // set instead) or when more than one structure is built from them.
-        let rows = ((scanned && !canon) || structures.len() > 1)
-            .then(|| format_ident!("__cq_{}_rows", name));
+        let rows = (scanned || structures.len() > 1).then(|| format_ident!("__cq_{}_rows", name));
         let mut statements: Vec<Stmt> = Vec::new();
         let source = match &rows {
             Some(rows) => {
@@ -291,7 +267,7 @@ impl<'a> Context<'a> {
             statements.push(syn::parse_quote! { let #structure = &#build; });
             // A type lacking a trait a read uses on it fails at a one-line
             // call naming the trait, rather than inside a closure.
-            for guard in self.guards(name, &columns, canon && columns == heading) {
+            for guard in self.guards(name, &columns, false) {
                 statements.push(syn::parse_quote! { ::cq_storage::require::#guard(#structure); });
             }
             built.push((levels.clone(), structure));

@@ -29,7 +29,7 @@ Storage laws & Abstraction functions of \code{HashIndex}, membership and
 ordered cursors against an independent bag oracle
 (\path{runtime/cq-storage/tests/}).\\
 Whole chain & Host maps probed in place, compiler-built indexes, a
-user-defined \texttt{\#[index(Type)]}, merge joins over built ordered maps,
+user-defined \texttt{index\_provider!}, merge joins over host and built ordered maps,
 Yannakakis semijoin passes as membership tests, bounded ordered scans and a
 computed head column, each compared with an independent oracle
 (\path{facade/mini-linq/tests/physical_query.rs}); the runnable

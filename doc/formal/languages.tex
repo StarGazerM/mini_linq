@@ -213,7 +213,7 @@ of Section~\ref{sec:ix}, and
 Physical is a complete standalone program with declarations, detailed operators,
 read modes and output metadata. Lowering reads those operators back as RA and
 checks correspondence with the RA contained in IX. Structures extends Physical
-and binds every keyed read to a host key fact or a built Rust type. Their local
+and binds retained-let reads to provider types; host reads dispatch by type. Their local
 contract rules and immediate-source correspondence checks are stated separately
 in Section~\ref{sec:pass-contracts}. Complete token grammars are also given in
 the documentation of the language crates under \path{languages/}.

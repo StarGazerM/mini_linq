@@ -13,6 +13,7 @@ mod mini_linq {
     pub use ::mini_linq::{
         cq_to_ra, index_demands as choose_index_policy, select_structures, structures_to_rust,
     };
+    pub(crate) use cq_state_providers::default_indexes as index_provider;
     pub use cq_state_providers::hash_distinct as distinct_state;
 }
 #[macro_export]
@@ -35,7 +36,7 @@ fn answers_from_a_query_are_a_zero_copy_canonical_host() {
     let allowed = ["b"];
     let B = Answers::collect_from(::mini_linq::mini_linq! {
         struct Second;
-        #[host(canon)] relation A(x: &String);
+        relation A(x: &String);
         relation answer(x: &String);
         answer(*x) :- A(x), if allowed.contains(&x.as_str());
     });
@@ -57,7 +58,7 @@ fn grouped_answers_are_probed_in_place() {
     let result: Vec<_> = ::mini_linq::mini_linq! {
         struct Probe;
         relation L(k: &i32);
-        #[host(keyed [k], canon)] relation G(k: &i32, v: &i32);
+        relation G(k: &i32, v: &i32);
         relation answer(v: i32);
         answer(**v) :- L(k), G(k, v);
     }
@@ -76,7 +77,7 @@ fn owned_answers_and_once_evaluated_fresh_leaf_holes() {
     let __cq_leaf_0 = 7;
     let result: Vec<_> = ::mini_linq::mini_linq! {
         struct Hole;
-        #[host(canon)] relation Neg(x: i32) = ({
+        relation Neg(x: i32) = ({
             calls.set(calls.get() + 1);
             Answers::collect_from([(1,), (2,), (2,)])
         });
@@ -101,10 +102,11 @@ fn a_borrowed_grouped_leaf_is_an_ordinary_host() {
     let result: Vec<_> = ::mini_linq::mini_linq! {
         struct Hole;
         relation L(k: i32);
-        #[host(keyed [k], canon)] relation Leaf(k: i32, v: i32) = ({ calls.set(calls.get()+1); &G });
+        relation Leaf(k: i32, v: i32) = ({ calls.set(calls.get()+1); &G });
         relation answer(v: i32);
         answer(*v) :- L(k), Leaf(k, v);
-    }.collect();
+    }
+    .collect();
     assert_eq!(result, [(10,)]);
     assert_eq!(calls.get(), 1);
 }
@@ -115,7 +117,7 @@ fn a_context_hole_can_supply_a_leaf_hole_and_leaf_order_is_written_order() {
     let order = std::cell::RefCell::new(Vec::new());
     let result: Vec<_> = ::mini_linq::mini_linq! {
         struct Outer;
-        #[host(canon)] relation Inner(x: i32) = ({
+        relation Inner(x: i32) = ({
             order.borrow_mut().push(1);
             Answers::collect_from(::mini_linq::mini_linq! {
                 struct Inner;

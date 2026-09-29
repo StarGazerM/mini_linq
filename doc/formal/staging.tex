@@ -48,9 +48,9 @@ A caller policy wrapper appends \code{policy \{...\}} to IX and invokes
 select_structures!  { Physical   policy { ... } }
 structures_to_rust! { Structures policy { ... } }
 \end{lstlisting}
-Terminal realization consumes that payload and the caller's provider
-path. Canon pipe or alias scans use the provider; canonical materialized storage
-is read directly. The composition example in \path{examples/composition/}
+Terminal realization consumes that payload and the caller's distinct-state
+and index-provider paths. Canon boundaries use distinct state, including
+before let materialization. Host reads dispatch through runtime traits. The composition example in \path{examples/composition/}
 starts at RA with \code{index_demands!}, defines the policy wrapper, and binds
 the post-RA slots it uses. It does not bind the logical slots.
 

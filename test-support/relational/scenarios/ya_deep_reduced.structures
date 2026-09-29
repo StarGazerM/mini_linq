@@ -1,12 +1,7 @@
 structures {
-    R;
-    S;
-    T;
-    U;
-    r1 = ::std::collections::HashSet<_> [b];
-    r2 = ::std::collections::HashSet<_> [c];
-    r4 = ::std::collections::HashSet<_> [d];
-    r6 = ::cq_storage::HashIndex<_, _> [d];
-    r7 = ::cq_storage::HashIndex<_, _> [c];
-    r8 = ::cq_storage::HashIndex<_, _> [b];
+    r2 = index_provider!(semi) [c] ;
+    r4 = index_provider!(semi) [d] ;
+    r6 = index_provider!(probe) [d] ;
+    r7 = index_provider!(probe) [c] ;
+    r8 = index_provider!(probe) [b] ;
 }

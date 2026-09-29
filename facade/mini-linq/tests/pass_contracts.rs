@@ -112,10 +112,10 @@ fn complete_program_parsers_reject_wrong_stage_payloads() {
 
 #[test]
 #[cfg(all(feature = "structure-selection", feature = "physical-realization"))]
-fn declaration_facts_and_leaf_expressions_are_preserved_at_every_edge() {
+fn declaration_layout_and_leaf_expressions_are_preserved_at_every_edge() {
     use quote::ToTokens;
     let source: cq::Program = syn::parse_quote! {
-        struct Q; #[host(keyed [a] ordered, canon)] relation R(a:i32) = (host_expression(config));
+        struct Q; relation R(a:i32) = (host_expression(config));
         answer(x) :- R(x);
     };
     let nf = cq::normal::normalize(&source).unwrap();
@@ -143,8 +143,8 @@ fn declaration_facts_and_leaf_expressions_are_preserved_at_every_edge() {
         structures
     );
     let replacements: [RelationDecl; 2] = [
-        syn::parse_quote!(#[host(keyed [a], canon)] relation R(a:i32) = (host_expression(config));),
-        syn::parse_quote!(#[host(keyed [a] ordered, canon)] relation R(a:i32) = (other_expression(config));),
+        syn::parse_quote!(relation R(a:u64) = (host_expression(config));),
+        syn::parse_quote!(relation R(a:i32) = (other_expression(config));),
     ];
     for replacement in replacements {
         let mut t = vo.clone();
@@ -166,36 +166,18 @@ fn declaration_facts_and_leaf_expressions_are_preserved_at_every_edge() {
         t.physical.program.declarations[0] = replacement;
         assert!(cq_structure_selection::check(&physical, &t, &policy).is_err());
     }
-    for attrs in [
-        vec![syn::parse_quote!(#[host(keyed [missing])])],
-        vec![syn::parse_quote!(#[host(keyed [a,r#a])])],
-        vec![syn::parse_quote!(#[host()]), syn::parse_quote!(#[host()])],
-    ] {
-        let mut c = source.clone();
-        c.declarations[0].attrs = attrs.clone();
-        assert!(cq::contract::check(&c).is_err());
-        let mut r = ra.clone();
-        r.plan.declarations[0].attrs = attrs.clone();
-        assert!(cq_lang_ra::contract::check(&r).is_err());
-        let mut p = physical.clone();
-        p.program.declarations[0].attrs = attrs;
-        assert!(cq_lang_physical::contract::check(&p).is_err());
-    }
 }
 
 #[test]
-fn output_schemas_cannot_silently_discard_host_facts_or_leaf_values() {
-    for output in [
-        syn::parse_quote!(#[host(canon)] relation answer(x:i32);),
-        syn::parse_quote!(relation answer(x:i32) = (side_effect());),
-    ] {
+fn output_schemas_cannot_silently_discard_leaf_values() {
+    for output in [syn::parse_quote!(relation answer(x:i32) = (side_effect());)] {
         let output: RelationDecl = output;
         let c: cq::Program =
             syn::parse_quote! { struct Q; relation R(a:i32); #output answer(x) :- R(x); };
         let r: ra::Program = syn::parse_quote! { relational { relation R(a:i32); #output
         r = rename R {a -> x}; output r as answer(x); } };
         let p: physical::Program = syn::parse_quote! { physical { relation R(a:i32); #output
-        r = alias canon rename R {a -> x}; return r as answer(x); } };
+        r = pipe canon rename R {a -> x}; return r as answer(x); } };
         for result in [
             cq::contract::check(&c),
             ra::contract::check(&r).map(|_| ()),

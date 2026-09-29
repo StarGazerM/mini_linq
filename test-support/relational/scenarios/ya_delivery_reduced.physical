@@ -2,10 +2,10 @@ physical {
     relation D(driver_id: i32, depot_id: i32);
     relation S(depot_id: i32, item_id: i32);
     relation N(job_id: i32, item_id: i32);
-    r0 = alias rename S { depot_id -> depot, item_id -> item };
-    r1 = let rename D { driver_id -> driver, depot_id -> depot };
+    r0 = pipe rename S { depot_id -> depot, item_id -> item };
+    r1 = pipe rename D { driver_id -> driver, depot_id -> depot };
     r2 = let semi[depot] r0, r1;
-    r3 = alias rename N { job_id -> job, item_id -> item };
+    r3 = pipe rename N { job_id -> job, item_id -> item };
     r4 = let semi[item] r3, r2;
     r5 = let semi[item] r2, r4;
     r6 = pipe semi[depot] r1, r5;

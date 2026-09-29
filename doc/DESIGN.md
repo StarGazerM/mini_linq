@@ -2,7 +2,7 @@
 
 The principles and invariants the code enforces. Grammars, APIs and the exact
 obligations of each language and pass live in that crate's `//!`
-documentation; formal rules (`ST-Hole`, `IF-Facts`, …) are listed with their
+documentation; formal rules (`ST-Hole`, `IF-Dispatch`, …) are listed with their
 implementing sources in [formal/rules.tsv](formal/rules.tsv).
 
 ## Meaning
@@ -24,7 +24,7 @@ its storage entries.
 | VO (reduced) | + reductions applied to a clause before it is joined | where reductions go |
 | RA | straight-line named algebra (SSA without φ) | none (elaboration) |
 | IX | demands: the key sets the plan applies results at | none (derived) |
-| Physical | one operator per result; `pipe`/`let`/`alias` modes | operator, mode, dedup placement |
+| Physical | one operator per result; `pipe`/`let` modes | operator, mode, dedup placement |
 | Structures | the bindings Γ: the value answering each keyed read | representation |
 
 Step `i` of a valuation plan denotes the partial valuations on the variables
@@ -35,12 +35,10 @@ relation with an abstraction function `α`; each operation commutes with `α`,
 and `α` of a built value is exactly the rows it was built from
 (`α ∘ build = id`). The laws are tested in `runtime/cq-storage/tests/`.
 
-**Deduplication is a canonical index**, not an operator. A result marked
-`canon` is inserted into a canonical index. The Structures contract requires
-the returned result to be canonical, by that flag or by key inference from
-`canon` hosts through joins, semijoins, selects, extends and key-keeping
-projections. `project = canon` flags every key-dropping projection: set
-semantics is a property of representation, not a separate algebra.
+**Canonicality is a plan property.** A `canon` boundary deduplicates through
+`distinct_state!`, including before a let is materialized. Uniqueness propagates
+through joins of unique inputs, semijoins, selects, extends, and projections
+that retain an inferred key. Host types supply no canonicity premises.
 
 **Keys are curryings.** A relation `R ⊆ Tup(X)` read on a key `K ⊆ X` is used
 at the curried type `Tup(K) → P(Tup(X∖K))`. An IX demand is such a key: an
@@ -51,11 +49,10 @@ answers a read on every prefix `K₁ ∪ … ∪ Kᵢ`. That is a trie
 lazily built level is call-by-need. Level order is representation and never
 appears above Structures.
 
-**Modes are binding time**, inferred from use. `pipe` is linear: read exactly
-once, as a stream. `let` is shared: read through a key or more than once.
-`alias` is a host read in place, scanned or through its declared key. `merge`
-needs both sides ordered on its key: an ordered host key, a built structure,
-or a pipe sorted by its own merge.
+**Modes are binding time.** A derived `pipe` has one stream read; a `let`
+retains rows or built indexes for repeated or keyed reads. A host rename is a
+reusable `pipe` read. Merge requires ordered inputs: rustc checks a direct
+host's `OrderedRead`; a built let or a same-key merge pipe supplies plan order.
 
 ## Program shape
 
@@ -65,17 +62,26 @@ parses, prints and checks on its own. An extension contains its base program
 are standalone over `cq-syntax`. No IR carries its producer's program: RA
 holds no CQ and Physical no IX.
 
-**Languages make no capability claims.** Whether a type supports the reads a
-plan performs is rustc's check, through the `cq_storage::require` guards the
-printer emits beside each value; the compiler names a type without inspecting it.
+**Languages make no capability claims.** Declarations contain only a name,
+ordered columns and an optional leaf expression. Rust types and traits decide
+host access. Structures records built lets, never host capabilities.
 
-**No fallback hides an unmet premise.** A missing demand, an unserved read or
-a non-canonical return is a diagnostic. Defaults exist only as named policy
-rules: an absent `join` is `seek` (a `probe`); an unadvised probe builds a
-`cq_storage::HashIndex`, a membership test a `HashSet`, and an ordered read a
-`BTreeMap`. A canon pipe or alias is deduplicated through the caller-bound
-`distinct_state!` provider. There is no built-in dedup set, storage dispatch
-or fallback backend.
+**Declaration order is layout.** A grouped host key occupies the leading
+columns. Only a read whose column set equals a leading prefix is eligible for
+native lookup. A different prefix length or unsupported key type falls back;
+a non-leading read always builds, even when its Rust key type matches.
+
+**Host dispatch is lazy.** `cq_storage::dispatch::Host` uses stable autoref
+selection for `seek`, `contains`, and leading-column `range`. A native read
+uses the host trait. Its fallback is initialized once on first use within the
+query block, shared by all probes, and never built on the native path.
+
+**Provider slots select built types and distinct state.** `index_provider!`
+accepts `probe`, `semi`, `ordered`, or `trie Type`. The default provider selects
+HashIndex, HashSet, BTreeMap, and Trie respectively. A caller can bind any
+provider whose types implement the reads used by its plan. `distinct_state!`
+handles canonical boundaries. Missing IX demands and unserved derived pipe
+reads remain independent contract errors.
 
 **The printer inserts no binding clones.** Rows borrow host and built fields,
 and a value bound by an outer source is used by its inner loops as that source
@@ -103,8 +109,8 @@ contract, so an invalid program never leaves a pass. `compile` never invokes
 the pass's domain, the target contract, the erasure or kernel relation, and
 the obligations of every explicit choice (split granularity, reduction tree
 edges, demand derivation and names, policy-mandated operators, declaration
-facts, read admissibility, `#[index]` advice). Choices the options leave free
-(a prefix or elimination ranking, sibling reduction order, alias/let/pipe
+layout, read admissibility, provider slots). Choices the options leave free
+(a prefix or elimination ranking, sibling reduction order, let/pipe
 when several are admissible, structure entry order) are accepted in any
 admissible form; the selector is never re-run to compare.
 `tools/check_dependencies.py` rejects a `check` body that calls `compile`.
@@ -136,11 +142,9 @@ no residual-hole IR. The core opens in four places:
   the caller's Rust. The stage continuation replaces that one quotation and
   leaves the context intact; rustc checks the closing bindings. A context may
   collect an answer and feed it to another quotation, or supply a leaf.
-- **Below the core.** Representation is opened to the caller, not chosen by
-  the compiler: hosts are read in place through their declared keys,
-  `#[index(Type)]` names any type implementing the traits its reads use,
-  `distinct_state!` binds a provider, and every stage boundary is a caller
-  import (see Modularity).
+- **Below the core.** Host representations dispatch through Rust traits;
+  `index_provider!` and `distinct_state!` select built types and state. Every
+  stage boundary is a caller import (see Modularity).
 
 Each crossing between the core and its outside is one of four checked
 interfaces:
@@ -148,23 +152,15 @@ interfaces:
 | Interface | What crosses | Check |
 |---|---|---|
 | Surface | CQ text after extension clauses are expanded; `name! { tokens }` passes through | the CQ contract rejects every clause still unexpanded (IF-Surface) |
-| Output | answer sets, as canonical hosts | `Answers`/`GroupedAnswers` construction retains distinct rows (IF-Output) |
-| Input | declarations: host facts and leaf expressions | local contracts, then rustc guards (IF-Input, IF-Leaf, IF-Facts) |
+| Output | answer sets reused as ordinary hosts | `Answers`/`GroupedAnswers` construction retains distinct rows (IF-Output) |
+| Input | declarations: ordered columns and leaf expressions | local contracts, then type dispatch (IF-Input, IF-Leaf, IF-Dispatch) |
 | Environment | the enclosing Rust scope of embedded expressions | logical scope in CQ, the rest by rustc (IF-Environment) |
 
-**Host facts live on declarations and are checked by rustc.** In
-`#[host(keyed [a] ordered, canon)] relation R(a: i32, b: i32);` every declared
-fact emits a `cq_storage::require` guard (`keyed` at the declared key tuple
-type, `ordered`, `canonical`) even when the chosen plan does not use it. Local
-contracts reject unknown or duplicate key columns and repeated `host`
-attributes; pass checks preserve complete declarations. `#[index(Type)]` is
-advice for a structure built over a relation, not a fact.
-
-**Answers are hosts.** An answer set is a canonical host (`#[host(canon)]`, or
-`#[host(keyed […], canon)]` grouped). `Answers::collect_from` retains distinct
-rows; `GroupedAnswers::collect_from` deduplicates `(key, payload)` pairs and
-answers keyed reads in place. Rows may hold `&T` and neither collector clones
-referents, so queries compose without copying.
+**Answers are ordinary hosts.** `Answers::collect_from` retains distinct rows;
+`GroupedAnswers::collect_from` deduplicates `(key, payload)` pairs and supports
+native keyed reads on the leading declared columns. Rows may hold `&T`, and
+neither collector clones referents. A later query still establishes its own
+plan uniqueness through the caller's distinct-state provider.
 
 ## Planning
 
@@ -184,20 +180,18 @@ semijoins form a full reducer of a join tree; tree reduction requires an
 acyclic body.
 
 **Policy is strategy only.** The caller supplies one query-independent
-`policy { … }` (`join`, `semijoin`, `project`, `intersect`). Host facts belong
-to declarations and `#[index(Type)]` advice to relations; no policy names a
-query's results.
+`policy { … }` (`join`, `semijoin`, `project`, `intersect`); no policy names a query's results.
 
 **No pass reselects.** A later pass never revisits a choice an earlier one
 recorded. IX derives demands from the fixed RA plan; lowering respects `join`,
-`project` and declaration facts; selection preserves the Physical program
+`project` and declaration layout; selection preserves the Physical program
 unchanged; the printer preserves the operator graph and storage choices and
 decides only Rust control flow and layout.
 
 **Worst-case-optimal join is a configuration, not an IR.** Generic join
 decomposes into `Split::Fine` in the order pass (bind one variable at a
 time), `project = canon` (enumerate each prefix as a set), prefix checks as
-semijoins read through one curried structure, and `intersect = smallest`
+semijoins over built lets can share a curried structure; host reads dispatch by type. `intersect = smallest`
 (enumerate the smaller candidate set, test the other). On the fan instance in
 `facade/mini-linq/tests/wcoj.rs`, the hash-operation count of that
 configuration grows at most 2.5× per doubling of `n`, while the binary and
@@ -249,6 +243,6 @@ oracles and the reference printer, not by proof. Every printed program meets:
 - Bag or annotated (K-relation) semantics.
 - A proven WCOJ complexity bound; cardinality estimation and cost-based
   ordering.
-- Host-declared tries (`keyed [a][b]` on a host's own nested maps).
+- Native keyed reads of nested host tries.
 - Recursion and incremental evaluation; deltas would be ordinary hosts, not
   IR constructs.

@@ -17,8 +17,9 @@ a different RA version.
 \paragraph{Open physical configuration.}
 The post-IX passes take query-independent strategy $\chi$ from the caller
 (merge or probe joins, semijoin preference, projection and intersection choices).
-Declarations carry host facts (key columns, order and canonical status) and
-\texttt{\#[index(Type)]} advice naming the Rust type built over a relation.
+Declaration order fixes host layout. Types choose direct reads through stable
+autoref dispatch, with lazy per-query fallbacks; \texttt{index\_provider!}
+selects built-let types. Host types never establish plan canonicality.
 Neither pass reselects a choice recorded by the previous one. Whether a value
 implements the operation trait each read needs is Rust's check at a guard the
 printer emits beside the value; those trait laws are stated in

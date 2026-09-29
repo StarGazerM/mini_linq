@@ -1,8 +1,8 @@
 physical {
     relation R(value: i32);
     relation S(first: i32, second: i32);
-    r0 = alias rename S { first -> y, second -> z };
-    r1 = let rename R { value -> x };
+    r0 = pipe rename S { first -> y, second -> z };
+    r1 = pipe rename R { value -> x };
     r2 = let semi[] r0, r1;
     r3 = pipe semi[] r1, r2;
     r4 = pipe probe[] r3, r2;

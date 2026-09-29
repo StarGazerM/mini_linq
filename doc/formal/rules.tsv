@@ -36,12 +36,11 @@ WF-VO	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO:	Chec
 WF-RA	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule WF-RA:	Check declarations, local operators, output heading and definition reachability.
 WF-IX	implementation	languages/cq-lang-ix/src/lib.rs	/// Formal rule WF-IX:	Check valid unique used descriptors; complete coverage is a pass obligation.
 WF-Physical	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule WF-Physical:	Derive local headings and reads, then check output, reachability and modes.
-PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one read and no keyed or range read for each pipe.
+PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one stream read for a derived pipe; noncanonical host renames are reusable.
 PH-Let	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Let:	Require every let to be read.
-PH-Alias	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Alias:	Require every alias to rename a declared relation.
-STR-Key	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Key:	Answer probe and semi reads by an exact host key or built level prefix.
-STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Range:	Answer a range by an ordered host key or a built entry on its column.
-STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Merge:	Answer each merge side by ordered storage or a same-key merge pipe.
+STR-Key	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Key:	Answer reads by reusable host dispatch or a built level prefix.
+STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Range:	Answer range by host dispatch or an ordered built entry.
+STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Merge:	Require a direct ordered host read, built entry, or same-key merge pipe.
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
 CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage and Written introducing order.
 CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check reduction erasure, allowed guards and complete dependency-ordered tree edges.
@@ -49,7 +48,7 @@ CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-El
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
 CK-Physical	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Physical:	Check local contracts, RA erasure, IX demands and independent policy premises.
-CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs	/// Formal rule CK-Structures:	Check Physical preservation, exact host facts and independently derived storage rules.
+CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs	/// Formal rule CK-Structures:	Check Physical preservation and independently derived provider and level rules.
 A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Variable:	Keep a first bare argument and record its name.
 A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated bare argument and append its equality guard.
 A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Wildcard:	Replace a wildcard by a fresh unconstrained atom variable.
@@ -100,12 +99,9 @@ ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse
 ST-Terminal	implementation	facade/mini-linq/src/lib.rs	/// Formal rule ST-Terminal:	Realize the policed Structures payload with no next continuation.
 ST-Hole	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Hole:	Stage continuation replaces a quotation in the caller Rust context; rustc checks closing bindings.
 IF-Surface	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Surface:	Reject every remaining extension clause by name.
-IF-Input	implementation	languages/cq-syntax/src/lib.rs	/// Formal rule IF-Input:	Check unique host attributes and known duplicate-free keys.
+IF-Input	implementation	languages/cq-syntax/src/lib.rs	/// Formal rule IF-Input:	Check declaration names and arity; declaration order is layout.
 IF-Output	implementation	runtime/cq-storage/src/answers.rs	/// Formal rule IF-Output:	Collect distinct rows into a canonical input host.
 IF-Environment	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Environment:	Check visible logical scope and leave Rust environment resolution to rustc.
 IF-Leaf	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Leaf:	Evaluate leaf expressions once under fresh bindings.
-STR-Facts	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-Facts:	Require exact declaration facts in Structures entries.
-IF-Facts	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Facts:	Emit a guard for each declared fact even if unused.
-IF-Canon	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Canon:	Require Canonical for each canon host.
-IF-Keyed	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Keyed:	Require IndexRead at the written declaration key type.
-IF-Ordered	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Ordered:	Require OrderedRead for every ordered host.
+IF-Dispatch	implementation	passes/cq-print/src/access.rs	// Formal rule IF-Dispatch:	Native access is eligible only at a leading declaration prefix.
+IF-Fallback	implementation	runtime/cq-storage/src/dispatch.rs	/// Formal rule IF-Fallback:	Initialize a shared fallback once on first use.

@@ -39,7 +39,7 @@ fn projection_strategy_rejects_unknown_duplicate_and_unterminated_choices() {
 
 #[test]
 fn policy_rejects_removed_host_entries() {
-    for text in ["policy { R; }", "policy { R keyed [a] ordered canon; }"] {
+    for text in ["policy { R; }", "policy { R supports [a]; }"] {
         assert!(syn::parse_str::<Policy>(text).is_err());
     }
 }

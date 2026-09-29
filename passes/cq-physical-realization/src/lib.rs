@@ -9,38 +9,13 @@
 //! supported adjacent probe/check pairs enumerate the smaller runtime candidate
 //! set without changing RA/VO order.
 //!
-//! Representation and execution:
-//!
-//! - Rows flow as tuples in sorted-heading order, each column bound to the
-//!   RA heading's own identifier so user Rust inside nested macros resolves.
-//!   Host columns are `&T` (borrowed from the host value, or from rows a
-//!   structure was built over); computed columns are the owned value the
-//!   extend produced. User Rust (select conditions, extend values, head
-//!   expressions) sees every column as `&T`.
-//! - A `let` is collected once (`__cq_<r>_rows`) only when its rows are
-//!   scanned as a bag or more than one structure is built over them. Each
-//!   built structure is `__cq_<r>_on_<cols>`, bound by reference and built
-//!   through `cq_storage::Build` from `((key cols,), (remaining cols,))`
-//!   pairs in sorted column order, followed by a `cq_storage::require` guard
-//!   naming the trait every read on it uses. A `let` flagged `canon` gets a
-//!   `HashSet` of its full rows unless a full-key structure exists; scans of
-//!   it read that set.
-//! - A host keyed `[k…]` is `Map<(k…,), Coll<(rest…,)>>` with tuples in the
-//!   host's declared column order; an unkeyed host iterates full rows. Its
-//!   owned key is constructed from the bound columns by `Clone::clone`;
-//!   built structures are keyed by `(&T, …)`. Distinct-state providers
-//!   separately own retained copies and may clone rows.
-//! - `merge` co-iterates native cursors when both sides are hosts or both
-//!   are built structures; otherwise (a sorted pipe, or a mixed pair) each
-//!   side is presented through `cq_storage::sorted_by` with its key
-//!   re-tupled as references in sorted column order. A host merged on a
-//!   multi-column key must list the key in that sorted order.
-//! - The block's value is an iterator of the answer tuples in head order.
-//!   A `canon` pipe or alias is deduplicated where it is scanned through the
-//!   caller's distinct-state provider. Structures live only for the block,
-//!   so a program that binds any statement collects its answers inside the
-//!   block and evaluates to `Vec::into_iter`; a program over hosts alone
-//!   evaluates to the lazy iterator itself.
+//! Rows borrow declared host columns and retain owned computed columns. The
+//! printer binds hosts once and dispatches reusable host reads by type. Only
+//! leading declaration prefixes are eligible for native keyed reads; other
+//! reads use one lazy fallback. Built lets use the caller's index provider.
+//! Canon boundaries use the caller's distinct provider before materialization
+//! or stream consumption. Merge requires ordered inputs; mixed cursors normalize
+//! key references. Answers are collected before block-local storage is dropped.
 
 use cq_lang_structures as structures;
 use cq_lang_structures::physical;
@@ -63,6 +38,7 @@ use cq_print::{Context, Repr, error, index, sorted};
 pub struct Endpoints {
     /// Distinct-state provider (`cq-protocol`): `new`, `insert`.
     pub distinct_state: syn::Path,
+    pub index_provider: syn::Path,
     /// Enumerate the smaller candidate set for supported binary intersections.
     pub intersect: bool,
 }
@@ -74,6 +50,7 @@ pub fn compile(module: &structures::Program, endpoints: &Endpoints) -> syn::Resu
         context: Context::new(module, &analysis),
         endpoints,
     };
+    printer.intersect = endpoints.intersect;
     let definitions = &module.physical.program.definitions;
     let mut position = 0;
     while position < definitions.len() {
@@ -100,7 +77,9 @@ pub fn compile(module: &structures::Program, endpoints: &Endpoints) -> syn::Resu
             )
         }
     };
-    syn::parse2(quote! { { #(#statements)* #value } })
+    let provider = &endpoints.index_provider;
+    let import = quote!(#[allow(unused_imports)] use #provider as index_provider;);
+    syn::parse2(quote! { { #import #(#statements)* #value } })
 }
 
 struct Printer<'a> {
@@ -123,7 +102,9 @@ impl Printer<'_> {
         let name = symbol_name(&definition.name);
         self.register(&name);
         let repr = match physical::ModeKind::from(&definition.mode) {
-            physical::ModeKind::Alias => Repr::Alias,
+            physical::ModeKind::Pipe if matches!(definition.operator, Operator::Rename(_)) => {
+                Repr::Host
+            }
             physical::ModeKind::Pipe => {
                 let mut rows = self.produce(&name, definition)?;
                 if definition.canon.is_some() {
@@ -132,7 +113,10 @@ impl Printer<'_> {
                 Repr::Pipe(Some(rows))
             }
             physical::ModeKind::Let => {
-                let rows = self.produce(&name, definition)?;
+                let mut rows = self.produce(&name, definition)?;
+                if definition.canon.is_some() {
+                    rows = self.distinct(&definition.name, rows);
+                }
                 self.materialize(&name, definition.canon.is_some(), rows)
             }
         };
@@ -143,7 +127,7 @@ impl Printer<'_> {
     pub(crate) fn scan(&mut self, result: &Ident) -> syn::Result<TokenStream> {
         let name = symbol_name(result);
         match self.reprs.get(&name) {
-            Some(Repr::Alias) => {
+            Some(Repr::Host) => {
                 let rows = self.host_scan(&name);
                 Ok(if self.physical_analysis.canon.contains(&name) {
                     self.distinct(&self.physical[&name].name, rows)
@@ -156,15 +140,9 @@ impl Printer<'_> {
                 None => error(result, format!("pipe `{name}` is read twice")),
             },
             Some(Repr::Let { rows, structures }) => {
-                let heading = self.heading(&name);
-                let set = structures
-                    .iter()
-                    .find(|(c, _)| c.len() == 1 && c[0] == heading)
-                    .map(|(_, s)| s);
-                let source = match (self.physical_analysis.canon.contains(&name), set, rows) {
-                    (true, Some(set), _) => set,
-                    (_, _, Some(rows)) => rows,
-                    _ => return error(result, format!("`{name}` is scanned but not materialized")),
+                let _ = structures;
+                let Some(source) = rows else {
+                    return error(result, format!("`{name}` is scanned but not materialized"));
                 };
                 Ok(quote!(::core::iter::Iterator::copied(#source.iter())))
             }

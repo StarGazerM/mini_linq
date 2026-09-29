@@ -6,9 +6,10 @@
 //! [`Build`] plus the access traits a plan uses is a first-class structure,
 //! and the compiler names it without inspecting it.
 //!
-//! An answer set is a canonical host; declare it `#[host(canon)]` (and
-//! `keyed [...]` for [`GroupedAnswers`]). [`Answers::collect_from`] accepts
-//! any answer iterator, including tuples of references for zero-copy columns.
+//! [`Answers`] and [`GroupedAnswers`] compose query outputs as inputs. Grouped
+//! keys occupy the leading declared columns. [`dispatch`] selects direct reads
+//! by type, with one lazy fallback per query read. Host uniqueness is never a
+//! language premise; caller-selected distinct state establishes canonical plans.
 //!
 //! # Abstraction functions
 //!
@@ -35,10 +36,12 @@
 
 mod answers;
 mod candidates;
+pub mod dispatch;
 mod hash_index;
 mod host;
 mod membership;
 mod ordered;
+pub mod rows;
 mod trie;
 
 pub use answers::{Answers, GroupedAnswers};
@@ -56,5 +59,16 @@ pub mod require {
     pub fn seek<T: super::IndexRead>(_: T) {}
     pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
     pub fn ordered<T: super::OrderedRead>(_: T) {}
+    /// A direct ordered read must use the leading declared key type.
+    pub fn ordered_key<'a, K, T: super::OrderedRead + 'a>(_: &'a T)
+    where
+        <T::Cursor<'a> as super::OrderedCursor>::Key: OrderedKey<K>,
+    {
+    }
+    #[diagnostic::on_unimplemented(
+        message = "ordered input key must match the leading declaration prefix"
+    )]
+    pub trait OrderedKey<K> {}
+    impl<K> OrderedKey<K> for &K {}
     pub fn canonical<T: super::Canonical>(_: T) {}
 }

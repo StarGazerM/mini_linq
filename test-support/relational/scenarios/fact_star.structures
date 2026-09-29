@@ -1,9 +1,2 @@
 structures {
-    F;
-    A;
-    B;
-    C;
-    r1 = ::cq_storage::HashIndex<_, _> [x];
-    r3 = ::cq_storage::HashIndex<_, _> [y];
-    r5 = ::cq_storage::HashIndex<_, _> [z];
 }

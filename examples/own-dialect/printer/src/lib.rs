@@ -52,13 +52,10 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
         let name = symbol_name(&p.name);
         push.context.register(&name);
         match p.mode {
-            physical::Mode::Alias(_) => {
-                push.context.reprs.insert(name, Repr::Alias);
-            }
             physical::Mode::Pipe(_) => {}
             physical::Mode::Let(_) => {
                 let row = push.pattern(&name);
-                let body = push.operator(&name, quote!(__push_rows.push(#row);))?;
+                let body = push.emit(&name, quote!(__push_rows.push(#row);))?;
                 let source = quote!({
                     let mut __push_rows = ::std::vec::Vec::new();
                     #body
@@ -89,6 +86,7 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
     )?;
     let statements = &push.statements;
     syn::parse2(quote!({
+        #[allow(unused_imports)] use mini_linq::index_provider;
         #(#statements)*
         let mut __push_out = mini_linq::distinct_state! { operator #returned; new };
         #body
@@ -100,15 +98,9 @@ impl Push<'_> {
     fn emit(&self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
         let definition = self.physical[result];
         if let Some(Repr::Let { rows, structures }) = self.reprs.get(result) {
-            let heading = self.heading(result);
-            let set = structures
-                .iter()
-                .find(|(levels, _)| levels.len() == 1 && levels[0] == heading)
-                .map(|(_, s)| s);
-            let storage = match (definition.canon.is_some(), set, rows) {
-                (true, Some(set), _) => set,
-                (_, _, Some(rows)) => rows,
-                _ => return error(&definition.name, "unmaterialized scan"),
+            let _ = structures;
+            let Some(storage) = rows else {
+                return error(&definition.name, "unmaterialized scan");
             };
             let pattern = self.pattern(result);
             return Ok(
@@ -148,15 +140,11 @@ impl Push<'_> {
                 let right = symbol_name(&k.right);
                 let columns = sorted(&k.columns);
                 let (lookup, payload, host) = match self.keyed(&k.right, &columns)? {
-                    Access::Host(access) => {
-                        let key = self.host_key(&left, &access);
-                        let value = access.value;
-                        (
-                            quote!(::cq_storage::IndexRead::lookup(&&#value, #key)),
-                            access.payload,
-                            true,
-                        )
-                    }
+                    Access::Host(access) => (
+                        self.host_lookup(&left, &access, false),
+                        access.payload,
+                        false,
+                    ),
                     Access::Built(structure) => (
                         self.chained_lookup(&left, &structure, &right, &columns),
                         self.heading(&right)
@@ -191,11 +179,7 @@ impl Push<'_> {
                 let left = symbol_name(&k.left);
                 let right = symbol_name(&k.right);
                 let test = match self.keyed(&k.right, &sorted(&k.columns))? {
-                    Access::Host(access) => {
-                        let key = self.host_key(&left, &access);
-                        let value = access.value;
-                        quote!(::cq_storage::ExactMembership::contains(&#value, #key))
-                    }
+                    Access::Host(access) => self.host_lookup(&left, &access, true),
                     Access::Built(structure) => self.chained_contains(
                         &left,
                         &structure,

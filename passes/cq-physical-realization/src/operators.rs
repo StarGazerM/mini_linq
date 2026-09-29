@@ -79,15 +79,11 @@ impl<'a> Printer<'a> {
         let outer_pattern = self.pattern(&left);
         let access = self.keyed(&keyed.right, &columns)?;
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
-            Access::Host(access) => {
-                let value = &access.value;
-                let key = self.host_key(&left, access);
-                (
-                    quote!(::cq_storage::IndexRead::lookup(&&#value, #key)),
-                    access.payload.clone(),
-                    true,
-                )
-            }
+            Access::Host(access) => (
+                self.host_lookup(&left, access, false),
+                access.payload.clone(),
+                false,
+            ),
             Access::Prefix(structure, levels) => {
                 let all = self.levels_of(&right, structure);
                 // The opt-in binary case has exactly one remaining key,
@@ -157,11 +153,7 @@ impl<'a> Printer<'a> {
             }
         });
         let test = match self.keyed(&keyed.right, &columns)? {
-            Access::Host(access) => {
-                let value = &access.value;
-                let key = self.host_key(&left, &access);
-                quote!(::cq_storage::ExactMembership::contains(&#value, #key))
-            }
+            Access::Host(access) => self.host_lookup(&left, &access, true),
             Access::Built(structure) => {
                 let levels = self.levels_of(&symbol_name(&keyed.right), &structure);
                 self.chained_contains(&left, &structure, &levels)
@@ -293,69 +285,66 @@ impl<'a> Printer<'a> {
                 ),
             );
         }
-        let side = self.ordered(reader, &select.input, std::slice::from_ref(&column_name))?;
-        let (cursor, payload, host): (TokenStream, Vec<String>, bool) = match &side {
-            Side::Host(access) => {
-                let value = &access.value;
-                (
-                    quote!(::cq_storage::OrderedRead::ordered(&#value)),
-                    access.payload.clone(),
-                    true,
+        let rows = if self.analysis.host_read(&input) {
+            let access = self.host_access(&input, std::slice::from_ref(&column_name));
+            let handle = format_ident!("__cq_{}_host", input);
+            let bound = |value: Option<i32>| {
+                value.map_or_else(
+                    || quote!(None),
+                    |n| {
+                        let n = proc_macro2::Literal::i32_unsuffixed(n);
+                        quote!(Some(&(#n,)))
+                    },
                 )
-            }
-            Side::Built(structure) => (
-                quote!(::cq_storage::OrderedRead::ordered(&#structure)),
-                self.heading(&input)
-                    .iter()
-                    .filter(|c| **c != column_name)
-                    .cloned()
-                    .collect(),
-                false,
-            ),
-            Side::Pipe(_) => unreachable!("a range reads through a key, never a pipe"),
-        };
-        // A host key is `(i32,)`, a built key `(&i32,)`.
-        let seek = window.low.map(|low| {
-            let bound = if host {
-                quote!(&&(#low,))
-            } else {
-                quote!(&&(&#low,))
             };
-            quote! { ::cq_storage::OrderedCursor::seek(&mut __cq_cursor, #bound); }
-        });
-        let scan = match window.high {
-            Some(high) => {
-                let bound = if host {
-                    quote!((#high,))
-                } else {
-                    quote!((&#high,))
-                };
-                quote! {
-                    ::core::iter::Iterator::take_while(__cq_cursor, |(__cq_k, _)| **__cq_k <= #bound)
+            let low = bound(window.low);
+            let high = bound(window.high);
+            let binders = access
+                .key
+                .iter()
+                .chain(&access.payload)
+                .map(|c| self.ident(&input, c));
+            let row = self.pattern(name);
+            quote!({
+                use ::cq_storage::dispatch::Range as _;
+                ::core::iter::Iterator::map((&&#handle).range(#low, #high), move |(#(#binders,)*)| #row)
+            })
+        } else {
+            let Side::Built(structure) =
+                self.ordered(reader, &select.input, std::slice::from_ref(&column_name))?
+            else {
+                return error(reader, "range needs a host rename or built let");
+            };
+            let seek = window.low.map(|low| {
+                let low = proc_macro2::Literal::i32_unsuffixed(low);
+                quote!(::cq_storage::OrderedCursor::seek(&mut __cq_cursor, &&(&#low,));)
+            });
+            let cursor = match window.high {
+                Some(high) => {
+                    let high = proc_macro2::Literal::i32_unsuffixed(high);
+                    quote!(::core::iter::Iterator::take_while(__cq_cursor, |(__cq_k,_)| *__cq_k.0 <= #high))
                 }
-            }
-            None => quote!(__cq_cursor),
-        };
-        let row = self.row(name, |c| {
-            if c == column_name {
-                return if host {
-                    quote!(&__cq_k.0)
-                } else {
+                None => quote!(__cq_cursor),
+            };
+            let payload: Vec<_> = self
+                .heading(&input)
+                .iter()
+                .filter(|c| **c != column_name)
+                .collect();
+            let row = self.row(name, |c| {
+                if c == column_name {
                     quote!(__cq_k.0)
-                };
-            }
-            let i = index(payload.iter().position(|p| p == c).expect("payload column"));
-            if host {
-                quote!(&__cq_v.#i)
-            } else {
-                quote!(__cq_v.#i)
-            }
-        });
-        let rows = quote! {{
-            let mut __cq_cursor = #cursor;
-            #seek
-            ::core::iter::Iterator::map(#scan, move |(__cq_k, __cq_v)| #row)
-        }};
+                } else {
+                    let i = index(payload.iter().position(|p| *p == c).unwrap());
+                    quote!(__cq_v.#i)
+                }
+            });
+            quote!({
+                let mut __cq_cursor = ::cq_storage::OrderedRead::ordered(&#structure);
+                #seek
+                ::core::iter::Iterator::map(#cursor, |(__cq_k,__cq_v)| #row)
+            })
+        };
         if window.residual.is_empty() {
             return Ok(rows);
         }

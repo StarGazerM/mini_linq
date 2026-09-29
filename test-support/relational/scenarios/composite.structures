@@ -1,5 +1,2 @@
 structures {
-    R;
-    S;
-    r1 = ::cq_storage::HashIndex<_, _> [a, b];
 }

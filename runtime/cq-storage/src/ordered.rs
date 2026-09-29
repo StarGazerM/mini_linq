@@ -24,6 +24,10 @@ pub trait OrderedCursor: Iterator<Item = (Self::Key, Self::Value)> {
 ///
 /// Implementations are on borrowed collections so a cursor lives as long as
 /// the borrow it was created from, not as long as the handle it was called on.
+#[diagnostic::on_unimplemented(
+    message = "this read requires ordered inputs",
+    note = "join = merge on a leading host key requires OrderedRead; materialize a let to build an ordered index"
+)]
 pub trait OrderedRead {
     type Cursor<'a>: OrderedCursor
     where

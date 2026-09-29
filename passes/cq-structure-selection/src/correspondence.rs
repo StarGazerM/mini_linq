@@ -11,9 +11,8 @@ const PAYLOAD: u8 = 1;
 const ORDERED: u8 = 2;
 type Demands = BTreeMap<String, BTreeMap<Key, u8>>;
 
-/// Check unchanged Physical, all read premises, exact host facts, and built
-/// advice/defaults. Entry order is not a storage rule.
-/// Formal rule CK-Structures: Check Physical preservation, exact host facts and independently derived storage rules.
+/// Check unchanged Physical, all read premises, built provider choices. Entry order is not a storage rule.
+/// Formal rule CK-Structures: Check Physical preservation, independently derived storage rules.
 pub fn check(
     source: &physical::Program,
     target: &structures::Program,
@@ -35,8 +34,6 @@ pub fn check(
             format!("result `{construct}`: Structures must preserve the source Physical program"),
         ));
     }
-    // The target contract independently compares each Structures host entry
-    // with its declaration, including written key order and canon/order facts.
     let facts = &info.physical;
     let definitions: BTreeMap<_, _> = source
         .program
@@ -44,17 +41,10 @@ pub fn check(
         .iter()
         .map(|d| (symbol_name(&d.name), d))
         .collect();
-    let mut advice = BTreeMap::new();
-    for input in source.inputs() {
-        if let Some(attr) = input.index_advice()? {
-            advice.insert(symbol_name(&input.name), attr.parse_args::<syn::Type>()?);
-        }
-    }
-    let advised = |name: &str| facts.hosts.get(name).and_then(|h| advice.get(h));
     let mut demands = Demands::new();
     for (name, readers) in &facts.key_reads {
         for (reader, columns) in readers {
-            if info.host_key_for(name, columns).is_none() {
+            if facts.modes[name] == ModeKind::Let {
                 let strength = if matches!(definitions[reader].operator, Operator::Semi(..)) {
                     MEMBER
                 } else {
@@ -67,7 +57,7 @@ pub fn check(
     for (name, readers) in &facts.range_reads {
         for (_, column) in readers {
             let columns = std::slice::from_ref(column);
-            if !info.host_key_for(name, columns).is_some_and(|k| k.ordered) {
+            if facts.modes[name] == ModeKind::Let {
                 demand(&mut demands, name, columns, ORDERED);
             }
         }
@@ -77,7 +67,7 @@ pub fn check(
             let stream = facts.modes[name] == ModeKind::Pipe
                 && matches!(&definitions[name].operator,
                 Operator::Merge(_, k) if k.columns.iter().map(symbol_name).collect::<Key>() == columns.iter().cloned().collect());
-            if !stream && !info.host_key_for(name, columns).is_some_and(|k| k.ordered) {
+            if !stream && facts.modes[name] == ModeKind::Let {
                 demand(&mut demands, name, columns, ORDERED);
             }
         }
@@ -135,10 +125,6 @@ pub fn check(
             let eligible = sides.iter().all(|(name, prefix)| {
                 let full: Key = facts.headings[name].iter().cloned().collect();
                 facts.modes[name] == ModeKind::Let
-                    && advised(name).is_none()
-                    && facts.key_reads[name]
-                        .iter()
-                        .all(|(_, c)| info.host_key_for(name, c).is_none())
                     && demands
                         .get(name)
                         .into_iter()
@@ -165,9 +151,6 @@ pub fn check(
     // no ordered reads. This does not call the selector's chain builder.
     let mut chains: BTreeMap<String, Vec<Key>> = BTreeMap::new();
     for (name, reads) in &demands {
-        if advised(name).is_some() {
-            continue;
-        }
         if let Some(prefix) = intersections.get(name) {
             chains.insert(
                 name.clone(),
@@ -191,9 +174,7 @@ pub fn check(
     }
     let mut discharged: BTreeSet<(String, Key)> = BTreeSet::new();
     for entry in &target.structures.entries {
-        let Structure::Built { keyed, .. } = &entry.structure else {
-            continue;
-        };
+        let Structure::Built { keyed, .. } = &entry.structure;
         let name = symbol_name(&entry.name);
         let fail = |message: &str| {
             syn::Error::new_spanned(&entry.name, format!("built result `{name}`: {message}"))
@@ -209,25 +190,18 @@ pub fn check(
             .collect();
         let Some(reads) = demands.get(&name) else {
             return Err(fail(
-                "no read requires a build; a host key already answers it or it is unused",
+                "no read requires a build; it is a host read or unused",
             ));
         };
         for prefix in &prefixes {
             if !reads.contains_key(prefix) {
-                return Err(fail(&format!(
-                    "no unanswered read on {prefix:?}; do not build a read already answered by a host key"
-                )));
+                return Err(fail(&format!("no built read on {prefix:?}")));
             }
             if !discharged.insert((name.clone(), prefix.clone())) {
                 return Err(fail(&format!("duplicate build for read on {prefix:?}")));
             }
         }
-        let expected = if let Some(ty) = advised(&name) {
-            if levels.len() != 1 {
-                return Err(fail("index advice requires one exact-key entry per read"));
-            }
-            ty.clone()
-        } else {
+        let expected = {
             if let Some(chain) = chains.get(&name) {
                 if *chain != prefixes {
                     return Err(fail(
@@ -238,23 +212,19 @@ pub fn check(
                 return Err(fail("these reads do not admit chained Trie levels"));
             }
             let mut ty: syn::Type = match reads[prefixes.last().unwrap()] {
-                MEMBER => syn::parse_quote!(::std::collections::HashSet<_>),
-                PAYLOAD => syn::parse_quote!(::cq_storage::HashIndex<_, _>),
-                _ => syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
+                MEMBER => syn::parse_quote!(index_provider!(semi)),
+                PAYLOAD => syn::parse_quote!(index_provider!(probe)),
+                _ => syn::parse_quote!(index_provider!(ordered)),
             };
             for _ in 1..levels.len() {
-                ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
+                ty = syn::parse_quote!(index_provider!(trie #ty));
             }
             ty
         };
         if keyed.ty != expected {
             return Err(fail(&format!(
                 "type must respect {}: {}",
-                if advised(&name).is_some() {
-                    "#[index(T)] advice"
-                } else {
-                    "read-kind default"
-                },
+                "read-kind provider slot",
                 quote::quote!(#expected)
             )));
         }

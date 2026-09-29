@@ -1,6 +1,6 @@
 //! A caller-written host composes RA → IX → Physical → Structures → Rust.
 //!
-//! The policy contains query-independent strategy; declarations carry host facts.
+//! The policy contains query-independent strategy; host types decide native reads.
 //! `R` and `S` are host maps keyed
 //! on their join columns, so the compiler probes them in place and builds no
 //! structure of its own; `L` is only scanned.
@@ -20,6 +20,7 @@ use policy as physical_policy;
 mod wiring {
     pub(crate) use super::physical_policy;
     pub(crate) use ::mini_linq::{select_structures, structures_to_rust};
+    pub(crate) use cq_state_providers::default_indexes as index_provider;
     pub(crate) use cq_state_providers::hash_distinct as distinct_state;
 }
 use wiring as mini_linq;
@@ -35,8 +36,8 @@ fn query<'a>(
     ::core::iter::Iterator::collect(::mini_linq::index_demands! {
         relational {
         relation L(a: i32);
-        #[host(keyed [a])] relation R(a: i32, b: i32);
-        #[host(keyed [b])] relation S(b: i32, c: i32);
+        relation R(a: i32, b: i32);
+        relation S(b: i32, c: i32);
             l = rename L {a -> a};
             r = rename R {a -> a, b -> b};
             s = rename S {b -> b, c -> c};

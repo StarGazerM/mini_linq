@@ -7,9 +7,6 @@ pub mod kw {
     syn::custom_keyword!(agg);
     syn::custom_keyword!(indexes);
     syn::custom_keyword!(relation);
-    syn::custom_keyword!(keyed);
-    syn::custom_keyword!(ordered);
-    syn::custom_keyword!(canon);
 }
 
 /// A list that retains the separators written between its items.
@@ -53,25 +50,15 @@ pub struct ColumnDecl {
 ///
 /// CQ atom arguments remain positional against this declaration order.
 ///
-/// An `#[index(…)]` attribute is advice for structure selection: whichever
-/// structures a later pass builds over this relation use the Rust type it
-/// names, with the operations it claims. It is not part of the query's
-/// meaning and names no columns — which columns get indexed is a planner
-/// decision the query cannot see. The declaration contract permits at most
-/// one `#[index(…)]` list and one `#[host(…)]` list. Host facts are checked
-/// against the declared columns; index advice belongs to the pass that reads it.
-/// The parser accepts arbitrary outer attributes; the contract restricts them.
+/// Declaration order is the host layout. A grouped host stores a leading
+/// prefix as its key; Rust traits decide which operations its type supports.
 ///
 /// ```text
-/// RelationDecl ::= RustOuterAttribute*
-///                  "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")"
+/// RelationDecl ::= "relation" Ident "(" [ColumnDecl ("," ColumnDecl)* [","]] ")"
 ///                  ["=" "(" Expr ")"] ";"
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct RelationDecl {
-    #[parse(syn::Attribute::parse_outer)]
-    #[to_tokens(|tokens, attrs| quote::TokenStreamExt::append_all(tokens, attrs))]
-    pub attrs: Vec<syn::Attribute>,
     pub relation_token: kw::relation,
     pub name: Ident,
     #[syn(parenthesized)]
@@ -90,85 +77,15 @@ impl RelationDecl {
         self.columns.len()
     }
 
-    /// The structure advice attached to this relation, if any. Shape is the
-    /// CQ contract's concern; the argument is read by the pass that consults
-    /// it.
-    pub fn index_advice(&self) -> syn::Result<Option<&syn::Attribute>> {
-        self.host_facts()?;
-        let mut advice = None;
-        for attr in &self.attrs {
-            if attr.path().is_ident("host") {
-                continue;
-            }
-            if !attr.path().is_ident("index") {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    "relation declarations accept only `#[index(…)]` and `#[host(…)]`",
-                ));
-            }
-            attr.meta.require_list()?;
-            if advice.replace(attr).is_some() {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    format!("relation `{}` advises an index twice", self.name),
-                ));
-            }
-        }
-        Ok(advice)
-    }
-
     /// A result schema describes types, not a runtime input value.
     pub fn check_result(&self) -> syn::Result<()> {
-        if self.value.is_some() || self.attrs.iter().any(|a| a.path().is_ident("host")) {
+        if self.value.is_some() {
             return Err(syn::Error::new_spanned(
                 self,
-                "result declarations cannot bind a host value or declare host facts",
+                "result declarations cannot bind a host value",
             ));
         }
         Ok(())
-    }
-
-    /// Formal rule IF-Input: Check declaration facts before any planning decision.
-    pub fn host_facts(&self) -> syn::Result<HostFacts> {
-        let mut facts = None;
-        for attr in &self.attrs {
-            if !attr.path().is_ident("host") {
-                continue;
-            }
-            if facts.is_some() {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    format!("relation `{}` declares host facts twice", self.name),
-                ));
-            }
-            let host: HostFacts = attr.parse_args()?;
-            if let Some(key) = &host.key {
-                let mut seen = BTreeSet::new();
-                for c in &key.columns {
-                    if !self
-                        .columns
-                        .iter()
-                        .any(|d| symbol_name(&d.name) == symbol_name(c))
-                    {
-                        return Err(syn::Error::new_spanned(
-                            c,
-                            format!("relation `{}` has no column `{c}`", self.name),
-                        ));
-                    }
-                    if !seen.insert(symbol_name(c)) {
-                        return Err(syn::Error::new_spanned(
-                            c,
-                            format!(
-                                "relation `{}` has duplicate host key column `{c}`",
-                                self.name
-                            ),
-                        ));
-                    }
-                }
-            }
-            facts = Some(host);
-        }
-        Ok(facts.unwrap_or_default())
     }
 }
 
@@ -180,26 +97,6 @@ pub struct LeafValue {
     pub paren_token: token::Paren,
     #[syn(in = paren_token)]
     pub expression: syn::Expr,
-}
-
-/// Declaration facts, with written key order preserved for host tuple layout.
-#[derive(Clone, Debug, Default, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct HostFacts {
-    #[syn(optional, peek = kw::keyed)]
-    pub key: Option<HostKey>,
-    pub comma: Option<Token![,]>,
-    pub canon: Option<kw::canon>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct HostKey {
-    pub keyed_token: kw::keyed,
-    #[syn(bracketed)]
-    pub bracket: token::Bracket,
-    #[syn(in = bracket)]
-    #[parse(CommaList::parse_terminated)]
-    pub columns: CommaList<Ident>,
-    pub ordered: Option<kw::ordered>,
 }
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -276,12 +173,12 @@ pub struct TypeAnnotation {
     pub ty: Type,
 }
 
+/// Formal rule IF-Input: Check declaration names and arity; preserve layout order.
 pub fn check_input_declarations<'a>(
     inputs: impl IntoIterator<Item = &'a RelationDecl>,
 ) -> syn::Result<BTreeMap<String, &'a RelationDecl>> {
     let mut schema = BTreeMap::new();
     for input in inputs {
-        input.index_advice()?;
         if input.columns.is_empty() {
             return Err(syn::Error::new_spanned(
                 input,
@@ -318,7 +215,7 @@ pub mod algebra;
 /// Parse declarations while the next token starts a relation declaration.
 pub fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<RelationDecl>> {
     let mut declarations = Vec::new();
-    while input.peek(syn::Token![#]) || input.peek(kw::relation) {
+    while input.peek(kw::relation) {
         declarations.push(input.parse()?);
     }
     Ok(declarations)

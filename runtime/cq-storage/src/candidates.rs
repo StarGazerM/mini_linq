@@ -130,6 +130,18 @@ where
     }
 }
 
+impl<T: Candidates> Candidates for &T {
+    type Key = T::Key;
+    type Item = T::Item;
+    type Iter = T::Iter;
+    fn count(&self, key: &Self::Key) -> usize {
+        T::count(*self, key)
+    }
+    fn keys(&self, key: &Self::Key) -> Self::Iter {
+        T::keys(*self, key)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

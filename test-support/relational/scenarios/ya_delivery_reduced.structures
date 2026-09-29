@@ -1,9 +1,5 @@
 structures {
-    D;
-    S;
-    N;
-    r1 = ::std::collections::HashSet<_> [depot];
-    r2 = ::std::collections::HashSet<_> [item];
-    r4 = ::cq_storage::HashIndex<_, _> [item];
-    r5 = ::cq_storage::HashIndex<_, _> [depot];
+    r2 = index_provider!(semi) [item] ;
+    r4 = index_provider!(probe) [item] ;
+    r5 = index_provider!(probe) [depot] ;
 }

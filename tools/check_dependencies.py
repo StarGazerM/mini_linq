@@ -241,13 +241,13 @@ def isolate(packages, only=()):
             print(f"PASS: {name} {detail}", flush=True)
 
 
-CQ = 'struct Q; #[host(canon)] relation R(a:i32); answer(x) :- R(x);'
-RA = 'relational { #[host(canon)] relation R(a:i32); r = rename R {a -> x}; output r as answer(x); }'
+CQ = 'struct Q; relation R(a:i32); answer(x) :- R(x);'
+RA = 'relational { relation R(a:i32); r = rename R {a -> x}; output r as answer(x); }'
 IX = RA + ' indexes {}'
 POLICED_IX = IX + ' policy {}'
-PHYSICAL = 'physical { #[host(canon)] relation R(a:i32); r = alias rename R {a -> x}; return r as answer(x); }'
+PHYSICAL = 'physical { relation R(a:i32); r = pipe canon rename R {a -> x}; return r as answer(x); }'
 POLICED_PHYSICAL = PHYSICAL + ' policy {}'
-STRUCTURES = PHYSICAL + ' structures { R canon; }'
+STRUCTURES = PHYSICAL + ' structures {}'
 
 
 STATE_BINDINGS = r"""
@@ -258,7 +258,16 @@ macro_rules! distinct_state {
 #[allow(unused_imports)]
 pub(crate) use distinct_state;
 #[allow(unused_imports)]
-mod wiring { pub(crate) use super::distinct_state; }
+macro_rules! indexes {
+    (probe) => { ::cq_storage::HashIndex<'_, _, _> };
+    (semi) => { ::std::collections::HashSet<_> };
+    (ordered) => { ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> };
+    (trie $inner:ty) => { ::cq_storage::Trie<'_, _, $inner> };
+}
+#[allow(unused_imports)]
+pub(crate) use indexes as index_provider;
+#[allow(unused_imports)]
+mod wiring { pub(crate) use super::{distinct_state,index_provider}; }
 use wiring as mini_linq;
 """
 
@@ -270,7 +279,7 @@ def frontend_source(feature):
             "written-order": (CQ, "choose_index_policy", ["relational", "rename"]),
             "hypergraph": (CQ, "choose_index_policy", ["relational", "rename"]),
             "index-demands": (RA, "physical_policy", ["indexes"]),
-            "physical-lowering": (POLICED_IX, "select_structures", ["physical", "alias", "policy"]),
+            "physical-lowering": (POLICED_IX, "select_structures", ["physical", "pipe", "policy"]),
             "structure-selection": (POLICED_PHYSICAL, "structures_to_rust", ["structures", "R"]),
         }[feature]
         checks = " ".join(f'assert!(CAPTURE.contains({json.dumps(word)}));' for word in expected)

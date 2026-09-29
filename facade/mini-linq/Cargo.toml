@@ -56,3 +56,7 @@ required-features = ["written-order", "hypergraph", "index-demands", "physical-l
 [[test]]
 name = "wcoj"
 required-features = ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]
+
+[[test]]
+name = "dispatch"
+required-features = ["written-order", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]

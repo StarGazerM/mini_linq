@@ -20,13 +20,24 @@ fn main() {
             &structures,
             &cq_physical_realization::Endpoints {
                 distinct_state: syn::parse_quote!(distinct_state),
+                index_provider: syn::parse_quote!(index_provider),
                 intersect: false,
             },
         )
         .unwrap();
+        let inputs = policy.merge_joins().then(|| {
+            quote! {
+                let mut lm = ::std::collections::BTreeMap::<_,Vec<_>>::new();
+                let mut rm = ::std::collections::BTreeMap::<_,Vec<_>>::new();
+                for &(k,v) in L { lm.entry((k,)).or_default().push((v,)); }
+                for &(k,v) in R { rm.entry((k,)).or_default().push((v,)); }
+                let L = &lm; let R = &rm;
+            }
+        });
         functions.push(quote! {
             #[allow(non_snake_case)]
             pub fn #name(L: &[(i32, i32)], R: &[(i32, i32)]) -> Vec<(i32, i32)> {
+                #inputs
                 (#expression).map(|(x, y)| (*x, *y)).collect()
             }
         });

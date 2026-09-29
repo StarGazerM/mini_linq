@@ -3,12 +3,12 @@ physical {
     relation B(first: i32, second: i32);
     relation C(first: i32, second: i32);
     relation Stock(depot: i32, item: i32, day: i32);
-    r0 = alias rename A { first -> d, second -> i };
-    r1 = let rename B { first -> i, second -> t };
+    r0 = pipe rename A { first -> d, second -> i };
+    r1 = pipe rename B { first -> i, second -> t };
     r2 = pipe probe[i] r0, r1;
-    r3 = let rename C { first -> d, second -> t };
+    r3 = pipe rename C { first -> d, second -> t };
     r4 = pipe probe[d, t] r2, r3;
-    r5 = let rename Stock { depot -> d, item -> i, day -> t };
+    r5 = pipe rename Stock { depot -> d, item -> i, day -> t };
     r6 = pipe probe[d, i, t] r4, r5;
     r7 = pipe canon project r6 keep { d, i, t };
     return r7 as answer(d, i, t);

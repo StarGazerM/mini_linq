@@ -27,10 +27,6 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
         ));
     }
     super::check_demands(source, target)?;
-    let hosts: BTreeMap<_, _> = target
-        .inputs()
-        .map(|d| Ok((symbol_name(&d.name), d.host_facts()?)))
-        .collect::<syn::Result<_>>()?;
     let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for definition in &target.program.definitions {
         let name = symbol_name(&definition.name);
@@ -40,10 +36,7 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
         let heading: BTreeSet<String> = facts.headings[&name].iter().cloned().collect();
         let inherited = match &definition.operator {
             Operator::Unit(_) => Some(BTreeSet::new()),
-            Operator::Rename(r) => hosts[&symbol_name(&r.relation)]
-                .canon
-                .is_some()
-                .then(|| heading.clone()),
+            Operator::Rename(_) => None,
             Operator::Probe(_, k) | Operator::Merge(_, k) => {
                 let merge = policy.merge_joins() && !k.columns.is_empty();
                 if merge != matches!(definition.operator, Operator::Merge(..)) {
@@ -61,21 +54,18 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
             Operator::Select(s) => keys.get(&symbol_name(&s.input)).cloned(),
             Operator::Range(_, r) => {
                 let input = symbol_name(&r.input);
-                let ordered = facts
+                let leading = facts
                     .hosts
                     .get(&input)
-                    .and_then(|h| hosts[h].key.as_ref())
-                    .is_some_and(|k| {
-                        k.ordered.is_some()
-                            && k.columns.len() == 1
-                            && facts.renames[&input].get(&symbol_name(&r.column))
-                                == k.columns.first().map(symbol_name).as_ref()
-                    });
-                if !ordered {
-                    return Err(fail(&format!(
-                        "range of `{input}` requires the declaration's single ordered host key `{}`",
-                        r.column
-                    )));
+                    .and_then(|h| target.inputs().find(|d| symbol_name(&d.name) == *h))
+                    .and_then(|d| d.columns.first())
+                    .map(|c| symbol_name(&c.name));
+                if leading.is_none()
+                    || facts.renames[&input].get(&symbol_name(&r.column)) != leading.as_ref()
+                {
+                    return Err(fail(
+                        "range requires the leading declared column of a host rename",
+                    ));
                 }
                 if !has_bound(&r.condition, &symbol_name(&r.column)) {
                     return Err(fail(&format!(
@@ -91,46 +81,6 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
                 .filter(|k| k.is_subset(&heading))
                 .cloned(),
         };
-        if matches!(definition.mode, physical::Mode::Alias(_)) {
-            let Some(host) = facts.hosts.get(&name).and_then(|h| hosts.get(h)) else {
-                return Err(fail("alias must rename a declared host"));
-            };
-            // A host alias must answer its reads; a let can instead carry builds.
-            let answers = |columns: &[String], ordered: bool| {
-                host.key.as_ref().is_some_and(|k| {
-                    let wanted: BTreeSet<_> = columns
-                        .iter()
-                        .map(|c| facts.renames[&name][c].clone())
-                        .collect();
-                    let actual: BTreeSet<_> = k.columns.iter().map(symbol_name).collect();
-                    wanted == actual && (!ordered || k.ordered.is_some())
-                })
-            };
-            if facts
-                .key_reads
-                .get(&name)
-                .into_iter()
-                .flatten()
-                .any(|(_, c)| !answers(c, false))
-                || facts
-                    .merge_reads
-                    .get(&name)
-                    .into_iter()
-                    .flatten()
-                    .any(|(_, c)| !answers(c, true))
-                || facts
-                    .range_reads
-                    .get(&name)
-                    .into_iter()
-                    .flatten()
-                    .any(|(_, c)| !answers(std::slice::from_ref(c), true))
-            {
-                return Err(fail(&format!(
-                    "alias reads are not answered by declaration for `{}`",
-                    facts.hosts[&name]
-                )));
-            }
-        }
         if definition.canon.is_some()
             && definition.name != target.program.returned
             && (!policy.canon_projections() || !matches!(definition.operator, Operator::Project(_)))
@@ -156,7 +106,7 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
     if !keys.contains_key(&returned) {
         return Err(syn::Error::new_spanned(
             &target.program.returned,
-            format!("return `{returned}`: not canonical by flag or declaration key inference"),
+            format!("return `{returned}`: not canonical by flag or plan key inference"),
         ));
     }
     Ok(())

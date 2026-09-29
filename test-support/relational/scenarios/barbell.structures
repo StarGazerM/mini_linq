@@ -1,15 +1,2 @@
 structures {
-    R;
-    S;
-    T;
-    Bridge;
-    U;
-    V;
-    W;
-    r1 = ::cq_storage::HashIndex<_, _> [y];
-    r3 = ::cq_storage::HashIndex<_, _> [x, z];
-    r5 = ::cq_storage::HashIndex<_, _> [x];
-    r7 = ::cq_storage::HashIndex<_, _> [u];
-    r9 = ::cq_storage::HashIndex<_, _> [v];
-    r11 = ::cq_storage::HashIndex<_, _> [u, w];
 }

@@ -3,8 +3,8 @@
 //! CQ planning produces RA; IX records index demands; Physical
 //! fixes one physical operator per result and the mode its reads allow,
 //! under a caller-supplied, query-independent policy; Structures answers
-//! every keyed read with a host key fact or a Rust type built over the
-//! result, with per-relation `#[index]` advice; realization prints one pull
+//! built let reads with a provider-selected Rust type over the
+//! result, using the caller-bound `index_provider!`; realization prints one pull
 //! program over the runtime's traits. Caller import
 //! aliases bind policy and provider slots. No global storage default or
 //! fallback whole-query backend is supplied.
@@ -127,9 +127,9 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
 /// Input is `IX policy { … }`. A natural join becomes a right-side `probe`,
 /// or a `merge` under `join = merge` when the shared heading is nonempty;
 /// Cartesian joins remain `probe[]`. Every semijoin becomes `semi`, a select
-/// bounding an ordered host key a `range`; modes follow
+/// bounding a leading declared column a `range`; modes follow
 /// from use; the return is flagged `canon` unless uniqueness is inferred
-/// from `canon` hosts. The policy is re-appended for [`select_structures!`].
+/// from plan-internal canon boundaries. The policy is re-appended for [`select_structures!`].
 #[cfg(feature = "physical-lowering")]
 #[proc_macro]
 pub fn lower_physical(input: TokenStream) -> TokenStream {
@@ -146,12 +146,9 @@ pub fn lower_physical(input: TokenStream) -> TokenStream {
 
 /// Bind every keyed read to a value that answers it under the appended policy.
 ///
-/// Input is `Physical policy { … }`. Host facts come from declarations
-/// (`#[host(keyed [a] ordered, canon)]`). Each read no host key answers gets a
-/// structure: the type the relation's `#[index(…)]` advice names, else
-/// `cq_storage::HashIndex` for probes, `HashSet` for semijoins, `BTreeMap`
-/// for merges and ranges. Whether a type implements the traits the plan uses
-/// is rustc's check. Continues to [`structures_to_rust!`].
+/// Input is `Physical policy { … }`. Built let reads select `index_provider!`
+/// types by read kind. Host reads use type dispatch and declaration layout;
+/// rustc checks direct keyed and ordered operations. Continues to [`structures_to_rust!`].
 #[cfg(feature = "structure-selection")]
 #[proc_macro]
 pub fn select_structures(input: TokenStream) -> TokenStream {
@@ -168,9 +165,8 @@ pub fn select_structures(input: TokenStream) -> TokenStream {
 
 /// Print Structures as one pull program: a block that builds the chosen
 /// structures, guards the traits each read needs, and evaluates to an
-/// iterator of the answer tuples in head order. A `canon` pipe or alias return
-/// uses the caller's `mini_linq::distinct_state!` provider; a `canon` let return
-/// reads canonical materialized storage.
+/// iterator of the answer tuples in head order. A `canon` result
+/// uses the caller's `mini_linq::distinct_state!` provider, including before a canonical let is materialized.
 #[cfg(feature = "physical-realization")]
 #[proc_macro]
 /// Formal rule ST-Terminal: Realize the policed Structures payload with no next continuation.
@@ -181,6 +177,7 @@ pub fn structures_to_rust(input: TokenStream) -> TokenStream {
         |source: &entry::Policed<cq_lang_structures::Program, cq_lang_physical::policy::Policy>| {
             let endpoints = cq_physical_realization::Endpoints {
                 distinct_state: syn::parse_quote!(mini_linq::distinct_state),
+                index_provider: syn::parse_quote!(mini_linq::index_provider),
                 intersect: source.policy.smallest_intersections(),
             };
             cq_physical_realization::compile(&source.language, &endpoints)

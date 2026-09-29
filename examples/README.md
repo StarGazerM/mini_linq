@@ -9,8 +9,8 @@ A caller-written host composes RA → IX → Physical → Structures → Rust by
 binding every macro slot itself: `physical_policy!` appends an empty,
 query-independent `policy {}` and invokes `lower_physical!`, and
 `select_structures!`, `structures_to_rust!` and a `cq-state-providers`
-`distinct_state!` provider are imported under the facade's slot names. Host
-declarations carry `#[host(keyed [...])]` facts, so the compiler probes the
+`distinct_state!` and `index_provider!` providers are imported under the facade's slot names. Host
+types provide keyed reads on leading declared columns, so dispatch probes the
 caller's `HashMap` and `BTreeMap` in place, builds nothing, and returns
 borrowed answers.
 

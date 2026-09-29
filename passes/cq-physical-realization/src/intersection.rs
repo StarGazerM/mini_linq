@@ -20,15 +20,18 @@ impl Printer<'_> {
             .into_iter()
             .filter(|c| c != &variable)
             .collect();
-        let candidate = |result: &Ident, prefix: &[String]| {
+        let eligible = |result: &Ident, prefix: &[String]| {
             let name = symbol_name(result);
-            let (levels, depth) = self.built_levels(&name, prefix)?;
-            (depth == 1 && levels.len() == 2 && levels[1] == [variable.clone()])
-                .then(|| self.built_ident(&name, levels))
+            self.analysis.host_read(&name)
+                || self
+                    .built_levels(&name, prefix)
+                    .is_some_and(|(levels, depth)| {
+                        depth == 1 && levels.len() == 2 && levels[1] == [variable.clone()]
+                    })
         };
-        let (Some(sa), Some(sb)) = (candidate(&a.right, &ak), candidate(&b.right, &bk)) else {
+        if !eligible(&a.right, &ak) || !eligible(&b.right, &bk) {
             return Ok(false);
-        };
+        }
         let first_name = symbol_name(&first.name);
         let name = symbol_name(&second.name);
         self.register(&first_name);
@@ -36,56 +39,59 @@ impl Printer<'_> {
         let outer = self.scan(&a.left)?;
         let left = symbol_name(&a.left);
         let pattern = self.pattern(&left);
-        let key = |columns: &[String]| {
-            let fields = columns.iter().map(|c| self.ident(&left, c));
-            quote!(&(#(#fields,)*))
-        };
-        let ka = key(&ak);
-        let kb = key(&bk);
         let variable_ident = self.ident(&first_name, &variable);
         let row = self.pattern(&name);
-        let test_a = self.chained_contains(
-            &first_name,
-            &sa,
-            &self.levels_of(&symbol_name(&a.right), &sa),
-        );
-        let test_b = self.chained_contains(
-            &first_name,
-            &sb,
-            &self.levels_of(&symbol_name(&b.right), &sb),
-        );
-        // Option's empty iterator disables the unchosen branch without a
-        // box or per-prefix collection. Both branches yield the same row.
-        let branch = |choice: TokenStream, key: &TokenStream, test: &TokenStream| {
-            quote! {
-                ::core::iter::Iterator::flat_map(
-                    ::core::iter::IntoIterator::into_iter(#choice),
-                    move |__cq_candidates| {
-                        ::core::iter::Iterator::filter_map(
-                            ::cq_storage::Candidates::keys(&__cq_candidates, #key),
-                            move |__cq_v| {
-                                let #variable_ident = __cq_v.0;
-                                if #test { ::core::option::Option::Some(#row) }
-                                else { ::core::option::Option::None }
-                            }
-                        )
-                    }
+        let candidate = |result: &Ident, prefix: &[String]| {
+            let name = symbol_name(result);
+            if self.analysis.host_read(&name) {
+                let access = self.host_access(&name, prefix);
+                (
+                    self.host_candidates(&left, &access, true),
+                    self.host_candidates(&left, &access, false),
+                )
+            } else {
+                let (levels, _) = self.built_levels(&name, prefix).unwrap();
+                let structure = self.built_ident(&name, levels);
+                let fields = prefix.iter().map(|c| self.ident(&left, c));
+                let key = quote!(&(#(#fields,)*));
+                (
+                    quote!(::cq_storage::Candidates::count(&#structure,#key)),
+                    quote!(::cq_storage::Candidates::keys(&#structure,#key)),
                 )
             }
         };
-        let from_a = branch(quote!(__cq_from_a), &ka, &test_b);
-        let from_b = branch(quote!(__cq_from_b), &kb, &test_a);
-        let mut rows = quote! {{
-            ::cq_storage::require::candidates(#sa);
-            ::cq_storage::require::candidates(#sb);
-            ::core::iter::Iterator::flat_map(#outer, move |#pattern| {
-                let __cq_choose_a = ::cq_storage::Candidates::count(&#sa, #ka)
-                    <= ::cq_storage::Candidates::count(&#sb, #kb);
-                let __cq_from_a = if __cq_choose_a { Some(#sa) } else { None };
-                let __cq_from_b = if __cq_choose_a { None } else { Some(#sb) };
-                ::core::iter::Iterator::chain(#from_a, #from_b)
+        let (count_a, keys_a) = candidate(&a.right, &ak);
+        let (count_b, keys_b) = candidate(&b.right, &bk);
+        let test = |result: &Ident| -> syn::Result<TokenStream> {
+            let right = symbol_name(result);
+            Ok(match self.keyed(result, self.heading(&right))? {
+                Access::Host(access) => self.host_lookup(&first_name, &access, true),
+                Access::Built(s) => {
+                    self.chained_contains(&first_name, &s, &self.levels_of(&right, &s))
+                }
+                Access::Prefix(s, l) => self.chained_contains(&first_name, &s, &l),
             })
-        }};
+        };
+        let test_a = test(&a.right)?;
+        let test_b = test(&b.right)?;
+        let branch = |choice: TokenStream, keys: TokenStream, test: TokenStream| {
+            quote! {
+                ::core::iter::Iterator::flat_map(::core::iter::IntoIterator::into_iter(#choice), move |()| {
+                    ::core::iter::Iterator::filter_map(#keys, move |__cq_v| {
+                        let #variable_ident = __cq_v.0;
+                        if #test { Some(#row) } else { None }
+                    })
+                })
+            }
+        };
+        let from_a = branch(quote!(__cq_choose_a.then_some(())), keys_a, test_b);
+        let from_b = branch(quote!((!__cq_choose_a).then_some(())), keys_b, test_a);
+        let mut rows = quote! {
+            ::core::iter::Iterator::flat_map(#outer, move |#pattern| {
+                let __cq_choose_a = #count_a <= #count_b;
+                ::core::iter::Iterator::chain(#from_a,#from_b)
+            })
+        };
         let repr = match physical::ModeKind::from(&second.mode) {
             physical::ModeKind::Pipe => {
                 if second.canon.is_some() {
@@ -93,8 +99,12 @@ impl Printer<'_> {
                 }
                 Repr::Pipe(Some(rows))
             }
-            physical::ModeKind::Let => self.materialize(&name, second.canon.is_some(), rows),
-            physical::ModeKind::Alias => unreachable!("a check is not an alias"),
+            physical::ModeKind::Let => {
+                if second.canon.is_some() {
+                    rows = self.distinct(&second.name, rows);
+                }
+                self.materialize(&name, second.canon.is_some(), rows)
+            }
         };
         self.reprs.insert(first_name, Repr::Pipe(None));
         self.reprs.insert(name, repr);

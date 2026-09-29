@@ -13,12 +13,11 @@ each implementation rule is registered at the function that checks them.
 $\mathsf{CQScope}(s)$ consists of the CQ clause rules in
 Section~\ref{sec:languages}, plus declaration and result checks: relation and
 column names are unique and declared relations have positive arity;
-declaration attributes are limited to at most one \code{index(...)} list and
-at most one \code{host(...)} list; host key columns are known and duplicate-free;
+declarations contain no attributes; declaration order fixes host row layout;
 an optional parenthesized leaf expression is preserved as Rust syntax; body atoms name declared inputs at the declared arity;
 lets cannot shadow bound logical names; the body contains an atom; the head has
 positive arity. A declaration named by the head is treated as the result and
-must have its arity and cannot declare host facts or a leaf value. Without that declaration, every head argument must be a
+must have its arity and cannot bind a leaf value. Without that declaration, every head argument must be a
 bound bare variable with a known, non-inference symbolic type. With a declared
 result, these bare-head binding/type-inference requirements are not imposed.
 Negation and aggregation parse but are rejected by CQ checking. An opaque
@@ -85,8 +84,9 @@ unique results, earlier operands, total one-to-one renames, fresh extension
 columns, subset projections, visible expression uses, defined output and
 reachability. Probe/merge/semi keys are duplicate-free lists whose set is exactly
 the operands' heading intersection; semi keeps the left heading, probe/merge
-take the union. Range checks its column and condition scope but does not itself
-prove an integer bound or ordered representation. Shared algebra operators
+take the union. Range checks its column and condition scope, and a host rename
+range must use the leading declared column. It does not itself prove an integer
+bound or ordered representation. Shared algebra operators
 have their local heading effects. Analysis derives rows, source identifiers,
 symbolic types, computed columns, hosts/renames, keyed/merge/range reads, scans,
 recognized comparison conditions, modes and canon flags. Output expressions
@@ -98,15 +98,14 @@ Let $\mathsf{reads}(r)$ count operand occurrences and the return use.
 \Rule{WF-Physical}{\mathsf{PHeading}(t,A)\quad\mathsf{PMode}(t,A)}
  {\mathsf{WF}_{Physical}(t)\Downarrow A}
 
-\Rule{PH-Pipe}{\mathsf{mode}(r)=pipe\quad\mathsf{reads}(r)=1\\
- r\notin\dom A.key\_reads\quad r\notin\dom A.range\_reads}
+\Rule{PH-Pipe}{\mathsf{mode}(r)=pipe\\
+ (\mathsf{operator}(r)=rename(R,m)\land r\notin A.canon)\ \lor\
+ (\mathsf{reads}(r)=1\land r\notin\dom A.key\_reads\land r\notin\dom A.range\_reads)}
  {\mathsf{PModeOK}(r)}
 
 \Rule{PH-Let}{\mathsf{mode}(r)=let\quad\mathsf{reads}(r)>0}
  {\mathsf{PModeOK}(r)}
 
-\Rule{PH-Alias}{\mathsf{mode}(r)=alias\quad\mathsf{operator}(r)=rename(R,m)}
- {\mathsf{PModeOK}(r)}
 \end{mathpar}
 $\mathsf{PMode}$ requires the applicable rule for every result. A merge-side
 read can satisfy a pipe's single-use rule; its ordering premise is discharged
@@ -114,24 +113,21 @@ by Structures. Physical checks neither IX demand membership nor canonical
 return evidence.
 
 \paragraph{Structures.}
-$\mathsf{Entries}(t,A)$ validates its embedded Physical and records exactly one
-host entry per input, host key names from declared columns, canon facts, and
-built entries over existing \code{let} results. Built columns are in the
-heading and do not repeat across levels. Duplicate host entries and duplicate
-built entries with the same concatenated level sequence are rejected. Every host entry must exactly repeat its declaration facts, including written
-key order, ordered and canon flags. A built key answers the union of a prefix of its levels.
-Define $\mathsf{host}(r,C)$ by translating $C$ through a rename and comparing
-its sorted list with the host's sorted key list (without removing duplicates); $\mathsf{built}(r,C)$ by a matching
-level prefix. Write $\mathsf{orderedHost}$ when the host also says ordered.
+$\mathsf{Entries}(t,A)$ validates its embedded Physical and records only
+built entries over existing \code{let} results. Built columns belong to the
+heading and never repeat across levels; duplicate concatenated keys fail.
+A built key answers the union of a prefix of its levels.
+Write $\mathsf{hostRead}(r)$ when $r$ is a reusable pipe rename and
+$\mathsf{built}(r,C)$ for a matching level prefix. No host facts occur in this IR.
 \begin{mathpar}
 
-\Rule{STR-Key}{\mathsf{host}(r,C)\lor\mathsf{built}(r,C)}
+\Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)}
  {\mathsf{answers}(r,C,probe/semi)}
 
-\Rule{STR-Range}{\mathsf{orderedHost}(r,\{c\})\lor\mathsf{built}(r,\{c\})}
+\Rule{STR-Range}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,\{c\})}
  {\mathsf{answers}(r,\{c\},range)}
 
-\Rule{STR-Merge}{\mathsf{orderedHost}(r,C)\lor\mathsf{built}(r,C)\\
+\Rule{STR-Merge}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)\\
  \text{or }(\mathsf{mode}(r)=pipe\land\mathsf{operator}(r)=merge[C](l,s))}
  {\mathsf{answers}(r,C,merge)}
 
@@ -139,15 +135,13 @@ level prefix. Write $\mathsf{orderedHost}$ when the host also says ordered.
  \mathsf{unique}(t.returned)\text{ inferred}}
  {\mathsf{WF}_{Structures}(t)\Downarrow A}
 \end{mathpar}
-The uniqueness inference starts Unit at the empty key, and a Rename at its full
-heading when its host is canon or it has a full-key build. Join requires both
-input keys and unions them; semi keeps the left key; select/range/extend keep
-the input key; project keeps it only when no key column is dropped. If no key
-is inherited, a canon flag or full-key build supplies the full heading as key.
-The return must have a key. These are symbolic premises: a built type accepted
-here must still implement the appropriate ordered, membership, construction or
-canonical trait in generated Rust. Every declared host fact is checked by a generated trait guard. Trait laws
-remain representation assumptions, not established by syntactic analysis.
+Uniqueness starts Unit at the empty key; host renames establish no key.
+Join requires both input keys and unions them; semi keeps the left key;
+select/range/extend preserve it; project preserves it only when no key column
+is dropped. A canon flag establishes the full heading through caller-selected
+distinct state. A built structure alone proves no uniqueness. The return must
+have a key. Rust checks the traits of built structures and direct host reads;
+trait laws remain representation assumptions, not syntactic conclusions.
 
 \subsection{Pass correspondence checks}
 Each complete pass check requires successful local checks of its source
@@ -219,19 +213,16 @@ normalized name \code{iN}; extra entries are rejected.
 \paragraph{Physical lowering.}
 Erase probe/merge to natural join, semi to semijoin, range to select, and remove
 modes/canon flags, preserving definitions, names, declarations and output.
-$\mathsf{PolicyPhysical}(t,\chi)$ reads checked host facts from declarations; the policy contains only strategy. A join is merge iff merge policy
-is set and its shared heading is nonempty; otherwise it is probe. A range must
-rename a host with a single ordered key matching its range column and have a
-recognized usable integer bound among conjunction leaves. Bounds are recognized
-by the comparison parser, excluding inequality and strict bounds that overflow
-\code{i32}; an eligible select is not required to become a range.
-Aliases must answer every keyed/range/merge read from declaration host facts, ordered
-where required. Let/pipe choices may differ from construction when locally valid.
+$\mathsf{PolicyPhysical}(t,\chi)$ uses strategy and plan facts only. A join
+is merge iff merge policy is set and the shared heading is nonempty; otherwise
+it is probe. A range reads the leading declared column through a host rename
+and has a usable integer bound among conjunction leaves. Recognition excludes
+inequality and strict bounds overflowing \code{i32}; an eligible select need
+not become range. Let/pipe choices may differ when locally admissible.
 Canon may appear only at return or a project=canon projection; that policy
-requires canon on key-dropping projections. The return must be unique by the
-declaration key inference or a canon flag. This inference uses Unit, canon hosts,
-join key unions, left keys for semi, preservation through select/range/extend,
-and key-preserving project. It does not consult built structures.
+requires canon on key-dropping projections. Unit, canon boundaries, join key
+unions, left keys for semi, select/range/extend and key-preserving project
+establish uniqueness; hosts and built types do not.
 \begin{mathpar}
 
 \Rule{CK-Demands}{\mathsf{WF}_{Physical}(t)\quad\forall\,probe[C](l,r),semi[C](l,r)\text{ in }t.\\
@@ -248,16 +239,14 @@ The checker does not require the constructor's particular materialization
 choices and does not use \code{semijoin = prefer_lazy}.
 
 \paragraph{Structure selection.}
-$\mathsf{StorageRules}(s,t,\chi)$ first requires exactly the declaration host facts,
-including written host-key tuple order and canon/order flags, and unchanged
-Physical. Independently collect unanswered reads per exact result and key,
-with strength membership $<$ payload $<$ ordered. Host keys discharge exact
-reads; merge-sorted pipes discharge their matching merge reads. Advice
-\code{#[index(T)]} on a renamed input fixes each built type to $T$ and requires
-one level per entry. Without advice, defaults are \code{HashSet<_>},
-\code{cq_storage::HashIndex<_, _>}, and \code{BTreeMap<_, Vec<_>>} by strength.
+$\mathsf{StorageRules}(s,t,\chi)$ requires unchanged Physical. Independently
+collect reads of retained lets by exact result and key, with strength
+membership $<$ payload $<$ ordered. Reusable host renames dispatch in Rust;
+merge-sorted pipes discharge matching merge reads. Built types are
+\code{index\_provider!(semi)}, \code{index\_provider!(probe)}, and
+\code{index\_provider!(ordered)} by strength.
 
-Without advice, strict inclusion chains with membership at each nonmaximal
+Strict inclusion chains with membership at each nonmaximal
 key and no ordered maximal read require one curried Trie, its levels the
 successive key differences. The independent check allows an empty first key;
 the constructor's chain builder additionally requires that first key to be
@@ -265,11 +254,10 @@ nonempty. Correspondence checking remains separate from construction. Under inte
 recognizes adjacent pipe probe/check pairs whose intermediate result is not
 flagged canon and whose second left operand is that intermediate result.
 One new variable completes both candidate headings; both prefixes are nonempty,
-the sides are materialized, and there is no advice
-or host-answered key reads, and only compatible prefix/full unordered demands.
+the sides are materialized, with only compatible prefix/full unordered demands.
 It adds prefix/full membership demands and requires two levels. Conflicting
 prefix choices are excluded. Each extra level wraps the leaf default in
-\code{cq_storage::Trie<'_, _, T>}.
+\code{index\_provider!(trie T)}.
 Every built prefix must discharge an unanswered demand exactly once; missing,
 extra, duplicate, wrong-level and wrong-type builds fail. Entry order is free;
 comparison is against these obligations, not the selector's token stream.
@@ -296,16 +284,14 @@ supports the exercised cases, not an arbitrary Rust equivalence theorem.
 Extensions produce Rust contexts $C[h_1,\ldots,h_n]$; each quotation $h_i$
 passes through the same closed core. Surface extensions introduce no operators.
 The following rules are implementation obligations, not proofs of extension
-semantics or Rust expression equivalence. Let $\mathsf{facts}(d)=(K,o,c)$
-be the optional written key tuple, ordering flag and canonical flag.
+semantics or Rust expression equivalence.
 \begin{mathpar}
 \Rule{IF-Surface}{\operatorname{parse}_{CQ}(T)=s\quad
  \text{no unexpanded extension clause remains in }s}
  {\mathsf{surface}(T)=s\text{ is admitted to CQ checking}}
 
-\Rule{IF-Input}{\text{at most one host attribute on }d\quad
- K\subseteq\operatorname{columns}(d)\quad\text{no duplicate in }K}
- {\mathsf{hostFacts}(d)\Downarrow(K,o,c)}
+\Rule{IF-Input}{\text{unique relation and column names}\quad\text{positive arity}}
+ {\mathsf{layout}(d)=\operatorname{columns}(d)\text{ in declaration order}}
 
 \Rule{IF-Output}{A=\mathsf{collect\_from}(I)\quad
  \alpha(A)=\{r\mid r\in I\}}
@@ -319,29 +305,19 @@ be the optional written key tuple, ordering flag and canonical flag.
  \Gamma_H\vdash_{Rust}e}
  {d\longmapsto\code{let b = \&(e);}\quad R\mapsto b}
 
-\Rule{STR-Facts}{\mathsf{entryFacts}(R)=\mathsf{facts}(\mathsf{decl}(R))}
- {\mathsf{HostEntryOK}(R)}
+\Rule{IF-Dispatch}{C=\{d_1,\ldots,d_k\}\quad
+ H:\mathsf{ReadAt}(\tau_1,\ldots,\tau_k)}
+ {\mathsf{read}(H,C)\longmapsto\mathsf{nativeRead}(H,C)}
 
-\Rule{IF-Facts}{\text{emit every applicable guard below for every input declaration}}
- {\mathsf{declaredFactsCheckedByRustc}}
-
-\Rule{IF-Canon}{c=\mathsf{true}}
- {\mathsf{emit}(\code{require::canonical(\&value)})}
-
-\Rule{IF-Keyed}{K=(k_1,\ldots,k_m)\quad\tau_i=\mathsf{type}_d(k_i)}
- {\mathsf{emit}(\code{require::keyed::<}(\tau_1,\ldots,\tau_m),\code{_>(\&value)})}
-
-\Rule{IF-Ordered}{o=\mathsf{true}}
- {\mathsf{emit}(\code{require::ordered(\&value)})}
+\Rule{IF-Fallback}{C\text{ is nonleading}\ \lor\ H\not:\mathsf{ReadAt}(C)}
+ {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\mathsf{build}(\alpha(H),C))}
 \end{mathpar}
-The keyed guard requires $\code{IndexRead::Key}=(\tau_1,\ldots,\tau_m)$,
-including written tuple order; the other guards require \code{Canonical}
-and \code{OrderedRead}. Guards are emitted even when the chosen plan does not
-use the declared access. Grouped answers collect distinct $(K,V)$ pairs and
-implement keyed read; ungrouped answers collect distinct full rows. Both may
-retain references. Leaf bindings occur once per query-block evaluation, before
-operators, in declaration order. Rust checks that returned borrows outlive the
-block. Named hosts keep their access expressions. All pass correspondences
-preserve complete declarations, including facts and leaf syntax, without
-calling compilation. No purity or arbitrary contextual equivalence follows
-from these structural checks.
+Stable autoref specialization chooses a native keyed read only at the exact
+leading-prefix key type. Otherwise the query allocates one lazy fallback per
+read key: a hash index, membership set, or ordered structure. Range uses the
+leading column. Merge is direct-only on a leading host key and requires
+OrderedRead, diagnosed by rustc. Canonicality never follows from a host type.
+Grouped answers concatenate the leading key tuple with the remaining columns;
+ungrouped answers supply full rows. Both may retain references. Leaf bindings
+occur once per query evaluation in declaration order. Pass checks preserve
+complete declarations and leaf syntax without evaluating Rust expressions.

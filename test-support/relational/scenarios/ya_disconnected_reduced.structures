@@ -1,6 +1,3 @@
 structures {
-    R;
-    S;
-    r1 = ::std::collections::HashSet<_> [];
-    r2 = ::cq_storage::HashIndex<_, _> [];
+    r2 = index_provider!(probe) [] ;
 }

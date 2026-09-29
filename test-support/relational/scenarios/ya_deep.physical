@@ -3,12 +3,12 @@ physical {
     relation S(first: i32, second: i32);
     relation T(first: i32, second: i32);
     relation U(first: i32, second: i32);
-    r0 = alias rename R { first -> a, second -> b };
-    r1 = let rename S { first -> b, second -> c };
+    r0 = pipe rename R { first -> a, second -> b };
+    r1 = pipe rename S { first -> b, second -> c };
     r2 = pipe probe[b] r0, r1;
-    r3 = let rename T { first -> c, second -> d };
+    r3 = pipe rename T { first -> c, second -> d };
     r4 = pipe probe[c] r2, r3;
-    r5 = let rename U { first -> d, second -> e };
+    r5 = pipe rename U { first -> d, second -> e };
     r6 = pipe probe[d] r4, r5;
     r7 = pipe canon project r6 keep { a, e };
     return r7 as answer(a, e);

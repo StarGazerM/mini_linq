@@ -33,6 +33,7 @@ mod binary {
         pub(crate) use ::mini_linq::{
             index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;
@@ -62,6 +63,7 @@ mod first {
         pub(crate) use ::mini_linq::{
             index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;
@@ -91,6 +93,7 @@ mod smallest {
         pub(crate) use ::mini_linq::{
             index_demands as choose_index_policy, select_structures, structures_to_rust,
         };
+        pub(crate) use cq_state_providers::default_indexes as index_provider;
         pub(crate) use cq_state_providers::hash_distinct as distinct_state;
     }
     use wiring as mini_linq;

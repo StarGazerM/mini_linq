@@ -1,5 +1,12 @@
 //! The build script prints real Rust through the unchanged downstream passes;
 //! rustc compiles it here, and the tests execute it against an independent oracle.
+macro_rules! indexes {
+    (probe) => { ::cq_storage::HashIndex<'_, _, _> };
+    (semi) => { ::std::collections::HashSet<_> };
+    (ordered) => { ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> };
+    (trie $inner:ty) => { ::cq_storage::Trie<'_, _, $inner> };
+}
+pub(crate) use indexes as index_provider;
 macro_rules! distinct_state {
     (operator $id:ident; new) => {
         ::std::collections::HashSet::new()

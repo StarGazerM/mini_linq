@@ -4,7 +4,7 @@ use quote::ToTokens;
 fn complete_program_preserves_declarations_and_attributes() {
     let source: cq::Program = syn::parse_quote! {
         pub struct Query;
-        #[index(MyIndex)] relation Z(a:i32,b:i32);
+        relation Z(a:i32,b:i32);
         relation A(a:i32);
         answer(x) :- Z(x,y), A(y);
     };
@@ -98,43 +98,24 @@ fn column_types_preserve_lifetimes_and_nested_generic_arguments() {
 }
 
 #[test]
-fn host_facts_and_leaf_values_round_trip_and_reject_declaration_mutations() {
-    for facts in [
-        "",
-        ",",
-        "canon",
-        ", canon",
-        "keyed []",
-        "keyed [b,a,] ordered, canon",
-    ] {
-        let source: cq::Program = syn::parse_str(&format!(
-            "struct Q; #[index(Index)] #[host({facts})] relation R(a:i32,b:&str) = (make_rows(config)); answer(x,y) :- R(x,y);"
-        )).unwrap();
-        cq::contract::check(&source).unwrap();
-        assert_eq!(
-            syn::parse2::<cq::Program>(source.to_token_stream()).unwrap(),
-            source
+fn declarations_keep_leaf_holes_and_reject_attributes() {
+    let source: cq::Program = syn::parse_quote! { struct Q; relation R(a:i32,b:&str) = (make_rows(config)); answer(x,y) :- R(x,y); };
+    cq::contract::check(&source).unwrap();
+    assert_eq!(
+        syn::parse2::<cq::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    for attr in ["host(canon)", "index(T)", "other"] {
+        let text = format!("struct Q; #[{attr}] relation R(a:i32); answer(x) :- R(x);");
+        assert!(syn::parse_str::<cq::Program>(&text).is_err());
+    }
+    for value in ["rows", "()"] {
+        assert!(
+            syn::parse_str::<cq::Program>(&format!(
+                "struct Q; relation R(a:i32) = {value}; answer(x) :- R(x);"
+            ))
+            .is_err()
         );
-    }
-    for (attribute, diagnostic) in [
-        ("#[host(keyed [missing])]", "missing"),
-        ("#[host(keyed [a,r#a])]", "duplicate"),
-        ("#[host()] #[host(canon)]", "twice"),
-        ("#[host(ordered)]", "unexpected"),
-        ("#[host(canon, keyed [a])]", "unexpected"),
-    ] {
-        let source: cq::Program = syn::parse_str(&format!(
-            "struct Q; {attribute} relation R(a:i32); answer(x) :- R(x);"
-        ))
-        .unwrap();
-        let error = cq::contract::check(&source).unwrap_err().to_string();
-        assert!(error.contains(diagnostic), "{error}");
-    }
-    for text in [
-        "struct Q; relation R(a:i32) = rows; answer(x) :- R(x);",
-        "struct Q; relation R(a:i32) = (); answer(x) :- R(x);",
-    ] {
-        assert!(syn::parse_str::<cq::Program>(text).is_err());
     }
 }
 

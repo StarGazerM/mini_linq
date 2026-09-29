@@ -1,38 +1,7 @@
-//! IX → Physical: one physical operator per RA result, the mode its reads
-//! allow, and which results must be made canonical.
-//!
-//! This pass decides three things and nothing else:
-//!
-//! - the **operator**: a natural join is `probe[C] l, r` — `r` the side IX
-//!   names as indexed, `C` the attributes both headings share — or
-//!   `merge[C] l, r` under `policy { join = merge; }`; a join without shared
-//!   attributes is the Cartesian `probe[] l, r` under either rule, since
-//!   there is no key to co-iterate on; a semijoin is `semi[C] l, r`; a
-//!   select is `range[c]` when its input renames a host declared
-//!   `keyed [c] ordered` on that one column and the condition bounds `c` by
-//!   an integer literal inside the total comparison fragment, else `select`;
-//!   every other operator keeps its logical name;
-//! - the **mode**: a rename is an `alias` when the host's declared key answers
-//!   every keyed, ranged or merged read of it (a rename that is only scanned
-//!   is always an alias), else a `let` for Structures to build over; any
-//!   other result is a `let` when it is read through a key, read more than
-//!   once, or merged on a key it is not itself sorted on by its own merge,
-//!   else a `pipe`;
-//! - the **canon** flag: on the returned result when uniqueness does not
-//!   follow from the declared `canon` hosts through joins, semijoins,
-//!   selects, extends and key-keeping projections — the same inference
-//!   Structures repeats with the built values it adds. Under
-//!   `policy { project = canon; }`, every projection whose kept columns do
-//!   not retain an inferred input key is also flagged. Its reads still
-//!   decide its mode: a canon pipe deduplicates its stream, a canon let
-//!   materializes a set.
-//!
-//! No Rust type is named here (Structures binds every keyed read to a
-//! value), and `policy { semijoin = prefer_lazy; }` is not read: whether a
-//! semijoin's test is deferred to its consumer is a printer's choice with no
-//! trace in this language. [`check`] independently checks erasure and policy
-//! obligations; any admissible alias/let/pipe choice is accepted, without
-//! replaying operator or mode selection.
+//! IX → Physical: choose operators and retention using plan reads only.
+//! Host renames are reusable pipe reads. Bounded selects on their leading
+//! declared column become range operators; Rust dispatch chooses their storage.
+//! Canonicality follows only from plan operators and explicit canon boundaries.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,18 +12,6 @@ use cq_lang_ix::syntax::symbol_name;
 use cq_lang_physical as physical;
 use cq_lang_physical::policy::Policy;
 use syn::Ident;
-
-/// A host's key as its declaration states it: sorted host attribute names.
-struct HostKey {
-    columns: Vec<String>,
-    ordered: bool,
-}
-
-/// The declarations' facts about every declared host relation.
-struct Hosts {
-    keys: BTreeMap<String, Option<HostKey>>,
-    canon: BTreeSet<String>,
-}
 
 /// How one result is read, gathered from every reader in RA order.
 #[derive(Default)]
@@ -80,19 +37,10 @@ pub fn compile(source: &ix::Program, policy: &Policy) -> syn::Result<physical::P
         .iter()
         .map(|d| (d.result.clone(), d.operator.clone()))
         .collect();
-    let inputs: Vec<_> = source
-        .ra
-        .plan
-        .declarations
-        .iter()
-        .filter(|d| symbol_name(&d.name) != symbol_name(&source.ra.plan.output.head.relation))
-        .cloned()
-        .collect();
-    let hosts = hosts(&inputs)?;
     let returned = source.ra.plan.output.input.clone();
-    let (operators, reads) = operators(source, &info, &operations, &hosts, policy)?;
-    let modes = modes(&operations, &operators, &reads, &hosts);
-    let unique = canonical(&info, &operations, &hosts);
+    let (operators, reads) = operators(source, &info, &operations, policy)?;
+    let modes = modes(&operations, &operators, &reads);
+    let unique = canonical(&info, &operations, policy, &returned);
     let definitions = operations
         .iter()
         .zip(modes)
@@ -131,7 +79,6 @@ fn operators(
     source: &ix::Program,
     info: &ix::ra::Analysis,
     operations: &[(Ident, Op)],
-    hosts: &Hosts,
     policy: &Policy,
 ) -> syn::Result<(Vec<physical::Operator>, BTreeMap<String, Reads>)> {
     let mut reads: BTreeMap<String, Reads> = operations
@@ -177,7 +124,9 @@ fn operators(
                     .iter()
                     .find(|(name, _)| *name == s.input)
                     .map(|(_, op)| op);
-                match ordered_column(hosts, rename).filter(|column| bounded(&s.condition, column)) {
+                match leading_column(&source.ra.plan.declarations, rename)
+                    .filter(|column| bounded(&s.condition, column))
+                {
                     Some(column) => {
                         reads
                             .get_mut(&symbol_name(&s.input))
@@ -218,7 +167,6 @@ fn modes(
     operations: &[(Ident, Op)],
     operators: &[physical::Operator],
     reads: &BTreeMap<String, Reads>,
-    hosts: &Hosts,
 ) -> Vec<physical::Mode> {
     let own_merge: BTreeMap<String, Vec<String>> = operations
         .iter()
@@ -237,10 +185,7 @@ fn modes(
             let name = symbol_name(name);
             let result = &reads[&name];
             match op {
-                Op::Rename(_) if hosts.answers(op, result) => {
-                    physical::Mode::Alias(Default::default())
-                }
-                Op::Rename(_) => physical::Mode::Let(Default::default()),
+                Op::Rename(_) => physical::Mode::Pipe(Default::default()),
                 _ if !result.keyed.is_empty()
                     || !result.ranged.is_empty()
                     || result.count >= 2
@@ -260,18 +205,17 @@ fn modes(
 fn canonical(
     info: &ix::ra::Analysis,
     operations: &[(Ident, Op)],
-    hosts: &Hosts,
+    policy: &Policy,
+    returned: &Ident,
 ) -> BTreeSet<String> {
     let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut inherited = BTreeSet::new();
     for (name, op) in operations {
         let name = symbol_name(name);
         let heading: Vec<_> = info[&name].heading.iter().cloned().collect();
         let key = match op {
             Op::Unit(_) => Some(Vec::new()),
-            Op::Rename(r) => hosts
-                .canon
-                .contains(&symbol_name(&r.relation))
-                .then(|| heading.clone()),
+            Op::Rename(_) => None,
             Op::NaturalJoin(j) => match (
                 unique.get(&symbol_name(&j.left)),
                 unique.get(&symbol_name(&j.right)),
@@ -293,83 +237,32 @@ fn canonical(
                 .cloned(),
         };
         if let Some(key) = key {
+            inherited.insert(name.clone());
             unique.insert(name, key);
+        } else if name == symbol_name(returned)
+            || (policy.canon_projections() && matches!(op, Op::Project(_)))
+        {
+            unique.insert(name, heading);
         }
     }
-    unique.into_keys().collect()
+    inherited
 }
 
-/// Read checked declaration facts, without query-specific policy entries.
-fn hosts(inputs: &[cq::RelationDecl]) -> syn::Result<Hosts> {
-    let mut hosts = Hosts {
-        keys: BTreeMap::new(),
-        canon: BTreeSet::new(),
+/// Translate the leading declared column through a rename; no type facts enter lowering.
+fn leading_column(inputs: &[cq::RelationDecl], rename: Option<&Op>) -> Option<String> {
+    let Op::Rename(r) = rename? else {
+        return None;
     };
-    for input in inputs {
-        let host = input.host_facts()?;
-        let name = symbol_name(&input.name);
-        let key = host.key.map(|key| {
-            let mut columns: Vec<_> = key.columns.iter().map(symbol_name).collect();
-            columns.sort();
-            HostKey {
-                columns,
-                ordered: key.ordered.is_some(),
-            }
-        });
-        hosts.keys.insert(name.clone(), key);
-        if host.canon.is_some() {
-            hosts.canon.insert(name);
-        }
-    }
-    Ok(hosts)
-}
-
-impl Hosts {
-    /// The host's key columns translated into a rename's attribute names,
-    /// sorted, with whether the key is ordered.
-    fn key_through(&self, rename: &Op) -> Option<(Vec<String>, bool)> {
-        let Op::Rename(r) = rename else {
-            return None;
-        };
-        let key = self.keys[&symbol_name(&r.relation)].as_ref()?;
-        let mut columns: Vec<String> = r
-            .mapping
-            .iter()
-            .filter(|m| key.columns.contains(&symbol_name(&m.source)))
-            .map(|m| symbol_name(&m.target))
-            .collect();
-        columns.sort();
-        Some((columns, key.ordered))
-    }
-
-    /// Whether the host behind `rename` answers every read in place: keyed
-    /// reads on its key, ranged and merged reads on its ordered key.
-    fn answers(&self, rename: &Op, reads: &Reads) -> bool {
-        let key = self.key_through(rename);
-        let on_key = |columns: &[String], needs_order: bool| {
-            key.as_ref().is_some_and(|(key, ordered)| {
-                let mut wanted = columns.to_vec();
-                wanted.sort();
-                wanted == *key && (*ordered || !needs_order)
-            })
-        };
-        reads.keyed.iter().all(|c| on_key(c, false))
-            && reads
-                .ranged
-                .iter()
-                .all(|c| on_key(std::slice::from_ref(c), true))
-            && reads.merged.iter().all(|c| on_key(c, true))
-    }
-}
-
-/// The single ordered key column of the host behind `rename`, in the
-/// rename's attribute name.
-fn ordered_column(hosts: &Hosts, rename: Option<&Op>) -> Option<String> {
-    let (columns, ordered) = hosts.key_through(rename?)?;
-    match columns.as_slice() {
-        [column] if ordered => Some(column.clone()),
-        _ => None,
-    }
+    let first = &inputs
+        .iter()
+        .find(|d| d.name == r.relation)?
+        .columns
+        .first()?
+        .name;
+    r.mapping
+        .iter()
+        .find(|m| m.source == *first)
+        .map(|m| symbol_name(&m.target))
 }
 
 fn scan(reads: &mut BTreeMap<String, Reads>, operand: &Ident) {

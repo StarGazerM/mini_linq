@@ -11,6 +11,9 @@ use crate::ExactMembership;
 /// Exact lookup preserves stored occurrences. A cursor is independent of the
 /// temporary lookup handle: HashIndex cursors retain an owned bucket reference,
 /// while host and trie cursors borrow their backing value for its lifetime.
+#[diagnostic::on_unimplemented(
+    message = "this direct read requires IndexRead at the leading declared key type"
+)]
 pub trait IndexRead: Clone {
     type Key;
     type Item: Copy;
@@ -72,9 +75,7 @@ impl<K, V> Clone for HashIndex<'_, K, V> {
         }
     }
 }
-impl<'a, K: Eq + Hash + 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build<I>
-    for HashIndex<'a, K, V>
-{
+impl<'a, K: 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build<I> for HashIndex<'a, K, V> {
     fn build(source: I) -> Self {
         Self {
             state: Rc::new(State {

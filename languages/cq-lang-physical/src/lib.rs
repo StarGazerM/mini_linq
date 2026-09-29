@@ -3,13 +3,13 @@
 //! `contract::check` derives headings, source identifier bindings, computed
 //! columns, hosts, renames, reads and modes from this program alone. A pipe
 //! has exactly one stream read; keyed and repeated reads require retained
-//! storage or a host alias. Structures discharges order and uniqueness
+//! storage or a host rename. Structures discharges order and uniqueness
 //! premises. IX demands and relational erasure belong to the lowering pass.
 //!
 //! ```text
 //! Program ::= "physical" "{" RelationDecl* Definition* "return" Ident "as" Atom ";" "}"
 //! Definition ::= Ident "=" Mode ["canon"] Operator ";"
-//! Mode ::= "pipe" | "let" | "alias"
+//! Mode ::= "pipe" | "let"
 //! Operator ::= Unit | Rename | Select | Extend | Project
 //!            | "probe" "[" Ident,* "]" Ident "," Ident
 //!            | "merge" "[" Ident,* "]" Ident "," Ident
@@ -28,7 +28,6 @@ pub mod kw {
     pub use cq_syntax::algebra::kw::*;
     syn::custom_keyword!(physical);
     syn::custom_keyword!(pipe);
-    syn::custom_keyword!(alias);
     syn::custom_keyword!(canon);
     syn::custom_keyword!(probe);
     syn::custom_keyword!(merge);
@@ -75,8 +74,6 @@ pub enum Mode {
     Pipe(kw::pipe),
     #[parse(peek = Token![let])]
     Let(Token![let]),
-    #[parse(peek = kw::alias)]
-    Alias(kw::alias),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -183,7 +180,6 @@ pub struct Analysis {
 pub enum ModeKind {
     Pipe,
     Let,
-    Alias,
 }
 
 impl From<&Mode> for ModeKind {
@@ -191,7 +187,6 @@ impl From<&Mode> for ModeKind {
         match mode {
             Mode::Pipe(_) => ModeKind::Pipe,
             Mode::Let(_) => ModeKind::Let,
-            Mode::Alias(_) => ModeKind::Alias,
         }
     }
 }
@@ -224,9 +219,8 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 }
 
 /// Formal rule WF-Physical: Derive local headings and reads, then check output, reachability and modes.
-/// Formal rule PH-Pipe: Require one read and no keyed or range read for each pipe.
+/// Formal rule PH-Pipe: Require linear stream use except for reusable noncanonical host renames.
 /// Formal rule PH-Let: Require every let to be read.
-/// Formal rule PH-Alias: Require every alias to rename a declared relation.
 fn analyze(module: &Program) -> syn::Result<Analysis> {
     let program = &module.program;
     let declarations = cq_syntax::check_input_declarations(&program.declarations)?;
@@ -372,6 +366,18 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         format!("range `{name}`: `{}` has no column `{column}`", r.input),
                     );
                 }
+                if let Some(host) = analysis.hosts.get(&symbol_name(&r.input)) {
+                    let leading = symbol_name(
+                        &declarations[host]
+                            .columns
+                            .first()
+                            .expect("positive arity")
+                            .name,
+                    );
+                    if analysis.renames[&symbol_name(&r.input)][&column] != leading {
+                        return error(r, "a host range must read its leading declared column");
+                    }
+                }
                 analysis
                     .range_reads
                     .entry(symbol_name(&r.input))
@@ -432,12 +438,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             analysis.scanned.remove(&symbol_name(&k.left));
         }
         let mode = ModeKind::from(&definition.mode);
-        if mode == ModeKind::Alias && !matches!(definition.operator, Operator::Rename(_)) {
-            return error(
-                &definition.name,
-                format!("alias `{name}` must rename a host"),
-            );
-        }
         analysis.modes.insert(name.clone(), mode);
         if definition.canon.is_some() {
             analysis.canon.insert(name);
@@ -504,7 +504,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         let mode = analysis.modes[&name];
         let reads = readers.get(&name).map_or(0, Vec::len);
         match mode {
-            ModeKind::Pipe => {
+            ModeKind::Pipe
+                if !analysis.hosts.contains_key(&name) || analysis.canon.contains(&name) =>
+            {
                 if reads != 1 {
                     return error(
                         &definition.name,
@@ -591,9 +593,10 @@ pub fn binary_intersection<'a>(
         || ah.len() != ak.len() + 1
         || bh.len() != bk.len()
         || !bh.iter().all(|c| left.contains(c) || c == v)
-        || [&a.right, &b.right]
-            .iter()
-            .any(|r| analysis.modes[&symbol_name(r)] != ModeKind::Let)
+        || [&a.right, &b.right].iter().any(|r| {
+            analysis.modes[&symbol_name(r)] != ModeKind::Let
+                && !analysis.hosts.contains_key(&symbol_name(r))
+        })
     {
         return None;
     }

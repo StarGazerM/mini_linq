@@ -1,3 +1,10 @@
+macro_rules! indexes {
+    (probe) => { ::cq_storage::HashIndex<'_, _, _> };
+    (semi) => { ::std::collections::HashSet<_> };
+    (ordered) => { ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> };
+    (trie $inner:ty) => { ::cq_storage::Trie<'_, _, $inner> };
+}
+pub(crate) use indexes as index_provider;
 use std::collections::HashSet;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct Value(i32);
@@ -58,6 +65,7 @@ mod built {
     pub(crate) use policy as physical_policy;
     mod wiring {
         pub(crate) use super::physical_policy;
+        pub(crate) use crate::index_provider;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, select_structures};
         pub(crate) use own_push::{push as structures_to_rust, set_sink as distinct_state};
     }
@@ -91,6 +99,7 @@ mod generic {
     pub(crate) use policy as physical_policy;
     mod wiring {
         pub(crate) use super::physical_policy;
+        pub(crate) use crate::index_provider;
         pub(crate) use ::mini_linq::{index_demands as choose_index_policy, select_structures};
         pub(crate) use own_push::{push as structures_to_rust, set_sink as distinct_state};
     }

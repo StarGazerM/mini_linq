@@ -61,9 +61,9 @@ complexity guarantee follows.
 \paragraph{Physical and Structures.}
 Physical restates every IX result with one physical operator (probe, merge,
 semi, range, or the logical operator's own name) and the mode its reads allow
-(pipe, let, alias), marking canonical results; Structures binds every keyed
-read to a host key fact or a Rust type built over the result and discharges the
-order and canonical premises. Below Structures a printer emits one pull program
+(pipe, let), marking canonical results; Structures records built-let types
+from the provider slot and discharges plan read and uniqueness premises.
+Host renames use type dispatch without capability declarations. Below Structures a printer emits one pull program
 over the \code{cq-storage} operation traits. Their local contract rules and
 pass correspondence judgments appear in Section~\ref{sec:pass-contracts}.
 Complete grammars and representation obligations also appear in \path{languages/cq-lang-physical/src/lib.rs},

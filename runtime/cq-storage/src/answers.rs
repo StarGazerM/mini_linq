@@ -6,7 +6,7 @@ use crate::{Canonical, ExactMembership, IndexRead};
 
 /// A distinct set of answer rows, iterable as an unkeyed host.
 ///
-/// An answer set is a canonical host: declare it `#[host(canon)]`.
+/// An answer set can be bound to an ordinary relation declaration.
 /// Rows may contain borrowed columns (`&T`) or owned columns; collecting
 /// borrowed tuples retains those references without cloning their referents.
 #[derive(Clone, Debug)]
@@ -51,11 +51,10 @@ impl<'a, T> IntoIterator for &'a Answers<T> {
 
 /// Distinct `(key, payload)` rows grouped for in-place keyed host reads.
 ///
-/// Use tuple keys and tuple payloads in declared column order, and declare
-/// `#[host(keyed [key_columns], canon)]`. For example, an answer `(a,b,c)`
-/// grouped by `b` is supplied as `((b,), (a,c))`. Both tuples may own or borrow
-/// their fields. No key or payload is cloned during collection. Like ordinary
-/// host maps, bind a grouped host by reference when probing it from a query.
+/// The key occupies the leading declared columns and the payload the rest.
+/// For `relation R(a: A, b: B, c: C)`, grouping by `(a,b)` supplies
+/// `((a,b), (c,))`. To group by `b`, declare `b` first. Both tuples may own
+/// or borrow their fields; collection clones neither key nor payload.
 #[derive(Clone, Debug)]
 pub struct GroupedAnswers<K, V> {
     groups: HashMap<K, Answers<V>>,
