@@ -1,22 +1,9 @@
-//! Hash operations include construction and execution, but exclude fixture
-//! creation and the independent ordered-set oracle. A fresh query builds its
-//! structures on every run; the counter is isolated per test thread. Both
-//! generic plans canonicalize prefix projections so repeated prefixes do not
-//! multiply the work being measured at the candidate intersection.
-use std::cell::Cell;
+//! Candidate intersection semantics; seeded fan growth lives in cq-workloads'
+//! feature-gated costs framework, shared with cargo xtask bench.
 use std::collections::BTreeSet;
-use std::hash::{Hash, Hasher};
 
-thread_local! { static HASHES: Cell<usize> = const { Cell::new(0) }; }
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 struct V(i32);
-impl Hash for V {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        HASHES.with(|n| n.set(n.get() + 1));
-        self.0.hash(state);
-    }
-}
 
 type Answer<'a> = BTreeSet<(&'a V, &'a V, &'a V)>;
 
@@ -119,38 +106,6 @@ fn oracle<'a>(r: &'a [(V, V)], s: &'a [(V, V)], t: &'a [(V, V)]) -> Answer<'a> {
                 .filter_map(move |(sb, c)| (sb == b && t.contains(&(a, c))).then_some((a, b, c)))
         })
         .collect()
-}
-
-#[test]
-fn fan_hash_counts_prove_smallest_avoids_quadratic_enumeration() {
-    let mut counts = Vec::new();
-    println!("n\tbinary\tfirst\tsmallest");
-    for n in [50, 100, 200] {
-        let fan: Vec<_> = (1..=n).flat_map(|i| [(V(0), V(i)), (V(i), V(0))]).collect();
-        let expected = oracle(&fan, &fan, &fan);
-        let mut row = Vec::new();
-        for run in [binary::run, first::run, smallest::run] {
-            HASHES.with(|n| n.set(0));
-            let actual = run(&fan, &fan, &fan);
-            let hashes = HASHES.with(Cell::get);
-            assert_eq!(actual, expected);
-            row.push(hashes);
-        }
-        println!("{n}\t{}\t{}\t{}", row[0], row[1], row[2]);
-        counts.push(row);
-    }
-    for pair in counts.windows(2) {
-        for strategy in [0, 1] {
-            assert!(
-                pair[1][strategy] * 2 >= pair[0][strategy] * 7,
-                "binary and first must grow at least 3.5x: {counts:?}"
-            );
-        }
-        assert!(
-            pair[1][2] * 2 <= pair[0][2] * 5,
-            "smallest must grow at most 2.5x: {counts:?}"
-        );
-    }
 }
 
 #[test]

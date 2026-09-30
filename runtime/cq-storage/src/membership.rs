@@ -23,6 +23,7 @@ where
     S: BuildHasher,
 {
     fn contains(&self, key: &Q) -> bool {
+        crate::count!(lookups);
         HashSet::contains(self, key)
     }
 }
@@ -33,6 +34,7 @@ where
     Q: Ord,
 {
     fn contains(&self, key: &Q) -> bool {
+        crate::count!(lookups);
         BTreeSet::contains(self, key)
     }
 }
@@ -45,6 +47,7 @@ where
     S: BuildHasher,
 {
     fn contains(&self, key: &Q) -> bool {
+        crate::count!(lookups);
         self.get(key).is_some_and(|values| !values.is_empty())
     }
 }
@@ -56,6 +59,7 @@ where
     Q: Ord,
 {
     fn contains(&self, key: &Q) -> bool {
+        crate::count!(lookups);
         self.get(key).is_some_and(|values| !values.is_empty())
     }
 }

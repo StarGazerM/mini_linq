@@ -9,10 +9,10 @@
 
 use std::{
     cell::{OnceCell, RefCell},
-    collections::HashMap,
     hash::Hash,
 };
 
+use crate::instrument::HashMap;
 use crate::{Build, ExactMembership, IndexRead};
 
 pub struct Trie<'a, K, Inner> {
@@ -45,7 +45,8 @@ where
     I: Iterator<Item = (K, R)>,
 {
     fn build(source: I) -> Self {
-        let mut groups: HashMap<K, Vec<R>> = HashMap::new();
+        crate::count!(index_builds);
+        let mut groups: HashMap<K, Vec<R>> = HashMap::default();
         for (key, rest) in source {
             groups.entry(key).or_default().push(rest);
         }
@@ -71,15 +72,17 @@ where
 impl<'a, 'b, K: Eq + Hash, Inner> IndexRead for &'a Trie<'b, K, Inner> {
     type Key = K;
     type Item = &'a Inner;
-    type Cursor = std::option::IntoIter<&'a Inner>;
+    type Cursor = crate::instrument::Cursor<std::option::IntoIter<&'a Inner>>;
 
     fn lookup(&self, key: &K) -> Self::Cursor {
-        self.buckets.get(key).map(Bucket::get).into_iter()
+        crate::count!(lookups);
+        crate::instrument::cursor!(self.buckets.get(key).map(Bucket::get).into_iter())
     }
 }
 
 impl<K: Eq + Hash, Inner> ExactMembership<K> for Trie<'_, K, Inner> {
     fn contains(&self, key: &K) -> bool {
+        crate::count!(lookups);
         self.buckets.contains_key(key)
     }
 }
@@ -93,11 +96,13 @@ impl<'a, K: Eq + Hash, Inner: crate::Keys> crate::Candidates for &'a Trie<'_, K,
         fn(&'a Inner) -> Inner::Iter<'a>,
     >;
     fn count(&self, key: &K) -> usize {
+        crate::count!(lookups);
         self.buckets
             .get(key)
             .map_or(0, |bucket| bucket.get().key_count())
     }
     fn keys(&self, key: &K) -> Self::Iter {
+        crate::count!(lookups);
         self.buckets
             .get(key)
             .map(Bucket::get)

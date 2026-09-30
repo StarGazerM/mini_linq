@@ -19,6 +19,7 @@ use wiring as mini_linq;
 
 struct Observed<T: ?Sized> {
     scans: Cell<usize>,
+    rows: Cell<usize>,
     reads: Cell<usize>,
     value: T,
 }
@@ -26,6 +27,7 @@ impl<T> Observed<T> {
     fn new(value: T) -> Self {
         Self {
             scans: Cell::new(0),
+            rows: Cell::new(0),
             reads: Cell::new(0),
             value,
         }
@@ -38,7 +40,9 @@ where
     type Row = <&'a T as Rows>::Row;
     fn rows(self) -> impl Iterator<Item = Self::Row> {
         self.scans.set(self.scans.get() + 1);
-        (&self.value).rows()
+        (&self.value)
+            .rows()
+            .inspect(|_| self.rows.set(self.rows.get() + 1))
     }
 }
 impl<'a, T: ?Sized> IndexRead for &'a Observed<T>
@@ -137,6 +141,68 @@ fn fallback_is_lazy_and_shared_for_membership() {
     assert_eq!(got.len(), 2);
     assert_eq!(r.scans.get(), 0);
     assert_eq!(r.reads.get(), 3);
+}
+
+#[test]
+fn first_host_answer_streams_and_owns_unused_dispatch_state() {
+    let values: Vec<_> = (0..100_000).map(|a| (a,)).collect();
+    let l = Observed::new(values.as_slice());
+    let r = Observed::new(
+        (0..100_000)
+            .map(|a| ((a,), vec![(a,)]))
+            .collect::<HashMap<_, _>>(),
+    );
+    let mut answers = probe!(l, r);
+    assert_eq!((l.rows.get(), r.scans.get(), r.reads.get()), (0, 0, 0));
+    assert_eq!(answers.next(), Some((&0, &0)));
+    assert_eq!((l.rows.get(), r.scans.get(), r.reads.get()), (1, 0, 1));
+    assert!(l.rows.get() * 1000 < values.len());
+    println!("host first answer: rows=1, lookups=1, builds=0; full result=100000");
+}
+
+#[test]
+fn first_answer_owns_and_initializes_the_fallback_only_on_demand() {
+    let values: Vec<_> = (0..20_000).map(|v| (0, v)).collect();
+    let l = Observed::new(values.as_slice());
+    let r = Observed::new(values.as_slice());
+    let visits = Cell::new(0);
+    let observe = |_: &i32, _: &i32| {
+        visits.set(visits.get() + 1);
+        true
+    };
+    let mut answers = ::mini_linq::cq_to_ra! {
+        struct Q;
+        relation l(a:i32,tag:i32); relation r(a:i32,b:i32);
+        answer(tag,b) :- l(a,tag),r(a,b),if observe(tag,b);
+    };
+    assert_eq!((l.rows.get(), r.rows.get(), visits.get()), (0, 0, 0));
+    assert_eq!(answers.next(), Some((&0, &0)));
+    assert_eq!((l.rows.get(), r.rows.get(), visits.get()), (1, 20_000, 1));
+    assert_eq!(answers.next(), Some((&0, &1)));
+    assert_eq!((r.scans.get(), r.rows.get(), visits.get()), (1, 20_000, 2));
+    println!(
+        "lazy fallback first answer: outer rows=1, build rows=20000, answers visited=1; full result=400000000"
+    );
+}
+
+#[test]
+fn host_and_fallback_range_iterators_survive_the_generated_block() {
+    let rows: Vec<_> = (0..100_000).map(|a| (a, a)).collect();
+    let r = Observed::new(
+        rows.iter()
+            .map(|&(a, b)| ((a,), vec![(b,)]))
+            .collect::<BTreeMap<_, _>>(),
+    );
+    let mut answers = window!(r);
+    assert_eq!((r.scans.get(), r.reads.get()), (0, 0));
+    assert_eq!(answers.next(), Some((&2, &2)));
+    assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
+    let r = Observed::new(rows.as_slice());
+    let mut answers = window!(r);
+    assert_eq!(r.rows.get(), 0);
+    assert_eq!(answers.next(), Some((&2, &2)));
+    assert_eq!(answers.next(), Some((&3, &3)));
+    assert_eq!(r.scans.get(), 1);
 }
 
 #[test]

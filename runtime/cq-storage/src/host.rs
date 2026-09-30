@@ -13,20 +13,22 @@ use crate::IndexRead;
 impl<'a, K: Eq + Hash, V, S: BuildHasher> IndexRead for &'a HashMap<K, Vec<V>, S> {
     type Key = K;
     type Item = &'a V;
-    type Cursor = std::slice::Iter<'a, V>;
+    type Cursor = crate::instrument::Cursor<std::slice::Iter<'a, V>>;
 
     fn lookup(&self, key: &K) -> Self::Cursor {
-        self.get(key).map_or([].iter(), |values| values.iter())
+        crate::count!(lookups);
+        crate::instrument::cursor!(self.get(key).map_or([].iter(), |values| values.iter()))
     }
 }
 
 impl<'a, K: Ord, V> IndexRead for &'a BTreeMap<K, Vec<V>> {
     type Key = K;
     type Item = &'a V;
-    type Cursor = std::slice::Iter<'a, V>;
+    type Cursor = crate::instrument::Cursor<std::slice::Iter<'a, V>>;
 
     fn lookup(&self, key: &K) -> Self::Cursor {
-        self.get(key).map_or([].iter(), |values| values.iter())
+        crate::count!(lookups);
+        crate::instrument::cursor!(self.get(key).map_or([].iter(), |values| values.iter()))
     }
 }
 

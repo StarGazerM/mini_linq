@@ -15,7 +15,8 @@
 //! reads use one lazy fallback. Built lets use the caller's index provider.
 //! Canon boundaries use the caller's distinct provider before materialization
 //! or stream consumption. Merge requires ordered inputs; mixed cursors normalize
-//! key references. Answers are collected before block-local storage is dropped.
+//! key references. Host-only iterators own their shared lazy dispatch state;
+//! answers borrowing materialized block-local storage are collected.
 
 use cq_lang_structures as structures;
 use cq_lang_structures::physical;
@@ -79,7 +80,9 @@ pub fn compile(module: &structures::Program, endpoints: &Endpoints) -> syn::Resu
     };
     let provider = &endpoints.index_provider;
     let import = quote!(#[allow(unused_imports)] use #provider as index_provider;);
-    syn::parse2(quote! { { #import #(#statements)* #value } })
+    let mut expression = syn::parse2(quote! { { #import #(#statements)* #value } })?;
+    cq_print::own_captures(&mut expression, &printer.owned);
+    Ok(expression)
 }
 
 struct Printer<'a> {

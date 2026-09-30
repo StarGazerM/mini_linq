@@ -159,7 +159,9 @@ pub trait Rows: Copy {
 }
 impl<T: Rows> Rows for &T {
     type Row = T::Row;
-    fn rows(self) -> impl Iterator<Item = Self::Row> {
+    // Forward the copied handle, without retaining the borrow of that handle.
+    #[allow(refining_impl_trait)]
+    fn rows(self) -> impl Iterator<Item = T::Row> + use<T> {
         (*self).rows()
     }
 }
@@ -167,7 +169,7 @@ macro_rules! flat {
     ([$($g:tt)*] $ty:ty) => {
         impl<'a, $($g)*> Rows for &'a $ty where &'a T: Columns, T: 'a {
             type Row = <&'a T as Columns>::Row;
-            fn rows(self) -> impl Iterator<Item = Self::Row> { self.iter().map(Columns::columns) }
+            fn rows(self) -> impl Iterator<Item = Self::Row> { crate::instrument::cursor!(self.iter().map(Columns::columns)) }
         }
     };
 }
@@ -185,7 +187,7 @@ macro_rules! grouped {
         {
             type Row = <<&'a K as Columns>::Row as Concat<<&'a V as Rows>::Row>>::Row;
             fn rows(self) -> impl Iterator<Item = Self::Row> {
-                self.iter().flat_map(|(k, vs)| vs.rows().map(move |v| k.columns().concat(v)))
+                crate::instrument::cursor!(self.iter().flat_map(|(k, vs)| vs.rows().map(move |v| k.columns().concat(v))))
             }
         }
     };
@@ -200,7 +202,9 @@ where
 {
     type Row = <<&'a K as Columns>::Row as Concat<<&'a V as Columns>::Row>>::Row;
     fn rows(self) -> impl Iterator<Item = Self::Row> {
-        self.iter()
-            .flat_map(|(k, vs)| vs.iter().map(move |v| k.columns().concat(v.columns())))
+        crate::instrument::cursor!(
+            self.iter()
+                .flat_map(|(k, vs)| vs.iter().map(move |v| k.columns().concat(v.columns()))),
+        )
     }
 }

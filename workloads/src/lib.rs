@@ -5,7 +5,10 @@
 //! procedural macro that exposes a typed CQ without executing student passes in
 //! the catalog build. Executable provider compositions are separate examples.
 
+pub mod adversarial;
 pub mod catalog;
+#[cfg(feature = "counters")]
+pub mod costs;
 pub mod dataset;
 pub mod execution;
 pub mod generate;

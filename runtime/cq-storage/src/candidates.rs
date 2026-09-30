@@ -17,53 +17,53 @@ pub trait Keys {
 impl<K, V, S> Keys for HashMap<K, V, S> {
     type Key = K;
     type Iter<'a>
-        = std::collections::hash_map::Keys<'a, K, V>
+        = crate::instrument::Cursor<std::collections::hash_map::Keys<'a, K, V>>
     where
         Self: 'a;
     fn key_count(&self) -> usize {
         self.len()
     }
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        self.keys()
+        crate::instrument::cursor!(self.keys())
     }
 }
 impl<K, S> Keys for HashSet<K, S> {
     type Key = K;
     type Iter<'a>
-        = std::collections::hash_set::Iter<'a, K>
+        = crate::instrument::Cursor<std::collections::hash_set::Iter<'a, K>>
     where
         Self: 'a;
     fn key_count(&self) -> usize {
         self.len()
     }
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        self.iter()
+        crate::instrument::cursor!(self.iter())
     }
 }
 impl<K, V> Keys for BTreeMap<K, V> {
     type Key = K;
     type Iter<'a>
-        = std::collections::btree_map::Keys<'a, K, V>
+        = crate::instrument::Cursor<std::collections::btree_map::Keys<'a, K, V>>
     where
         Self: 'a;
     fn key_count(&self) -> usize {
         self.len()
     }
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        self.keys()
+        crate::instrument::cursor!(self.keys())
     }
 }
 impl<K> Keys for BTreeSet<K> {
     type Key = K;
     type Iter<'a>
-        = std::collections::btree_set::Iter<'a, K>
+        = crate::instrument::Cursor<std::collections::btree_set::Iter<'a, K>>
     where
         Self: 'a;
     fn key_count(&self) -> usize {
         self.len()
     }
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        self.iter()
+        crate::instrument::cursor!(self.iter())
     }
 }
 
@@ -87,36 +87,44 @@ pub trait Candidates {
 impl<'a, K: Eq + Hash, V: Eq + Hash, S: BuildHasher> Candidates for &'a HashMap<K, Vec<V>, S> {
     type Key = K;
     type Item = &'a V;
-    type Iter = Distinct<std::slice::Iter<'a, V>>;
+    type Iter = Distinct<crate::instrument::Cursor<std::slice::Iter<'a, V>>>;
     fn count(&self, key: &K) -> usize {
+        crate::count!(lookups);
         self.get(key).map_or(0, Vec::len)
     }
     fn keys(&self, key: &K) -> Self::Iter {
-        Distinct::new(self.get(key).map_or([].iter(), |values| values.iter()))
+        crate::count!(lookups);
+        Distinct::new(crate::instrument::cursor!(
+            self.get(key).map_or([].iter(), |values| values.iter()),
+        ))
     }
 }
 impl<'a, K: Ord, V: Eq + Hash> Candidates for &'a BTreeMap<K, Vec<V>> {
     type Key = K;
     type Item = &'a V;
-    type Iter = Distinct<std::slice::Iter<'a, V>>;
+    type Iter = Distinct<crate::instrument::Cursor<std::slice::Iter<'a, V>>>;
     fn count(&self, key: &K) -> usize {
+        crate::count!(lookups);
         self.get(key).map_or(0, Vec::len)
     }
     fn keys(&self, key: &K) -> Self::Iter {
-        Distinct::new(self.get(key).map_or([].iter(), |values| values.iter()))
+        crate::count!(lookups);
+        Distinct::new(crate::instrument::cursor!(
+            self.get(key).map_or([].iter(), |values| values.iter()),
+        ))
     }
 }
 
 /// A bag cursor enumerated as a set, preserving first occurrence order.
 pub struct Distinct<I: Iterator> {
     source: I,
-    seen: HashSet<I::Item>,
+    seen: crate::instrument::HashSet<I::Item>,
 }
 impl<I: Iterator> Distinct<I> {
     pub(crate) fn new(source: I) -> Self {
         Self {
             source,
-            seen: HashSet::new(),
+            seen: crate::instrument::HashSet::default(),
         }
     }
 }
@@ -126,7 +134,10 @@ where
 {
     type Item = I::Item;
     fn next(&mut self) -> Option<Self::Item> {
-        self.source.find(|v| self.seen.insert(*v))
+        self.source.find(|v| {
+            crate::count!(distinct_insertions);
+            self.seen.insert(*v)
+        })
     }
 }
 

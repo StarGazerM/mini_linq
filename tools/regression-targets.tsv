@@ -11,6 +11,8 @@ cq-lang-vo	test	valuation_language	languages/cq-lang-vo/tests/valuation_language
 cq-lang-cq	test	hypergraph_analysis	languages/cq-lang-cq/tests/hypergraph_analysis.rs
 cq-storage	test	access_laws	runtime/cq-storage/tests/access_laws.rs
 cq-storage	test	representation_laws	runtime/cq-storage/tests/representation_laws.rs
+cq-storage	test	counters	runtime/cq-storage/tests/counters.rs
+cq-workloads	test	growth	workloads/tests/growth.rs
 cq-order	test	order	passes/cq-order/tests/order.rs
 cq-reduce	test	reduce	passes/cq-reduce/tests/reduce.rs
 cq-elaborate	test	elaborate	passes/cq-elaborate/tests/elaborate.rs

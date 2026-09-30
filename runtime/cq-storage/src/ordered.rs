@@ -57,9 +57,11 @@ impl<'a, K: Ord, V> Iterator for GroupedCursor<'a, K, V> {
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
+        crate::count!(cursor_steps);
         loop {
             if let Some((key, values)) = &mut self.current {
                 if let Some(value) = values.next() {
+                    crate::count!(rows_enumerated);
                     return Some((key, value));
                 }
                 self.current = None;
@@ -75,6 +77,7 @@ impl<'a, K: Ord, V> OrderedCursor for GroupedCursor<'a, K, V> {
     type Value = &'a V;
 
     fn seek(&mut self, bound: &&'a K) {
+        crate::count!(cursor_steps);
         if self.current.as_ref().is_some_and(|(key, _)| *key >= *bound) {
             return;
         }
@@ -90,6 +93,7 @@ impl<'a, K: Ord, V> OrderedRead for &'a BTreeMap<K, Vec<V>> {
         Self: 'b;
 
     fn ordered(&self) -> Self::Cursor<'_> {
+        crate::count!(lookups);
         GroupedCursor {
             map: self,
             keys: self.range::<K, _>(..),
@@ -108,7 +112,11 @@ impl<'a, K: Ord> Iterator for KeyCursor<'a, K> {
     type Item = (&'a K, ());
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.keys.next().map(|key| (key, ()))
+        crate::count!(cursor_steps);
+        self.keys.next().map(|key| {
+            crate::count!(rows_enumerated);
+            (key, ())
+        })
     }
 }
 
@@ -117,6 +125,7 @@ impl<'a, K: Ord> OrderedCursor for KeyCursor<'a, K> {
     type Value = ();
 
     fn seek(&mut self, bound: &&'a K) {
+        crate::count!(cursor_steps);
         self.keys = self.set.range((Bound::Included(*bound), Bound::Unbounded));
     }
 }
@@ -128,6 +137,7 @@ impl<'a, K: Ord> OrderedRead for &'a BTreeSet<K> {
         Self: 'b;
 
     fn ordered(&self) -> Self::Cursor<'_> {
+        crate::count!(lookups);
         KeyCursor {
             set: self,
             keys: self.range::<K, _>(..),
@@ -161,7 +171,13 @@ where
     type Item = (K, V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.pairs.next()
+        crate::count!(cursor_steps);
+        let item = self.pairs.next();
+        #[cfg(feature = "counters")]
+        if item.is_some() {
+            crate::count!(rows_enumerated);
+        }
+        item
     }
 }
 
@@ -173,6 +189,7 @@ where
     type Value = V;
 
     fn seek(&mut self, bound: &K) {
+        crate::count!(cursor_steps);
         while self.pairs.peek().is_some_and(|(key, _)| key < bound) {
             self.pairs.next();
         }
@@ -251,11 +268,13 @@ where
     type Item = (L::Key, L::Value, R::Value);
 
     fn next(&mut self) -> Option<Self::Item> {
+        crate::count!(cursor_steps);
         loop {
             if let Some((key, item)) = self.pending {
                 if self.position < self.group.len() {
                     let matched = self.group[self.position];
                     self.position += 1;
+                    crate::count!(rows_enumerated);
                     return Some((key, item, matched));
                 }
                 self.pending = None;

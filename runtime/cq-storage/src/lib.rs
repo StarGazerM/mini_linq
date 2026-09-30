@@ -36,9 +36,20 @@
 
 mod answers;
 mod candidates;
+macro_rules! count {
+    ($field:ident) => {
+        #[cfg(feature = "counters")]
+        crate::counters::record(|counts| counts.$field += 1);
+    };
+}
+pub(crate) use count;
+
+#[cfg(feature = "counters")]
+pub mod counters;
 pub mod dispatch;
 mod hash_index;
 mod host;
+mod instrument;
 mod membership;
 mod ordered;
 pub mod rows;

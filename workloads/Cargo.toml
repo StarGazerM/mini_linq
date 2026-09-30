@@ -10,3 +10,12 @@ cq-lang-cq.workspace = true
 cq-syntax.workspace = true
 mini-linq = { path = "../facade/mini-linq", default-features = false }
 syn.workspace = true
+cq-storage = { workspace = true, optional = true }
+
+[features]
+default = []
+counters = ["dep:cq-storage", "cq-storage/counters", "mini-linq/logical-selection", "mini-linq/index-demands", "mini-linq/structure-selection", "mini-linq/physical-lowering", "mini-linq/physical-realization"]
+
+[[test]]
+name = "growth"
+required-features = ["counters"]

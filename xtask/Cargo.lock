@@ -431,9 +431,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-physical-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-physical-realization"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-print",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-print"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-reduce"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-vo",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-storage"
+version = "0.1.0"
+
+[[package]]
+name = "cq-structure-selection"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-physical",
+ "cq-lang-structures",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -454,6 +510,7 @@ name = "cq-workloads"
 version = "0.1.0"
 dependencies = [
  "cq-lang-cq",
+ "cq-storage",
  "cq-syntax",
  "mini-linq",
  "syn 2.0.119",
@@ -904,13 +961,20 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-elaborate",
+ "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
  "cq-lang-structures",
  "cq-lang-vo",
+ "cq-order",
+ "cq-physical-lowering",
+ "cq-physical-realization",
+ "cq-reduce",
  "cq-stage",
+ "cq-structure-selection",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

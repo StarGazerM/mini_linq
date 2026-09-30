@@ -7,4 +7,8 @@ cargo xtask generate all tiny --scenario all
 cargo xtask golden all tiny --scenario all
 cargo xtask golden all tiny --scenario all --write
 cargo xtask explain triangle --through index-requirements
+cargo test -p cq-storage --features counters --test counters --locked
+cargo test -p cq-workloads --features counters --test growth --locked -- --nocapture
+cargo xtask bench
+cargo xtask bench --scale 512 --seed 7
 ```

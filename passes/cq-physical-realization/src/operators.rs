@@ -307,7 +307,9 @@ impl<'a> Printer<'a> {
             let row = self.pattern(name);
             quote!({
                 use ::cq_storage::dispatch::Range as _;
-                ::core::iter::Iterator::map((&&#handle).range(#low, #high), move |(#(#binders,)*)| #row)
+                ::core::iter::Iterator::flat_map(::core::iter::once(()), move |()| {
+                    ::core::iter::Iterator::map((&&#handle).range(#low, #high), move |(#(#binders,)*)| #row)
+                })
             })
         } else {
             let Side::Built(structure) =

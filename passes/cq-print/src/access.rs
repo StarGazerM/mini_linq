@@ -66,7 +66,7 @@ impl<'a> Context<'a> {
         let value = &access.value;
         let row = self.pattern(result);
         let payload = access.payload.iter().map(|c| self.ident(result, c));
-        quote! { ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(&#value), move |(#(#payload,)*)| #row) }
+        quote! { ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#value), move |(#(#payload,)*)| #row) }
     }
 
     /// Allocate one lazy fallback for each host read key, outside all probe closures.
@@ -106,11 +106,11 @@ impl<'a> Context<'a> {
                 quote!(::cq_storage::dispatch::KeySet<_>)
             };
             self.statements.push(syn::parse_quote! {
-                let #fallback: &::cq_storage::dispatch::Lazy<#ty, _> = &::cq_storage::dispatch::Lazy::new(|| <#ty as ::cq_storage::Build<_>>::build(
+                let #fallback: ::cq_storage::dispatch::Lazy<#ty, _> = ::cq_storage::dispatch::Lazy::new(move || <#ty as ::cq_storage::Build<_>>::build(
                     ::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*), (#(#payload,)*)))
                 ));
             });
-            self.bound = true;
+            self.owned.push(fallback);
         }
         let mut merged = std::collections::BTreeSet::new();
         for (_, columns) in self
@@ -161,15 +161,15 @@ impl<'a> Context<'a> {
                 .chain(&a.payload)
                 .map(|c| self.ident(result, c));
             self.statements.push(syn::parse_quote! {
-                let #fallback = &::cq_storage::dispatch::Lazy::new(|| <::std::collections::BTreeMap<_, ::std::vec::Vec<_>> as ::cq_storage::Build<_>>::build(
+                let #fallback = ::cq_storage::dispatch::Lazy::new(move || <::cq_storage::dispatch::RangeIndex<_, _> as ::cq_storage::Build<_>>::build(
                     ::core::iter::Iterator::map(#rows, |#pattern| (((*#key),), (#(#all,)*)))
                 ));
             });
             let handle = format_ident!("__cq_{}_host", result);
             let value = a.value;
             let ty = &self.infos[result].types[column];
-            self.statements.push(syn::parse_quote! { let #handle = ::cq_storage::dispatch::Host::<_, (#ty,), _, _>::new(&#value, #fallback); });
-            self.bound = true;
+            self.statements.push(syn::parse_quote! { let #handle = ::cq_storage::dispatch::Host::<_, (#ty,), _, _>::new(#value, &#fallback); });
+            self.owned.push(handle);
         }
     }
 
@@ -239,9 +239,9 @@ impl<'a> Context<'a> {
         let types = access.key.iter().map(|c| &self.infos[left].types[c]);
         let types: Vec<_> = types.collect();
         let receiver = if access.prefix {
-            quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(&#value, #fallback))
+            quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         } else {
-            quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(&#value, #fallback))
+            quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         };
         if contains {
             quote!({ use ::cq_storage::dispatch::Contains as _; (#receiver).contains(#key) })
@@ -257,9 +257,9 @@ impl<'a> Context<'a> {
         let types = access.key.iter().map(|c| &self.infos[left].types[c]);
         let types: Vec<_> = types.collect();
         let receiver = if access.prefix {
-            quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(&#value, #fallback))
+            quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         } else {
-            quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(&#value, #fallback))
+            quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         };
         let method = if count { quote!(count) } else { quote!(keys) };
         quote!({ use ::cq_storage::dispatch::CandidateRead as _; (#receiver).#method(#key) })

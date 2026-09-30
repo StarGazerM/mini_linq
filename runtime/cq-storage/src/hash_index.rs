@@ -1,12 +1,13 @@
 //! Deferred hash buckets with independently owned lookup cursors.
 use std::{
     cell::{OnceCell, RefCell},
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     hash::Hash,
     rc::Rc,
 };
 
 use crate::ExactMembership;
+use crate::instrument::HashMap;
 
 /// Exact lookup preserves stored occurrences. A cursor is independent of the
 /// temporary lookup handle: HashIndex cursors retain an owned bucket reference,
@@ -44,12 +45,19 @@ impl<K: Eq + Hash, V, S: Default + std::hash::BuildHasher, I: Iterator<Item = (K
     for HashSet<K, S>
 {
     fn build(source: I) -> Self {
-        source.map(|(key, _)| key).collect()
+        crate::count!(index_builds);
+        source
+            .map(|(key, _)| {
+                crate::count!(distinct_insertions);
+                key
+            })
+            .collect()
     }
 }
 
 impl<K: Ord, V, I: Iterator<Item = (K, V)>> Build<I> for BTreeMap<K, Vec<V>> {
     fn build(source: I) -> Self {
+        crate::count!(index_builds);
         let mut map = BTreeMap::new();
         for (key, value) in source {
             map.entry(key).or_insert_with(Vec::new).push(value);
@@ -90,6 +98,7 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
     type Item = V;
     type Cursor = BucketCursor<V>;
     fn lookup(&self, key: &K) -> Self::Cursor {
+        crate::count!(lookups);
         let buckets = self.buckets();
         BucketCursor {
             bucket: buckets.get(key).cloned(),
@@ -101,13 +110,14 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
 impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
     fn buckets(&self) -> &HashMap<K, Rc<Vec<V>>> {
         self.state.buckets.get_or_init(|| {
+            crate::count!(index_builds);
             let source = self
                 .state
                 .source
                 .borrow_mut()
                 .take()
                 .expect("the source is consumed only by this initialization");
-            let mut buckets = HashMap::<K, Vec<V>>::new();
+            let mut buckets = HashMap::<K, Vec<V>>::default();
             for (key, value) in source {
                 buckets.entry(key).or_default().push(value);
             }
@@ -122,22 +132,23 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
 impl<K: Eq + Hash, V> crate::Keys for HashIndex<'_, K, V> {
     type Key = K;
     type Iter<'a>
-        = std::collections::hash_map::Keys<'a, K, Rc<Vec<V>>>
+        = crate::instrument::Cursor<std::collections::hash_map::Keys<'a, K, Rc<Vec<V>>>>
     where
         Self: 'a;
     fn key_count(&self) -> usize {
         self.buckets().len()
     }
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        self.buckets().keys()
+        crate::instrument::cursor!(self.buckets().keys())
     }
 }
 
-impl<K: Eq + Hash, V: Copy + Eq + Hash> crate::Candidates for &HashIndex<'_, K, V> {
+impl<K: Eq + Hash, V: Copy + Eq + Hash> crate::Candidates for HashIndex<'_, K, V> {
     type Key = K;
     type Item = V;
     type Iter = crate::candidates::Distinct<BucketCursor<V>>;
     fn count(&self, key: &K) -> usize {
+        crate::count!(lookups);
         self.buckets().get(key).map_or(0, |v| v.len())
     }
     fn keys(&self, key: &K) -> Self::Iter {
@@ -152,8 +163,10 @@ pub struct BucketCursor<V> {
 impl<V: Copy> Iterator for BucketCursor<V> {
     type Item = V;
     fn next(&mut self) -> Option<V> {
+        crate::count!(cursor_steps);
         let item = self.bucket.as_ref()?.get(self.position).copied();
         if item.is_some() {
+            crate::count!(rows_enumerated);
             self.position += 1;
         }
         item

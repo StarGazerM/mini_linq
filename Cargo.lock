@@ -244,6 +244,7 @@ name = "cq-workloads"
 version = "0.1.0"
 dependencies = [
  "cq-lang-cq",
+ "cq-storage",
  "cq-syntax",
  "mini-linq",
  "syn 2.0.119",

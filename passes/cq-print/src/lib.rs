@@ -14,6 +14,8 @@ use syn::{Expr, Ident, Stmt};
 
 pub mod access;
 pub mod expressions;
+mod ownership;
+pub use ownership::own_captures;
 
 /// A host relation's value: its name in scope, declared column order, and
 /// key columns in the order the Structures entry lists them.
@@ -48,6 +50,8 @@ pub struct Context<'a> {
     pub statements: Vec<Stmt>,
     /// Whether a statement binds a value the iterator borrows.
     pub bound: bool,
+    /// Shared handles cloned into the move closures that use them.
+    pub owned: Vec<Ident>,
     pub intersect: bool,
     pub candidate_reads: BTreeMap<String, Vec<Vec<String>>>,
 }
@@ -108,7 +112,6 @@ impl<'a> Context<'a> {
                 used.insert(value.to_string());
                 let input_name = &input.name;
                 statements.push(syn::parse_quote! { let #value = &#input_name; });
-                bound = true;
                 value
             };
             let name = symbol_name(&input.name);
@@ -151,6 +154,7 @@ impl<'a> Context<'a> {
             reprs: BTreeMap::new(),
             statements,
             bound,
+            owned: Vec::new(),
             candidate_reads,
             intersect: false,
         }

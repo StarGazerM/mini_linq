@@ -1,3 +1,4 @@
+mod bench;
 mod explain;
 #[cfg(feature = "oracle")]
 mod oracle;
@@ -45,6 +46,7 @@ fn run() -> Result<()> {
         }
         "differential" => Err("differential execution is unavailable: the old whole-query Rust backend was removed; general physical selection and a host input/output contract are required before generated-query comparison can resume".into()),
         "explain" => explain::run(arguments, &repository_root()),
+        "bench" => bench::run(arguments),
         "help" | "--help" | "-h" => {
             help();
             Ok(())
@@ -516,10 +518,12 @@ MiniLinq workload tasks
   cargo xtask golden [SELECTION] [SCALE] [--scenario SCENARIO] [--write]
   cargo xtask differential [SELECTION] [SCALE] [--scenario SCENARIO]
   cargo xtask explain CASE [--through STAGE]
+  cargo xtask bench [--scale N] [--seed N]
 
 SCENARIO is coverage, empty-input, no-match, or all. It defaults to coverage.
 
 STAGE is cq, relational-plan, or index-requirements. It defaults to index-requirements.
+Bench reports scales N, 2N and 4N (default N=128); time is never asserted.
 
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
 mode that changes those answers. `differential` is unavailable until general

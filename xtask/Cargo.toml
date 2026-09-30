@@ -21,7 +21,7 @@ cq-lang-ra = { path = "../languages/cq-lang-ra" }
 cq-elaborate = { path = "../passes/cq-elaborate" }
 cq-index-policy = { path = "../passes/cq-index-policy" }
 cq-order = { path = "../passes/cq-order" }
-cq-workloads = { path = "../workloads" }
+cq-workloads = { path = "../workloads", features = ["counters"] }
 duckdb = { version = "~1.10505.0", features = ["bundled"], optional = true }
 quote = "1"
 syn = { version = "2", features = ["extra-traits", "full"] }
