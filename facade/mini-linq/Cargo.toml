@@ -38,6 +38,7 @@ cq-physical-lowering = { workspace = true, optional = true }
 cq-physical-realization = { workspace = true, optional = true }
 
 [dev-dependencies]
+cq-load.workspace = true
 cq-state-providers.workspace = true
 syn_derive.workspace = true
 cq-storage.workspace = true

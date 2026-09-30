@@ -8,17 +8,21 @@ const COLORED_CQ_SCOPE: &str = "MiniLinq evaluates a set-valued colored conjunct
 const SPADE_SCOPE: &str = "`spade` is this course's alias for the triangle-with-one-edge-handle shape called lollipop in join-processing literature and paw in graph theory. It remains a colored CQ/homomorphism pattern, not induced-subgraph matching: no pairwise inequality or non-edge constraint is implied.";
 
 macro_rules! classic_case {
-    ($module:ident, $name:literal, $purpose:expr, $scope_note:expr $(,)?) => {
-        QueryCase::new(
-            Suite::Classic,
-            $name,
-            queries::classic::$module::RUST_PATH,
-            $purpose,
-            $scope_note,
-            include_str!(concat!("../../sql/classic/", $name, ".sql")),
-            queries::classic::$module::module,
-        )
-    };
+    ($module:ident, $name:literal, $purpose:expr, $scope_note:expr $(,)?) => {{
+        mod loaded {
+            crate::queries::classic::$module::with_query!(crate::loading::capture);
+        }
+        QueryCase {
+            suite: Suite::Classic,
+            name: $name,
+            rust_path: queries::classic::$module::RUST_PATH,
+            purpose: $purpose,
+            scope_note: $scope_note,
+            sql: include_str!(concat!("../../sql/classic/", $name, ".sql")),
+            module: queries::classic::$module::module,
+            load: loaded::read_relations,
+        }
+    }};
 }
 
 /// Ten small, structurally distinct positive CQs used throughout the course.

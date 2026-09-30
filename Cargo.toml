@@ -26,6 +26,7 @@ members = [
     "passes/cq-print",
     "passes/cq-physical-realization",
     "runtime/cq-storage",
+    "runtime/cq-load",
     "runtime/cq-state-providers",
     "runtime/cq-protocol",
     "facade/cq-stage",
@@ -65,6 +66,7 @@ cq-lang-ix = { path = "languages/cq-lang-ix", default-features = false }
 cq-lang-vo = { path = "languages/cq-lang-vo", default-features = false }
 cq-protocol = { path = "runtime/cq-protocol" }
 cq-storage = { path = "runtime/cq-storage" }
+cq-load = { path = "runtime/cq-load" }
 cq-order = { path = "passes/cq-order", default-features = false }
 cq-elaborate = { path = "passes/cq-elaborate", default-features = false }
 cq-reduce = { path = "passes/cq-reduce", default-features = false }

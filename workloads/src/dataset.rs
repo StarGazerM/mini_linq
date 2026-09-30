@@ -351,6 +351,29 @@ impl Dataset {
         dataset.validate_schema(schema)?;
         Ok(dataset)
     }
+
+    /// Validate rows already decoded by a declaration-generated loader.
+    /// Only the manifest is read here; relation files are not read a second time.
+    pub fn from_loaded_schema(
+        schema: &[cq::RelationDecl],
+        directory: impl AsRef<Path>,
+        relations: Vec<RelationData>,
+    ) -> Result<Self, DatasetError> {
+        let directory = directory.as_ref();
+        let manifest_path = directory.join(MANIFEST_FILE);
+        let text = fs::read_to_string(&manifest_path).map_err(|source| DatasetError::Io {
+            path: manifest_path.clone(),
+            source,
+        })?;
+        let manifest = decode_manifest(&manifest_path, &text)?;
+        reject_extra_csv_files(directory, manifest.relations.len())?;
+        let dataset = Self {
+            manifest,
+            relations,
+        };
+        dataset.validate_schema(schema)?;
+        Ok(dataset)
+    }
 }
 
 /// Write a canonical materialized result: exact width, strictly sorted, distinct rows.
@@ -753,6 +776,7 @@ fn manifest_error(path: &Path, line: usize, message: impl Into<String>) -> Datas
 
 #[derive(Debug)]
 pub enum DatasetError {
+    Load(cq_load::Error),
     Io {
         path: PathBuf,
         source: std::io::Error,
@@ -774,6 +798,7 @@ pub enum DatasetError {
 impl fmt::Display for DatasetError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Load(error) => error.fmt(formatter),
             Self::Io { path, source } => write!(formatter, "{}: {source}", path.display()),
             Self::InvalidQuery(error) => write!(formatter, "invalid workload query: {error}"),
             Self::Schema(message) => formatter.write_str(message),
@@ -802,10 +827,17 @@ impl fmt::Display for DatasetError {
 impl StdError for DatasetError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
+            Self::Load(error) => Some(error),
             Self::Io { source, .. } => Some(source),
             Self::InvalidQuery(error) => Some(error),
             Self::Schema(_) | Self::Manifest { .. } | Self::Csv { .. } => None,
         }
+    }
+}
+
+impl From<cq_load::Error> for DatasetError {
+    fn from(error: cq_load::Error) -> Self {
+        Self::Load(error)
     }
 }
 

@@ -11,6 +11,8 @@ mod fuzz_model;
 mod golden;
 #[cfg(feature = "oracle")]
 mod oracle;
+#[cfg(feature = "oracle")]
+mod typed;
 
 use std::env;
 use std::error::Error;
@@ -85,10 +87,16 @@ fn list() -> Result<()> {
     for case in cq_workloads::extended::CASES {
         println!("{:<24} {:<7} {}", case.name, "extended", case.family);
     }
+    for case in cq_workloads::typed::CASES {
+        println!("{:<24} {:<7} {}", case.name, "typed", case.purpose);
+    }
     Ok(())
 }
 
 fn generate(selection: Selection, scale: Scale, scenarios: ScenarioSelection) -> Result<()> {
+    if matches!(selection, Selection::Suite("typed") | Selection::Typed(_)) {
+        return Err("typed CSV fixtures are authored; use `cargo xtask golden typed --write` to regenerate their Parquet copies and goldens".into());
+    }
     extended::check_scale(selection, scale)?;
     let allow_inapplicable = scenarios.allows_inapplicable();
     for case in selection.cases() {
@@ -170,6 +178,7 @@ fn golden(
         }
     }
     checked.extend(extended::golden(selection, scenarios, write)?);
+    checked.extend(typed::golden(selection, scale, scenarios, write)?);
     if matches!(selection, Selection::All)
         && scale == Scale::Tiny
         && matches!(scenarios, ScenarioSelection::All)
@@ -221,7 +230,7 @@ fn read_generated(
         .into());
     }
     let module = case.module()?;
-    let dataset = cq_workloads::dataset::Dataset::read_from_dir(&module, &directory)?;
+    let dataset = case.load(&directory)?;
     dataset.validate_provenance(case.suite, case.name, config)?;
 
     // Tiny artifacts are checked in. Tie them byte-for-byte to the current
@@ -319,6 +328,7 @@ enum Selection {
     Suite(&'static str),
     Case(&'static QueryCase),
     Extension(&'static cq_workloads::extended::Case),
+    Typed(&'static cq_workloads::typed::Case),
 }
 
 impl Selection {
@@ -328,9 +338,11 @@ impl Selection {
             "classic" => Ok(Self::Suite("classic")),
             "retail" => Ok(Self::Suite("retail")),
             "extended" => Ok(Self::Suite("extended")),
+            "typed" => Ok(Self::Suite("typed")),
             name => cq_workloads::case(name)
                 .map(Self::Case)
                 .or_else(|| cq_workloads::extended::case(name).map(Self::Extension))
+                .or_else(|| cq_workloads::typed::case(name).map(Self::Typed))
                 .ok_or_else(|| format!("unknown suite or case `{name}`").into()),
         }
     }
@@ -340,7 +352,7 @@ impl Selection {
             Self::All => Box::new(catalog::all()),
             Self::Suite(name) => Box::new(catalog::named(name).into_iter().flatten()),
             Self::Case(case) => Box::new(std::iter::once(case)),
-            Self::Extension(_) => Box::new(std::iter::empty()),
+            Self::Extension(_) | Self::Typed(_) => Box::new(std::iter::empty()),
         }
     }
 
@@ -348,6 +360,15 @@ impl Selection {
         match self {
             Self::All | Self::Suite("extended") => Box::new(cq_workloads::extended::CASES.iter()),
             Self::Extension(case) => Box::new(std::iter::once(case)),
+            _ => Box::new(std::iter::empty()),
+        }
+    }
+
+    #[cfg_attr(not(feature = "oracle"), allow(dead_code))]
+    fn typed(self) -> Box<dyn Iterator<Item = &'static cq_workloads::typed::Case>> {
+        match self {
+            Self::All | Self::Suite("typed") => Box::new(cq_workloads::typed::CASES.iter()),
+            Self::Typed(case) => Box::new(std::iter::once(case)),
             _ => Box::new(std::iter::empty()),
         }
     }
@@ -506,7 +527,8 @@ It defaults to all for golden, coverage for generate.
 
 STAGE is cq, relational-plan, or index-requirements. It defaults to index-requirements.
 Bench reports scales N, 2N and 4N (default N=128); time is never asserted.
-The extended corpus has deterministic tiny fixtures only.
+The extended and typed corpora have tiny fixtures only. Typed CSV fixtures are
+authored; `golden typed --write` regenerates their Parquet copies and answers.
 
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
 mode that changes those answers. `differential` is an alias for `fuzz`, which

@@ -4,17 +4,21 @@
 use crate::{QueryCase, Suite, queries};
 
 macro_rules! retail_case {
-    ($module:ident, $name:literal, $purpose:expr, $scope_note:expr $(,)?) => {
-        QueryCase::new(
-            Suite::Retail,
-            $name,
-            queries::retail::$module::RUST_PATH,
-            $purpose,
-            $scope_note,
-            include_str!(concat!("../../sql/retail/", $name, ".sql")),
-            queries::retail::$module::module,
-        )
-    };
+    ($module:ident, $name:literal, $purpose:expr, $scope_note:expr $(,)?) => {{
+        mod loaded {
+            crate::queries::retail::$module::with_query!(crate::loading::capture);
+        }
+        QueryCase {
+            suite: Suite::Retail,
+            name: $name,
+            rust_path: queries::retail::$module::RUST_PATH,
+            purpose: $purpose,
+            scope_note: $scope_note,
+            sql: include_str!(concat!("../../sql/retail/", $name, ".sql")),
+            module: queries::retail::$module::module,
+            load: loaded::read_relations,
+        }
+    }};
 }
 
 // These independently named integer join cores are inspired by TPC-H/TPC-DS

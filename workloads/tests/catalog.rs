@@ -203,6 +203,7 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
         PathBuf::from("workloads/src/queries/classic/mod.rs"),
         PathBuf::from("workloads/src/queries/retail/mod.rs"),
         PathBuf::from("workloads/src/queries/extended/mod.rs"),
+        PathBuf::from("workloads/src/queries/typed/mod.rs"),
     ]);
     expected_paths.extend(cq_workloads::extended::CASES.iter().map(|case| {
         let path = PathBuf::from(case.rust_path);
@@ -211,8 +212,15 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
             .to_path_buf()
     }));
 
-    for case in all_cases() {
-        let source_path = PathBuf::from(case.rust_path);
+    for (name, rust_path, module) in all_cases()
+        .map(|case| (case.name, case.rust_path, case.module().unwrap()))
+        .chain(
+            cq_workloads::typed::CASES
+                .iter()
+                .map(|case| (case.name, case.rust_path, case.module().unwrap())),
+        )
+    {
+        let source_path = PathBuf::from(rust_path);
         let expected_path = if source_path.is_absolute() {
             source_path
                 .strip_prefix(&repository_root)
@@ -229,7 +237,7 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
         assert!(
             expected_path.starts_with("workloads/src/queries"),
             "case `{}` points outside the Rust query tree: `{}`",
-            case.name,
+            name,
             expected_path.display(),
         );
         assert!(
@@ -289,10 +297,9 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
             )
         });
         assert_eq!(
-            direct,
-            case.module().unwrap(),
+            direct, module,
             "catalog typed module for `{}` differs from its Rust query macro",
-            case.name,
+            name,
         );
     }
 
@@ -312,6 +319,14 @@ fn authored_sql_files_are_exactly_the_catalog() {
             .iter()
             .map(|case| PathBuf::from("workloads/sql/extended").join(format!("{}.sql", case.name))),
     );
+    for case in cq_workloads::typed::CASES {
+        let path = PathBuf::from("workloads/sql/typed").join(format!("{}.sql", case.name));
+        assert!(expected_paths.insert(path.clone()));
+        assert_eq!(
+            fs::read_to_string(repository_root.join(path)).unwrap(),
+            case.sql
+        );
+    }
 
     for case in all_cases() {
         let expected_path = canonical_artifact_path(case, "sql", "sql");

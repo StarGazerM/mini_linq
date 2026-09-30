@@ -1,6 +1,6 @@
 //! Tiny checked-in CSV fixtures and DuckDB goldens shared by executable consumers.
 use crate::{Scenario, dataset::Dataset};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A Cartesian product of nonempty relations cannot have no matches.
 /// This is the corpus's sole scenario exception, also checked by catalog tests.
@@ -12,14 +12,19 @@ pub fn scenarios(name: &str) -> &'static [Scenario] {
     }
 }
 
-pub fn load(name: &str, scenario: Scenario) -> Dataset {
+pub fn directory(name: &str, scenario: Scenario) -> PathBuf {
     let case = crate::case(name).expect("catalog case");
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join(case.suite.as_str())
         .join(name)
         .join(scenario.as_str())
-        .join("tiny");
+        .join("tiny")
+}
+
+pub fn load(name: &str, scenario: Scenario) -> Dataset {
+    let case = crate::case(name).expect("catalog case");
+    let directory = directory(name, scenario);
     Dataset::read_from_dir(&case.module().unwrap(), directory).unwrap()
 }
 

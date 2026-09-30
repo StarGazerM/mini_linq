@@ -8,6 +8,30 @@
 //! program over the runtime's traits. Caller import
 //! aliases bind policy and provider slots. No global storage default or
 //! fallback whole-query backend is supplied.
+//!
+//! [`relation_loaders!`] is a caller-side convenience independent of query
+//! planning. Invoke it through an authored workload callback, for example
+//! `workload::with_query!(mini_linq::relation_loaders)`, to reuse the exact CQ
+//! tokens. It also accepts just relation declarations. An input declaration
+//! `relation Lineitem(orderkey: i64, price: cq_load::Decimal);` emits a
+//! `LineitemLoader` type; result declarations in a complete CQ are excluded.
+//! No new CQ syntax or loading semantics are introduced into the language.
+//!
+//! `LineitemLoader::csv(path, cq_load::CsvOptions::default())` returns owned
+//! `(i64, Decimal)` tuples. `csv_hash::<1>` and `csv_btree::<1>` group into
+//! `(i64,)` keys and `Vec<(Decimal,)>` payloads. The const parameter selects
+//! any leading prefix, including zero and the entire row. Only key fields
+//! require `Eq + Hash` or `Ord`; payloads may contain `f64` or user-defined
+//! `cq_load::Load` implementations. Rows and duplicate payloads retain input
+//! order within each group. `csv_batches` yields bounded typed row batches.
+//! With `cq-load`'s optional `parquet` feature, the same generated type also
+//! provides `parquet`, `parquet_hash`, `parquet_btree`, and `parquet_batches`,
+//! using `cq_load::ParquetOptions`. Source options and scalar syntax are
+//! documented by the runtime; all parse errors retain source context.
+//! A local `relation_loader!(Lineitem)` selector expands to `LineitemLoader`,
+//! allowing declarative callbacks to call `<relation_loader!(Lineitem)>::csv`
+//! in the same scope without concatenating identifiers. Relation names remain
+//! available for authored Rust column types, including `String` and user types.
 
 use proc_macro::TokenStream;
 #[cfg(any(
@@ -20,7 +44,14 @@ use proc_macro::TokenStream;
     feature = "physical-realization"
 ))]
 mod entry;
+mod load;
 mod workload;
+
+/// Generate typed source readers from declarations or a complete CQ callback.
+#[proc_macro]
+pub fn relation_loaders(input: TokenStream) -> TokenStream {
+    load::expand(input)
+}
 
 /// Capture a typed CQ for the workload catalog and export a token callback.
 /// The leaf re-exports `with_<head>!` (also `with_query!`); passing a macro path

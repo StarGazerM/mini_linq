@@ -100,31 +100,31 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
     };
     let query: cq_lang_cq::Program = syn::parse2(tokens.clone())?;
     let mut setup = Vec::new();
+    let mut validation = Vec::new();
     for (i, declaration) in query.inputs().enumerate() {
         let storage = format_ident!("input_{i}");
         let name = &declaration.name;
+        let loader = format_ident!("{}Loader", cq_lang_cq::symbol_name(name));
         let arity = declaration.columns.len();
-        let fields: Vec<_> = (0..arity).collect();
-        let tail: Vec<_> = (1..arity).collect();
-        let rows = quote!(dataset.relations[#i].rows.iter());
-        let init = match host.to_string().as_str() {
-            "slice" => quote!(#rows.map(|row| (#(row[#fields],)*)).collect::<Vec<_>>()),
-            "hashmap" | "btreemap" => {
-                let map = if host == "hashmap" {
-                    quote!(std::collections::HashMap)
-                } else {
-                    quote!(std::collections::BTreeMap)
-                };
-                quote!({
-                    let mut groups = #map::<_, Vec<_>>::new();
-                    for row in #rows {
-                        groups.entry((row[0],)).or_default().push((#(row[#tail],)*));
-                    }
-                    groups
-                })
-            }
+        let fields: Vec<_> = (0..arity).map(syn::Index::from).collect();
+        let tail: Vec<_> = (0..arity.saturating_sub(1)).map(syn::Index::from).collect();
+        let method = match host.to_string().as_str() {
+            "slice" => quote!(csv),
+            "hashmap" => quote!(csv_hash::<1>),
+            "btreemap" => quote!(csv_btree::<1>),
             _ => return Err(syn::Error::new_spanned(host, "unknown test host")),
         };
+        let init = quote!(loaders::#loader::#method(
+            directory.join(::cq_workloads::dataset::input_file_name(#i)),
+            ::cq_load::CsvOptions::default(),
+        ).unwrap());
+        let rows = if host == "slice" {
+            quote!(#storage.iter().map(|row| vec![#(row.#fields,)*]).collect())
+        } else {
+            quote!(#storage.iter().flat_map(|(key, values)| values.iter().map(move |value| vec![key.0, #(value.#tail,)*])).collect())
+        };
+        let relation_name = cq_lang_cq::symbol_name(name);
+        validation.push(quote!(::cq_workloads::dataset::RelationData::new(#relation_name, #arity, #rows).unwrap()));
         let view = if host == "slice" {
             quote!(#storage.as_slice())
         } else {
@@ -162,6 +162,7 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
     });
     let test = (!matches!(mode, Mode::Compile)).then(|| quote!(#[test]));
     Ok(quote! {
+        mod loaders { ::mini_linq::relation_loaders! { #tokens } }
         macro_rules! strategy {
             ($($ix:tt)*) => { ::mini_linq::lower_physical! {
                 $($ix)* policy { join = #join; project = #project; intersect = #intersect; }
@@ -178,8 +179,14 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
         #[allow(non_snake_case)]
         pub fn corpus() {
             for &scenario in cq_workloads::execution::scenarios(#case) {
-                let dataset = cq_workloads::execution::load(#case, scenario);
+                let directory = cq_workloads::execution::directory(#case, scenario);
                 #(#setup)*
+                let schema = ::cq_workloads::case(#case).unwrap().module().unwrap();
+                ::cq_workloads::dataset::Dataset::from_loaded_schema(
+                    &schema.inputs().cloned().collect::<Vec<_>>(),
+                    &directory,
+                    vec![#(#validation,)*],
+                ).unwrap();
                 let answers = ::mini_linq::#planner! { #tokens }
                     .map(|row| vec![#(*row.#fields),*]).collect();
                 cq_workloads::execution::check(#case, scenario, answers);

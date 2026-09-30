@@ -8,3 +8,4 @@
 pub mod classic;
 pub mod extended;
 pub mod retail;
+pub mod typed;

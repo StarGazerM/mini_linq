@@ -23,3 +23,16 @@ cargo test -p cq-workload-e2e --test extension_laws --locked
 cargo test -p cq-workload-e2e --test extension_compile_fail --locked
 cargo test -p cq-workloads --test extended_catalog --locked
 ```
+
+```sh
+cargo test -p cq-load --locked
+cargo test -p cq-load --features parquet --locked
+cargo test -p mini-linq --test relation_loaders --locked
+cargo test -p cq-workload-e2e --test typed --locked
+cargo test -p cq-workload-e2e --test typed --features parquet --locked
+cargo xtask golden typed --write                 # DuckDB COPY creates typed Parquet fixtures and SQL goldens
+cargo xtask golden typed                         # both formats execute against the same golden gate
+mkdir -p target/load-bench
+duckdb :memory: -c "CREATE TABLE lineitem AS SELECT (5000000000+i)::BIGINT AS orderkey, (i%7+1)::INTEGER AS linenumber, ((i%1000000)::DECIMAL(18,2)/100)::DECIMAL(18,2) AS price, DATE '1992-01-01'+(i%2500)::INTEGER AS shipdate, 'lineitem-'||(i%1000)::VARCHAR AS comment FROM range(1000000) AS rows(i); COPY lineitem TO 'target/load-bench/lineitem.csv' (FORMAT CSV, HEADER false); COPY lineitem TO 'target/load-bench/lineitem.parquet' (FORMAT PARQUET, COMPRESSION SNAPPY);"
+cargo bench -p cq-workload-e2e --bench load --features parquet --locked -- target/load-bench
+```

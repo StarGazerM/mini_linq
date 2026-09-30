@@ -1,0 +1,6 @@
+shipdate,label
+1969-12-31,before epoch
+1970-01-01,epoch
+2000-02-29,"leap, century"
+2024-02-29,"leap ""day"""
+2024-03-01,unused

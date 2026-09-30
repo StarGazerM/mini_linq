@@ -20,7 +20,8 @@ env = dict(os.environ, CARGO_TARGET_DIR=str(UI_ROOT / "target"), CARGO_TERM_COLO
 manifest = '[package]\nname = "workload-ui"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
 for name, path in {
     "mini-linq": "facade/mini-linq",
-    "cq-storage": "runtime/cq-storage",
+        "cq-storage": "runtime/cq-storage",
+        "cq-load": "runtime/cq-load",
     "cq-state-providers": "runtime/cq-state-providers",
     "cq-workloads": "workloads",
     "cq-workload-e2e": "workloads/e2e",

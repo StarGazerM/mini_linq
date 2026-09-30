@@ -15,8 +15,10 @@ pub mod extended;
 #[cfg(feature = "counters")]
 pub mod extended_costs;
 pub mod generate;
+mod loading;
 pub mod queries;
 pub mod sql;
+pub mod typed;
 
 use cq_lang_cq as cq;
 
@@ -103,32 +105,27 @@ pub struct QueryCase {
     /// Independently authored DuckDB query over declaration-ordered raw tables.
     pub sql: &'static str,
     module: fn() -> syn::Result<cq::Program>,
+    load: loading::ReadRelations,
 }
 
 impl QueryCase {
-    pub(crate) const fn new(
-        suite: Suite,
-        name: &'static str,
-        rust_path: &'static str,
-        purpose: &'static str,
-        scope_note: &'static str,
-        sql: &'static str,
-        module: fn() -> syn::Result<cq::Program>,
-    ) -> Self {
-        Self {
-            suite,
-            name,
-            rust_path,
-            purpose,
-            scope_note,
-            sql,
-            module,
-        }
-    }
-
     /// Construct the exact typed CQ owned by this Rust query module.
     pub fn module(self) -> syn::Result<cq::Program> {
         (self.module)()
+    }
+
+    /// Read corpus tuples through loaders generated from the authored callback.
+    pub fn load(
+        self,
+        directory: impl AsRef<std::path::Path>,
+    ) -> Result<dataset::Dataset, dataset::DatasetError> {
+        let directory = directory.as_ref();
+        let schema = self.module().map_err(dataset::DatasetError::InvalidQuery)?;
+        dataset::Dataset::from_loaded_schema(
+            &schema.inputs().cloned().collect::<Vec<_>>(),
+            directory,
+            (self.load)(directory)?,
+        )
     }
 }
 

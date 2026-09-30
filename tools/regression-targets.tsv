@@ -42,6 +42,9 @@ mini-linq	test	openings	facade/mini-linq/tests/openings.rs
 mini-linq	test	pass_contracts	facade/mini-linq/tests/pass_contracts.rs
 mini-linq	test	dispatch	facade/mini-linq/tests/dispatch.rs
 mini-linq	test	workload_callback	facade/mini-linq/tests/workload_callback.rs
+mini-linq	test	relation_loaders	facade/mini-linq/tests/relation_loaders.rs
+cq-load	test	loading	runtime/cq-load/tests/loading.rs
+cq-workload-e2e	test	typed	workloads/e2e/tests/typed.rs
 cq-workload-e2e	test	census	workloads/e2e/tests/census.rs
 cq-workload-e2e	test	provider_candidates	workloads/e2e/tests/provider_candidates.rs
 cq-workload-e2e	test	compile_fail	workloads/e2e/tests/compile_fail.rs

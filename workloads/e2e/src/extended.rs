@@ -50,8 +50,19 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
     let schema = cq_workloads::extended::schema(source.clone())?;
     let setup = schema.iter().enumerate().map(|(i, declaration)| {
         let name = &declaration.name;
-        let fields: Vec<_> = (0..declaration.arity()).collect();
-        quote!(let #name: ::std::vec::Vec<_> = dataset.relations[#i].rows.iter().map(|row| (#(row[#fields],)*)).collect();)
+        let loader = format_ident!("{}Loader", cq_lang_cq::symbol_name(name));
+        quote!(let #name = loaders::#loader::csv(
+            directory.join(::cq_workloads::dataset::input_file_name(#i)),
+            ::cq_load::CsvOptions::default(),
+        ).unwrap();)
+    });
+    let validation = schema.iter().map(|declaration| {
+        let name = &declaration.name;
+        let relation_name = cq_lang_cq::symbol_name(name);
+        let arity = declaration.arity();
+        let fields: Vec<_> = (0..arity).map(syn::Index::from).collect();
+        quote!(::cq_workloads::dataset::RelationData::new(#relation_name, #arity,
+            #name.iter().map(|row| vec![#(row.#fields,)*]).collect()).unwrap())
     });
     let family_name = family.to_string();
     let extension: syn::Path = match family_name.as_str() {
@@ -98,6 +109,7 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
     Ok(quote! {
         #[allow(non_snake_case)]
         mod #module {
+            mod loaders { ::mini_linq::relation_loaders! { #(#schema)* } }
             macro_rules! policy { ($($ix:tt)*) => { ::mini_linq::lower_physical! { $($ix)* policy {} } }; }
             pub(crate) use policy as physical_policy;
             #[allow(unused_imports)]
@@ -112,14 +124,21 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
                 pub(crate) use ::cq_state_providers::hash_distinct as distinct_state;
                 pub(crate) use ::cq_state_providers::default_indexes as index_provider;
             }
-            pub(super) fn execute(dataset: &::cq_workloads::dataset::Dataset) -> ::std::vec::Vec<::std::vec::Vec<i32>> {
-                #(#setup)* #parameters
+            pub(super) fn execute(case: ::cq_workloads::extended::Case, scenario: ::cq_workloads::Scenario) -> ::std::vec::Vec<::std::vec::Vec<i32>> {
+                let directory = case.path("data").join(scenario.as_str()).join("tiny");
+                #(#setup)*
+                let dataset = ::cq_workloads::dataset::Dataset::from_loaded_schema(
+                    &case.schema().unwrap(), &directory, vec![#(#validation,)*],
+                ).unwrap();
+                dataset.validate_provenance(::cq_workloads::Suite::Extended, case.name, case.config(scenario)).unwrap();
+                assert_eq!(dataset, case.generate(scenario).unwrap(), "stale extension fixture: {}", case.name);
+                #parameters
                 let result = #extension! { #source }; #output
             }
             #[test]
             fn duckdb_scenarios() {
                 let case = ::cq_workloads::extended::case(#name).unwrap();
-                for scenario in ::cq_workloads::Scenario::ALL { case.check(scenario, execute(&case.load(scenario).unwrap())); }
+                for scenario in ::cq_workloads::Scenario::ALL { case.check(scenario, execute(*case, scenario)); }
             }
         }
     })

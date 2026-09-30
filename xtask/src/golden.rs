@@ -8,11 +8,15 @@ use crate::Result;
 /// a missing final newline, or other drift in a checked-in golden.
 pub(super) fn compare(path: &Path, rows: &[Vec<i32>], arity: usize) -> Result<()> {
     let expected = canonical_bytes(rows, arity)?;
+    compare_bytes(path, &expected)
+}
+
+pub(super) fn compare_bytes(path: &Path, expected: &[u8]) -> Result<()> {
     let tracked = std::fs::read(path)?;
     if tracked != expected {
         let position = tracked
             .iter()
-            .zip(&expected)
+            .zip(expected)
             .position(|(a, b)| a != b)
             .unwrap_or(tracked.len().min(expected.len()));
         return Err(format!(

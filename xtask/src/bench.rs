@@ -44,6 +44,23 @@ impl Options {
 
 pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let options = Options::parse(arguments)?;
+    let start = std::time::Instant::now();
+    let mut loaded_rows = 0;
+    let mut loaded_cases = 0;
+    for case in cq_workloads::catalog::all() {
+        for &scenario in cq_workloads::execution::scenarios(case.name) {
+            let config = crate::generation_config(case, scenario, cq_workloads::Scale::Tiny);
+            let data = case.load(crate::data_directory(case, scenario, config.scale))?;
+            data.validate_provenance(case.suite, case.name, config)?;
+            loaded_rows += data.relations.iter().map(|r| r.rows.len()).sum::<usize>();
+            loaded_cases += 1;
+            std::hint::black_box(data);
+        }
+    }
+    println!(
+        "corpus CSV: {loaded_cases} cases, {loaded_rows} raw rows, {:.3} ms (generated tuple loading and manifest validation)",
+        start.elapsed().as_secs_f64() * 1_000.0,
+    );
     let observations: Vec<_> = [options.scale, options.scale * 2, options.scale * 4]
         .into_iter()
         .flat_map(|scale| costs::run(scale, options.seed))

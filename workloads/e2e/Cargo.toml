@@ -9,6 +9,15 @@ publish = false
 [lib]
 proc-macro = true
 
+[features]
+default = []
+parquet = ["cq-load/parquet"]
+
+[[bench]]
+name = "load"
+harness = false
+required-features = ["parquet"]
+
 [dependencies]
 cq-workloads = { path = ".." }
 cq-lang-cq.workspace = true
@@ -30,6 +39,7 @@ cq-lang-structures.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+cq-load.workspace = true
 cq-ext-union = { path = "../../extensions/cq-ext-union" }
 cq-ext-negation = { path = "../../extensions/cq-ext-negation" }
 cq-ext-aggregate = { path = "../../extensions/cq-ext-aggregate" }

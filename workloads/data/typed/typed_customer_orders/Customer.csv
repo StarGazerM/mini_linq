@@ -1,0 +1,6 @@
+customerkey,name
+5000000001,"Alice, Inc."
+5000000002,"Bob ""B"""
+-5000000001,Zoë
+5000000009,unmatched
+5000000001,"Alice, Inc."

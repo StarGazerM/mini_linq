@@ -1,0 +1,16 @@
+[package]
+name = "cq-load"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+parquet = ["dep:arrow-array", "dep:arrow-schema", "dep:parquet"]
+
+[dependencies]
+csv = "1.4"
+arrow-array = { version = "58.4", default-features = false, optional = true }
+arrow-schema = { version = "58.4", default-features = false, optional = true }
+parquet = { version = "58.4", default-features = false, features = ["arrow", "snap"], optional = true }
