@@ -36,3 +36,11 @@ mkdir -p target/load-bench
 duckdb :memory: -c "CREATE TABLE lineitem AS SELECT (5000000000+i)::BIGINT AS orderkey, (i%7+1)::INTEGER AS linenumber, ((i%1000000)::DECIMAL(18,2)/100)::DECIMAL(18,2) AS price, DATE '1992-01-01'+(i%2500)::INTEGER AS shipdate, 'lineitem-'||(i%1000)::VARCHAR AS comment FROM range(1000000) AS rows(i); COPY lineitem TO 'target/load-bench/lineitem.csv' (FORMAT CSV, HEADER false); COPY lineitem TO 'target/load-bench/lineitem.parquet' (FORMAT PARQUET, COMPRESSION SNAPPY);"
 cargo bench -p cq-workload-e2e --bench load --features parquet --locked -- target/load-bench
 ```
+
+```sh
+cargo xtask bench --tpch --sf 0.1                 # TPC-H-derived; automatic release build and DuckDB oracle; exact SF 0.1 gate
+cargo xtask bench --tpch --sf 1                   # TPC-H-derived; repeats the SF 0.1 correctness gate before SF 1 measurement
+cargo xtask bench --tpch --sf 0.1 --runs 9        # one explicit warm execution, median of an odd number >= 3; never a time gate
+cat target/bench/tpch-0.1.tsv target/bench/tpch-1.tsv
+cat workloads/tpch-methodology.txt workloads/tpch/coverage.tsv
+```

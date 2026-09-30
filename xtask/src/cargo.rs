@@ -8,6 +8,29 @@ pub fn command() -> std::process::Command {
     command
 }
 
+pub(super) const BENCH_RELEASE_CHILD: &str = "CQ_XTASK_BENCH_RELEASE_CHILD";
+
+/// Always request the release profile explicitly. Checking debug_assertions
+/// alone would incorrectly accept a development profile that disables them.
+pub(super) fn release_benchmark(arguments: &[String], oracle: bool) -> std::process::Command {
+    let mut command = command();
+    command
+        .arg("run")
+        .arg("--manifest-path")
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .arg("--locked")
+        .arg("--release");
+    if oracle {
+        command.arg("--features").arg("oracle");
+    }
+    command
+        .arg("--")
+        .arg("bench")
+        .args(arguments)
+        .env(BENCH_RELEASE_CHILD, "1");
+    command
+}
+
 fn remove_package_identity(
     command: &mut std::process::Command,
     names: impl IntoIterator<Item = std::ffi::OsString>,
@@ -32,6 +55,33 @@ fn remove_package_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn benchmark_child_explicitly_selects_release_and_optional_oracle() {
+        for oracle in [false, true] {
+            let arguments = vec!["--scale".to_owned(), "24".to_owned()];
+            let command = release_benchmark(&arguments, oracle);
+            let args = command
+                .get_args()
+                .map(|arg| arg.to_str().unwrap())
+                .collect::<Vec<_>>();
+            let mut expected = vec![
+                "run",
+                "--manifest-path",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"),
+                "--locked",
+                "--release",
+            ];
+            if oracle {
+                expected.extend(["--features", "oracle"]);
+            }
+            expected.extend(["--", "bench", "--scale", "24"]);
+            assert_eq!(args, expected);
+            assert!(command.get_envs().any(|(key, value)| {
+                key == BENCH_RELEASE_CHILD && value == Some(std::ffi::OsStr::new("1"))
+            }));
+        }
+    }
 
     #[test]
     fn child_cargo_clears_package_identity_but_preserves_user_configuration() {

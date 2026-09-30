@@ -43,6 +43,47 @@ impl Options {
 }
 
 pub(super) fn run(arguments: Vec<String>) -> Result<()> {
+    let tpch = arguments.iter().filter(|arg| *arg == "--tpch").count();
+    if tpch > 1 {
+        return Err("`--tpch` may be provided only once".into());
+    }
+    if tpch == 0 {
+        // Reject malformed synthetic arguments before starting a release build.
+        Options::parse(arguments.clone())?;
+    }
+    if std::env::var_os(crate::cargo::BENCH_RELEASE_CHILD).is_none() {
+        eprintln!(
+            "building and running benchmarks in the release profile{}...",
+            if tpch == 1 {
+                " with the DuckDB oracle"
+            } else {
+                ""
+            }
+        );
+        let status = crate::cargo::release_benchmark(&arguments, tpch == 1).status()?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(format!("release benchmark failed with status {status}").into())
+        };
+    }
+    // A profile override must fail clearly rather than recursively rebuilding,
+    // or silently reporting development-profile benchmark timings.
+    if cfg!(debug_assertions) {
+        return Err("benchmark release child has debug assertions enabled; remove the release profile override and rerun".into());
+    }
+    if tpch == 1 {
+        #[cfg(feature = "oracle")]
+        {
+            return crate::tpch::run(arguments);
+        }
+        #[cfg(not(feature = "oracle"))]
+        {
+            return Err(
+                "TPC-H-derived release benchmark child is missing the oracle feature".into(),
+            );
+        }
+    }
     let options = Options::parse(arguments)?;
     let start = std::time::Instant::now();
     let mut loaded_rows = 0;

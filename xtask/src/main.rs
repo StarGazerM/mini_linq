@@ -12,6 +12,8 @@ mod golden;
 #[cfg(feature = "oracle")]
 mod oracle;
 #[cfg(feature = "oracle")]
+mod tpch;
+#[cfg(feature = "oracle")]
 mod typed;
 
 use std::env;
@@ -521,12 +523,16 @@ MiniLinq workload tasks
   cargo xtask differential [--cases N] [--seed S]
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
+  cargo xtask bench --tpch --sf 0.1|1 [--runs N]
 
 SCENARIO is coverage, empty-input, no-match, or all.
 It defaults to all for golden, coverage for generate.
 
 STAGE is cq, relational-plan, or index-requirements. It defaults to index-requirements.
-Bench reports scales N, 2N and 4N (default N=128); time is never asserted.
+Bench always builds and runs in the release profile; time is never asserted.
+The synthetic bench reports scales N, 2N and 4N (default N=128).
+The TPC-H-derived bench enables the DuckDB oracle, caches data under target/,
+and reports warm medians for the selected scale factor.
 The extended and typed corpora have tiny fixtures only. Typed CSV fixtures are
 authored; `golden typed --write` regenerates their Parquet copies and answers.
 

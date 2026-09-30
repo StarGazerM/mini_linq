@@ -1,0 +1,42 @@
+TPC-H-derived query numeric and ordering contract
+
+Q6 and Q19:
+Decimal<2> loads each dbgen fixed-point measure without floating conversion.
+CQ computes the exact product in i128 at scale 4. Its head retains
+(l_orderkey,l_linenumber), so equal-valued distinct lineitems stay distinct.
+The existing aggregate extension then sums the materialized computed rows.
+Empty scalar input produces SQL NULL (\N in serialized answers), not zero.
+The compute stage, its Vec allocation, and the aggregate stage are all query
+work. Formatting decimal coefficients is outside timed execution.
+
+Q14 and Q17:
+Canonical DuckDB decimal division returns a floating-point type. The official
+numeric documentation explicitly states that fixed-point division uses
+approximate floating arithmetic; it does not return an exact decimal:
+https://duckdb.org/docs/current/sql/data_types/numeric#arithmetic-and-internal-representation
+
+The current distinct state requires Eq + Hash on output tuples
+(runtime/cq-storage/src/counters.rs, DistinctSet); f64 satisfies neither.
+A minimal authored CQ with `let ratio: f64 = f64::from(*value) / 7.0` and
+head `rows(ratio)` fails generated Rust compilation with E0277 on Eq and Hash.
+The same bound exists on the ordinary hash distinct provider. This is a
+current output representation limitation, not a claim that Rust division,
+prefix LIKE, or compositional AVG is unavailable. A custom SQL-compatible
+floating answer provider/type could address representation, but would not
+turn canonical floating division into the required exact-decimal aggregate.
+Converting the result to a chosen decimal precision would change the query.
+These two queries are therefore explicitly excluded under the current
+output interface and this benchmark's strict decimal correctness contract.
+
+Ordered queries:
+The current RA Operator set has no sort or top-k, and no installed extension
+adds them. coverage.tsv preserves each full canonical ORDER BY and LIMIT
+requirement. The set comparison requested for correctness does not silently
+remove ordering from the implemented language. No host sorting/take adapter
+is substituted for missing authored MiniLinq ordering semantics.
+
+Coverage source:
+All 22 canonical SQL peers were inspected from the official DuckDB repository;
+per-query source URLs are recorded in coverage.tsv. The authored Q6/Q19 SQL
+uses the same constants and semantics. These are TPC-H-derived measurements,
+not certified benchmark submissions.

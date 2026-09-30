@@ -211,6 +211,13 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
             .unwrap_or(&path)
             .to_path_buf()
     }));
+    for case in cq_workloads::tpch::CASES {
+        assert!(
+            expected_paths.insert(PathBuf::from(case.rust_path)),
+            "duplicate standalone benchmark source {}",
+            case.rust_path
+        );
+    }
 
     for (name, rust_path, module) in all_cases()
         .map(|case| (case.name, case.rust_path, case.module().unwrap()))
@@ -319,6 +326,15 @@ fn authored_sql_files_are_exactly_the_catalog() {
             .iter()
             .map(|case| PathBuf::from("workloads/sql/extended").join(format!("{}.sql", case.name))),
     );
+    for path in cq_workloads::tpch::CASES
+        .iter()
+        .filter_map(|case| case.sql_path)
+    {
+        assert!(
+            expected_paths.insert(PathBuf::from(path)),
+            "duplicate standalone benchmark SQL peer {path}"
+        );
+    }
     for case in cq_workloads::typed::CASES {
         let path = PathBuf::from("workloads/sql/typed").join(format!("{}.sql", case.name));
         assert!(expected_paths.insert(path.clone()));
@@ -356,6 +372,136 @@ fn authored_sql_files_are_exactly_the_catalog() {
         artifact_files("sql", "sql"),
         expected_paths,
         "the SQL artifact tree and catalog must be an exact bijection"
+    );
+}
+
+#[test]
+fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
+    use cq_workloads::tpch;
+
+    assert_eq!(tpch::CASES.len(), 12);
+    let retail = tpch::CASES
+        .iter()
+        .filter(|case| case.tpch_query.is_none())
+        .map(|case| case.name)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(retail, RETAIL.iter().map(|case| case.name).collect());
+    let mut names = BTreeSet::new();
+    for case in tpch::CASES {
+        assert!(names.insert(case.name), "duplicate benchmark {}", case.name);
+        let path = Path::new(case.rust_path);
+        assert!(!path.is_absolute());
+        assert_eq!(path.file_stem().unwrap(), case.name);
+        let source = fs::read_to_string(repository_root().join(path)).unwrap();
+        let parsed = syn::parse_file(&source).unwrap();
+        if case.tpch_query.is_none() {
+            assert!(path.starts_with("workloads/src/queries/retail/tpch"));
+            assert!(case.sql_path.is_none(), "retail SQL is authored inline");
+            let declarations = parsed
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    syn::Item::Macro(item)
+                        if item.mac.path.is_ident("retail_kernel")
+                            || item
+                                .mac
+                                .path
+                                .segments
+                                .last()
+                                .is_some_and(|s| s.ident == "retail_kernel") =>
+                    {
+                        Some(&item.mac)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(declarations.len(), 1);
+            let prefix = |input: syn::parse::ParseStream<'_>| -> syn::Result<(String, String)> {
+                input.parse::<syn::Token![$]>()?;
+                input.parse::<syn::Token![;]>()?;
+                let keyword: syn::Ident = input.parse()?;
+                assert_eq!(keyword, "name");
+                let name: syn::LitStr = input.parse()?;
+                input.parse::<syn::Token![;]>()?;
+                let keyword: syn::Ident = input.parse()?;
+                assert_eq!(keyword, "sql");
+                let sql: syn::LitStr = input.parse()?;
+                let _: proc_macro2::TokenStream = input.parse()?;
+                Ok((name.value(), sql.value()))
+            };
+            let (name, sql) =
+                syn::parse::Parser::parse2(prefix, declarations[0].tokens.clone()).unwrap();
+            assert_eq!(name, case.name);
+            assert!(!sql.trim().is_empty(), "{} has no authored SQL", case.name);
+        } else {
+            assert!(path.starts_with("workloads/src/queries/tpch"));
+            let constant = |name: &str| {
+                parsed
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        syn::Item::Const(item) if item.ident == name => Some(&*item.expr),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{} has no {name} constant", case.name))
+            };
+            let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(name),
+                ..
+            }) = constant("NAME")
+            else {
+                panic!("{} must author its name as a string literal", case.name);
+            };
+            assert_eq!(name.value(), case.name);
+            let syn::Expr::Macro(sql) = constant("SQL") else {
+                panic!("{} must include its authored SQL peer", case.name);
+            };
+            assert!(sql.mac.path.is_ident("include_str"));
+            let included: syn::LitStr = syn::parse2(sql.mac.tokens.clone()).unwrap();
+            let sql_path = case
+                .sql_path
+                .expect("full query needs an authored SQL peer");
+            assert!(Path::new(sql_path).starts_with("workloads/sql/tpch"));
+            assert_eq!(
+                repository_root()
+                    .join(path.parent().unwrap())
+                    .join(included.value())
+                    .canonicalize()
+                    .unwrap(),
+                repository_root().join(sql_path).canonicalize().unwrap(),
+                "{} includes SQL different from its registered peer",
+                case.name,
+            );
+        }
+    }
+
+    let mut coverage_ids = BTreeSet::new();
+    let mut implemented = BTreeSet::new();
+    for row in tpch::COVERAGE.lines().skip(1) {
+        let columns = row.split('\t').collect::<Vec<_>>();
+        assert_eq!(columns.len(), 5, "malformed coverage record {row}");
+        let number: u8 = columns[0].strip_prefix('Q').unwrap().parse().unwrap();
+        assert!(
+            coverage_ids.insert(number),
+            "duplicate coverage record {row}"
+        );
+        if columns[1] == "implemented" {
+            assert_eq!(columns[2], "none");
+            implemented.insert(number);
+        } else {
+            assert!(columns[1].starts_with("not_expressible_"));
+            assert!(!columns[2].is_empty() && columns[2] != "none");
+        }
+    }
+    assert_eq!(coverage_ids, (1..=22).collect());
+    let full_queries = tpch::CASES
+        .iter()
+        .filter_map(|case| case.tpch_query)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(full_queries, BTreeSet::from([6, 19]));
+    assert_eq!(
+        implemented, full_queries,
+        "coverage and executable catalogue differ"
     );
 }
 

@@ -18,6 +18,7 @@ pub mod generate;
 mod loading;
 pub mod queries;
 pub mod sql;
+pub mod tpch;
 pub mod typed;
 
 use cq_lang_cq as cq;

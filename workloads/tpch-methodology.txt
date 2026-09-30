@@ -1,0 +1,98 @@
+TPC-H-derived benchmark methodology
+
+Scope and query authorship
+The ten retail modules in src/queries/retail/tpch are independently named,
+inspired-by positive CQ kernels over dbgen tables. Their SQL peers are authored
+in each module. The pre-existing synthetic retail corpus remains unchanged.
+The four d-prefixed kernels map their TPC-DS-inspired relation roles onto real
+TPC-H dbgen relations; each source documents the mapping. They are not TPC-DS
+queries. All filters execute inside the measured query, not during export.
+
+tpch/coverage.tsv records all 22 canonical full-query assessments.
+Q6 and Q19 have authored SQL and MiniLinq/aggregate compositions. Exact missing
+ordered-result/top-k support excludes 18 complete queries; no required ordering
+or limit is silently dropped. Q14/Q17 have a documented floating-result and
+exactness-contract limitation. tpch/numeric_contract.txt gives the details. String
+LIKE patterns, HAVING, AVG composition and COUNT DISTINCT are not falsely
+reported missing merely because their SQL keywords are absent.
+
+Data and correctness
+The xtask oracle uses DuckDB tpch CALL dbgen at SF 0.1 and SF 1. Generated
+DuckDB tables, per-query projected Parquet files, manifests, executable crates,
+Cargo timing reports, answer witnesses and output reports live under target/bench.
+Exports contain only declared columns, in declaration order, without filters,
+preaggregation or casts. Typed relation_loaders! read the Parquet schemas into
+Vec hosts. The file cache is local and engine-version/projection keyed.
+
+Every fresh executable/configuration is checked against authored DuckDB SQL on
+SF 0.1 before any query measurements, including invocations requesting SF 1.
+The requested scale is also checked before each configuration's measured runs.
+Comparison uses sets of complete output tuples. Only columns typed DECIMAL by
+DuckDB normalize trailing fractional zeroes; VARCHAR values are unchanged.
+No float tolerance is used. Q6/Q19 keep lineitem primary keys through distinct
+CQ heads so equal-valued different input rows still contribute to SQL SUM.
+Products/sums use i128 coefficients at scale four. Empty scalar SUM yields NULL.
+Every measured run must reproduce its warm answer and deterministic counters.
+
+Configurations
+Each query compiles the same authored clauses in two configurations:
+- default: the written coarse binary CQ planner and default physical policy;
+- hypergraph candidate: single-atom guard pushdown and GYO-tree semijoin
+  reduction on H03, H07, H08, D19, D27; the main written atom order is retained;
+- generic_smallest candidate: fine variable-at-a-time planner, canonical
+  projections and smallest intersection driver on H05, H09, H21, D72, D85;
+- generic-smallest candidate: the same generic policy for full Q6 and Q19.
+All hosts are typed Vecs loaded from the same projections. This is a small
+candidate set, not an exhaustive planner search. The metadata records the
+best measured configuration for each query/scale from this set; candidates
+are not assumed faster than default. Initialization/index building is charged
+to every run; no configuration gets uncharged persistent prebuilt indexes.
+
+Timing and memory
+Both the synthetic bench and TPC-H-derived path automatically build/run release
+code. Each measured configuration runs in a fresh worker process, loads once,
+checks one warm result, and reports the median of five executions by default.
+An odd run count of at least three may be requested. Each timed execution
+constructs a fresh query, builds required indexes, runs and fully materializes
+its typed output. Load time, string formatting, answer-set normalization,
+comparison, file I/O and result destruction are outside the query timer.
+
+DuckDB uses separately preloaded in-memory tables from the identical Parquet
+projections. Its load is measured separately. Both threads=1 and the engine's
+observed default thread count are reported. Each mode performs its correctness
+execution and one additional explicit warm execution before N measured runs.
+DuckDB timing includes preparation/planning/optimization, execution and complete
+Arrow result collection. MiniLinq produces a Vec of typed Rust tuples; DuckDB
+produces typed columnar Arrow batches. Neither timer includes textual output
+conversion. This is an end-to-end execution boundary, not an isolated operator
+benchmark. Engine/client output layouts and DuckDB's runtime planning differ.
+
+The optional Linux VmHWM reading is the worker process peak RSS. It includes
+loading, oracle/answer witnesses, warmup, all samples, and canonical comparison;
+it is not incremental query-only memory. Unsupported platforms report NA.
+MiniLinq counter instrumentation is enabled during timing, so its overhead is
+included. DuckDB is timed without equivalent per-operation instrumentation.
+Counters are the existing cq-storage counters: hashes, index builds, lookups,
+cursor steps, row enumeration and distinct insertions. Extension aggregate
+folding and uninstrumented host operations are not covered by those counters.
+Q6/Q19 explicitly materialize computed rows before aggregate! because the current
+aggregate extension expects borrowed measure columns. Both phases and that
+intermediate allocation are timed.
+
+Compilation
+A generated isolated binary crate per query contains both configurations plus
+the shared worker. Cargo release --timings supplies that binary unit's duration,
+excluding separate dependency units. The source is freshly rewritten before
+each measurement so an up-to-date no-op build cannot report a compile time.
+This duration includes macro expansion, Rust checking, optimization/codegen and
+linking; it is not an isolated measurement of proc-macro CPU time. Dependency
+versions are seeded from the repository lock and the release build is locked.
+The HTML report is retained under target/bench/compile. All queries compile
+before timing begins; no compiler process is intentionally run during query
+measurement. Times are descriptive and are never asserted or used as a gate.
+
+Output
+The complete TSV has one row per query/configuration/scale. Companion JSON
+records raw sorted samples, SQL, export schemas, configurations, compile reports,
+engine/compiler versions and methodology. A .partial TSV is used during a run;
+the final TSV is replaced only after the entire requested suite passes.

@@ -19,7 +19,7 @@ debug = false
 
 [features]
 default = []
-oracle = ["dep:duckdb"]
+oracle = ["dep:duckdb", "dep:serde_json"]
 
 [dependencies]
 cq-lang-vo = { path = "../languages/cq-lang-vo" }
@@ -35,6 +35,7 @@ cq-structure-selection = { path = "../passes/cq-structure-selection" }
 cq-lang-structures = { path = "../languages/cq-lang-structures" }
 cq-workloads = { path = "../workloads", features = ["counters"] }
 duckdb = { version = "~1.10505.0", features = ["bundled", "parquet"], optional = true }
+serde_json = { version = "1", optional = true }
 quote = "1"
 syn = { version = "2", features = ["extra-traits", "full"] }
 
