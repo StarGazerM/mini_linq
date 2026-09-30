@@ -9,6 +9,14 @@ publish = false
 # Keep the heavyweight DuckDB client out of the ordinary teaching workspace.
 [workspace]
 
+# Native debug symbols dominate DuckDB's archive and link cost; the compiler
+# crates retain their ordinary debug information.
+[profile.dev.package.libduckdb-sys]
+debug = false
+
+[profile.test.package.libduckdb-sys]
+debug = false
+
 [features]
 default = []
 oracle = ["dep:duckdb"]
@@ -21,6 +29,10 @@ cq-lang-ra = { path = "../languages/cq-lang-ra" }
 cq-elaborate = { path = "../passes/cq-elaborate" }
 cq-index-policy = { path = "../passes/cq-index-policy" }
 cq-order = { path = "../passes/cq-order" }
+cq-reduce = { path = "../passes/cq-reduce" }
+cq-physical-lowering = { path = "../passes/cq-physical-lowering" }
+cq-structure-selection = { path = "../passes/cq-structure-selection" }
+cq-lang-structures = { path = "../languages/cq-lang-structures" }
 cq-workloads = { path = "../workloads", features = ["counters"] }
 duckdb = { version = "~1.10505.0", features = ["bundled"], optional = true }
 quote = "1"

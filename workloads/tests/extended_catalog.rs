@@ -46,6 +46,7 @@ fn authored_callbacks_schemas_and_sql_cover_all_families() {
             .unwrap()
         );
         let operator = match case.family {
+            "surface" => "SELECT DISTINCT",
             "union" | "stacked" => "UNION",
             "negation" => "NOT EXISTS",
             "aggregate" => "GROUP BY",
@@ -68,6 +69,7 @@ fn authored_callbacks_schemas_and_sql_cover_all_families() {
     assert_eq!(
         counts,
         BTreeMap::from([
+            ("surface", 12),
             ("union", 3),
             ("negation", 3),
             ("aggregate", 3),
@@ -98,5 +100,5 @@ fn tiny_fixtures_and_goldens_have_exact_provenance_and_shapes() {
             scenarios += 1;
         }
     }
-    assert_eq!(scenarios, 51);
+    assert_eq!(scenarios, 87);
 }

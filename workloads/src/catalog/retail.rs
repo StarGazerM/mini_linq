@@ -11,6 +11,7 @@ macro_rules! retail_case {
             queries::retail::$module::RUST_PATH,
             $purpose,
             $scope_note,
+            include_str!(concat!("../../sql/retail/", $name, ".sql")),
             queries::retail::$module::module,
         )
     };

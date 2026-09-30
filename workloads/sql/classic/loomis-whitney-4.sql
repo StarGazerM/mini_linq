@@ -1,35 +1,7 @@
-WITH
-  "mini-linq/input/0" AS (
-    SELECT DISTINCT "c0", "c1", "c2"
-    FROM "mini-linq/raw/0"
-  ),
-  "mini-linq/input/1" AS (
-    SELECT DISTINCT "c0", "c1", "c2"
-    FROM "mini-linq/raw/1"
-  ),
-  "mini-linq/input/2" AS (
-    SELECT DISTINCT "c0", "c1", "c2"
-    FROM "mini-linq/raw/2"
-  ),
-  "mini-linq/input/3" AS (
-    SELECT DISTINCT "c0", "c1", "c2"
-    FROM "mini-linq/raw/3"
-  )
-SELECT DISTINCT
-  "a0"."c0" AS "a",
-  "a0"."c1" AS "b",
-  "a0"."c2" AS "c",
-  "a1"."c2" AS "d"
-FROM "mini-linq/input/0" AS "a0"
-CROSS JOIN "mini-linq/input/1" AS "a1"
-CROSS JOIN "mini-linq/input/2" AS "a2"
-CROSS JOIN "mini-linq/input/3" AS "a3"
-WHERE "a1"."c0" = "a0"."c1"
-  AND "a1"."c1" = "a0"."c2"
-  AND "a2"."c0" = "a0"."c0"
-  AND "a2"."c1" = "a0"."c2"
-  AND "a2"."c2" = "a1"."c2"
-  AND "a3"."c0" = "a0"."c0"
-  AND "a3"."c1" = "a0"."c1"
-  AND "a3"."c2" = "a1"."c2"
+-- Four ternary projections agree on every shared coordinate.
+SELECT DISTINCT abc.c0, abc.c1, abc.c2, bcd.c2
+FROM "mini-linq/raw/0" AS abc
+JOIN "mini-linq/raw/1" AS bcd ON bcd.c0 = abc.c1 AND bcd.c1 = abc.c2
+JOIN "mini-linq/raw/2" AS acd ON acd.c0 = abc.c0 AND acd.c1 = abc.c2 AND acd.c2 = bcd.c2
+JOIN "mini-linq/raw/3" AS abd ON abd.c0 = abc.c0 AND abd.c1 = abc.c1 AND abd.c2 = bcd.c2
 ORDER BY 1, 2, 3, 4;

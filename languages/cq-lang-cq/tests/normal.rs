@@ -49,3 +49,19 @@ fn kernels_compare_up_to_renaming_of_variables() {
     assert_eq!(Kernel::of(&one), Kernel::of(&two));
     assert_ne!(Kernel::of(&one), Kernel::of(&three));
 }
+
+#[test]
+fn repeated_head_variables_preserve_tuple_positions() {
+    // Differential seed 4: normalization rejected a legal all-bare head even
+    // though every downstream heading is a set and the output is a tuple.
+    let source = cq(quote! {
+        struct RepeatHead;
+        relation R(x: i32);
+        answer(x, x) :- R(x);
+    });
+    cq::contract::check(&source).unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    cq::normal::check(&normal).unwrap();
+    assert_eq!(normal, source);
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+}

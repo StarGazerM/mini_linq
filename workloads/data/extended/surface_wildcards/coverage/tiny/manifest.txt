@@ -1,0 +1,9 @@
+mini-linq-dataset	2
+suite	extended
+case	surface_wildcards
+scenario	coverage
+scale	tiny
+seed	7469001197919237856
+generator-version	2
+relations	1
+relation	R	3	4	3

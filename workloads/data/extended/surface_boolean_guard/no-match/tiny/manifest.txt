@@ -1,0 +1,9 @@
+mini-linq-dataset	2
+suite	extended
+case	surface_boolean_guard
+scenario	no-match
+scale	tiny
+seed	10678909629704200985
+generator-version	2
+relations	1
+relation	R	2	1	1

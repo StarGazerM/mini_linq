@@ -86,6 +86,30 @@ fn triangle() -> cq::Program {
 }
 
 #[test]
+fn generated_results_do_not_shadow_declared_relations() {
+    // Differential seed 0 exposed a built result mistaken for an unused host.
+    // Even an unused declaration reserves its name for downstream contracts.
+    let source = cq(quote! {
+        struct Collision;
+        relation r0(x: i32);
+        relation r1(x: i32);
+        relation r2(x: i32);
+        r2(x) :- r0(x);
+    });
+    let valuation = coarse(&source);
+    let target = compile(&valuation).unwrap();
+    check(&valuation, &target).unwrap();
+    assert_plan(
+        &target,
+        quote! {
+            r3 = rename r0 { x -> x };
+            r4 = project r3 keep { x };
+            output r4 as r2(x);
+        },
+    );
+}
+
+#[test]
 fn coarse_plans_elaborate_relation_at_a_time() {
     let plan = vo(&chain(), quote! { L@0(a); R@1(a, b); S@2(b, c); });
     let target = compile(&plan).unwrap();

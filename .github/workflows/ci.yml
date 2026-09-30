@@ -19,7 +19,17 @@ jobs:
       - name: Verify component dependency boundaries
         run: python3 tools/check_dependencies.py --isolate
       - name: Test restored compiler regressions
+        env:
+          CARGO_BUILD_JOBS: 2
         run: bash tools/test_regressions.sh
+      - name: Recompute every golden with DuckDB
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo xtask golden
+      - name: Compare 200 seeded compiled CQs with DuckDB
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo xtask fuzz --cases 200 --seed 0
       - name: Test IX and Physical composition
         run: python3 tools/check_dependencies.py --consumers
       - name: Test package feature configurations
@@ -29,7 +39,9 @@ jobs:
       - name: Check Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test teaching tool
-        run: cargo test --manifest-path xtask/Cargo.toml --locked
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: cargo test --manifest-path xtask/Cargo.toml --locked --features oracle
       - name: Run heterogeneous provider composition
         run: cargo run --manifest-path examples/composition/Cargo.toml --locked
       - name: Check formal source correspondence

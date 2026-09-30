@@ -34,3 +34,37 @@ cq_workloads::queries::extended::stacked_antijoin::with_query!(
     cq_workload_e2e::instantiate_extended
 );
 cq_workloads::queries::extended::stacked_mixed::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::surface_constant::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_negative_constant::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_repeat::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::surface_wildcards::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_compare::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_arithmetic_guard::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_boolean_guard::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_let_sum::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_let_chain::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_computed_head::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_self_join::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::surface_disconnected::with_query!(
+    cq_workload_e2e::instantiate_extended
+);

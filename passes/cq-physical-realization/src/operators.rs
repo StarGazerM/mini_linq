@@ -99,7 +99,8 @@ impl<'a> Printer<'a> {
                         "a probe needs the payload; it reads a curried structure only at its full depth",
                     );
                 }
-                let key = levels[0].iter().map(|c| self.ident(&left, c));
+                let owned = self.owned_key(&right, &levels[0]);
+                let key = levels[0].iter().map(|c| self.key_field(&left, c, owned));
                 (
                     quote!(::cq_storage::Candidates::keys(&#structure, &(#(#key,)*))),
                     all[1].clone(),
@@ -110,11 +111,7 @@ impl<'a> Printer<'a> {
                 let lookup = self.chained_lookup(&left, structure, &right, &columns);
                 (
                     lookup,
-                    self.heading(&right)
-                        .iter()
-                        .filter(|c| !columns.contains(c))
-                        .cloned()
-                        .collect(),
+                    self.built_payload(&right, &self.levels_of(&right, structure)),
                     false,
                 )
             }
@@ -122,16 +119,18 @@ impl<'a> Printer<'a> {
         // Payload fields are read by position: a host payload is a borrowed
         // tuple, a built payload a value; field access copies the `&T`
         // column out of either.
-        let row = self.row(name, |c| match payload.iter().position(|p| p == c) {
-            Some(i) => {
-                let i = index(i);
-                if host {
-                    quote!(&__cq_v.#i)
-                } else {
-                    quote!(__cq_v.#i)
+        let row = self.row(name, |c| {
+            match payload.iter().position(|p| p == c && !columns.contains(p)) {
+                Some(i) => {
+                    let i = index(i);
+                    if host {
+                        quote!(&__cq_v.#i)
+                    } else {
+                        quote!(__cq_v.#i)
+                    }
                 }
+                None => self.ident(&left, c).to_token_stream(),
             }
-            None => self.ident(&left, c).to_token_stream(),
         });
         Ok(quote! {
             ::core::iter::Iterator::flat_map(#outer, move |#outer_pattern| {
@@ -156,9 +155,11 @@ impl<'a> Printer<'a> {
             Access::Host(access) => self.host_lookup(&left, &access, true),
             Access::Built(structure) => {
                 let levels = self.levels_of(&symbol_name(&keyed.right), &structure);
-                self.chained_contains(&left, &structure, &levels)
+                self.chained_contains(&left, &structure, &symbol_name(&keyed.right), &levels)
             }
-            Access::Prefix(structure, levels) => self.chained_contains(&left, &structure, &levels),
+            Access::Prefix(structure, levels) => {
+                self.chained_contains(&left, &structure, &symbol_name(&keyed.right), &levels)
+            }
         };
         Ok(quote! {
             ::core::iter::Iterator::filter(#input, move |&(#(#binders,)*)| #test)
@@ -175,6 +176,12 @@ impl<'a> Printer<'a> {
         let columns = sorted(&keyed.columns);
         let left = self.ordered(reader, &keyed.left, &columns)?;
         let right = self.ordered(reader, &keyed.right, &columns)?;
+        if [&keyed.left, &keyed.right].iter().any(|result| {
+            let result = symbol_name(result);
+            !self.analysis.host_read(&result) && self.owned_key(&result, &columns)
+        }) {
+            return Ok(self.merge_owned_keys(name, keyed, &columns, &left, &right));
+        }
         let native = matches!(
             (&left, &right),
             (Side::Host(_), Side::Host(_)) | (Side::Built(_), Side::Built(_))
@@ -263,6 +270,86 @@ impl<'a> Printer<'a> {
                 move |(__cq_k, __cq_l, __cq_r)| #row
             )
         })
+    }
+
+    /// Computed bindings and borrowed host columns compare through owned
+    /// keys, while each cursor carries its original row separately.
+    fn merge_owned_keys(
+        &self,
+        name: &str,
+        keyed: &physical::Keyed,
+        columns: &[String],
+        left: &Side,
+        right: &Side,
+    ) -> TokenStream {
+        let mut cursors = Vec::new();
+        for (side, result) in [(left, &keyed.left), (right, &keyed.right)] {
+            let result = symbol_name(result);
+            let pattern = self.pattern(&result);
+            let key = columns.iter().map(|c| self.key_field(&result, c, true));
+            let pairs = match side {
+                Side::Pipe(rows) => {
+                    quote!(::core::iter::Iterator::map(#rows, move |#pattern| ((#(#key,)*), #pattern)))
+                }
+                Side::Host(access) => {
+                    let value = &access.value;
+                    let row = self.row(&result, |c| {
+                        if let Some(i) = columns.iter().position(|k| k == c) {
+                            let i = index(i);
+                            quote!(&__cq_k.#i)
+                        } else {
+                            let i = index(access.payload.iter().position(|p| p == c).unwrap());
+                            quote!(&__cq_v.#i)
+                        }
+                    });
+                    quote!(::core::iter::Iterator::map(::cq_storage::OrderedRead::ordered(&#value), |(__cq_k, __cq_v)| {
+                        let #pattern = #row; ((#(#key,)*), #pattern)
+                    }))
+                }
+                Side::Built(structure) => {
+                    let payload = if self.analysis.host_read(&result) {
+                        self.heading(&result)
+                            .iter()
+                            .filter(|c| !columns.contains(c))
+                            .cloned()
+                            .collect()
+                    } else {
+                        self.built_payload(&result, &self.levels_of(&result, structure))
+                    };
+                    let row = self.row(&result, |c| {
+                        if let Some(i) = payload.iter().position(|p| p == c) {
+                            let i = index(i);
+                            quote!(__cq_v.#i)
+                        } else {
+                            let i = index(columns.iter().position(|k| k == c).unwrap());
+                            quote!(__cq_k.#i)
+                        }
+                    });
+                    quote!(::core::iter::Iterator::map(::cq_storage::OrderedRead::ordered(&#structure), |(__cq_k, __cq_v)| {
+                        let #pattern = #row; ((#(#key,)*), #pattern)
+                    }))
+                }
+            };
+            cursors.push(quote!(::cq_storage::sorted_by(#pairs)));
+        }
+        let left_name = symbol_name(&keyed.left);
+        let right_name = symbol_name(&keyed.right);
+        let row = self.row(name, |c| {
+            if let Some(i) = self.heading(&left_name).iter().position(|p| p == c) {
+                let i = index(i);
+                quote!(__cq_l.#i)
+            } else {
+                let i = index(
+                    self.heading(&right_name)
+                        .iter()
+                        .position(|p| p == c)
+                        .unwrap(),
+                );
+                quote!(__cq_r.#i)
+            }
+        });
+        let (left, right) = (&cursors[0], &cursors[1]);
+        quote!(::core::iter::Iterator::map(::cq_storage::merge(#left, #right), move |(_, __cq_l, __cq_r)| #row))
     }
 
     /// Enter an ordered value at the select's lower bound on `column` and

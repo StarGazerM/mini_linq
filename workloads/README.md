@@ -5,6 +5,10 @@ cargo test --manifest-path examples/own-dialect/Cargo.toml --test corpus --locke
 cargo xtask list
 cargo xtask generate all tiny --scenario all
 cargo xtask golden all tiny --scenario all
+cargo xtask golden                              # byte comparison of every checked-in golden, all scenarios
+cargo xtask fuzz --cases 200 --seed 0            # gated deterministic compiled-query comparison with DuckDB
+cargo xtask fuzz --cases 5000 --seed 0           # larger local run; generated Rust stays under target/
+cargo xtask differential --cases 200 --seed 0    # alias for fuzz
 cargo xtask golden all tiny --scenario all --write
 cargo xtask explain triangle --through index-requirements
 cargo test -p cq-storage --features counters --test counters --locked

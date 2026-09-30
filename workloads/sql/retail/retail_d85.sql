@@ -1,50 +1,11 @@
-WITH
-  "mini-linq/input/0" AS (
-    SELECT DISTINCT "c0", "c1", "c2", "c3"
-    FROM "mini-linq/raw/0"
-  ),
-  "mini-linq/input/1" AS (
-    SELECT DISTINCT "c0", "c1", "c2", "c3", "c4", "c5"
-    FROM "mini-linq/raw/1"
-  ),
-  "mini-linq/input/2" AS (
-    SELECT DISTINCT "c0"
-    FROM "mini-linq/raw/2"
-  ),
-  "mini-linq/input/3" AS (
-    SELECT DISTINCT "c0"
-    FROM "mini-linq/raw/3"
-  ),
-  "mini-linq/input/4" AS (
-    SELECT DISTINCT "c0"
-    FROM "mini-linq/raw/4"
-  ),
-  "mini-linq/input/5" AS (
-    SELECT DISTINCT "c0"
-    FROM "mini-linq/raw/5"
-  ),
-  "mini-linq/input/6" AS (
-    SELECT DISTINCT "c0"
-    FROM "mini-linq/raw/6"
-  )
-SELECT DISTINCT
-  "a0"."c0" AS "order_number",
-  "a0"."c1" AS "item_key",
-  "a1"."c5" AS "reason_key"
-FROM "mini-linq/input/0" AS "a0"
-CROSS JOIN "mini-linq/input/1" AS "a1"
-CROSS JOIN "mini-linq/input/2" AS "a2"
-CROSS JOIN "mini-linq/input/3" AS "a3"
-CROSS JOIN "mini-linq/input/3" AS "a4"
-CROSS JOIN "mini-linq/input/4" AS "a5"
-CROSS JOIN "mini-linq/input/5" AS "a6"
-CROSS JOIN "mini-linq/input/6" AS "a7"
-WHERE "a1"."c0" = "a0"."c0"
-  AND "a1"."c1" = "a0"."c1"
-  AND "a2"."c0" = "a0"."c2"
-  AND "a3"."c0" = "a1"."c2"
-  AND "a4"."c0" = "a1"."c3"
-  AND "a5"."c0" = "a1"."c4"
-  AND "a6"."c0" = "a0"."c3"
-  AND "a7"."c0" = "a1"."c5"
+-- Return matches both order and item; demographics have two independent roles.
+SELECT DISTINCT sale.c0, sale.c1, returned.c5
+FROM "mini-linq/raw/0" AS sale
+JOIN "mini-linq/raw/1" AS returned ON returned.c0 = sale.c0 AND returned.c1 = sale.c1
+JOIN "mini-linq/raw/2" AS page ON page.c0 = sale.c2
+JOIN "mini-linq/raw/3" AS refunded_demo ON refunded_demo.c0 = returned.c2
+JOIN "mini-linq/raw/3" AS returning_demo ON returning_demo.c0 = returned.c3
+JOIN "mini-linq/raw/4" AS address ON address.c0 = returned.c4
+JOIN "mini-linq/raw/5" AS sold_date ON sold_date.c0 = sale.c3
+JOIN "mini-linq/raw/6" AS reason ON reason.c0 = returned.c5
 ORDER BY 1, 2, 3;

@@ -27,8 +27,9 @@
 //! - The plan ends with `project P keep { … }` retaining the head variables
 //!   — the whole heading under a computed head — then `output … as head`.
 //!
-//! Results are `r0, r1, …` in emission order. [`check`] compares the RA
-//! kernel with the source CQ kernel and checks declarations and output head.
+//! Results are fresh `r0, r1, …` names in emission order, skipping declared
+//! relation names. [`check`] compares the RA kernel with the source CQ kernel
+//! and checks declarations and output head.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -47,6 +48,13 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
         inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
         atoms: &analysis.atoms,
         definitions: Vec::new(),
+        reserved: source
+            .cq
+            .declarations
+            .iter()
+            .map(|declaration| symbol_name(&declaration.name))
+            .collect(),
+        next_result: 0,
         relations: BTreeMap::new(),
         prefix: None,
         heading: BTreeSet::new(),
@@ -121,6 +129,8 @@ struct State<'a> {
     inputs: &'a [cq::RelationDecl],
     atoms: &'a BTreeMap<usize, cq::Atom>,
     definitions: Vec<ra::Definition>,
+    reserved: BTreeSet<String>,
+    next_result: usize,
     relations: BTreeMap<usize, Ident>,
     prefix: Option<Ident>,
     heading: BTreeSet<String>,
@@ -372,9 +382,15 @@ impl State<'_> {
         unit
     }
 
-    /// Formal rule E-Emit: Append the operator under rN in definition emission order.
+    /// Formal rule E-Emit: Append the operator under a fresh rN in emission order.
     fn emit(&mut self, operator: ra::Operator) -> Ident {
-        let result = format_ident!("r{}", self.definitions.len());
+        let result = loop {
+            let name = format!("r{}", self.next_result);
+            self.next_result += 1;
+            if self.reserved.insert(name.clone()) {
+                break format_ident!("{name}");
+            }
+        };
         self.definitions.push(ra::Definition {
             result: result.clone(),
             eq_token: Default::default(),

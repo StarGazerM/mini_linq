@@ -1,0 +1,9 @@
+mini-linq-dataset	2
+suite	extended
+case	surface_negative_constant
+scenario	coverage
+scale	tiny
+seed	14659464158304124151
+generator-version	2
+relations	1
+relation	R	2	4	3

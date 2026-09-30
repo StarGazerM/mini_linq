@@ -24,7 +24,7 @@ use super::{Atom, BodyItem, Filter, Let, Program, Query, rust};
 use crate::symbol_name;
 
 /// Whether a complete CQ program is in normal form.
-/// Formal rule WF-NF: Check CQ plus distinct bare atom arguments and distinct all-bare head names.
+/// Formal rule WF-NF: Check CQ plus distinct bare arguments within each body atom.
 pub fn check(module: &Program) -> syn::Result<()> {
     super::contract::check(module)?;
     let query = &module.query;
@@ -48,12 +48,6 @@ pub fn check(module: &Program) -> syn::Result<()> {
                 ));
             }
         }
-    }
-    if !query.head.is_normalized() && query.head.variables().count() == query.head.args.len() {
-        return Err(syn::Error::new_spanned(
-            &query.head,
-            "normal form: head variables are distinct",
-        ));
     }
     Ok(())
 }

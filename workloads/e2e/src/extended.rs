@@ -55,6 +55,7 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
     });
     let family_name = family.to_string();
     let extension: syn::Path = match family_name.as_str() {
+        "surface" => syn::parse_quote!(::mini_linq::mini_linq),
         "union" | "stacked" => syn::parse_quote!(::cq_ext_union::union),
         "negation" => syn::parse_quote!(::cq_ext_negation::negation),
         "aggregate" => syn::parse_quote!(::cq_ext_aggregate::aggregate),

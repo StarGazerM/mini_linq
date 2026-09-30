@@ -1,31 +1,7 @@
-WITH
-  "mini-linq/input/0" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/0"
-  ),
-  "mini-linq/input/1" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/1"
-  ),
-  "mini-linq/input/2" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/2"
-  ),
-  "mini-linq/input/3" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/3"
-  )
-SELECT DISTINCT
-  "a0"."c0" AS "a",
-  "a0"."c1" AS "b",
-  "a1"."c1" AS "c",
-  "a2"."c1" AS "d"
-FROM "mini-linq/input/0" AS "a0"
-CROSS JOIN "mini-linq/input/1" AS "a1"
-CROSS JOIN "mini-linq/input/2" AS "a2"
-CROSS JOIN "mini-linq/input/3" AS "a3"
-WHERE "a1"."c0" = "a0"."c1"
-  AND "a2"."c0" = "a1"."c1"
-  AND "a3"."c0" = "a2"."c1"
-  AND "a3"."c1" = "a0"."c0"
+-- Close a directed four-edge colored cycle.
+SELECT DISTINCT r.c0, r.c1, s.c1, t.c1
+FROM "mini-linq/raw/0" AS r
+JOIN "mini-linq/raw/1" AS s ON s.c0 = r.c1
+JOIN "mini-linq/raw/2" AS t ON t.c0 = s.c1
+JOIN "mini-linq/raw/3" AS u ON u.c0 = t.c1 AND u.c1 = r.c0
 ORDER BY 1, 2, 3, 4;

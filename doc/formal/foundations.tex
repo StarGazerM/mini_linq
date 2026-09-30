@@ -57,14 +57,14 @@ Conversely, compatible valuations have a unique union satisfying both.
 \end{proof}
 A distinct-variable atom is therefore its input relation renamed by argument
 position. Repetitions, constants and computed arguments require additional
-constraints (normalization rules A-*). For distinct head variables $\bar h$ and $H=\set(\bar h)$,
+constraints (normalization rules A-*). For head variables $\bar h$ (possibly repeated) and $H=\set(\bar h)$,
 \[
  \sem q_I=\operatorname{out}_{\bar h}(\pi_H\Val_I(C)),\qquad
  \operatorname{out}_{\bar h}(L)=
  \{\langle t(h_1),\ldots,t(h_m)\rangle\mid t\in L\}.
 \]
-Projection selects attributes; out fixes answer order. Computed or repeated
-head expressions instead act on each valuation.
+Projection selects attributes; out fixes answer order and repeated positions.
+Computed head expressions instead act on each valuation.
 
 \subsection{Assumptions for relational compilation}
 A host judgment

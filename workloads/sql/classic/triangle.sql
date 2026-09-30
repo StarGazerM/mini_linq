@@ -1,24 +1,6 @@
-WITH
-  "mini-linq/input/0" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/0"
-  ),
-  "mini-linq/input/1" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/1"
-  ),
-  "mini-linq/input/2" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/2"
-  )
-SELECT DISTINCT
-  "a0"."c0" AS "x",
-  "a0"."c1" AS "y",
-  "a1"."c1" AS "z"
-FROM "mini-linq/input/0" AS "a0"
-CROSS JOIN "mini-linq/input/1" AS "a1"
-CROSS JOIN "mini-linq/input/2" AS "a2"
-WHERE "a1"."c0" = "a0"."c1"
-  AND "a2"."c0" = "a1"."c1"
-  AND "a2"."c1" = "a0"."c0"
+-- Close a directed three-edge colored cycle.
+SELECT DISTINCT r.c0, r.c1, s.c1
+FROM "mini-linq/raw/0" AS r
+JOIN "mini-linq/raw/1" AS s ON s.c0 = r.c1
+JOIN "mini-linq/raw/2" AS t ON t.c0 = s.c1 AND t.c1 = r.c0
 ORDER BY 1, 2, 3;

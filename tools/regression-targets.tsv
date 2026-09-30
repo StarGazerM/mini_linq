@@ -26,6 +26,9 @@ mini-linq	lib	macro_inputs	facade/mini-linq/src/lib.rs
 mini-linq-course	example	cq-inspection	examples/cq-inspection/main.rs
 mini-linq-course	example	free-variables	examples/free-variables/main.rs
 cq-xtask	manifest-test	restored	xtask/Cargo.toml
+cq-xtask	oracle-test	oracle-unit	xtask/Cargo.toml
+cq-xtask	oracle	golden	xtask/Cargo.toml
+cq-xtask	oracle	fuzz	xtask/Cargo.toml
 mini-linq-composition-example	manifest-run	composition	examples/composition/Cargo.toml
 own-dialect	manifest-test	queries	examples/own-dialect/Cargo.toml
 own-dialect	manifest-target-test	corpus	examples/own-dialect/Cargo.toml
@@ -40,6 +43,7 @@ mini-linq	test	pass_contracts	facade/mini-linq/tests/pass_contracts.rs
 mini-linq	test	dispatch	facade/mini-linq/tests/dispatch.rs
 mini-linq	test	workload_callback	facade/mini-linq/tests/workload_callback.rs
 cq-workload-e2e	test	census	workloads/e2e/tests/census.rs
+cq-workload-e2e	test	provider_candidates	workloads/e2e/tests/provider_candidates.rs
 cq-workload-e2e	test	compile_fail	workloads/e2e/tests/compile_fail.rs
 cq-workload-e2e	test	elimination_cost	workloads/e2e/tests/elimination_cost.rs
 cq-workload-e2e	test	planner_0	workloads/e2e/tests/planner_0.rs

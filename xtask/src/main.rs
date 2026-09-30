@@ -1,6 +1,14 @@
 mod bench;
+mod cargo;
 mod explain;
 mod extended;
+#[cfg(feature = "oracle")]
+mod fuzz;
+#[cfg(all(test, not(feature = "oracle")))]
+#[path = "fuzz/model.rs"]
+mod fuzz_model;
+#[cfg(any(feature = "oracle", test))]
+mod golden;
 #[cfg(feature = "oracle")]
 mod oracle;
 
@@ -45,7 +53,16 @@ fn run() -> Result<()> {
                 rerun_with_oracle("golden", &arguments)
             }
         }
-        "differential" => Err("differential execution is unavailable: the old whole-query Rust backend was removed; general physical selection and a host input/output contract are required before generated-query comparison can resume".into()),
+        "fuzz" | "differential" => {
+            #[cfg(feature = "oracle")]
+            {
+                fuzz::run(arguments, &repository_root())
+            }
+            #[cfg(not(feature = "oracle"))]
+            {
+                rerun_with_oracle(&command, &arguments)
+            }
+        }
         "explain" => explain::run(arguments, &repository_root()),
         "bench" => bench::run(arguments),
         "help" | "--help" | "-h" => {
@@ -76,8 +93,6 @@ fn generate(selection: Selection, scale: Scale, scenarios: ScenarioSelection) ->
     let allow_inapplicable = scenarios.allows_inapplicable();
     for case in selection.cases() {
         let module = case.module()?;
-        let sql = cq_workloads::sql::translate(&module)?;
-        write_text(&sql_path(case), &sql)?;
         for scenario in scenarios.values() {
             let config = generation_config(case, scenario, scale);
             if !check_or_skip_scenario(case, scenario, allow_inapplicable)? {
@@ -114,6 +129,7 @@ fn golden(
 ) -> Result<()> {
     extended::check_scale(selection, scale)?;
     let allow_inapplicable = scenarios.allows_inapplicable();
+    let mut checked = std::collections::BTreeSet::new();
     for case in selection.cases() {
         for scenario in scenarios.values() {
             let config = generation_config(case, scenario, scale);
@@ -129,6 +145,7 @@ fn golden(
             let (module, dataset) = read_generated(case, config, generated.as_ref())?;
             let expected = oracle::evaluate(case, &dataset)?;
             let path = golden_path(case, scenario, scale);
+            checked.insert(path.clone());
             if write {
                 cq_workloads::dataset::write_result_rows(
                     &path,
@@ -142,16 +159,7 @@ fn golden(
                     path.display()
                 );
             } else {
-                let arity = module.query.head.args.len();
-                let tracked = cq_workloads::dataset::read_result_rows(&path, arity)?;
-                compare_rows(
-                    case,
-                    scenario,
-                    "tracked golden",
-                    &tracked,
-                    "DuckDB",
-                    &expected,
-                )?;
+                golden::compare(&path, &expected, module.query.head.args.len())?;
                 println!(
                     "golden {:<27} {:<11} {} rows",
                     case.name,
@@ -161,16 +169,21 @@ fn golden(
             }
         }
     }
-    extended::golden(selection, scenarios, write)?;
+    checked.extend(extended::golden(selection, scenarios, write)?);
+    if matches!(selection, Selection::All)
+        && scale == Scale::Tiny
+        && matches!(scenarios, ScenarioSelection::All)
+    {
+        golden::check_inventory(&repository_root().join("workloads/golden"), &checked)?;
+    }
     Ok(())
 }
 
 #[cfg(not(feature = "oracle"))]
 fn rerun_with_oracle(command: &str, arguments: &[String]) -> Result<()> {
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     eprintln!("enabling the DuckDB oracle for `cargo xtask {command}`...");
-    let status = std::process::Command::new(cargo)
+    let status = cargo::command()
         .arg("run")
         .arg("--manifest-path")
         .arg(manifest)
@@ -225,49 +238,7 @@ fn read_generated(
         .into());
     }
 
-    let expected_sql = cq_workloads::sql::translate(&module)?;
-    let path = sql_path(case);
-    let actual_sql = std::fs::read_to_string(&path)?;
-    if actual_sql != expected_sql {
-        return Err(format!(
-            "generated SQL for `{}` is stale at {}; rerun `cargo xtask generate {} {}`",
-            case.name,
-            path.display(),
-            case.suite.as_str(),
-            config.scale.as_str(),
-        )
-        .into());
-    }
     Ok((module, dataset))
-}
-
-#[cfg(feature = "oracle")]
-fn compare_rows(
-    case: &QueryCase,
-    scenario: Scenario,
-    left_name: &str,
-    left: &[Vec<i32>],
-    right_name: &str,
-    right: &[Vec<i32>],
-) -> Result<()> {
-    if left == right {
-        return Ok(());
-    }
-    let mismatch = left
-        .iter()
-        .zip(right)
-        .position(|(left, right)| left != right)
-        .unwrap_or_else(|| left.len().min(right.len()));
-    Err(format!(
-        "`{}` scenario `{}` differs: {left_name} has {} rows, {right_name} has {} rows; first mismatch at {mismatch}: {left_name}={:?}, {right_name}={:?}",
-        case.name,
-        scenario.as_str(),
-        left.len(),
-        right.len(),
-        left.get(mismatch),
-        right.get(mismatch),
-    )
-    .into())
 }
 
 fn check_or_skip_scenario(
@@ -464,7 +435,11 @@ impl CommandOptions {
         Ok(Self {
             selection: Selection::parse(positional.first().map_or("all", String::as_str))?,
             scale: parse_scale(positional.get(1).map_or("tiny", String::as_str))?,
-            scenarios: scenarios.unwrap_or(ScenarioSelection::One(Scenario::Coverage)),
+            scenarios: scenarios.unwrap_or(if allow_write {
+                ScenarioSelection::All
+            } else {
+                ScenarioSelection::One(Scenario::Coverage)
+            }),
             write,
         })
     }
@@ -513,21 +488,6 @@ fn golden_path(case: &QueryCase, scenario: Scenario, scale: Scale) -> PathBuf {
         .join(format!("{}.csv", scale.as_str()))
 }
 
-fn sql_path(case: &QueryCase) -> PathBuf {
-    repository_root()
-        .join("workloads/sql")
-        .join(case.suite.as_str())
-        .join(format!("{}.sql", case.name))
-}
-
-fn write_text(path: &Path, text: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, text)?;
-    Ok(())
-}
-
 fn help() {
     println!(
         "\
@@ -536,19 +496,21 @@ MiniLinq workload tasks
   cargo xtask list
   cargo xtask generate [all|classic|retail|extended|CASE] [tiny|medium|large] [--scenario SCENARIO]
   cargo xtask golden [SELECTION] [SCALE] [--scenario SCENARIO] [--write]
-  cargo xtask differential [SELECTION] [SCALE] [--scenario SCENARIO]
+  cargo xtask fuzz [--cases N] [--seed S]
+  cargo xtask differential [--cases N] [--seed S]
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
 
-SCENARIO is coverage, empty-input, no-match, or all. It defaults to coverage.
+SCENARIO is coverage, empty-input, no-match, or all.
+It defaults to all for golden, coverage for generate.
 
 STAGE is cq, relational-plan, or index-requirements. It defaults to index-requirements.
 Bench reports scales N, 2N and 4N (default N=128); time is never asserted.
 The extended corpus has deterministic tiny fixtures only.
 
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
-mode that changes those answers. `differential` is unavailable until general
-physical selection and the new host input/output contract are implemented.
+mode that changes those answers. `differential` is an alias for `fuzz`, which
+compiles seeded random CQs and compares their execution against DuckDB.
 `explain` records typed CQ, RA and IX payloads; it does not execute a backend."
     );
 }
@@ -572,6 +534,15 @@ mod tests {
             vec![Scenario::Coverage]
         );
         assert!(!options.write);
+    }
+
+    #[test]
+    fn golden_defaults_to_every_scenario() {
+        let options = CommandOptions::parse(Vec::new(), true).unwrap();
+        assert_eq!(
+            options.scenarios.values().collect::<Vec<_>>(),
+            Scenario::ALL
+        );
     }
 
     #[test]
@@ -602,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_paths_include_scenario_but_sql_does_not() {
+    fn artifact_paths_include_scenario() {
         let case = catalog::all().next().unwrap();
 
         assert!(
@@ -613,7 +584,6 @@ mod tests {
             golden_path(case, Scenario::EmptyInput, Scale::Tiny)
                 .ends_with("workloads/golden/classic/intersection/empty-input/tiny.csv")
         );
-        assert!(sql_path(case).ends_with("workloads/sql/classic/intersection.sql"));
     }
 
     #[test]

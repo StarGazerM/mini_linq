@@ -9,7 +9,7 @@ pub fn evaluate(case: &QueryCase, dataset: &Dataset) -> Result<Vec<Vec<i32>>> {
     let source = case.module()?;
     dataset.validate(&source)?;
 
-    evaluate_sql(&dataset.relations, &cq_workloads::sql::translate(&source)?)
+    evaluate_sql(&dataset.relations, case.sql)
 }
 
 pub fn evaluate_sql(

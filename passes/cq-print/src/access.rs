@@ -8,6 +8,8 @@ pub struct HostAccess {
     pub value: Ident,
     pub prefix: bool,
     pub fallback: Ident,
+    /// Computed prefix keys cannot borrow for the lifetime of host rows.
+    pub owned_key: bool,
     /// Key columns in declaration order for an eligible prefix.
     pub key: Vec<String>,
     /// Remaining columns in the host's declared order.
@@ -51,12 +53,14 @@ impl<'a> Context<'a> {
             .into_iter()
             .filter(|c| !columns.contains(c))
             .collect();
+        let owned_key = self.owned_key(result, columns);
         HostAccess {
             value: host.value.clone(),
             prefix,
             key,
             payload,
             fallback: format_ident!("__cq_{}_fallback_{}", result, columns.join("_")),
+            owned_key,
         }
     }
 
@@ -98,7 +102,14 @@ impl<'a> Context<'a> {
             let fallback = a.fallback;
             let rows = self.host_scan(result);
             let pattern = self.pattern(result);
-            let key = a.key.iter().map(|c| self.ident(result, c));
+            let key = a.key.iter().map(|c| {
+                let ident = self.ident(result, c);
+                if a.owned_key {
+                    quote!(::core::clone::Clone::clone(#ident))
+                } else {
+                    ident.to_token_stream()
+                }
+            });
             let payload = a.payload.iter().map(|c| self.ident(result, c));
             let ty = if probe {
                 quote!(::cq_storage::HashIndex<'_, _, _>)
@@ -228,7 +239,12 @@ impl<'a> Context<'a> {
     }
 
     pub fn host_key(&self, result: &str, access: &HostAccess) -> TokenStream {
-        let key = access.key.iter().map(|c| self.ident(result, c));
+        // A computed binding lives only for its prefix iteration. Its
+        // fallback therefore owns key values, while payloads remain borrowed.
+        let key = access
+            .key
+            .iter()
+            .map(|c| self.key_field(result, c, access.owned_key));
         quote!(&(#(#key,)*))
     }
 
@@ -238,7 +254,7 @@ impl<'a> Context<'a> {
         let key = self.host_key(left, access);
         let types = access.key.iter().map(|c| &self.infos[left].types[c]);
         let types: Vec<_> = types.collect();
-        let receiver = if access.prefix {
+        let receiver = if access.prefix && !access.owned_key {
             quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         } else {
             quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
@@ -256,7 +272,7 @@ impl<'a> Context<'a> {
         let key = self.host_key(left, access);
         let types = access.key.iter().map(|c| &self.infos[left].types[c]);
         let types: Vec<_> = types.collect();
-        let receiver = if access.prefix {
+        let receiver = if access.prefix && !access.owned_key {
             quote!(&&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))
         } else {
             quote!(&::cq_storage::dispatch::Host::<_, (#(#types,)*), _, _>::new(#value, &#fallback))

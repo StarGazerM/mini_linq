@@ -100,6 +100,8 @@ pub struct QueryCase {
     pub purpose: &'static str,
     /// Honest scope note for derived rather than standards-compliant cases.
     pub scope_note: &'static str,
+    /// Independently authored DuckDB query over declaration-ordered raw tables.
+    pub sql: &'static str,
     module: fn() -> syn::Result<cq::Program>,
 }
 
@@ -110,6 +112,7 @@ impl QueryCase {
         rust_path: &'static str,
         purpose: &'static str,
         scope_note: &'static str,
+        sql: &'static str,
         module: fn() -> syn::Result<cq::Program>,
     ) -> Self {
         Self {
@@ -118,6 +121,7 @@ impl QueryCase {
             rust_path,
             purpose,
             scope_note,
+            sql,
             module,
         }
     }

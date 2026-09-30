@@ -15,6 +15,7 @@ macro_rules! classic_case {
             queries::classic::$module::RUST_PATH,
             $purpose,
             $scope_note,
+            include_str!(concat!("../../sql/classic/", $name, ".sql")),
             queries::classic::$module::module,
         )
     };

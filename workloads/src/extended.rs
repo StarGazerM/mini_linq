@@ -1,4 +1,4 @@
-//! Authored extension queries, independent SQL translations, and tiny fixtures.
+//! Authored surface and extension queries, independent SQL, and tiny fixtures.
 //! This catalog does not send an extension through a positive-CQ evaluator.
 use std::path::{Path, PathBuf};
 
@@ -146,6 +146,18 @@ macro_rules! case {
     }};
 }
 pub const CASES: &[Case] = &[
+    case!(surface_constant),
+    case!(surface_negative_constant),
+    case!(surface_repeat),
+    case!(surface_wildcards),
+    case!(surface_compare),
+    case!(surface_arithmetic_guard),
+    case!(surface_boolean_guard),
+    case!(surface_let_sum),
+    case!(surface_let_chain),
+    case!(surface_computed_head),
+    case!(surface_self_join),
+    case!(surface_disconnected),
     case!(union_two),
     case!(union_join),
     case!(union_project),
@@ -173,6 +185,71 @@ fn fixture(name: &str, scenario: Scenario) -> Vec<Vec<Vec<i32>>> {
     // All coverage fixtures retain duplicates and deliberately unsorted rows.
     // No-match keeps every input nonempty. Empty-input empties only input 0.
     match (name, no_match) {
+        ("surface_constant", false) => vec![vec![vec![3, 7], vec![-1, 7], vec![3, 8], vec![3, 7]]],
+        ("surface_constant", true) => vec![vec![vec![3, 8]]],
+        ("surface_negative_constant", false) => {
+            vec![vec![vec![-2, 3], vec![2, 3], vec![-2, -1], vec![-2, 3]]]
+        }
+        ("surface_negative_constant", true) => vec![vec![vec![2, 3]]],
+        ("surface_repeat", false) => vec![vec![vec![2, 2], vec![-1, -1], vec![2, 3], vec![2, 2]]],
+        ("surface_repeat", true) => vec![vec![vec![2, 3]]],
+        ("surface_wildcards", false) => vec![vec![
+            vec![2, 3, 4],
+            vec![2, 5, 6],
+            vec![-1, 7, 7],
+            vec![2, 3, 4],
+        ]],
+        ("surface_wildcards", true) => vec![vec![vec![-1, 7, 8]]],
+        ("surface_compare", false) => vec![vec![
+            vec![-2, 1],
+            vec![1, 2],
+            vec![2, 2],
+            vec![-3, 4],
+            vec![1, 2],
+        ]],
+        ("surface_compare", true) => vec![vec![vec![2, 1]]],
+        ("surface_arithmetic_guard", false) => vec![vec![
+            vec![-1, 2],
+            vec![3, 0],
+            vec![0, 1],
+            vec![5, -2],
+            vec![-1, 2],
+        ]],
+        ("surface_arithmetic_guard", true) => vec![vec![vec![0, 1]]],
+        ("surface_boolean_guard", false) => vec![vec![
+            vec![-1, 0],
+            vec![2, 3],
+            vec![-1, -1],
+            vec![3, 3],
+            vec![1, 2],
+            vec![-1, 0],
+        ]],
+        ("surface_boolean_guard", true) => vec![vec![vec![1, 2]]],
+        ("surface_let_sum" | "surface_let_chain", false) => vec![vec![
+            vec![2, 3],
+            vec![3, 2],
+            vec![-1, 2],
+            vec![1, -2],
+            vec![2, 3],
+        ]],
+        ("surface_let_sum" | "surface_let_chain", true) => vec![vec![vec![1, -2]]],
+        ("surface_computed_head", false) => {
+            vec![vec![vec![2, 3], vec![0, -1], vec![-1, 2], vec![2, 3]]]
+        }
+        ("surface_computed_head", true) => vec![vec![vec![-1, 2]]],
+        ("surface_self_join", false) => vec![vec![
+            vec![1, 2],
+            vec![2, 3],
+            vec![3, 1],
+            vec![2, 4],
+            vec![1, 2],
+        ]],
+        ("surface_self_join", true) => vec![vec![vec![2, 1]]],
+        ("surface_disconnected", false) => vec![
+            vec![vec![3, 8], vec![3, 9], vec![-1, 7], vec![3, 8]],
+            vec![vec![1], vec![-2], vec![4], vec![1]],
+        ],
+        ("surface_disconnected", true) => vec![vec![vec![1, 8]], vec![vec![2]]],
         ("union_two", false) => vec![
             vec![vec![3], vec![1], vec![1], vec![-1]],
             vec![vec![2], vec![3], vec![3], vec![-2]],

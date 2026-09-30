@@ -1,0 +1,839 @@
+//! Random abstract queries have two printers; only the CQ printer enters Rust.
+//! `xtask fuzz` writes a disposable Cargo consumer under target/fuzz. Its small
+//! proc macro runs the selected logical passes, then calls the public facade
+//! for physical lowering and realization. Each batch is compiled once; runtime
+//! data travels over stdin so row minimization does not require recompilation.
+#[path = "fuzz/compiler.rs"]
+mod compiler;
+#[path = "fuzz/model.rs"]
+mod model;
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use cq_workloads::dataset::RelationData;
+use model::Case;
+
+use crate::Result;
+
+const DEFAULT_SEED: u64 = 0;
+const BATCH: usize = 64;
+type Answers = Vec<Vec<i32>>;
+type ConsumerResult = std::result::Result<Answers, String>;
+
+#[derive(Clone, Copy, Debug)]
+struct Config {
+    planner: usize,
+    fine: bool,
+    reduce: usize,
+    merge: bool,
+    canon: bool,
+    smallest: bool,
+    host: usize,
+    ordered_distinct: bool,
+    custom_index: bool,
+}
+
+impl Config {
+    fn sample(seed: &mut u64) -> Self {
+        fn next(seed: &mut u64, n: u64) -> usize {
+            *seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut x = *seed;
+            x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            ((x ^ (x >> 31)) % n) as usize
+        }
+        Self {
+            planner: next(seed, 4),
+            fine: next(seed, 2) == 1,
+            reduce: next(seed, 3),
+            merge: next(seed, 2) == 1,
+            canon: next(seed, 2) == 1,
+            smallest: next(seed, 2) == 1,
+            host: next(seed, 3),
+            ordered_distinct: next(seed, 2) == 1,
+            custom_index: next(seed, 2) == 1,
+        }
+    }
+
+    fn axes(self) -> [(&'static str, &'static str); 9] {
+        [
+            (
+                "planner",
+                [
+                    "written",
+                    "prefix-connected",
+                    "prefix-greedy",
+                    "elimination",
+                ][self.planner],
+            ),
+            ("split", if self.fine { "fine" } else { "coarse" }),
+            (
+                "reduce",
+                ["none", "guards", "guards-and-acyclic-tree"][self.reduce],
+            ),
+            ("join", if self.merge { "merge" } else { "seek" }),
+            ("project", if self.canon { "canon" } else { "keep" }),
+            (
+                "intersect",
+                if self.smallest { "smallest" } else { "first" },
+            ),
+            ("host", ["slice", "hashmap", "btreemap"][self.host]),
+            (
+                "distinct",
+                if self.ordered_distinct {
+                    "ordered"
+                } else {
+                    "hash"
+                },
+            ),
+            (
+                "indexes",
+                if self.custom_index {
+                    "sorted"
+                } else {
+                    "default"
+                },
+            ),
+        ]
+    }
+
+    fn policy(self) -> String {
+        format!(
+            "policy {{ join = {}; project = {}; intersect = {}; }}",
+            self.axes()[3].1,
+            self.axes()[4].1,
+            self.axes()[5].1
+        )
+    }
+}
+
+impl std::fmt::Display for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, (axis, value)) in self.axes().into_iter().enumerate() {
+            if i != 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{axis}={value}")?;
+        }
+        Ok(())
+    }
+}
+
+// A native host can only satisfy its declared key. Reject these *capability*
+// combinations before compilation; all other compiler errors are failures.
+fn eligible(case: &Case, c: Config) -> Result<bool> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| eligible_inner(case, c)))
+        .unwrap_or_else(|payload| {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown panic payload");
+            Err(format!("compiler panic: {message}").into())
+        })
+}
+
+fn eligible_inner(case: &Case, c: Config) -> Result<bool> {
+    let source = syn::parse_str(&case.cq())?;
+    let ra = compiler::plan(&source, c.planner, c.fine, c.reduce)?;
+    let ix = cq_index_policy::compile(&ra)?;
+    let policy = syn::parse_str(&c.policy())?;
+    let physical = cq_physical_lowering::compile(&ix, &policy)?;
+    let structures = cq_structure_selection::compile(&physical, &policy)?;
+    let analysis = cq_lang_structures::contract::check(&structures)?;
+    for (result, reads) in &analysis.physical.merge_reads {
+        if !analysis.host_read(result) {
+            continue;
+        }
+        let host = &analysis.physical.hosts[result];
+        let inverse: BTreeMap<_, _> = analysis.physical.renames[result]
+            .iter()
+            .map(|(t, s)| (s, t))
+            .collect();
+        let layout: Vec<_> = analysis.host_layouts[host]
+            .iter()
+            .map(|column| inverse[column].clone())
+            .collect();
+        for (_, columns) in reads {
+            if layout[..columns.len()] == *columns && (c.host != 2 || columns.len() != 1) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
+    let (mut count, mut seed) = (200usize, DEFAULT_SEED);
+    let mut args = arguments.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--cases" => count = args.next().ok_or("--cases requires a number")?.parse()?,
+            "--seed" => {
+                seed = args
+                    .next()
+                    .ok_or("--seed requires a decimal u64")?
+                    .parse()?
+            }
+            _ => {
+                return Err(
+                    format!("unknown fuzz option {arg:?}; expected --cases N --seed S").into(),
+                );
+            }
+        }
+    }
+    if count == 0 {
+        return Err("--cases must be positive".into());
+    }
+    let started = Instant::now();
+    let mut coverage = model::Coverage::default();
+    let mut distribution = BTreeMap::<String, usize>::new();
+    let mut rejected = 0;
+    let mut cases = Vec::with_capacity(count);
+    println!("fuzz: {count} cases, seed {seed}, batches of {BATCH}");
+    for index in 0..count {
+        let case = model::generate(seed.wrapping_add(index as u64));
+        let mut config_seed = case.seed ^ 0x434f_4e46_4947;
+        let config = loop {
+            let config = Config::sample(&mut config_seed);
+            match eligible(&case, config) {
+                Ok(true) => break config,
+                Ok(false) => rejected += 1,
+                Err(error) => {
+                    let fingerprint = diagnostic(&*error);
+                    let mut minimal = case.clone();
+                    for rows in &mut minimal.data {
+                        rows.clear();
+                    }
+                    shrink_atoms(&mut minimal, |candidate| {
+                        eligible(candidate, config)
+                            .is_err_and(|error| diagnostic(&*error) == fingerprint)
+                    });
+                    report(
+                        root,
+                        &minimal,
+                        config,
+                        &format!("compiler preflight: {error}"),
+                    )?;
+                    return Err(format!(
+                        "fuzz compiler failure at case {index}, seed {}",
+                        case.seed
+                    )
+                    .into());
+                }
+            }
+        };
+        coverage.observe(&case);
+        for (axis, value) in config.axes() {
+            *distribution.entry(format!("{axis}/{value}")).or_default() += 1;
+        }
+        cases.push((case, config));
+    }
+    let mut runner = Runner::new(root)?;
+    let mut compile_time = Duration::ZERO;
+    let mut execute_time = Duration::ZERO;
+    let mut oracle_time = Duration::ZERO;
+    let mut nonempty = 0;
+    for (batch_index, batch) in cases.chunks(BATCH).enumerate() {
+        let offset = batch_index * BATCH;
+        let started = Instant::now();
+        if let Err(error) = runner.compile(batch) {
+            let (mut minimal, config) = match runner.isolate_compile_failure(batch) {
+                Ok(case) => case,
+                Err(isolation) => {
+                    for (case, config) in batch {
+                        report(
+                            root,
+                            case,
+                            *config,
+                            &format!(
+                                "batch-only compilation failure; could not minimize independently: {isolation}\n{error}"
+                            ),
+                        )?;
+                    }
+                    return Err(isolation);
+                }
+            };
+            let fingerprint =
+                diagnostic(&*runner.compile(&[(minimal.clone(), config)]).unwrap_err());
+            for rows in &mut minimal.data {
+                rows.clear();
+            }
+            shrink_atoms(&mut minimal, |candidate| {
+                matches!(eligible(candidate, config), Ok(true))
+                    && runner
+                        .compile(&[(candidate.clone(), config)])
+                        .is_err_and(|error| diagnostic(&*error) == fingerprint)
+            });
+            let minimized_error = runner.compile(&[(minimal.clone(), config)]).unwrap_err();
+            report(
+                root,
+                &minimal,
+                config,
+                &format!("Rust compilation: {minimized_error}"),
+            )?;
+            return Err(format!("fuzz Rust compilation failed; seed {}", minimal.seed).into());
+        }
+        compile_time += started.elapsed();
+        let started = Instant::now();
+        let actual = match runner
+            .execute(batch.iter().enumerate().map(|(id, (case, _))| (id, case)))
+        {
+            Ok(actual) => actual,
+            Err(error) => {
+                for (id, (case, config)) in batch.iter().enumerate() {
+                    if runner.execute(std::iter::once((id, case))).is_err() {
+                        let mut minimal = case.clone();
+                        shrink_rows(&mut minimal, |candidate| {
+                            runner.execute(std::iter::once((id, candidate))).is_err()
+                        });
+                        report(
+                            root,
+                            &minimal,
+                            *config,
+                            &format!("consumer execution: {error}"),
+                        )?;
+                        return Err(format!("fuzz consumer failure at seed {}", case.seed).into());
+                    }
+                }
+                // If only a batch reproduces it, retain all implicated queries
+                // instead of pretending a single-case minimization succeeded.
+                for (case, config) in batch {
+                    report(
+                        root,
+                        case,
+                        *config,
+                        &format!(
+                            "batch-only consumer failure; could not minimize independently: {error}"
+                        ),
+                    )?;
+                }
+                return Err(error);
+            }
+        };
+        execute_time += started.elapsed();
+        for (id, (case, config)) in batch.iter().enumerate() {
+            let started = Instant::now();
+            let expected = match reference(case) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    let mut minimal = case.clone();
+                    loop {
+                        let before = size(&minimal);
+                        shrink_rows(&mut minimal, |candidate| reference(candidate).is_err());
+                        shrink_atoms(&mut minimal, |candidate| reference(candidate).is_err());
+                        if size(&minimal) == before {
+                            break;
+                        }
+                    }
+                    report(
+                        root,
+                        &minimal,
+                        *config,
+                        &format!("DuckDB evaluation: {error}"),
+                    )?;
+                    return Err(format!("fuzz oracle failure at seed {}", case.seed).into());
+                }
+            };
+            oracle_time += started.elapsed();
+            nonempty += usize::from(!expected.is_empty());
+            let got = &actual[id];
+            if got.as_ref().ok() != Some(&expected) {
+                let mut minimal = case.clone();
+                shrink_rows(&mut minimal, |candidate| runner.mismatch(id, candidate));
+                // Atom shrinking recompiles candidates. Each accepted candidate
+                // gets a fresh runtime comparison against independently printed SQL.
+                loop {
+                    let before = size(&minimal);
+                    shrink_atoms(&mut minimal, |candidate| {
+                        matches!(eligible(candidate, *config), Ok(true))
+                            && runner.compile(&[(candidate.clone(), *config)]).is_ok()
+                            && runner.mismatch(0, candidate)
+                    });
+                    runner.compile(&[(minimal.clone(), *config)])?;
+                    shrink_rows(&mut minimal, |candidate| runner.mismatch(0, candidate));
+                    if size(&minimal) == before {
+                        break;
+                    }
+                }
+                let expected = reference(&minimal)?;
+                let got = runner.execute(std::iter::once((0, &minimal)))?;
+                report(
+                    root,
+                    &minimal,
+                    *config,
+                    &format!("expected {expected:?}, actual {got:?}"),
+                )?;
+                return Err(
+                    format!("fuzz mismatch at case {}, seed {}", offset + id, case.seed).into(),
+                );
+            }
+        }
+        println!(
+            "fuzz: {}/{} passed; compilation {:.2}s, execution {:.2}s, DuckDB {:.2}s",
+            offset + batch.len(),
+            count,
+            compile_time.as_secs_f64(),
+            execute_time.as_secs_f64(),
+            oracle_time.as_secs_f64()
+        );
+    }
+    println!("query distribution: {coverage}");
+    println!("configuration distribution: {distribution:?}");
+    println!(
+        "fuzz: passed {count}; {nonempty} nonempty answers; {rejected} unavailable native-merge configurations resampled; total {:.2}s (compile {:.2}s, execute {:.2}s, DuckDB {:.2}s)",
+        started.elapsed().as_secs_f64(),
+        compile_time.as_secs_f64(),
+        execute_time.as_secs_f64(),
+        oracle_time.as_secs_f64()
+    );
+    Ok(())
+}
+
+fn reference(case: &Case) -> Result<Vec<Vec<i32>>> {
+    let relations = case
+        .query
+        .schema
+        .iter()
+        .zip(&case.data)
+        .map(|(relation, rows)| RelationData {
+            name: relation.name.clone(),
+            arity: relation.arity,
+            rows: rows.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut rows = crate::oracle::evaluate_sql(&relations, &case.sql())?;
+    rows.sort();
+    if rows.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("independent SQL printer failed to enforce DISTINCT".into());
+    }
+    Ok(rows)
+}
+
+fn shrink_rows(case: &mut Case, mut fails: impl FnMut(&Case) -> bool) {
+    'restart: loop {
+        for relation in 0..case.data.len() {
+            for row in 0..case.data[relation].len() {
+                let mut candidate = case.clone();
+                candidate.data[relation].remove(row);
+                if fails(&candidate) {
+                    *case = candidate;
+                    continue 'restart;
+                }
+            }
+        }
+        break;
+    }
+}
+
+fn shrink_atoms(case: &mut Case, mut fails: impl FnMut(&Case) -> bool) {
+    let mut index = 0;
+    while index < case.query.atoms.len() {
+        if let Some(candidate) = case.without_atom(index) {
+            if fails(&candidate) {
+                *case = candidate;
+                index = 0;
+                continue;
+            }
+        }
+        index += 1;
+    }
+}
+
+fn size(case: &Case) -> (usize, usize) {
+    (case.query.atoms.len(), case.data.iter().map(Vec::len).sum())
+}
+
+fn report(root: &Path, case: &Case, config: Config, reason: &str) -> Result<()> {
+    let dir = root
+        .join("target/fuzz/failures")
+        .join(case.seed.to_string());
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("query.cq"), case.cq())?;
+    std::fs::write(dir.join("query.sql"), case.sql())?;
+    std::fs::write(dir.join("data.txt"), input_line(0, case))?;
+    std::fs::write(
+        dir.join("configuration.txt"),
+        format!("seed={}\n{config}\n{reason}\n", case.seed),
+    )?;
+    eprintln!(
+        "FUZZ FAILURE seed={}\nconfiguration: {config}\nCQ:\n{}\nSQL:\n{}\nminimized dataset: {:?}\n{reason}\nartifacts: {}\nreproduce original: cargo xtask fuzz --cases 1 --seed {}",
+        case.seed,
+        case.cq(),
+        case.sql(),
+        case.data,
+        dir.display(),
+        case.seed
+    );
+    Ok(())
+}
+
+fn diagnostic(error: impl std::fmt::Display) -> String {
+    let text = error.to_string();
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("error[") || line.starts_with("error:"))
+        .or_else(|| text.lines().next())
+        .unwrap_or("");
+    // Removing an atom changes tuple widths and generated identifiers. Keep
+    // the diagnostic kind and trait obligation, not those incidental details.
+    line.split('`')
+        .enumerate()
+        .map(|(index, part)| {
+            if index % 2 == 0 {
+                part.to_owned()
+            } else if let Some((_, obligation)) = part.rsplit_once(": ") {
+                format!("`_: {obligation}`")
+            } else {
+                "`_`".to_owned()
+            }
+        })
+        .collect()
+}
+
+fn input_line(id: usize, case: &Case) -> String {
+    let mut line = format!("{id} {}", case.data.len());
+    for (relation, rows) in case.query.schema.iter().zip(&case.data) {
+        write!(line, " {} {}", relation.arity, rows.len()).unwrap();
+        for row in rows {
+            for value in row {
+                write!(line, " {value}").unwrap();
+            }
+        }
+    }
+    line.push('\n');
+    line
+}
+
+struct Runner {
+    directory: PathBuf,
+    target: PathBuf,
+    executable: PathBuf,
+}
+
+impl Runner {
+    fn new(root: &Path) -> Result<Self> {
+        let parent = root.join("target/fuzz");
+        std::fs::create_dir_all(&parent)?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let mut nonce = 0;
+        let (directory, package) = loop {
+            let package = format!("cq-fuzz-consumer-{stamp}-{nonce}");
+            let directory = parent.join(&package);
+            match std::fs::create_dir(&directory) {
+                Ok(()) => break (directory, package),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => nonce += 1,
+                Err(error) => return Err(error.into()),
+            }
+        };
+        let target = root.join("target/fuzz-build");
+        let executable = target.join("debug").join(&package);
+        std::fs::create_dir_all(directory.join("src"))?;
+        std::fs::create_dir_all(directory.join("planner/src"))?;
+        let dependency =
+            |name: &str, path: &str| format!("{name} = {{ path = {:?} }}\n", root.join(path));
+        let mut manifest = format!(
+            "[package]\nname = {package:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[profile.dev]\ndebug = 0\n[dependencies]\ncq-fuzz-planner = {{ path = \"planner\" }}\n",
+        );
+        for (name, path) in [
+            ("mini-linq", "facade/mini-linq"),
+            ("cq-storage", "runtime/cq-storage"),
+            ("cq-state-providers", "runtime/cq-state-providers"),
+        ] {
+            manifest.push_str(&dependency(name, path));
+        }
+        std::fs::write(directory.join("Cargo.toml"), manifest)?;
+        let mut manifest = String::from(
+            "[package]\nname = \"cq-fuzz-planner\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n[dependencies]\nsyn = { version = \"2\", features = [\"full\"] }\nquote = \"1\"\n",
+        );
+        for (name, path) in [
+            ("cq-lang-cq", "languages/cq-lang-cq"),
+            ("cq-lang-ra", "languages/cq-lang-ra"),
+            ("cq-order", "passes/cq-order"),
+            ("cq-reduce", "passes/cq-reduce"),
+            ("cq-elaborate", "passes/cq-elaborate"),
+        ] {
+            manifest.push_str(&dependency(name, path));
+        }
+        std::fs::write(directory.join("planner/Cargo.toml"), manifest)?;
+        std::fs::copy(root.join("Cargo.lock"), directory.join("Cargo.lock"))?;
+        std::fs::write(
+            directory.join("planner/src/compiler.rs"),
+            include_str!("fuzz/compiler.rs"),
+        )?;
+        std::fs::write(directory.join("planner/src/lib.rs"), PLANNER)?;
+        std::fs::copy(
+            root.join("workloads/e2e/tests/support/mod.rs"),
+            directory.join("src/support.rs"),
+        )?;
+        Ok(Self {
+            directory,
+            target,
+            executable,
+        })
+    }
+
+    fn compile(&mut self, cases: &[(Case, Config)]) -> Result<()> {
+        let mut source = String::from(
+            "#![recursion_limit = \"512\"]\n#![allow(unused_imports, unused_variables, dead_code, unused_macros, unused_parens)]\nmod support;\n",
+        );
+        source.push_str(include_str!("fuzz/harness.rs"));
+        source.push_str("\nfn dispatch(id: usize, data: &Data) -> Vec<Vec<i32>> { match id {\n");
+        for id in 0..cases.len() {
+            writeln!(source, "{id} => case_{id}::run(data),").unwrap();
+        }
+        source.push_str("_ => panic!(\"unknown case {id}\"), } }\n");
+        for (id, (case, config)) in cases.iter().enumerate() {
+            source.push_str(&consumer_case(id, case, *config));
+        }
+        std::fs::write(self.directory.join("src/main.rs"), source)?;
+        let output = crate::cargo::command()
+            .args([
+                "build",
+                "--offline",
+                "--quiet",
+                "--jobs",
+                "2",
+                "--manifest-path",
+            ])
+            .arg(self.directory.join("Cargo.toml"))
+            .arg("--target-dir")
+            .arg(&self.target)
+            .output()?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
+        }
+        Ok(())
+    }
+
+    fn isolate_compile_failure(&mut self, cases: &[(Case, Config)]) -> Result<(Case, Config)> {
+        let mut candidates = cases.to_vec();
+        while candidates.len() > 1 {
+            let half = candidates.len() / 2;
+            if self.compile(&candidates[..half]).is_err() {
+                candidates.truncate(half);
+            } else {
+                candidates.drain(..half);
+            }
+        }
+        if self.compile(&candidates).is_ok() {
+            return Err("batch compilation failed but no individual case reproduced it".into());
+        }
+        Ok(candidates.remove(0))
+    }
+
+    fn execute<'a>(
+        &self,
+        cases: impl Iterator<Item = (usize, &'a Case)>,
+    ) -> Result<Vec<ConsumerResult>> {
+        let cases = cases.collect::<Vec<_>>();
+        let input = cases
+            .iter()
+            .map(|(id, case)| input_line(*id, case))
+            .collect::<String>();
+        let input_path = self.directory.join("data.txt");
+        std::fs::write(&input_path, input)?;
+        let output = Command::new(&self.executable)
+            .stdin(Stdio::from(std::fs::File::open(input_path)?))
+            .output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "consumer exited {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+        let text = String::from_utf8(output.stdout)?;
+        if text.lines().count() != cases.len() {
+            return Err(format!("consumer returned wrong number of cases: {text}").into());
+        }
+        text.lines()
+            .zip(cases)
+            .map(|(line, (id, case))| {
+                let mut words = line.split_whitespace();
+                if words.next() != Some(&id.to_string()) {
+                    return Err(format!("unexpected consumer id: {line}").into());
+                }
+                let status = words.next();
+                if status != Some("OK") {
+                    return Ok(Err(format!(
+                        "consumer {status:?}: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    )));
+                }
+                let count: usize = words.next().ok_or("missing result row count")?.parse()?;
+                let values = words
+                    .map(str::parse::<i32>)
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                if values.len() != count * case.output_arity() {
+                    return Err(format!("invalid consumer result: {line}").into());
+                }
+                Ok(Ok(values
+                    .chunks(case.output_arity())
+                    .map(<[i32]>::to_vec)
+                    .collect()))
+            })
+            .collect()
+    }
+
+    fn mismatch(&self, id: usize, case: &Case) -> bool {
+        match (self.execute(std::iter::once((id, case))), reference(case)) {
+            (Ok(actual), Ok(expected)) => actual[0].as_ref().ok() != Some(&expected),
+            _ => false,
+        }
+    }
+}
+
+fn consumer_case(id: usize, case: &Case, c: Config) -> String {
+    let mut code = format!("\nmod case_{id} {{\n");
+    writeln!(code, "macro_rules! policy {{ ($($t:tt)*) => {{ ::mini_linq::lower_physical! {{ $($t)* {} }} }}; }}", c.policy()).unwrap();
+    code.push_str("pub(super) use policy as physical_policy;\nmod mini_linq {\n pub(super) use super::physical_policy;\n pub(super) use ::mini_linq::{select_structures, structures_to_rust};\n");
+    writeln!(
+        code,
+        "pub(super) use cq_state_providers::{} as distinct_state;",
+        if c.ordered_distinct {
+            "ordered_distinct"
+        } else {
+            "hash_distinct"
+        }
+    )
+    .unwrap();
+    if c.custom_index {
+        code.push_str("macro_rules! indexes { (probe) => { crate::support::SortedIndex<_, _> }; ($($t:tt)*) => { cq_state_providers::default_indexes!($($t)*) }; }\npub(super) use indexes as index_provider;\n");
+    } else {
+        code.push_str("pub(super) use cq_state_providers::default_indexes as index_provider;\n");
+    }
+    code.push_str("}\npub(super) fn run(data: &crate::Data) -> Vec<Vec<i32>> {\n");
+    for (i, relation) in case.query.schema.iter().enumerate() {
+        let fields = (0..relation.arity)
+            .map(|j| format!("row[{j}],"))
+            .collect::<String>();
+        if c.host == 0 {
+            writeln!(code, "let input_{i} = data[{i}].iter().map(|row| ({fields})).collect::<Vec<_>>();\nlet {} = input_{i}.as_slice();", relation.name).unwrap();
+        } else {
+            let tail = (1..relation.arity)
+                .map(|j| format!("row[{j}],"))
+                .collect::<String>();
+            writeln!(code, "let mut input_{i} = std::collections::{}::<(i32,), Vec<_>>::new();\nfor row in &data[{i}] {{ input_{i}.entry((row[0],)).or_default().push(({tail})); }}\nlet {} = &input_{i};", if c.host == 1 { "HashMap" } else { "BTreeMap" }, relation.name).unwrap();
+        }
+    }
+    let fields = (0..case.output_arity())
+        .map(|i| format!("crate::integer(row.{i}),"))
+        .collect::<String>();
+    writeln!(
+        code,
+        "cq_fuzz_planner::query! {{ [{} {} {}] {} }}.map(|row| vec![{fields}]).collect()\n}}\n}}",
+        c.planner,
+        c.fine,
+        c.reduce,
+        case.cq()
+    )
+    .unwrap();
+    code
+}
+
+const PLANNER: &str = r#"
+mod compiler;
+use syn::parse::Parse;
+struct Request { planner: usize, fine: bool, reduce: usize, source: cq_lang_cq::Program }
+impl Parse for Request {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let header; syn::bracketed!(header in input);
+        Ok(Self { planner: header.parse::<syn::LitInt>()?.base10_parse()?, fine: header.parse::<syn::LitBool>()?.value, reduce: header.parse::<syn::LitInt>()?.base10_parse()?, source: input.parse()? })
+    }
+}
+#[proc_macro]
+pub fn query(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let result = syn::parse::<Request>(tokens).and_then(|request| compiler::plan(&request.source, request.planner, request.fine, request.reduce));
+    match result { Ok(ra) => quote::quote!(::mini_linq::index_demands! { #ra }), Err(error) => error.into_compile_error() }.into()
+}
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compiler_shrinking_preserves_trait_failure_when_tuple_width_changes() {
+        assert_eq!(
+            diagnostic("error[E0277]: the trait bound `(i32, i32): Ord` is not satisfied"),
+            diagnostic("error[E0277]: the trait bound `(i32, i32, i32): Ord` is not satisfied"),
+        );
+        assert_ne!(
+            diagnostic("error[E0277]: the trait bound `(i32, i32): Ord` is not satisfied"),
+            diagnostic("error[E0277]: the trait bound `(i32, i32): Hash` is not satisfied"),
+        );
+    }
+
+    #[test]
+    fn row_shrinking_keeps_only_the_witness() {
+        let mut case = model::generate(1);
+        case.data[0] = vec![
+            vec![3; case.query.schema[0].arity],
+            vec![7; case.query.schema[0].arity],
+        ];
+        shrink_rows(&mut case, |candidate| {
+            candidate.data[0].iter().any(|row| row[0] == 7)
+        });
+        assert_eq!(case.data[0].len(), 1);
+        assert_eq!(case.data[0][0][0], 7);
+        assert!(case.data.iter().skip(1).all(Vec::is_empty));
+    }
+
+    #[test]
+    fn row_shrinking_revisits_earlier_rows_after_later_deletions() {
+        let mut case = model::generate(1);
+        case.data[0] = (0..3)
+            .map(|value| vec![value; case.query.schema[0].arity])
+            .collect();
+        shrink_rows(&mut case, |candidate| {
+            let contains = |value| candidate.data[0].iter().any(|row| row[0] == value);
+            contains(2) && (contains(0) || !contains(1))
+        });
+        assert_eq!(case.data[0], vec![vec![2; case.query.schema[0].arity]]);
+    }
+
+    #[test]
+    fn atom_shrinking_revisits_earlier_atoms_after_later_deletions() {
+        let mut case = Case {
+            seed: 0,
+            query: model::Query {
+                schema: (0..3)
+                    .map(|i| model::Relation {
+                        name: format!("r{i}"),
+                        arity: 1,
+                    })
+                    .collect(),
+                atoms: (0..3)
+                    .map(|relation| model::Atom {
+                        relation,
+                        terms: vec![model::Term::Var(0)],
+                    })
+                    .collect(),
+                bindings: Vec::new(),
+                guards: Vec::new(),
+                head: vec![model::Expr::Var(0)],
+            },
+            data: vec![Vec::new(); 3],
+        };
+        shrink_atoms(&mut case, |candidate| {
+            let contains = |relation| {
+                candidate
+                    .query
+                    .atoms
+                    .iter()
+                    .any(|atom| atom.relation == relation)
+            };
+            contains(2) && (contains(0) || !contains(1))
+        });
+        assert_eq!(case.query.atoms.len(), 1);
+        assert_eq!(case.query.atoms[0].relation, 2);
+    }
+}

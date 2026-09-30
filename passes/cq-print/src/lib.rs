@@ -208,6 +208,60 @@ impl<'a> Context<'a> {
             .collect()
     }
 
+    /// An index key is owned if either its rows or a keyed reader supplies a
+    /// computed column. Temporary prefix bindings cannot borrow for the
+    /// lifetime of the indexed input rows.
+    pub fn owned_key(&self, result: &str, columns: &[String]) -> bool {
+        let computed = |name: &str| {
+            self.infos[name]
+                .computed
+                .iter()
+                .any(|c| columns.contains(c))
+        };
+        computed(result)
+            || self
+                .physical_analysis
+                .key_reads
+                .get(result)
+                .into_iter()
+                .flatten()
+                .any(|(reader, _)| match &self.physical[reader].operator {
+                    Operator::Probe(_, keyed) | Operator::Semi(_, keyed) => {
+                        computed(&symbol_name(&keyed.left))
+                    }
+                    _ => false,
+                })
+    }
+
+    pub fn key_field(&self, result: &str, column: &str, owned: bool) -> TokenStream {
+        let ident = self.ident(result, column);
+        if !owned {
+            return ident.to_token_stream();
+        }
+        if self.infos[result].computed.contains(column) {
+            quote!(::core::clone::Clone::clone(&#ident))
+        } else {
+            quote!(::core::clone::Clone::clone(#ident))
+        }
+    }
+
+    /// Keep original borrowed key columns alongside owned comparison keys,
+    /// so result rows retain their original ownership and input identity.
+    pub fn built_payload(&self, result: &str, levels: &[Vec<String>]) -> Vec<String> {
+        let columns = levels.concat();
+        self.heading(result)
+            .iter()
+            .filter(|c| {
+                !columns.contains(c)
+                    || (!self.infos[result].computed.contains(*c)
+                        && levels
+                            .iter()
+                            .any(|level| level.contains(c) && self.owned_key(result, level)))
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Propagate Rust identifiers through the logical operation defining a result.
     pub fn register(&mut self, name: &str) {
         self.idents
@@ -217,7 +271,6 @@ impl<'a> Context<'a> {
 
     /// Build the selected structures over a result and append their statements.
     pub fn materialize(&mut self, name: &str, _canon: bool, source: TokenStream) -> Repr {
-        let heading = self.heading(name);
         let scanned = self.physical_analysis.scanned.contains(name);
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
@@ -236,15 +289,14 @@ impl<'a> Context<'a> {
         let mut built = Vec::new();
         for (levels, ty) in &structures {
             let columns: Vec<String> = levels.concat();
-            let payload = heading
-                .iter()
-                .filter(|c| !columns.contains(c))
-                .map(|c| self.ident(name, c));
+            let payload_columns = self.built_payload(name, levels);
+            let payload = payload_columns.iter().map(|c| self.ident(name, c));
             // A curried value is built from nested pairs, one per level:
             // `((k₁,), ((k₂,), (payload,)))`.
             let mut nested = quote!((#(#payload,)*));
             for level in levels.iter().rev() {
-                let key = level.iter().map(|c| self.ident(name, c));
+                let owned = self.owned_key(name, level);
+                let key = level.iter().map(|c| self.key_field(name, c, owned));
                 nested = quote!(((#(#key,)*), #nested));
             }
             let structure = format_ident!(
@@ -352,7 +404,8 @@ impl<'a> Context<'a> {
             Some(levels.len())
         );
         let key = |level: &Vec<String>| {
-            let key = level.iter().map(|c| self.ident(left, c));
+            let owned = self.owned_key(right, level);
+            let key = level.iter().map(|c| self.key_field(left, c, owned));
             quote!(&(#(#key,)*))
         };
         let first = key(&levels[0]);
@@ -374,10 +427,12 @@ impl<'a> Context<'a> {
         &self,
         left: &str,
         structure: &Ident,
+        right: &str,
         levels: &[Vec<String>],
     ) -> TokenStream {
         let key = |level: &Vec<String>| {
-            let key = level.iter().map(|c| self.ident(left, c));
+            let owned = self.owned_key(right, level);
+            let key = level.iter().map(|c| self.key_field(left, c, owned));
             quote!(&(#(#key,)*))
         };
         let (last, init) = levels.split_last().expect("at least one level");

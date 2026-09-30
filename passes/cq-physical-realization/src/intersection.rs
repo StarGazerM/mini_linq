@@ -52,7 +52,8 @@ impl Printer<'_> {
             } else {
                 let (levels, _) = self.built_levels(&name, prefix).unwrap();
                 let structure = self.built_ident(&name, levels);
-                let fields = prefix.iter().map(|c| self.ident(&left, c));
+                let owned = self.owned_key(&name, prefix);
+                let fields = prefix.iter().map(|c| self.key_field(&left, c, owned));
                 let key = quote!(&(#(#fields,)*));
                 (
                     quote!(::cq_storage::Candidates::count(&#structure,#key)),
@@ -67,9 +68,9 @@ impl Printer<'_> {
             Ok(match self.keyed(result, self.heading(&right))? {
                 Access::Host(access) => self.host_lookup(&first_name, &access, true),
                 Access::Built(s) => {
-                    self.chained_contains(&first_name, &s, &self.levels_of(&right, &s))
+                    self.chained_contains(&first_name, &s, &right, &self.levels_of(&right, &s))
                 }
-                Access::Prefix(s, l) => self.chained_contains(&first_name, &s, &l),
+                Access::Prefix(s, l) => self.chained_contains(&first_name, &s, &right, &l),
             })
         };
         let test_a = test(&a.right)?;

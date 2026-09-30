@@ -154,11 +154,38 @@ impl Printer<'_> {
     }
 
     pub(crate) fn distinct(&self, operator: &Ident, rows: TokenStream) -> TokenStream {
+        self.distinct_width(operator, rows, self.heading(&symbol_name(operator)).len())
+    }
+
+    fn distinct_width(&self, operator: &Ident, rows: TokenStream, width: usize) -> TokenStream {
         let provider = &self.endpoints.distinct_state;
+        // Std implements tuple Eq/Hash/Ord only through arity twelve. Keep
+        // iterator rows flat, but recursively group wider equality keys. Clone
+        // fields instead of borrowing the filter's temporary row: a provider
+        // may retain this key after that row has been yielded and dropped.
+        fn group(fields: &[TokenStream]) -> TokenStream {
+            if fields.len() <= 12 {
+                quote!((#(#fields,)*))
+            } else {
+                group(&fields.chunks(12).map(group).collect::<Vec<_>>())
+            }
+        }
+        let key = if width <= 12 {
+            quote!(__cq_row)
+        } else {
+            let fields = (0..width)
+                .map(|field| {
+                    let field = index(field);
+                    quote!(::core::clone::Clone::clone(&__cq_row.#field))
+                })
+                .collect::<Vec<_>>();
+            let nested = group(&fields);
+            quote!(&#nested)
+        };
         quote! {{
             let mut __cq_seen = #provider! { operator #operator; new };
             ::core::iter::Iterator::filter(#rows, move |__cq_row| {
-                #provider! { operator #operator; insert(__cq_seen, __cq_row) }
+                #provider! { operator #operator; insert(__cq_seen, #key) }
             })
         }}
     }
@@ -205,11 +232,24 @@ impl Printer<'_> {
             Some(v) => v.to_token_stream(),
             None => format_ident!("__cq_h{i}").to_token_stream(),
         });
-        quote! {
+        let mapped = quote! {
             ::core::iter::Iterator::map(#rows, move |#[allow(unused_variables)] #pattern| {
                 let (#(#temporaries,)*) = { #(#shadows)* (#(#expressions,)*) };
                 (#(#output,)*)
             })
+        };
+        // Canonical valuations can have the same computed answer. The map is
+        // injective only when its bare outputs retain every source column.
+        // Otherwise canonicalize the image with the caller's state provider.
+        if heading.iter().all(|column| {
+            variables
+                .iter()
+                .flatten()
+                .any(|variable| symbol_name(variable) == *column)
+        }) {
+            mapped
+        } else {
+            self.distinct_width(&self.physical[result].name, mapped, head.args.len())
         }
     }
 }

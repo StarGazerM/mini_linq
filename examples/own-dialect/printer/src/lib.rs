@@ -147,11 +147,7 @@ impl Push<'_> {
                     ),
                     Access::Built(structure) => (
                         self.chained_lookup(&left, &structure, &right, &columns),
-                        self.heading(&right)
-                            .iter()
-                            .filter(|c| !columns.contains(c))
-                            .cloned()
-                            .collect(),
+                        self.built_payload(&right, &self.levels_of(&right, &structure)),
                         false,
                     ),
                     Access::Prefix(_, _) => {
@@ -161,16 +157,18 @@ impl Push<'_> {
                         );
                     }
                 };
-                let row = self.row(result, |c| match payload.iter().position(|p| p == c) {
-                    Some(i) => {
-                        let i = index(i);
-                        if host {
-                            quote!(&__push_v.#i)
-                        } else {
-                            quote!(__push_v.#i)
+                let row = self.row(result, |c| {
+                    match payload.iter().position(|p| p == c && !columns.contains(p)) {
+                        Some(i) => {
+                            let i = index(i);
+                            if host {
+                                quote!(&__push_v.#i)
+                            } else {
+                                quote!(__push_v.#i)
+                            }
                         }
+                        None => self.ident(&left, c).to_token_stream(),
                     }
-                    None => self.ident(&left, c).to_token_stream(),
                 });
                 let pattern = self.pattern(result);
                 self.emit(&left, quote!(for __push_v in #lookup { #[allow(unused_variables)] let #pattern = #row; #sink }))
@@ -183,10 +181,11 @@ impl Push<'_> {
                     Access::Built(structure) => self.chained_contains(
                         &left,
                         &structure,
+                        &right,
                         &self.levels_of(&right, &structure),
                     ),
                     Access::Prefix(structure, levels) => {
-                        self.chained_contains(&left, &structure, &levels)
+                        self.chained_contains(&left, &structure, &right, &levels)
                     }
                 };
                 self.emit(&left, quote!(if #test { #sink }))

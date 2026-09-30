@@ -28,13 +28,12 @@ uses are checked in written scope; opaque syntax remains Rust's responsibility.
 
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
 
-\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{each atom has distinct bare arguments}\\
- \text{an all-bare head has distinct arguments}}
+\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{each body atom has distinct bare arguments}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 \end{mathpar}
 NF is a restriction of the same \code{cq::Program}, checked by
-\code{normal::check}, not another Rust AST type. It does not restrict a computed
-head to bare variables.
+\code{normal::check}, not another Rust AST type. The head remains an ordered
+tuple and may repeat variables or contain computed expressions.
 
 \paragraph{VO.}
 $\mathsf{Schedule}(t,A)$ checks subatom relation, clause index, arity and original

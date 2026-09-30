@@ -1,32 +1,7 @@
-WITH
-  "mini-linq/input/0" AS (
-    SELECT DISTINCT "c0", "c1", "c2"
-    FROM "mini-linq/raw/0"
-  ),
-  "mini-linq/input/1" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/1"
-  ),
-  "mini-linq/input/2" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/2"
-  ),
-  "mini-linq/input/3" AS (
-    SELECT DISTINCT "c0", "c1"
-    FROM "mini-linq/raw/3"
-  )
-SELECT DISTINCT
-  "a0"."c0" AS "k1",
-  "a0"."c1" AS "k2",
-  "a0"."c2" AS "k3",
-  "a1"."c1" AS "a",
-  "a2"."c1" AS "b",
-  "a3"."c1" AS "c"
-FROM "mini-linq/input/0" AS "a0"
-CROSS JOIN "mini-linq/input/1" AS "a1"
-CROSS JOIN "mini-linq/input/2" AS "a2"
-CROSS JOIN "mini-linq/input/3" AS "a3"
-WHERE "a1"."c0" = "a0"."c0"
-  AND "a2"."c0" = "a0"."c1"
-  AND "a3"."c0" = "a0"."c2"
+-- Attach one dimension value to each of the fact's three keys.
+SELECT DISTINCT f.c0, f.c1, f.c2, da.c1, db.c1, dc.c1
+FROM "mini-linq/raw/0" AS f
+JOIN "mini-linq/raw/1" AS da ON da.c0 = f.c0
+JOIN "mini-linq/raw/2" AS db ON db.c0 = f.c1
+JOIN "mini-linq/raw/3" AS dc ON dc.c0 = f.c2
 ORDER BY 1, 2, 3, 4, 5, 6;

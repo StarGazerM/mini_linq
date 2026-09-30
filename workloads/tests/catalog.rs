@@ -304,7 +304,7 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
 }
 
 #[test]
-fn sql_files_are_exactly_the_catalog_and_match_translation_byte_for_byte() {
+fn authored_sql_files_are_exactly_the_catalog() {
     let repository_root = repository_root();
     let mut expected_paths = BTreeSet::new();
     expected_paths.extend(
@@ -328,15 +328,10 @@ fn sql_files_are_exactly_the_catalog_and_match_translation_byte_for_byte() {
                     expected_path.display()
                 )
             });
-        let source = case
-            .module()
-            .unwrap_or_else(|error| panic!("case `{}` did not parse: {error}", case.name));
-        let translated = cq_workloads::sql::translate(&source)
-            .unwrap_or_else(|error| panic!("case `{}` did not translate: {error}", case.name));
         assert_eq!(
             checked_in,
-            translated,
-            "checked-in SQL for `{}` differs from fresh translation at `{}`",
+            case.sql,
+            "catalog SQL for `{}` differs from its authored file at `{}`",
             case.name,
             expected_path.display()
         );

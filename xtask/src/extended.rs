@@ -27,12 +27,14 @@ pub(super) fn golden(
     selection: Selection,
     scenarios: ScenarioSelection,
     write: bool,
-) -> Result<()> {
+) -> Result<Vec<std::path::PathBuf>> {
+    let mut checked = Vec::new();
     for case in selection.extensions() {
         for scenario in scenarios.values() {
             let dataset = case.load(scenario)?;
             let expected = crate::oracle::evaluate_sql(&dataset.relations, case.sql)?;
             let path = case.path("golden").join(scenario.as_str()).join("tiny.csv");
+            checked.push(path.clone());
             if write {
                 cq_workloads::dataset::write_result_rows(&path, &expected, case.arity)?;
                 println!(
@@ -42,15 +44,7 @@ pub(super) fn golden(
                     path.display()
                 );
             } else {
-                let tracked = cq_workloads::dataset::read_result_rows(&path, case.arity)?;
-                if tracked != expected {
-                    return Err(format!(
-                        "{}/{}: tracked extension golden differs from DuckDB",
-                        case.name,
-                        scenario.as_str()
-                    )
-                    .into());
-                }
+                crate::golden::compare(&path, &expected, case.arity)?;
                 println!(
                     "golden {:<27} {:<11} {} rows",
                     case.name,
@@ -60,7 +54,7 @@ pub(super) fn golden(
             }
         }
     }
-    Ok(())
+    Ok(checked)
 }
 
 #[cfg(test)]
@@ -70,7 +64,10 @@ mod tests {
     fn extended_selection_and_scale_have_no_positive_cq_cases() {
         let selection = Selection::parse("extended").unwrap();
         assert_eq!(selection.cases().count(), 0);
-        assert_eq!(selection.extensions().count(), 17);
+        assert_eq!(
+            selection.extensions().count(),
+            cq_workloads::extended::CASES.len()
+        );
         assert!(check_scale(selection, Scale::Tiny).is_ok());
         assert!(check_scale(selection, Scale::Medium).is_err());
         let selection = Selection::parse("recursion_reach").unwrap();
