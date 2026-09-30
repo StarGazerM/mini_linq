@@ -13,7 +13,9 @@
 //!   after the join, then the earliest clause.
 //! - `Elimination` takes the variable order of `cq::hypergraph::Analysis`
 //!   (a perfect elimination order when the query is acyclic) and orders the
-//!   atoms by the position of their earliest variable.
+//!   Coarse atoms by the position of their earliest variable. Fine enumerates
+//!   variables in reverse elimination order, connecting shared keys before
+//!   independent leaf columns form Cartesian prefixes.
 //!
 //! `Coarse` writes one full subatom per atom occurrence (a binary join
 //! plan). `Fine` writes one variable at a time (generic join): the first
@@ -426,7 +428,7 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     cq::normal::check(source)?;
     let query = &source.query;
     let clauses = clauses(query);
-    let (sequence, variables) = match options.heuristic {
+    let (sequence, mut variables) = match options.heuristic {
         Heuristic::Written => {
             let sequence: Vec<usize> = (0..clauses.len()).collect();
             let variables = binding_order(&clauses, &sequence);
@@ -439,6 +441,12 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
         }
         Heuristic::Elimination => elimination(source, &clauses)?,
     };
+    // Elimination removes leaves first. Enumerating in that direction joins
+    // their independent projections before any connecting variable is bound.
+    // Reverse it for Fine; Coarse retains the earliest-variable atom ranking.
+    if options.heuristic == Heuristic::Elimination && options.split == Split::Fine {
+        variables.reverse();
+    }
     let steps = match options.split {
         Split::Coarse => coarse(&clauses, &sequence),
         Split::Fine => fine(query, &clauses, &sequence, &variables)?,

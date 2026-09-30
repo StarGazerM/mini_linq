@@ -1,3 +1,5 @@
+// These fixtures use host reads; retain the provider slot for built let reads.
+#[allow(unused_macros)]
 macro_rules! indexes {
     (probe) => { ::cq_storage::HashIndex<'_, _, _> };
     (semi) => { ::std::collections::HashSet<_> };

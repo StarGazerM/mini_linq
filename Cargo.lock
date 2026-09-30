@@ -218,6 +218,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-workload-e2e"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-index-policy",
+ "cq-lang-cq",
+ "cq-lang-physical",
+ "cq-lang-structures",
+ "cq-order",
+ "cq-physical-lowering",
+ "cq-reduce",
+ "cq-state-providers",
+ "cq-storage",
+ "cq-structure-selection",
+ "cq-workloads",
+ "mini-linq",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-workloads"
 version = "0.1.0"
 dependencies = [

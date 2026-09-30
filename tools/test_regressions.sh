@@ -22,6 +22,7 @@ while IFS=$'\t' read -r package kind target source; do
             test|example) command=(cargo test --locked -p "$package" --all-features "--$kind" "$target") ;;
             lib) command=(cargo test --locked -p "$package" --lib) ;;
             manifest-test) command=(cargo test --locked --manifest-path "$source") ;;
+            manifest-target-test) command=(cargo test --locked --manifest-path "$source" --test "$target") ;;
             scenario) command=(python3 "$source") ;;
             manifest-run) command=(cargo run --locked --manifest-path "$source") ;;
             *) printf 'Unknown regression kind: %s\n' "$kind" >&2; exit 2 ;;

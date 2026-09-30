@@ -31,8 +31,14 @@ members = [
     "facade/cq-stage",
     "facade/mini-linq",
     "workloads",
+    "workloads/e2e",
 ]
 resolver = "3"
+
+# The generated corpus has thousands of distinct Rust iterator types.
+# Keep its test binaries small without changing compiler/runtime profiles.
+[profile.test.package.cq-workload-e2e]
+debug = 0
 
 [workspace.package]
 edition = "2024"

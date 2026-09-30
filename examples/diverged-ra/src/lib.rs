@@ -1,5 +1,7 @@
 //! The build script prints real Rust through the unchanged downstream passes;
 //! rustc compiles it here, and the tests execute it against an independent oracle.
+// The current theta query uses host reads; retain the slot for built let reads.
+#[allow(unused_macros)]
 macro_rules! indexes {
     (probe) => { ::cq_storage::HashIndex<'_, _, _> };
     (semi) => { ::std::collections::HashSet<_> };

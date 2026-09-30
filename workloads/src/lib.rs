@@ -7,6 +7,7 @@
 
 pub mod catalog;
 pub mod dataset;
+pub mod execution;
 pub mod generate;
 pub mod queries;
 pub mod sql;

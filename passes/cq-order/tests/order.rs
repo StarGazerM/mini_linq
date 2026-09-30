@@ -278,9 +278,12 @@ fn elimination_orders_atoms_by_their_earliest_variable() {
             })
             .collect();
         assert!(earliest.is_sorted(), "{earliest:?} for {order:?}");
-        // Fine binds the atom variables in exactly the elimination order.
+        // Fine enumerates in reverse elimination order to connect shared keys.
         let fine = plan(&source, Heuristic::Elimination, Split::Fine);
-        assert_eq!(atom_bound(&fine), order);
+        assert_eq!(
+            atom_bound(&fine),
+            order.into_iter().rev().collect::<Vec<_>>()
+        );
     }
 }
 
@@ -315,7 +318,7 @@ fn elimination_defers_an_atom_to_the_binding_that_supplies_its_column() {
     );
     let fine = plan(&source, Heuristic::Elimination, Split::Fine);
     let order = cq::hypergraph::Analysis::of(&source).elimination_order;
-    let atom_order: Vec<String> = order.iter().filter(|v| *v != "k").cloned().collect();
+    let atom_order: Vec<String> = order.iter().rev().filter(|v| *v != "k").cloned().collect();
     assert_eq!(atom_bound(&fine), atom_order);
     // No subatom lists `k` before the binding supplies it.
     let binding = fine

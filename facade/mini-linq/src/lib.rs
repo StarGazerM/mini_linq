@@ -22,7 +22,9 @@ use proc_macro::TokenStream;
 mod entry;
 mod workload;
 
-/// Capture a typed CQ for the workload catalog without compiling a host API.
+/// Capture a typed CQ for the workload catalog and export a token callback.
+/// The leaf re-exports `with_<head>!` (also `with_query!`); passing a macro path
+/// invokes it with the authored token stream, preserving Rust hygiene.
 #[proc_macro]
 pub fn workload_query(input: TokenStream) -> TokenStream {
     workload::expand(input)
@@ -77,6 +79,62 @@ pub fn cq_to_ra_generic(input: TokenStream) -> TokenStream {
         },
     )
 }
+
+// These selectors retain cq_to_ra!'s payload and caller-bound continuation.
+macro_rules! planner_selector {
+    ($name:ident, $heuristic:expr, $split:ident) => {
+        #[cfg(feature = "written-order")]
+        #[proc_macro]
+        #[doc = concat!("CQ → RA using ", stringify!($heuristic), "/", stringify!($split), ".")]
+        pub fn $name(input: TokenStream) -> TokenStream {
+            entry::stage(
+                input,
+                Some(syn::parse_quote!(mini_linq::choose_index_policy)),
+                |source: &cq_lang_cq::Program| {
+                    let normal = cq_lang_cq::normal::normalize(source)?;
+                    let plan = cq_order::compile(
+                        &normal,
+                        &cq_order::Options {
+                            heuristic: $heuristic,
+                            split: cq_order::Split::$split,
+                        },
+                    )?;
+                    cq_elaborate::compile(&plan)
+                },
+            )
+        }
+    };
+}
+planner_selector!(
+    cq_to_ra_prefix_connected,
+    cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+    Coarse
+);
+planner_selector!(
+    cq_to_ra_prefix_connected_fine,
+    cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+    Fine
+);
+planner_selector!(
+    cq_to_ra_prefix_greedy,
+    cq_order::Heuristic::Prefix(cq_order::Ranking::GreedyWidth),
+    Coarse
+);
+planner_selector!(
+    cq_to_ra_prefix_greedy_fine,
+    cq_order::Heuristic::Prefix(cq_order::Ranking::GreedyWidth),
+    Fine
+);
+planner_selector!(
+    cq_to_ra_elimination,
+    cq_order::Heuristic::Elimination,
+    Coarse
+);
+planner_selector!(
+    cq_to_ra_elimination_fine,
+    cq_order::Heuristic::Elimination,
+    Fine
+);
 
 /// CQ → RA with Yannakakis reduction: normalize, schedule clauses as
 /// written, push single-atom guards onto their atoms, semijoin-reduce along

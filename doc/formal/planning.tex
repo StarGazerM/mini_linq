@@ -103,8 +103,10 @@ An atom variable absent from that numbering is diagnosed.
 \paragraph{Coarse and Fine.}
 The split is independent of the heuristic. Coarse copies each guard/let in the
 chosen sequence and emits one full subatom for each atom. For Written and
-Prefix, variable order is first provision along that sequence; Elimination
-uses $E$, which contains atom variables only.
+Prefix, variable order is first provision along that sequence; Elimination/Fine
+uses $\operatorname{reverse}(E)$, which contains atom variables only. This binds
+connecting variables before independent leaf projections form Cartesian prefixes;
+the Coarse atom ranking still uses $E$.
 \begin{mathpar}
 
 \Rule{O-Coarse}{\mathit{seq}\text{ chosen}}

@@ -115,6 +115,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-physical-realization"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "cq-print",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-print"
 version = "0.1.0"
 dependencies = [
@@ -135,9 +146,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-reduce"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-vo",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-state-providers"
+version = "0.1.0"
+dependencies = [
+ "cq-protocol",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -169,6 +199,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-workload-e2e"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-index-policy",
+ "cq-lang-cq",
+ "cq-lang-physical",
+ "cq-lang-structures",
+ "cq-order",
+ "cq-physical-lowering",
+ "cq-reduce",
+ "cq-structure-selection",
+ "cq-workloads",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-workloads"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-syntax",
+ "mini-linq",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
@@ -182,6 +241,8 @@ dependencies = [
  "cq-lang-vo",
  "cq-order",
  "cq-physical-lowering",
+ "cq-physical-realization",
+ "cq-reduce",
  "cq-stage",
  "cq-structure-selection",
  "proc-macro2",
@@ -193,7 +254,10 @@ dependencies = [
 name = "own-dialect"
 version = "0.0.0"
 dependencies = [
+ "cq-state-providers",
  "cq-storage",
+ "cq-workload-e2e",
+ "cq-workloads",
  "mini-linq",
  "own-push",
 ]

@@ -26,6 +26,7 @@ mini-linq-course	example	free-variables	examples/free-variables/main.rs
 cq-xtask	manifest-test	restored	xtask/Cargo.toml
 mini-linq-composition-example	manifest-run	composition	examples/composition/Cargo.toml
 own-dialect	manifest-test	queries	examples/own-dialect/Cargo.toml
+own-dialect	manifest-target-test	corpus	examples/own-dialect/Cargo.toml
 stacked-ir	scenario	expansions	examples/stacked-ir/check_expansions.py
 diverged-ra	scenario	downstream-reuse	examples/diverged-ra/check.py
 cq-reduce	test	ya_schedule	teaching/ya/ya_schedule.rs
@@ -35,3 +36,16 @@ cq-lang-cq	test	normal	languages/cq-lang-cq/tests/normal.rs
 mini-linq	test	openings	facade/mini-linq/tests/openings.rs
 mini-linq	test	pass_contracts	facade/mini-linq/tests/pass_contracts.rs
 mini-linq	test	dispatch	facade/mini-linq/tests/dispatch.rs
+mini-linq	test	workload_callback	facade/mini-linq/tests/workload_callback.rs
+cq-workload-e2e	test	census	workloads/e2e/tests/census.rs
+cq-workload-e2e	test	compile_fail	workloads/e2e/tests/compile_fail.rs
+cq-workload-e2e	test	elimination_cost	workloads/e2e/tests/elimination_cost.rs
+cq-workload-e2e	test	planner_0	workloads/e2e/tests/planner_0.rs
+cq-workload-e2e	test	planner_1	workloads/e2e/tests/planner_1.rs
+cq-workload-e2e	test	planner_2	workloads/e2e/tests/planner_2.rs
+cq-workload-e2e	test	planner_3	workloads/e2e/tests/planner_3.rs
+cq-workload-e2e	test	planner_4	workloads/e2e/tests/planner_4.rs
+cq-workload-e2e	test	planner_5	workloads/e2e/tests/planner_5.rs
+cq-workload-e2e	test	planner_6	workloads/e2e/tests/planner_6.rs
+cq-workload-e2e	test	planner_7	workloads/e2e/tests/planner_7.rs
+cq-workload-e2e	test	planner_8	workloads/e2e/tests/planner_8.rs

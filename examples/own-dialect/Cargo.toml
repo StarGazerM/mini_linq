@@ -11,3 +11,12 @@ members = ["printer"]
 own-push = { path = "printer" }
 mini-linq = { path = "../../facade/mini-linq", default-features = false, features = ["written-order", "index-demands", "physical-lowering", "structure-selection"] }
 cq-storage = { path = "../../runtime/cq-storage" }
+
+[build-dependencies]
+cq-workloads = { path = "../../workloads" }
+
+[dev-dependencies]
+cq-workload-e2e = { path = "../../workloads/e2e" }
+cq-workloads = { path = "../../workloads" }
+cq-state-providers = { path = "../../runtime/cq-state-providers" }
+mini-linq = { path = "../../facade/mini-linq" }
