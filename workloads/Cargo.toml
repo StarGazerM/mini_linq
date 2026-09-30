@@ -10,11 +10,16 @@ cq-lang-cq.workspace = true
 cq-syntax.workspace = true
 mini-linq = { path = "../facade/mini-linq", default-features = false }
 syn.workspace = true
+cq-ext-support = { path = "../extensions/cq-ext-support" }
+proc-macro2.workspace = true
+quote.workspace = true
+cq-ext-negation = { path = "../extensions/cq-ext-negation", optional = true }
+cq-ext-recursion = { path = "../extensions/cq-ext-recursion", optional = true }
 cq-storage = { workspace = true, optional = true }
 
 [features]
 default = []
-counters = ["dep:cq-storage", "cq-storage/counters", "mini-linq/logical-selection", "mini-linq/index-demands", "mini-linq/structure-selection", "mini-linq/physical-lowering", "mini-linq/physical-realization"]
+counters = ["dep:cq-storage", "cq-storage/counters", "mini-linq/logical-selection", "mini-linq/written-order", "mini-linq/index-demands", "mini-linq/structure-selection", "mini-linq/physical-lowering", "mini-linq/physical-realization", "dep:cq-ext-negation", "dep:cq-ext-recursion"]
 
 [[test]]
 name = "growth"

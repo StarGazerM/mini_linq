@@ -1,0 +1,10 @@
+WITH
+  A AS (SELECT DISTINCT c0 FROM "mini-linq/raw/0"),
+  B AS (SELECT DISTINCT c0 FROM "mini-linq/raw/1"),
+  Blocked AS (SELECT DISTINCT c0,c1 FROM "mini-linq/raw/2"),
+  Hidden AS (SELECT DISTINCT c0,c1 FROM "mini-linq/raw/3")
+SELECT DISTINCT * FROM (
+SELECT A.c0 FROM A WHERE NOT EXISTS (SELECT 1 FROM Blocked WHERE Blocked.c0=A.c0) AND NOT EXISTS (SELECT 1 FROM Hidden WHERE Hidden.c0=A.c0)
+UNION SELECT B.c0 FROM B WHERE NOT EXISTS (SELECT 1 FROM Hidden WHERE Hidden.c0=B.c0)
+) AS result
+ORDER BY 1;

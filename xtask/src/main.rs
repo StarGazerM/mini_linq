@@ -1,5 +1,6 @@
 mod bench;
 mod explain;
+mod extended;
 #[cfg(feature = "oracle")]
 mod oracle;
 
@@ -64,10 +65,14 @@ fn list() -> Result<()> {
             case.purpose
         );
     }
+    for case in cq_workloads::extended::CASES {
+        println!("{:<24} {:<7} {}", case.name, "extended", case.family);
+    }
     Ok(())
 }
 
 fn generate(selection: Selection, scale: Scale, scenarios: ScenarioSelection) -> Result<()> {
+    extended::check_scale(selection, scale)?;
     let allow_inapplicable = scenarios.allows_inapplicable();
     for case in selection.cases() {
         let module = case.module()?;
@@ -96,6 +101,7 @@ fn generate(selection: Selection, scale: Scale, scenarios: ScenarioSelection) ->
             );
         }
     }
+    extended::generate(selection, scenarios)?;
     Ok(())
 }
 
@@ -106,6 +112,7 @@ fn golden(
     scenarios: ScenarioSelection,
     write: bool,
 ) -> Result<()> {
+    extended::check_scale(selection, scale)?;
     let allow_inapplicable = scenarios.allows_inapplicable();
     for case in selection.cases() {
         for scenario in scenarios.values() {
@@ -154,6 +161,7 @@ fn golden(
             }
         }
     }
+    extended::golden(selection, scenarios, write)?;
     Ok(())
 }
 
@@ -339,6 +347,7 @@ enum Selection {
     All,
     Suite(&'static str),
     Case(&'static QueryCase),
+    Extension(&'static cq_workloads::extended::Case),
 }
 
 impl Selection {
@@ -347,8 +356,10 @@ impl Selection {
             "all" => Ok(Self::All),
             "classic" => Ok(Self::Suite("classic")),
             "retail" => Ok(Self::Suite("retail")),
+            "extended" => Ok(Self::Suite("extended")),
             name => cq_workloads::case(name)
                 .map(Self::Case)
+                .or_else(|| cq_workloads::extended::case(name).map(Self::Extension))
                 .ok_or_else(|| format!("unknown suite or case `{name}`").into()),
         }
     }
@@ -358,6 +369,15 @@ impl Selection {
             Self::All => Box::new(catalog::all()),
             Self::Suite(name) => Box::new(catalog::named(name).into_iter().flatten()),
             Self::Case(case) => Box::new(std::iter::once(case)),
+            Self::Extension(_) => Box::new(std::iter::empty()),
+        }
+    }
+
+    fn extensions(self) -> Box<dyn Iterator<Item = &'static cq_workloads::extended::Case>> {
+        match self {
+            Self::All | Self::Suite("extended") => Box::new(cq_workloads::extended::CASES.iter()),
+            Self::Extension(case) => Box::new(std::iter::once(case)),
+            _ => Box::new(std::iter::empty()),
         }
     }
 }
@@ -514,7 +534,7 @@ fn help() {
 MiniLinq workload tasks
 
   cargo xtask list
-  cargo xtask generate [all|classic|retail|CASE] [tiny|medium|large] [--scenario SCENARIO]
+  cargo xtask generate [all|classic|retail|extended|CASE] [tiny|medium|large] [--scenario SCENARIO]
   cargo xtask golden [SELECTION] [SCALE] [--scenario SCENARIO] [--write]
   cargo xtask differential [SELECTION] [SCALE] [--scenario SCENARIO]
   cargo xtask explain CASE [--through STAGE]
@@ -524,6 +544,7 @@ SCENARIO is coverage, empty-input, no-match, or all. It defaults to coverage.
 
 STAGE is cq, relational-plan, or index-requirements. It defaults to index-requirements.
 Bench reports scales N, 2N and 4N (default N=128); time is never asserted.
+The extended corpus has deterministic tiny fixtures only.
 
 `golden` compares DuckDB with checked-in CSV answers. `--write` is the only
 mode that changes those answers. `differential` is unavailable until general

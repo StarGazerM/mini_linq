@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	recursion_reverse
+scenario	coverage
+scale	tiny
+seed	8530743697921433134
+generator-version	2
+relations	2
+relation	Goal	1	2	1
+relation	Edge	2	6	5

@@ -33,7 +33,9 @@ LANGUAGES = inventory("languages")
 FAMILIES = inventory("passes")
 RUNTIME = inventory("runtime")
 FACADES = inventory("facade")
-PATHS = LANGUAGES | FAMILIES | RUNTIME | FACADES
+EXTENSIONS = inventory("extensions")
+CORE = LANGUAGES | FAMILIES | RUNTIME | FACADES
+PATHS = CORE | EXTENSIONS
 # The crate declares the languages its pass transforms, not an arbitrary allowlist.
 EDGES = {}
 for name, path in FAMILIES.items():
@@ -80,10 +82,14 @@ def production(package):
     return [d for d in package["dependencies"] if d["kind"] != "dev"]
 
 
+def mask_rust(source):
+    return re.sub(r'//[^\n]*|/\*.*?\*/|r(#+)".*?"\1|"(?:\\.|[^"\\])*"',
+                  lambda m: " " * len(m.group()), source, flags=re.S)
+
+
 def recomputing_checks(source):
     """Inspect balanced check bodies after masking Rust comments and strings."""
-    masked = re.sub(r'//[^\n]*|/\*.*?\*/|r(#+)".*?"\1|"(?:\\.|[^"\\])*"',
-                    lambda m: " " * len(m.group()), source, flags=re.S)
+    masked = mask_rust(source)
     for match in re.finditer(r"\bpub\s+fn\s+check\s*\(", masked):
         start = masked.index("{", match.end())
         depth, end = 1, start + 1
@@ -97,10 +103,35 @@ def recomputing_checks(source):
 def check_independent_relations():
     assert list(recomputing_checks('pub fn check() { if true { compile(s); } }')) == [1]
     assert not list(recomputing_checks('pub fn check() { let x = "compile("; /* compile(s) */ }\nfn f() { compile(s); }'))
-    for path in sorted((ROOT / "passes").glob("*/src/**/*.rs")):
+    for path in sorted(list((ROOT / "passes").glob("*/src/**/*.rs")) + list((ROOT / "extensions").glob("*/src/**/*.rs"))):
         for line in recomputing_checks(path.read_text()):
             raise ValueError(f"{path.relative_to(ROOT)}:{line}: check must not call compile")
-    print("PASS: pass check bodies do not call compile", flush=True)
+    print("PASS: pass and extension check bodies do not call compile", flush=True)
+
+
+def forbidden_import(source, extension_names, surface_only=False):
+    masked = mask_rust(source)
+    names = "|".join(re.escape(name.replace("-", "_")) for name in extension_names)
+    if names and re.search(rf"\b({names})\s*::|\b(?:use|extern\s+crate)\b[^;]*\b({names})\b", masked):
+        return "core imports an extension"
+    if surface_only:
+        aliases = {"cq_lang_cq"} | set(re.findall(r"\bcq_lang_cq\s+as\s+(\w+)", masked))
+        for alias in aliases:
+            if re.search(rf"\b{alias}\s*::\s*(?:contract|normal|hypergraph)\b|\buse\s+{alias}\s*::\s*\{{[^}}]*\b(?:contract|normal|hypergraph)\b", masked):
+                return "extensions may use CQ for surface parsing only"
+    return None
+
+
+def check_extension_sources():
+    assert forbidden_import('use cq_ext_union::union;', EXTENSIONS)
+    assert forbidden_import('use cq_lang_cq as cq; cq::normal::normalize(s);', (), True)
+    assert not forbidden_import('// use cq_ext_union::union;\nconst S: &str = "cq::contract";', EXTENSIONS)
+    for name, path in PATHS.items():
+        for source in (ROOT / path / "src").rglob("*.rs"):
+            violation = forbidden_import(source.read_text(), EXTENSIONS if name in CORE else (), name in EXTENSIONS)
+            if violation:
+                raise ValueError(f"{source.relative_to(ROOT)}: {violation}")
+    print("PASS: core never imports extensions; extensions use only CQ surface parsing", flush=True)
 
 
 def check(data, announce=True):
@@ -124,8 +155,10 @@ def check(data, announce=True):
                 raise ValueError(f"pass features are forbidden: {name}")
         elif name in RUNTIME:
             allowed = {"cq-syntax", "cq-protocol"} - {name}
+        elif name in EXTENSIONS:
+            allowed = {"cq-syntax", "cq-lang-cq", "cq-stage", "cq-storage", "cq-state-providers"} | (set(EXTENSIONS) - {name})
         else:
-            allowed = set(packages)
+            allowed = set(packages) - set(EXTENSIONS)
         for dep in package["dependencies"]:
             target = dep["name"]
             if "path" not in dep and target not in packages: continue
@@ -143,7 +176,7 @@ def check(data, announce=True):
     for dep in production(frontend):
         if dep["name"] in FAMILIES and not dep["optional"]:
             raise ValueError(f"frontend unconditionally includes a pass: {dep['name']}")
-    if announce: print("PASS: folder-derived language, pass, runtime and facade boundaries", flush=True)
+    if announce: print("PASS: folder-derived language, pass, runtime, facade and extension boundaries", flush=True)
     return packages
 
 
@@ -155,6 +188,14 @@ def negative_dependency_checks(data):
                  ("cq-lang-ix", "cq-lang-physical", None, False),
                  ("cq-physical-lowering", "cq-lang-vo", "dev", False),
                  ("cq-physical-realization", "cq-storage", None, True)]
+    if EXTENSIONS:
+        extension = next(iter(EXTENSIONS))
+        mutations += [(extension, "cq-order", None, False),
+                      (extension, "cq-lang-ra", "dev", False),
+                      (extension, "mini-linq", "build", False),
+                      ("mini-linq", extension, "dev", False),
+                      ("cq-storage", extension, None, False),
+                      ("cq-lang-cq", extension, None, True)]
     for owner, target, kind, remote in mutations:
         altered = copy.deepcopy(data)
         package = next(p for p in altered["packages"] if p["name"] == owner)
@@ -218,7 +259,7 @@ def copy_component(destination, name, selected):
 
 def isolate(packages, only=()):
     logdir = ROOT / "target/component-logs"; logdir.mkdir(parents=True, exist_ok=True)
-    for name in LANGUAGES | RUNTIME | FAMILIES:
+    for name in LANGUAGES | RUNTIME | FAMILIES | EXTENSIONS:
         if only and name not in only: continue
         selected = closure(packages, name) | {"cq-syntax"}
         with tempfile.TemporaryDirectory(prefix=f"mini-linq-{name}-") as temporary:
@@ -234,7 +275,7 @@ def isolate(packages, only=()):
             with (logdir / f"{name}.log").open("w") as log:
                 result = subprocess.run(command, cwd=destination, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"isolation failed: {name}; see {logdir / (name + '.log')}")
-            if name in FAMILIES | LANGUAGES:
+            if name in FAMILIES | LANGUAGES | EXTENSIONS:
                 if not re.search(r"test result: ok\. [1-9][0-9]* passed", (logdir / f"{name}.log").read_text()):
                     raise ValueError(f"isolation executed no tests: {name}")
             detail = "with only: " + ", ".join(sorted(selected - {name}))
@@ -359,6 +400,7 @@ def main():
     parser.add_argument("--only", action="append", default=[], help="limit probes by component, frontend feature, or integration target")
     args = parser.parse_args()
     check_independent_relations()
+    check_extension_sources()
     labels = set(ALLOWED) | set(FRONTEND) | set(CONSUMERS)
     if set(args.only) - labels:
         parser.error("unknown --only label(s): " + ", ".join(sorted(set(args.only) - labels)))

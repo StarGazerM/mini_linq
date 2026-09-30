@@ -1,5 +1,5 @@
 use crate::Result;
-use cq_workloads::{adversarial, costs};
+use cq_workloads::{adversarial, costs, extended_costs};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
@@ -53,6 +53,11 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         options.seed
     );
     print!("{}", costs::table(&observations));
+    let extended: Vec<_> = [options.scale, options.scale * 2, options.scale * 4]
+        .into_iter()
+        .flat_map(extended_costs::run)
+        .collect();
+    print!("{}", extended_costs::table(&extended));
     Ok(())
 }
 

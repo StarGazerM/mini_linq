@@ -6,4 +6,5 @@
 //! physical assignments and a host input/output contract remain to be supplied.
 
 pub mod classic;
+pub mod extended;
 pub mod retail;

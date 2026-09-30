@@ -1,0 +1,17 @@
+pub mod aggregate_join;
+pub mod aggregate_stats;
+pub mod aggregate_two_keys;
+pub mod correlated_exists;
+pub mod correlated_parameter;
+pub mod correlated_scalar;
+pub mod negation_key;
+pub mod negation_pair;
+pub mod negation_twice;
+pub mod recursion_closure;
+pub mod recursion_reach;
+pub mod recursion_reverse;
+pub mod stacked_antijoin;
+pub mod stacked_mixed;
+pub mod union_join;
+pub mod union_project;
+pub mod union_two;

@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	correlated_exists
+scenario	empty-input
+scale	tiny
+seed	17537211614036826047
+generator-version	2
+relations	2
+relation	A	1	0	0
+relation	S	2	5	4

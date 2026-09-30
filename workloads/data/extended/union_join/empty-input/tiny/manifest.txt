@@ -1,0 +1,12 @@
+mini-linq-dataset	2
+suite	extended
+case	union_join
+scenario	empty-input
+scale	tiny
+seed	10403728953623380341
+generator-version	2
+relations	4
+relation	A	1	0	0
+relation	B	1	2	2
+relation	C	1	2	2
+relation	D	1	2	2

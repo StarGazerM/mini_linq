@@ -1,0 +1,12 @@
+mini-linq-dataset	2
+suite	extended
+case	stacked_mixed
+scenario	no-match
+scale	tiny
+seed	12139179222214425410
+generator-version	2
+relations	4
+relation	A	1	1	1
+relation	B	1	1	1
+relation	Blocked	2	1	1
+relation	Hidden	2	1	1

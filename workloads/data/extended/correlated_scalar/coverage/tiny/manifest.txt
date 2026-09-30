@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	correlated_scalar
+scenario	coverage
+scale	tiny
+seed	6013490231902344083
+generator-version	2
+relations	2
+relation	A	1	4	3
+relation	S	3	5	4

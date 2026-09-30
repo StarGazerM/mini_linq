@@ -32,6 +32,12 @@ members = [
     "facade/mini-linq",
     "workloads",
     "workloads/e2e",
+    "extensions/cq-ext-support",
+    "extensions/cq-ext-union",
+    "extensions/cq-ext-negation",
+    "extensions/cq-ext-aggregate",
+    "extensions/cq-ext-recursion",
+    "extensions/cq-ext-correlated",
 ]
 resolver = "3"
 

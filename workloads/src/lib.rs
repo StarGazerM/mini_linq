@@ -11,6 +11,9 @@ pub mod catalog;
 pub mod costs;
 pub mod dataset;
 pub mod execution;
+pub mod extended;
+#[cfg(feature = "counters")]
+pub mod extended_costs;
 pub mod generate;
 pub mod queries;
 pub mod sql;
@@ -20,11 +23,12 @@ use cq_lang_cq as cq;
 /// The stable version written into generated workload manifests.
 pub const GENERATOR_VERSION: u32 = 2;
 
-/// One of the two teaching corpora.
+/// One of the workload categories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Suite {
     Classic,
     Retail,
+    Extended,
 }
 
 impl Suite {
@@ -32,6 +36,7 @@ impl Suite {
         match self {
             Self::Classic => "classic",
             Self::Retail => "retail",
+            Self::Extended => "extended",
         }
     }
 }
@@ -130,10 +135,13 @@ pub fn case(name: &str) -> Option<&'static QueryCase> {
 
 /// Stable catalog seed. Renaming a case deliberately changes its generated data.
 pub fn seed_for(case: &QueryCase) -> u64 {
+    seed_for_name(case.name)
+}
+
+pub fn seed_for_name(name: &str) -> u64 {
     // FNV-1a is fixed here rather than delegated to a randomized standard
     // hasher so checked-in datasets remain reproducible across Rust releases.
-    case.name
-        .as_bytes()
+    name.as_bytes()
         .iter()
         .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
             (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)

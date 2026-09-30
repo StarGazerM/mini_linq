@@ -341,6 +341,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-ext-negation"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-ext-recursion"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-ext-support"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -509,10 +546,15 @@ dependencies = [
 name = "cq-workloads"
 version = "0.1.0"
 dependencies = [
+ "cq-ext-negation",
+ "cq-ext-recursion",
+ "cq-ext-support",
  "cq-lang-cq",
  "cq-storage",
  "cq-syntax",
  "mini-linq",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

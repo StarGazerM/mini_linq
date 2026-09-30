@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	union_project
+scenario	coverage
+scale	tiny
+seed	1431961213015820058
+generator-version	2
+relations	2
+relation	A	2	3	3
+relation	B	2	3	2

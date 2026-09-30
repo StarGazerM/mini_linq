@@ -1,0 +1,9 @@
+WITH
+  A AS (SELECT DISTINCT c0 FROM "mini-linq/raw/0"),
+  B AS (SELECT DISTINCT c0 FROM "mini-linq/raw/1"),
+  C AS (SELECT DISTINCT c0 FROM "mini-linq/raw/2"),
+  D AS (SELECT DISTINCT c0 FROM "mini-linq/raw/3")
+SELECT DISTINCT * FROM (
+SELECT A.c0 FROM A JOIN B ON A.c0=B.c0 UNION SELECT C.c0 FROM C JOIN D ON C.c0=D.c0
+) AS result
+ORDER BY 1;

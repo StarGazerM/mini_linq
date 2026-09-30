@@ -1,0 +1,6 @@
+WITH
+  Sale AS (SELECT DISTINCT c0,c1,c2,c3 FROM "mini-linq/raw/0")
+SELECT DISTINCT * FROM (
+SELECT c0,c1,CAST(count(*) AS INTEGER),CAST(sum(c3) AS INTEGER) FROM Sale WHERE c0>0 GROUP BY c0,c1
+) AS result
+ORDER BY 1,2,3,4;

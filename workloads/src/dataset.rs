@@ -113,6 +113,24 @@ impl Dataset {
         config: GenerationConfig,
         relations: Vec<RelationData>,
     ) -> Result<Self, DatasetError> {
+        cq::contract::check(module).map_err(DatasetError::InvalidQuery)?;
+        Self::new_schema(
+            &module.inputs().cloned().collect::<Vec<_>>(),
+            suite,
+            case,
+            config,
+            relations,
+        )
+    }
+
+    /// Extensions supply only their authored input schema to the dataset layer.
+    pub fn new_schema(
+        schema: &[cq::RelationDecl],
+        suite: Suite,
+        case: impl Into<String>,
+        config: GenerationConfig,
+        relations: Vec<RelationData>,
+    ) -> Result<Self, DatasetError> {
         let case = case.into();
         validate_manifest_token("case name", &case)?;
         let manifest = Manifest {
@@ -128,13 +146,18 @@ impl Dataset {
             manifest,
             relations,
         };
-        dataset.validate(module)?;
+        dataset.validate_schema(schema)?;
         Ok(dataset)
     }
 
     /// Enforce exact declaration order, names, arities, row widths, and counts.
     pub fn validate(&self, module: &cq::Program) -> Result<(), DatasetError> {
         cq::contract::check(module).map_err(DatasetError::InvalidQuery)?;
+        self.validate_schema(&module.inputs().cloned().collect::<Vec<_>>())
+    }
+
+    pub fn validate_schema(&self, schema: &[cq::RelationDecl]) -> Result<(), DatasetError> {
+        cq_syntax::check_input_declarations(schema).map_err(DatasetError::InvalidQuery)?;
         validate_manifest_token("case name", &self.manifest.case)?;
         if self.manifest.generator_version != GENERATOR_VERSION {
             return Err(DatasetError::Schema(format!(
@@ -143,7 +166,7 @@ impl Dataset {
             )));
         }
 
-        let declarations = module.inputs();
+        let declarations = schema.iter();
         let declaration_count = declarations.clone().count();
         if self.relations.len() != declaration_count {
             return Err(DatasetError::Schema(format!(
@@ -258,6 +281,15 @@ impl Dataset {
         directory: impl AsRef<Path>,
     ) -> Result<(), DatasetError> {
         self.validate(module)?;
+        self.write_schema(&module.inputs().cloned().collect::<Vec<_>>(), directory)
+    }
+
+    pub fn write_schema(
+        &self,
+        schema: &[cq::RelationDecl],
+        directory: impl AsRef<Path>,
+    ) -> Result<(), DatasetError> {
+        self.validate_schema(schema)?;
         let directory = directory.as_ref();
         fs::create_dir_all(directory).map_err(|source| DatasetError::Io {
             path: directory.to_owned(),
@@ -286,6 +318,13 @@ impl Dataset {
         directory: impl AsRef<Path>,
     ) -> Result<Self, DatasetError> {
         cq::contract::check(module).map_err(DatasetError::InvalidQuery)?;
+        Self::read_schema(&module.inputs().cloned().collect::<Vec<_>>(), directory)
+    }
+
+    pub fn read_schema(
+        schema: &[cq::RelationDecl],
+        directory: impl AsRef<Path>,
+    ) -> Result<Self, DatasetError> {
         let directory = directory.as_ref();
         let manifest_path = directory.join(MANIFEST_FILE);
         let text = fs::read_to_string(&manifest_path).map_err(|source| DatasetError::Io {
@@ -309,7 +348,7 @@ impl Dataset {
             manifest,
             relations,
         };
-        dataset.validate(module)?;
+        dataset.validate_schema(schema)?;
         Ok(dataset)
     }
 }
@@ -530,6 +569,7 @@ fn decode_manifest(path: &Path, text: &str) -> Result<Manifest, DatasetError> {
     let suite = match manifest_value(path, 2, lines[1], "suite")? {
         "classic" => Suite::Classic,
         "retail" => Suite::Retail,
+        "extended" => Suite::Extended,
         value => return Err(manifest_error(path, 2, format!("unknown suite `{value}`"))),
     };
     let case = manifest_value(path, 3, lines[2], "case")?.to_owned();

@@ -394,7 +394,7 @@ fn format_relational_block(plan: &ra::Plan) -> String {
         plan.output.input,
         format_atom(&plan.output.head),
     );
-    let declarations = plan.declarations.iter().map(|d| compact_tokens(d));
+    let declarations = plan.declarations.iter().map(compact_tokens);
     let body = declarations
         .chain(definitions)
         .chain(std::iter::once(output))

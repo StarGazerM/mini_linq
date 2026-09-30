@@ -1,0 +1,36 @@
+#![recursion_limit = "512"]
+cq_workloads::queries::extended::union_two::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::union_join::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::union_project::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::negation_key::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::negation_pair::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::negation_twice::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::aggregate_stats::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::aggregate_two_keys::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::aggregate_join::with_query!(cq_workload_e2e::instantiate_extended);
+cq_workloads::queries::extended::recursion_closure::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::recursion_reach::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::recursion_reverse::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::correlated_parameter::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::correlated_exists::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::correlated_scalar::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::stacked_antijoin::with_query!(
+    cq_workload_e2e::instantiate_extended
+);
+cq_workloads::queries::extended::stacked_mixed::with_query!(cq_workload_e2e::instantiate_extended);

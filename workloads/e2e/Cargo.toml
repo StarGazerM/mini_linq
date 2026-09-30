@@ -10,6 +10,7 @@ publish = false
 proc-macro = true
 
 [dependencies]
+cq-workloads = { path = ".." }
 cq-lang-cq.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
@@ -29,6 +30,11 @@ cq-lang-structures.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+cq-ext-union = { path = "../../extensions/cq-ext-union" }
+cq-ext-negation = { path = "../../extensions/cq-ext-negation" }
+cq-ext-aggregate = { path = "../../extensions/cq-ext-aggregate" }
+cq-ext-recursion = { path = "../../extensions/cq-ext-recursion" }
+cq-ext-correlated = { path = "../../extensions/cq-ext-correlated" }
 cq-workloads = { path = ".." }
 mini-linq.workspace = true
 cq-storage.workspace = true

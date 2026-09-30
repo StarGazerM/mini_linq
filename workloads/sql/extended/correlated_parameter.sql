@@ -1,0 +1,6 @@
+WITH
+  A AS (SELECT DISTINCT c0,c1 FROM "mini-linq/raw/0")
+SELECT DISTINCT * FROM (
+SELECT c0 FROM A WHERE c0>2
+) AS result
+ORDER BY 1;

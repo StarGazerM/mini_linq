@@ -9,8 +9,15 @@ pub fn evaluate(case: &QueryCase, dataset: &Dataset) -> Result<Vec<Vec<i32>>> {
     let source = case.module()?;
     dataset.validate(&source)?;
 
+    evaluate_sql(&dataset.relations, &cq_workloads::sql::translate(&source)?)
+}
+
+pub fn evaluate_sql(
+    relations: &[cq_workloads::dataset::RelationData],
+    sql: &str,
+) -> Result<Vec<Vec<i32>>> {
     let connection = Connection::open_in_memory()?;
-    for (input_index, relation) in dataset.relations.iter().enumerate() {
+    for (input_index, relation) in relations.iter().enumerate() {
         let raw_name = cq_workloads::sql::raw_table_name(input_index);
         let columns = (0..relation.arity)
             .map(|column| format!("c{column} INTEGER NOT NULL"))
@@ -29,8 +36,7 @@ pub fn evaluate(case: &QueryCase, dataset: &Dataset) -> Result<Vec<Vec<i32>>> {
         }
     }
 
-    let sql = cq_workloads::sql::translate(&source)?;
-    let mut statement = connection.prepare(&sql)?;
+    let mut statement = connection.prepare(sql)?;
     let mut query = statement.query([])?;
     let arity = query
         .as_ref()

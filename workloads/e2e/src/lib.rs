@@ -4,6 +4,15 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as Tokens;
 use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, parse::Parse};
+mod extended;
+
+/// Execute an authored extension callback against all three tiny SQL goldens.
+#[proc_macro]
+pub fn instantiate_extended(input: TokenStream) -> TokenStream {
+    extended::expand(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
 
 struct Request {
     planner: Ident,

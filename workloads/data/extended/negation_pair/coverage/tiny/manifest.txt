@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	negation_pair
+scenario	coverage
+scale	tiny
+seed	13298126694522821407
+generator-version	2
+relations	2
+relation	A	2	4	3
+relation	S	2	3	2

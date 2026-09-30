@@ -233,16 +233,42 @@ oracles and the reference printer, not by proof. Every printed program meets:
   expression and no printer copies a binding; ownership is created only by a
   CQ `let`, a final computed column, or the endpoint.
 
+## Extensions
+
+The crates in `extensions/` exercise the four openings without edits to
+`languages/`, `passes/`, `runtime/` or `facade/`. They emit core quotations into
+caller-resolved slots and never run passes. `cq-ext-union` makes one hole per
+disjunct and shares a lazy distinct sink; `cq-ext-negation` projects a negative
+hole into `GroupedAnswers` and uses an environment membership guard;
+`cq-ext-aggregate` folds a hole's distinct rows into grouped output;
+`cq-ext-recursion` runs linear delta holes to a finite active-domain fixpoint,
+feeding `Answers` through leaf declarations; `cq-ext-correlated` closes borrowed
+hosts and caller parameters around per-row existential/scalar quotations.
+Union and negation stack only by binding `union_hole!` to negation: neither
+crate depends on or recognizes the other. Authored leaves run once per context.
+Union streams when no local leaves must be retained; contexts retaining leaves
+collect before returning to close their lifetimes.
+
+Each extension has an independent structural correspondence check and mutation
+tests; executed programs are compared with 51 DuckDB scenarios from 17 authored
+queries. These checks establish the recorded context/quotation correspondence,
+not arbitrary Rust semantics. Negation checks declared transitive host dependency
+edges (opaque leaf dependencies must be supplied by the caller). Group-by folds
+use the explicitly projected CQ row set; recursive heads only copy active-domain
+columns; scalar subqueries require at most one distinct result and have an
+explicit empty default. Each extension crate's `//!` documentation gives its surface syntax and premises.
+The permanent boundary gate is `tools/check_dependencies.py`: extensions may
+depend only on surface CQ/syntax, stage/storage/state-provider openings and other
+extensions, and the core cannot depend on or import an extension. An incidental
+diff against an old commit is not the long-term architectural gate.
+
 ## Open
 
-- Extension crates and their semantics, including `union` beyond the positive
-  conjunctive core.
-- Negation and aggregation: the syntax parses and the CQ contract rejects it;
-  `languages/cq-lang-cq/tests/hw4_optional.rs` (feature `hw4`) states the
-  target contract.
+- Broader extension surfaces, including mutually recursive strata and nullable
+  or bag-valued aggregates. The core's native negation/aggregation syntax still
+  parses and is rejected by CQ; the extensions expand their own surfaces first.
 - Bag or annotated (K-relation) semantics.
 - A proven WCOJ complexity bound; cardinality estimation and cost-based
   ordering.
 - Native keyed reads of nested host tries.
-- Recursion and incremental evaluation; deltas would be ordinary hosts, not
-  IR constructs.
+- Incremental evaluation across changing inputs.

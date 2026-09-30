@@ -1,0 +1,11 @@
+mini-linq-dataset	2
+suite	extended
+case	stacked_antijoin
+scenario	coverage
+scale	tiny
+seed	17313384021752690503
+generator-version	2
+relations	3
+relation	A	1	4	3
+relation	B	1	3	2
+relation	Blocked	2	2	2

@@ -1,0 +1,10 @@
+mini-linq-dataset	2
+suite	extended
+case	aggregate_join
+scenario	empty-input
+scale	tiny
+seed	12999639960457941673
+generator-version	2
+relations	2
+relation	Sale	3	0	0
+relation	Allowed	1	3	2

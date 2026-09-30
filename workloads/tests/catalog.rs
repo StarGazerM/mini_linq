@@ -202,7 +202,14 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
         PathBuf::from("workloads/src/queries/mod.rs"),
         PathBuf::from("workloads/src/queries/classic/mod.rs"),
         PathBuf::from("workloads/src/queries/retail/mod.rs"),
+        PathBuf::from("workloads/src/queries/extended/mod.rs"),
     ]);
+    expected_paths.extend(cq_workloads::extended::CASES.iter().map(|case| {
+        let path = PathBuf::from(case.rust_path);
+        path.strip_prefix(&repository_root)
+            .unwrap_or(&path)
+            .to_path_buf()
+    }));
 
     for case in all_cases() {
         let source_path = PathBuf::from(case.rust_path);
@@ -300,6 +307,11 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
 fn sql_files_are_exactly_the_catalog_and_match_translation_byte_for_byte() {
     let repository_root = repository_root();
     let mut expected_paths = BTreeSet::new();
+    expected_paths.extend(
+        cq_workloads::extended::CASES
+            .iter()
+            .map(|case| PathBuf::from("workloads/sql/extended").join(format!("{}.sql", case.name))),
+    );
 
     for case in all_cases() {
         let expected_path = canonical_artifact_path(case, "sql", "sql");
@@ -433,6 +445,22 @@ fn checked_in_tiny_scenarios_are_an_exact_fresh_generator_bijection() {
     );
     assert_eq!(expected_data_directories.len(), 59);
     assert_eq!(expected_golden_paths.len(), 59);
+    for case in cq_workloads::extended::CASES {
+        for scenario in Scenario::ALL {
+            expected_data_directories.insert(
+                PathBuf::from("workloads/data/extended")
+                    .join(case.name)
+                    .join(scenario.as_str())
+                    .join("tiny"),
+            );
+            expected_golden_paths.insert(
+                PathBuf::from("workloads/golden/extended")
+                    .join(case.name)
+                    .join(scenario.as_str())
+                    .join("tiny.csv"),
+            );
+        }
+    }
 
     let actual_data_directories = artifact_tree_files("data")
         .into_iter()
