@@ -1,5 +1,5 @@
 //! Relational equality printing. Embedded Rust is emitted verbatim elsewhere.
-//! Equalities use the column type's Eq; no Rust expression is inspected.
+//! Admissible column `==` decides Leibniz identity; no Rust expression is inspected.
 use cq_lang_structures::syntax::{EqualityValue, algebra::Theta};
 use proc_macro2::TokenStream;
 use quote::quote;

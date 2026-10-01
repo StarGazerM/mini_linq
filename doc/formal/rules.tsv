@@ -64,7 +64,7 @@ S-Connected	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Connecte
 S-Greedy	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Greedy:	GreedyWidth and Auto rank connected atoms before union arity.
 S-Elimination	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Elimination:	Rank ready atoms by earliest elimination variable then clause index.
 O-Coarse	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Coarse:	Copy equalities and Rust chain nodes; emit one full subatom per chosen atom.
-O-Fine	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Fine:	Split unobserved columns while preserving source-before obligations; introduce Rust-observed values from full atoms.
+O-Fine	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Fine:	Introduce one variable per subatom; retain free-variable binders, the written Rust chain and source-before obligations.
 H-Occurrence	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-Occurrence:	Construct atom facts indexed by the complete normal-form body.
 H-Incidence	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-Incidence:	Insert every atom clause into each variable incidence set.
 H-Adjacency	abstract	-	-	Derived atom adjacency with whole shared-variable labels; no separate IR.
@@ -90,7 +90,7 @@ E-ReduceWith	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Red
 C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:	Project head dependencies or the full heading under a computed head.
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
 O-Join	abstract	-	-	Ghost binary-tree composition on disjoint full-atom coverages.
-L-Retention	abstract	-	-	Relational finite-set projection law; projection cannot collapse values observed by a later opaque Rust node.
+L-Retention	abstract	-	-	Leibniz identity and functional extensionality permit canonical projection before an opaque Rust node whenever its free variables are retained.
 Plan-Prefix	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, elaborate and continue with RA.
 Plan-Generic	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Generic:	Normalize, order Prefix(Connected)/Fine, elaborate and continue with RA.
 Plan-Graph	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Graph:	Normalize, Written/Coarse order, no Rust guard pushdown, Tree iff acyclic, elaborate.

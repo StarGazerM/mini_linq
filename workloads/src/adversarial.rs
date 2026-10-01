@@ -64,15 +64,15 @@ pub fn projection(scale: usize, seed: u64) -> Join {
 }
 
 /// Four fixed leading-column matches amid a growing relation.
-/// Both ordered windows and map probes use keys 2..6 independently of n.
+/// Opaque guards scan the host; map probes use keys 2..6 independently of n.
 pub fn host_rows(scale: usize, seed: u64) -> Vec<Edge> {
     shuffled((0..size(scale)).map(|i| (i, i * 3)).collect(), seed)
 }
 
-/// Diagonal rows; Written/Fine binds disconnected R/S prefixes before T's
-/// connecting columns. Elimination/Fine binds through T, reproducing 576 -> 24
-/// predicate visits at n=24. The original shared-key-first fixture is linear
-/// under both current planners; the unary S prefix exposes the order decision.
+/// Diagonal rows; Connected/Fine enumerates disconnected R/S prefixes before
+/// T's connecting columns, while Elimination/Fine binds through T. Both guards
+/// wait for all written relational constraints and visit n complete valuations;
+/// storage enumeration exposes the quadratic versus linear order decision.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Disconnected {
     pub r: Vec<Edge>,

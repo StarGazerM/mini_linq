@@ -4,8 +4,7 @@
 //! binds and guards keep their written chain; relational steps may move only
 //! earlier across them. Their free variables determine their partial-function
 //! meaning; I/O, mutation and evaluation counts are outside that meaning.
-//! Equality, keyed storage and deduplication require Eq, with Hash or Ord
-//! supplied by the selected representation.
+//! Equality in the relational centre is identity in classical Set.
 //!
 //! CQ planning produces RA; IX records index demands; Physical
 //! fixes one physical operator per result and the mode its reads allow,
@@ -39,6 +38,24 @@
 //! allowing declarative callbacks to call `<relation_loader!(Lineitem)>::csv`
 //! in the same scope without concatenating identifiers. Relation names remain
 //! available for authored Rust column types, including `String` and user types.
+//!
+//! 1. Leibniz admissibility of a column type: a type may be compared, joined,
+//!    grouped, keyed or deduplicated by the relational centre only if its `==`
+//!    decides Leibniz equality (Rust code cannot distinguish `==`-equal values).
+//!    Holds for integers, bool, char, String/&str, the cq-load Date/Decimal,
+//!    tuples and derived-Eq structs of admissible types; fails for f64/f32
+//!    (0.0 == -0.0) and hand-written lenient Eq.
+//! 2. Functional extensionality of embedded Rust: an embedded expression receives
+//!    query variables as shared references (`&T`, never `&mut`), so its value is
+//!    a function of the values of its free variables; equal (Leibniz) inputs give
+//!    equal results. Interior mutability, globals and I/O are outside the meaning,
+//!    as already documented (evaluation count is not preserved).
+//!
+//! Any surviving representative of `==`-equal values IS the value. Dedup,
+//! canonical projection, and projecting away variables before an opaque Rust step
+//! are sound whenever the Rust step's free variables are retained. `Eq` and the
+//! selected representation's `Hash`/`Ord` bounds are necessary mechanical checks;
+//! rustc cannot prove Leibniz admissibility of a hand-written implementation.
 
 use proc_macro::TokenStream;
 #[cfg(any(

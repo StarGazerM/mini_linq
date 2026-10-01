@@ -12,6 +12,11 @@
 //!        | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
 //!        | "reduce" Ident "@" Int "with" Subatom ";"
 //! ```
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 pub use cq_lang_cq as cq;
 
@@ -162,8 +167,6 @@ fn error<T>(
 fn analyze(program: &Program) -> syn::Result<Analysis> {
     let body = &program.cq.query.body;
     let hypergraph = cq::hypergraph::Analysis::of(&program.cq);
-    let observed = cq::normal::rust_observed(&program.cq);
-    let mut first_atom = BTreeMap::new();
     let mut analysis = Analysis::default();
     let mut written_bound = BTreeSet::new();
     let mut rust_chain = Vec::new();
@@ -174,9 +177,6 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         match item {
             cq::BodyItem::Positive { atom } => {
                 analysis.atoms.insert(clause, atom.clone());
-                for variable in atom.variables() {
-                    first_atom.entry(symbol_name(variable)).or_insert(clause);
-                }
                 written_bound.extend(atom.variables().map(symbol_name));
             }
             cq::BodyItem::Equality(equality) => {
@@ -258,24 +258,6 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                             );
                         }
                         Column::Dropped(_) => {}
-                    }
-                }
-                for variable in introduced.iter().filter(|v| observed.contains(*v)) {
-                    if subatom.variables().count() != variables.len() {
-                        return error(
-                            subatom,
-                            format!(
-                                "partial subatom introduces Rust-observed `{variable}`; its full source row is required"
-                            ),
-                        );
-                    }
-                    if first_atom[variable] != clause {
-                        return error(
-                            subatom,
-                            format!(
-                                "Rust-observed `{variable}` must retain its first source atom's value"
-                            ),
-                        );
                     }
                 }
                 seen_atoms.insert(clause);

@@ -3,8 +3,25 @@
 //! Compiler programs denote `bottom + Set`: one panic aborts evaluation.
 //! Rust expressions are opaque partial functions of their free variables;
 //! only relational steps commute or move earlier across the written Rust chain.
-//! I/O, mutation and evaluation counts are outside this meaning. Relational
-//! equality uses Eq, with Hash or Ord required by selected representations.
+//! Equality in the relational centre is identity in classical Set.
+//!
+//! 1. Leibniz admissibility of a column type: a type may be compared, joined,
+//!    grouped, keyed or deduplicated by the relational centre only if its `==`
+//!    decides Leibniz equality (Rust code cannot distinguish `==`-equal values).
+//!    Holds for integers, bool, char, String/&str, the cq-load Date/Decimal,
+//!    tuples and derived-Eq structs of admissible types; fails for f64/f32
+//!    (0.0 == -0.0) and hand-written lenient Eq.
+//! 2. Functional extensionality of embedded Rust: an embedded expression receives
+//!    query variables as shared references (`&T`, never `&mut`), so its value is
+//!    a function of the values of its free variables; equal (Leibniz) inputs give
+//!    equal results. Interior mutability, globals and I/O are outside the meaning,
+//!    as already documented (evaluation count is not preserved).
+//!
+//! Any surviving representative of `==`-equal values IS the value. Dedup,
+//! canonical projection, and projecting away variables before an opaque Rust step
+//! are sound whenever the Rust step's free variables are retained. `Eq` and the
+//! selected representation's `Hash`/`Ord` bounds are necessary mechanical checks;
+//! rustc cannot prove Leibniz admissibility of a hand-written implementation.
 
 use syn::ext::IdentExt;
 use syn::{Ident, Index, Token, Type, token};

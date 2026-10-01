@@ -126,7 +126,7 @@ fn written_fine_splits_each_atom_in_its_reference_position() {
             quote! { R@0(a, _); R@0(a, b); S@1(b, c); T@2(a, c); }
         )
     );
-    // Guards and bindings follow the step that binds their last variable.
+    // Guards and bindings follow every complete written relational predecessor.
     let guarded = cq(quote! {
         struct Q;
         relation R(a: i32, b: i32);
@@ -139,7 +139,7 @@ fn written_fine_splits_each_atom_in_its_reference_position() {
         expected(
             &guarded,
             quote! {
-                R@0(a, b);
+                R@0(a, _); R@0(a, b);
                 S@1(b, c); T@2(a, c); if a > 0; let d: i32 = a + c;
             }
         )
@@ -175,8 +175,8 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
     let cases = [
         (chain(), [0, 1, 2].as_slice(), [0, 1, 2].as_slice()),
         (triangle(), &[0, 1, 2], &[0, 1, 2]),
-        // Guards become ready in query order: VO keeps guards in that order,
-        // so `x != z` is placed as soon as T binds z and `w > 1` after S.
+        // Connected ranking binds z from T before S. Both guards retain their
+        // written order and wait until all three atoms have been checked.
         (
             cq(quote! {
                 struct Q;
@@ -186,7 +186,7 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
                 answer(x) :- R(x, y), S(z, w), T(y, z), if x != z, if w > 1;
             }),
             &[0, 1, 2, 3, 4],
-            &[0, 1, 2, 3, 4],
+            &[0, 2, 1, 3, 4],
         ),
         (
             cq(quote! {
@@ -631,16 +631,44 @@ fn generic_join_checks_all_atom_aliases_before_the_next_variable_class() {
 }
 
 #[test]
-fn partial_atoms_cannot_introduce_values_observed_by_rust() {
+fn elimination_fine_binds_identity_aliases_through_the_first_ranked_atom() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(b:i32,a:i32); relation S(c:i32); relation T(b:i32,c:i32,k:i32);
+        answer(k) :- R(b,a),S(c),T(b,c,k),if observe(b,c);
+    });
+    let target = plan(&source, Heuristic::Elimination, Split::Fine);
+    let first = target.valuation.steps.first().unwrap();
+    let valuation::Step::Atom(atom, _) = first else {
+        panic!("a shared variable must be introduced by an atom")
+    };
+    assert_eq!(atom.relation, "T");
+    assert_eq!(atom.variables().count(), 1);
+    let guard = target
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, valuation::Step::Guard(..)))
+        .unwrap();
+    assert_eq!(guard, target.valuation.steps.len() - 1);
+}
+
+#[test]
+fn partial_atoms_can_introduce_free_variables_before_the_full_before_check() {
     let source = cq(quote! {
         struct Q; relation R(x:Key,z:i32);
         answer(y) :- R(x,z), let y:bool=x.flag;
     });
     let changed = expected(&source, quote! { R@0(x,_); R@0(x,z); let y:bool=x.flag; });
-    let error = valuation::contract::check(&changed)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("Rust-observed"), "{error}");
+    valuation::contract::check(&changed).unwrap();
+    let incomplete = expected(&source, quote! { R@0(x,_); let y:bool=x.flag; R@0(x,z); });
+    assert!(
+        valuation::contract::check(&incomplete)
+            .unwrap_err()
+            .to_string()
+            .contains("Before condition"),
+        "projection must still check the complete written relational predecessor"
+    );
     for heuristic in [
         Heuristic::Written,
         Heuristic::Prefix(Ranking::Connected),
@@ -659,23 +687,18 @@ fn partial_atoms_cannot_introduce_values_observed_by_rust() {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(first.variables().count(), 2);
+        assert_eq!(first.variables().count(), 1);
     }
 }
 
 #[test]
-fn observed_shared_variables_keep_their_first_source_atom() {
+fn shared_free_variables_can_be_supplied_by_any_admissible_atom() {
     let source = cq(quote! {
         struct Q; relation R(x:Key,z:i32); relation S(x:Key);
         answer(y) :- R(x,z),S(x),let y:bool=x.flag;
     });
     let changed = expected(&source, quote! { S@1(x); R@0(x,z); let y:bool=x.flag; });
-    assert!(
-        valuation::contract::check(&changed)
-            .unwrap_err()
-            .to_string()
-            .contains("first source atom")
-    );
+    valuation::contract::check(&changed).unwrap();
     plan(
         &source,
         Heuristic::Prefix(Ranking::GreedyWidth),

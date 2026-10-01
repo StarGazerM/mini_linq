@@ -6,6 +6,11 @@
 //! ```text
 //! Entry ::= Ident "=" RustType ("[" Ident,* "]")+ ";"
 //! ```
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 pub use cq_lang_physical as physical;
 
@@ -210,7 +215,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 if !all.insert(symbol_name(column)) {
                     return error(column, format!("`{column}` appears in two levels"));
                 }
-                cq_syntax::algebra::check_setoid_type(
+                cq_syntax::algebra::check_leibniz_type(
                     &analysis.physical.rows[&name].types[&symbol_name(column)],
                     column,
                 )?;

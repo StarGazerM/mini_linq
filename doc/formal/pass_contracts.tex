@@ -196,7 +196,7 @@ and head tokens with variable renaming).
  \mathsf{kernel}(t,s.cq)=\mathsf{Kernel}(s.cq)}
  {\mathsf{check}_{elaborate}(s,t,())\Downarrow\ok}.
 \]
-This is the implemented structural criterion, not a complete semantic-equivalence
+This is the implemented structural criterion, not a complete semantic-equality
 procedure or an exact RA-shape comparison.
 
 \paragraph{Index demands.}
@@ -277,13 +277,13 @@ Rows borrow host/built fields, computed columns remain owned, and host lookups
 clone owned key values; distinct providers may clone retained rows. A block
 with bound storage collects answers before returning \code{Vec::into_iter};
 a block without bound statements may return the lazy iterator. This evidence
-supports the exercised cases, not an arbitrary Rust equivalence theorem.
+supports the exercised cases, not an arbitrary Rust semantic equality theorem.
 
 \subsection{The four interfaces of the closed core}
 Extensions produce Rust contexts $C[h_1,\ldots,h_n]$; each quotation $h_i$
 passes through the same closed core. Surface extensions introduce no operators.
 The following rules are implementation obligations, not proofs of extension
-semantics or Rust expression equivalence.
+semantics or Rust expression semantic equality.
 \begin{mathpar}
 \Rule{IF-Surface}{\operatorname{parse}_{CQ}(T)=s\quad
  \text{no unexpanded extension clause remains in }s}

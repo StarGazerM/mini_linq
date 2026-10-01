@@ -45,7 +45,7 @@ Free variables alone do not justify changing callback counts. For
 $R=\{(1,10),(1,20)\}$, set-projecting \code{R(x,witness)} to $x$ before
 \code{let y = tick(x)} changes two calls to one. Coarse elaboration retains
 witness columns until its final projection; Fine can project partial subatoms.
-Neither establishes arbitrary effect-trace equivalence. Argument scope also
+Neither establishes arbitrary effect-trace equality. Argument scope also
 differs from execution order: in \code{R(x,f(x),g())}, A-Prefix places a
 $g()$ binding before the atom and A-Local places the $f(x)$ guard after it. The \code{argument_placement}
 example checks VO equality and RA operator positions: the $g$ binding precedes

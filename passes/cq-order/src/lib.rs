@@ -5,6 +5,11 @@
 //! the Rust chain. This sufficient refinement condition permits no new panic
 //! on a nonpanicking written reference input. Other effects, including I/O,
 //! mutation and evaluation counts, are outside this denotation.
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -47,8 +52,7 @@ pub enum Split {
     /// One full subatom per atom occurrence.
     #[default]
     Coarse,
-    /// One new variable per subatom, except that a Rust-observed variable
-    /// requires its complete source row to preserve its actual value.
+    /// One new variable per subatom.
     Fine,
 }
 
@@ -73,7 +77,7 @@ impl Clause<'_> {
 /// Formal rule D-Atom: Atom provides its columns and requires let-supplied columns.
 /// Formal rule D-Guard: Guard requires dependencies on the written prefix.
 /// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
-fn clauses<'a>(query: &'a cq::Query, observed: &BTreeSet<String>) -> Vec<Clause<'a>> {
+fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
     let let_bound: BTreeSet<String> = query
         .body
         .iter()
@@ -94,9 +98,7 @@ fn clauses<'a>(query: &'a cq::Query, observed: &BTreeSet<String>) -> Vec<Clause<
                     let provides: Vec<String> = atom.variables().map(symbol_name).collect();
                     let requires = provides
                         .iter()
-                        .filter(|v| {
-                            let_bound.contains(*v) || (observed.contains(*v) && prefix.contains(*v))
-                        })
+                        .filter(|v| let_bound.contains(*v))
                         .cloned()
                         .collect();
                     (provides, requires)
@@ -194,14 +196,14 @@ fn schedule(
 fn prefix_rank<'a>(
     clauses: &'a [Clause<'a>],
     ranking: Ranking,
-    equivalences: &'a BTreeMap<String, String>,
+    canonical_names: &'a BTreeMap<String, String>,
 ) -> impl Fn(usize, &BTreeSet<String>) -> Rank + 'a {
     move |clause, bound| {
         let facts = &clauses[clause];
         if !facts.is_atom() {
             return (false, false, 0, clause);
         }
-        let canonical = |name: &String| equivalences.get(name).unwrap_or(name).clone();
+        let canonical = |name: &String| canonical_names.get(name).unwrap_or(name).clone();
         let supplied: BTreeSet<_> = facts.provides.iter().map(canonical).collect();
         let available: BTreeSet<_> = bound.iter().map(canonical).collect();
         let shared = supplied.intersection(&available).count();
@@ -304,21 +306,10 @@ struct Fine<'a> {
     /// Guards and bindings not yet placed, in query order.
     waiting: Vec<usize>,
     incomplete_atoms: BTreeSet<usize>,
-    observed: BTreeSet<String>,
-    first_atom: BTreeMap<String, usize>,
     steps: Vec<valuation::Step>,
 }
 
 impl Fine<'_> {
-    fn full_ready(&self, clause: usize) -> bool {
-        self.clauses[clause].requires.is_subset(&self.bound)
-            && self.clauses[clause].provides.iter().all(|v| {
-                !self.observed.contains(v)
-                    || self.bound.contains(v)
-                    || self.first_atom.get(v) == Some(&clause)
-            })
-    }
-
     fn place_ready(&mut self) {
         loop {
             let pending: Vec<_> = self
@@ -373,7 +364,6 @@ fn fine(
     clauses: &[Clause<'_>],
     sequence: &[usize],
     variables: &[String],
-    observed: BTreeSet<String>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let atoms: Vec<usize> = sequence
         .iter()
@@ -385,16 +375,6 @@ fn fine(
         .filter(|c| matches!(c.item, BodyItem::Let(_)))
         .flat_map(|c| &c.provides)
         .collect();
-    let mut first_atom = BTreeMap::new();
-    for (clause, facts) in clauses
-        .iter()
-        .enumerate()
-        .filter(|(_, facts)| facts.is_atom())
-    {
-        for variable in &facts.provides {
-            first_atom.entry(variable.clone()).or_insert(clause);
-        }
-    }
     let mut plan = Fine {
         clauses,
         bound: BTreeSet::new(),
@@ -402,8 +382,6 @@ fn fine(
             .filter(|&c| !clauses[c].is_atom())
             .collect(),
         incomplete_atoms: atoms.iter().copied().collect(),
-        observed,
-        first_atom,
         steps: Vec::new(),
     };
     for &clause in &atoms {
@@ -418,16 +396,7 @@ fn fine(
             if plan.bound.contains(*v) {
                 return true;
             }
-            if let_bound.contains(v) {
-                return false;
-            }
-            if plan.observed.contains(*v) {
-                return plan
-                    .first_atom
-                    .get(*v)
-                    .is_some_and(|&clause| plan.full_ready(clause));
-            }
-            true
+            !let_bound.contains(v)
         }) else {
             return Err(syn::Error::new_spanned(
                 query,
@@ -440,23 +409,13 @@ fn fine(
             .copied()
             .filter(|&c| clauses[c].provides.contains(variable));
         if !plan.bound.contains(variable) {
-            let binder = if plan.observed.contains(variable) {
-                let binder = plan.first_atom[variable];
-                Some(binder)
-            } else {
-                holding.next()
-            };
-            let Some(binder) = binder else {
+            let Some(binder) = holding.next() else {
                 return Err(syn::Error::new_spanned(
                     query,
                     format!("`{variable}` is not a variable of the query"),
                 ));
             };
-            if plan.observed.contains(variable) {
-                plan.bound.extend(clauses[binder].provides.iter().cloned());
-            } else {
-                plan.bound.insert(variable.clone());
-            }
+            plan.bound.insert(variable.clone());
             plan.subatom(binder, atom(clauses[binder].item));
             plan.place_ready();
         }
@@ -473,7 +432,7 @@ fn atom(item: &BodyItem) -> &cq::Atom {
 }
 
 /// Written splits each atom in place; it performs no cross-clause reordering.
-fn written_fine(clauses: &[Clause<'_>], observed: &BTreeSet<String>) -> Vec<valuation::Step> {
+fn written_fine(clauses: &[Clause<'_>]) -> Vec<valuation::Step> {
     let mut steps = Vec::new();
     let mut bound = BTreeSet::new();
     for (clause, facts) in clauses.iter().enumerate() {
@@ -484,8 +443,7 @@ fn written_fine(clauses: &[Clause<'_>], observed: &BTreeSet<String>) -> Vec<valu
                 .filter(|v| !bound.contains(*v))
                 .cloned()
                 .collect();
-            if new.is_empty() || new.iter().any(|v| observed.contains(v)) {
-                bound.extend(new);
+            if new.is_empty() {
                 steps.push(subatom(clause, atom, |_| true));
             } else {
                 for variable in new {
@@ -506,8 +464,7 @@ fn written_fine(clauses: &[Clause<'_>], observed: &BTreeSet<String>) -> Vec<valu
 pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
     let query = &source.query;
-    let observed = cq::normal::rust_observed(source);
-    let clauses = clauses(query, &observed);
+    let clauses = clauses(query);
     let hypergraph = cq::hypergraph::Analysis::of(source);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Written => {
@@ -519,7 +476,7 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
             let sequence = schedule(
                 query,
                 &clauses,
-                prefix_rank(&clauses, ranking, &hypergraph.equivalences),
+                prefix_rank(&clauses, ranking, &hypergraph.canonical_names),
             )?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
@@ -538,10 +495,19 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
         // against the other atoms holding that logical variable.
         let mut grouped = Vec::new();
         for variable in &variables {
-            for alias in variables
+            let mut aliases: Vec<_> = variables
                 .iter()
                 .filter(|alias| hypergraph.equivalent(variable, alias))
-            {
+                .collect();
+            // Identity permits any ranked supplier. Bind the class through
+            // its earliest scheduled atom before checking the other aliases;
+            // name order alone can choose a disconnected supplier instead.
+            aliases.sort_by_key(|alias| {
+                sequence
+                    .iter()
+                    .position(|&clause| clauses[clause].provides.contains(alias))
+            });
+            for alias in aliases {
                 if !grouped.contains(alias) {
                     grouped.push(alias.clone());
                 }
@@ -551,8 +517,8 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     }
     let steps = match options.split {
         Split::Coarse => coarse(&clauses, &sequence),
-        Split::Fine if options.heuristic == Heuristic::Written => written_fine(&clauses, &observed),
-        Split::Fine => fine(query, &clauses, &sequence, &variables, observed)?,
+        Split::Fine if options.heuristic == Heuristic::Written => written_fine(&clauses),
+        Split::Fine => fine(query, &clauses, &sequence, &variables)?,
     };
     let program = valuation::Program {
         cq: source.clone(),
@@ -647,7 +613,6 @@ pub fn check(
             ));
         }
     }
-    let observed = cq::normal::rust_observed(source);
     let mut seen = BTreeSet::new();
     let mut previous = None;
     for (step, introduced) in target.valuation.steps.iter().zip(&analysis.introduces) {
@@ -678,10 +643,7 @@ pub fn check(
                         "Coarse requires exactly one full subatom per atom clause",
                     ));
                 }
-                if options.split == Split::Fine
-                    && introduced.len() > 1
-                    && !introduced.iter().any(|v| observed.contains(v))
-                {
+                if options.split == Split::Fine && introduced.len() > 1 {
                     return Err(fail("Fine permits at most one new variable per subatom"));
                 }
                 // Written: the clauses that introduce variables follow the

@@ -1,7 +1,7 @@
 use cq_workloads::{adversarial, costs};
 
 #[test]
-fn checked_shapes_have_recorded_linear_constant_or_quadratic_growth() {
+fn each_decision_has_linear_or_constant_vs_adversarial_growth() {
     let runs: Vec<_> = [24, 48, 96]
         .into_iter()
         .map(|n| costs::run(n, adversarial::SEED))

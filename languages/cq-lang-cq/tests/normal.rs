@@ -164,7 +164,7 @@ fn kernels_preserve_cross_kind_chain_and_relational_predecessors() {
 }
 
 #[test]
-fn equality_and_result_dedup_reject_known_non_setoid_columns() {
+fn equality_and_result_dedup_reject_known_non_leibniz_columns() {
     for source in [
         quote!(struct Q; relation R(value:f64); answer(x) :- R(x);),
         quote!(struct Q; relation R(key:f64,value:i32); answer(y) :- R(1.0,y);),
@@ -172,7 +172,14 @@ fn equality_and_result_dedup_reject_known_non_setoid_columns() {
         quote!(struct Q; relation R(value:i32); relation answer(computed:f64); answer(*x as f64) :- R(x);),
     ] {
         let error = cq::normal::normalize(&cq(source)).unwrap_err().to_string();
-        assert!(error.contains("Eq") && error.contains("column"), "{error}");
+        assert!(
+            error.contains("Leibniz admissibility of a column type")
+                && error.contains("Rust code cannot distinguish `==`-equal values")
+                && error.contains("f64/f32 (0.0 == -0.0)")
+                && error.contains("hand-written lenient Eq")
+                && error.contains("column"),
+            "{error}"
+        );
     }
     let malformed: cq::Equality = cq::Equality {
         left: syn::parse_quote!(x),
@@ -211,7 +218,7 @@ fn a_host_capture_in_the_head_becomes_a_final_binding() {
 }
 
 #[test]
-fn tuple_annotations_expose_known_float_columns_to_the_setoid_check() {
+fn tuple_annotations_expose_known_float_columns_to_the_leibniz_check() {
     for source in [
         quote! {
             struct Q; relation R(t:i32);

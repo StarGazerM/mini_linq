@@ -1,5 +1,5 @@
 //! RA prime correspondence: independent relational tableaux between opaque
-//! chain nodes, with source-prefix containment and final set equivalence.
+//! chain nodes, with source-prefix containment and equal final sets.
 #[allow(dead_code)]
 #[path = "../../../test-support/relational/cq_semantics.rs"]
 mod cq_oracle;
@@ -467,9 +467,9 @@ fn correspondence_preserves_the_supplied_vo_before_constraints() {
 }
 
 #[test]
-fn rust_observed_equality_class_preserves_its_original_generator_binding() {
-    // Key Eq may compare only id while Rust reads flag. The S representative
-    // therefore cannot replace x from R, even when the planner visits S first.
+fn leibniz_equality_class_can_use_either_generator_binding() {
+    // Key is admissible: equality includes every field Rust can read. Retain
+    // the expression's free-variable name, then solve its relational aliases.
     let surface = cq(quote! {
         struct Q; relation R(key:Key, marker:i32); relation S(key:Key);
         answer(y) :- R(x,z), S(x), let y:bool = x.flag;
@@ -483,10 +483,7 @@ fn rust_observed_equality_class_preserves_its_original_generator_binding() {
     };
     assert_eq!(rename.relation, "R");
     let explicit = target.plan.definitions.iter().any(|d| matches!(&d.operator, ra::Operator::Select(select) if select.condition.equalities.iter().any(|e| matches!(e.right, ra::EqualityValue::Variable(_)))));
-    assert!(
-        explicit,
-        "observed equality must retain both concrete bindings"
-    );
+    assert!(!explicit, "the shared join heading decides identity");
     let replacement: ra::Program = syn::parse_quote! { relational {
         relation R(key:Key, marker:i32); relation S(key:Key);
         s = rename S {key -> x}; r = rename R {key -> x, marker -> z};
@@ -494,14 +491,11 @@ fn rust_observed_equality_class_preserves_its_original_generator_binding() {
         p = project b keep {y}; output p as answer(y);
     }};
     ra::contract::check(&replacement).unwrap();
-    assert!(
-        check(&source, &replacement).is_err(),
-        "Eq cannot justify a different Rust binding supplier"
-    );
+    check(&source, &replacement).unwrap();
 }
 
 #[test]
-fn projection_before_rust_cannot_discard_an_observed_eq_representative() {
+fn projection_before_rust_can_discard_variables_outside_its_free_variables() {
     let source = cq(quote! {
         struct Q; relation R(key:Key, marker:i32);
         answer(y) :- R(x,z), let y:bool = x.flag;
@@ -513,10 +507,5 @@ fn projection_before_rust_cannot_discard_an_observed_eq_representative() {
         output out as answer(y);
     }};
     ra::contract::check(&target).unwrap();
-    assert!(
-        check(&coarse(&source), &target)
-            .unwrap_err()
-            .to_string()
-            .contains("representative")
-    );
+    check(&coarse(&source), &target).unwrap();
 }

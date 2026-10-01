@@ -63,7 +63,7 @@ pub enum GyoStep {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Analysis {
     /// Equality classes; aliases retain their actual spelling in CQ/VO.
-    pub equivalences: BTreeMap<String, String>,
+    pub canonical_names: BTreeMap<String, String>,
     /// Atom variables in order of first occurrence over the body.
     pub variables: Vec<String>,
     /// Atom clause index → its variables, in column order.
@@ -110,7 +110,7 @@ impl Analysis {
             .flat_map(super::Atom::variables)
             .map(symbol_name)
             .collect();
-        analysis.equivalences = names
+        analysis.canonical_names = names
             .iter()
             .map(|name| (name.clone(), name.clone()))
             .collect();
@@ -123,16 +123,22 @@ impl Analysis {
             {
                 let left = symbol_name(left);
                 let right = symbol_name(right);
-                let a = analysis.equivalences.get(&left).unwrap_or(&left).clone();
-                let b = analysis.equivalences.get(&right).unwrap_or(&right).clone();
+                let a = analysis.canonical_names.get(&left).unwrap_or(&left).clone();
+                let b = analysis
+                    .canonical_names
+                    .get(&right)
+                    .unwrap_or(&right)
+                    .clone();
                 let representative = a.clone().min(b.clone());
-                for value in analysis.equivalences.values_mut() {
+                for value in analysis.canonical_names.values_mut() {
                     if *value == a || *value == b {
                         *value = representative.clone();
                     }
                 }
-                analysis.equivalences.insert(left, representative.clone());
-                analysis.equivalences.insert(right, representative);
+                analysis
+                    .canonical_names
+                    .insert(left, representative.clone());
+                analysis.canonical_names.insert(right, representative);
             }
         }
         let mut edges = BTreeMap::new();
@@ -180,12 +186,12 @@ impl Analysis {
 
     /// Whether relational variable equalities place two names in one class.
     pub fn equivalent(&self, left: &str, right: &str) -> bool {
-        self.equivalences
+        self.canonical_names
             .get(left)
             .map(String::as_str)
             .unwrap_or(left)
             == self
-                .equivalences
+                .canonical_names
                 .get(right)
                 .map(String::as_str)
                 .unwrap_or(right)

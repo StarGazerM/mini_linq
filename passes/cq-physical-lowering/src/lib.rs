@@ -5,6 +5,11 @@
 //! ancestry chain; relational steps may move earlier, never later across them.
 //! I/O, mutation and evaluation counts are outside the denotation.
 //! Canonicality follows only from plan operators and explicit canon boundaries.
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

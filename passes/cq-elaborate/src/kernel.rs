@@ -1,6 +1,6 @@
 //! Structural erasure of RA prime. Opaque Rust chain nodes remain in their
 //! actual definition order; erasure never repairs a reordered target by sorting
-//! it against the source. Relational equivalence and legal earlier movement are
+//! it against the source. Relational equality and legal earlier movement are
 //! established independently by the per-region tableau check.
 
 use std::collections::BTreeSet;

@@ -22,10 +22,25 @@ relative order and stay after the steps binding their free variables. An
 identical Rust chain and inclusion of each source Before set in the target
 Before set is a **sufficient** condition for refinement. RA laws apply only
 to relational steps; bind and guard nodes belong to the ordered chain.
-Equalities, keys and deduplication require a setoid (`Eq` with `Hash` or
-`Ord` for storage), never merely `PartialEq`.
-Rust-observed bindings retain their original stored representatives; equality
-unification and partial-atom projection cannot substitute or collapse them.
+Equality in the relational centre is identity in classical Set.
+
+1. Leibniz admissibility of a column type: a type may be compared, joined,
+   grouped, keyed or deduplicated by the relational centre only if its `==`
+   decides Leibniz equality (Rust code cannot distinguish `==`-equal values).
+   Holds for integers, bool, char, String/&str, the cq-load Date/Decimal,
+   tuples and derived-Eq structs of admissible types; fails for f64/f32
+   (0.0 == -0.0) and hand-written lenient Eq.
+2. Functional extensionality of embedded Rust: an embedded expression receives
+   query variables as shared references (`&T`, never `&mut`), so its value is
+   a function of the values of its free variables; equal (Leibniz) inputs give
+   equal results. Interior mutability, globals and I/O are outside the meaning,
+   as already documented (evaluation count is not preserved).
+
+Any surviving representative of `==`-equal values IS the value. Dedup,
+canonical projection, and projecting away variables before an opaque Rust step
+are sound whenever the Rust step's free variables are retained. `Eq` and the
+selected representation's `Hash`/`Ord` bounds are necessary mechanical checks;
+rustc cannot prove Leibniz admissibility of a hand-written implementation.
 
 At each atom's written position normalization replaces repeated variables
 and literals with fresh columns and relational equalities. An already-bound

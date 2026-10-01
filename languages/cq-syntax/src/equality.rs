@@ -1,4 +1,5 @@
-//! Relational equality, interpreted using the column type's `Eq` relation.
+//! Relational equality is Leibniz identity in classical Set. An admissible
+//! column type's `==` is the generated decision procedure for that identity.
 //! Rust expressions are never recognized as relational equalities.
 use syn::{Ident, Token};
 

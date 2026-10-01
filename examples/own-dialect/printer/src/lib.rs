@@ -17,7 +17,7 @@ pub fn set_sink(input: TokenStream) -> TokenStream {
         Ok(match &request.task {
             cq_protocol::Task::New { .. } => quote!(::std::collections::HashSet::new()),
             cq_protocol::Task::Insert { state, value, .. } => {
-                quote!({ ::cq_storage::require::setoid(#value); (#state).insert(::core::clone::Clone::clone(#value)) })
+                quote!({ ::cq_storage::require::leibniz(#value); (#state).insert(::core::clone::Clone::clone(#value)) })
             }
         })
     })

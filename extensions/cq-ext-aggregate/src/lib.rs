@@ -22,7 +22,7 @@
 //! bijections, schema and leaf preservation, projections, capture links and fold
 //! specifications where defined; it never calls `compile`. Context emission is
 //! Rust realization, validated by differential execution and ownership/laziness
-//! tests, without a claim of deciding arbitrary Rust equivalence.
+//! tests, without a claim of deciding arbitrary Rust semantic equality.
 //!
 mod expansion;
 

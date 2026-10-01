@@ -21,6 +21,11 @@
 //!
 //! `contract::check` derives headings, types and source identifier bindings
 //! entirely from this program. VO correspondence belongs to cq-elaborate.
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 pub use cq_syntax::algebra::{AttributeRename, Bind, Guard, Project, Rename, Select, Theta, Unit};
 pub use cq_syntax::{Equality, EqualityValue};
@@ -286,7 +291,7 @@ fn check_in<'a>(
                                 format!("selection uses unavailable column `{name}`"),
                             ));
                         }
-                        check_setoid(&input.types[&name], column)?;
+                        check_leibniz(&input.types[&name], column)?;
                     }
                 }
                 (input.heading.clone(), vec![name])
@@ -400,13 +405,13 @@ fn check_in<'a>(
                     .heading
                     .intersection(&relations[&operands[1]].heading)
                 {
-                    check_setoid(&relations[&operands[0]].types[name], &bindings[name])?;
-                    check_setoid(&relations[&operands[1]].types[name], &bindings[name])?;
+                    check_leibniz(&relations[&operands[0]].types[name], &bindings[name])?;
+                    check_leibniz(&relations[&operands[1]].types[name], &bindings[name])?;
                 }
             }
             Operator::Project(project) => {
                 for column in &project.attributes {
-                    check_setoid(&types[&symbol_name(column)], column)?;
+                    check_leibniz(&types[&symbol_name(column)], column)?;
                 }
             }
             _ => {}
@@ -451,7 +456,7 @@ fn check_in<'a>(
         ));
     }
     for column in plan.output.head.variables() {
-        check_setoid(&output.types[&symbol_name(column)], column)?;
+        check_leibniz(&output.types[&symbol_name(column)], column)?;
     }
 
     check_all_reachable(plan, &relations, &output_name)?;
@@ -568,8 +573,8 @@ fn check_all_reachable(
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
 
-/// Reject known types without Rust's setoid premise; aliases are checked by the
-/// generated `Eq + Hash` or `Ord` bounds in the realization.
-fn check_setoid(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
-    cq_syntax::algebra::check_setoid_type(ty, column)
+/// Reject known failures of Leibniz admissibility. Generated Rust checks the
+/// necessary trait bounds; admissibility of user implementations is a premise.
+fn check_leibniz(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
+    cq_syntax::algebra::check_leibniz_type(ty, column)
 }

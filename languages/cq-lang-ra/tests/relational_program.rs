@@ -343,7 +343,7 @@ fn opaque_nodes_form_one_ancestry_chain() {
 }
 
 #[test]
-fn selection_scope_and_float_setoid_are_checked_with_column_diagnostics() {
+fn selection_scope_and_float_leibniz_are_checked_with_column_diagnostics() {
     for program in [
         quote! { relational {
             relation R(a: i32); r = rename R {a -> x};

@@ -1,10 +1,9 @@
 //! Independent relational-region proof. A tableau records existential rows,
 //! literal equalities and the opaque Rust relations already traversed. Projection
 //! and semijoin keep existential witnesses; each right operand gets fresh witness
-//! variables. Containment uses finite conjunctive-query homomorphisms. For
-//! Rust-observed classes, Eq is an explicit predicate between concrete witnesses;
-//! it does not substitute representatives. Projection losses are tracked
-//! separately because opaque Rust need not respect the column type's Eq classes.
+//! variables. Containment uses finite conjunctive-query homomorphisms. Leibniz
+//! equality unifies terms; functional extensionality makes projection sound
+//! before Rust whenever its free variables remain in the heading.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,13 +33,11 @@ struct Tableau {
     heading: BTreeMap<String, Term>,
     atoms: BTreeSet<Atom>,
     impossible: bool,
-    projected_representatives: BTreeSet<Term>,
 }
 
 #[derive(Default)]
 struct Context {
     next_variable: usize,
-    sensitive: BTreeSet<String>,
 }
 
 impl Context {
@@ -76,9 +73,6 @@ impl Tableau {
                 *value = keep.clone();
             }
         }
-        if self.projected_representatives.remove(&replace) {
-            self.projected_representatives.insert(keep.clone());
-        }
         self.atoms = std::mem::take(&mut self.atoms)
             .into_iter()
             .map(|mut atom| {
@@ -93,39 +87,12 @@ impl Tableau {
         Some((replace, keep))
     }
 
-    fn equate(
-        &mut self,
-        left: Term,
-        right: Term,
-        preserve_representatives: bool,
-    ) -> Option<(Term, Term)> {
-        if !preserve_representatives {
-            return self.unify(left, right);
-        }
-        if left != right {
-            self.atoms.insert(Atom {
-                relation: "#eq".into(),
-                arguments: vec![left.clone(), right.clone()],
-            });
-            self.atoms.insert(Atom {
-                relation: "#eq".into(),
-                arguments: vec![right, left],
-            });
-        }
-        None
-    }
-
-    fn equality(&mut self, equality: &ra::Equality, context: &Context) {
+    fn equality(&mut self, equality: &ra::Equality) {
         let left = self.heading[&symbol_name(&equality.left)].clone();
         match &equality.right {
             ra::EqualityValue::Variable(variable) => {
                 let right = self.heading[&symbol_name(variable)].clone();
-                self.equate(
-                    left,
-                    right,
-                    context.sensitive.contains(&symbol_name(&equality.left))
-                        || context.sensitive.contains(&symbol_name(variable)),
-                );
+                self.unify(left, right);
             }
             ra::EqualityValue::Literal(literal) => {
                 // Keep literal predicates syntactic. Inferring contradiction
@@ -160,16 +127,10 @@ impl Tableau {
                 arguments: atom.arguments.iter().map(&mut rename).collect(),
             })
             .collect();
-        let projected_representatives = self
-            .projected_representatives
-            .iter()
-            .map(&mut rename)
-            .collect();
         Self {
             heading,
             atoms,
             impossible: self.impossible,
-            projected_representatives,
         }
     }
 
@@ -177,25 +138,20 @@ impl Tableau {
         let right = right.freshen(context);
         let mut joined = self.clone();
         joined.impossible |= right.impossible;
-        joined
-            .projected_representatives
-            .extend(right.projected_representatives);
         joined.atoms.extend(right.atoms);
         let mut equalities = Vec::new();
         for (name, term) in right.heading {
             match joined.heading.get(&name) {
-                Some(left) => {
-                    equalities.push((left.clone(), term, context.sensitive.contains(&name)))
-                }
+                Some(left) => equalities.push((left.clone(), term)),
                 None if !semijoin => {
                     joined.heading.insert(name, term);
                 }
                 None => {}
             }
         }
-        while let Some((left, right, sensitive)) = equalities.pop() {
-            if let Some((replace, keep)) = joined.equate(left, right, sensitive) {
-                for (left, right, _) in &mut equalities {
+        while let Some((left, right)) = equalities.pop() {
+            if let Some((replace, keep)) = joined.unify(left, right) {
+                for (left, right) in &mut equalities {
                     if *left == replace {
                         *left = keep.clone();
                     }
@@ -208,24 +164,8 @@ impl Tableau {
         joined
     }
 
-    fn project(&mut self, keep: &BTreeSet<String>, context: &Context) {
-        if self.heading.keys().any(|name| !keep.contains(name)) {
-            self.projected_representatives.extend(
-                self.heading
-                    .iter()
-                    .filter(|(name, _)| keep.contains(*name) && context.sensitive.contains(*name))
-                    .map(|(_, term)| term.clone()),
-            );
-        }
+    fn project(&mut self, keep: &BTreeSet<String>) {
         self.heading.retain(|name, _| keep.contains(name));
-    }
-
-    fn loses_observed_representative(&self, expression: &syn::Expr) -> bool {
-        let environment = self.heading.keys().cloned().collect();
-        cq::rust::free_variables(expression)
-            .dependencies(&environment)
-            .iter()
-            .any(|name| self.projected_representatives.contains(&self.heading[name]))
     }
 
     fn rust(
@@ -256,7 +196,6 @@ impl Tableau {
 struct ChainNode {
     payload: String,
     input: Tableau,
-    lost_representative: bool,
 }
 
 fn payload(item: &BodyItem) -> String {
@@ -293,20 +232,15 @@ fn source_tableau(source: &valuation::Program, context: &mut Context) -> (Tablea
                     .variables()
                     .map(|(_, name)| symbol_name(name))
                     .collect();
-                input.project(&visible, context);
+                input.project(&visible);
                 table = table.join(&input, false, context);
             }
-            valuation::Step::Equality(equality, _) => table.equality(equality, context),
+            valuation::Step::Equality(equality, _) => table.equality(equality),
             valuation::Step::Guard(filter, _) => {
                 let item = BodyItem::Filter(filter.clone());
                 chain.push(ChainNode {
                     payload: payload(&item),
                     input: table.clone(),
-                    lost_representative: table.loses_observed_representative(match &item {
-                        BodyItem::Filter(filter) => &filter.condition,
-                        BodyItem::Let(binding) => &binding.expression,
-                        _ => unreachable!(),
-                    }),
                 });
                 table.rust(chain.len() - 1, &filter.condition, &[], context);
             }
@@ -315,11 +249,6 @@ fn source_tableau(source: &valuation::Program, context: &mut Context) -> (Tablea
                 chain.push(ChainNode {
                     payload: payload(&item),
                     input: table.clone(),
-                    lost_representative: table.loses_observed_representative(match &item {
-                        BodyItem::Filter(filter) => &filter.condition,
-                        BodyItem::Let(binding) => &binding.expression,
-                        _ => unreachable!(),
-                    }),
                 });
                 table.rust(
                     chain.len() - 1,
@@ -351,12 +280,7 @@ fn source_tableau(source: &valuation::Program, context: &mut Context) -> (Tablea
                         if hypergraph.equivalent(left_name, right_name) {
                             let lhs = reduced.heading[left_name].clone();
                             let rhs = reduced.heading[&format!("#support:{right_name}")].clone();
-                            reduced.equate(
-                                lhs,
-                                rhs,
-                                context.sensitive.contains(left_name)
-                                    || context.sensitive.contains(right_name),
-                            );
+                            reduced.unify(lhs, rhs);
                         }
                     }
                 }
@@ -417,13 +341,13 @@ fn target_tableau(target: &ra::Program, context: &mut Context) -> (Tableau, Vec<
             ra::Operator::Project(project) => {
                 let mut table = results[&symbol_name(&project.input)].clone();
                 let keep: BTreeSet<_> = project.attributes.iter().map(symbol_name).collect();
-                table.project(&keep, context);
+                table.project(&keep);
                 table
             }
             ra::Operator::Select(select) => {
                 let mut table = results[&symbol_name(&select.input)].clone();
                 for equality in &select.condition.equalities {
-                    table.equality(equality, context);
+                    table.equality(equality);
                 }
                 table
             }
@@ -436,11 +360,6 @@ fn target_tableau(target: &ra::Program, context: &mut Context) -> (Tableau, Vec<
                 chain.push(ChainNode {
                     payload: payload(&item),
                     input: table.clone(),
-                    lost_representative: table.loses_observed_representative(match &item {
-                        BodyItem::Filter(filter) => &filter.condition,
-                        BodyItem::Let(binding) => &binding.expression,
-                        _ => unreachable!(),
-                    }),
                 });
                 table.rust(chain.len() - 1, &guard.condition, &[], context);
                 table
@@ -451,11 +370,6 @@ fn target_tableau(target: &ra::Program, context: &mut Context) -> (Tableau, Vec<
                 chain.push(ChainNode {
                     payload: payload(&item),
                     input: table.clone(),
-                    lost_representative: table.loses_observed_representative(match &item {
-                        BodyItem::Filter(filter) => &filter.condition,
-                        BodyItem::Let(binding) => &binding.expression,
-                        _ => unreachable!(),
-                    }),
                 });
                 table.rust(
                     chain.len() - 1,
@@ -546,10 +460,7 @@ fn contained(target: &Tableau, source: &Tableau, columns: &BTreeSet<String>) -> 
 }
 
 pub(crate) fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
-    let mut context = Context {
-        sensitive: crate::rust_sensitive(&source.cq),
-        ..Context::default()
-    };
+    let mut context = Context::default();
     let (source_output, source_chain) = source_tableau(source, &mut context);
     let (target_output, target_chain) = target_tableau(target, &mut context);
     let error = |message: &str| {
@@ -569,11 +480,6 @@ pub(crate) fn check(source: &valuation::Program, target: &ra::Program) -> syn::R
         ));
     }
     for (ordinal, (source, target)) in source_chain.iter().zip(&target_chain).enumerate() {
-        if source.lost_representative || target.lost_representative {
-            return Err(error(&format!(
-                "Rust step {ordinal} follows a projection that may discard its original Eq representative"
-            )));
-        }
         let common = source
             .input
             .heading

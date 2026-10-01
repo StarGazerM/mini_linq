@@ -4,8 +4,8 @@
 //! binds and guards keep their written chain; relational steps may move only
 //! earlier across them. Their free variables determine their partial-function
 //! meaning; I/O, mutation and evaluation counts are outside that meaning.
-//! Equality, keyed storage and deduplication require Eq, with Hash or Ord
-//! supplied by the selected representation.
+//! Relational `==` decides Leibniz identity. `Eq` and the selected storage's
+//! `Hash` or `Ord` bounds are necessary checks, not a proof of admissibility.
 //!
 //! These structures do not implement relational operators, choose access
 //! paths, or couple a collection to a query-wide representation. Query access
@@ -40,6 +40,24 @@
 //!
 //! [`require`] holds one-line guards the compiler emits beside each
 //! structure so a missing trait fails there, naming the structure.
+//!
+//! 1. Leibniz admissibility of a column type: a type may be compared, joined,
+//!    grouped, keyed or deduplicated by the relational centre only if its `==`
+//!    decides Leibniz equality (Rust code cannot distinguish `==`-equal values).
+//!    Holds for integers, bool, char, String/&str, the cq-load Date/Decimal,
+//!    tuples and derived-Eq structs of admissible types; fails for f64/f32
+//!    (0.0 == -0.0) and hand-written lenient Eq.
+//! 2. Functional extensionality of embedded Rust: an embedded expression receives
+//!    query variables as shared references (`&T`, never `&mut`), so its value is
+//!    a function of the values of its free variables; equal (Leibniz) inputs give
+//!    equal results. Interior mutability, globals and I/O are outside the meaning,
+//!    as already documented (evaluation count is not preserved).
+//!
+//! Any surviving representative of `==`-equal values IS the value. Dedup,
+//! canonical projection, and projecting away variables before an opaque Rust step
+//! are sound whenever the Rust step's free variables are retained. `Eq` and the
+//! selected representation's `Hash`/`Ord` bounds are necessary mechanical checks;
+//! rustc cannot prove Leibniz admissibility of a hand-written implementation.
 
 mod answers;
 mod candidates;
@@ -75,8 +93,9 @@ mod point;
 pub use point::{PointLookup, PointRows};
 
 pub mod require {
-    /// Verify the setoid premise even when a custom provider adds no bound.
-    pub fn setoid<T: Eq + ?Sized>(_: &T) {}
+    /// Check the necessary `Eq` bound even when a provider adds no bound.
+    /// Leibniz admissibility remains a caller premise; `Eq` cannot prove it.
+    pub fn leibniz<T: Eq + ?Sized>(_: &T) {}
     /// Preserve a build pair while enforcing Eq on its key.
     pub fn key<K: Eq, V>(pair: (K, V)) -> (K, V) {
         pair
@@ -99,8 +118,9 @@ pub mod require {
     impl<K> OrderedKey<K> for &K {}
     pub fn canonical<T: super::Canonical>(_: T) {}
 }
-/// The relational centre uses the column type's equivalence relation.
-/// Requiring `Eq` also rejects floating-point columns and PartialEq-only types.
+/// Decide Leibniz identity using the admissible column type's `==`.
+/// The `Eq` bound rejects floats and PartialEq-only types; it cannot establish
+/// Leibniz admissibility of a hand-written implementation.
 pub fn relational_eq<T: Eq + ?Sized>(left: &T, right: &T) -> bool {
     left == right
 }

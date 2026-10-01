@@ -4,12 +4,17 @@
 //! binds and guards keep their written chain; relational steps may move only
 //! earlier across them. Their free variables determine their partial-function
 //! meaning; I/O, mutation and evaluation counts are outside that meaning.
-//! Equality, keyed storage and deduplication require Eq, with Hash or Ord
-//! supplied by the selected representation.
+//! Relational `==` decides Leibniz identity. `Eq` and the selected storage's
+//! `Hash` or `Ord` bounds are necessary checks, not a proof of admissibility.
 //!
 //! [`Context`] records checked layouts and generated bindings. Printers choose
 //! their control flow and state sinks; this crate selects neither a planner
 //! nor a runtime dependency. Runtime names occur only in emitted Rust tokens.
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 use cq_lang_structures as structures;
 use proc_macro2::TokenStream;

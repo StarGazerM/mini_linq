@@ -67,6 +67,29 @@ Projection selects attributes; out fixes answer order and repeated positions.
 Computed head expressions instead act on each valuation.
 
 \subsection{Assumptions for relational compilation}
+The compiler denotation is classical Set composed with one undistinguished
+panic: $T X=\bot+\operatorname{Set}X$. Equality is Leibniz identity, not an
+additional relation on values. The premises are:
+\begin{enumerate}
+\item Leibniz admissibility of a column type: a type may be compared, joined,
+grouped, keyed or deduplicated by the relational centre only if its \code{==}
+decides Leibniz equality (Rust code cannot distinguish \code{==}-equal values).
+Holds for integers, bool, char, String/\&str, the cq-load Date/Decimal, tuples
+and derived-Eq structs of admissible types; fails for f64/f32
+(\code{0.0 == -0.0}) and hand-written lenient Eq.
+\item Functional extensionality of embedded Rust: an embedded expression
+receives query variables as shared references (\code{\&T}, never \code{\&mut}),
+so its value is a function of the values of its free variables; equal (Leibniz)
+inputs give equal results. Interior mutability, globals and I/O are outside the
+meaning, as already documented (evaluation count is not preserved).
+\end{enumerate}
+Any surviving representative of \code{==}-equal values is the value. Dedup,
+canonical projection and projection before opaque Rust are sound whenever its
+free variables remain. Rust steps keep their written chain, and each target
+chain input retains all source Before constraints. This is refinement against
+written order: if the reference returns, the target returns the same set
+without panic. An embedded expression need not be total on all typed inputs.
+
 A host judgment
 $\langle e,\rho,\sigma\rangle\Downarrow_H(v,\sigma',\alpha)$
 evaluates Rust expression $e$ in binding environment $\rho$ and store $\sigma$,
@@ -74,7 +97,7 @@ returning value $v$ and events $\alpha$. Panic and divergence are also possible.
 The relation $v\simeq_\tau a$ connects Rust values with abstract values;
 input fields are borrowed, while computed bindings can be owned.
 
-\begin{definition}[Admissible relational host, $\mathcal H_{\rm rel}$]
+\begin{definition}[Total specialization for relational equations, $\mathcal H_{\rm rel}$]
 \label{def:host}
 For each expression, on every well-typed valuation of its logical inputs and
 related host bindings, including valuations introduced by a transformed plan:
@@ -89,8 +112,10 @@ agrees exactly with equality of represented values; equal values hash equally;
 clones preserve values. When used, sorting implements a consistent total order silently.
 \end{enumerate}
 \end{definition}
-These are theorem premises, not properties established by Syn or Rust trait
-bounds. Resource exhaustion is outside the finite-value model. Correct Rust
+These stronger premises specialize the algebraic equations below to total
+expressions; they are not required by the compiler's partial Rust chain.
+Neither Syn nor Rust trait bounds establish the semantic premises.
+Resource exhaustion is outside the finite-value model. Correct Rust
 elaboration, resolution, ownership and captures are separate obligations of the
 selected expansion; they are not folded into source-host admissibility.
 Totality merely on tuples reached by the original plan is insufficient: with

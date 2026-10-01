@@ -124,6 +124,6 @@ fn main() {
         assert!(oracle(&case).is_empty());
     }
     println!(
-        "PASS: automatic and authored RA/IX contracts; independent whole-tuple oracle and duplicate/empty fixtures. No generated-query equivalence or intermediate runtime counts are claimed."
+        "PASS: automatic and authored RA/IX contracts; independent whole-tuple oracle and duplicate/empty fixtures. No generated-query semantic equality or intermediate runtime counts are claimed."
     );
 }

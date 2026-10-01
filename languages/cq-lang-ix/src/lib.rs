@@ -5,6 +5,11 @@
 //! key values come from a stream or a compile-time literal tuple. The denotation
 //! is `bottom + Set`: opaque Rust binds and guards retain their ancestry chain;
 //! index analysis preserves that plan and introduces no evaluation freedom.
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 pub use cq_lang_ra as ra;
 

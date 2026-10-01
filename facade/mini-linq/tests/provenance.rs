@@ -1,15 +1,37 @@
-//! Opaque Rust observes the first-bound stored value, including its provenance.
+//! Leibniz identity and functional extensionality permit canonical projection.
+//! Compile and execute both optimized queries and the written-order reference.
 use proc_macro2::TokenStream;
 use quote::quote;
 
 fn expression(source: &str, options: cq_order::Options, policy: &str) -> TokenStream {
+    elaborate_expression(source, options, policy, false)
+}
+
+fn written_expression(source: &str, policy: &str) -> TokenStream {
+    elaborate_expression(source, cq_order::Options::default(), policy, true)
+}
+
+fn elaborate_expression(
+    source: &str,
+    options: cq_order::Options,
+    policy: &str,
+    written: bool,
+) -> TokenStream {
     let source = cq_lang_cq::normal::normalize(&syn::parse_str(source).unwrap()).unwrap();
     let vo = cq_order::compile(&source, &options).unwrap();
     cq_order::check(&source, &vo, &options).unwrap();
-    let ra = cq_elaborate::compile(&vo).unwrap();
+    let ra = if written {
+        cq_elaborate::compile_written(&vo).unwrap()
+    } else {
+        cq_elaborate::compile(&vo).unwrap()
+    };
     cq_elaborate::check(&vo, &ra).unwrap();
-    let ix = cq_index_policy::compile(&ra).unwrap();
-    cq_index_policy::check(&ra, &ix).unwrap();
+    realize(&ra, policy)
+}
+
+fn realize(ra: &cq_lang_ra::Program, policy: &str) -> TokenStream {
+    let ix = cq_index_policy::compile(ra).unwrap();
+    cq_index_policy::check(ra, &ix).unwrap();
     let policy = syn::parse_str(policy).unwrap();
     let physical = cq_physical_lowering::compile(&ix, &policy).unwrap();
     cq_physical_lowering::check(&ix, &physical, &policy).unwrap();
@@ -28,7 +50,7 @@ fn expression(source: &str, options: cq_order::Options, policy: &str) -> TokenSt
 }
 
 #[test]
-fn equal_columns_and_literal_reads_preserve_the_first_bound_value() {
+fn admissible_values_and_literal_reads_refine_the_written_order() {
     let mut cases = Vec::new();
     for heuristic in [
         cq_order::Heuristic::Written,
@@ -45,11 +67,11 @@ fn equal_columns_and_literal_reads_preserve_the_first_bound_value() {
                 "policy {join=merge; project=canon;}",
             ] {
                 let label = format!("{heuristic:?}/{split:?}/{policy}");
-                // A slice has no native OrderedRead. Merge fixtures use full
-                // row keys so both distinct source witnesses remain present.
+                // A slice has no native OrderedRead. Merge fixtures group on
+                // the declared leading key and retain all payload rows.
                 let (r_host, s_host) = if policy.contains("join=merge") {
                     (
-                        quote!(let R: ::std::collections::BTreeMap<(Key,i32),Vec<()>> = rows_r.iter().cloned().map(|row| (row,vec![()])).collect();),
+                        quote!(let R: ::std::collections::BTreeMap<(Key,),Vec<(i32,)>> = rows_r.iter().cloned().fold(::std::collections::BTreeMap::new(), |mut map,(key,row)| { map.entry((key,)).or_default().push((row,)); map });),
                         quote!(let S: ::std::collections::BTreeMap<(Key,),Vec<()>> = rows_s.iter().cloned().map(|row| (row,vec![()])).collect();),
                     )
                 } else {
@@ -58,77 +80,121 @@ fn equal_columns_and_literal_reads_preserve_the_first_bound_value() {
                         quote!(let S = rows_s.as_slice();),
                     )
                 };
-                let query = expression(
-                    "struct Q; relation R(k:Key,r:i32); relation S(k:Key); \
-                 answer(y) :- R(x,z), S(x), let y:bool = x.flag;",
-                    cq_order::Options { heuristic, split },
-                    policy,
-                );
+                let source = "struct Q; relation R(k:Key,r:i32); relation S(k:Key); \
+                              answer(y) :- R(x,z), S(x), let y:bool = x.flag;";
+                let written = written_expression(source, policy);
+                let query = expression(source, cq_order::Options { heuristic, split }, policy);
                 cases.push(quote!({
                     let rows_r = [(Key { id: 1, flag: false }, 0)];
-                    let rows_s = [(Key { id: 1, flag: true },)];
+                    let rows_s = [(Key { id: 1, flag: false },), (Key { id: 1, flag: true },)];
                     #r_host #s_host
-                    let mut written = Vec::new();
-                    for (x, _) in &rows_r {
-                        for (alias,) in &rows_s {
-                            if x == alias { written.push((x.flag,)); }
-                        }
-                    }
+                    let expected: Vec<_> = (#written).collect();
                     let actual: Vec<_> = (#query).collect();
-                    assert_eq!(actual, written, "first-bound representative: {}", #label);
+                    assert_eq!(actual, expected, "Leibniz join: {}", #label);
                 }));
-                let correlated = expression(
-                    "struct Q; relation R(k:Key,r:i32); answer(flag,z) :- R(x,z), let flag:bool=x.flag;",
-                    cq_order::Options { heuristic, split },
-                    policy,
-                );
+                let source = "struct Q; relation R(k:Key,r:i32); answer(flag,z) :- R(x,z), let flag:bool=x.flag;";
+                let written = written_expression(source, policy);
+                let correlated = expression(source, cq_order::Options { heuristic, split }, policy);
                 cases.push(quote!({
                     let rows_r = [(Key {id:1,flag:false},0),(Key {id:1,flag:true},1)];
                     #r_host
-                    let mut written: Vec<_> = rows_r.iter().map(|(x,z)| (x.flag,z)).collect();
+                    let mut written: Vec<_> = (#written).collect();
                     let mut actual: Vec<_> = (#correlated).collect();
                     written.sort(); actual.sort();
                     assert_eq!(actual,written,"full-row correlation: {}",#label);
                 }));
-                let partial = expression(
-                    "struct Q; relation R(k:Key,r:i32); answer(y) :- R(x,z), let y:i32=if x.flag {10 / *z} else {0};",
-                    cq_order::Options { heuristic, split },
-                    policy,
-                );
+                let source = "struct Q; relation R(k:Key,r:i32); answer(y) :- R(x,z), let y:i32=if x.flag {10 / *z} else {0};";
+                let written = written_expression(source, policy);
+                let partial = expression(source, cq_order::Options { heuristic, split }, policy);
                 cases.push(quote!({
-                let rows_r = [(Key {id:1,flag:true},1),(Key {id:1,flag:false},0)];
-                #r_host
-                let mut written: Vec<_> = rows_r.iter().map(|(x,z)| (if x.flag {10 / *z} else {0},)).collect();
-                let mut actual: Vec<_> = (#partial).collect();
-                written.sort(); actual.sort();
-                assert_eq!(actual,written,"correlation cannot introduce a panic: {}",#label);
-            }));
+                    let rows_r = [(Key {id:1,flag:true},1),(Key {id:1,flag:false},0)];
+                    #r_host
+                    let mut written: Vec<_> = (#written).collect();
+                    let mut actual: Vec<_> = (#partial).collect();
+                    written.sort(); actual.sort();
+                    assert_eq!(actual,written,"correlation cannot introduce a panic: {}",#label);
+                }));
             }
         }
     }
-    let point = expression(
-        "struct Q; relation R(k:i32,p:i32); \
-         answer(y) :- R(x,z), x=5, let y:bool = ::std::ptr::eq(x,captured);",
-        cq_order::Options::default(),
-        "policy {}",
-    );
+    let source = "struct Q; relation R(k:i32,p:i32); \
+                  answer(y) :- R(x,z), x=5, let y:i32 = *x + 1;";
+    let written = written_expression(source, "policy {}");
+    let point = expression(source, cq_order::Options::default(), "policy {}");
     cases.push(quote!({
-        let rows = [(5_i32,7_i32)];
+        let rows = [(5_i32,7_i32), (5,8), (6,9)];
         let R = rows.as_slice();
-        let captured = &rows[0].0;
-        let written: Vec<_> = R.iter().filter(|(key,_)| *key == 5)
-            .map(|(x,_)| (::std::ptr::eq(x,captured),)).collect();
+        let expected: Vec<_> = (#written).collect();
         let actual: Vec<_> = (#point).collect();
-        assert_eq!(actual, written, "slice const-read retains the stored key");
+        assert_eq!(actual, expected, "slice constant read retains the key value");
     }));
     cases.push(quote!({
-        let R = ::std::collections::HashMap::from([((5_i32,),vec![(7_i32,)])]);
-        let captured = &R.get_key_value(&(5,)).unwrap().0.0;
-        let written: Vec<_> = R.iter().filter(|((key,),_)| *key == 5)
-            .flat_map(|((x,), payload)| payload.iter().map(move |_| (::std::ptr::eq(x,captured),))).collect();
+        let R = ::std::collections::HashMap::from([((5_i32,),vec![(7_i32,), (8,)]), ((6,),vec![(9,)])]);
+        let expected: Vec<_> = (#written).collect();
         let actual: Vec<_> = (#point).collect();
-        assert_eq!(actual, written, "native const-read retains the stored key");
+        assert_eq!(actual, expected, "native constant read retains the key value");
     }));
+    run_cases(&cases);
+}
+
+#[test]
+fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
+    let source = "struct Q; relation R(k:i32,z:i32); relation S(k:i32,w:i32); \
+                  answer(y) :- R(x,z), S(x,w), if observe(x,visits), let y:i32=10 / *x;";
+    let normalized = cq_lang_cq::normal::normalize(&syn::parse_str(source).unwrap()).unwrap();
+    let vo = cq_order::compile(&normalized, &cq_order::Options::default()).unwrap();
+    let ra = syn::parse_quote!(relational {
+        relation R(k:i32,z:i32); relation S(k:i32,w:i32);
+        r = rename R {k -> x, z -> z}; rp = project r keep {x};
+        s = rename S {k -> x, w -> w}; sp = project s keep {x};
+        j = natural_join rp with sp;
+        g = guard j if (observe(x,visits)); b = bind g with y:i32 = (10 / *x);
+        p = project b keep {y}; output p as answer(y);
+    });
+    cq_elaborate::check(&vo, &ra).unwrap();
+    let optimized = realize(&ra, "policy {project=canon;}");
+    let written = written_expression(source, "policy {}");
+    run_cases(&[quote!({
+        fn observe(x: &i32, visits: &::std::cell::Cell<usize>) -> bool {
+            assert_ne!(*x, 0, "both full written atoms must constrain the guard");
+            visits.set(visits.get()+1);
+            *x > 1
+        }
+        let mut previous_rows = None;
+        for scale in [24_i32,48,96] {
+            let mut rows_r: Vec<_> = (0..scale).map(|z| (2,z)).collect();
+            rows_r.push((0,0)); // S has no 0: the written reference never panics.
+            let rows_s: Vec<_> = (0..scale).map(|w| (2,w)).collect();
+            let R = rows_r.as_slice(); let S = rows_s.as_slice();
+            let written_visits = ::std::cell::Cell::new(0);
+            let visits = &written_visits;
+            let expected: ::std::collections::BTreeSet<_> = (#written).collect();
+            assert_eq!(written_visits.get(), (scale*scale) as usize);
+            let optimized_visits = ::std::cell::Cell::new(0);
+            let visits = &optimized_visits;
+            ::cq_storage::counters::reset();
+            let actual: ::std::collections::BTreeSet<_> = (#optimized).collect();
+            let counts = ::cq_storage::counters::snapshot();
+            assert_eq!(actual, expected);
+            assert_eq!(actual, ::std::collections::BTreeSet::from([(5,)]));
+            assert_eq!(optimized_visits.get(), 1);
+            assert!(counts.rows_enumerated > 0);
+            if let Some(previous) = previous_rows {
+                assert!(counts.rows_enumerated*2 < previous*5, "fan-out must enumerate linearly: {previous} -> {counts:?}");
+            }
+            previous_rows = Some(counts.rows_enumerated);
+            println!("fan scale={scale} guard_visits={} counts={counts:?}", optimized_visits.get());
+        }
+        let R: &[(i32,i32)] = &[(0,0)];
+        let S: &[(i32,i32)] = &[];
+        let visits = &::std::cell::Cell::new(0);
+        assert_eq!((#written).count(), 0);
+        assert_eq!((#optimized).count(), 0);
+        assert_eq!(visits.get(), 0);
+    })]);
+}
+
+fn run_cases(cases: &[TokenStream]) {
     let program = quote! {
         #![allow(non_snake_case, unused_variables, unused_macros)]
         macro_rules! distinct {
@@ -141,23 +207,14 @@ fn equal_columns_and_literal_reads_preserve_the_first_bound_value() {
             (ordered) => { ::std::collections::BTreeMap<_,Vec<_>> };
             (trie $inner:ty) => { ::cq_storage::Trie<'_,_,$inner> };
         }
-        #[derive(Clone,Debug)]
+        #[derive(Clone,Debug,PartialEq,Eq,Hash,PartialOrd,Ord)]
         struct Key { id:i32, flag:bool }
-        impl PartialEq for Key { fn eq(&self,other:&Self)->bool { self.id == other.id } }
-        impl Eq for Key {}
-        impl ::std::hash::Hash for Key {
-            fn hash<H: ::std::hash::Hasher>(&self,state:&mut H) { self.id.hash(state); }
-        }
-        impl Ord for Key {
-            fn cmp(&self,other:&Self)->::std::cmp::Ordering { self.id.cmp(&other.id) }
-        }
-        impl PartialOrd for Key {
-            fn partial_cmp(&self,other:&Self)->Option<::std::cmp::Ordering> { Some(self.cmp(other)) }
-        }
         fn main() { #(#cases)* }
     };
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let dir = std::env::temp_dir().join(format!("cq-provenance-{}", std::process::id()));
+    let dir = std::env::temp_dir()
+        .join(format!("cq-provenance-{}", std::process::id()))
+        .join(std::thread::current().name().unwrap());
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("main.rs"), program.to_string()).unwrap();
     let runtime = std::process::Command::new("rustc")
@@ -167,6 +224,8 @@ fn equal_columns_and_literal_reads_preserve_the_first_bound_value() {
             "cq_storage",
             "--crate-type",
             "rlib",
+            "--cfg",
+            "feature=\"counters\"",
         ])
         .arg(root.join("runtime/cq-storage/src/lib.rs"))
         .arg("--out-dir")
@@ -203,5 +262,6 @@ fn equal_columns_and_literal_reads_preserve_the_first_bound_value() {
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );
+    print!("{}", String::from_utf8_lossy(&run.stdout));
     std::fs::remove_dir_all(dir).unwrap();
 }

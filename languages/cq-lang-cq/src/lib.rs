@@ -5,6 +5,11 @@
 //! mutation, counters and evaluation counts are outside this meaning.
 //! Relational steps commute and may move earlier across a Rust step. Rust
 //! steps keep their relative order and follow every free-variable binder.
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 pub use cq_syntax::predicate::{Comparison, Predicate, Term};
 pub mod hypergraph;

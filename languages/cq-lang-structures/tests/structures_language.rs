@@ -126,7 +126,7 @@ fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
 }
 
 #[test]
-fn every_built_key_level_requires_the_setoid_premise() {
+fn every_built_key_level_requires_the_leibniz_premise() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation L(a: i32); relation R(a: i32, payload: f64);
         l = pipe rename L { a -> x };

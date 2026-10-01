@@ -3,14 +3,20 @@
 //! The meaning is `T X = bottom + Set X`: one panic aborts evaluation.
 //! Each Rust step is a partial function of its free variables; I/O, mutation
 //! and evaluation counts are outside the meaning. Relational equalities are
-//! interpreted with `Eq`; Rust guards remain opaque. Relational constraints may
+//! Leibniz identities decided by admissible `==`; Rust guards remain opaque.
+//! Relational constraints may
 //! move earlier across a Rust node, shrinking its domain, while Rust nodes retain
 //! written order. Identical chain payloads and source-before constraints retained
 //! before each node are a sufficient refinement condition. [`check`] proves
 //! conjunctive-tableau containment at every supplied-VO chain input and
-//! equivalence at output. Because Rust may distinguish values identified by
-//! `Eq`, observed binding suppliers retain concrete witnesses: equality-class
-//! alias solving and projections cannot replace their representatives.
+//! equality of output sets. Leibniz admissibility makes relational equalities
+//! identities. Functional extensionality permits alias solving, deduplication
+//! and projection before Rust while retaining its free variables.
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -148,7 +154,7 @@ mod tableau;
 pub use kernel::{erase, kernel};
 
 /// The RA definitions refine the supplied VO schedule, retaining its Rust
-/// chain, preceding relational constraints and observed binding witnesses.
+/// chain and preceding relational constraints.
 /// Formal rule CK-Elaborate: Check local contracts, chain regions and relational tableaux.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     valuation::contract::check(source)?;
@@ -484,10 +490,6 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
         };
         protected.extend(cq::rust::free_variables(expression).dependencies(&generators));
     }
-    // A Rust observer may distinguish representatives that Eq identifies.
-    // Preserve the entire observed equality class so its original generator
-    // remains the supplier even when another atom is scheduled earlier.
-    protected.extend(rust_sensitive(source));
     let mut aliases = BTreeMap::<String, Ident>::new();
     let canonical = |id: &Ident, aliases: &BTreeMap<String, Ident>| {
         aliases.get(&symbol_name(id)).unwrap_or(id).clone()
@@ -536,26 +538,4 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
         aliases = proposed;
     }
     aliases
-}
-
-/// Query-variable equality classes whose concrete representatives reach Rust.
-/// The existing free-variable analysis is the only expression analysis used.
-fn rust_sensitive(source: &valuation::cq::Program) -> BTreeSet<String> {
-    use valuation::cq::BodyItem;
-    let graph = valuation::cq::hypergraph::Analysis::of(source);
-    let mut names: BTreeSet<_> = graph.clauses.values().flatten().cloned().collect();
-    for item in &source.query.body {
-        if let BodyItem::Let(binding) = item {
-            names.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
-        }
-    }
-    let observed = valuation::cq::normal::rust_observed(source);
-    let classes: BTreeSet<_> = observed
-        .iter()
-        .map(|name| graph.equivalences.get(name).unwrap_or(name).clone())
-        .collect();
-    names
-        .into_iter()
-        .filter(|name| classes.contains(graph.equivalences.get(name).unwrap_or(name)))
-        .collect()
 }

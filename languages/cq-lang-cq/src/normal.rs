@@ -1,7 +1,8 @@
 //! CQ normal form for `T X = bottom + Set X`.
 //!
-//! Atoms contain only variables. Relational equality uses the column type's
-//! `Eq`; Rust lets and guards are opaque partial functions. The reference is
+//! Atoms contain only variables. Relational equality is Leibniz identity,
+//! decided by an admissible column's `==`. Rust lets and guards are opaque
+//! partial functions under functional extensionality. The reference is
 //! written order. Preserving the Rust chain and including every source
 //! relational predecessor before each Rust step is a sufficient refinement
 //! condition. I/O, mutation, counters and evaluation counts are outside the
@@ -75,24 +76,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
             "normal form: output variable is not bound by the body",
         ));
     }
-    check_setoids(module)
-}
-
-/// Query variables whose actual values are observed by opaque Rust.
-/// Projection or Eq-key comparison may not substitute another representative
-/// before these variables reach their original Rust consumer.
-pub fn rust_observed(module: &Program) -> BTreeSet<String> {
-    let mut environment = BTreeSet::new();
-    let mut observed = BTreeSet::new();
-    for item in &module.query.body {
-        if let Some(step) = item.rust_step() {
-            observed.extend(step.free_variables.dependencies(&environment));
-            environment.extend(step.bindings.iter().map(symbol_name));
-        } else if let BodyItem::Positive { atom } = item {
-            environment.extend(atom.variables().map(symbol_name));
-        }
-    }
-    observed
+    check_leibniz_types(module)
 }
 
 /// Canonicalize at each atom's written position.
@@ -229,7 +213,7 @@ fn path(ident: &Ident) -> syn::Expr {
     syn::parse2(quote!(#ident)).expect("identifier expression")
 }
 
-fn check_setoids(module: &Program) -> syn::Result<()> {
+fn check_leibniz_types(module: &Program) -> syn::Result<()> {
     let schemas: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
     let mut columns: BTreeMap<String, Vec<(&syn::Type, String)>> = BTreeMap::new();
     let mut required = BTreeSet::new();
@@ -258,7 +242,7 @@ fn check_setoids(module: &Program) -> syn::Result<()> {
     }
     if let Some(output) = module.output() {
         for column in &output.columns {
-            super::syntax::algebra::check_setoid_type(&column.ty, &column.name)?;
+            super::syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
         }
     }
     for item in &module.query.body {
@@ -271,7 +255,7 @@ fn check_setoids(module: &Program) -> syn::Result<()> {
                     .any(|v| symbol_name(v) == symbol_name(&name))
                     || required.contains(&symbol_name(&name))
                 {
-                    super::syntax::algebra::check_setoid_type(&ty, &name)?;
+                    super::syntax::algebra::check_leibniz_type(&ty, &name)?;
                 }
             }
         }
@@ -280,7 +264,7 @@ fn check_setoids(module: &Program) -> syn::Result<()> {
     for variable in required {
         if let Some(entries) = columns.get(&variable) {
             for (ty, column) in entries {
-                super::syntax::algebra::check_setoid_type(
+                super::syntax::algebra::check_leibniz_type(
                     ty,
                     &Ident::new(&variable, Span::call_site()),
                 )
@@ -323,7 +307,7 @@ fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident 
 /// Structural query content compared by elaboration after RA erasure.
 ///
 /// Variables are renamed by first occurrence (`v0`, `v1`, …) so kernels
-/// compare relational structure up to α-equivalence. The opaque Rust chain
+/// compare relational structure up to alpha-renaming. The opaque Rust chain
 /// retains exact payload tokens: alpha rewriting arbitrary Rust tokens could
 /// capture host names or change fields and local binders.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -350,7 +334,7 @@ impl Kernel {
     }
 
     /// Structural sufficient condition for refinement; this is deliberately
-    /// incomplete for arbitrary equivalences between relational programs.
+    /// incomplete for all identities between relational programs.
     pub fn refines(&self, source: &Self) -> bool {
         let mut atoms = self.atoms.clone();
         let mut source_atoms = source.atoms.clone();

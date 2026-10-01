@@ -1,11 +1,12 @@
-//! Point lookup retains the stored key as well as its payload. Opaque Rust may
-//! observe those values, so a lookup must never reconstruct keys from literals.
+//! Point lookup returns full borrowed rows from a host-owned key and payload.
+//! Their shared references remain valid for the host's lifetime. Leibniz
+//! equality makes any equal key the same value; provenance adds no meaning.
 use crate::rows::{Columns, Concat};
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, Hash};
 
 /// Native point access to full borrowed rows in declaration order.
-/// Payload-only IndexRead cannot provide the original key binding.
+/// Payload-only IndexRead does not supply a host-lifetime key reference.
 pub trait PointLookup: Clone {
     type Key: Eq;
     type Row: Copy;
@@ -105,31 +106,29 @@ where
 mod tests {
     use super::*;
     #[test]
-    fn map_points_retain_the_stored_key_reference_and_every_payload() {
+    fn map_points_return_the_key_value_and_every_payload() {
         let hash = HashMap::from([((5,), vec![(1,), (2,)]), ((7,), vec![])]);
-        let stored = hash.get_key_value(&(5,)).unwrap().0;
         let rows: Vec<_> = (&hash).point_lookup(&(5,)).collect();
         assert_eq!(rows, [(&5, &1), (&5, &2)]);
-        assert!(rows.iter().all(|(key, _)| std::ptr::eq(*key, &stored.0)));
         assert_eq!((&hash).point_lookup(&(7,)).count(), 0);
         assert_eq!((&hash).point_lookup(&(8,)).count(), 0);
         let ordered: BTreeMap<_, _> = hash.into_iter().collect();
-        let stored = ordered.get_key_value(&(5,)).unwrap().0;
-        assert!(
-            (&ordered)
-                .point_lookup(&(5,))
-                .all(|(key, _)| std::ptr::eq(key, &stored.0))
+        assert_eq!(
+            (&ordered).point_lookup(&(5,)).collect::<Vec<_>>(),
+            [(&5, &1), (&5, &2)]
         );
     }
     #[test]
-    fn set_points_return_the_stored_tuple_fields() {
+    fn set_points_return_the_tuple_values() {
         let hash = std::collections::HashSet::from([(5, 6)]);
-        let stored = hash.get(&(5, 6)).unwrap();
-        let (a, b) = (&hash).point_lookup(&(5, 6)).next().unwrap();
-        assert!(std::ptr::eq(a, &stored.0) && std::ptr::eq(b, &stored.1));
+        assert_eq!(
+            (&hash).point_lookup(&(5, 6)).collect::<Vec<_>>(),
+            [(&5, &6)]
+        );
         let ordered = std::collections::BTreeSet::from([(5, 6)]);
-        let stored = ordered.get(&(5, 6)).unwrap();
-        let (a, b) = (&ordered).point_lookup(&(5, 6)).next().unwrap();
-        assert!(std::ptr::eq(a, &stored.0) && std::ptr::eq(b, &stored.1));
+        assert_eq!(
+            (&ordered).point_lookup(&(5, 6)).collect::<Vec<_>>(),
+            [(&5, &6)]
+        );
     }
 }

@@ -169,9 +169,10 @@ pub struct Project {
     pub attributes: CommaList<Ident>,
 }
 
-/// Diagnose syntactically known non-setoid columns. Aliases and user types are
-/// checked by generated Rust `Eq + Hash`/`Ord` bounds.
-pub fn check_setoid_type(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
+/// Diagnose syntactically known failures of Leibniz admissibility. Generated
+/// Rust checks necessary `Eq + Hash`/`Ord` bounds for aliases and user types;
+/// their semantic admissibility remains a caller premise.
+pub fn check_leibniz_type(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
     fn contains_float(ty: &syn::Type) -> bool {
         match ty {
             syn::Type::Path(path) => {
@@ -197,7 +198,7 @@ pub fn check_setoid_type(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
         Err(syn::Error::new_spanned(
             ty,
             format!(
-                "column `{column}` requires Eq + Hash or Ord for relational equality, keys or deduplication; floating-point types such as f64 provide only PartialEq"
+                "column `{column}` requires Eq + Hash or Ord for relational storage and must satisfy this premise. Leibniz admissibility of a column type: a type may be compared, joined, grouped, keyed or deduplicated by the relational centre only if its `==` decides Leibniz equality (Rust code cannot distinguish `==`-equal values). Holds for integers, bool, char, String/&str, the cq-load Date/Decimal, tuples and derived-Eq structs of admissible types; fails for f64/f32 (0.0 == -0.0) and hand-written lenient Eq."
             ),
         ))
     } else {

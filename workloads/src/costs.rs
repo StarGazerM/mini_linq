@@ -173,7 +173,7 @@ pub struct Observation {
     pub scale: usize,
     pub counts: Snapshot,
     pub elapsed: Duration,
-    /// The original disconnected-prefix predicate witness (n*n versus n).
+    /// Guard invocations after all written relational prerequisites.
     pub guard_visits: usize,
 }
 
@@ -337,9 +337,8 @@ pub fn run(scale: usize, seed: u64) -> Vec<Observation> {
 /// point lookups distinguish O(1) from O(n). Opaque guards scan both hosts.
 /// Multiplication avoids floats.
 /// The slack admits fixed setup while separating asymptotic predictions (2/4,
-/// or 1/2). Opaque-observer disconnected plans retain concrete witnesses and
-/// both currently enumerate quadratic prefixes; their guards run only after
-/// every written relational prerequisite.
+/// or 1/2). Both Fine orders enumerate the disconnected query linearly;
+/// their guards still run after every written relational prerequisite.
 pub fn assert_growth(runs: &[Vec<Observation>]) {
     assert_eq!(runs.len(), 3);
     assert!(runs.iter().all(|observations| observations.len() == 13));
@@ -350,7 +349,8 @@ pub fn assert_growth(runs: &[Vec<Observation>]) {
             let (numerator, denominator, winner) = match (small.query, small.config) {
                 ("triangle", "generic/smallest")
                 | ("chain", "yannakakis")
-                | ("projection", "canon") => (5, 2, true),
+                | ("projection", "canon")
+                | ("disconnected", _) => (5, 2, true),
                 ("probe", "map/direct") => (5, 4, true),
                 ("guard", _) | ("probe", _) => (17, 10, false),
                 _ => (3, 1, false),

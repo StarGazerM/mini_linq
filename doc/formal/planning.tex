@@ -7,8 +7,9 @@ emits named RA. Each constructor checks its target contract. Separately callable
 correspondence checks are specified in Section~\ref{sec:pass-contracts}.
 Rules in this section describe successful construction on the checked domain;
 abstract laws are explicitly identified and registered as such in
-\path{rules.tsv}. Host purity and totality remain semantic premises, not
-properties inferred by these passes.
+\path{rules.tsv}. Leibniz admissibility and functional extensionality remain
+semantic premises, not properties inferred by these passes. Rust computations
+may be partial; their written chain and Before constraints are retained.
 
 \subsection{Normalization: CQ to CQ}
 \label{sec:prefix-planning}
@@ -330,7 +331,7 @@ witness coarse join assembly; it is mathematical notation, not stored IR.
 \end{mathpar}
 All three rules here are abstract. Retention follows by restricting a left
 witness in one direction and choosing its original witness in the other; all
-shared or observed coordinates survive. In occurrence notation its required
+shared or free-variable coordinates survive. In occurrence notation its required
 sort is $K(C,P)=X(C)\cap(H\cup X(O\setminus C)\cup\fv(P))$.
 This law justifies potential last-use pruning but the implemented elaborator
 only projects partial subatoms and the final head. Projection and joins here

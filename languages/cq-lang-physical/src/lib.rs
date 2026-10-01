@@ -21,6 +21,11 @@
 //! Bind/guard expressions are opaque partial functions. Their ancestry chain
 //! preserves written order; only relational steps may move earlier across it.
 //! Other effects and evaluation counts are outside this meaning.
+//!
+//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Functional extensionality of shared-reference Rust inputs permits canonical
+//! projection whenever free variables remain; see the premises in
+//! `cq-syntax`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -331,8 +336,8 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         .push((name.clone(), columns.clone(), cq_syntax::SupplyKind::Stream));
                 }
                 for c in &columns {
-                    check_setoid(&left.types[c], c, &definition.name)?;
-                    check_setoid(&right.types[c], c, &definition.name)?;
+                    check_leibniz(&left.types[c], c, &definition.name)?;
+                    check_leibniz(&right.types[c], c, &definition.name)?;
                 }
                 if matches!(definition.operator, Operator::Merge(..)) {
                     for side in [&k.left, &k.right] {
@@ -365,7 +370,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     let Some(ty) = row.types.get(&c) else {
                         return error(s, format!("select `{name}` uses unavailable column `{c}`"));
                     };
-                    check_setoid(ty, &c, &definition.name)?;
+                    check_leibniz(ty, &c, &definition.name)?;
                 }
                 if matches!(definition.operator, Operator::Point(..)) {
                     let Some(keys) = s.condition.constant_keys() else {
@@ -454,7 +459,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         chains.insert(name.clone(), chain);
         if definition.canon.is_some() {
             for (c, ty) in &row.types {
-                check_setoid(ty, c, &definition.name)?;
+                check_leibniz(ty, c, &definition.name)?;
             }
         }
         analysis
@@ -640,9 +645,9 @@ pub mod policy;
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
 
-/// Reject syntactically known non-setoid columns; rustc checks aliases.
-fn check_setoid(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn::Result<()> {
+/// Reject known failures of Leibniz admissibility; rustc checks necessary bounds.
+fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn::Result<()> {
     let column = syn::Ident::new(column, proc_macro2::Span::call_site());
-    cq_syntax::algebra::check_setoid_type(ty, &column)
+    cq_syntax::algebra::check_leibniz_type(ty, &column)
         .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
 }
