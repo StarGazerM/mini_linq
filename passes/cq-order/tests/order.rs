@@ -62,12 +62,16 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
             .map(|(clause, _)| clause)
             .unwrap()
     };
-    let (mut guards, mut lets) = (0, 0);
+    let (mut guards, mut lets, mut equalities) = (0, 0, 0);
     plan.valuation
         .steps
         .iter()
         .map(|step| match step {
             valuation::Step::Atom(subatom, _) => subatom.clause(),
+            valuation::Step::Equality(..) => {
+                equalities += 1;
+                nth(equalities - 1, |item| matches!(item, BodyItem::Equality(_)))
+            }
             valuation::Step::Guard(..) => {
                 guards += 1;
                 nth(guards - 1, |item| matches!(item, BodyItem::Filter(_)))
@@ -99,11 +103,12 @@ fn written_coarse_follows_the_normal_body() {
         expected(
             &messy,
             quote! {
-                let __cq_0_1: i32 = 5;
-                R@1(x, __cq_0_1);
+                R@0(x, __cq_0_1);
+                __cq_0_1 = 5;
                 S@2(__cq_1_0, z);
-                R@3(x, __cq_2_1);
-                if __cq_2_1 == x;
+                R@3(__cq_2_0, __cq_2_1);
+                x = __cq_2_0;
+                x = __cq_2_1;
                 if z > 1;
                 let w: i32 = x + z;
             }
@@ -112,13 +117,13 @@ fn written_coarse_follows_the_normal_body() {
 }
 
 #[test]
-fn fine_split_of_the_triangle_is_generic_join() {
+fn written_fine_splits_each_atom_in_its_reference_position() {
     let triangle = triangle();
     assert_eq!(
         plan(&triangle, Heuristic::Written, Split::Fine),
         expected(
             &triangle,
-            quote! { R@0(a, _); T@2(a, _); R@0(a, b); S@1(b, _); S@1(b, c); T@2(a, c); }
+            quote! { R@0(a, _); R@0(a, b); S@1(b, c); T@2(a, c); }
         )
     );
     // Guards and bindings follow the step that binds their last variable.
@@ -134,9 +139,8 @@ fn fine_split_of_the_triangle_is_generic_join() {
         expected(
             &guarded,
             quote! {
-                R@0(a, _); if a > 0; T@2(a, _);
-                R@0(a, b); S@1(b, _);
-                S@1(b, c); let d: i32 = a + c; T@2(a, c);
+                R@0(a, b);
+                S@1(b, c); T@2(a, c); if a > 0; let d: i32 = a + c;
             }
         )
     );
@@ -182,7 +186,7 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
                 answer(x) :- R(x, y), S(z, w), T(y, z), if x != z, if w > 1;
             }),
             &[0, 1, 2, 3, 4],
-            &[0, 2, 3, 1, 4],
+            &[0, 1, 2, 3, 4],
         ),
         (
             cq(quote! {
@@ -204,7 +208,7 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
                 answer(x, z) :- R(x, y), S(y, z), T(x, z), if y > x;
             }),
             &[0, 1, 2, 3],
-            &[0, 3, 1, 2],
+            &[0, 1, 2, 3],
         ),
     ];
     for (source, written, prefix) in &cases {
@@ -225,34 +229,35 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
 }
 
 #[test]
-fn prefix_ranking_counts_normalized_constants_as_the_old_literal_keys() {
-    let source = cq(quote! {
-        struct Q;
-        relation R(a: i32, b: i32);
-        relation S(a: i32, b: i32);
-        relation T(a: i32, b: i32);
-        answer(x, z) :- R(x, 7), S(7, z), T(z, x);
+fn literals_are_relational_steps_after_their_atoms() {
+    let normal = normal(quote! {
+        struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32); relation T(a:i32,b:i32);
+        answer(x,z) :- R(x,7), S(7,z), T(z,x);
     });
-    let normal = cq::normal::normalize(&source).unwrap();
-    let constants = normal
-        .query
-        .body
-        .iter()
-        .take_while(|item| matches!(item, BodyItem::Let(_)))
-        .count();
-    assert_eq!(constants, 2);
-    for heuristic in [
-        Heuristic::Prefix(Ranking::Connected),
-        Heuristic::Prefix(Ranking::GreedyWidth),
-    ] {
-        let sequence = sequence(&plan(&normal, heuristic, Split::Coarse));
-        // The constants' bindings come first, as C-CONSTANT did.
-        assert_eq!(sequence[..constants], [0, 1]);
-        let clauses: Vec<usize> = sequence[constants..]
+    assert!(
+        !normal
+            .query
+            .body
             .iter()
-            .map(|c| c - constants)
-            .collect();
-        assert_eq!(clauses, [0, 1, 2], "{heuristic:?}");
+            .any(|item| matches!(item, BodyItem::Let(_)))
+    );
+    assert_eq!(
+        normal
+            .query
+            .body
+            .iter()
+            .filter(|item| matches!(item, BodyItem::Equality(_)))
+            .count(),
+        4
+    );
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            plan(&normal, heuristic, split);
+        }
     }
 }
 
@@ -509,7 +514,7 @@ fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
     reject(&source, &reduced, &coarse, &["clause #0", "reductions"]);
     let reverse = expected(&source, quote! { T@2(z,w); S@1(y,z); R@0(x,y); });
     valuation::contract::check(&reverse).unwrap();
-    reject(&source, &reverse, &coarse, &["clause #1", "Written"]);
+    reject(&source, &reverse, &coarse, &["clause #2", "Written"]);
     let fine = Options {
         split: Split::Fine,
         ..coarse
@@ -519,7 +524,7 @@ fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
         quote! { T@2(_,w); T@2(z,w); S@1(_,z); S@1(y,z); R@0(_,y); R@0(x,y); },
     );
     valuation::contract::check(&fine_reverse).unwrap();
-    reject(&source, &fine_reverse, &fine, &["clause #1", "Written"]);
+    reject(&source, &fine_reverse, &fine, &["clause #2", "Written"]);
     let alternative = expected(&source, quote! { S@1(y,z); R@0(x,y); T@2(z,w); });
     for heuristic in [
         Heuristic::Prefix(Ranking::Connected),
@@ -534,4 +539,146 @@ fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
         assert_ne!(cq_order::compile(&source, &options).unwrap(), alternative);
         cq_order::check(&source, &alternative, &options).unwrap();
     }
+}
+
+#[test]
+fn partial_rust_steps_keep_cross_kind_order_and_all_written_relations() {
+    for source in [
+        normal(quote! {
+            struct Q; relation R(a:i32); relation S(a:i32);
+            answer(x,y) :- R(x), S(w), if *x != 0 && *w > 1, let y:i32 = 10 / *x;
+        }),
+        normal(quote! {
+            struct Q; relation R(a:i32); relation S(a:i32,b:i32);
+            answer(x,y) :- R(x), if *x != 0, S(10 / *x,y);
+        }),
+    ] {
+        for heuristic in [
+            Heuristic::Written,
+            Heuristic::Prefix(Ranking::Connected),
+            Heuristic::Prefix(Ranking::GreedyWidth),
+            Heuristic::Prefix(Ranking::Auto),
+            Heuristic::Elimination,
+        ] {
+            for split in [Split::Coarse, Split::Fine] {
+                let planned = plan(&source, heuristic, split);
+                let guard = planned
+                    .valuation
+                    .steps
+                    .iter()
+                    .position(|s| matches!(s, valuation::Step::Guard(..)))
+                    .unwrap();
+                let binding = planned
+                    .valuation
+                    .steps
+                    .iter()
+                    .position(|s| matches!(s, valuation::Step::Let(..)))
+                    .unwrap();
+                assert!(guard < binding, "{heuristic:?}/{split:?}");
+                let mut changed = planned.clone();
+                changed.valuation.steps.swap(guard, binding);
+                assert!(valuation::contract::check(&changed).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn before_condition_rejects_a_relational_step_moved_after_rust() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation S(a:i32);
+        answer(x,y) :- R(x), S(w), if *x != 0, let y:i32 = 10 / *x;
+    });
+    let mut target = plan(&source, Heuristic::Written, Split::Coarse);
+    target.valuation.steps.swap(1, 2);
+    let error = valuation::contract::check(&target).unwrap_err().to_string();
+    assert!(error.contains("Before"), "{error}");
+}
+
+#[test]
+fn a_partial_subatom_does_not_count_as_a_written_relational_predecessor() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32,b:i32);
+        answer(x) :- R(x,y), if host();
+    });
+    let target = expected(&source, quote! { R@0(x,_); if host(); R@0(x,y); });
+    let error = valuation::contract::check(&target).unwrap_err().to_string();
+    assert!(error.contains("Before"), "{error}");
+}
+
+#[test]
+fn generic_join_checks_all_atom_aliases_before_the_next_variable_class() {
+    let source = cq::normal::normalize(&triangle()).unwrap();
+    let target = plan(&source, Heuristic::Prefix(Ranking::Connected), Split::Fine);
+    let atoms: Vec<_> = target
+        .valuation
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            valuation::Step::Atom(atom, _) => Some((
+                atom.clause(),
+                atom.variables()
+                    .map(|(_, v)| v.to_string())
+                    .collect::<Vec<_>>(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(atoms[0], (0, vec!["a".into()]));
+    assert_eq!(atoms[1], (3, vec!["__cq_2_0".into()]));
+    assert_eq!(atoms[2], (0, vec!["a".into(), "b".into()]));
+    assert_eq!(atoms[3], (1, vec!["__cq_1_0".into()]));
+}
+
+#[test]
+fn partial_atoms_cannot_introduce_values_observed_by_rust() {
+    let source = cq(quote! {
+        struct Q; relation R(x:Key,z:i32);
+        answer(y) :- R(x,z), let y:bool=x.flag;
+    });
+    let changed = expected(&source, quote! { R@0(x,_); R@0(x,z); let y:bool=x.flag; });
+    let error = valuation::contract::check(&changed)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Rust-observed"), "{error}");
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Elimination,
+    ] {
+        let target = plan(&source, heuristic, Split::Fine);
+        let first = target
+            .valuation
+            .steps
+            .iter()
+            .find_map(|step| match step {
+                valuation::Step::Atom(atom, _) if atom.variables().any(|(_, v)| v == "x") => {
+                    Some(atom)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(first.variables().count(), 2);
+    }
+}
+
+#[test]
+fn observed_shared_variables_keep_their_first_source_atom() {
+    let source = cq(quote! {
+        struct Q; relation R(x:Key,z:i32); relation S(x:Key);
+        answer(y) :- R(x,z),S(x),let y:bool=x.flag;
+    });
+    let changed = expected(&source, quote! { S@1(x); R@0(x,z); let y:bool=x.flag; });
+    assert!(
+        valuation::contract::check(&changed)
+            .unwrap_err()
+            .to_string()
+            .contains("first source atom")
+    );
+    plan(
+        &source,
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Split::Coarse,
+    );
 }

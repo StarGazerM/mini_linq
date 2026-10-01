@@ -1,5 +1,12 @@
 //! Physical access traits and concrete data structures for generated programs.
 //!
+//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
+//! binds and guards keep their written chain; relational steps may move only
+//! earlier across them. Their free variables determine their partial-function
+//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Equality, keyed storage and deduplication require Eq, with Hash or Ord
+//! supplied by the selected representation.
+//!
 //! These structures do not implement relational operators, choose access
 //! paths, or couple a collection to a query-wide representation. Query access
 //! is available only through the operation traits; a user type implementing
@@ -64,7 +71,16 @@ pub use ordered::{
 };
 pub use trie::Trie;
 
+mod point;
+pub use point::{PointLookup, PointRows};
+
 pub mod require {
+    /// Verify the setoid premise even when a custom provider adds no bound.
+    pub fn setoid<T: Eq + ?Sized>(_: &T) {}
+    /// Preserve a build pair while enforcing Eq on its key.
+    pub fn key<K: Eq, V>(pair: (K, V)) -> (K, V) {
+        pair
+    }
     pub fn candidates<T: super::Candidates>(_: T) {}
     pub fn keyed<K, T: super::IndexRead<Key = K>>(_: T) {}
     pub fn seek<T: super::IndexRead>(_: T) {}
@@ -82,4 +98,9 @@ pub mod require {
     pub trait OrderedKey<K> {}
     impl<K> OrderedKey<K> for &K {}
     pub fn canonical<T: super::Canonical>(_: T) {}
+}
+/// The relational centre uses the column type's equivalence relation.
+/// Requiring `Eq` also rejects floating-point columns and PartialEq-only types.
+pub fn relational_eq<T: Eq + ?Sized>(left: &T, right: &T) -> bool {
+    left == right
 }

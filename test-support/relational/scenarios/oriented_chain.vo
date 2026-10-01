@@ -1,8 +1,10 @@
 struct OrientedChain;
 relation Edge(src: i32, dst: i32);
-answer(a, d) :- Edge(a, b), Edge(b, c), Edge(d, c);
+answer(a, d) :- Edge(a, b), Edge(__cq_1_0, c), b = __cq_1_0, Edge(d, __cq_2_1), c = __cq_2_1;
 valuation {
     Edge@0(a, b);
-    Edge@1(b, c);
-    Edge@2(d, c);
+    Edge@1(__cq_1_0, c);
+    b = __cq_1_0;
+    Edge@3(d, __cq_2_1);
+    c = __cq_2_1;
 }

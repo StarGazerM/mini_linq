@@ -30,6 +30,10 @@ fn main() {
                     report("atom", expression);
                 }
             }
+            BodyItem::Equality(e) => println!(
+                "relational equality inputs: {:?}",
+                e.variables().collect::<Vec<_>>()
+            ),
             BodyItem::Filter(filter) => report("if", &filter.condition),
             BodyItem::Let(binding) => {
                 report("let initializer", &binding.expression);

@@ -1,5 +1,12 @@
 //! Structures → Rust: print one pull program.
 //!
+//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
+//! binds and guards keep their written chain; relational steps may move only
+//! earlier across them. Their free variables determine their partial-function
+//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Equality, keyed storage and deduplication require Eq, with Hash or Ord
+//! supplied by the selected representation.
+//!
 //! This pass has no independent Rust semantic checker. Its obligations are
 //! SemanticAgreement against oracle answers and rustc's generated trait
 //! guards; authored expansion fixtures separately pin the emitted syntax.
@@ -32,7 +39,7 @@ mod intersection;
 mod operators;
 
 use cq_print::access::{Access, Side};
-use cq_print::expressions::{deref_predicates, window};
+use cq_print::expressions::relational_condition;
 use cq_print::{Context, Repr, error, index, sorted};
 
 /// Caller-resolved macro paths the program is printed into.
@@ -185,6 +192,7 @@ impl Printer<'_> {
         quote! {{
             let mut __cq_seen = #provider! { operator #operator; new };
             ::core::iter::Iterator::filter(#rows, move |__cq_row| {
+                ::cq_storage::require::setoid(#key);
                 #provider! { operator #operator; insert(__cq_seen, #key) }
             })
         }}

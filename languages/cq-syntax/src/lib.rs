@@ -1,4 +1,10 @@
-//! Shared syntax, declarations, Rust expression helpers and predicate recognition.
+//! Shared syntax, declarations and Rust free-variable/pattern analysis.
+//!
+//! Compiler programs denote `bottom + Set`: one panic aborts evaluation.
+//! Rust expressions are opaque partial functions of their free variables;
+//! only relational steps commute or move earlier across the written Rust chain.
+//! I/O, mutation and evaluation counts are outside this meaning. Relational
+//! equality uses Eq, with Hash or Ord required by selected representations.
 
 use syn::ext::IdentExt;
 use syn::{Ident, Index, Token, Type, token};
@@ -31,6 +37,8 @@ pub fn symbol_name(identifier: &Ident) -> String {
     identifier.unraw().to_string()
 }
 
+pub mod keyed;
+pub use keyed::SupplyKind;
 pub mod predicate;
 pub mod rust;
 
@@ -151,16 +159,85 @@ pub struct Let {
 }
 
 impl Let {
-    /// Written binding types; unannotated bindings retain Rust type inference.
+    /// Written binding types, including structurally annotated tuple fields.
+    /// Unannotated or nonstructural patterns retain Rust type inference.
     pub fn binding_types(&self) -> Vec<(Ident, syn::Type)> {
+        fn assign(pattern: &syn::Pat, ty: &syn::Type, output: &mut [(Ident, syn::Type)]) {
+            let ty = match ty {
+                syn::Type::Paren(group) => &*group.elem,
+                syn::Type::Group(group) => &*group.elem,
+                ty => ty,
+            };
+            if matches!(ty, syn::Type::Paren(_) | syn::Type::Group(_)) {
+                assign(pattern, ty, output);
+                return;
+            }
+            match pattern {
+                syn::Pat::Paren(group) => assign(&group.pat, ty, output),
+                syn::Pat::Ident(binding) => {
+                    if let Some((_, inferred)) = output
+                        .iter_mut()
+                        .find(|(name, _)| symbol_name(name) == symbol_name(&binding.ident))
+                    {
+                        *inferred =
+                            if binding.by_ref.is_some() && !matches!(ty, syn::Type::Infer(_)) {
+                                if binding.mutability.is_some() {
+                                    syn::parse_quote!(&mut #ty)
+                                } else {
+                                    syn::parse_quote!(& #ty)
+                                }
+                            } else {
+                                ty.clone()
+                            };
+                    }
+                    if let Some((_, inner)) = &binding.subpat {
+                        assign(inner, ty, output);
+                    }
+                }
+                syn::Pat::Tuple(pattern) => {
+                    let syn::Type::Tuple(tuple) = ty else {
+                        // Named types and reference match ergonomics require
+                        // Rust type resolution; do not invent field types.
+                        return;
+                    };
+                    let rest = pattern
+                        .elems
+                        .iter()
+                        .position(|p| matches!(p, syn::Pat::Rest(_)));
+                    if let Some(rest) = rest {
+                        if tuple.elems.len() + 1 < pattern.elems.len() {
+                            return;
+                        }
+                        for (pattern, ty) in pattern.elems.iter().take(rest).zip(&tuple.elems) {
+                            assign(pattern, ty, output);
+                        }
+                        let trailing = pattern.elems.len() - rest - 1;
+                        for (pattern, ty) in pattern
+                            .elems
+                            .iter()
+                            .rev()
+                            .take(trailing)
+                            .zip(tuple.elems.iter().rev())
+                        {
+                            assign(pattern, ty, output);
+                        }
+                    } else if pattern.elems.len() == tuple.elems.len() {
+                        for (pattern, ty) in pattern.elems.iter().zip(&tuple.elems) {
+                            assign(pattern, ty, output);
+                        }
+                    }
+                }
+                // Reference and constructor patterns are left to Rust; tuple
+                // propagation never guesses a default binding mode.
+                _ => {}
+            }
+        }
         let mut vars: Vec<_> = rust::bindings(&self.pattern)
             .into_iter()
             .map(|id| (id, syn::parse_quote!(_)))
             .collect();
         if let Some(annotation) = &self.annotation {
-            if vars.len() == 1 && matches!(self.pattern, syn::Pat::Ident(_)) {
-                vars[0].1 = annotation.ty.clone();
-            }
+            assign(&self.pattern, &annotation.ty, &mut vars);
         }
         vars
     }
@@ -220,3 +297,6 @@ pub fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec
     }
     Ok(declarations)
 }
+
+pub mod equality;
+pub use equality::{Equality, EqualityValue};

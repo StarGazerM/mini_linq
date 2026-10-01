@@ -17,6 +17,7 @@ pub enum Term {
     Var(usize),
     Constant(i32),
     Wildcard,
+    Expression(Expr),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +40,38 @@ pub enum Expr {
     Constant(i32),
     Binary(Arithmetic, Box<Expr>, Box<Expr>),
     Negate(Box<Expr>),
+    Partial(PartialOp, Box<Expr>),
+}
+
+/// Ordinary Rust expressions whose partiality is observable as whole-query abort.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartialOp {
+    Divide,
+    Remainder,
+    Add,
+    Subtract,
+    Multiply,
+    Unwrap,
+}
+
+impl PartialOp {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Divide => "divide",
+            Self::Remainder => "remainder",
+            Self::Add => "overflow-add",
+            Self::Subtract => "overflow-subtract",
+            Self::Multiply => "overflow-multiply",
+            Self::Unwrap => "unwrap",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Atom(usize),
+    Binding(usize),
+    Guard(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +105,8 @@ pub struct Query {
     pub bindings: Vec<Binding>,
     pub guards: Vec<Guard>,
     pub head: Vec<Expr>,
+    /// Empty uses the total lane's atoms/bindings/guards order.
+    pub order: Vec<Step>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +118,27 @@ pub struct Case {
 }
 
 impl Case {
+    pub fn has_partial_terms(&self) -> bool {
+        let mut features = BTreeSet::new();
+        for atom in &self.query.atoms {
+            for term in &atom.terms {
+                if let Term::Expression(expression) = term {
+                    expression.features(&mut features);
+                }
+            }
+        }
+        for binding in &self.query.bindings {
+            binding.expression.features(&mut features);
+        }
+        for guard in &self.query.guards {
+            guard.features(&mut features);
+        }
+        for expression in &self.query.head {
+            expression.features(&mut features);
+        }
+        features.contains("partial-term")
+    }
+
     pub fn output_arity(&self) -> usize {
         self.query.head.len()
     }
@@ -112,31 +168,39 @@ impl Case {
         )
         .unwrap();
         let mut clauses = Vec::new();
-        for atom in &self.query.atoms {
-            let terms = atom
-                .terms
-                .iter()
-                .map(|term| match term {
-                    Term::Var(variable) => format!("v{variable}"),
-                    Term::Constant(value) => value.to_string(),
-                    Term::Wildcard => "_".to_owned(),
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            clauses.push(format!(
-                "{}({terms})",
-                self.query.schema[atom.relation].name
-            ));
-        }
-        for binding in &self.query.bindings {
-            clauses.push(format!(
-                "let v{}: i32 = {}",
-                binding.variable,
-                rust_expression(&binding.expression)
-            ));
-        }
-        for guard in &self.query.guards {
-            clauses.push(format!("if {}", rust_guard(guard)));
+        for step in self.query.body_order() {
+            match step {
+                Step::Atom(index) => {
+                    let atom = &self.query.atoms[index];
+                    let terms = atom
+                        .terms
+                        .iter()
+                        .map(|term| match term {
+                            Term::Var(variable) => format!("v{variable}"),
+                            Term::Constant(value) => value.to_string(),
+                            Term::Wildcard => "_".to_owned(),
+                            Term::Expression(expression) => rust_expression(expression),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    clauses.push(format!(
+                        "{}({terms})",
+                        self.query.schema[atom.relation].name
+                    ));
+                }
+                Step::Binding(index) => {
+                    let binding = &self.query.bindings[index];
+                    clauses.push(format!(
+                        "let v{}: i32 = {}",
+                        binding.variable,
+                        rust_expression(&binding.expression)
+                    ));
+                }
+                Step::Guard(index) => {
+                    let guard = &self.query.guards[index];
+                    clauses.push(format!("if {}", rust_guard(guard)));
+                }
+            }
         }
         writeln!(
             source,
@@ -160,6 +224,10 @@ impl Case {
     /// need no input deduplication: positive CQs with a DISTINCT output have
     /// set semantics, including self-joins and existential wildcard columns.
     pub fn sql(&self) -> String {
+        if self.has_partial_terms() {
+            return "-- Opaque partial terms: oracle is the compiled written-order Rust program.\n"
+                .into();
+        }
         let mut environment = BTreeMap::new();
         let mut conditions = Vec::new();
         let mut from = Vec::new();
@@ -180,6 +248,10 @@ impl Case {
                     }
                     Term::Constant(value) => conditions.push(format!("{field} = {value}")),
                     Term::Wildcard => (),
+                    Term::Expression(expression) => conditions.push(format!(
+                        "{field} = {}",
+                        sql_expression(expression, &environment)
+                    )),
                 }
             }
         }
@@ -231,6 +303,17 @@ impl Case {
         }
         let mut candidate = self.clone();
         candidate.query.atoms.remove(index);
+        candidate
+            .query
+            .order
+            .retain(|step| *step != Step::Atom(index));
+        for step in &mut candidate.query.order {
+            if let Step::Atom(occurrence) = step {
+                if *occurrence > index {
+                    *occurrence -= 1;
+                }
+            }
+        }
         candidate.query.well_bound().then_some(candidate)
     }
 }
@@ -243,6 +326,19 @@ fn rust_expression(expression: &Expr) -> String {
         Expr::Var(variable) => format!("v{variable}.to_owned()"),
         Expr::Constant(value) => value.to_string(),
         Expr::Negate(inner) => format!("(-({}))", rust_expression(inner)),
+        Expr::Partial(operator, inner) => {
+            let value = rust_expression(inner);
+            match operator {
+                PartialOp::Divide => format!("(10i32 / ({value}))"),
+                PartialOp::Remainder => format!("(10i32 % ({value}))"),
+                PartialOp::Add => format!("(i32::MAX + ({value}))"),
+                PartialOp::Subtract => format!("(i32::MIN - ({value}))"),
+                PartialOp::Multiply => format!("(i32::MAX * ({value}))"),
+                PartialOp::Unwrap => {
+                    format!("(if ({value}) != 0 {{ Some({value}) }} else {{ None }}).unwrap()")
+                }
+            }
+        }
         Expr::Binary(operator, left, right) => {
             let token = match operator {
                 Arithmetic::Add => "+",
@@ -284,6 +380,7 @@ fn rust_guard(guard: &Guard) -> String {
 
 fn sql_expression(expression: &Expr, environment: &BTreeMap<usize, String>) -> String {
     match expression {
+        Expr::Partial(..) => unreachable!("partial terms use the compiled Rust reference"),
         Expr::Var(variable) => environment[variable].clone(),
         Expr::Constant(value) => value.to_string(),
         Expr::Negate(inner) => format!("(-({}))", sql_expression(inner, environment)),
@@ -340,6 +437,11 @@ impl Expr {
     fn features(&self, output: &mut BTreeSet<String>) {
         match self {
             Self::Var(_) | Self::Constant(_) => (),
+            Self::Partial(operator, inner) => {
+                output.insert("partial-term".into());
+                output.insert(format!("partial-{}", operator.name()));
+                inner.features(output);
+            }
             Self::Binary(operator, left, right) => {
                 output.insert(
                     match operator {
@@ -370,16 +472,17 @@ impl Expr {
                 left.variables(output);
                 right.variables(output);
             }
-            Self::Negate(inner) => inner.variables(output),
+            Self::Negate(inner) | Self::Partial(_, inner) => inner.variables(output),
         }
     }
 
     fn has_arithmetic(&self) -> bool {
-        matches!(self, Self::Binary(..) | Self::Negate(_))
+        matches!(self, Self::Binary(..) | Self::Negate(_) | Self::Partial(..))
     }
 
     fn value(&self, environment: &[i32]) -> i32 {
         match self {
+            Self::Partial(..) => unreachable!("partial terms use the compiled Rust reference"),
             Self::Var(variable) => environment[*variable],
             Self::Constant(value) => *value,
             Self::Negate(inner) => -inner.value(environment),
@@ -480,17 +583,49 @@ impl Guard {
 }
 
 impl Query {
+    fn body_order(&self) -> Vec<Step> {
+        if !self.order.is_empty() {
+            return self.order.clone();
+        }
+        (0..self.atoms.len())
+            .map(Step::Atom)
+            .chain((0..self.bindings.len()).map(Step::Binding))
+            .chain((0..self.guards.len()).map(Step::Guard))
+            .collect()
+    }
+
     fn well_bound(&self) -> bool {
-        let mut bound = self
-            .atoms
-            .iter()
-            .flat_map(atom_variables)
-            .collect::<BTreeSet<_>>();
-        for binding in &self.bindings {
-            let mut used = BTreeSet::new();
-            binding.expression.variables(&mut used);
-            if !used.is_subset(&bound) || !bound.insert(binding.variable) {
-                return false;
+        let mut bound = BTreeSet::new();
+        for step in self.body_order() {
+            match step {
+                Step::Atom(index) => {
+                    let atom = &self.atoms[index];
+                    bound.extend(atom_variables(atom));
+                    for term in &atom.terms {
+                        if let Term::Expression(expression) = term {
+                            let mut used = BTreeSet::new();
+                            expression.variables(&mut used);
+                            if !used.is_subset(&bound) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                Step::Binding(index) => {
+                    let binding = &self.bindings[index];
+                    let mut used = BTreeSet::new();
+                    binding.expression.variables(&mut used);
+                    if !used.is_subset(&bound) || !bound.insert(binding.variable) {
+                        return false;
+                    }
+                }
+                Step::Guard(index) => {
+                    let mut used = BTreeSet::new();
+                    self.guards[index].variables(&mut used);
+                    if !used.is_subset(&bound) {
+                        return false;
+                    }
+                }
             }
         }
         let mut used = BTreeSet::new();
@@ -527,7 +662,7 @@ fn atom_variables(atom: &Atom) -> BTreeSet<usize> {
         .iter()
         .filter_map(|term| match term {
             Term::Var(variable) => Some(*variable),
-            Term::Constant(_) | Term::Wildcard => None,
+            Term::Constant(_) | Term::Wildcard | Term::Expression(_) => None,
         })
         .collect()
 }
@@ -606,6 +741,9 @@ impl Random {
 }
 
 pub fn generate(seed: u64) -> Case {
+    if seed & 1 == 0 {
+        return generate_partial(seed);
+    }
     let mut random = Random(seed);
     let relations = 1 + random.pick(4);
     let schema = (0..relations)
@@ -702,6 +840,7 @@ pub fn generate(seed: u64) -> Case {
                         Term::Var(variable) => witness[*variable],
                         Term::Constant(value) => *value,
                         Term::Wildcard => random.small(),
+                        Term::Expression(_) => unreachable!("total lane atoms"),
                     })
                     .collect(),
             );
@@ -724,9 +863,153 @@ pub fn generate(seed: u64) -> Case {
             bindings,
             guards,
             head,
+            order: Vec::new(),
         },
         data,
     }
+}
+
+fn generate_partial(seed: u64) -> Case {
+    let mut random = Random(seed ^ 0x0050_4152_5449_414c);
+    // Consecutive even seeds cover every operator/position combination before
+    // random data and body schedules vary its domain of evaluation.
+    let ordinal = seed / 2;
+    let operator = [
+        PartialOp::Divide,
+        PartialOp::Remainder,
+        PartialOp::Add,
+        PartialOp::Subtract,
+        PartialOp::Multiply,
+        PartialOp::Unwrap,
+    ][ordinal as usize % 6];
+    let position = (ordinal / 6) as usize % 5;
+    let partial = |variable| Expr::Partial(operator, Box::new(Expr::Var(variable)));
+    let safe = match operator {
+        PartialOp::Divide | PartialOp::Remainder | PartialOp::Unwrap => {
+            Guard::Compare(Comparison::NotEqual, Expr::Var(0), Expr::Constant(0))
+        }
+        PartialOp::Add | PartialOp::Subtract => {
+            Guard::Compare(Comparison::LessEqual, Expr::Var(0), Expr::Constant(0))
+        }
+        PartialOp::Multiply => Guard::And(
+            Box::new(Guard::Compare(
+                Comparison::GreaterEqual,
+                Expr::Var(0),
+                Expr::Constant(0),
+            )),
+            Box::new(Guard::Compare(
+                Comparison::LessEqual,
+                Expr::Var(0),
+                Expr::Constant(1),
+            )),
+        ),
+    };
+    let mut query = Query {
+        schema: vec![
+            Relation {
+                name: "r0".into(),
+                arity: 1,
+            },
+            Relation {
+                name: "r1".into(),
+                arity: 2,
+            },
+        ],
+        atoms: vec![
+            Atom {
+                relation: 0,
+                terms: vec![Term::Var(0)],
+            },
+            Atom {
+                relation: 1,
+                terms: vec![Term::Var(1), Term::Var(2)],
+            },
+        ],
+        bindings: Vec::new(),
+        guards: vec![safe],
+        head: vec![Expr::Var(0), Expr::Var(2)],
+        order: vec![Step::Atom(0)],
+    };
+    let protected = random.pick(3) != 0;
+    let relation_before_rust = random.pick(2) == 0;
+    if relation_before_rust && position < 2 {
+        query.order.push(Step::Atom(1));
+    }
+    if protected {
+        query.order.push(Step::Guard(0));
+    }
+    match position {
+        0 => {
+            query.guards.push(Guard::Compare(
+                Comparison::GreaterEqual,
+                partial(0),
+                Expr::Constant(0),
+            ));
+            query.order.push(Step::Guard(1));
+        }
+        1 => {
+            query.bindings.push(Binding {
+                variable: 3,
+                expression: partial(0),
+            });
+            query.order.push(Step::Binding(0));
+            query.head[0] = Expr::Var(3);
+        }
+        2 | 3 => {
+            // Both dependencies from earlier atoms and same-atom variables
+            // exercise the two argument-expression desugaring rules.
+            query.atoms[1].terms[0] = Term::Expression(partial(if position == 2 { 0 } else { 2 }));
+            query.order.push(Step::Atom(1));
+            if position == 3 {
+                // A mismatching literal after a same-atom partial expression
+                // must not suppress that expression in the written oracle.
+                query.schema[1].arity = 3;
+                query.atoms[1].terms.push(Term::Constant(5));
+            }
+        }
+        _ => {
+            query.head[0] = partial(0);
+            query.order.push(Step::Atom(1));
+        }
+    }
+    if position < 2 && !relation_before_rust {
+        query.order.push(Step::Atom(1));
+    }
+    if !protected {
+        query.order.push(Step::Guard(0));
+    }
+    let values = [-2, -1, 0, 1, 2, i32::MIN, i32::MAX];
+    let mut data = vec![
+        (0..1 + random.pick(5))
+            .map(|_| vec![values[random.pick(values.len())]])
+            .collect::<Vec<_>>(),
+        (0..1 + random.pick(5))
+            .map(|_| {
+                vec![
+                    values[random.pick(values.len())],
+                    values[random.pick(values.len())],
+                ]
+            })
+            .collect::<Vec<_>>(),
+    ];
+    if query.schema[1].arity == 3 {
+        for row in &mut data[1] {
+            row.push(5 + random.pick(2) as i32);
+        }
+    }
+    // Domain-sensitive emptiness: an earlier empty generator must suppress
+    // later partial terms even under eager-index and split configurations.
+    if random.pick(4) == 0 {
+        data[1].clear();
+    }
+    if random.pick(8) == 0 {
+        data[0].clear();
+    }
+    if random.pick(3) == 0 && !data[0].is_empty() {
+        let duplicate = data[0][0].clone();
+        data[0].push(duplicate);
+    }
+    Case { seed, query, data }
 }
 
 /// Counts cases with each property, rather than counting syntax occurrences.
@@ -776,6 +1059,10 @@ impl Coverage {
                     Term::Wildcard => {
                         features.insert("wildcard".into());
                     }
+                    Term::Expression(expression) => {
+                        features.insert("partial-argument".into());
+                        expression.features(&mut features);
+                    }
                 }
             }
         }
@@ -784,6 +1071,25 @@ impl Coverage {
         }
         for guard in &query.guards {
             guard.features(&mut features);
+            let mut own = BTreeSet::new();
+            guard.features(&mut own);
+            if own.contains("partial-term") {
+                features.insert("partial-guard".into());
+            }
+        }
+        for binding in &query.bindings {
+            let mut own = BTreeSet::new();
+            binding.expression.features(&mut own);
+            if own.contains("partial-term") {
+                features.insert("partial-let".into());
+            }
+        }
+        for expression in &query.head {
+            let mut own = BTreeSet::new();
+            expression.features(&mut own);
+            if own.contains("partial-term") {
+                features.insert("partial-head".into());
+            }
         }
         for expression in query
             .head
@@ -869,7 +1175,9 @@ mod tests {
             for (relation, rows) in case.query.schema.iter().zip(&case.data) {
                 assert!((1..=3).contains(&relation.arity));
                 assert!(rows.iter().all(|row| row.len() == relation.arity));
-                assert!(rows.iter().flatten().all(|value| (-3..=3).contains(value)));
+                if !case.has_partial_terms() {
+                    assert!(rows.iter().flatten().all(|value| (-3..=3).contains(value)));
+                }
             }
             coverage.observe(&case);
         }
@@ -903,6 +1211,16 @@ mod tests {
             "expression-multiply",
             "expression-remainder",
             "expression-negate",
+            "partial-divide",
+            "partial-remainder",
+            "partial-overflow-add",
+            "partial-overflow-subtract",
+            "partial-overflow-multiply",
+            "partial-unwrap",
+            "partial-guard",
+            "partial-let",
+            "partial-argument",
+            "partial-head",
         ] {
             assert!(coverage.counts[feature] > 30, "{feature}: {coverage}");
         }
@@ -941,6 +1259,7 @@ mod tests {
                     Expr::Constant(0),
                 )))],
                 head: vec![Expr::Var(2)],
+                order: Vec::new(),
             },
             data: vec![vec![]],
         };
@@ -1010,6 +1329,7 @@ mod tests {
                     ),
                     Expr::Var(0),
                 ],
+                order: Vec::new(),
             },
             data: vec![vec![
                 vec![-3, -2],

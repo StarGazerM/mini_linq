@@ -98,6 +98,43 @@ impl<K: Eq + Hash, V> ExactMembership<K> for GroupedAnswers<K, V> {
     }
 }
 
+impl<'a, K: Eq + Hash, V> crate::PointLookup for &'a GroupedAnswers<K, V>
+where
+    &'a K: crate::rows::Columns,
+    &'a V: crate::rows::Columns,
+    <&'a K as crate::rows::Columns>::Row: crate::rows::Concat<<&'a V as crate::rows::Columns>::Row>,
+{
+    type Key = K;
+    type Row = <<&'a K as crate::rows::Columns>::Row as crate::rows::Concat<
+        <&'a V as crate::rows::Columns>::Row,
+    >>::Row;
+    type Cursor =
+        crate::PointRows<&'a K, std::iter::Flatten<std::option::IntoIter<hash_set::Iter<'a, V>>>>;
+    fn point_lookup(&self, key: &K) -> Self::Cursor {
+        crate::count!(lookups);
+        let found = self.groups.get_key_value(key);
+        crate::PointRows {
+            key: found.map(|(k, _)| k),
+            values: found.map(|(_, v)| v.iter()).into_iter().flatten(),
+        }
+    }
+}
+impl<'a, K: Eq + Hash> crate::PointLookup for &'a Answers<K>
+where
+    &'a K: crate::rows::Columns,
+{
+    type Key = K;
+    type Row = <&'a K as crate::rows::Columns>::Row;
+    type Cursor = std::iter::Map<std::option::IntoIter<&'a K>, fn(&'a K) -> Self::Row>;
+    fn point_lookup(&self, key: &K) -> Self::Cursor {
+        crate::count!(lookups);
+        self.rows
+            .get(key)
+            .into_iter()
+            .map(crate::rows::Columns::columns)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

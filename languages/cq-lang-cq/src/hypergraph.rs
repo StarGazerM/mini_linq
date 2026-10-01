@@ -6,9 +6,12 @@
 //! order pass reads it to rank clauses and variables; reduction computes
 //! its Yannakakis schedule from the join tree.
 //!
-//! Every fact is defined on the atoms only. Guards and bindings are not
-//! hyperedges: a variable bound by a `let` and used in no atom is not a
-//! vertex, and a guard adds no adjacency.
+//! Relational variable equalities identify vertices; fresh names introduced
+//! by normalization therefore preserve the original join graph. The analysis
+//! expands each equality class in its incident edges while retaining actual
+//! variable spellings for scheduling. Rust guards and bindings add no edges;
+//! their opaque partial-function chain has denotation `bottom + Set X` and is
+//! checked by the valuation contract. Other effects are outside that meaning.
 //!
 //! The facts, and the theorem that ties them together:
 //!
@@ -59,6 +62,8 @@ pub enum GyoStep {
 /// The hypergraph of a normal-form query.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Analysis {
+    /// Equality classes; aliases retain their actual spelling in CQ/VO.
+    pub equivalences: BTreeMap<String, String>,
     /// Atom variables in order of first occurrence over the body.
     pub variables: Vec<String>,
     /// Atom clause index → its variables, in column order.
@@ -97,34 +102,93 @@ impl Analysis {
     /// Formal rule H-Incidence: Insert every atom clause into each variable incidence set.
     pub fn of(module: &Program) -> Analysis {
         let mut analysis = Analysis::default();
+        let names: BTreeSet<_> = module
+            .query
+            .body
+            .iter()
+            .filter_map(BodyItem::atom)
+            .flat_map(super::Atom::variables)
+            .map(symbol_name)
+            .collect();
+        analysis.equivalences = names
+            .iter()
+            .map(|name| (name.clone(), name.clone()))
+            .collect();
+        for item in &module.query.body {
+            if let BodyItem::Equality(super::Equality {
+                left,
+                right: super::EqualityValue::Variable(right),
+                ..
+            }) = item
+            {
+                let left = symbol_name(left);
+                let right = symbol_name(right);
+                let a = analysis.equivalences.get(&left).unwrap_or(&left).clone();
+                let b = analysis.equivalences.get(&right).unwrap_or(&right).clone();
+                let representative = a.clone().min(b.clone());
+                for value in analysis.equivalences.values_mut() {
+                    if *value == a || *value == b {
+                        *value = representative.clone();
+                    }
+                }
+                analysis.equivalences.insert(left, representative.clone());
+                analysis.equivalences.insert(right, representative);
+            }
+        }
+        let mut edges = BTreeMap::new();
         for (clause, item) in module.query.body.iter().enumerate() {
             let BodyItem::Positive { atom } = item else {
                 continue;
             };
             let columns: Vec<String> = atom.variables().map(symbol_name).collect();
-            for variable in &columns {
-                if !analysis.incidence.contains_key(variable) {
+            // Expanding an equality class in each incident edge preserves the
+            // relational join graph while retaining actual alias names for VO.
+            let edge: BTreeSet<_> = names
+                .iter()
+                .filter(|name| {
+                    columns
+                        .iter()
+                        .any(|column| analysis.equivalent(column, name))
+                })
+                .cloned()
+                .collect();
+            for variable in columns.iter().chain(&edge) {
+                if !analysis.variables.contains(variable) {
                     analysis.variables.push(variable.clone());
                 }
+            }
+            for variable in &edge {
                 analysis
                     .incidence
                     .entry(variable.clone())
                     .or_default()
                     .insert(clause);
-                let neighbours = analysis.primal.entry(variable.clone()).or_default();
-                neighbours.extend(columns.iter().filter(|c| *c != variable).cloned());
+                analysis
+                    .primal
+                    .entry(variable.clone())
+                    .or_default()
+                    .extend(edge.iter().filter(|c| *c != variable).cloned());
             }
             analysis.clauses.insert(clause, columns);
+            edges.insert(clause, edge);
         }
-        let edges: BTreeMap<usize, BTreeSet<String>> = analysis
-            .clauses
-            .iter()
-            .map(|(&clause, columns)| (clause, columns.iter().cloned().collect()))
-            .collect();
         analysis.reduce(edges.clone());
         analysis.conformal = conformal(&edges);
         analysis.eliminate();
         analysis
+    }
+
+    /// Whether relational variable equalities place two names in one class.
+    pub fn equivalent(&self, left: &str, right: &str) -> bool {
+        self.equivalences
+            .get(left)
+            .map(String::as_str)
+            .unwrap_or(left)
+            == self
+                .equivalences
+                .get(right)
+                .map(String::as_str)
+                .unwrap_or(right)
     }
 
     /// Variables common to two atom clauses, in `a`'s column order.
@@ -132,7 +196,10 @@ impl Analysis {
         let (Some(left), Some(right)) = (self.clauses.get(&a), self.clauses.get(&b)) else {
             return Vec::new();
         };
-        left.iter().filter(|v| right.contains(v)).cloned().collect()
+        left.iter()
+            .filter(|v| right.iter().any(|r| self.equivalent(v, r)))
+            .cloned()
+            .collect()
     }
 
     /// GYO reduction on the residual edges; fills `gyo_steps`, `acyclic`

@@ -1,6 +1,8 @@
 //! Structures records only built let structures, their provider types and trie levels.
 //! Host renames need no entry: type dispatch selects their direct or lazy built reads.
 //! Contracts discharge plan premises, never host capability claims.
+//! The denotation is `bottom + Set`; opaque Rust binds and guards stay in their
+//! written chain. Const supplies use one point read and never justify a build.
 //! ```text
 //! Entry ::= Ident "=" RustType ("[" Ident,* "]")+ ";"
 //! ```
@@ -110,7 +112,7 @@ pub mod contract {
     }
 }
 
-use physical::{ModeKind, Operator};
+use physical::{ModeKind, Operator, syntax::SupplyKind};
 
 /// A built structure: the sorted columns of each level, and its type.
 pub type Built = (Vec<Vec<String>>, syn::Type);
@@ -168,7 +170,6 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 
 /// Formal rule WF-Structures: Check entries, read coverage and inferred canonical return.
 /// Formal rule STR-Key: Answer probe and semi reads by host dispatch or a built level prefix.
-/// Formal rule STR-Range: Answer a range by host dispatch or a built entry on its column.
 /// Formal rule STR-Merge: Answer each merge side by ordered storage or a same-key merge pipe.
 fn analyze(program: &Program) -> syn::Result<Analysis> {
     let module = &program.structures;
@@ -209,6 +210,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 if !all.insert(symbol_name(column)) {
                     return error(column, format!("`{column}` appears in two levels"));
                 }
+                cq_syntax::algebra::check_setoid_type(
+                    &analysis.physical.rows[&name].types[&symbol_name(column)],
+                    column,
+                )?;
             }
             if analysis.physical.modes[&name] != ModeKind::Let {
                 return error(
@@ -217,6 +222,21 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 );
             }
             let columns = keyed.level_names();
+            let serves_stream = analysis
+                .physical
+                .keyed_reads
+                .get(&name)
+                .into_iter()
+                .flatten()
+                .any(|(_, read_columns, supply)| {
+                    *supply == SupplyKind::Stream && prefix_depth(&columns, read_columns).is_some()
+                });
+            if !serves_stream {
+                return error(
+                    &entry.name,
+                    "a built structure must serve a stream demand; const-only reads use direct access or scan and filter",
+                );
+            }
             if !seen.insert((name.clone(), Some(columns.concat()))) {
                 return error(&entry.name, "duplicate structure on these columns");
             }
@@ -227,32 +247,29 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 .push((columns, keyed.ty.clone()));
         }
     }
-    // Keyed reads: probe, semi, range.
+    // Only stream supplies require reusable storage. Const supplies always
+    // have the direct-host or scan-and-filter implementation available.
     let answered = |result: &str, columns: &[String]| -> bool {
         analysis.host_read(result) || analysis.built_on(result, columns).is_some()
     };
-    for (result, reads) in &analysis.physical.key_reads {
-        for (reader, columns) in reads {
+    for (result, reads) in &analysis.physical.keyed_reads {
+        for (reader, columns, supply) in reads {
+            if *supply == SupplyKind::Const
+                || analysis
+                    .physical
+                    .merge_reads
+                    .get(result)
+                    .is_some_and(|merge| {
+                        merge.iter().any(|(merge_reader, _)| merge_reader == reader)
+                    })
+            {
+                continue;
+            }
             if !answered(result, columns) {
                 return error(
                     &module.structures_token,
                     format!(
                         "`{reader}` reads `{result}` on {columns:?}; no reusable host read or built structure answers it"
-                    ),
-                );
-            }
-        }
-    }
-    for (result, reads) in &analysis.physical.range_reads {
-        for (reader, column) in reads {
-            let columns = vec![column.clone()];
-            let ordered =
-                analysis.host_read(result) || analysis.built_on(result, &columns).is_some();
-            if !ordered {
-                return error(
-                    &module.structures_token,
-                    format!(
-                        "`{reader}` ranges over `{result}` on `{column}`; no ordered key answers it"
                     ),
                 );
             }
@@ -314,9 +331,11 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
             }
             Operator::Semi(_, k) => analysis.unique.get(&symbol_name(&k.left)).cloned(),
-            Operator::Select(s) => analysis.unique.get(&symbol_name(&s.input)).cloned(),
-            Operator::Range(_, r) => analysis.unique.get(&symbol_name(&r.input)).cloned(),
-            Operator::Extend(e) => analysis.unique.get(&symbol_name(&e.input)).cloned(),
+            Operator::Select(s) | Operator::Point(_, s) => {
+                analysis.unique.get(&symbol_name(&s.input)).cloned()
+            }
+            Operator::Bind(b) => analysis.unique.get(&symbol_name(&b.input)).cloned(),
+            Operator::Guard(g) => analysis.unique.get(&symbol_name(&g.input)).cloned(),
             Operator::Project(p) => analysis
                 .unique
                 .get(&symbol_name(&p.input))

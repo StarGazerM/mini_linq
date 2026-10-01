@@ -51,31 +51,15 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
                     .map(|(l, r)| l.union(r).cloned().collect())
             }
             Operator::Semi(_, k) => keys.get(&symbol_name(&k.left)).cloned(),
-            Operator::Select(s) => keys.get(&symbol_name(&s.input)).cloned(),
-            Operator::Range(_, r) => {
-                let input = symbol_name(&r.input);
-                let leading = facts
-                    .hosts
-                    .get(&input)
-                    .and_then(|h| target.inputs().find(|d| symbol_name(&d.name) == *h))
-                    .and_then(|d| d.columns.first())
-                    .map(|c| symbol_name(&c.name));
-                if leading.is_none()
-                    || facts.renames[&input].get(&symbol_name(&r.column)) != leading.as_ref()
-                {
-                    return Err(fail(
-                        "range requires the leading declared column of a host rename",
-                    ));
+            Operator::Select(s) => {
+                if s.condition.constant_keys().is_some() {
+                    return Err(fail("literal selection requires a const point read"));
                 }
-                if !has_bound(&r.condition, &symbol_name(&r.column)) {
-                    return Err(fail(&format!(
-                        "range condition does not bound key `{}`",
-                        r.column
-                    )));
-                }
-                keys.get(&input).cloned()
+                keys.get(&symbol_name(&s.input)).cloned()
             }
-            Operator::Extend(e) => keys.get(&symbol_name(&e.input)).cloned(),
+            Operator::Point(_, s) => keys.get(&symbol_name(&s.input)).cloned(),
+            Operator::Bind(b) => keys.get(&symbol_name(&b.input)).cloned(),
+            Operator::Guard(g) => keys.get(&symbol_name(&g.input)).cloned(),
             Operator::Project(p) => keys
                 .get(&symbol_name(&p.input))
                 .filter(|k| k.is_subset(&heading))
@@ -110,30 +94,4 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
         ));
     }
     Ok(())
-}
-
-/// Independently recognize an integer bound among conjunction leaves.
-fn has_bound(expr: &syn::Expr, column: &str) -> bool {
-    use physical::syntax::predicate::{Comparison, Predicate, Term};
-    let expr = physical::syntax::rust::unparen(expr);
-    if let syn::Expr::Binary(b) = expr {
-        if matches!(b.op, syn::BinOp::And(_)) {
-            return has_bound(&b.left, column) || has_bound(&b.right, column);
-        }
-    }
-    let Some(p) = Predicate::from_expr(expr) else {
-        return false;
-    };
-    let (n, forward) = match (&p.left, &p.right) {
-        (Term::Variable(v), Term::Integer(n)) if symbol_name(v) == column => (*n, true),
-        (Term::Integer(n), Term::Variable(v)) if symbol_name(v) == column => (*n, false),
-        _ => return false,
-    };
-    match p.comparison {
-        Comparison::Ne(_) => false,
-        Comparison::Eq(_) | Comparison::Ge(_) | Comparison::Le(_) => true,
-        Comparison::Gt(_) if forward => n < i32::MAX,
-        Comparison::Lt(_) if !forward => n < i32::MAX,
-        Comparison::Gt(_) | Comparison::Lt(_) => n > i32::MIN,
-    }
 }

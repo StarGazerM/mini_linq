@@ -9,6 +9,9 @@ fn integer(value: impl std::borrow::Borrow<i32>) -> i32 {
 }
 
 fn main() {
+    // Panic is one undistinguished abort in the denotation. Payloads and
+    // backtraces are not part of the oracle protocol.
+    std::panic::set_hook(Box::new(|_| {}));
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

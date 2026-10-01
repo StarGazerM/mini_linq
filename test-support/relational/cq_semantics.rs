@@ -1,6 +1,6 @@
 use crate::{
     cq,
-    values::{Binding, Database, Relation, Rows, evaluate_predicate},
+    values::{Binding, Database, Relation, Rows, evaluate_equality, evaluate_predicate},
 };
 use cq_syntax::symbol_name;
 use std::collections::BTreeSet;
@@ -28,7 +28,7 @@ pub fn valuations(program: &cq::Program, database: &Database) -> Relation {
                 symbol_name(&atom.relation),
                 atom.variables().map(symbol_name).collect::<Vec<_>>(),
             )),
-            cq::BodyItem::Filter(_) => None,
+            cq::BodyItem::Filter(_) | cq::BodyItem::Equality(_) => None,
             cq::BodyItem::Let(_)
             | cq::BodyItem::Negation(_)
             | cq::BodyItem::Aggregate(_)
@@ -69,6 +69,10 @@ pub fn valuations(program: &cq::Program, database: &Database) -> Relation {
             if atoms.iter().all(|(r, xs)| {
                 relations[r].contains(&xs.iter().map(|x| assignment[x]).collect::<Vec<_>>())
             }) && predicates.iter().all(|p| evaluate_predicate(p, assignment))
+                && program.query.body.iter().all(|item| match item {
+                    cq::BodyItem::Equality(e) => evaluate_equality(e, assignment),
+                    _ => true,
+                })
             {
                 result.rows.insert(assignment.clone());
             }

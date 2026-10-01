@@ -4,13 +4,13 @@ physical {
     relation T(first: i32, second: i32);
     r0 = pipe rename R { first -> a, second -> b };
     r1 = pipe project r0 keep { a };
-    r2 = pipe rename T { first -> c, second -> a };
-    r3 = pipe semi[a] r1, r2;
-    r4 = pipe probe[a] r3, r0;
-    r5 = pipe rename S { first -> b, second -> c };
-    r6 = pipe semi[b] r4, r5;
-    r7 = pipe probe[b] r6, r5;
-    r8 = pipe probe[a, c] r7, r2;
+    r2 = pipe probe[a] r1, r0;
+    r3 = pipe rename S { first -> b, second -> c };
+    r4 = pipe semi[b] r2, r3;
+    r5 = pipe probe[b] r4, r3;
+    r6 = pipe rename T { first -> c, second -> a };
+    r7 = pipe semi[a, c] r5, r6;
+    r8 = pipe probe[a, c] r7, r6;
     r9 = pipe canon project r8 keep { a, b, c };
     return r9 as answer(a, b, c);
 }

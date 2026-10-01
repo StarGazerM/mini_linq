@@ -1,55 +1,16 @@
-//! VO: a valuation plan — the order in which a query's valuations are built.
-//!
-//! CQ denotes the valuations `h : Vars → Dom` satisfying every atom. A plan
-//! is a sequence of steps that extend a partial valuation: an atom step
-//! binds the variables of one **subatom** — an atom restricted to some of
-//! its columns, the rest written `_` — and constrains the already-bound
-//! ones; a guard or binding step is placed once its variables are bound.
-//! After each step the plan denotes the set of partial valuations on the
-//! bound variables that satisfy every subatom seen so far, restricted to
-//! their bound columns. The last step denotes `⟦Q⟧`.
-//!
-//! What the plan decides is only the order and the granularity: one subatom
-//! per atom with all its columns is relation-at-a-time (a binary join
-//! plan); one new variable per subatom is variable-at-a-time (generic
-//! join); anything between is a Free Join split. Nothing here names an
-//! operator, a key or a structure; the algebra below chooses them.
-//!
-//! A subatom names its source clause (`R@2`) so self-joins stay distinct.
-//! It must list every variable of that clause that is already bound — a
-//! plan may drop only unbound columns, never a constraint — and a clause
-//! whose subatom adds no new variable is a consistency check, which erases
-//! to nothing under set semantics.
-//!
-//! A **reduction** restricts a clause's relation before the clause is ever
-//! joined. `reduce R@0 with S@1(b, _)` keeps the tuples of `R@0` that agree
-//! with some tuple of `S@1` on the variables the two clauses share — the
-//! subatom lists exactly those, `_` elsewhere. `reduce R@0 if (e)` keeps the
-//! tuples satisfying `e`, one of the query's guards over `R@0`'s own
-//! variables; that guard is thereby placed and appears as no step. A
-//! reduction may stand anywhere before the reduced clause's first subatom
-//! step. Under set semantics it changes nothing the plan denotes — it is a
-//! Yannakakis semijoin, or a guard pushed onto one atom, written down where
-//! the algebra will apply it — so the erasure ignores reductions.
+//! Valuation plans for `T X = bottom + Set X`.
+//! Relational subatoms, equalities and semijoin reductions commute. They may
+//! move earlier across opaque Rust lets/guards; the Rust chain retains written
+//! order and all its written relational predecessors. This chain/Before check
+//! is a sufficient refinement condition: a target may panic only on an input
+//! where the written reference panics. I/O, mutation and evaluation counts are
+//! outside this denotation. A split atom is a predecessor only once its full
+//! correlated row has been checked. Rust guards are never reductions.
 //!
 //! ```text
-//! valuation {
-//!     reduce R@0 with T@2(a, _); // keep the R tuples whose a occurs in T
-//!     R@0(a, _);            // bind a from R
-//!     T@2(a, _);            // check a against T
-//!     R@0(a, b);            // bind b from R given a
-//!     S@1(b, _);
-//!     if (b != 5);
-//!     S@1(b, c);  T@2(a, c);
-//! }
-//! ```
-//!
-//! ```text
-//! Program   ::= CQ "valuation" "{" Step* "}"
-//! Step      ::= Subatom ";" | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
-//!             | "reduce" Ident "@" Int Reduction ";"
-//! Reduction ::= "with" Subatom | "if" Expr
-//! Subatom   ::= Ident "@" Int "(" (Ident | "_"),* ")"
+//! Step ::= Subatom ";" | Ident "=" (Ident | Literal) ";"
+//!        | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
+//!        | "reduce" Ident "@" Int "with" Subatom ";"
 //! ```
 
 pub use cq_lang_cq as cq;
@@ -58,7 +19,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{Ident, LitInt, Token, token};
 
-use cq_syntax::rust;
 pub use cq_syntax::{CommaList, symbol_name};
 
 pub mod kw {
@@ -86,15 +46,29 @@ fn parse_steps(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Step>> {
     Ok(steps)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub enum Step {
-    #[parse(peek = Token![if])]
+    Equality(cq::Equality, Token![;]),
     Guard(cq_syntax::Filter, Token![;]),
-    #[parse(peek = Token![let])]
     Let(Box<cq_syntax::Let>, Token![;]),
-    #[parse(peek = kw::reduce)]
     Reduce(Reduce, Token![;]),
     Atom(Subatom, Token![;]),
+}
+
+impl syn::parse::Parse for Step {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        Ok(if input.peek(Token![if]) {
+            Self::Guard(input.parse()?, input.parse()?)
+        } else if input.peek(Token![let]) {
+            Self::Let(input.parse()?, input.parse()?)
+        } else if input.peek(kw::reduce) {
+            Self::Reduce(input.parse()?, input.parse()?)
+        } else if input.peek(Ident) && input.peek2(Token![=]) {
+            Self::Equality(input.parse()?, input.parse()?)
+        } else {
+            Self::Atom(input.parse()?, input.parse()?)
+        })
+    }
 }
 
 /// A restriction of one clause's relation, applied before its first subatom.
@@ -112,8 +86,6 @@ pub enum Reduction {
     /// Semijoin with another clause on the variables the subatom lists.
     #[parse(peek = kw::with)]
     With(kw::with, Subatom),
-    /// One of the query's guards, over the reduced clause's variables.
-    Guard(cq_syntax::Filter),
 }
 
 impl Reduce {
@@ -169,14 +141,6 @@ pub struct Analysis {
     pub atoms: BTreeMap<usize, cq_syntax::Atom>,
 }
 
-/// A normalized source clause; indices retain their source ordering.
-#[derive(Clone, Debug)]
-enum Clause {
-    Atom(cq_syntax::Atom),
-    Guard(cq_syntax::Filter),
-    Let(Box<cq_syntax::Let>),
-}
-
 pub mod contract {
     /// Formal rule WF-VO: Check NF and the local valuation schedule with coverage and reduction premises.
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
@@ -196,96 +160,67 @@ fn error<T>(
 }
 
 fn analyze(program: &Program) -> syn::Result<Analysis> {
-    let module = &program.valuation;
-    let clauses = program
-        .cq
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            cq::BodyItem::Positive { atom } => Some(Clause::Atom(atom.clone())),
-            cq::BodyItem::Filter(f) => Some(Clause::Guard(f.clone())),
-            cq::BodyItem::Let(l) => Some(Clause::Let(l.clone())),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let body = &program.cq.query.body;
+    let hypergraph = cq::hypergraph::Analysis::of(&program.cq);
+    let observed = cq::normal::rust_observed(&program.cq);
+    let mut first_atom = BTreeMap::new();
     let mut analysis = Analysis::default();
-    let mut clause_variables: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    let mut guards: Vec<&cq_syntax::Filter> = Vec::new();
-    let mut lets: Vec<&cq_syntax::Let> = Vec::new();
-    for (clause, item) in clauses.iter().enumerate() {
+    let mut written_bound = BTreeSet::new();
+    let mut rust_chain = Vec::new();
+    let mut dependencies = BTreeMap::new();
+    let mut equalities = BTreeMap::new();
+    let mut let_bound = BTreeSet::new();
+    for (clause, item) in body.iter().enumerate() {
         match item {
-            Clause::Atom(atom) => {
-                if !atom.is_normalized() {
-                    return error(atom, "valuation requires normalized atoms");
-                }
-                clause_variables.insert(clause, atom.variables().map(symbol_name).collect());
+            cq::BodyItem::Positive { atom } => {
                 analysis.atoms.insert(clause, atom.clone());
+                for variable in atom.variables() {
+                    first_atom.entry(symbol_name(variable)).or_insert(clause);
+                }
+                written_bound.extend(atom.variables().map(symbol_name));
             }
-            Clause::Guard(filter) => guards.push(filter),
-            Clause::Let(binding) => lets.push(binding),
+            cq::BodyItem::Equality(equality) => {
+                equalities.insert(clause, equality);
+            }
+            cq::BodyItem::Filter(_) | cq::BodyItem::Let(_) => {
+                let step = item.rust_step().expect("Rust step");
+                dependencies.insert(clause, step.free_variables.dependencies(&written_bound));
+                written_bound.extend(step.bindings.iter().map(symbol_name));
+                let_bound.extend(step.bindings.iter().map(symbol_name));
+                rust_chain.push(clause);
+            }
+            _ => unreachable!("normal form checked"),
         }
     }
-    let let_bound: Vec<String> = lets
-        .iter()
-        .flat_map(|binding| rust::bindings(&binding.pattern))
-        .map(|v| symbol_name(&v))
-        .collect();
-    let is_variable = |v: &str| {
-        clause_variables.values().flatten().any(|c| c == v) || let_bound.iter().any(|c| c == v)
-    };
-    // The clause a subatom or a reduction names: an atom of that relation.
     let atom_clause = |named: &dyn quote::ToTokens, relation: &Ident, clause: usize| {
-        let Some(variables) = clause_variables.get(&clause) else {
+        let Some(atom) = analysis.atoms.get(&clause) else {
             return error(named, format!("clause #{clause} is not an atom"));
         };
-        let atom = &analysis.atoms[&clause];
         if symbol_name(relation) != symbol_name(&atom.relation) {
             return error(relation, format!("clause #{clause} is `{}`", atom.relation));
         }
-        Ok(variables)
+        Ok(atom.variables().map(symbol_name).collect::<Vec<_>>())
     };
     let columns = |subatom: &Subatom| {
-        let clause = subatom.clause();
-        let variables = atom_clause(subatom, &subatom.relation, clause)?;
+        let variables = atom_clause(subatom, &subatom.relation, subatom.clause())?;
         if subatom.columns.len() != variables.len() {
             return error(
                 subatom,
-                format!("clause #{clause} has {} columns", variables.len()),
+                format!(
+                    "clause #{} has {} columns",
+                    subatom.clause(),
+                    variables.len()
+                ),
             );
         }
         Ok(variables)
     };
-    // The guards the reductions place; a guard step is then the next guard
-    // the reductions leave, in query order.
-    let mut consumed = vec![false; guards.len()];
-    for step in &module.steps {
-        let Step::Reduce(reduce, _) = step else {
-            continue;
-        };
-        let Reduction::Guard(filter) = &reduce.reduction else {
-            continue;
-        };
-        let unplaced = guards
-            .iter()
-            .zip(&consumed)
-            .position(|(guard, taken)| !taken && guard.condition == filter.condition);
-        match unplaced {
-            Some(guard) => consumed[guard] = true,
-            None => {
-                return error(
-                    filter,
-                    "a reduction guard is one of the query's guards, once",
-                );
-            }
-        }
-    }
-    let mut bound: Vec<String> = Vec::new();
-    let mut covered: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
-    let mut guards_seen = 0usize;
-    let mut lets_seen = 0usize;
-    let is_bound = |bound: &[String], v: &str| bound.iter().any(|b| b == v);
-    for step in &module.steps {
+    let mut bound = Vec::new();
+    let mut seen_atoms = BTreeSet::new();
+    let mut complete = BTreeSet::new();
+    let mut placed_equalities = BTreeSet::new();
+    let mut next_rust = 0;
+    for step in &program.valuation.steps {
         analysis.bound_before.push(bound.clone());
         match step {
             Step::Atom(subatom, _) => {
@@ -295,18 +230,26 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 for (position, column) in subatom.columns.iter().enumerate() {
                     let expected = &variables[position];
                     match column {
-                        Column::Variable(v) if symbol_name(v) == *expected => {
-                            if !is_bound(&bound, expected) {
-                                introduced.push(expected.clone());
-                            }
-                        }
-                        Column::Variable(v) => {
+                        Column::Variable(v) if symbol_name(v) != *expected => {
                             return error(
                                 v,
                                 format!("column {position} of clause #{clause} is `{expected}`"),
                             );
                         }
-                        Column::Dropped(_) if is_bound(&bound, expected) => {
+                        Column::Variable(_) => {
+                            if !bound.contains(expected) {
+                                if let_bound.contains(expected) {
+                                    return error(
+                                        subatom,
+                                        format!(
+                                            "`{expected}` must be supplied by its Rust binding before this atom"
+                                        ),
+                                    );
+                                }
+                                introduced.push(expected.clone());
+                            }
+                        }
+                        Column::Dropped(_) if bound.contains(expected) => {
                             return error(
                                 subatom,
                                 format!(
@@ -317,146 +260,168 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         Column::Dropped(_) => {}
                     }
                 }
-                covered
-                    .entry(clause)
-                    .or_default()
-                    .extend(subatom.variables().map(|(_, v)| symbol_name(v)));
+                for variable in introduced.iter().filter(|v| observed.contains(*v)) {
+                    if subatom.variables().count() != variables.len() {
+                        return error(
+                            subatom,
+                            format!(
+                                "partial subatom introduces Rust-observed `{variable}`; its full source row is required"
+                            ),
+                        );
+                    }
+                    if first_atom[variable] != clause {
+                        return error(
+                            subatom,
+                            format!(
+                                "Rust-observed `{variable}` must retain its first source atom's value"
+                            ),
+                        );
+                    }
+                }
+                seen_atoms.insert(clause);
+                if subatom.variables().count() == variables.len() {
+                    complete.insert(clause);
+                }
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
+            }
+            Step::Equality(equality, _) => {
+                let Some((&clause, _)) = equalities.iter().find(|(clause, expected)| {
+                    !placed_equalities.contains(*clause) && ***expected == *equality
+                }) else {
+                    return error(
+                        equality,
+                        "every relational equality must appear exactly once from the query",
+                    );
+                };
+                if let Some(variable) = equality
+                    .variables()
+                    .find(|v| !bound.contains(&symbol_name(v)))
+                {
+                    return error(
+                        equality,
+                        format!("equality uses `{variable}` before it is bound"),
+                    );
+                }
+                placed_equalities.insert(clause);
+                complete.insert(clause);
+                analysis.introduces.push(Vec::new());
+            }
+            Step::Guard(_, _) | Step::Let(_, _) => {
+                let Some(&clause) = rust_chain.get(next_rust) else {
+                    return error(step, "more Rust steps than the query has");
+                };
+                let identical = match (step, &body[clause]) {
+                    (Step::Guard(a, _), cq::BodyItem::Filter(b)) => a == b,
+                    (Step::Let(a, _), cq::BodyItem::Let(b)) => a == b,
+                    _ => false,
+                };
+                if !identical {
+                    return error(
+                        step,
+                        "Rust lets and guards must keep their written relative order (chain)",
+                    );
+                }
+                if let Some(missing) = dependencies[&clause].iter().find(|v| !bound.contains(*v)) {
+                    return error(
+                        step,
+                        format!("Rust step uses `{missing}` before it is bound"),
+                    );
+                }
+                for earlier in 0..clause {
+                    if matches!(
+                        &body[earlier],
+                        cq::BodyItem::Positive { .. } | cq::BodyItem::Equality(_)
+                    ) && !complete.contains(&earlier)
+                    {
+                        return error(
+                            step,
+                            format!(
+                                "Before condition: relational clause #{earlier} must be completed before Rust clause #{clause}"
+                            ),
+                        );
+                    }
+                }
+                let introduced = body[clause]
+                    .rust_step()
+                    .expect("Rust step")
+                    .bindings
+                    .iter()
+                    .map(symbol_name)
+                    .collect::<Vec<_>>();
+                bound.extend(introduced.iter().cloned());
+                analysis.introduces.push(introduced);
+                next_rust += 1;
             }
             Step::Reduce(reduce, _) => {
                 let clause = reduce.clause();
                 let variables = atom_clause(reduce, &reduce.relation, clause)?;
-                if covered.contains_key(&clause) {
+                if seen_atoms.contains(&clause) {
                     return error(
                         reduce,
                         format!("clause #{clause} is reduced after its first subatom"),
                     );
                 }
-                match &reduce.reduction {
-                    Reduction::With(_, subatom) => {
-                        let support = subatom.clause();
-                        let support_variables = columns(subatom)?;
-                        if support == clause {
-                            return error(subatom, "a clause cannot reduce itself");
-                        }
-                        for (position, column) in subatom.columns.iter().enumerate() {
-                            let expected = &support_variables[position];
-                            let shared = variables.contains(expected);
-                            match column {
-                                Column::Variable(v) if symbol_name(v) != *expected => {
-                                    return error(
-                                        v,
-                                        format!(
-                                            "column {position} of clause #{support} is `{expected}`"
-                                        ),
-                                    );
-                                }
-                                Column::Variable(_) if !shared => {
-                                    return error(
-                                        subatom,
-                                        format!(
-                                            "`{expected}` is not shared with clause #{clause}; a reduction lists exactly the shared variables"
-                                        ),
-                                    );
-                                }
-                                Column::Dropped(_) if shared => {
-                                    return error(
-                                        subatom,
-                                        format!(
-                                            "`{expected}` is shared with clause #{clause}; a reduction lists exactly the shared variables"
-                                        ),
-                                    );
-                                }
-                                Column::Variable(_) | Column::Dropped(_) => {}
-                            }
-                        }
-                    }
-                    Reduction::Guard(filter) => {
-                        // Names that are not query variables — callees,
-                        // constants — are Rust's to resolve.
-                        let free = rust::free_variables(&filter.condition);
-                        if let Some(missing) = free
-                            .names
-                            .iter()
-                            .find(|v| !variables.contains(*v) && is_variable(v))
-                        {
+                let Reduction::With(_, subatom) = &reduce.reduction;
+                let support = subatom.clause();
+                let support_variables = columns(subatom)?;
+                if support == clause {
+                    return error(subatom, "a clause cannot reduce itself");
+                }
+                for (position, column) in subatom.columns.iter().enumerate() {
+                    let expected = &support_variables[position];
+                    let shared = variables
+                        .iter()
+                        .any(|variable| hypergraph.equivalent(variable, expected));
+                    match column {
+                        Column::Variable(v) if symbol_name(v) != *expected => {
                             return error(
-                                filter,
+                                v,
+                                format!("column {position} of clause #{support} is `{expected}`"),
+                            );
+                        }
+                        Column::Variable(_) if !shared => {
+                            return error(
+                                subatom,
                                 format!(
-                                    "reduction guard uses `{missing}`, not a variable of clause #{clause}"
+                                    "`{expected}` is not shared with clause #{clause}; a reduction lists exactly the shared variables"
                                 ),
                             );
                         }
+                        Column::Dropped(_) if shared => {
+                            return error(
+                                subatom,
+                                format!(
+                                    "`{expected}` is shared with clause #{clause}; a reduction lists exactly the shared variables"
+                                ),
+                            );
+                        }
+                        _ => {}
                     }
                 }
                 analysis.introduces.push(Vec::new());
-            }
-            Step::Guard(filter, _) => {
-                while consumed.get(guards_seen).is_some_and(|taken| *taken) {
-                    guards_seen += 1;
-                }
-                let Some(expected) = guards.get(guards_seen) else {
-                    return error(filter, "more guards than the query has");
-                };
-                if expected.condition != filter.condition {
-                    return error(filter, "guards must appear in query order");
-                }
-                guards_seen += 1;
-                let free = rust::free_variables(&filter.condition);
-                if let Some(missing) = free
-                    .names
-                    .iter()
-                    .find(|v| !bound.contains(*v) && is_variable(v))
-                {
-                    return error(filter, format!("guard uses `{missing}` before it is bound"));
-                }
-                analysis.introduces.push(Vec::new());
-            }
-            Step::Let(binding, _) => {
-                let Some(expected) = lets.get(lets_seen) else {
-                    return error(binding, "more bindings than the query has");
-                };
-                if **expected != **binding {
-                    return error(binding, "bindings must appear in query order");
-                }
-                lets_seen += 1;
-                let environment: BTreeSet<String> = bound.iter().cloned().collect();
-                let free = rust::free_variables(&binding.expression);
-                if let Some(missing) = free.names.difference(&environment).next() {
-                    if clause_variables.values().flatten().any(|v| v == missing) {
-                        return error(
-                            binding,
-                            format!("binding uses `{missing}` before it is bound"),
-                        );
-                    }
-                }
-                let introduced: Vec<String> = rust::bindings(&binding.pattern)
-                    .iter()
-                    .map(symbol_name)
-                    .collect();
-                bound.extend(introduced.iter().cloned());
-                analysis.introduces.push(introduced);
             }
         }
     }
-    for (clause, variables) in &clause_variables {
-        let seen = covered.get(clause).cloned().unwrap_or_default();
-        if let Some(missing) = variables.iter().find(|v| !seen.contains(*v)) {
+    for (clause, atom) in &analysis.atoms {
+        if !complete.contains(clause) {
             return error(
-                &module.valuation_token,
-                format!("clause #{clause} never binds `{missing}`"),
+                atom,
+                format!("clause #{clause} never completes its full correlated row"),
             );
         }
     }
-    while consumed.get(guards_seen).is_some_and(|taken| *taken) {
-        guards_seen += 1;
+    if let Some((_, missing)) = equalities
+        .iter()
+        .find(|(clause, _)| !placed_equalities.contains(clause))
+    {
+        return error(*missing, "every relational equality must be placed");
     }
-    if guards_seen != guards.len() {
-        return error(guards[guards_seen], "every guard must be placed");
-    }
-    if lets_seen != lets.len() {
-        return error(lets[lets_seen], "every binding must be placed");
+    if next_rust != rust_chain.len() {
+        return error(
+            &body[rust_chain[next_rust]],
+            "every Rust guard and binding must be placed",
+        );
     }
     Ok(analysis)
 }

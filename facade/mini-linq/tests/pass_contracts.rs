@@ -11,7 +11,7 @@ use cq_lang_cq as cq;
 use cq_lang_ix as ix;
 use cq_lang_physical as physical;
 use cq_lang_ra as ra;
-pub use cq_lang_ra::syntax::{RelationDecl, predicate, rust, symbol_name};
+pub use cq_lang_ra::syntax::{Equality, EqualityValue, RelationDecl, predicate, rust, symbol_name};
 
 #[allow(dead_code)]
 #[path = "../../../test-support/relational/cases.rs"]
@@ -65,7 +65,7 @@ fn lowering_preserves_authored_demands_but_index_policy_requires_first_use_names
         l = rename L {a -> a}; r = rename R {a -> a, b -> b}; s = rename S {b -> b, c -> c};
         j0 = natural_join l with r; j1 = natural_join j0 with s;
         x = semijoin j1 with l; p = project x keep {a, c}; output p as answer(a, c);
-    } indexes { membership = @l[0]; second = @s[0]; first = @r[0]; }};
+    } indexes { membership = @l[0] stream; second = @s[0] stream; first = @r[0] stream; }};
     let policy: physical::policy::Policy = syn::parse_quote!(policy {});
     let target = cq_physical_lowering::compile(&source, &policy).unwrap();
     ix::contract::check(&source).unwrap();

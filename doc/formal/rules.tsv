@@ -1,9 +1,9 @@
 rule	kind	path	marker	status
-X-FilterLeft	abstract	-	-	Pure filter placement law; general subtree placement is not implemented by the prefix planner.
-X-ExtendLeft	abstract	-	-	Pure extension placement law; general subtree placement is not implemented by the prefix planner.
-X-FilterExtend	abstract	-	-	Pure independent filter and extension interchange law.
-X-Keys	abstract	-	-	Pure multi-argument matching law; motivates complete prefix-key access.
-X-Local	abstract	-	-	Pure candidate-local matching law; motivates partial-key access and residual selection.
+X-FilterLeft	abstract	-	-	Historical rule; opaque Rust guards retain their chain and source-before relational steps.
+X-ExtendLeft	abstract	-	-	Historical rule; opaque Rust bindings retain their chain and source-before relational steps.
+X-FilterExtend	abstract	-	-	Retired interchange rule: guards and bindings preserve one written relative order.
+X-Keys	abstract	-	-	Historical matching presentation; current NF uses variables and explicit relational equalities.
+X-Local	abstract	-	-	Historical matching presentation; dependent expressions become positioned Rust bindings plus relational equality.
 H-Eval	abstract	-	-	Finite successful host boundary; host semantics and representation adequacy are premises.
 IX-Reuse	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Reuse:	Independent first-use demand derivation; authored fixtures separately check expansion.
 IX-New	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-New:	Independent first-use demand derivation; authored fixtures separately check expansion.
@@ -39,32 +39,32 @@ WF-Physical	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule
 PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one stream read for a derived pipe; noncanonical host renames are reusable.
 PH-Let	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Let:	Require every let to be read.
 STR-Key	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Key:	Answer reads by reusable host dispatch or a built level prefix.
-STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Range:	Answer range by host dispatch or an ordered built entry.
+STR-Range	abstract	-	-	Retired by bottom + Set denotation: Rust guards are opaque chain nodes and are never pushed into relational inputs.
 STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Merge:	Require a direct ordered host read, built entry, or same-key merge pipe.
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
-CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage and Written introducing order.
-CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check reduction erasure, allowed guards and complete dependency-ordered tree edges.
-CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check local contracts, declarations, head and recovered kernel.
+CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, unified Rust chain, source-before inclusion and exact Written order.
+CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check exact retained steps and complete dependency-ordered relational tree reductions; no guard pushdown.
+CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check supplied VO relational regions, exact Rust chain, original binding witnesses and projection safety.
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
 CK-Physical	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Physical:	Check local contracts, RA erasure, IX demands and independent policy premises.
 CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs	/// Formal rule CK-Structures:	Check Physical preservation and independently derived provider and level rules.
 A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Variable:	Keep a first bare argument and record its name.
-A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated bare argument and append its equality guard.
+A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated bare argument and append relational equality.
 A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Wildcard:	Replace a wildcard by a fresh unconstrained atom variable.
-A-Constant	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Constant:	Replace a literal and prepend its typed CQ binding.
-A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Prefix:	Emit a CQ binding before the atom when no new atom variable is needed.
-A-Local	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Local:	Emit a CQ equality guard after the atom for dependent expressions.
+A-Constant	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Constant:	Replace a literal with a fresh atom column and an atom-position relational literal equality.
+A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Prefix:	Emit an opaque Rust binding immediately before its atom when its query inputs are already bound.
+A-Local	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Local:	Emit an opaque Rust binding after its atom, then a relational equality with the fresh atom column.
 D-Atom	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Atom:	Atom provides its columns and requires let-supplied columns.
 D-Guard	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Guard:	Guard requires dependencies on the written prefix.
 D-Bind	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Bind:	Binding provides pattern names and requires RHS prefix dependencies.
-C-Ready	implementation	passes/cq-order/src/lib.rs	/// Formal rule C-Ready:	Require inputs and next pending guard or let of the same kind.
+C-Ready	implementation	passes/cq-order/src/lib.rs	/// Formal rule C-Ready:	Require free-variable binders, the next node of one Rust chain and every source-before relational step.
 S-Written	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Written:	Written uses the complete normal-form body sequence.
 S-Connected	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Connected:	Ready atoms rank by shared names then clause index.
 S-Greedy	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Greedy:	GreedyWidth and Auto rank connected atoms before union arity.
 S-Elimination	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Elimination:	Rank ready atoms by earliest elimination variable then clause index.
-O-Coarse	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Coarse:	Copy guards and lets; emit one full subatom per chosen atom.
-O-Fine	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Fine:	Iterate variables with ready bindings and guards; introduce then check.
+O-Coarse	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Coarse:	Copy equalities and Rust chain nodes; emit one full subatom per chosen atom.
+O-Fine	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Fine:	Split unobserved columns while preserving source-before obligations; introduce Rust-observed values from full atoms.
 H-Occurrence	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-Occurrence:	Construct atom facts indexed by the complete normal-form body.
 H-Incidence	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-Incidence:	Insert every atom clause into each variable incidence set.
 H-Adjacency	abstract	-	-	Derived atom adjacency with whole shared-variable labels; no separate IR.
@@ -73,27 +73,27 @@ G-Absorb	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule G
 G-Accept	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule G-Accept:	Accept a terminal residual with at most one edge, all empty.
 G-Reject	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule G-Reject:	Reject every other terminal residual.
 H-JoinTree	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-JoinTree:	Return the constructed GYO parent map exactly when acyclic.
-R-Guard	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Guard:	Push transparent guards to the earliest eligible atom and remove their steps.
+R-Guard	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Guard:	Retain every opaque Rust guard as its original chain step; compatibility option adds no reductions.
 Y-Up	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Up:	Produce upward parent-with-child VO steps in reverse BFS order.
 Y-Down	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Down:	Produce downward child-with-parent VO steps in BFS order.
-R-Tree	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Tree:	Insert the tree schedule before the first atom after pushed guards.
+R-Tree	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Tree:	Insert only relational tree semijoins before atom reads.
 E-Emit	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Emit:	Append the operator under rN in definition emission order.
 E-Relation	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Relation:	Reuse a clause result or emit its complete positional rename at first use.
 E-Check	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Check:	A partial subatom with no new names semijoins an existing prefix.
 E-Project	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Project:	Project a partial subatom unless it is an existing-prefix check.
 B-Root	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Root:	Install the first full or projected subatom as the prefix.
 B-Join	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Join:	Join a non-check subatom with the current prefix.
-C-Guard	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Guard:	Select the prefix for a VO guard, seeding Unit if absent.
-C-Bind	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Bind:	Extend the prefix with the binding block and symbolic column types.
-E-ReduceGuard	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-ReduceGuard:	Select the current clause relation and replace its map entry.
+C-Guard	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Guard:	Append an opaque guard to the prefix, seeding Unit if absent.
+C-Bind	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Bind:	Append an opaque pattern binding to the prefix without applying RA laws to it.
+E-ReduceGuard	abstract	-	-	Retired by bottom + Set denotation: Rust guards are opaque chain nodes and are never pushed into relational inputs.
 E-ReduceWith	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-ReduceWith:	Semijoin current clause relations and replace only the target entry.
 C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:	Project head dependencies or the full heading under a computed head.
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
 O-Join	abstract	-	-	Ghost binary-tree composition on disjoint full-atom coverages.
-L-Retention	abstract	-	-	Pure finite-set projection law; no general last-use pruning algorithm is claimed.
+L-Retention	abstract	-	-	Relational finite-set projection law; projection cannot collapse values observed by a later opaque Rust node.
 Plan-Prefix	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, elaborate and continue with RA.
-Plan-Generic	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Generic:	Normalize, order Written/Fine, elaborate and continue with RA.
-Plan-Graph	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Graph:	Normalize, Written/Coarse order, Atoms pushdown, Tree iff acyclic, elaborate.
+Plan-Generic	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Generic:	Normalize, order Prefix(Connected)/Fine, elaborate and continue with RA.
+Plan-Graph	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Graph:	Normalize, Written/Coarse order, no Rust guard pushdown, Tree iff acyclic, elaborate.
 ST-Entry	implementation	facade/mini-linq/src/lib.rs	/// Formal rule ST-Entry:	Check and dispatch unchanged CQ to the caller-resolved logical slot.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
 ST-Terminal	implementation	facade/mini-linq/src/lib.rs	/// Formal rule ST-Terminal:	Realize the policed Structures payload with no next continuation.

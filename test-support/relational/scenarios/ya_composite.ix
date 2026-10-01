@@ -1,4 +1,4 @@
 indexes {
-    i0 =@r1[0, 1];
-    i1 =@r3[0, 1];
+    i0 =@r1[0, 1] stream;
+    i1 =@r3[0, 1] stream;
 }

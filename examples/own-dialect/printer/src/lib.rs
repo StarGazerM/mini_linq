@@ -1,4 +1,7 @@
-//! A push dialect: physical reads feed nested for loops and a caller-bound set sink.
+//! A push dialect for `T X = bottom + Set X`: one panic aborts evaluation.
+//! Physical reads feed nested loops and a set sink. Rust binds and guards remain
+//! opaque partial functions in their ancestry order; I/O, mutation and evaluation
+//! counts are outside the meaning. Only relational steps admit RA laws.
 use cq_lang_structures as structures;
 use cq_print::{Context, Repr, access::Access, error, index, sorted};
 use proc_macro::TokenStream;
@@ -14,7 +17,7 @@ pub fn set_sink(input: TokenStream) -> TokenStream {
         Ok(match &request.task {
             cq_protocol::Task::New { .. } => quote!(::std::collections::HashSet::new()),
             cq_protocol::Task::Insert { state, value, .. } => {
-                quote!((#state).insert(::core::clone::Clone::clone(#value)))
+                quote!({ ::cq_storage::require::setoid(#value); (#state).insert(::core::clone::Clone::clone(#value)) })
             }
         })
     })
@@ -131,9 +134,32 @@ impl Push<'_> {
                 Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
             }
             Operator::Project(project) => self.emit(&symbol_name(&project.input), sink),
+            Operator::Point(_, select) => {
+                if let Some(rows) = self.host_point(result, select) {
+                    let pattern = self.pattern(result);
+                    Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
+                } else {
+                    let condition = cq_print::expressions::relational_condition(&select.condition);
+                    self.emit(&symbol_name(&select.input), quote!(if #condition { #sink }))
+                }
+            }
             Operator::Select(select) => {
-                let condition = cq_print::expressions::deref_predicates(&select.condition);
+                let condition = cq_print::expressions::relational_condition(&select.condition);
                 self.emit(&symbol_name(&select.input), quote!(if #condition { #sink }))
+            }
+            Operator::Guard(guard) => {
+                let condition = &guard.condition;
+                self.emit(&symbol_name(&guard.input), quote!(if #condition { #sink }))
+            }
+            Operator::Bind(bind) => {
+                let pattern = &bind.pattern;
+                let annotation = &bind.annotation;
+                let expression = &bind.expression;
+                let shadows = self.shadows(&symbol_name(&bind.input));
+                self.emit(
+                    &symbol_name(&bind.input),
+                    quote! { let #pattern #annotation = { #(#shadows)* #expression }; #sink },
+                )
             }
             Operator::Probe(_, k) => {
                 let left = symbol_name(&k.left);
@@ -192,7 +218,7 @@ impl Push<'_> {
             }
             _ => error(
                 &p.name,
-                "this push example implements unit, rename, project, select, probe and semi",
+                "this push example implements unit, rename, project, select, point, bind, guard, probe and semi",
             ),
         }
     }

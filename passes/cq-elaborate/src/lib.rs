@@ -1,35 +1,16 @@
-//! VO → RA: each valuation step as one named relational-algebra shape.
+//! VO to RA prime, preserving the opaque Rust chain.
 //!
-//! The valuation plan fixed the order and the granularity; this pass decides
-//! nothing about either. It records one thing: the operator each step
-//! becomes over the running prefix `P`, the relation of valuations bound so
-//! far.
-//!
-//! - A clause's relation is `rename R { col -> var, … }` over the whole
-//!   clause, emitted where the clause is first mentioned — by a reduction or
-//!   a subatom — and reused after.
-//! - A subatom `R@i(x, …)` is the clause's relation, restricted by
-//!   `project … keep { x, … }` when it drops columns. It is the prefix when
-//!   there is none, else `natural_join P with it`; a partial subatom that
-//!   binds no new variable only checks the prefix: `semijoin P with rC` on
-//!   the clause's whole relation, whose shared heading with the prefix is
-//!   exactly the bound columns the subatom lists.
-//! - A reduction restricts the clause's relation itself, before the prefix
-//!   sees it: `reduce C with D(cols)` is `semijoin rC with rD` over the two
-//!   clauses' current relations — the RA semijoin keeps the tuples of the
-//!   left agreeing with some tuple of the right on their shared heading,
-//!   exactly the columns the subatom lists, so nothing is projected — and
-//!   `reduce C if (e)` is `select rC if (e)`. The result becomes the
-//!   clause's relation for every later reduction and subatom of it.
-//! - A guard is `select P if (e)`; a binding is `extend P with { v: T, … }
-//!   value ({ let pat: T = e; (v, …) })`. Either before every atom seeds
-//!   the prefix with `unit`.
-//! - The plan ends with `project P keep { … }` retaining the head variables
-//!   — the whole heading under a computed head — then `output … as head`.
-//!
-//! Results are fresh `r0, r1, …` names in emission order, skipping declared
-//! relation names. [`check`] compares the RA kernel with the source CQ kernel
-//! and checks declarations and output head.
+//! The meaning is `T X = bottom + Set X`: one panic aborts evaluation.
+//! Each Rust step is a partial function of its free variables; I/O, mutation
+//! and evaluation counts are outside the meaning. Relational equalities are
+//! interpreted with `Eq`; Rust guards remain opaque. Relational constraints may
+//! move earlier across a Rust node, shrinking its domain, while Rust nodes retain
+//! written order. Identical chain payloads and source-before constraints retained
+//! before each node are a sufficient refinement condition. [`check`] proves
+//! conjunctive-tableau containment at every supplied-VO chain input and
+//! equivalence at output. Because Rust may distinguish values identified by
+//! `Eq`, observed binding suppliers retain concrete witnesses: equality-class
+//! alias solving and projections cannot replace their representatives.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,8 +22,51 @@ use quote::format_ident;
 use syn::Ident;
 
 /// Elaborate a valuation plan into named RA, then check the RA contract.
-/// Formal rule C-Guard: Select the prefix for a VO guard, seeding Unit if absent.
+/// Formal rule C-Guard: Append an opaque guard to the prefix, seeding Unit if absent.
 pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
+    compile_in(source, true)
+}
+
+/// Compile the exact written reference, with no relational hoisting or alias
+/// solving. The valuation must contain one full atom per written generator and
+/// every equality/bind/guard at its written position; reductions are forbidden.
+/// This is the executable reference used for partial-expression refinement tests.
+pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> {
+    valuation::contract::check(source)?;
+    use valuation::cq::BodyItem;
+    let exact = source.valuation.steps.len() == source.cq.query.body.len()
+        && source
+            .cq
+            .query
+            .body
+            .iter()
+            .zip(&source.valuation.steps)
+            .enumerate()
+            .all(|(clause, (item, step))| match (item, step) {
+                (BodyItem::Positive { atom }, valuation::Step::Atom(subatom, _)) => {
+                    subatom.clause() == clause
+                        && subatom.relation == atom.relation
+                        && subatom.variables().count() == atom.args.len()
+                        && subatom
+                            .variables()
+                            .map(|(_, variable)| symbol_name(variable))
+                            .eq(atom.variables().map(symbol_name))
+                }
+                (BodyItem::Equality(a), valuation::Step::Equality(b, _)) => a == b,
+                (BodyItem::Filter(a), valuation::Step::Guard(b, _)) => a == b,
+                (BodyItem::Let(a), valuation::Step::Let(b, _)) => a == b,
+                _ => false,
+            });
+    if !exact {
+        return Err(syn::Error::new_spanned(
+            &source.valuation,
+            "written reference requires exactly the full written NF steps, without splitting, reductions or reordering",
+        ));
+    }
+    compile_in(source, false)
+}
+
+fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Result<ra::Program> {
     let analysis = valuation::contract::check(source)?;
     let mut state = State {
         inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
@@ -58,18 +82,52 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
         relations: BTreeMap::new(),
         prefix: None,
         heading: BTreeSet::new(),
+        aliases: if relational_hoisting {
+            aliases(&source.cq)
+        } else {
+            BTreeMap::new()
+        },
+        relational_hoisting,
+        equalities: source
+            .cq
+            .query
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                valuation::cq::BodyItem::Equality(equality) => Some(equality.clone()),
+                _ => None,
+            })
+            .collect(),
     };
     for (step, introduces) in source.valuation.steps.iter().zip(&analysis.introduces) {
         match step {
-            valuation::Step::Atom(subatom, _) => state.subatom(subatom, introduces.is_empty()),
+            valuation::Step::Atom(subatom, _) => {
+                let check = subatom.variables().all(|(_, variable)| {
+                    state
+                        .heading
+                        .contains(&symbol_name(&state.canonical(variable)))
+                });
+                state.subatom(subatom, check);
+            }
             valuation::Step::Reduce(reduce, _) => state.reduce(reduce),
             valuation::Step::Guard(filter, _) => {
                 let input = state.prefix_or_unit();
-                state.prefix = Some(state.select(input, filter));
+                state.prefix = Some(state.guard(input, filter));
             }
-            valuation::Step::Let(binding, _) => state.extend(binding),
+            valuation::Step::Let(binding, _) => state.bind(binding),
+            valuation::Step::Equality(equality, _) => state.equality(equality),
         }
-        state.heading.extend(introduces.iter().cloned());
+        let introduced: Vec<_> = introduces
+            .iter()
+            .map(|name| {
+                state
+                    .aliases
+                    .get(name)
+                    .map(symbol_name)
+                    .unwrap_or_else(|| name.clone())
+            })
+            .collect();
+        state.heading.extend(introduced);
     }
     let output = state.finish(&source.cq.query.head);
     let target = ra::Program {
@@ -86,10 +144,12 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
 }
 
 mod kernel;
+mod tableau;
 pub use kernel::{erase, kernel};
 
-/// The RA definitions compute the query scheduled by VO.
-/// Formal rule CK-Elaborate: Check local contracts, declarations, head and recovered kernel.
+/// The RA definitions refine the supplied VO schedule, retaining its Rust
+/// chain, preceding relational constraints and observed binding witnesses.
+/// Formal rule CK-Elaborate: Check local contracts, chain regions and relational tableaux.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     valuation::contract::check(source)?;
     ra::contract::check(target)?;
@@ -111,15 +171,7 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
             ),
         ));
     }
-    if kernel(target, &source.cq) != valuation::cq::normal::Kernel::of(&source.cq) {
-        return Err(syn::Error::new_spanned(
-            &target.plan.output,
-            format!(
-                "result `{}`: kernel does not compute query `{}`",
-                target.plan.output.input, source.cq.name
-            ),
-        ));
-    }
+    tableau::check(source, target)?;
     Ok(())
 }
 
@@ -134,6 +186,9 @@ struct State<'a> {
     relations: BTreeMap<usize, Ident>,
     prefix: Option<Ident>,
     heading: BTreeSet<String>,
+    aliases: BTreeMap<String, Ident>,
+    relational_hoisting: bool,
+    equalities: Vec<ra::Equality>,
 }
 
 impl State<'_> {
@@ -158,15 +213,34 @@ impl State<'_> {
                 source: column.name.clone(),
                 minus_token: Default::default(),
                 gt_token: Default::default(),
-                target: variable.clone(),
+                target: self.canonical(variable),
             })
             .collect();
-        let result = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
+        let mut result = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
             rename_token: Default::default(),
             relation: atom.relation.clone(),
             mapping_brace: Default::default(),
             mapping,
         })));
+        // A literal equality is a keyed relational read of this occurrence.
+        // It may move earlier across Rust because it only restricts its domain.
+        let variables: BTreeSet<_> = atom.variables().map(symbol_name).collect();
+        let literals: Vec<_> = self
+            .equalities
+            .iter()
+            .filter(|e| {
+                self.relational_hoisting
+                    && variables.contains(&symbol_name(&e.left))
+                    && matches!(e.right, ra::EqualityValue::Literal(_))
+            })
+            .map(|e| ra::Equality {
+                left: self.canonical(&e.left),
+                ..e.clone()
+            })
+            .collect();
+        if !literals.is_empty() {
+            result = self.select(result, literals);
+        }
         self.relations.insert(clause, result.clone());
         result
     }
@@ -194,7 +268,7 @@ impl State<'_> {
             let variables: Vec<&Ident> = self.atoms[&clause].variables().collect();
             let attributes = subatom
                 .variables()
-                .map(|(position, _)| variables[position].clone())
+                .map(|(position, _)| self.canonical(variables[position]))
                 .collect();
             right = self.project(right, attributes);
         }
@@ -209,7 +283,6 @@ impl State<'_> {
         });
     }
 
-    /// Formal rule E-ReduceGuard: Select the current clause relation and replace its map entry.
     /// Formal rule E-ReduceWith: Semijoin current clause relations and replace only the target entry.
     fn reduce(&mut self, reduce: &valuation::Reduce) {
         let clause = reduce.clause();
@@ -219,7 +292,6 @@ impl State<'_> {
                 let right = self.relation(subatom.clause());
                 self.semijoin(left, right)
             }
-            valuation::Reduction::Guard(filter) => self.select(left, filter),
         };
         self.relations.insert(clause, result);
     }
@@ -233,102 +305,86 @@ impl State<'_> {
         })))
     }
 
-    fn select(&mut self, input: Ident, filter: &cq::Filter) -> Ident {
+    fn canonical(&self, variable: &Ident) -> Ident {
+        self.aliases
+            .get(&symbol_name(variable))
+            .unwrap_or(variable)
+            .clone()
+    }
+
+    fn select(&mut self, input: Ident, equalities: Vec<ra::Equality>) -> Ident {
         self.emit(ra::Operator::Select(Box::new(ra::Select {
             select_token: Default::default(),
             input,
             if_token: Default::default(),
             condition_paren: Default::default(),
+            condition: ra::Theta {
+                equalities: equalities.into_iter().collect(),
+            },
+        })))
+    }
+
+    fn equality(&mut self, equality: &ra::Equality) {
+        if self.relational_hoisting && matches!(equality.right, ra::EqualityValue::Literal(_)) {
+            // Literal constraints on stored columns already decorate the rename.
+            if self.atoms.values().any(|atom| {
+                atom.variables()
+                    .any(|v| symbol_name(v) == symbol_name(&equality.left))
+            }) {
+                return;
+            }
+        }
+        let left = self.canonical(&equality.left);
+        let right = match &equality.right {
+            ra::EqualityValue::Variable(variable) => {
+                let variable = self.canonical(variable);
+                if symbol_name(&variable) == symbol_name(&left) {
+                    return;
+                }
+                ra::EqualityValue::Variable(variable)
+            }
+            other => other.clone(),
+        };
+        let input = self.prefix_or_unit();
+        self.prefix = Some(self.select(
+            input,
+            vec![ra::Equality {
+                left,
+                eq_token: equality.eq_token,
+                right,
+            }],
+        ));
+    }
+
+    fn guard(&mut self, input: Ident, filter: &cq::Filter) -> Ident {
+        self.emit(ra::Operator::Guard(Box::new(ra::Guard {
+            guard_token: Default::default(),
+            input,
+            if_token: filter.if_token,
+            condition_paren: Default::default(),
             condition: filter.condition.clone(),
         })))
     }
 
-    /// `extend P with { v: T, … } value ({ let pat: T = e; (v, …) })`: the
-    /// binding evaluated per prefix tuple, its bound variables the columns.
-    /// Formal rule C-Bind: Extend the prefix with the binding block and symbolic column types.
-    fn extend(&mut self, binding: &cq::Let) {
-        let variables = cq::rust::bindings(&binding.pattern);
-        let columns = binding
-            .binding_types()
-            .into_iter()
-            .map(|(name, ty)| cq::ColumnDecl {
-                name,
-                colon_token: Default::default(),
-                ty,
-            })
-            .collect();
-        let pat = match &binding.annotation {
-            Some(annotation) => syn::Pat::Type(syn::PatType {
-                attrs: Vec::new(),
-                pat: Box::new(binding.pattern.clone()),
-                colon_token: annotation.colon_token,
-                ty: Box::new(annotation.ty.clone()),
-            }),
-            None => binding.pattern.clone(),
-        };
-        let mut stmts = vec![syn::Stmt::Local(syn::Local {
-            attrs: Vec::new(),
-            let_token: binding.let_token,
-            pat,
-            init: Some(syn::LocalInit {
-                eq_token: binding.eq_token,
-                expr: Box::new(binding.expression.clone()),
-                diverge: None,
-            }),
-            semi_token: Default::default(),
-        })];
-        if !variables.is_empty() {
-            let mut elems = syn::punctuated::Punctuated::new();
-            for variable in &variables {
-                elems.push(syn::Expr::Path(syn::ExprPath {
-                    attrs: Vec::new(),
-                    qself: None,
-                    path: variable.clone().into(),
-                }));
-                elems.push_punct(Default::default());
-            }
-            stmts.push(syn::Stmt::Expr(
-                syn::Expr::Tuple(syn::ExprTuple {
-                    attrs: Vec::new(),
-                    paren_token: Default::default(),
-                    elems,
-                }),
-                None,
-            ));
-        }
-        let value = syn::Expr::Block(syn::ExprBlock {
-            attrs: Vec::new(),
-            label: None,
-            block: syn::Block {
-                brace_token: Default::default(),
-                stmts,
-            },
-        });
+    /// Formal rule C-Bind: Append an opaque pattern binding to the prefix.
+    fn bind(&mut self, binding: &cq::Let) {
         let input = self.prefix_or_unit();
-        self.prefix = Some(self.emit(ra::Operator::Extend(Box::new(ra::Extend {
-            extend_token: Default::default(),
+        self.prefix = Some(self.emit(ra::Operator::Bind(Box::new(ra::Bind {
+            bind_token: Default::default(),
             input,
             with_token: Default::default(),
-            columns_brace: Default::default(),
-            columns,
-            value_token: Default::default(),
-            value_paren: Default::default(),
-            value,
+            pattern: binding.pattern.clone(),
+            annotation: binding.annotation.clone(),
+            eq_token: binding.eq_token,
+            expression_paren: Default::default(),
+            expression: binding.expression.clone(),
         }))));
     }
 
-    /// Retain the head's variables — every column under a computed head, so
-    /// embedded Rust observes the whole prefix — and name the output.
-    /// Formal rule C-Finish: Project head dependencies or the full heading under a computed head.
+    /// Retain the normalized head variables and name the output.
+    /// Formal rule C-Finish: Project the head variables after the complete chain.
     fn finish(&mut self, head: &cq::Atom) -> ra::Output {
-        let retained: BTreeSet<String> = if head.variables().count() < head.args.len() {
-            self.heading.clone()
-        } else {
-            head.variables()
-                .map(symbol_name)
-                .filter(|v| self.heading.contains(v))
-                .collect()
-        };
+        let retained: BTreeSet<String> = head.variables().map(symbol_name).collect();
         let mut bindings = BTreeMap::new();
         for definition in &self.definitions {
             match &definition.operator {
@@ -339,11 +395,9 @@ impl State<'_> {
                             .or_insert_with(|| m.target.clone());
                     }
                 }
-                ra::Operator::Extend(e) => {
-                    for c in &e.columns {
-                        bindings
-                            .entry(symbol_name(&c.name))
-                            .or_insert_with(|| c.name.clone());
+                ra::Operator::Bind(e) => {
+                    for name in cq::rust::bindings(&e.pattern) {
+                        bindings.entry(symbol_name(&name)).or_insert(name);
                     }
                 }
                 _ => (),
@@ -399,4 +453,109 @@ impl State<'_> {
         });
         result
     }
+}
+
+/// Solve generator equalities through shared join headings when doing so keeps
+/// every opaque expression's names and every atom's distinct rename targets.
+fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
+    use valuation::cq::BodyItem;
+    let atoms: Vec<_> = source
+        .query
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            BodyItem::Positive { atom } => Some(atom),
+            _ => None,
+        })
+        .collect();
+    let generators: BTreeSet<_> = atoms
+        .iter()
+        .flat_map(|atom| atom.variables().map(symbol_name))
+        .collect();
+    let mut protected: BTreeSet<_> = source.query.head.variables().map(symbol_name).collect();
+    for item in &source.query.body {
+        let expression = match item {
+            BodyItem::Filter(filter) => &filter.condition,
+            BodyItem::Let(binding) => {
+                protected.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
+                &binding.expression
+            }
+            _ => continue,
+        };
+        protected.extend(cq::rust::free_variables(expression).dependencies(&generators));
+    }
+    // A Rust observer may distinguish representatives that Eq identifies.
+    // Preserve the entire observed equality class so its original generator
+    // remains the supplier even when another atom is scheduled earlier.
+    protected.extend(rust_sensitive(source));
+    let mut aliases = BTreeMap::<String, Ident>::new();
+    let canonical = |id: &Ident, aliases: &BTreeMap<String, Ident>| {
+        aliases.get(&symbol_name(id)).unwrap_or(id).clone()
+    };
+    for item in &source.query.body {
+        let BodyItem::Equality(equality) = item else {
+            continue;
+        };
+        let ra::EqualityValue::Variable(right) = &equality.right else {
+            continue;
+        };
+        if !generators.contains(&symbol_name(&equality.left))
+            || !generators.contains(&symbol_name(right))
+        {
+            continue;
+        }
+        let left = canonical(&equality.left, &aliases);
+        let right = canonical(right, &aliases);
+        if left == right {
+            continue;
+        }
+        let (keep, replace) = if protected.contains(&symbol_name(&right)) {
+            (right, left)
+        } else {
+            (left, right)
+        };
+        if protected.contains(&symbol_name(&replace)) {
+            continue;
+        }
+        let mut proposed = aliases.clone();
+        for value in proposed.values_mut() {
+            if symbol_name(value) == symbol_name(&replace) {
+                *value = keep.clone();
+            }
+        }
+        proposed.insert(symbol_name(&replace), keep);
+        if atoms.iter().any(|atom| {
+            let names: BTreeSet<_> = atom
+                .variables()
+                .map(|v| symbol_name(&canonical(v, &proposed)))
+                .collect();
+            names.len() != atom.args.len()
+        }) {
+            continue;
+        }
+        aliases = proposed;
+    }
+    aliases
+}
+
+/// Query-variable equality classes whose concrete representatives reach Rust.
+/// The existing free-variable analysis is the only expression analysis used.
+fn rust_sensitive(source: &valuation::cq::Program) -> BTreeSet<String> {
+    use valuation::cq::BodyItem;
+    let graph = valuation::cq::hypergraph::Analysis::of(source);
+    let mut names: BTreeSet<_> = graph.clauses.values().flatten().cloned().collect();
+    for item in &source.query.body {
+        if let BodyItem::Let(binding) = item {
+            names.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
+        }
+    }
+    let observed = valuation::cq::normal::rust_observed(source);
+    let classes: BTreeSet<_> = observed
+        .iter()
+        .map(|name| graph.equivalences.get(name).unwrap_or(name).clone())
+        .collect();
+    names
+        .into_iter()
+        .filter(|name| classes.contains(graph.equivalences.get(name).unwrap_or(name)))
+        .collect()
 }

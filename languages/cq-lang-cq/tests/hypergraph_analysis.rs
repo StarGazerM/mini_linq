@@ -248,3 +248,21 @@ fn analysis_requires_normal_form() {
     assert!(analysis.acyclic);
     assert_bfmy(&analysis);
 }
+
+#[test]
+fn normalization_aliases_preserve_cycles_and_join_tree_connectivity() {
+    for text in [
+        "struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32); relation T(a:i32,b:i32); answer(x,y,z) :- R(x,y),S(y,z),T(z,x);",
+        "struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32); answer(x,z) :- R(x,y),S(y,z);",
+    ] {
+        let source: cq_lang_cq::Program = syn::parse_str(text).unwrap();
+        let normalized = cq_lang_cq::normal::normalize(&source).unwrap();
+        let before = cq_lang_cq::hypergraph::Analysis::of(&source);
+        let after = cq_lang_cq::hypergraph::Analysis::of(&normalized);
+        assert_eq!(after.acyclic, before.acyclic);
+        assert_eq!(after.chordal, before.chordal);
+        assert_eq!(after.conformal, before.conformal);
+        assert!(after.equivalent("y", "__cq_1_0"));
+        assert!(!after.shared(0, 1).is_empty());
+    }
+}

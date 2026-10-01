@@ -41,7 +41,7 @@ cq-physical-realization = { workspace = true, optional = true }
 cq-load.workspace = true
 cq-state-providers.workspace = true
 syn_derive.workspace = true
-cq-storage.workspace = true
+cq-storage = { workspace = true, features = ["counters"] }
 contracts.workspace = true
 prettyplease.workspace = true
 syn = { workspace = true, features = ["visit-mut"] }
@@ -60,4 +60,11 @@ required-features = ["written-order", "hypergraph", "index-demands", "physical-l
 
 [[test]]
 name = "dispatch"
+required-features = ["written-order", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]
+[[test]]
+name = "denotation"
+required-features = ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]
+
+[[test]]
+name = "provenance"
 required-features = ["written-order", "index-demands", "physical-lowering", "structure-selection", "physical-realization"]

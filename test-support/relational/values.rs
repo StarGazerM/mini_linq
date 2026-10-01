@@ -66,23 +66,44 @@ pub fn evaluate_predicate(expr: &syn::Expr, row: &Binding) -> bool {
     {
         return evaluate_predicate(left, row) && evaluate_predicate(right, row);
     }
-    let predicate =
-        cq_syntax::predicate::Predicate::from_expr(expr).expect("integer comparison oracle domain");
-    use cq_syntax::predicate::{Comparison, Term};
-    let value = |term: &Term| match term {
-        Term::Variable(v) => row[&symbol_name(v)],
-        Term::Integer(i) => *i,
+    let syn::Expr::Binary(binary) = cq_syntax::rust::unparen(expr) else {
+        panic!("integer comparison oracle domain")
     };
-    let l = value(&predicate.left);
-    let r = value(&predicate.right);
-    match predicate.comparison {
-        Comparison::Eq(_) => l == r,
-        Comparison::Ne(_) => l != r,
-        Comparison::Lt(_) => l < r,
-        Comparison::Le(_) => l <= r,
-        Comparison::Gt(_) => l > r,
-        Comparison::Ge(_) => l >= r,
+    let l = evaluate_integer(&binary.left, row);
+    let r = evaluate_integer(&binary.right, row);
+    match binary.op {
+        syn::BinOp::Eq(_) => l == r,
+        syn::BinOp::Ne(_) => l != r,
+        syn::BinOp::Lt(_) => l < r,
+        syn::BinOp::Le(_) => l <= r,
+        syn::BinOp::Gt(_) => l > r,
+        syn::BinOp::Ge(_) => l >= r,
+        _ => panic!("integer comparison oracle domain"),
     }
+}
+
+pub fn evaluate_integer(expr: &syn::Expr, row: &Binding) -> i32 {
+    match cq_syntax::rust::unparen(expr) {
+        syn::Expr::Path(p) => row[&symbol_name(p.path.get_ident().expect("variable"))],
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(n),
+            ..
+        }) => n.base10_parse().unwrap(),
+        syn::Expr::Unary(u) => match u.op {
+            syn::UnOp::Deref(_) => evaluate_integer(&u.expr, row),
+            syn::UnOp::Neg(_) => -evaluate_integer(&u.expr, row),
+            _ => panic!("integer term oracle domain"),
+        },
+        _ => panic!("integer term oracle domain"),
+    }
+}
+
+pub fn evaluate_equality(e: &cq_syntax::Equality, row: &Binding) -> bool {
+    let right = match &e.right {
+        cq_syntax::EqualityValue::Variable(v) => row[&symbol_name(v)],
+        cq_syntax::EqualityValue::Literal(l) => evaluate_integer(l, row),
+    };
+    row[&symbol_name(&e.left)] == right
 }
 
 #[cfg(test)]

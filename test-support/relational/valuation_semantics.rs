@@ -45,18 +45,43 @@ pub fn evaluate(program: &vo::Program, database: &Database) -> Rows {
                 let relation = match &r.reduction {
                     vo::Reduction::With(_, support) => {
                         let left = &atoms[&r.clause()];
-                        left.join(&atoms[&support.clause()])
-                            .project(left.heading.clone())
-                    }
-                    vo::Reduction::Guard(g) => {
-                        let mut left = atoms[&r.clause()].clone();
-                        left.rows
-                            .retain(|row| evaluate_predicate(&g.condition, row));
-                        left
+                        let mut reduced = left.clone();
+                        let same = |a: &str, b: &str| {
+                            let mut reached = BTreeSet::from([a.to_owned()]);
+                            loop {
+                                let previous = reached.len();
+                                for item in &program.cq.query.body {
+                                    if let cq::BodyItem::Equality(e) = item {
+                                        if let cq::EqualityValue::Variable(v) = &e.right {
+                                            let (l, r) = (symbol_name(&e.left), symbol_name(v));
+                                            if reached.contains(&l) || reached.contains(&r) {
+                                                reached.insert(l);
+                                                reached.insert(r);
+                                            }
+                                        }
+                                    }
+                                }
+                                if reached.len() == previous {
+                                    return reached.contains(b);
+                                }
+                            }
+                        };
+                        reduced.rows.retain(|row| {
+                            atoms[&support.clause()].rows.iter().any(|witness| {
+                                support.variables().all(|(_, v)| {
+                                    let v = symbol_name(v);
+                                    row.iter()
+                                        .filter(|(c, _)| same(c, &v))
+                                        .all(|(_, value)| *value == witness[&v])
+                                })
+                            })
+                        });
+                        reduced
                     }
                 };
                 atoms.insert(r.clause(), relation);
             }
+            vo::Step::Equality(e, _) => result.rows.retain(|row| evaluate_equality(e, row)),
             vo::Step::Let(..) => panic!("computed columns are checked by generated Rust execution"),
         }
     }

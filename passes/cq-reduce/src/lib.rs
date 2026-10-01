@@ -1,34 +1,15 @@
-//! VO → VO: the reductions a plan applies to a clause's relation before the
-//! clause is joined.
-//!
-//! This pass decides one thing: which `reduce` steps the plan carries, and
-//! where. The order and the granularity of the input plan are kept as they
-//! are. A reduction is a semijoin or a selection that, under set semantics,
-//! preserves the completed query answer under the relational host assumptions.
-//! [`check`] removes target reductions and removes their pushed guards from the
-//! source-step comparison. It independently checks tree edges and dependency
-//! order; sibling orders and eligible guard hosts are free. It does not compare
-//! the target with `compile(source, options)`.
-//!
-//! - `Pushdown::Atoms` turns every guard whose variables all belong to one
-//!   atom clause into `reduce C@k if (e);` on the earliest such clause,
-//!   placed before that clause's first step; the guard's `if` step goes. A
-//!   guard the lexical analysis cannot see through (`opaque`) stays a step.
-//! - `Reductions::Tree` is the Yannakakis full reducer over the GYO join tree
-//!   computed from the source program's CQ, so the query must be acyclic: an upward
-//!   pass, leaves toward the root, `reduce parent with child(shared)`, then a
-//!   downward pass, root toward the leaves, `reduce child with parent(shared)`,
-//!   the edges visited in breadth-first order from the root. Pushed guards
-//!   precede the reducer, and the reducer precedes the first atom step.
-//!
-//! `None`/`None` is the identity. A plan that already carries reductions is
-//! refused rather than reduced twice.
+//! Add only relational semijoin reductions to a valuation plan.
+//! The denotation is `T X = bottom + Set X`; the written Rust chain consists
+//! of opaque partial functions. Relational reductions may move earlier across
+//! it, but Rust steps retain their relative order and written relational
+//! predecessors. I/O, mutation and evaluation counts are outside the meaning.
+//! Erasure must preserve every non-reduction step exactly. Rust guards are
+//! never pushed onto atom inputs, including under the legacy `Atoms` option.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use cq_lang_vo as valuation;
 use cq_lang_vo::syntax as cq;
-use cq_lang_vo::syntax::rust;
 use cq_lang_vo::syntax::symbol_name;
 use cq_lang_vo::{Column, Reduce, Reduction, Step, Subatom};
 use proc_macro2::Span;
@@ -40,12 +21,12 @@ pub struct Options {
     pub semijoins: Reductions,
 }
 
-/// Which guards become reductions.
+/// Compatibility spellings; Rust guards always remain in their chain.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Pushdown {
     #[default]
     None,
-    /// Every guard over the variables of one atom clause.
+    /// Compatibility spelling; opaque Rust guards always stay in the chain.
     Atoms,
 }
 
@@ -59,8 +40,8 @@ pub enum Reductions {
 }
 
 /// Insert the reductions `options` ask for, then check the VO contract.
-/// Formal rule R-Guard: Push transparent guards to the earliest eligible atom and remove their steps.
-/// Formal rule R-Tree: Insert the tree schedule before the first atom after pushed guards.
+/// Formal rule R-Guard: Retain every opaque Rust guard in the written chain.
+/// Formal rule R-Tree: Insert the relational tree schedule before the first atom.
 pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
     let analysis = valuation::contract::check(source)?;
     if let Some(step) = source
@@ -79,46 +60,7 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
         .steps
         .iter()
         .position(|step| matches!(step, Step::Atom(..)));
-    let first_step =
-        |clause: usize| {
-            source.valuation.steps.iter().position(
-                |step| matches!(step, Step::Atom(subatom, _) if subatom.clause() == clause),
-            )
-        };
-    // The reductions to insert before each step, and the guard steps that
-    // become reductions.
     let mut before: BTreeMap<usize, Vec<Step>> = BTreeMap::new();
-    let mut pushed: BTreeSet<usize> = BTreeSet::new();
-    if options.guards == Pushdown::Atoms {
-        for (position, step) in source.valuation.steps.iter().enumerate() {
-            let Step::Guard(filter, _) = step else {
-                continue;
-            };
-            let free = rust::free_variables(&filter.condition);
-            if free.opaque {
-                continue;
-            }
-            let host = analysis.atoms.iter().find(|(_, atom)| {
-                free.names
-                    .iter()
-                    .all(|v| atom.variables().any(|c| symbol_name(c) == *v))
-            });
-            let Some((&clause, atom)) = host else {
-                continue;
-            };
-            let at = match options.semijoins {
-                Reductions::Tree => first_atom,
-                Reductions::None => first_step(clause),
-            }
-            .expect("the contract binds every atom clause");
-            before.entry(at).or_default().push(reduce(
-                clause,
-                atom,
-                Reduction::Guard(filter.clone()),
-            ));
-            pushed.insert(position);
-        }
-    }
     if options.semijoins == Reductions::Tree {
         let reducer = tree(source, &analysis)?;
         if let Some(first) = first_atom {
@@ -132,9 +74,7 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
         if let Some(reductions) = before.remove(&position) {
             steps.extend(reductions);
         }
-        if !pushed.contains(&position) {
-            steps.push(step.clone());
-        }
+        steps.push(step.clone());
     }
     let program = valuation::Program {
         cq: source.cq.clone(),
@@ -151,43 +91,13 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
 mod correspondence;
 pub use correspondence::check;
 
-/// The plan's steps without its reductions, and the guards those placed.
-fn erase(module: &valuation::Program) -> (Vec<Step>, Vec<cq::Filter>) {
-    let mut steps = Vec::new();
-    let mut guards = Vec::new();
-    for step in &module.valuation.steps {
-        match step {
-            Step::Reduce(
-                Reduce {
-                    reduction: Reduction::Guard(filter),
-                    ..
-                },
-                _,
-            ) => guards.push(filter.clone()),
-            Step::Reduce(..) => {}
-            step => steps.push(step.clone()),
-        }
-    }
-    (steps, guards)
-}
-
-/// `steps` without one guard step per placed guard.
-fn without_guards(steps: &[Step], placed: &[cq::Filter]) -> Vec<Step> {
-    let mut pending: Vec<&cq::Filter> = placed.iter().collect();
-    steps
+/// Erase only semijoin reductions, preserving all opaque Rust positions.
+fn erase(module: &valuation::Program) -> Vec<Step> {
+    module
+        .valuation
+        .steps
         .iter()
-        .filter(|step| {
-            let Step::Guard(filter, _) = step else {
-                return true;
-            };
-            match pending.iter().position(|p| p.condition == filter.condition) {
-                Some(i) => {
-                    pending.remove(i);
-                    false
-                }
-                None => true,
-            }
-        })
+        .filter(|step| !matches!(step, Step::Reduce(..)))
         .cloned()
         .collect()
 }
@@ -226,17 +136,29 @@ fn tree(source: &valuation::Program, analysis: &valuation::Analysis) -> syn::Res
     let down = order.iter().skip(1).map(edge).map(|(p, c)| (c, p));
     Ok(up
         .chain(down)
-        .map(|(target, support)| semijoin(analysis, target, support))
+        .map(|(target, support)| {
+            semijoin(
+                analysis,
+                &valuation::cq::hypergraph::Analysis::of(&source.cq),
+                target,
+                support,
+            )
+        })
         .collect())
 }
 
 /// `reduce target with support(shared)`: the support's columns that are
 /// variables of the target, `_` elsewhere.
-fn semijoin(analysis: &valuation::Analysis, target: usize, support: usize) -> Step {
+fn semijoin(
+    analysis: &valuation::Analysis,
+    hypergraph: &valuation::cq::hypergraph::Analysis,
+    target: usize,
+    support: usize,
+) -> Step {
     let atom = &analysis.atoms[&target];
     let shared: Vec<String> = atom.variables().map(symbol_name).collect();
     let subatom = subatom(support, &analysis.atoms[&support], |v| {
-        shared.iter().any(|s| s == v)
+        shared.iter().any(|s| hypergraph.equivalent(s, v))
     });
     reduce(target, atom, Reduction::With(Default::default(), subatom))
 }

@@ -71,12 +71,23 @@ pub fn evaluate_plan<'a>(
             }
             ra::Operator::Select(select) => {
                 let mut input = definitions[&symbol_name(&select.input)].clone();
-                input
-                    .rows
-                    .retain(|row| evaluate_predicate(&select.condition, row));
+                input.rows.retain(|row| {
+                    select
+                        .condition
+                        .equalities
+                        .iter()
+                        .all(|e| evaluate_equality(e, row))
+                });
                 input
             }
-            ra::Operator::Extend(_) => {
+            ra::Operator::Guard(guard) => {
+                let mut input = definitions[&symbol_name(&guard.input)].clone();
+                input
+                    .rows
+                    .retain(|row| evaluate_predicate(&guard.condition, row));
+                input
+            }
+            ra::Operator::Bind(_) => {
                 panic!("Rust computations are tested by compiled end-to-end tests")
             }
             ra::Operator::Project(project) => definitions[&symbol_name(&project.input)]

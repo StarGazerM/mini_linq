@@ -15,7 +15,7 @@ impl<'a> Printer<'a> {
             Operator::Select(select) => {
                 let input = self.scan(&select.input)?;
                 let pattern = self.borrowed_pattern(&symbol_name(&select.input));
-                let condition = deref_predicates(&select.condition);
+                let condition = relational_condition(&select.condition);
                 Ok(quote! {
                     ::core::iter::Iterator::filter(
                         #input,
@@ -23,21 +23,27 @@ impl<'a> Printer<'a> {
                     )
                 })
             }
-            Operator::Range(_, ranged) => {
-                self.range(name, &definition.name, &ranged.column, ranged)
+            Operator::Point(_, select) => self.point(name, select),
+            Operator::Guard(guard) => {
+                let input = self.scan(&guard.input)?;
+                let pattern = self.borrowed_pattern(&symbol_name(&guard.input));
+                let condition = &guard.condition;
+                Ok(quote! {
+                    ::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| #condition)
+                })
             }
-            Operator::Extend(extend) => {
-                let input = self.scan(&extend.input)?;
-                let input_name = symbol_name(&extend.input);
+            Operator::Bind(bind) => {
+                let input = self.scan(&bind.input)?;
+                let input_name = symbol_name(&bind.input);
                 let pattern = self.pattern(&input_name);
                 let shadows = self.shadows(&input_name);
-                let names = extend.columns.iter().map(|c| &c.name);
-                let types = extend.columns.iter().map(|c| &c.ty);
-                let value = &extend.value;
+                let binding = &bind.pattern;
+                let annotation = &bind.annotation;
+                let value = &bind.expression;
                 let row = self.pattern(name);
                 Ok(quote! {
                     ::core::iter::Iterator::map(#input, move |#pattern| {
-                        let (#(#names,)*): (#(#types,)*) = { #(#shadows)* #value };
+                        let #binding #annotation = { #(#shadows)* #value };
                         #row
                     })
                 })
@@ -352,103 +358,20 @@ impl<'a> Printer<'a> {
         quote!(::core::iter::Iterator::map(::cq_storage::merge(#left, #right), move |(_, __cq_l, __cq_r)| #row))
     }
 
-    /// Enter an ordered value at the select's lower bound on `column` and
-    /// leave it at the upper bound; the other conjuncts remain a filter.
-    pub(super) fn range(
-        &mut self,
-        name: &str,
-        reader: &Ident,
-        column: &Ident,
-        select: &physical::Ranged,
-    ) -> syn::Result<TokenStream> {
-        let input = symbol_name(&select.input);
-        let column_name = symbol_name(column);
-        let window = window(&select.condition, &column_name);
-        if window.low.is_none() && window.high.is_none() {
-            return error(
-                column,
-                format!(
-                    "`{reader}` ranges over `{column}`, which the condition does not compare with an integer literal"
-                ),
+    /// A single compile-time key uses native prefix lookup or a scan/filter.
+    /// Neither path creates a retained structure for this demand.
+    fn point(&mut self, name: &str, select: &cq::algebra::Select) -> syn::Result<TokenStream> {
+        let input_name = symbol_name(&select.input);
+        let condition = relational_condition(&select.condition);
+        let pattern = self.borrowed_pattern(&input_name);
+        if !self.analysis.host_read(&input_name) {
+            let rows = self.scan(&select.input)?;
+            return Ok(
+                quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| #condition)),
             );
         }
-        let rows = if self.analysis.host_read(&input) {
-            let access = self.host_access(&input, std::slice::from_ref(&column_name));
-            let handle = format_ident!("__cq_{}_host", input);
-            let bound = |value: Option<i32>| {
-                value.map_or_else(
-                    || quote!(None),
-                    |n| {
-                        let n = proc_macro2::Literal::i32_unsuffixed(n);
-                        quote!(Some(&(#n,)))
-                    },
-                )
-            };
-            let low = bound(window.low);
-            let high = bound(window.high);
-            let binders = access
-                .key
-                .iter()
-                .chain(&access.payload)
-                .map(|c| self.ident(&input, c));
-            let row = self.pattern(name);
-            quote!({
-                use ::cq_storage::dispatch::Range as _;
-                ::core::iter::Iterator::flat_map(::core::iter::once(()), move |()| {
-                    ::core::iter::Iterator::map((&&#handle).range(#low, #high), move |(#(#binders,)*)| #row)
-                })
-            })
-        } else {
-            let Side::Built(structure) =
-                self.ordered(reader, &select.input, std::slice::from_ref(&column_name))?
-            else {
-                return error(reader, "range needs a host rename or built let");
-            };
-            let seek = window.low.map(|low| {
-                let low = proc_macro2::Literal::i32_unsuffixed(low);
-                quote!(::cq_storage::OrderedCursor::seek(&mut __cq_cursor, &&(&#low,));)
-            });
-            let cursor = match window.high {
-                Some(high) => {
-                    let high = proc_macro2::Literal::i32_unsuffixed(high);
-                    quote!(::core::iter::Iterator::take_while(__cq_cursor, |(__cq_k,_)| *__cq_k.0 <= #high))
-                }
-                None => quote!(__cq_cursor),
-            };
-            let payload: Vec<_> = self
-                .heading(&input)
-                .iter()
-                .filter(|c| **c != column_name)
-                .collect();
-            let row = self.row(name, |c| {
-                if c == column_name {
-                    quote!(__cq_k.0)
-                } else {
-                    let i = index(payload.iter().position(|p| *p == c).unwrap());
-                    quote!(__cq_v.#i)
-                }
-            });
-            quote!({
-                let mut __cq_cursor = ::cq_storage::OrderedRead::ordered(&#structure);
-                #seek
-                ::core::iter::Iterator::map(#cursor, |(__cq_k,__cq_v)| #row)
-            })
-        };
-        if window.residual.is_empty() {
-            return Ok(rows);
-        }
-        let pattern = self.borrowed_pattern(&input);
-        let residual = window
-            .residual
-            .iter()
-            .map(deref_predicates)
-            .reduce(|left, right| syn::parse_quote!((#left) && (#right)))
-            .expect("nonempty residual");
-        Ok(quote! {
-            ::core::iter::Iterator::filter(
-                #rows,
-                move |#[allow(unused_variables)] #pattern| #residual
-            )
-        })
+        Ok(self
+            .host_point(name, select)
+            .expect("checked host point input"))
     }
 }

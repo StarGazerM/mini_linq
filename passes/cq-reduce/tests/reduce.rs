@@ -47,23 +47,15 @@ fn reductions_preserve_answers_and_correspond_to_options() {
     }
 }
 #[test]
-fn pushed_guards_precede_reads_and_reduction_is_not_applied_twice() {
+fn legacy_guard_option_never_pushes_opaque_rust_steps() {
     let source: valuation::Program = syn::parse_str("struct Q; relation R(a:i32,b:i32); answer(a) :- R(a,b), if b > 0; valuation { R@0(a,b); if b > 0; }").unwrap();
     let options = Options {
         guards: Pushdown::Atoms,
         semijoins: Reductions::None,
     };
     let target = compile(&source, &options).unwrap();
-    assert!(matches!(
-        target.valuation.steps[0],
-        valuation::Step::Reduce(..)
-    ));
-    assert!(matches!(
-        target.valuation.steps[1],
-        valuation::Step::Atom(..)
-    ));
-    assert!(compile(&target, &options).is_err());
-    assert!(check(&source, &target, &Options::default()).is_err());
+    assert_eq!(target, source);
+    check(&source, &target, &Options::default()).unwrap();
 }
 #[test]
 fn opaque_and_multi_atom_guards_remain_steps() {
@@ -127,34 +119,24 @@ fn tree_reduction_pins_both_sweeps_and_rejects_missing_or_foreign_reducers() {
 }
 
 #[test]
-fn guard_pushdown_precedes_tree_reduction_and_keeps_multi_atom_guards_last() {
+fn all_guard_kinds_keep_their_schedule_around_tree_reductions() {
     let query = CHAIN.replace("S(b, c);", "S(b, c), if b > 0, if a != c, if a > 0;");
     let source = schedule(&query, &format!("{ATOMS} if b > 0; if a != c; if a > 0;"));
-    for (semijoins, steps) in [
-        (
-            Reductions::None,
-            "
-            reduce L@0 if a > 0; L@0(a);
-            reduce R@1 if b > 0; R@1(a, b);
-            S@2(b, c); if a != c;",
-        ),
-        (
-            Reductions::Tree,
-            "
-            reduce R@1 if b > 0;
-            reduce L@0 if a > 0;
-            reduce R@1 with L@0(a);
-            reduce S@2 with R@1(_, b);
-            reduce R@1 with S@2(b, _);
-            reduce L@0 with R@1(a, _);
-            L@0(a); R@1(a, b); S@2(b, c); if a != c;",
-        ),
-    ] {
+    for semijoins in [Reductions::None, Reductions::Tree] {
         let options = Options {
             guards: Pushdown::Atoms,
             semijoins,
         };
-        assert_eq!(compile(&source, &options).unwrap(), schedule(&query, steps));
+        let target = compile(&source, &options).unwrap();
+        let retained: Vec<_> = target
+            .valuation
+            .steps
+            .iter()
+            .filter(|s| !matches!(s, valuation::Step::Reduce(..)))
+            .cloned()
+            .collect();
+        assert_eq!(retained, source.valuation.steps);
+        check(&source, &target, &options).unwrap();
     }
 }
 
@@ -272,33 +254,12 @@ fn correspondence_checks_domains_erasure_and_each_reduction_obligation() {
 }
 
 #[test]
-fn guard_policy_is_checked_but_eligible_guard_host_is_free() {
-    let query = CHAIN.replace("S(b, c);", "S(b, c), if b > 0;");
-    let source = schedule(&query, &format!("{ATOMS} if b > 0;"));
-    let options = Options {
-        guards: Pushdown::Atoms,
-        semijoins: Reductions::None,
-    };
-    let alternative = schedule(&query, &format!("reduce S@2 if b > 0; {ATOMS}"));
-    assert_ne!(compile(&source, &options).unwrap(), alternative);
-    check(&source, &alternative, &options).unwrap();
-    reject(
-        &source,
-        &alternative,
-        &Options::default(),
-        &["clause #2", "guards=None"],
-    );
-    let invalid = schedule(&query, &format!("reduce L@0 if b > 0; {ATOMS}"));
-    reject(&source, &invalid, &options, &["clause #0", "b"]);
-    let opaque_query = query.replace("b > 0", "opaque!(b)");
-    let opaque_source = schedule(&opaque_query, &format!("{ATOMS} if opaque!(b);"));
-    let opaque = schedule(&opaque_query, &format!("reduce R@1 if opaque!(b); {ATOMS}"));
-    reject(
-        &opaque_source,
-        &opaque,
-        &options,
-        &["clause #1", "guards=Atoms"],
-    );
+fn rust_guard_reductions_are_not_in_the_language() {
+    for expression in ["b > 0", "10 / b > 1", "opaque!(b)"] {
+        assert!(
+            syn::parse_str::<valuation::Step>(&format!("reduce R@1 if {expression};")).is_err()
+        );
+    }
 }
 
 #[test]

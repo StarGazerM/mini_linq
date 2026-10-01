@@ -1,7 +1,8 @@
 struct SelfChain;
 relation Road(src: i32, dst: i32);
-answer(a, c) :- Road(a, b), Road(b, c);
+answer(a, c) :- Road(a, b), Road(__cq_1_0, c), b = __cq_1_0;
 valuation {
     Road@0(a, b);
-    Road@1(b, c);
+    Road@1(__cq_1_0, c);
+    b = __cq_1_0;
 }

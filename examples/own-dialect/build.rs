@@ -1,4 +1,4 @@
-// These queries use only unit/rename/project/select/probe/semi in Written/Coarse
+// These queries use only unit/rename/project/select/point/bind/guard/probe/semi in Written/Coarse
 // with probe joins. Review this explicit allow-list when the corpus changes.
 const SUPPORTED: [&str; 20] = [
     "intersection",

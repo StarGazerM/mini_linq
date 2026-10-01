@@ -5,9 +5,16 @@ pub fn plan(
     planner: usize,
     fine: bool,
     reduce: usize,
+    reference: bool,
 ) -> syn::Result<cq_lang_ra::Program> {
     use cq_order::{Heuristic, Ranking, Split};
     let normal = cq_lang_cq::normal::normalize(source)?;
+    if reference && (planner != 0 || fine || reduce != 0) {
+        return Err(syn::Error::new_spanned(
+            source,
+            "the effect reference requires Written/coarse/no reduction",
+        ));
+    }
     let options = cq_order::Options {
         heuristic: match planner {
             0 => Heuristic::Written,
@@ -34,5 +41,9 @@ pub fn plan(
             },
         },
     )?;
-    cq_elaborate::compile(&plan)
+    if reference {
+        cq_elaborate::compile_written(&plan)
+    } else {
+        cq_elaborate::compile(&plan)
+    }
 }

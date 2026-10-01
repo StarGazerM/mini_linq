@@ -1,6 +1,10 @@
 //! Physical preservation and storage rule derivation independent of selection.
 
-use cq_lang_physical::{self as physical, ModeKind, Operator, policy::Policy, syntax::symbol_name};
+use cq_lang_physical::{
+    self as physical, ModeKind, Operator,
+    policy::Policy,
+    syntax::{SupplyKind, symbol_name},
+};
 use cq_lang_structures::{self as structures, Structure};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,8 +46,13 @@ pub fn check(
         .map(|d| (symbol_name(&d.name), d))
         .collect();
     let mut demands = Demands::new();
-    for (name, readers) in &facts.key_reads {
-        for (reader, columns) in readers {
+    for (name, readers) in &facts.keyed_reads {
+        for (reader, columns, supply) in readers {
+            if *supply == SupplyKind::Const
+                || matches!(definitions[reader].operator, Operator::Merge(..))
+            {
+                continue;
+            }
             if facts.modes[name] == ModeKind::Let {
                 let strength = if matches!(definitions[reader].operator, Operator::Semi(..)) {
                     MEMBER
@@ -51,14 +60,6 @@ pub fn check(
                     PAYLOAD
                 };
                 demand(&mut demands, name, columns, strength);
-            }
-        }
-    }
-    for (name, readers) in &facts.range_reads {
-        for (_, column) in readers {
-            let columns = std::slice::from_ref(column);
-            if facts.modes[name] == ModeKind::Let {
-                demand(&mut demands, name, columns, ORDERED);
             }
         }
     }
@@ -190,7 +191,7 @@ pub fn check(
             .collect();
         let Some(reads) = demands.get(&name) else {
             return Err(fail(
-                "no read requires a build; it is a host read or unused",
+                "no stream demand requires a build; host and const-only reads do not justify storage",
             ));
         };
         for prefix in &prefixes {

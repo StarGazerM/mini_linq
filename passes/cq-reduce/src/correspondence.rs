@@ -1,8 +1,8 @@
 //! Reduction erasure and obligations, without the reducer's schedule builder.
 
-use super::{Options, Pushdown, Reductions, erase, without_guards};
-use cq_lang_vo::{self as vo, Reduction, Step, syntax::rust};
-use std::collections::{BTreeMap, BTreeSet};
+use super::{Options, Reductions, erase};
+use cq_lang_vo::{self as vo, Reduction, Step};
+use std::collections::BTreeMap;
 
 /// Check the source domain, unchanged query/steps, and reduction obligations.
 /// A full tree reducer obeys dependencies, but need not use breadth-first order.
@@ -48,12 +48,12 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
             ),
         ));
     }
-    let (steps, guards) = erase(target);
-    let retained = without_guards(&source.valuation.steps, &guards);
-    if steps != retained {
+    let steps = erase(target);
+    let retained = &source.valuation.steps;
+    if steps != *retained {
         let position = steps
             .iter()
-            .zip(&retained)
+            .zip(retained)
             .position(|(a, b)| a != b)
             .unwrap_or(steps.len().min(retained.len()));
         let construct = steps.get(position).or_else(|| retained.get(position));
@@ -65,6 +65,7 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
                 construct
                     .map(|s| match s {
                         Step::Atom(a, _) => format!("clause #{} (`{}`)", a.clause(), a.relation),
+                        Step::Equality(_, _) => "relational equality".into(),
                         Step::Guard(_, _) => "guard clause".into(),
                         Step::Let(_, _) => "binding clause".into(),
                         Step::Reduce(r, _) => format!("reduction of clause #{}", r.clause()),
@@ -87,21 +88,6 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
             syn::Error::new_spanned(r, format!("clause #{clause} (`{}`): {message}", r.relation))
         };
         match &r.reduction {
-            Reduction::Guard(filter) => {
-                if options.guards == Pushdown::None {
-                    return Err(fail("guards=None forbids `reduce ... if`"));
-                }
-                let free = rust::free_variables(&filter.condition);
-                let variables: BTreeSet<_> = source_info.atoms[&clause]
-                    .variables()
-                    .map(vo::symbol_name)
-                    .collect();
-                if free.opaque || !free.names.is_subset(&variables) {
-                    return Err(fail(
-                        "guards=Atoms requires a guard over this atom clause's variables",
-                    ));
-                }
-            }
             Reduction::With(_, support) => {
                 if options.semijoins == Reductions::None {
                     return Err(fail("semijoins=None forbids `reduce ... with`"));

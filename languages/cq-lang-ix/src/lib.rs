@@ -1,19 +1,54 @@
 //! IX records exact index demands over RA results.
 //!
 //! The complete relational plan is retained unchanged. Index descriptors use
-//! sorted logical headings of named RA results. Physical lowering checks its probe and semijoin reads against these demands.
+//! sorted logical headings of named RA results and explicitly record whether
+//! key values come from a stream or a compile-time literal tuple. The denotation
+//! is `bottom + Set`: opaque Rust binds and guards retain their ancestry chain;
+//! index analysis preserves that plan and introduces no evaluation freedom.
 
 pub use cq_lang_ra as ra;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-pub use cq_syntax::{Column, CommaList, SemicolonList, kw, symbol_name};
+pub use cq_syntax::{Column, CommaList, SemicolonList, SupplyKind, symbol_name};
 use syn::{Ident, Token, token};
+
+pub mod kw {
+    pub use cq_syntax::kw::indexes;
+    syn::custom_keyword!(stream);
+}
+
+/// The source of key values: another runtime result, or one literal tuple.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum Supply {
+    #[parse(peek = kw::stream)]
+    Stream(kw::stream),
+    #[parse(peek = Token![const])]
+    Const(Token![const]),
+}
+
+impl Supply {
+    pub fn kind(&self) -> SupplyKind {
+        match self {
+            Self::Stream(_) => SupplyKind::Stream,
+            Self::Const(_) => SupplyKind::Const,
+        }
+    }
+}
+
+impl From<SupplyKind> for Supply {
+    fn from(kind: SupplyKind) -> Self {
+        match kind {
+            SupplyKind::Stream => Self::Stream(Default::default()),
+            SupplyKind::Const => Self::Const(Default::default()),
+        }
+    }
+}
 
 /// An exact RA result version and its ordered logical column ordinals.
 ///
 /// ```text
-/// IndexRequirement ::= "@" Ident "[" [Column ("," Column)* [","]] "]"
+/// IndexRequirement ::= "@" Ident "[" [Column ("," Column)* [","]] "]" ("stream" | "const")
 /// ```
 ///
 /// The empty list denotes indexing by the unit tuple, including a Cartesian
@@ -27,9 +62,10 @@ pub struct IndexRequirement {
     #[syn(in = bracket_token)]
     #[parse(CommaList::parse_terminated)]
     pub columns: CommaList<Column>,
+    pub supply: Supply,
 }
 
-/// `i = @r[C]`, separated from other definitions by a semicolon.
+/// `i = @r[C] stream` or `i = @r[C] const`, followed by a semicolon.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct IndexDefinition {
     pub name: Ident,
@@ -38,7 +74,7 @@ pub struct IndexDefinition {
 }
 
 /// Semantic identity of an index demand; index names form a separate namespace.
-pub type Signature = (String, Vec<usize>);
+pub type Signature = (String, Vec<usize>, SupplyKind);
 
 pub fn signature(index: &IndexRequirement) -> Signature {
     (
@@ -48,6 +84,7 @@ pub fn signature(index: &IndexRequirement) -> Signature {
             .iter()
             .map(|column| column.index as usize)
             .collect(),
+        index.supply.kind(),
     )
 }
 
@@ -92,7 +129,7 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
     let mut descriptors = BTreeSet::new();
     for index in &module.indexes {
         let requirement = &index.requirement;
-        let (relation, columns) = signature(requirement);
+        let (relation, columns, supply) = signature(requirement);
         let Some(info) = info.get(&relation).map(|i| &i.heading) else {
             return Err(syn::Error::new_spanned(
                 requirement,
@@ -123,7 +160,7 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
                 format!("duplicate index identity `{}`", index.name),
             ));
         }
-        if !descriptors.insert((relation, columns)) {
+        if !descriptors.insert((relation, columns, supply)) {
             return Err(syn::Error::new_spanned(
                 requirement,
                 format!(
@@ -139,6 +176,21 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
         let (left, right) = match &definition.operator {
             ra::Operator::NaturalJoin(j) => (&j.left, &j.right),
             ra::Operator::Semijoin(j) => (&j.left, &j.right),
+            ra::Operator::Select(selection) => {
+                if let Some(keys) = selection.condition.constant_keys() {
+                    let input = symbol_name(&selection.input);
+                    let columns = info[&input]
+                        .heading
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ordinal, column)| {
+                            keys.contains_key(column).then_some(ordinal)
+                        })
+                        .collect();
+                    expected.insert((input, columns, SupplyKind::Const));
+                }
+                continue;
+            }
             _ => continue,
         };
         let lh = &info[&symbol_name(left)].heading;
@@ -148,14 +200,16 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
             .enumerate()
             .filter_map(|(i, c)| lh.contains(c).then_some(i))
             .collect();
-        expected.insert((symbol_name(right), columns));
+        expected.insert((symbol_name(right), columns, SupplyKind::Stream));
     }
 
     for (name, index) in indexes {
         if !expected.contains(&signature(&index.requirement)) {
             return Err(syn::Error::new_spanned(
                 &index.name,
-                format!("index `{name}` is demanded by no join"),
+                format!(
+                    "index `{name}` is demanded by no join or literal selection with this supply"
+                ),
             ));
         }
     }

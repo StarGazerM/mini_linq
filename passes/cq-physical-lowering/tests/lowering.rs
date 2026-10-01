@@ -86,61 +86,57 @@ fn lower(source: &str, policy: &str) -> (ix::Program, physical::Program, Policy)
 }
 
 #[test]
-fn layout_bounds_and_plan_uniqueness_are_independent_obligations() {
+fn const_demand_and_point_modifier_are_independent_obligations() {
     let (source, target, policy) = lower(
-        "relational {
-        relation R(a:i32,b:i32) = (rows()); r = rename R {a -> x,b -> y};
-        s = select r if (x >= 2 && y != 3); output s as answer(x,y);
-    } indexes {}",
+        "relational { relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
+        s = select r if (x = 2); output s as answer(x,y);
+        } indexes {i = @r[0] const;}",
         "policy {}",
     );
-    assert_eq!(target.program.definitions[0].mode, syn::parse_quote!(pipe));
     assert!(matches!(
         target.program.definitions[1].operator,
-        physical::Operator::Range(..)
+        physical::Operator::Point(..)
     ));
-    assert!(target.program.definitions[1].canon.is_some());
-    for replacement in [
-        syn::parse_quote!(s = pipe range[y] r if (x >= 2 && y != 3);),
-        syn::parse_quote!(s = pipe range[x] r if (x != 2);),
-        syn::parse_quote!(s = pipe range[x] r if (x >= 2 && y != 3);),
-    ] {
-        let mut changed = target.clone();
-        changed.program.definitions[1] = replacement;
-        assert!(check(&source, &changed, &policy).is_err());
-    }
-    // A select is admissible even when the optimizer chooses a range.
-    let mut select = target.clone();
-    select.program.definitions[1] =
-        syn::parse_quote!(s = pipe canon select r if (x >= 2 && y != 3););
-    check(&source, &select, &policy).unwrap();
+    let mut changed = target.clone();
+    changed.program.definitions[1] = syn::parse_quote!(s = pipe canon select r if (x = 2););
+    assert!(check(&source, &changed, &policy).is_err());
+    let mut missing = source.clone();
+    missing.indexes.clear();
+    assert!(
+        check(&missing, &target, &policy)
+            .unwrap_err()
+            .to_string()
+            .contains("demand")
+    );
     let mut retained = target;
     retained.program.definitions[0].mode = syn::parse_quote!(let);
     check(&source, &retained, &policy).unwrap();
 }
 
 #[test]
-fn nonleading_unbounded_and_derived_selects_stay_selects() {
-    for condition in ["y >= 2", "x != 2", "x < y", "x > 2147483647"] {
-        let (_, target, _) = lower(
-            &format!(
-                "relational {{ relation R(a:i32,b:i32); r = rename R {{a -> x,b -> y}}; s = select r if ({condition}); output s as answer(x,y); }} indexes {{}}"
-            ),
-            "policy {}",
-        );
-        assert!(matches!(
-            target.program.definitions[1].operator,
-            physical::Operator::Select(_)
-        ));
-    }
+fn relational_column_equality_is_a_select_and_rust_is_a_guard() {
+    let (_, target, _) = lower(
+        "relational {relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
+        s = select r if (x = y); g = guard s if (*x > 2); output g as answer(x,y);
+        } indexes {}",
+        "policy {}",
+    );
+    assert!(matches!(
+        target.program.definitions[1].operator,
+        physical::Operator::Select(_)
+    ));
+    assert!(matches!(
+        target.program.definitions[2].operator,
+        physical::Operator::Guard(_)
+    ));
 }
 
 #[test]
 fn join_policy_and_canonical_projection_mutations_are_rejected() {
     let source = "relational { relation L(a:i32); relation R(a:i32,b:i32);
         l = rename L {a -> a}; r = rename R {a -> a,b -> b}; j = natural_join l with r;
-        p = project j keep {a}; e = extend p with {n:i32} value (1); output e as answer(a,n);
-    } indexes { i = @r[0]; }";
+        p = project j keep {a}; e = bind p with n:i32 = (1); output e as answer(a,n);
+    } indexes { i = @r[0] stream; }";
     for policy in ["policy {}", "policy {join = merge; project = canon;}"] {
         let (source, target, policy) = lower(source, policy);
         let mut changed = target.clone();
@@ -162,13 +158,17 @@ fn join_policy_and_canonical_projection_mutations_are_rejected() {
 }
 
 #[test]
-fn range_checker_rejects_unbounded_authored_range_without_replaying_compile() {
-    let source: ix::Program = syn::parse_quote! { relational { relation R(a:i32); r = rename R {a -> a}; s = select r if (a != 1); output s as answer(a); } indexes {} };
-    let target: physical::Program = syn::parse_quote! { physical { relation R(a:i32); r = pipe rename R {a -> a}; s = pipe canon range[a] r if (a != 1); return s as answer(a); } };
-    assert!(
-        check(&source, &target, &syn::parse_quote!(policy {}))
-            .unwrap_err()
-            .to_string()
-            .contains("bound")
+fn chain_reordering_fails_erasure_even_if_local_program_is_scoped() {
+    let (source, target, policy) = lower(
+        "relational {relation R(a:i32); r = rename R {a -> x};
+        g = guard r if (*x != 0); b = bind g with y:i32 = (10 / *x);
+        output b as answer(x,y); } indexes {}",
+        "policy {}",
     );
+    let mut changed = target;
+    changed.program.definitions[1] = syn::parse_quote!(b = pipe bind r with y:i32 = (10 / *x););
+    changed.program.definitions[2] = syn::parse_quote!(g = pipe canon guard b if (*x != 0););
+    changed.program.returned = syn::parse_quote!(g);
+    physical::contract::check(&changed).unwrap();
+    assert!(check(&source, &changed, &policy).is_err());
 }

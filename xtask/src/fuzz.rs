@@ -1,4 +1,8 @@
-//! Random abstract queries have two printers; only the CQ printer enters Rust.
+//! Total queries use independently printed DuckDB SQL. Opaque partial terms
+//! use a second compiled query in written order with reordering disabled.
+//! The denotation is `bottom + Set`: a target must return the same set without
+//! panic whenever the written reference succeeds; a reference panic permits
+//! either outcome. I/O, mutation and evaluation count are outside this meaning.
 //! `xtask fuzz` writes a disposable Cargo consumer under target/fuzz. Its small
 //! proc macro runs the selected logical passes, then calls the public facade
 //! for physical lowering and realization. Each batch is compiled once; runtime
@@ -26,6 +30,7 @@ type ConsumerResult = std::result::Result<Answers, String>;
 
 #[derive(Clone, Copy, Debug)]
 struct Config {
+    reference: bool,
     planner: usize,
     fine: bool,
     reduce: usize,
@@ -38,6 +43,21 @@ struct Config {
 }
 
 impl Config {
+    fn written_reference() -> Self {
+        Self {
+            reference: true,
+            planner: 0,
+            fine: false,
+            reduce: 0,
+            merge: false,
+            canon: false,
+            smallest: false,
+            host: 0,
+            ordered_distinct: false,
+            custom_index: false,
+        }
+    }
+
     fn sample(seed: &mut u64) -> Self {
         fn next(seed: &mut u64, n: u64) -> usize {
             *seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
@@ -47,6 +67,7 @@ impl Config {
             ((x ^ (x >> 31)) % n) as usize
         }
         Self {
+            reference: false,
             planner: next(seed, 4),
             fine: next(seed, 2) == 1,
             reduce: next(seed, 3),
@@ -73,7 +94,7 @@ impl Config {
             ("split", if self.fine { "fine" } else { "coarse" }),
             (
                 "reduce",
-                ["none", "guards", "guards-and-acyclic-tree"][self.reduce],
+                ["none", "none-compat", "acyclic-tree"][self.reduce],
             ),
             ("join", if self.merge { "merge" } else { "seek" }),
             ("project", if self.canon { "canon" } else { "keep" }),
@@ -139,7 +160,7 @@ fn eligible(case: &Case, c: Config) -> Result<bool> {
 
 fn eligible_inner(case: &Case, c: Config) -> Result<bool> {
     let source = syn::parse_str(&case.cq())?;
-    let ra = compiler::plan(&source, c.planner, c.fine, c.reduce)?;
+    let ra = compiler::plan(&source, c.planner, c.fine, c.reduce, c.reference)?;
     let ix = cq_index_policy::compile(&ra)?;
     let policy = syn::parse_str(&c.policy())?;
     let physical = cq_physical_lowering::compile(&ix, &policy)?;
@@ -238,6 +259,8 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
     let mut execute_time = Duration::ZERO;
     let mut oracle_time = Duration::ZERO;
     let mut nonempty = 0;
+    let mut partial_cases = 0;
+    let mut reference_panics = 0;
     for (batch_index, batch) in cases.chunks(BATCH).enumerate() {
         let offset = batch_index * BATCH;
         let started = Instant::now();
@@ -318,14 +341,18 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
         execute_time += started.elapsed();
         for (id, (case, config)) in batch.iter().enumerate() {
             let started = Instant::now();
-            let expected = match reference(case) {
+            let expected = match runner.reference(id, case) {
                 Ok(rows) => rows,
                 Err(error) => {
                     let mut minimal = case.clone();
                     loop {
                         let before = size(&minimal);
-                        shrink_rows(&mut minimal, |candidate| reference(candidate).is_err());
-                        shrink_atoms(&mut minimal, |candidate| reference(candidate).is_err());
+                        shrink_rows(&mut minimal, |candidate| {
+                            runner.reference(id, candidate).is_err()
+                        });
+                        if !minimal.has_partial_terms() {
+                            shrink_atoms(&mut minimal, |candidate| reference(candidate).is_err());
+                        }
                         if size(&minimal) == before {
                             break;
                         }
@@ -334,15 +361,18 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                         root,
                         &minimal,
                         *config,
-                        &format!("DuckDB evaluation: {error}"),
+                        &format!("reference evaluation: {error}"),
                     )?;
                     return Err(format!("fuzz oracle failure at seed {}", case.seed).into());
                 }
             };
             oracle_time += started.elapsed();
-            nonempty += usize::from(!expected.is_empty());
+            nonempty += usize::from(expected.as_ref().is_ok_and(|rows| !rows.is_empty()));
+            partial_cases += usize::from(case.has_partial_terms());
+            reference_panics +=
+                usize::from(expected.as_ref().is_err_and(|reason| reason == "PANIC"));
             let got = &actual[id];
-            if got.as_ref().ok() != Some(&expected) {
+            if !refines(got, &expected) {
                 let mut minimal = case.clone();
                 shrink_rows(&mut minimal, |candidate| runner.mismatch(id, candidate));
                 // Atom shrinking recompiles candidates. Each accepted candidate
@@ -360,7 +390,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
                         break;
                     }
                 }
-                let expected = reference(&minimal)?;
+                let expected = runner.reference(0, &minimal)?;
                 let got = runner.execute(std::iter::once((0, &minimal)))?;
                 report(
                     root,
@@ -374,7 +404,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
             }
         }
         println!(
-            "fuzz: {}/{} passed; compilation {:.2}s, execution {:.2}s, DuckDB {:.2}s",
+            "fuzz: {}/{} passed; compilation {:.2}s, execution {:.2}s, references {:.2}s",
             offset + batch.len(),
             count,
             compile_time.as_secs_f64(),
@@ -385,7 +415,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
     println!("query distribution: {coverage}");
     println!("configuration distribution: {distribution:?}");
     println!(
-        "fuzz: passed {count}; {nonempty} nonempty answers; {rejected} unavailable native-merge configurations resampled; total {:.2}s (compile {:.2}s, execute {:.2}s, DuckDB {:.2}s)",
+        "fuzz: passed {count}; {nonempty} nonempty reference answers; {partial_cases} partial cases, {reference_panics} written reference panics; {rejected} unavailable native-merge configurations resampled; total {:.2}s (compile {:.2}s, execute {:.2}s, references {:.2}s)",
         started.elapsed().as_secs_f64(),
         compile_time.as_secs_f64(),
         execute_time.as_secs_f64(),
@@ -395,6 +425,9 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
 }
 
 fn reference(case: &Case) -> Result<Vec<Vec<i32>>> {
+    if case.has_partial_terms() {
+        return Err("partial terms require the compiled written-order reference".into());
+    }
     let relations = case
         .query
         .schema
@@ -412,6 +445,16 @@ fn reference(case: &Case) -> Result<Vec<Vec<i32>>> {
         return Err("independent SQL printer failed to enforce DISTINCT".into());
     }
     Ok(rows)
+}
+
+fn refines(target: &ConsumerResult, written: &ConsumerResult) -> bool {
+    match written {
+        Ok(expected) => target.as_ref().ok() == Some(expected),
+        Err(reason) if reason == "PANIC" => {
+            target.is_ok() || target.as_ref().is_err_and(|reason| reason == "PANIC")
+        }
+        Err(_) => false,
+    }
 }
 
 fn shrink_rows(case: &mut Case, mut fails: impl FnMut(&Case) -> bool) {
@@ -585,12 +628,22 @@ impl Runner {
         );
         source.push_str(include_str!("fuzz/harness.rs"));
         source.push_str("\nfn dispatch(id: usize, data: &Data) -> Vec<Vec<i32>> { match id {\n");
-        for id in 0..cases.len() {
+        for (id, (case, _)) in cases.iter().enumerate() {
             writeln!(source, "{id} => case_{id}::run(data),").unwrap();
+            if case.has_partial_terms() {
+                writeln!(source, "{} => case_{}::run(data),", id + BATCH, id + BATCH).unwrap();
+            }
         }
         source.push_str("_ => panic!(\"unknown case {id}\"), } }\n");
         for (id, (case, config)) in cases.iter().enumerate() {
             source.push_str(&consumer_case(id, case, *config));
+            if case.has_partial_terms() {
+                source.push_str(&consumer_case(
+                    id + BATCH,
+                    case,
+                    Config::written_reference(),
+                ));
+            }
         }
         std::fs::write(self.directory.join("src/main.rs"), source)?;
         let output = crate::cargo::command()
@@ -662,11 +715,11 @@ impl Runner {
                     return Err(format!("unexpected consumer id: {line}").into());
                 }
                 let status = words.next();
+                if matches!(status, Some("PANIC" | "DUPLICATES")) {
+                    return Ok(Err(status.unwrap().into()));
+                }
                 if status != Some("OK") {
-                    return Ok(Err(format!(
-                        "consumer {status:?}: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    )));
+                    return Err(format!("unknown consumer result: {line}").into());
                 }
                 let count: usize = words.next().ok_or("missing result row count")?.parse()?;
                 let values = words
@@ -684,9 +737,20 @@ impl Runner {
     }
 
     fn mismatch(&self, id: usize, case: &Case) -> bool {
-        match (self.execute(std::iter::once((id, case))), reference(case)) {
-            (Ok(actual), Ok(expected)) => actual[0].as_ref().ok() != Some(&expected),
+        match (
+            self.execute(std::iter::once((id, case))),
+            self.reference(id, case),
+        ) {
+            (Ok(actual), Ok(expected)) => !refines(&actual[0], &expected),
             _ => false,
+        }
+    }
+
+    fn reference(&self, id: usize, case: &Case) -> Result<ConsumerResult> {
+        if case.has_partial_terms() {
+            Ok(self.execute(std::iter::once((id + BATCH, case)))?.remove(0))
+        } else {
+            reference(case).map(Ok)
         }
     }
 }
@@ -729,10 +793,11 @@ fn consumer_case(id: usize, case: &Case, c: Config) -> String {
         .collect::<String>();
     writeln!(
         code,
-        "cq_fuzz_planner::query! {{ [{} {} {}] {} }}.map(|row| vec![{fields}]).collect()\n}}\n}}",
+        "cq_fuzz_planner::query! {{ [{} {} {} {}] {} }}.map(|row| vec![{fields}]).collect()\n}}\n}}",
         c.planner,
         c.fine,
         c.reduce,
+        c.reference,
         case.cq()
     )
     .unwrap();
@@ -742,16 +807,16 @@ fn consumer_case(id: usize, case: &Case, c: Config) -> String {
 const PLANNER: &str = r#"
 mod compiler;
 use syn::parse::Parse;
-struct Request { planner: usize, fine: bool, reduce: usize, source: cq_lang_cq::Program }
+struct Request { planner: usize, fine: bool, reduce: usize, reference: bool, source: cq_lang_cq::Program }
 impl Parse for Request {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let header; syn::bracketed!(header in input);
-        Ok(Self { planner: header.parse::<syn::LitInt>()?.base10_parse()?, fine: header.parse::<syn::LitBool>()?.value, reduce: header.parse::<syn::LitInt>()?.base10_parse()?, source: input.parse()? })
+        Ok(Self { planner: header.parse::<syn::LitInt>()?.base10_parse()?, fine: header.parse::<syn::LitBool>()?.value, reduce: header.parse::<syn::LitInt>()?.base10_parse()?, reference: header.parse::<syn::LitBool>()?.value, source: input.parse()? })
     }
 }
 #[proc_macro]
 pub fn query(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let result = syn::parse::<Request>(tokens).and_then(|request| compiler::plan(&request.source, request.planner, request.fine, request.reduce));
+    let result = syn::parse::<Request>(tokens).and_then(|request| compiler::plan(&request.source, request.planner, request.fine, request.reduce, request.reference));
     match result { Ok(ra) => quote::quote!(::mini_linq::index_demands! { #ra }), Err(error) => error.into_compile_error() }.into()
 }
 "#;
@@ -759,6 +824,74 @@ pub fn query(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refinement_keeps_abort_direction_and_set_equality() {
+        let rows = Ok(vec![vec![1]]);
+        let empty = Ok(Vec::new());
+        let panic = Err("PANIC".into());
+        let duplicates = Err("DUPLICATES".into());
+        assert!(refines(&rows, &rows));
+        assert!(refines(&rows, &panic));
+        assert!(refines(&panic, &panic));
+        assert!(!refines(&panic, &rows));
+        assert!(!refines(&empty, &rows));
+        assert!(!refines(&duplicates, &panic));
+        assert!(!refines(&rows, &duplicates));
+    }
+
+    #[test]
+    fn partial_reference_uses_written_order_and_disables_every_reordering_option() {
+        let config = Config::written_reference();
+        assert_eq!(config.planner, 0);
+        assert!(config.reference);
+        assert!(!config.fine);
+        assert_eq!(config.reduce, 0);
+        assert_eq!(
+            config.policy(),
+            "policy { join = seek; project = keep; intersect = first; }"
+        );
+        let case = model::generate(0);
+        assert!(case.has_partial_terms());
+        let source = consumer_case(BATCH, &case, config);
+        assert!(source.contains("[0 false 0 true]"));
+        assert!(
+            reference(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("written-order")
+        );
+    }
+
+    #[test]
+    fn effect_reference_keeps_literal_after_same_atom_partial_expression() {
+        let source = syn::parse_quote! {
+            struct Fuzz;
+            relation R(a: i32, b: i32, c: i32);
+            relation answer(a: i32);
+            answer(x) :- R(x, 10 / *x, 5);
+        };
+        let reference = compiler::plan(&source, 0, false, 0, true).unwrap();
+        let definitions: Vec<_> = reference.plan.definitions.iter().collect();
+        let bind = definitions
+            .iter()
+            .position(|d| matches!(d.operator, cq_lang_ra::Operator::Bind(_)))
+            .unwrap();
+        let literal = definitions
+            .iter()
+            .position(|d| match &d.operator {
+                cq_lang_ra::Operator::Select(selection) => {
+                    selection.condition.constant_keys().is_some()
+                }
+                _ => false,
+            })
+            .unwrap();
+        assert!(
+            bind < literal,
+            "a failing literal cannot suppress an earlier reference panic"
+        );
+        assert!(compiler::plan(&source, 1, false, 0, true).is_err());
+    }
 
     #[test]
     fn compiler_shrinking_preserves_trait_failure_when_tuple_width_changes() {
@@ -820,6 +953,7 @@ mod tests {
                 bindings: Vec::new(),
                 guards: Vec::new(),
                 head: vec![model::Expr::Var(0)],
+                order: Vec::new(),
             },
             data: vec![Vec::new(); 3],
         };

@@ -249,7 +249,7 @@ fn relational_contract_rejects_pruned_expression_dependencies() {
     relation R(a:i32,b:i32);
                 r0 = rename R {a -> x, b -> y};
                 r1 = project r0 keep {x};
-                r2 = select r1 if (accept(y));
+                r2 = guard r1 if (accept(y));
                 output r2 as answer(x);
             }
         };
@@ -257,18 +257,17 @@ fn relational_contract_rejects_pruned_expression_dependencies() {
 }
 
 #[test]
-fn extend_requires_available_inputs_and_fresh_distinct_columns() {
+fn bind_requires_available_inputs_and_fresh_columns() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32);
         r = rename R {a -> x,b -> y}; p = project r keep {x};
-        e = extend p with {z:i32} value (x + 1);
+        e = bind p with z:i32 = (x + 1);
         output e as answer(x,z);
     }};
     ra::contract::check(&source).unwrap();
     for operator in [
-        quote!(extend p with {z:i32} value (y + 1)),
-        quote!(extend p with {x:i32} value (1)),
-        quote!(extend p with {z:i32,z:i32} value ((1,2))),
+        quote!(bind p with z:i32 = (y + 1)),
+        quote!(bind p with x:i32 = (1)),
     ] {
         let mut changed = source.clone();
         changed.plan.definitions[2].operator = syn::parse2(operator).unwrap();
@@ -284,5 +283,86 @@ fn parsing_requires_an_output_consumes_the_body_and_checks_mapping_syntax() {
         "relational { relation R(a: i32); r = rename R {a x}; output r as answer(x); }",
     ] {
         assert!(syn::parse_str::<ra::Program>(text).is_err(), "{text}");
+    }
+}
+
+#[test]
+fn relational_selection_has_only_column_equalities_and_literals() {
+    check(quote! { relational {
+        relation R(a: i32, b: i32);
+        r = rename R {a -> x, b -> y};
+        s = select r if (x = -5, y = x);
+        output s as answer(x, y);
+    }})
+    .unwrap();
+    for condition in [
+        quote!(x == y),
+        quote!(accept(x)),
+        quote!(x = y + 1),
+        quote!(x = -true),
+    ] {
+        assert!(
+            syn::parse2::<ra::Program>(quote! { relational {
+                relation R(a: i32); r = rename R {a -> x};
+                s = select r if (#condition); output s as answer(x);
+            }})
+            .is_err()
+        );
+    }
+    assert!(
+        syn::parse2::<ra::Program>(quote! { relational {
+            relation R(a: i32); r = rename R {a -> x};
+            s = extend r with {y:i32} value (1); output s as answer(x, y);
+        }})
+        .is_err()
+    );
+}
+
+#[test]
+fn opaque_nodes_form_one_ancestry_chain() {
+    check(quote! { relational {
+        relation R(a: i32); relation S(b: i32);
+        r = rename R {a -> x};
+        g = guard r if (*x != 0);
+        s = rename S {b -> w};
+        j = natural_join g with s;
+        b = bind j with y: i32 = (10 / *x);
+        p = project b keep {x, y}; output p as answer(x, y);
+    }})
+    .unwrap();
+    let error = check(quote! { relational {
+        relation R(a: i32); relation S(b: i32);
+        r = rename R {a -> x}; s = rename S {b -> w};
+        g = guard r if (*x != 0);
+        b = bind s with y: i32 = (10 / *w);
+        j = natural_join g with b;
+        output j as answer(x, w, y);
+    }})
+    .unwrap_err();
+    assert!(error.to_string().contains("one ancestry chain"));
+}
+
+#[test]
+fn selection_scope_and_float_setoid_are_checked_with_column_diagnostics() {
+    for program in [
+        quote! { relational {
+            relation R(a: i32); r = rename R {a -> x};
+            s = select r if (y = 1); output s as answer(x);
+        }},
+        quote! { relational {
+            relation R(a: f64); r = rename R {a -> x};
+            s = select r if (x = 1.0); output s as answer(x);
+        }},
+        quote! { relational {
+            relation R(a: f64); relation S(a: f64);
+            r = rename R {a -> x}; s = rename S {a -> x};
+            j = natural_join r with s; p = project j keep {}; output p as answer();
+        }},
+    ] {
+        let error = check(program).unwrap_err().to_string();
+        assert!(
+            error.contains("column") && (error.contains("x") || error.contains("y")),
+            "{error}"
+        );
     }
 }

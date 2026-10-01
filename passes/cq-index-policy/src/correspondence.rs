@@ -4,7 +4,7 @@ use cq_lang_ix as ix;
 use cq_lang_ra as ra;
 use cq_lang_ra::syntax::symbol_name;
 
-/// Check RA preservation and the IX-Join/Other/New/Reuse derivation in order.
+/// Check RA preservation and the IX-Join/Const/Other/New/Reuse derivation in order.
 /// Demand names are fixed by the rules; no compiler decisions are replayed.
 /// Formal rule CK-Index: Check unchanged RA and complete first-use descriptors with iN names.
 pub fn check(source: &ra::Program, target: &ix::Program) -> syn::Result<()> {
@@ -26,25 +26,53 @@ pub fn check(source: &ra::Program, target: &ix::Program) -> syn::Result<()> {
     }
     let mut demands = Vec::new();
     for definition in &source.plan.definitions {
-        let (left, right) = match &definition.operator {
+        let (right, columns, supply) = match &definition.operator {
             // IX-Join: increasing logical ordinals in the right heading.
-            ra::Operator::NaturalJoin(j) => (&j.left, &j.right),
-            ra::Operator::Semijoin(j) => (&j.left, &j.right),
+            ra::Operator::NaturalJoin(j) => {
+                let columns: Vec<usize> = info[&symbol_name(&j.right)]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ordinal, column)| {
+                        info[&symbol_name(&j.left)]
+                            .heading
+                            .contains(column)
+                            .then_some(ordinal)
+                    })
+                    .collect();
+                (&j.right, columns, ix::SupplyKind::Stream)
+            }
+            ra::Operator::Semijoin(j) => {
+                let columns: Vec<usize> = info[&symbol_name(&j.right)]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ordinal, column)| {
+                        info[&symbol_name(&j.left)]
+                            .heading
+                            .contains(column)
+                            .then_some(ordinal)
+                    })
+                    .collect();
+                (&j.right, columns, ix::SupplyKind::Stream)
+            }
+            // IX-Const: all-literal theta is one keyed read of its input.
+            ra::Operator::Select(selection) => {
+                let Some(keys) = selection.condition.constant_keys() else {
+                    continue;
+                };
+                let columns = info[&symbol_name(&selection.input)]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ordinal, column)| keys.contains_key(column).then_some(ordinal))
+                    .collect();
+                (&selection.input, columns, ix::SupplyKind::Const)
+            }
             // IX-Other: no demand is introduced by other operators.
             _ => continue,
         };
-        let columns: Vec<usize> = info[&symbol_name(right)]
-            .heading
-            .iter()
-            .enumerate()
-            .filter_map(|(ordinal, column)| {
-                info[&symbol_name(left)]
-                    .heading
-                    .contains(column)
-                    .then_some(ordinal)
-            })
-            .collect();
-        let descriptor = (symbol_name(right), columns);
+        let descriptor = (symbol_name(right), columns, supply);
         // IX-Reuse: only the first occurrence contributes a demand.
         if demands.contains(&descriptor) {
             continue;
@@ -65,8 +93,8 @@ pub fn check(source: &ra::Program, target: &ix::Program) -> syn::Result<()> {
             return Err(syn::Error::new_spanned(
                 actual,
                 format!(
-                    "definition `{}`: demand `{}` must be the first-use demand for `{right}` on {:?}",
-                    definition.result, actual.name, descriptor.1
+                    "definition `{}`: demand `{}` must be the first-use demand for `{right}` on {:?} with {:?} supply",
+                    definition.result, actual.name, descriptor.1, descriptor.2
                 ),
             ));
         }
@@ -85,7 +113,7 @@ pub fn check(source: &ra::Program, target: &ix::Program) -> syn::Result<()> {
         return Err(syn::Error::new_spanned(
             extra,
             format!(
-                "demand `{}` for `{}`: no new source join requires this entry",
+                "demand `{}` for `{}`: no new source keyed read requires this entry",
                 extra.name, extra.requirement.relation
             ),
         ));

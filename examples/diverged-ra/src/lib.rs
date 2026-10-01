@@ -1,5 +1,9 @@
 //! The build script prints real Rust through the unchanged downstream passes;
 //! rustc compiles it here, and the tests execute it against an independent oracle.
+//!
+//! The meaning is `T X = bottom + Set X`, with one abort and an opaque partial
+//! Rust guard after the relational join. Other effects and evaluation counts
+//! are outside this meaning.
 // The current theta query uses host reads; retain the slot for built let reads.
 #[allow(unused_macros)]
 macro_rules! indexes {

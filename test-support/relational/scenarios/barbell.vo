@@ -6,13 +6,21 @@ relation Bridge(first: i32, second: i32);
 relation U(first: i32, second: i32);
 relation V(first: i32, second: i32);
 relation W(first: i32, second: i32);
-answer(x, y, z, u, v, w) :- R(x, y), S(y, z), T(x, z), Bridge(x, u), U(u, v), V(v, w), W(u, w);
+answer(x, y, z, u, v, w) :- R(x, y), S(__cq_1_0, z), y = __cq_1_0, T(__cq_2_0, __cq_2_1), x = __cq_2_0, z = __cq_2_1, Bridge(__cq_3_0, u), x = __cq_3_0, U(__cq_4_0, v), u = __cq_4_0, V(__cq_5_0, w), v = __cq_5_0, W(__cq_6_0, __cq_6_1), u = __cq_6_0, w = __cq_6_1;
 valuation {
     R@0(x, y);
-    S@1(y, z);
-    T@2(x, z);
-    Bridge@3(x, u);
-    U@4(u, v);
-    V@5(v, w);
-    W@6(u, w);
+    S@1(__cq_1_0, z);
+    y = __cq_1_0;
+    T@3(__cq_2_0, __cq_2_1);
+    x = __cq_2_0;
+    z = __cq_2_1;
+    Bridge@6(__cq_3_0, u);
+    x = __cq_3_0;
+    U@8(__cq_4_0, v);
+    u = __cq_4_0;
+    V@10(__cq_5_0, w);
+    v = __cq_5_0;
+    W@12(__cq_6_0, __cq_6_1);
+    u = __cq_6_0;
+    w = __cq_6_1;
 }

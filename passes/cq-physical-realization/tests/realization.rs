@@ -1,7 +1,7 @@
 //! Structures → Rust: authored modules print the statements and the pull
 //! iterator this pass owns — one build and guard per structure, host maps
-//! read in place, merges over native or sorted cursors, bounded scans,
-//! extends, and the distinct wrapper — with answers in head order.
+//! read in place, merges over native or sorted cursors, point reads,
+//! opaque binds/guards, and the distinct wrapper — with answers in head order.
 use cq_lang_structures as structures;
 use cq_physical_realization::{Endpoints, compile};
 use quote::{ToTokens, quote};
@@ -193,16 +193,16 @@ fn dispatch_uses_layout_and_allocates_fallbacks_outside_probe_closures() {
 }
 
 #[test]
-fn range_prints_dispatch_and_canonical_lets_use_the_distinct_provider() {
+fn point_prints_build_free_dispatch_and_canonical_lets_use_the_distinct_provider() {
     let p: structures::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:i32); r = pipe rename R {a -> x,b -> y};
-        w = let canon range[x] r if (x >= 2 && x < 9 && y != 5);
+        w = let canon point select r if (x = 2);
         p = pipe project w keep {x,y}; return p as answer(y,x);
     } structures {});
     let text = program(&p);
-    assert_eq!(text.matches("Lazy :: new").count(), 1);
-    assert!(text.contains("dispatch :: Range"));
-    assert!(text.contains(". range ("));
+    assert_eq!(text.matches("Lazy :: new").count(), 0);
+    assert!(text.contains("dispatch :: PointHost"));
+    assert!(text.contains(". point ("));
     assert!(text.contains("distinct_state ! { operator w"));
     assert!(text.contains("(y , x ,)"));
 }

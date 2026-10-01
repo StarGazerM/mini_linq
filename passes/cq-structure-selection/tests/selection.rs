@@ -73,14 +73,37 @@ fn host_renames_have_no_structure_entries_for_any_read_kind() {
         assert!(target.structures.entries.is_empty());
         check(&p, &target, &policy).unwrap();
     }
-    let p: physical::Program = syn::parse_quote!(physical { relation R(a:i32); r = pipe rename R {a -> x}; w = pipe canon range[x] r if (x > 2); return w as answer(x); });
+    let p: physical::Program = syn::parse_quote!(physical { relation R(a:i32); r = pipe rename R {a -> x}; w = pipe canon point select r if (x = 2); return w as answer(x); });
     let target = compile(&p, &syn::parse_quote!(policy {})).unwrap();
     assert!(target.structures.entries.is_empty());
 }
 
 #[test]
+fn const_supplies_on_host_and_materialized_inputs_never_build() {
+    for mode in ["pipe", "let"] {
+        let p: physical::Program = syn::parse_str(&format!(
+            "physical {{ relation R(a:i32); r = {mode} rename R {{a -> x}}; w = pipe canon point select r if (x = 2); return w as answer(x); }}"
+        )).unwrap();
+        let policy = syn::parse_quote!(policy {});
+        let target = compile(&p, &policy).unwrap();
+        assert!(target.structures.entries.is_empty());
+        check(&p, &target, &policy).unwrap();
+        let mut unnecessary = target;
+        unnecessary
+            .structures
+            .entries
+            .push(syn::parse_quote!(r = index_provider!(probe) [x];));
+        assert!(check(&p, &unnecessary, &policy).is_err());
+    }
+}
+
+#[test]
 fn ordered_read_types_and_changed_key_streams_have_mutation_coverage() {
-    let p: physical::Program = syn::parse_quote!(physical { relation R(a:i32); r = let rename R {a -> x}; w = pipe canon range[x] r if (x > 2); return w as answer(x); });
+    let p: physical::Program = syn::parse_quote!(physical {
+        relation L(a:i32); relation R(a:i32);
+        l = pipe rename L {a -> x}; r = let rename R {a -> x};
+        w = pipe canon merge[x] l,r; return w as answer(x);
+    });
     let policy = syn::parse_quote!(policy {});
     let target = compile(&p, &policy).unwrap();
     assert_eq!(
@@ -124,16 +147,18 @@ fn compatible_membership_chains_use_provider_selected_trie_levels() {
 
 #[test]
 fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
-    let case = scenarios::SCENARIOS
-        .iter()
-        .find(|c| c.name == "fine_triangle")
-        .unwrap();
-    let mut source: physical::Program = syn::parse_str(case.physical).unwrap();
-    for definition in &mut source.program.definitions {
-        if matches!(definition.operator, physical::Operator::Rename(_)) {
-            definition.mode = syn::parse_quote!(let);
-        }
-    }
+    // Author the physical premise directly: adjacent reads introduce then
+    // test one column. The fine-split source planner may choose other steps.
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a: i32, b: i32);
+        relation A(a: i32, c: i32); relation B(b: i32, c: i32);
+        l = pipe rename L { a -> a, b -> b };
+        a = let rename A { a -> a, c -> c };
+        b = let rename B { b -> b, c -> c };
+        p = pipe probe[a] l,a;
+        result = pipe canon semi[b,c] p,b;
+        return result as answer(a,b,c);
+    }};
     let policy = syn::parse_quote!(policy { intersect = smallest; });
     let target = compile(&source, &policy).unwrap();
     check(&source, &target, &policy).unwrap();
@@ -156,4 +181,26 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
         &mut changed.structures.entries[entry].structure;
     keyed.ty = syn::parse_quote!(index_provider!(semi));
     assert!(check(&source, &changed, &policy).is_err());
+}
+
+#[test]
+fn nonemptiness_and_keyed_membership_share_a_trie_with_an_empty_first_level() {
+    let p: physical::Program = syn::parse_quote! { physical {
+        relation L(a: i32); relation R(a: i32);
+        l = pipe rename L { a -> x }; r = let rename R { a -> x };
+        unit = pipe unit;
+        nonempty = pipe semi[] unit,r;
+        members = pipe probe[] nonempty,l;
+        result = pipe canon semi[x] members,r;
+        return result as answer(x);
+    }};
+    let policy = syn::parse_quote!(policy {});
+    let target = compile(&p, &policy).unwrap();
+    assert_eq!(
+        target.structures,
+        syn::parse_quote!(structures {
+            r = index_provider!(trie index_provider!(semi)) [][x];
+        })
+    );
+    check(&p, &target, &policy).unwrap();
 }

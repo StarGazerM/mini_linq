@@ -85,11 +85,11 @@ fn first_use_names_share_only_exact_version_and_columns_including_empty_columns(
     let source = versions();
     let expected: ix::Program = syn::parse_quote! {
         #source indexes {
-            i0 = @r[];
-            i1 = @s[1, 2];
-            i2 = @r[0, 1];
-            i3 = @t[0];
-            i4 = @right[1, 2];
+            i0 = @r[] stream;
+            i1 = @s[1, 2] stream;
+            i2 = @r[0, 1] stream;
+            i3 = @t[0] stream;
+            i4 = @right[1, 2] stream;
         }
     };
     assert_eq!(compile(&source).unwrap(), expected);
@@ -110,7 +110,7 @@ fn logical_heading_coordinates_ignore_declaration_and_rename_order() {
         output result as answer(x, w);
     }};
     let expected: ix::Program = syn::parse_quote! {
-        #source indexes { i0 = @first[1, 2]; i1 = @second[1, 2]; }
+        #source indexes { i0 = @first[1, 2] stream; i1 = @second[1, 2] stream; }
     };
     assert_eq!(compile(&source).unwrap(), expected);
 }
@@ -150,8 +150,7 @@ fn independent_derivation_rejects_mutations_with_construct_diagnostics() {
     bad.ra.plan.definitions[1].operator = syn::parse_quote!(rename R {c -> z, b -> y, a -> x});
     reject(&source, &bad, &["r", "preserve"]);
     let mut bad = target.clone();
-    bad.indexes =
-        syn::parse_quote!(i0 = @r[]; i1 = @s[1,2]; i2 = @t[0]; i3 = @r[0,1]; i4 = @right[1,2];);
+    bad.indexes = syn::parse_quote!(i0 = @r[] stream; i1 = @s[1,2] stream; i2 = @t[0] stream; i3 = @r[0,1] stream; i4 = @right[1,2] stream;);
     ix::contract::check(&bad).unwrap();
     reject(&source, &bad, &["right", "first-use"]);
     let mut bad = target.clone();
@@ -164,7 +163,64 @@ fn independent_derivation_rejects_mutations_with_construct_diagnostics() {
     bad.indexes[1].requirement.columns = syn::parse_quote!(0, 1);
     reject(&source, &bad, &["i1", "no join"]);
     let mut bad = target.clone();
-    bad.indexes.push(syn::parse_quote!(extra = @r[]));
+    bad.indexes.push(syn::parse_quote!(extra = @r[] stream));
     bad.indexes.push_punct(Default::default());
     reject(&source, &bad, &["extra", "duplicate"]);
+}
+
+#[test]
+fn ix_const_covers_all_literal_conjunctions_and_keeps_supply_in_identity() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a: i32, b: i32); relation S(a: i32, b: i32);
+        r = rename R { a -> x, b -> y }; s = rename S { a -> x, b -> y };
+        fixed = select r if (y = 7, x = -2);
+        repeated = select r if (x = 3, y = 8);
+        streamed = natural_join s with r;
+        restricted = natural_join fixed with repeated;
+        result = natural_join restricted with streamed;
+        output result as answer(x, y);
+    }};
+    let target = compile(&source).unwrap();
+    let expected: ix::Program = syn::parse_quote! { #source indexes {
+        i0 = @r[0,1] const;
+        i1 = @r[0,1] stream;
+        i2 = @repeated[0,1] stream;
+        i3 = @streamed[0,1] stream;
+    }};
+    assert_eq!(target, expected);
+    check(&source, &target).unwrap();
+    let mut missing = target.clone();
+    missing.indexes = syn::parse_quote! {
+        i0 = @r[0,1] stream;
+        i1 = @repeated[0,1] stream;
+        i2 = @streamed[0,1] stream;
+    };
+    // The remaining demands are locally valid; correspondence detects IX-Const omission.
+    ix::contract::check(&missing).unwrap();
+    assert!(
+        check(&source, &missing)
+            .unwrap_err()
+            .to_string()
+            .contains("first-use")
+    );
+    let mut wrong_supply = target;
+    wrong_supply.indexes[0].requirement.supply = syn::parse_quote!(stream);
+    assert!(check(&source, &wrong_supply).is_err());
+}
+
+#[test]
+fn rust_chain_nodes_and_column_equalities_create_no_demands() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a: i32, b: i32);
+        r = rename R { a -> x, b -> y };
+        equal = select r if (x = y);
+        guarded = guard equal if (*x != 0);
+        bound = bind guarded with z: i32 = (10 / *x);
+        projected = project bound keep {x, z};
+        output projected as answer(x, z);
+    }};
+    let target = compile(&source).unwrap();
+    assert!(target.indexes.is_empty());
+    assert_eq!(target.ra, source);
+    check(&source, &target).unwrap();
 }

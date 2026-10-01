@@ -1,5 +1,12 @@
 //! Reusable row layouts, host and built access, and expression printing helpers.
 //!
+//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
+//! binds and guards keep their written chain; relational steps may move only
+//! earlier across them. Their free variables determine their partial-function
+//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Equality, keyed storage and deduplication require Eq, with Hash or Ord
+//! supplied by the selected representation.
+//!
 //! [`Context`] records checked layouts and generated bindings. Printers choose
 //! their control flow and state sinks; this crate selects neither a planner
 //! nor a runtime dependency. Runtime names occur only in emitted Rust tokens.
@@ -15,6 +22,7 @@ use syn::{Expr, Ident, Stmt};
 pub mod access;
 pub mod expressions;
 mod ownership;
+mod point;
 pub use ownership::own_captures;
 
 /// A host relation's value: its name in scope, declared column order, and
@@ -297,7 +305,7 @@ impl<'a> Context<'a> {
             for level in levels.iter().rev() {
                 let owned = self.owned_key(name, level);
                 let key = level.iter().map(|c| self.key_field(name, c, owned));
-                nested = quote!(((#(#key,)*), #nested));
+                nested = quote!(::cq_storage::require::key(((#(#key,)*), #nested)));
             }
             let structure = format_ident!(
                 "__cq_{}_on_{}",
@@ -356,11 +364,6 @@ impl<'a> Context<'a> {
         }
         for (_, read) in physical.merge_reads.get(result).into_iter().flatten() {
             if read == columns {
-                require("ordered");
-            }
-        }
-        for (_, column) in physical.range_reads.get(result).into_iter().flatten() {
-            if columns == std::slice::from_ref(column) {
                 require("ordered");
             }
         }

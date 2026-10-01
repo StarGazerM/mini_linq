@@ -1,9 +1,12 @@
-//! RA → IX: name exact index demands for joins and semijoins.
+//! RA prime → IX: name exact stream and const demands over result versions.
 //!
 //! This analysis preserves the relational plan and makes no representation,
 //! physical algorithm, or continuation choice. [`check`] independently derives
 //! the ordered first-use demands and their rule-mandated names; fixtures
 //! separately pin the expansion.
+//! The denotation is `bottom + Set`; opaque Rust chain nodes are preserved
+//! exactly and create no demands. A literal selection supplies one fixed key,
+//! equivalent to a natural join with a one-tuple relation.
 
 use std::collections::BTreeSet;
 
@@ -18,22 +21,54 @@ pub fn compile(source: &ra::Program) -> syn::Result<ix::Program> {
     let mut indexes = cq_lang_ra::syntax::SemicolonList::new();
 
     for definition in &source.plan.definitions {
-        let (left, right) = match &definition.operator {
-            ra::Operator::NaturalJoin(join) => (&join.left, &join.right),
-            ra::Operator::Semijoin(join) => (&join.left, &join.right),
+        let (right, columns, supply) = match &definition.operator {
+            ra::Operator::NaturalJoin(join) => {
+                let columns: Vec<usize> = info[&symbol_name(&join.right)]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| {
+                        info[&symbol_name(&join.left)]
+                            .heading
+                            .contains(c)
+                            .then_some(i)
+                    })
+                    .collect();
+                (&join.right, columns, ix::SupplyKind::Stream)
+            }
+            ra::Operator::Semijoin(join) => {
+                let columns: Vec<usize> = info[&symbol_name(&join.right)]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| {
+                        info[&symbol_name(&join.left)]
+                            .heading
+                            .contains(c)
+                            .then_some(i)
+                    })
+                    .collect();
+                (&join.right, columns, ix::SupplyKind::Stream)
+            }
+            ra::Operator::Select(selection) => {
+                let Some(keys) = selection.condition.constant_keys() else {
+                    continue;
+                };
+                let columns = info[&symbol_name(&selection.input)]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| keys.contains_key(c).then_some(i))
+                    .collect();
+                (&selection.input, columns, ix::SupplyKind::Const)
+            }
             ra::Operator::Unit(_)
             | ra::Operator::Rename(_)
             | ra::Operator::Project(_)
-            | ra::Operator::Select(_)
-            | ra::Operator::Extend(_) => continue,
+            | ra::Operator::Bind(_)
+            | ra::Operator::Guard(_) => continue,
         };
-        let columns: Vec<usize> = info[&symbol_name(right)]
-            .heading
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| info[&symbol_name(left)].heading.contains(c).then_some(i))
-            .collect();
-        let descriptor = (symbol_name(right), columns.clone());
+        let descriptor = (symbol_name(right), columns.clone(), supply);
         if seen.insert(descriptor) {
             let name = syn::Ident::new(&format!("i{}", indexes.len()), right.span());
             indexes.push(ix::IndexDefinition {
@@ -44,6 +79,7 @@ pub fn compile(source: &ra::Program) -> syn::Result<ix::Program> {
                     relation: right.clone(),
                     bracket_token: Default::default(),
                     columns: columns.into_iter().map(syn::Index::from).collect(),
+                    supply: supply.into(),
                 },
             });
             indexes.push_punct(Default::default());

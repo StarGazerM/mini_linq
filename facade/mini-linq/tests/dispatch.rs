@@ -57,6 +57,18 @@ where
         (&self.value).lookup(key)
     }
 }
+impl<'a, T: ?Sized> cq_storage::PointLookup for &'a Observed<T>
+where
+    &'a T: cq_storage::PointLookup,
+{
+    type Key = <&'a T as cq_storage::PointLookup>::Key;
+    type Row = <&'a T as cq_storage::PointLookup>::Row;
+    type Cursor = <&'a T as cq_storage::PointLookup>::Cursor;
+    fn point_lookup(&self, key: &Self::Key) -> Self::Cursor {
+        self.reads.set(self.reads.get() + 1);
+        (&self.value).point_lookup(key)
+    }
+}
 impl<T: ExactMembership<K>, K> ExactMembership<K> for Observed<T> {
     fn contains(&self, key: &K) -> bool {
         self.reads.set(self.reads.get() + 1);
@@ -93,7 +105,7 @@ macro_rules! window {
     ($r:ident) => {
         ::mini_linq::cq_to_ra! {
             struct Q; relation $r(a:i32,b:i32);
-            answer(a,b) :- $r(a,b), if a >= 2 && a < 9;
+            answer(a,b) :- $r(a,b), if *a >= 2 && *a < 9;
         }
     };
 }
@@ -186,7 +198,7 @@ fn first_answer_owns_and_initializes_the_fallback_only_on_demand() {
 }
 
 #[test]
-fn host_and_fallback_range_iterators_survive_the_generated_block() {
+fn opaque_guard_iterators_survive_the_generated_block() {
     let rows: Vec<_> = (0..100_000).map(|a| (a, a)).collect();
     let r = Observed::new(
         rows.iter()
@@ -194,9 +206,9 @@ fn host_and_fallback_range_iterators_survive_the_generated_block() {
             .collect::<BTreeMap<_, _>>(),
     );
     let mut answers = window!(r);
-    assert_eq!((r.scans.get(), r.reads.get()), (0, 0));
+    assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
     assert_eq!(answers.next(), Some((&2, &2)));
-    assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
+    assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
     let r = Observed::new(rows.as_slice());
     let mut answers = window!(r);
     assert_eq!(r.rows.get(), 0);
@@ -206,7 +218,7 @@ fn host_and_fallback_range_iterators_survive_the_generated_block() {
 }
 
 #[test]
-fn ordered_host_ranges_build_zero_and_slices_build_once() {
+fn opaque_guards_scan_both_ordered_hosts_and_slices() {
     let r = Observed::new(BTreeMap::from([
         ((1,), vec![(0,)]),
         ((2,), vec![(5,), (6,)]),
@@ -215,13 +227,13 @@ fn ordered_host_ranges_build_zero_and_slices_build_once() {
     ]));
     let got: Vec<_> = window!(r).collect();
     assert_eq!(got.len(), 3);
-    assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
+    assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
     let rows = [(1, 0), (2, 5), (2, 6), (8, 1), (9, 1)];
     let r = Observed::new(rows.as_slice());
     let got: Vec<_> = window!(r).collect();
     assert_eq!(got.len(), 3);
     assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
-    println!("ordered range: builds=0 native-cursors=1; slice range: builds=1");
+    println!("opaque guards: maps and slices scan; no indexes built");
 }
 
 #[test]
@@ -246,16 +258,16 @@ fn ordered_key_types_need_no_hash_implementation_on_direct_reads() {
 }
 
 #[test]
-fn ordered_ranges_follow_the_declared_numeric_type() {
+fn opaque_guards_follow_the_declared_numeric_type() {
     let r = BTreeMap::from([
         ((1_u64,), vec![(0,)]),
         ((2,), vec![(5,)]),
         ((9,), vec![(1,)]),
     ]);
-    let got: Vec<_> = ::mini_linq::cq_to_ra! { struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),if a < 9; }.collect();
+    let got: Vec<_> = ::mini_linq::cq_to_ra! { struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),if *a < 9; }.collect();
     assert_eq!(got.len(), 2);
     let r = [(1_u64, 0), (2, 5), (9, 1)];
-    let got: Vec<_> = ::mini_linq::cq_to_ra! { struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),if a >= 2 && a < 9; }.collect();
+    let got: Vec<_> = ::mini_linq::cq_to_ra! { struct Q; relation r(a:u64,b:i32); answer(a,b) :- r(a,b),if *a >= 2 && *a < 9; }.collect();
     assert_eq!(got, [(&2, &5)]);
 }
 
@@ -333,21 +345,61 @@ fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
 }
 
 #[test]
-fn ordered_key_sets_range_without_payload_lookup() {
+fn ordered_key_sets_scan_for_opaque_guards() {
     let r = std::collections::BTreeSet::from([(1,), (2,), (9,)]);
-    let got: Vec<_> = ::mini_linq::cq_to_ra! { struct Q; relation r(a:i32); answer(a) :- r(a), if a >= 2 && a < 9; }.collect();
+    let got: Vec<_> = ::mini_linq::cq_to_ra! { struct Q; relation r(a:i32); answer(a) :- r(a), if *a >= 2 && *a < 9; }.collect();
     assert_eq!(got, [(&2,)]);
 }
 
 #[test]
-fn retained_ordered_ranges_preserve_unsigned_bounds() {
+fn retained_opaque_guards_preserve_unsigned_comparisons() {
     let r = [(1_u64, 0), (2, 5), (9, 1)];
     let got: Vec<_> = ::mini_linq::select_structures! {
         physical {
             relation r(a:u64,b:i32); rows = let rename r {a -> a,b -> b};
-            w = pipe canon range[a] rows if (a < 9); return w as answer(a,b);
+            w = pipe canon guard rows if (*a < 9); return w as answer(a,b);
         } policy {}
     }
     .collect();
     assert_eq!(got, [(&1, &0), (&2, &5)]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn literal_point_reads_scan_slices_and_directly_read_leading_map_keys() {
+    let Customer = Observed::new(vec![
+        (1_i32, "BUILDING"),
+        (2, "AUTOMOBILE"),
+        (3, "BUILDING"),
+    ]);
+    cq_storage::counters::reset();
+    let rows: std::collections::BTreeSet<_> = ::mini_linq::cq_to_ra! {
+        struct LiteralSlice;
+        relation Customer(id:i32, segment:&str);
+        answer(c) :- Customer(c, "BUILDING");
+    }
+    .map(|(c,)| *c)
+    .collect();
+    assert_eq!(rows, [1, 3].into());
+    assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
+    assert_eq!(Customer.scans.get(), 1);
+    assert_eq!(Customer.reads.get(), 0);
+    assert_eq!(Customer.rows.get(), 3);
+
+    let Customer = Observed::new(HashMap::from([
+        (("BUILDING",), vec![(1_i32,), (3,)]),
+        (("AUTOMOBILE",), vec![(2,)]),
+    ]));
+    cq_storage::counters::reset();
+    let rows: std::collections::BTreeSet<_> = ::mini_linq::cq_to_ra! {
+        struct LiteralMap;
+        relation Customer(segment:&str, id:i32);
+        answer(c) :- Customer("BUILDING", c);
+    }
+    .map(|(c,)| *c)
+    .collect();
+    assert_eq!(rows, [1, 3].into());
+    assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
+    assert_eq!(Customer.scans.get(), 0);
+    assert_eq!(Customer.reads.get(), 1);
 }

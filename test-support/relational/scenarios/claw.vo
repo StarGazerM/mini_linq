@@ -2,9 +2,11 @@ struct Claw;
 relation A(origin: i32, endpoint: i32);
 relation B(origin: i32, endpoint: i32);
 relation C(origin: i32, endpoint: i32);
-answer(a, b, c) :- A(h, a), B(h, b), C(h, c);
+answer(a, b, c) :- A(h, a), B(__cq_1_0, b), h = __cq_1_0, C(__cq_2_0, c), h = __cq_2_0;
 valuation {
     A@0(h, a);
-    B@1(h, b);
-    C@2(h, c);
+    B@1(__cq_1_0, b);
+    h = __cq_1_0;
+    C@3(__cq_2_0, c);
+    h = __cq_2_0;
 }

@@ -1,6 +1,5 @@
 indexes {
-    i0 =@r2[0];
-    i1 =@r0[0];
-    i2 =@r5[0];
-    i3 =@r2[0, 1];
+    i0 =@r0[0] stream;
+    i1 =@r3[0] stream;
+    i2 =@r6[0, 1] stream;
 }

@@ -1,4 +1,12 @@
-//! A named relational-algebra fragment for one complete conjunctive query.
+//! RA prime: named relational operators with an ordered Rust ancestry chain.
+//!
+//! The denotation is Kleisli over `T X = bottom + Set X`: one panic aborts
+//! evaluation. Rust binds and guards are opaque partial functions of their free
+//! variables. I/O, mutation and evaluation counts are outside this meaning.
+//! Relational laws apply only to relational operators. Moving a relational step
+//! earlier across Rust may shrink its evaluation domain; moving it later is not
+//! allowed. Preserving the Rust chain and every source-before relational step is
+//! a sufficient refinement condition, checked against the source by elaboration.
 //!
 //! This language separates logical query planning from index selection and
 //! Rust execution. Declared relation names are atomic input expressions;
@@ -14,7 +22,8 @@
 //! `contract::check` derives headings, types and source identifier bindings
 //! entirely from this program. VO correspondence belongs to cq-elaborate.
 
-pub use cq_syntax::algebra::{AttributeRename, Extend, Project, Rename, Select, Unit};
+pub use cq_syntax::algebra::{AttributeRename, Bind, Guard, Project, Rename, Select, Theta, Unit};
+pub use cq_syntax::{Equality, EqualityValue};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,7 +87,7 @@ pub struct Definition {
 /// One logical set operator.
 ///
 /// ```text
-/// Operator ::= Unit | Rename | NaturalJoin | Project | Semijoin | Select | Extend
+/// Operator ::= Unit | Rename | NaturalJoin | Project | Semijoin | Select | Bind | Guard
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Operator {
@@ -97,8 +106,10 @@ pub enum Operator {
     Semijoin(Box<Semijoin>),
     #[parse(peek = kw::select)]
     Select(Box<Select>),
-    #[parse(peek = kw::extend)]
-    Extend(Box<Extend>),
+    #[parse(peek = kw::bind)]
+    Bind(Box<Bind>),
+    #[parse(peek = kw::guard)]
+    Guard(Box<Guard>),
 }
 
 /// A binary natural join of two earlier relation results.
@@ -155,10 +166,12 @@ pub struct RelationInfo {
     pub bindings: BTreeMap<String, Ident>,
     pub heading: Heading,
     pub types: BTreeMap<String, syn::Type>,
-    /// Columns introduced by Extend. This records provenance, not the ownership
+    /// Columns introduced by Bind. This records provenance, not the ownership
     /// mode chosen by a realization when subsequent expressions read the column.
     pub computed: BTreeSet<String>,
     operands: Vec<String>,
+    /// Rust nodes on this result's single ancestry chain, in written order.
+    pub chain: Vec<String>,
 }
 
 /// Formal rule WF-RA: Check declarations, local operators, output heading and definition reachability.
@@ -176,7 +189,10 @@ fn check_in<'a>(
         .iter()
         .flat_map(|d| match &d.operator {
             Operator::Rename(r) => r.mapping.iter().map(|m| symbol_name(&m.target)).collect(),
-            Operator::Extend(e) => e.columns.iter().map(|c| symbol_name(&c.name)).collect(),
+            Operator::Bind(e) => cq_syntax::rust::bindings(&e.pattern)
+                .iter()
+                .map(symbol_name)
+                .collect(),
             _ => Vec::new(),
         })
         .collect();
@@ -193,6 +209,7 @@ fn check_in<'a>(
         Ok(())
     };
 
+    let mut chain = Vec::<String>::new();
     for definition in &plan.definitions {
         let result_name = symbol_name(&definition.result);
         if relations.contains_key(&result_name) {
@@ -253,21 +270,41 @@ fn check_in<'a>(
             }
             Operator::Select(select) => {
                 let (name, input) = earlier_relation(&select.input, &relations)?;
-                check_uses(&select.condition, &input.heading)?;
+                if select.condition.equalities.is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        select,
+                        "selection requires a relational equality",
+                    ));
+                }
+                for equality in &select.condition.equalities {
+                    equality.check()?;
+                    for column in equality.variables() {
+                        let name = symbol_name(column);
+                        if !input.heading.contains(&name) {
+                            return Err(syn::Error::new_spanned(
+                                column,
+                                format!("selection uses unavailable column `{name}`"),
+                            ));
+                        }
+                        check_setoid(&input.types[&name], column)?;
+                    }
+                }
                 (input.heading.clone(), vec![name])
             }
-            Operator::Extend(extend) => {
-                let (name, input) = earlier_relation(&extend.input, &relations)?;
-                check_uses(&extend.value, &input.heading)?;
+            Operator::Guard(guard) => {
+                let (name, input) = earlier_relation(&guard.input, &relations)?;
+                check_uses(&guard.condition, &input.heading)?;
+                (input.heading.clone(), vec![name])
+            }
+            Operator::Bind(bind) => {
+                let (name, input) = earlier_relation(&bind.input, &relations)?;
+                check_uses(&bind.expression, &input.heading)?;
                 let mut heading = input.heading.clone();
-                for column in &extend.columns {
-                    if !heading.insert(symbol_name(&column.name)) {
+                for column in cq_syntax::rust::bindings(&bind.pattern) {
+                    if !heading.insert(symbol_name(&column)) {
                         return Err(syn::Error::new_spanned(
-                            column,
-                            format!(
-                                "extend `{result_name}` requires fresh, distinct attributes: `{}`",
-                                column.name
-                            ),
+                            &column,
+                            format!("bind `{result_name}` requires fresh attributes: `{column}`"),
                         ));
                     }
                 }
@@ -305,10 +342,10 @@ fn check_in<'a>(
                     .cloned()
             })
             .collect();
-        if let Operator::Extend(extend) = &definition.operator {
-            for column in &extend.columns {
-                types.insert(symbol_name(&column.name), column.ty.clone());
-                computed.insert(symbol_name(&column.name));
+        if let Operator::Bind(bind) = &definition.operator {
+            for (name, ty) in bind.binding_types() {
+                types.insert(symbol_name(&name), ty);
+                computed.insert(symbol_name(&name));
             }
         }
         let mut bindings = BTreeMap::new();
@@ -325,12 +362,54 @@ fn check_in<'a>(
                     bindings.insert(symbol_name(&m.target), m.target.clone());
                 }
             }
-            Operator::Extend(e) => {
-                for c in &e.columns {
-                    bindings.insert(symbol_name(&c.name), c.name.clone());
+            Operator::Bind(e) => {
+                for name in cq_syntax::rust::bindings(&e.pattern) {
+                    bindings.insert(symbol_name(&name), name);
                 }
             }
             _ => (),
+        }
+        let mut ancestry = Vec::new();
+        for operand in &operands {
+            let branch = &relations[operand].chain;
+            if ancestry.starts_with(branch) {
+                continue;
+            }
+            if branch.starts_with(&ancestry) {
+                ancestry = branch.clone();
+                continue;
+            }
+            return Err(syn::Error::new_spanned(
+                &definition.operator,
+                "Rust chain nodes must form one ancestry chain",
+            ));
+        }
+        if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
+            if ancestry != chain {
+                return Err(syn::Error::new_spanned(
+                    &definition.operator,
+                    "Rust chain nodes must form one ancestry chain in written order",
+                ));
+            }
+            chain.push(result_name.clone());
+            ancestry = chain.clone();
+        }
+        match &definition.operator {
+            Operator::NaturalJoin(_) | Operator::Semijoin(_) => {
+                for name in relations[&operands[0]]
+                    .heading
+                    .intersection(&relations[&operands[1]].heading)
+                {
+                    check_setoid(&relations[&operands[0]].types[name], &bindings[name])?;
+                    check_setoid(&relations[&operands[1]].types[name], &bindings[name])?;
+                }
+            }
+            Operator::Project(project) => {
+                for column in &project.attributes {
+                    check_setoid(&types[&symbol_name(column)], column)?;
+                }
+            }
+            _ => {}
         }
         relations.insert(
             result_name,
@@ -340,6 +419,7 @@ fn check_in<'a>(
                 types,
                 computed,
                 operands,
+                chain: ancestry,
             },
         );
     }
@@ -352,24 +432,26 @@ fn check_in<'a>(
         ));
     };
 
-    for expr in &plan.output.head.args {
-        check_uses(expr, &output.heading)?;
+    if plan.output.head.variables().count() != plan.output.head.args.len() {
+        return Err(syn::Error::new_spanned(
+            &plan.output.head,
+            "RA output arguments must be variables; computations belong in final bind nodes",
+        ));
     }
     let output_attributes = plan
         .output
         .head
-        .args
-        .iter()
-        .flat_map(|e| cq_syntax::rust::free_variables(e).dependencies(&output.heading))
+        .variables()
+        .map(symbol_name)
         .collect::<BTreeSet<_>>();
-    if !output_attributes.is_subset(&output.heading)
-        || (plan.output.head.variables().count() == plan.output.head.args.len()
-            && output_attributes != output.heading)
-    {
+    if output_attributes != output.heading {
         return Err(syn::Error::new_spanned(
             &plan.output,
             format!("output `{output_name}` tuple attributes must exactly match its input heading"),
         ));
+    }
+    for column in plan.output.head.variables() {
+        check_setoid(&output.types[&symbol_name(column)], column)?;
     }
 
     check_all_reachable(plan, &relations, &output_name)?;
@@ -485,3 +567,9 @@ fn check_all_reachable(
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
+
+/// Reject known types without Rust's setoid premise; aliases are checked by the
+/// generated `Eq + Hash` or `Ord` bounds in the realization.
+fn check_setoid(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
+    cq_syntax::algebra::check_setoid_type(ty, column)
+}

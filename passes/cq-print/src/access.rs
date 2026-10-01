@@ -159,29 +159,6 @@ impl<'a> Context<'a> {
                 self.bound = true;
             }
         }
-        if let Some(reads) = self.physical_analysis.range_reads.get(result) {
-            let column = &reads[0].1;
-            let a = self.host_access(result, std::slice::from_ref(column));
-            let fallback = format_ident!("__cq_{}_range", result);
-            let rows = self.host_scan(result);
-            let pattern = self.pattern(result);
-            let key = self.ident(result, column);
-            let all = a
-                .key
-                .iter()
-                .chain(&a.payload)
-                .map(|c| self.ident(result, c));
-            self.statements.push(syn::parse_quote! {
-                let #fallback = ::cq_storage::dispatch::Lazy::new(move || <::cq_storage::dispatch::RangeIndex<_, _> as ::cq_storage::Build<_>>::build(
-                    ::core::iter::Iterator::map(#rows, |#pattern| (((*#key),), (#(#all,)*)))
-                ));
-            });
-            let handle = format_ident!("__cq_{}_host", result);
-            let value = a.value;
-            let ty = &self.infos[result].types[column];
-            self.statements.push(syn::parse_quote! { let #handle = ::cq_storage::dispatch::Host::<_, (#ty,), _, _>::new(#value, &#fallback); });
-            self.owned.push(handle);
-        }
     }
 
     /// The value answering a read of `result` keyed on sorted `columns`: a

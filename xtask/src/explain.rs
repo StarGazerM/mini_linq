@@ -414,12 +414,8 @@ fn format_relational_operator(operator: &ra::Operator) -> String {
             operator.input,
             quote::ToTokens::to_token_stream(&operator.condition)
         ),
-        ra::Operator::Extend(operator) => format!(
-            "extend {} with {{{}}} value ({})",
-            operator.input,
-            quote::ToTokens::to_token_stream(&operator.columns),
-            quote::ToTokens::to_token_stream(&operator.value)
-        ),
+        ra::Operator::Bind(operator) => compact_tokens(operator),
+        ra::Operator::Guard(operator) => compact_tokens(operator),
         ra::Operator::Rename(operator) => {
             let mapping = operator
                 .mapping
@@ -461,8 +457,8 @@ fn format_index_block(module: &index_requirements::Program) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "{} = @{}[{columns}];",
-                index.name, index.requirement.relation
+                "{} = @{}[{columns}] {};",
+                index.name, index.requirement.relation, compact_tokens(&index.requirement.supply)
             )
         })
         .collect::<Vec<_>>()

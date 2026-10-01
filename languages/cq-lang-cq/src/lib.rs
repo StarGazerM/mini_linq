@@ -1,9 +1,16 @@
-//! Complete CQ programs, local contracts, normalization and hypergraph analysis.
+//! Complete CQ programs with denotation `T X = bottom + Set X`.
+//! The reference evaluates the desugared body in written order; bottom is one
+//! undistinguished panic aborting the evaluation. Rust lets and guards denote
+//! opaque partial functions of their free variables and host captures. I/O,
+//! mutation, counters and evaluation counts are outside this meaning.
+//! Relational steps commute and may move earlier across a Rust step. Rust
+//! steps keep their relative order and follow every free-variable binder.
 
 pub use cq_syntax::predicate::{Comparison, Predicate, Term};
 pub mod hypergraph;
 pub mod normal;
 pub use cq_syntax::rust;
+pub use cq_syntax::{Equality, EqualityValue};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -97,16 +104,19 @@ impl Query {
 
 /// One source-ordered logical body clause.
 ///
-/// Expressions retain Rust syntax. Whether a condition can move is a planner
-/// premise, not a parser restriction.
+/// Rust expressions retain their syntax as opaque partial functions. Lets
+/// and guards share one written chain; relational steps alone may move earlier
+/// across that chain under the sufficient refinement check.
 ///
 /// ```text
-/// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
+/// BodyItem ::= Atom | Ident "=" (Ident | Literal)
+///            | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
 ///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
 /// ```
 #[derive(Clone, Debug)]
 pub enum BodyItem {
+    Equality(Equality),
     Filter(Filter),
     Let(Box<Let>),
     Negation(Negation),
@@ -140,6 +150,8 @@ impl syn::parse::Parse for BodyItem {
                 name,
                 tokens: body.parse()?,
             }
+        } else if input.peek(Ident) && input.peek2(Token![=]) {
+            Self::Equality(input.parse()?)
         } else {
             Self::Positive {
                 atom: input.parse()?,
@@ -151,6 +163,7 @@ impl syn::parse::Parse for BodyItem {
 impl quote::ToTokens for BodyItem {
     fn to_tokens(&self, output: &mut proc_macro2::TokenStream) {
         match self {
+            Self::Equality(x) => x.to_tokens(output),
             Self::Filter(x) => x.to_tokens(output),
             Self::Let(x) => x.to_tokens(output),
             Self::Negation(x) => x.to_tokens(output),
@@ -164,6 +177,7 @@ impl quote::ToTokens for BodyItem {
 impl PartialEq for BodyItem {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Equality(a), Self::Equality(b)) => a == b,
             (Self::Filter(a), Self::Filter(b)) => a == b,
             (Self::Let(a), Self::Let(b)) => a == b,
             (Self::Negation(a), Self::Negation(b)) => a == b,
@@ -219,7 +233,30 @@ pub enum Aggregator {
     },
 }
 
+/// The complete compiler-visible description of an opaque Rust step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RustStep {
+    /// Includes host captures. Opaque macro syntax conservatively depends on
+    /// its complete written query environment via `dependencies`.
+    pub free_variables: rust::FreeVariables,
+    pub bindings: Vec<Ident>,
+}
+
 impl BodyItem {
+    pub fn rust_step(&self) -> Option<RustStep> {
+        match self {
+            Self::Filter(filter) => Some(RustStep {
+                free_variables: rust::free_variables(&filter.condition),
+                bindings: Vec::new(),
+            }),
+            Self::Let(binding) => Some(RustStep {
+                free_variables: rust::free_variables(&binding.expression),
+                bindings: rust::bindings(&binding.pattern),
+            }),
+            _ => None,
+        }
+    }
+
     pub fn atom(&self) -> Option<&Atom> {
         match self {
             Self::Positive { atom } => Some(atom),
@@ -268,7 +305,8 @@ fn check_program(program: &Program) -> syn::Result<()> {
                         .into_iter()
                         .map(|(id, ty)| (symbol_name(&id), ty)),
                 ),
-                BodyItem::Filter(_)
+                BodyItem::Equality(_)
+                | BodyItem::Filter(_)
                 | BodyItem::Negation(_)
                 | BodyItem::Aggregate(_)
                 | BodyItem::Extension { .. } => (),
@@ -303,7 +341,8 @@ fn check_query(
         .flat_map(|item| match item {
             BodyItem::Positive { atom } => atom.variables().cloned().collect(),
             BodyItem::Let(binding) => rust::bindings(&binding.pattern),
-            BodyItem::Filter(_)
+            BodyItem::Equality(_)
+            | BodyItem::Filter(_)
             | BodyItem::Negation(_)
             | BodyItem::Aggregate(_)
             | BodyItem::Extension { .. } => Vec::new(),
@@ -328,11 +367,25 @@ fn check_query(
         match item {
             BodyItem::Positive { atom } => {
                 check_input_atom(schema, atom)?;
+                // Every bare argument of this atom is available to a same-atom
+                // computed argument, regardless of its column position.
+                let mut local = body_variables.clone();
+                local.extend(atom.variables().map(symbol_name));
                 for arg in &atom.args {
-                    if let Some(id) = rust::variable(arg) {
-                        body_variables.insert(symbol_name(id));
-                    } else {
-                        check_uses(arg, &body_variables)?;
+                    if rust::variable(arg).is_none() {
+                        check_uses(arg, &local)?;
+                    }
+                }
+                body_variables = local;
+            }
+            BodyItem::Equality(equality) => {
+                equality.check()?;
+                for variable in equality.variables() {
+                    if !body_variables.contains(&symbol_name(variable)) {
+                        return Err(syn::Error::new_spanned(
+                            variable,
+                            "relational equality uses a variable before it is bound",
+                        ));
                     }
                 }
             }
@@ -365,6 +418,9 @@ fn check_query(
         }
     }
 
+    for expression in &query.head.args {
+        check_uses(expression, &body_variables)?;
+    }
     for variable in query.head.variables() {
         if !declared_output && !body_variables.contains(&symbol_name(variable)) {
             return Err(syn::Error::new_spanned(

@@ -1,11 +1,14 @@
 //! Select provider types for built let reads, independently of host capabilities.
 //! Compatible membership prefixes share trie levels; ordered reads retain their own structure.
+//! The denotation is `bottom + Set`: Rust chain positions are preserved. A
+//! const supply is one fixed key, answered directly or by scan and filter;
+//! only stream supplies can justify building reusable keyed storage.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_physical as physical;
 use cq_lang_physical::policy::Policy;
-use cq_lang_physical::syntax::symbol_name;
+use cq_lang_physical::syntax::{SupplyKind, symbol_name};
 use cq_lang_physical::{ModeKind, Operator};
 use cq_lang_structures as structures;
 use proc_macro2::TokenStream;
@@ -55,7 +58,9 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
         if needs.contains(&Need::Ordered) || (!last && needs.iter().any(|n| *n != Need::Contains)) {
             return None;
         }
-        if columns.len() == previous.len() || !previous.iter().all(|c| columns.contains(c)) {
+        if (i > 0 && columns.len() == previous.len())
+            || !previous.iter().all(|c| columns.contains(c))
+        {
             return None;
         }
         levels.push(
@@ -98,19 +103,16 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
             .or_default()
             .insert(need);
     };
-    for (result, reads) in &analysis.key_reads {
-        for (reader, columns) in reads {
+    for (result, reads) in &analysis.keyed_reads {
+        for (reader, columns, supply) in reads {
+            if *supply == SupplyKind::Const || matches!(operators[reader], Operator::Merge(..)) {
+                continue;
+            }
             let need = match operators[reader] {
                 Operator::Semi(..) => Need::Contains,
                 _ => Need::Seek,
             };
             require(result, columns, need);
-        }
-    }
-    for (result, reads) in &analysis.range_reads {
-        for (_, column) in reads {
-            let columns = std::slice::from_ref(column);
-            require(result, columns, Need::Ordered);
         }
     }
     for (side, reads) in &analysis.merge_reads {

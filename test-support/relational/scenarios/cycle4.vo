@@ -3,10 +3,14 @@ relation R(first: i32, second: i32);
 relation S(first: i32, second: i32);
 relation T(first: i32, second: i32);
 relation U(first: i32, second: i32);
-answer(a, c) :- R(a, b), S(b, c), T(c, d), U(d, a);
+answer(a, c) :- R(a, b), S(__cq_1_0, c), b = __cq_1_0, T(__cq_2_0, d), c = __cq_2_0, U(__cq_3_0, __cq_3_1), d = __cq_3_0, a = __cq_3_1;
 valuation {
     R@0(a, b);
-    S@1(b, c);
-    T@2(c, d);
-    U@3(d, a);
+    S@1(__cq_1_0, c);
+    b = __cq_1_0;
+    T@3(__cq_2_0, d);
+    c = __cq_2_0;
+    U@5(__cq_3_0, __cq_3_1);
+    d = __cq_3_0;
+    a = __cq_3_1;
 }

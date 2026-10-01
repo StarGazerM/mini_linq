@@ -1,39 +1,12 @@
-//! CQ-NF → VO: the order in which a query's valuations are built.
-//!
-//! This pass decides one thing: the sequence of steps — which clause each
-//! subatom draws on and which of its columns it binds, and where each guard
-//! and binding sits. A [`Heuristic`] fixes the clause order and a [`Split`]
-//! the granularity; nothing else is chosen here.
-//!
-//! - `Written` keeps the normal-form body order; guards and bindings stay
-//!   where the body has them.
-//! - `Prefix(ranking)` repeats the clause-prefix choice: among the clauses
-//!   whose inputs are bound, a guard or binding first, then an atom sharing
-//!   a bound variable, then (`GreedyWidth`, `Auto`) the narrowest heading
-//!   after the join, then the earliest clause.
-//! - `Elimination` takes the variable order of `cq::hypergraph::Analysis`
-//!   (a perfect elimination order when the query is acyclic) and orders the
-//!   Coarse atoms by the position of their earliest variable. Fine enumerates
-//!   variables in reverse elimination order, connecting shared keys before
-//!   independent leaf columns form Cartesian prefixes.
-//!
-//! `Coarse` writes one full subatom per atom occurrence (a binary join
-//! plan). `Fine` writes one variable at a time (generic join): the first
-//! atom of the variable binds it over the already-bound columns, every
-//! other atom holding it checks, and guards and bindings follow the step
-//! that binds their last variable.
-//!
-//! Readiness is availability only: an atom waits for the bindings that
-//! supply its columns, a guard or binding for the variables it uses, and
-//! guards (bindings) keep their query order among themselves as VO
-//! requires. Normal form has no expression arguments; availability is
-//! derived from the complete query carried by the resulting VO program.
-//! [`check`] independently validates preservation and split obligations;
-//! Prefix/Elimination rankings remain fixture choices. Under Written the
-//! subatoms that introduce variables follow the normal body; Fine may check a
-//! later clause first.
+//! Schedule `T X = bottom + Set X` comprehensions into valuations.
+//! Rust lets and guards are opaque partial functions and keep written relative
+//! order, their free-variable binders, and all their written relational
+//! predecessors. Relational steps alone commute and may move earlier across
+//! the Rust chain. This sufficient refinement condition permits no new panic
+//! on a nonpanicking written reference input. Other effects, including I/O,
+//! mutation and evaluation counts, are outside this denotation.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_cq as cq;
 use cq_lang_cq::syntax::symbol_name;
@@ -74,7 +47,8 @@ pub enum Split {
     /// One full subatom per atom occurrence.
     #[default]
     Coarse,
-    /// One new variable per subatom.
+    /// One new variable per subatom, except that a Rust-observed variable
+    /// requires its complete source row to preserve its actual value.
     Fine,
 }
 
@@ -99,7 +73,7 @@ impl Clause<'_> {
 /// Formal rule D-Atom: Atom provides its columns and requires let-supplied columns.
 /// Formal rule D-Guard: Guard requires dependencies on the written prefix.
 /// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
-fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
+fn clauses<'a>(query: &'a cq::Query, observed: &BTreeSet<String>) -> Vec<Clause<'a>> {
     let let_bound: BTreeSet<String> = query
         .body
         .iter()
@@ -120,10 +94,15 @@ fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
                     let provides: Vec<String> = atom.variables().map(symbol_name).collect();
                     let requires = provides
                         .iter()
-                        .filter(|v| let_bound.contains(*v))
+                        .filter(|v| {
+                            let_bound.contains(*v) || (observed.contains(*v) && prefix.contains(*v))
+                        })
                         .cloned()
                         .collect();
                     (provides, requires)
+                }
+                BodyItem::Equality(equality) => {
+                    (Vec::new(), equality.variables().map(symbol_name).collect())
                 }
                 BodyItem::Filter(filter) => (
                     Vec::new(),
@@ -150,9 +129,7 @@ fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
         .collect()
 }
 
-/// Whether the clause may be placed: its inputs are bound and, for a guard
-/// or binding, it is the next of its kind in query order.
-/// Formal rule C-Ready: Require inputs and next pending guard or let of the same kind.
+/// Formal rule C-Ready: Require inputs, next Rust chain step, and every written relational predecessor.
 fn ready(
     clauses: &[Clause<'_>],
     pending: &[usize],
@@ -161,22 +138,23 @@ fn ready(
 ) -> bool {
     clauses[clause].requires.is_subset(bound)
         && match clauses[clause].item {
-            BodyItem::Positive { .. } => true,
-            BodyItem::Filter(_) => {
+            BodyItem::Positive { .. } | BodyItem::Equality(_) => true,
+            BodyItem::Filter(_) | BodyItem::Let(_) => {
                 pending
                     .iter()
-                    .find(|&&c| matches!(clauses[c].item, BodyItem::Filter(_)))
-                    == Some(&clause)
+                    .copied()
+                    .filter(|&c| matches!(clauses[c].item, BodyItem::Filter(_) | BodyItem::Let(_)))
+                    .min()
+                    == Some(clause)
+                    && !pending.iter().any(|&c| {
+                        c < clause
+                            && matches!(
+                                clauses[c].item,
+                                BodyItem::Positive { .. } | BodyItem::Equality(_)
+                            )
+                    })
             }
-            BodyItem::Let(_) => {
-                pending
-                    .iter()
-                    .find(|&&c| matches!(clauses[c].item, BodyItem::Let(_)))
-                    == Some(&clause)
-            }
-            BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
-                unreachable!("normal form")
-            }
+            _ => unreachable!("normal form"),
         }
 }
 
@@ -216,16 +194,20 @@ fn schedule(
 fn prefix_rank<'a>(
     clauses: &'a [Clause<'a>],
     ranking: Ranking,
+    equivalences: &'a BTreeMap<String, String>,
 ) -> impl Fn(usize, &BTreeSet<String>) -> Rank + 'a {
     move |clause, bound| {
         let facts = &clauses[clause];
         if !facts.is_atom() {
             return (false, false, 0, clause);
         }
-        let shared = facts.provides.iter().filter(|v| bound.contains(*v)).count();
+        let canonical = |name: &String| equivalences.get(name).unwrap_or(name).clone();
+        let supplied: BTreeSet<_> = facts.provides.iter().map(canonical).collect();
+        let available: BTreeSet<_> = bound.iter().map(canonical).collect();
+        let shared = supplied.intersection(&available).count();
         let width = match ranking {
             Ranking::Connected => 0,
-            Ranking::GreedyWidth | Ranking::Auto => bound.len() + facts.provides.len() - shared,
+            Ranking::GreedyWidth | Ranking::Auto => available.union(&supplied).count(),
         };
         (true, shared == 0, width, clause)
     }
@@ -302,6 +284,9 @@ fn coarse(clauses: &[Clause<'_>], sequence: &[usize]) -> Vec<valuation::Step> {
         .iter()
         .map(|&clause| match clauses[clause].item {
             BodyItem::Positive { atom } => subatom(clause, atom, |_| true),
+            BodyItem::Equality(equality) => {
+                valuation::Step::Equality(equality.clone(), Default::default())
+            }
             BodyItem::Filter(filter) => valuation::Step::Guard(filter.clone(), Default::default()),
             BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
@@ -318,31 +303,50 @@ struct Fine<'a> {
     bound: BTreeSet<String>,
     /// Guards and bindings not yet placed, in query order.
     waiting: Vec<usize>,
+    incomplete_atoms: BTreeSet<usize>,
+    observed: BTreeSet<String>,
+    first_atom: BTreeMap<String, usize>,
     steps: Vec<valuation::Step>,
 }
 
 impl Fine<'_> {
+    fn full_ready(&self, clause: usize) -> bool {
+        self.clauses[clause].requires.is_subset(&self.bound)
+            && self.clauses[clause].provides.iter().all(|v| {
+                !self.observed.contains(v)
+                    || self.bound.contains(v)
+                    || self.first_atom.get(v) == Some(&clause)
+            })
+    }
+
     fn place_ready(&mut self) {
-        while let Some(clause) = self
-            .waiting
-            .iter()
-            .copied()
-            .find(|&c| ready(self.clauses, &self.waiting, &self.bound, c))
-        {
+        loop {
+            let pending: Vec<_> = self
+                .waiting
+                .iter()
+                .copied()
+                .chain(self.incomplete_atoms.iter().copied())
+                .collect();
+            let Some(clause) = self
+                .waiting
+                .iter()
+                .copied()
+                .find(|&c| ready(self.clauses, &pending, &self.bound, c))
+            else {
+                break;
+            };
             self.waiting.retain(|&c| c != clause);
             self.bound
                 .extend(self.clauses[clause].provides.iter().cloned());
             self.steps.push(match self.clauses[clause].item {
+                BodyItem::Equality(equality) => {
+                    valuation::Step::Equality(equality.clone(), Default::default())
+                }
                 BodyItem::Filter(filter) => {
                     valuation::Step::Guard(filter.clone(), Default::default())
                 }
                 BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
-                BodyItem::Positive { .. }
-                | BodyItem::Negation(_)
-                | BodyItem::Aggregate(_)
-                | BodyItem::Extension { .. } => {
-                    unreachable!("guards and bindings wait")
-                }
+                _ => unreachable!("equalities and Rust steps wait"),
             });
         }
     }
@@ -350,6 +354,12 @@ impl Fine<'_> {
     /// The clause's subatom over its bound columns.
     fn subatom(&mut self, clause: usize, atom: &cq::Atom) {
         let step = subatom(clause, atom, |v| self.bound.contains(v));
+        if atom
+            .variables()
+            .all(|v| self.bound.contains(&symbol_name(v)))
+        {
+            self.incomplete_atoms.remove(&clause);
+        }
         self.steps.push(step);
     }
 }
@@ -363,6 +373,7 @@ fn fine(
     clauses: &[Clause<'_>],
     sequence: &[usize],
     variables: &[String],
+    observed: BTreeSet<String>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let atoms: Vec<usize> = sequence
         .iter()
@@ -374,21 +385,50 @@ fn fine(
         .filter(|c| matches!(c.item, BodyItem::Let(_)))
         .flat_map(|c| &c.provides)
         .collect();
+    let mut first_atom = BTreeMap::new();
+    for (clause, facts) in clauses
+        .iter()
+        .enumerate()
+        .filter(|(_, facts)| facts.is_atom())
+    {
+        for variable in &facts.provides {
+            first_atom.entry(variable.clone()).or_insert(clause);
+        }
+    }
     let mut plan = Fine {
         clauses,
         bound: BTreeSet::new(),
         waiting: (0..clauses.len())
             .filter(|&c| !clauses[c].is_atom())
             .collect(),
+        incomplete_atoms: atoms.iter().copied().collect(),
+        observed,
+        first_atom,
         steps: Vec::new(),
     };
+    for &clause in &atoms {
+        if atom(clauses[clause].item).args.is_empty() {
+            plan.subatom(clause, atom(clauses[clause].item));
+        }
+    }
     let mut remaining: Vec<&String> = variables.iter().collect();
     while !remaining.is_empty() {
         plan.place_ready();
-        let Some(next) = remaining
-            .iter()
-            .position(|v| !let_bound.contains(v) || plan.bound.contains(*v))
-        else {
+        let Some(next) = remaining.iter().position(|v| {
+            if plan.bound.contains(*v) {
+                return true;
+            }
+            if let_bound.contains(v) {
+                return false;
+            }
+            if plan.observed.contains(*v) {
+                return plan
+                    .first_atom
+                    .get(*v)
+                    .is_some_and(|&clause| plan.full_ready(clause));
+            }
+            true
+        }) else {
             return Err(syn::Error::new_spanned(
                 query,
                 "no variable can be bound next",
@@ -400,13 +440,23 @@ fn fine(
             .copied()
             .filter(|&c| clauses[c].provides.contains(variable));
         if !plan.bound.contains(variable) {
-            let Some(binder) = holding.next() else {
+            let binder = if plan.observed.contains(variable) {
+                let binder = plan.first_atom[variable];
+                Some(binder)
+            } else {
+                holding.next()
+            };
+            let Some(binder) = binder else {
                 return Err(syn::Error::new_spanned(
                     query,
                     format!("`{variable}` is not a variable of the query"),
                 ));
             };
-            plan.bound.insert(variable.clone());
+            if plan.observed.contains(variable) {
+                plan.bound.extend(clauses[binder].provides.iter().cloned());
+            } else {
+                plan.bound.insert(variable.clone());
+            }
             plan.subatom(binder, atom(clauses[binder].item));
             plan.place_ready();
         }
@@ -422,12 +472,43 @@ fn atom(item: &BodyItem) -> &cq::Atom {
     item.atom().expect("an atom clause")
 }
 
+/// Written splits each atom in place; it performs no cross-clause reordering.
+fn written_fine(clauses: &[Clause<'_>], observed: &BTreeSet<String>) -> Vec<valuation::Step> {
+    let mut steps = Vec::new();
+    let mut bound = BTreeSet::new();
+    for (clause, facts) in clauses.iter().enumerate() {
+        if let BodyItem::Positive { atom } = facts.item {
+            let new: Vec<_> = facts
+                .provides
+                .iter()
+                .filter(|v| !bound.contains(*v))
+                .cloned()
+                .collect();
+            if new.is_empty() || new.iter().any(|v| observed.contains(v)) {
+                bound.extend(new);
+                steps.push(subatom(clause, atom, |_| true));
+            } else {
+                for variable in new {
+                    bound.insert(variable);
+                    steps.push(subatom(clause, atom, |v| bound.contains(v)));
+                }
+            }
+        } else {
+            steps.extend(coarse(clauses, &[clause]));
+            bound.extend(facts.provides.iter().cloned());
+        }
+    }
+    steps
+}
+
 /// Order the normal-form query under `options`, then check the VO contract.
 /// Formal rule S-Written: Written uses the complete normal-form body sequence.
 pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
     let query = &source.query;
-    let clauses = clauses(query);
+    let observed = cq::normal::rust_observed(source);
+    let clauses = clauses(query, &observed);
+    let hypergraph = cq::hypergraph::Analysis::of(source);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Written => {
             let sequence: Vec<usize> = (0..clauses.len()).collect();
@@ -435,7 +516,11 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
             (sequence, variables)
         }
         Heuristic::Prefix(ranking) => {
-            let sequence = schedule(query, &clauses, prefix_rank(&clauses, ranking))?;
+            let sequence = schedule(
+                query,
+                &clauses,
+                prefix_rank(&clauses, ranking, &hypergraph.equivalences),
+            )?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
@@ -447,9 +532,27 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     if options.heuristic == Heuristic::Elimination && options.split == Split::Fine {
         variables.reverse();
     }
+    if options.split == Split::Fine && options.heuristic != Heuristic::Written {
+        // Enumerate every alias of a relational variable before the next
+        // variable class. Normalization must not erase generic-join checks
+        // against the other atoms holding that logical variable.
+        let mut grouped = Vec::new();
+        for variable in &variables {
+            for alias in variables
+                .iter()
+                .filter(|alias| hypergraph.equivalent(variable, alias))
+            {
+                if !grouped.contains(alias) {
+                    grouped.push(alias.clone());
+                }
+            }
+        }
+        variables = grouped;
+    }
     let steps = match options.split {
         Split::Coarse => coarse(&clauses, &sequence),
-        Split::Fine => fine(query, &clauses, &sequence, &variables)?,
+        Split::Fine if options.heuristic == Heuristic::Written => written_fine(&clauses, &observed),
+        Split::Fine => fine(query, &clauses, &sequence, &variables, observed)?,
     };
     let program = valuation::Program {
         cq: source.clone(),
@@ -482,6 +585,69 @@ pub fn check(
             ),
         ));
     }
+    if options.heuristic == Heuristic::Written {
+        let mut written = Vec::new();
+        let mut previous_atom = None;
+        for step in &target.valuation.steps {
+            match step {
+                valuation::Step::Atom(atom, _) => {
+                    if previous_atom != Some(atom.clause()) {
+                        written.push(atom.clause());
+                    }
+                    previous_atom = Some(atom.clause());
+                }
+                valuation::Step::Equality(equality, _) => {
+                    let position = source.query.body.iter().enumerate().find(|(i,item)| !written.contains(i) && matches!(item, BodyItem::Equality(expected) if expected == equality)).map(|(i,_)| i).expect("VO equality correspondence");
+                    written.push(position);
+                    previous_atom = None;
+                }
+                valuation::Step::Guard(filter, _) => {
+                    let position = source
+                        .query
+                        .body
+                        .iter()
+                        .enumerate()
+                        .find(|(i, item)| {
+                            !written.contains(i)
+                                && matches!(item, BodyItem::Filter(expected) if expected == filter)
+                        })
+                        .map(|(i, _)| i)
+                        .expect("VO chain correspondence");
+                    written.push(position);
+                    previous_atom = None;
+                }
+                valuation::Step::Let(binding, _) => {
+                    let position = source
+                        .query
+                        .body
+                        .iter()
+                        .enumerate()
+                        .find(|(i, item)| {
+                            !written.contains(i)
+                                && matches!(item, BodyItem::Let(expected) if expected == binding)
+                        })
+                        .map(|(i, _)| i)
+                        .expect("VO chain correspondence");
+                    written.push(position);
+                    previous_atom = None;
+                }
+                valuation::Step::Reduce(..) => {}
+            }
+        }
+        if written != (0..source.query.body.len()).collect::<Vec<_>>() {
+            let position = written
+                .iter()
+                .enumerate()
+                .find(|(i, clause)| **clause != *i)
+                .map(|(_, clause)| *clause)
+                .unwrap_or(source.query.body.len());
+            return Err(syn::Error::new_spanned(
+                &target.valuation,
+                format!("clause #{position}: Written requires every clause in normal-body order"),
+            ));
+        }
+    }
+    let observed = cq::normal::rust_observed(source);
     let mut seen = BTreeSet::new();
     let mut previous = None;
     for (step, introduced) in target.valuation.steps.iter().zip(&analysis.introduces) {
@@ -512,7 +678,10 @@ pub fn check(
                         "Coarse requires exactly one full subatom per atom clause",
                     ));
                 }
-                if options.split == Split::Fine && introduced.len() > 1 {
+                if options.split == Split::Fine
+                    && introduced.len() > 1
+                    && !introduced.iter().any(|v| observed.contains(v))
+                {
                     return Err(fail("Fine permits at most one new variable per subatom"));
                 }
                 // Written: the clauses that introduce variables follow the
@@ -531,7 +700,9 @@ pub fn check(
                     previous = Some(clause);
                 }
             }
-            valuation::Step::Guard(..) | valuation::Step::Let(..) => {}
+            valuation::Step::Equality(..)
+            | valuation::Step::Guard(..)
+            | valuation::Step::Let(..) => {}
         }
     }
     // The VO variable-coverage check alone is vacuous for nullary atoms.

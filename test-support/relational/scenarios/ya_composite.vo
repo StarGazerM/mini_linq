@@ -2,9 +2,13 @@ struct YaComposite;
 relation R(first: i32, second: i32, value: i32);
 relation S(first: i32, second: i32, third: i32);
 relation T(first: i32, second: i32, value: i32);
-answer(u, v) :- R(a, b, u), S(a, b, c), T(b, c, v);
+answer(u, v) :- R(a, b, u), S(__cq_1_0, __cq_1_1, c), a = __cq_1_0, b = __cq_1_1, T(__cq_2_0, __cq_2_1, v), b = __cq_2_0, c = __cq_2_1;
 valuation {
     R@0(a, b, u);
-    S@1(a, b, c);
-    T@2(b, c, v);
+    S@1(__cq_1_0, __cq_1_1, c);
+    a = __cq_1_0;
+    b = __cq_1_1;
+    T@4(__cq_2_0, __cq_2_1, v);
+    b = __cq_2_0;
+    c = __cq_2_1;
 }

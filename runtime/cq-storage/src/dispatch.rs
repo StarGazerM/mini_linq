@@ -7,6 +7,34 @@ use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::rc::Rc;
 
+/// A one-probe host read. Its fallback enumerates rows without building an index.
+pub struct PointHost<H, K, F>(H, F, std::marker::PhantomData<fn() -> K>);
+impl<H, K, F> PointHost<H, K, F> {
+    pub fn new(host: H, fallback: F) -> Self {
+        Self(host, fallback, std::marker::PhantomData)
+    }
+}
+
+pub trait PointRead<K> {
+    type Item;
+    type Cursor: Iterator<Item = Self::Item>;
+    fn point(self, key: &K) -> Self::Cursor;
+}
+impl<H, K: Eq, F: Fn() -> I, I: Iterator> PointRead<K> for &PointHost<H, K, F> {
+    type Item = I::Item;
+    type Cursor = I;
+    fn point(self, _: &K) -> I {
+        (self.1)()
+    }
+}
+impl<H: crate::PointLookup<Key = K>, K: Eq, F> PointRead<K> for &&PointHost<H, K, F> {
+    type Item = H::Row;
+    type Cursor = H::Cursor;
+    fn point(self, key: &K) -> Self::Cursor {
+        self.0.point_lookup(key)
+    }
+}
+
 /// The key and fallback types are fixed before method resolution, so an
 /// unsupported key type falls back even when another keyed read is implemented.
 pub struct Host<H, K, T, F>(pub H, Lazy<T, F>, std::marker::PhantomData<fn() -> K>);
@@ -72,7 +100,7 @@ where
         self.1.get().lookup(key)
     }
 }
-impl<H, Q: OwnKey<Owned = K>, K, T, F> Seek<Q> for &&Host<H, K, T, F>
+impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> Seek<Q> for &&Host<H, K, T, F>
 where
     H: IndexRead<Key = K>,
     H::Item: Columns,
@@ -92,7 +120,7 @@ impl<H, Q, K, T: ExactMembership<Q>, F: FnOnce() -> T> Contains<Q> for &Host<H, 
         self.1.get().contains(key)
     }
 }
-impl<H, Q: OwnKey<Owned = K>, K, T, F> Contains<Q> for &&Host<H, K, T, F>
+impl<H, Q: OwnKey<Owned = K>, K: Eq, T, F> Contains<Q> for &&Host<H, K, T, F>
 where
     H: ExactMembership<K>,
 {

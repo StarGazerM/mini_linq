@@ -23,7 +23,10 @@ const TREE: Options = Options {
 fn coarse(source: &cq::Program) -> valuation::Program {
     let steps = source.query.body.iter().enumerate().map(|(clause, item)| {
         let cq::BodyItem::Positive { atom } = item else {
-            unreachable!("every fixture is atoms only");
+            if let cq::BodyItem::Equality(e) = item {
+                return quote!(#e;);
+            }
+            unreachable!("every fixture has relational steps only");
         };
         let relation = &atom.relation;
         let clause = proc_macro2::Literal::usize_unsuffixed(clause);
@@ -54,7 +57,6 @@ fn reductions(plan: &valuation::Program) -> Vec<(usize, usize)> {
         .map(|step| match step {
             Step::Reduce(reduce, _) => match &reduce.reduction {
                 Reduction::With(_, support) => (reduce.clause(), support.clause()),
-                Reduction::Guard(_) => unreachable!("no guards are pushed"),
             },
             _ => unreachable!("only reductions precede the first atom"),
         })
@@ -91,7 +93,12 @@ fn reductions_respect_tree_dependencies_and_exactly_once_obligations() {
     for text in cases {
         let (tree, pairs) = schedule(text);
         let nodes = tree.len();
-        let parent = |clause: usize| tree[clause].1;
+        let parent = |clause: usize| {
+            tree.iter()
+                .find(|(node, _)| *node == clause)
+                .expect("atom clause in tree")
+                .1
+        };
         let children = |clause: usize| {
             tree.iter()
                 .filter_map(move |&(child, p)| (p == Some(clause)).then_some(child))
@@ -129,7 +136,8 @@ fn reductions_respect_tree_dependencies_and_exactly_once_obligations() {
 
 #[test]
 fn the_schedules_are_pinned() {
-    // Chain: up from the leaf E@0 to the root E@4, then down again.
+    // Clause numbers include the relational equalities emitted after repeated
+    // arguments. Chain: up from E@0 to E@7, then down again.
     let (tree, pairs) = schedule(
         "struct Chain; relation E(a:i32,b:i32); answer(a,f) :- E(a,b),E(b,c),E(c,d),E(d,e),E(e,f);",
     );
@@ -137,26 +145,26 @@ fn the_schedules_are_pinned() {
         tree,
         [
             (0, Some(1)),
-            (1, Some(2)),
-            (2, Some(3)),
-            (3, Some(4)),
-            (4, None)
+            (1, Some(3)),
+            (3, Some(5)),
+            (5, Some(7)),
+            (7, None)
         ]
     );
     assert_eq!(
         pairs,
         [
             (1, 0),
-            (2, 1),
-            (3, 2),
-            (4, 3),
-            (3, 4),
-            (2, 3),
-            (1, 2),
+            (3, 1),
+            (5, 3),
+            (7, 5),
+            (5, 7),
+            (3, 5),
+            (1, 3),
             (0, 1)
         ]
     );
-    // Branches: breadth-first from the root E@5, the upward sweep visits the
+    // Branches: breadth-first from the root E@9, the upward sweep visits the
     // deepest edges first and the downward sweep the shallowest.
     let (tree, pairs) = schedule(
         "struct Branches; relation E(a:i32,b:i32); answer(a,c,e,g) :- E(a,b),E(b,c),E(a,d),E(d,e),E(a,f),E(f,g);",
@@ -164,26 +172,26 @@ fn the_schedules_are_pinned() {
     assert_eq!(
         tree,
         [
-            (0, Some(2)),
+            (0, Some(3)),
             (1, Some(0)),
-            (2, Some(4)),
-            (3, Some(2)),
-            (4, Some(5)),
-            (5, None)
+            (3, Some(7)),
+            (5, Some(3)),
+            (7, Some(9)),
+            (9, None)
         ]
     );
     assert_eq!(
         pairs,
         [
             (0, 1),
-            (2, 3),
-            (2, 0),
-            (4, 2),
-            (5, 4),
-            (4, 5),
-            (2, 4),
-            (0, 2),
-            (3, 2),
+            (3, 5),
+            (3, 0),
+            (7, 3),
+            (9, 7),
+            (7, 9),
+            (3, 7),
+            (0, 3),
+            (5, 3),
             (1, 0)
         ]
     );

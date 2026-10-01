@@ -49,7 +49,7 @@ fn canonicality_comes_only_from_plan_boundaries_and_key_preservation() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation R(a:i32,b:i32);
         r = let canon rename R {a -> a,b -> b};
-        e = pipe extend r with {n:i32} value (1);
+        e = pipe bind r with n: i32 = (1);
         p = pipe project e keep {a,b}; return p as answer(a,b);
     } structures {} };
     let a = structures::contract::check(&p).unwrap();
@@ -90,4 +90,54 @@ fn leveled_entries_cover_prefixes_but_do_not_prove_uniqueness() {
     assert_eq!(a.built_on("r", &["x".into(), "y".into()]).unwrap().1, 2);
     p.physical.program.definitions[2].canon = None;
     assert!(structures::contract::check(&p).is_err());
+}
+
+#[test]
+fn a_const_only_read_cannot_justify_a_built_entry() {
+    let p: structures::Program = syn::parse_quote! { physical {
+        relation R(a: i32);
+        r = let rename R { a -> x };
+        p = pipe canon point select r if (x = 5);
+        return p as answer(x);
+    } structures {} };
+    structures::contract::check(&p).unwrap();
+    let mut invalid = p;
+    invalid
+        .structures
+        .entries
+        .push(syn::parse_quote!(r = UserIndex [x];));
+    let error = structures::contract::check(&invalid)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("const-only"), "{error}");
+}
+
+#[test]
+fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
+    let p: structures::Program = syn::parse_quote! { physical {
+        relation L(a: i32); relation R(a: i32);
+        l = pipe rename L { a -> x }; r = let rename R { a -> x };
+        p = let point select r if (x = 5);
+        j = pipe probe[x] l,r;
+        out = pipe canon semi[x] j,p;
+        return out as answer(x);
+    } structures { r = UserIndex [x]; p = UserIndex [x]; } };
+    structures::contract::check(&p).unwrap();
+}
+
+#[test]
+fn every_built_key_level_requires_the_setoid_premise() {
+    let p: structures::Program = syn::parse_quote! { physical {
+        relation L(a: i32); relation R(a: i32, payload: f64);
+        l = pipe rename L { a -> x };
+        r = let rename R { a -> x, payload -> y };
+        j = pipe probe[x] l,r;
+        out = pipe canon project j keep {x};
+        return out as answer(x);
+    } structures { r = UserTrie [x][y]; } };
+    let error = structures::contract::check(&p).unwrap_err().to_string();
+    assert!(
+        error.contains("y") && error.contains("Eq") && error.contains("f64"),
+        "{error}"
+    );
 }

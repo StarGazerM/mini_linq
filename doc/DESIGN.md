@@ -7,23 +7,41 @@ implementing sources in [formal/rules.tsv](formal/rules.tsv).
 
 ## Meaning
 
-**One meaning across presentations.** Every language denotes the same finite
-set of answers, `⟦Q⟧(D) = { h(head) | h : Vars → Dom, h(body) ⊆ D }` (set
-semantics). A pass changes presentation, never meaning, so the correspondence
-between adjacent languages is an erasure: CQ-NF is the kernel every plan
-erases to (compared up to renaming of variables), VO reductions erase to the
-unreduced plan, RA erases back to the kernel, IX drops its demands, Physical
-reads its operators back as RA (probe/merge as natural join, semi as
-semijoin, range as select, modes and `canon` discarded), and Structures drops
-its storage entries.
+**One denotation.** Queries compose in the Kleisli category for
+`T X = ⊥ + Set X`: the relational centre is Set and `⊥` is one
+undistinguished panic aborting the whole evaluation. A Rust bind or guard is
+an opaque partial function of its free query variables and host captures.
+The compiler reads only its free variables and pattern bindings. I/O,
+mutation, counters and evaluation counts are outside this meaning.
+
+The reference is the desugared body evaluated in written order. Each target
+refines it: whenever the reference returns, the target returns the same set
+without panic. Relational steps commute with each other and may move earlier
+past Rust steps. They may not move later. Rust steps retain their written
+relative order and stay after the steps binding their free variables. An
+identical Rust chain and inclusion of each source Before set in the target
+Before set is a **sufficient** condition for refinement. RA laws apply only
+to relational steps; bind and guard nodes belong to the ordered chain.
+Equalities, keys and deduplication require a setoid (`Eq` with `Hash` or
+`Ord` for storage), never merely `PartialEq`.
+Rust-observed bindings retain their original stored representatives; equality
+unification and partial-atom projection cannot substitute or collapse them.
+
+At each atom's written position normalization replaces repeated variables
+and literals with fresh columns and relational equalities. An already-bound
+argument expression becomes an immediately preceding Rust bind; one depending
+on that atom becomes a following bind and equality. Computed heads become
+final binds. Every normal-form atom and output contains only variables.
+Erasure preserves this chain; correspondence checks compare relational regions
+while allowing only refinement-preserving hoisting.
 
 | Language | Presentation | Decision recorded |
 |---|---|---|
-| CQ-NF | atoms over distinct variables, guards, bindings | none (canonical form) |
+| CQ-NF | variable-only atoms, equalities, Rust guards and binds | none (canonical form) |
 | VO | the order in which valuations are built; granularity of each step | valuation order, split |
 | VO (reduced) | + reductions applied to a clause before it is joined | where reductions go |
-| RA | straight-line named algebra (SSA without φ) | none (elaboration) |
-| IX | demands: the key sets the plan applies results at | none (derived) |
+| RA′ | relational operators and an opaque Rust ancestry chain | none (elaboration) |
+| IX | demands: key sets and stream/const supplies | none (derived) |
 | Physical | one operator per result; `pipe`/`let` modes | operator, mode, dedup placement |
 | Structures | the bindings Γ: the value answering each keyed read | representation |
 
@@ -37,12 +55,18 @@ and `α` of a built value is exactly the rows it was built from
 
 **Canonicality is a plan property.** A `canon` boundary deduplicates through
 `distinct_state!`, including before a let is materialized. Uniqueness propagates
-through joins of unique inputs, semijoins, selects, extends, and projections
+through joins of unique inputs, semijoins, selects, binds, guards, and projections
 that retain an inferred key. Host types supply no canonicity premises.
 
 **Keys are curryings.** A relation `R ⊆ Tup(X)` read on a key `K ⊆ X` is used
 at the curried type `Tup(K) → P(Tup(X∖K))`. An IX demand is such a key: an
-unordered set on an exact RA result. A leveled Structures entry
+unordered set on an exact RA result, with `stream` or `const` supply.
+`i0 = @r2[1] const;` means one key fixed by literals; `stream` means keys
+supplied by another result. A literal equality selection is a join with a
+one-tuple relation and therefore creates a const demand; column equalities
+and Rust chain nodes do not. `point select r if (x = 5)` answers a const
+demand by native leading-prefix lookup or scan/filter, never by building an
+index. Only stream probes can amortize building. A leveled Structures entry
 `Type [K₁][K₂]` is one curried index; by `(A × B → C) ≅ (A → B → C)` it
 answers a read on every prefix `K₁ ∪ … ∪ Kᵢ`. That is a trie
 (`cq_storage::Trie`): `build` is currying, `lookup` is application, and a
@@ -69,11 +93,15 @@ host access. Structures records built lets, never host capabilities.
 **Declaration order is layout.** A grouped host key occupies the leading
 columns. Only a read whose column set equals a leading prefix is eligible for
 native lookup. A different prefix length or unsupported key type falls back;
-a non-leading read always builds, even when its Rust key type matches.
+a non-leading stream read builds, even when its Rust key type matches.
+A const read scans and filters when native lookup is unavailable.
 
 **Host dispatch is lazy.** `cq_storage::dispatch::Host` uses stable autoref
-selection for `seek`, `contains`, and leading-column `range`. A native read
-uses the host trait. Its fallback is initialized once on first use within the
+selection for stream `seek`/`contains` and const point reads. A native read
+uses the host trait. Point reads require `PointLookup`, which returns the
+stored key together with its payload; `IndexRead` alone exposes only the
+payload and cannot preserve a Rust-visible key binding. Unsupported point
+reads scan the original full rows. Its fallback is initialized once on first use within the
 query block, shared by all probes, and never built on the native path.
 
 **Provider slots select built types and distinct state.** `index_provider!`
@@ -166,15 +194,16 @@ plan uniqueness through the caller's distinct-state provider.
 
 **Analysis, then transformation.** Logical planning is four passes: normalize
 (CQ → CQ-NF: atom arguments become distinct variables, constants and
-computed arguments become `let` and `if` items), order (CQ-NF → VO: a
+literals become relational equalities, computed arguments become positioned Rust binds), order (CQ-NF → VO: a
 heuristic fixes clause order, a split fixes granularity), reduce (VO → VO:
-guard pushdown and join-tree semijoins) and elaborate (VO → RA: each step one
+join-tree semijoins, with no Rust guard pushdown) and elaborate (VO → RA: each step one
 named RA shape). The hypergraph (incidence, GYO, join tree, elimination order,
 width) is an analysis the passes read, not an IR. Orders are heuristics: no
 cardinality estimate, cost model or global search is claimed.
 
-**Reductions erase to the identity.** A guard pushed onto an atom or a
-Yannakakis semijoin changes the size of intermediates, never the answer. The
+**Reductions erase to the identity.** A Yannakakis semijoin changes the size
+of relational intermediates while preserving the answer. Rust guards never
+move into reduction inputs. The
 reduce check erases reductions back to the source plan and verifies that tree
 semijoins form a full reducer of a join tree; tree reduction requires an
 acyclic body.
@@ -222,12 +251,14 @@ diverged by crate choice ([examples](../examples/README.md)):
 incremental) is a printer and its runtime, checked by running it against
 oracles and the reference printer, not by proof. Every printed program meets:
 
-- **D1** The distinct result of running the program is `⟦Q⟧`.
+- **D1** Execution refines the desugared written-order reference: on every
+  nonpanicking reference input, the result is the same set without panic.
 - **D2** Orders a `merge` relies on are preserved, or the dialect refuses.
 - **D3** A pipe is consumed once; this licenses moves, fusion, phases, fan-out.
-- **D4** Embedded Rust is pure; this licenses evaluation order and count
-  (laziness, batching, parallelism). The recognized comparison fragment is
-  pure by construction; other expressions are trusted.
+- **D4** Embedded Rust is an opaque partial function. Preserve its chain and
+  free-variable binders; move relational steps only earlier across it. The
+  chain/Before check is sufficient for refinement. Other effects and
+  evaluation counts are outside the denotation.
 - **D5** Hosts are immutable for a run.
 - **D6** A column of declared type `T` denotes `&T` in every embedded
   expression and no printer copies a binding; ownership is created only by a

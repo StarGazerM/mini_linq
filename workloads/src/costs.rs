@@ -77,14 +77,14 @@ configuration!(keep, $, {}, {
         ::mini_linq::cq_to_ra! {
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b),if a >= 2 && a < 6;
+            answer(a,b) :- r(a,b),if *a >= 2 && *a < 6;
         }.map(|(a,b)| vec![*a,*b]).collect()
     }
     pub(super) fn range_map(r: &std::collections::BTreeMap<(i32,),Vec<(i32,)>>) -> Answers {
         ::mini_linq::cq_to_ra! {
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b),if a >= 2 && a < 6;
+            answer(a,b) :- r(a,b),if *a >= 2 && *a < 6;
         }.map(|(a,b)| vec![*a,*b]).collect()
     }
     pub(super) fn probe_slice(l: &[(i32,)], r: &[Edge]) -> Answers {
@@ -302,10 +302,10 @@ pub fn run(scale: usize, seed: u64) -> Vec<Observation> {
     let ordered: BTreeMap<_, _> = rows.iter().map(|&(a, b)| ((a,), vec![(b,)])).collect();
     let hash: counters::HashMap<_, _> = rows.iter().map(|&(a, b)| ((a,), vec![(b,)])).collect();
     let probes = [(2,), (3,), (4,), (5,)];
-    results.push(measure("range", "btree/direct", scale, &expected, || {
+    results.push(measure("guard", "btree/scan", scale, &expected, || {
         (keep::range_map(&ordered), 0)
     }));
-    results.push(measure("range", "slice/build", scale, &expected, || {
+    results.push(measure("guard", "slice/scan", scale, &expected, || {
         (keep::range_slice(&rows), 0)
     }));
     results.push(measure("probe", "map/direct", scale, &expected, || {
@@ -318,7 +318,7 @@ pub fn run(scale: usize, seed: u64) -> Vec<Observation> {
     let expected = disconnected_oracle(&data);
     results.push(measure(
         "disconnected",
-        "written/fine",
+        "connected/fine",
         scale,
         &expected,
         || keep::disconnected(&data.r, &data.s, &data.t),
@@ -334,9 +334,12 @@ pub fn run(scale: usize, seed: u64) -> Vec<Observation> {
 }
 
 /// Rows at runtime storage boundaries distinguish O(n) from O(n*n) work;
-/// fixed-window hosts distinguish O(1) from O(n). Multiplication avoids floats.
+/// point lookups distinguish O(1) from O(n). Opaque guards scan both hosts.
+/// Multiplication avoids floats.
 /// The slack admits fixed setup while separating asymptotic predictions (2/4,
-/// or 1/2). Predicate visits independently pin the exact 576 -> 24 regression.
+/// or 1/2). Opaque-observer disconnected plans retain concrete witnesses and
+/// both currently enumerate quadratic prefixes; their guards run only after
+/// every written relational prerequisite.
 pub fn assert_growth(runs: &[Vec<Observation>]) {
     assert_eq!(runs.len(), 3);
     assert!(runs.iter().all(|observations| observations.len() == 13));
@@ -347,10 +350,9 @@ pub fn assert_growth(runs: &[Vec<Observation>]) {
             let (numerator, denominator, winner) = match (small.query, small.config) {
                 ("triangle", "generic/smallest")
                 | ("chain", "yannakakis")
-                | ("projection", "canon")
-                | ("disconnected", "elimination/fine") => (5, 2, true),
-                ("range", "btree/direct") | ("probe", "map/direct") => (5, 4, true),
-                ("range", _) | ("probe", _) => (17, 10, false),
+                | ("projection", "canon") => (5, 2, true),
+                ("probe", "map/direct") => (5, 4, true),
+                ("guard", _) | ("probe", _) => (17, 10, false),
                 _ => (3, 1, false),
             };
             let a = small.counts.rows_enumerated;
@@ -372,17 +374,17 @@ pub fn assert_growth(runs: &[Vec<Observation>]) {
     for observations in runs {
         let written = observations
             .iter()
-            .find(|o| o.query == "disconnected" && o.config == "written/fine")
+            .find(|o| o.query == "disconnected" && o.config == "connected/fine")
             .unwrap();
         let elimination = observations
             .iter()
             .find(|o| o.query == "disconnected" && o.config == "elimination/fine")
             .unwrap();
-        assert_eq!(written.guard_visits, written.scale * written.scale);
+        assert_eq!(written.guard_visits, written.scale);
         assert_eq!(elimination.guard_visits, elimination.scale);
         for observation in observations
             .iter()
-            .filter(|o| o.query == "range" || o.query == "probe")
+            .filter(|o| o.query == "guard" || o.query == "probe")
         {
             assert_eq!(
                 observation.counts.index_builds,

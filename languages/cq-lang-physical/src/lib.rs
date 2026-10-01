@@ -10,14 +10,17 @@
 //! Program ::= "physical" "{" RelationDecl* Definition* "return" Ident "as" Atom ";" "}"
 //! Definition ::= Ident "=" Mode ["canon"] Operator ";"
 //! Mode ::= "pipe" | "let"
-//! Operator ::= Unit | Rename | Select | Extend | Project
+//! Operator ::= Unit | Rename | Select | Point | Bind | Guard | Project
 //!            | "probe" "[" Ident,* "]" Ident "," Ident
 //!            | "merge" "[" Ident,* "]" Ident "," Ident
 //!            | "semi" "[" Ident,* "]" Ident "," Ident
-//!            | "range" "[" Ident "]" Ident "if" "(" Expr ")"
 //! ```
 //!
-//! Unit, Rename, Select, Extend and Project are shared algebra syntax.
+//! Unit, Rename, Select, Bind, Guard and Project are shared syntax.
+//! Meaning is Kleisli over bottom + Set: bottom aborts the whole evaluation.
+//! Bind/guard expressions are opaque partial functions. Their ancestry chain
+//! preserves written order; only relational steps may move earlier across it.
+//! Other effects and evaluation counts are outside this meaning.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,7 +35,7 @@ pub mod kw {
     syn::custom_keyword!(probe);
     syn::custom_keyword!(merge);
     syn::custom_keyword!(semi);
-    syn::custom_keyword!(range);
+    syn::custom_keyword!(point);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -84,8 +87,12 @@ pub enum Operator {
     Rename(Box<cq_syntax::algebra::Rename>),
     #[parse(peek = kw::select)]
     Select(Box<cq_syntax::algebra::Select>),
-    #[parse(peek = kw::extend)]
-    Extend(Box<cq_syntax::algebra::Extend>),
+    #[parse(peek = kw::point)]
+    Point(kw::point, Box<cq_syntax::algebra::Select>),
+    #[parse(peek = kw::bind)]
+    Bind(Box<cq_syntax::algebra::Bind>),
+    #[parse(peek = kw::guard)]
+    Guard(Box<cq_syntax::algebra::Guard>),
     #[parse(peek = kw::project)]
     Project(Box<cq_syntax::algebra::Project>),
     #[parse(peek = kw::probe)]
@@ -94,8 +101,6 @@ pub enum Operator {
     Merge(kw::merge, Keyed),
     #[parse(peek = kw::semi)]
     Semi(kw::semi, Keyed),
-    #[parse(peek = kw::range)]
-    Range(kw::range, Ranged),
 }
 
 /// `[a, b] left, right`: the join columns by name, then both operands.
@@ -111,30 +116,16 @@ pub struct Keyed {
     pub right: Ident,
 }
 
-/// `[c] input if (condition)`: a bounded read on an ordered column.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Ranged {
-    #[syn(bracketed)]
-    pub bracket: token::Bracket,
-    #[syn(in = bracket)]
-    pub column: Ident,
-    pub input: Ident,
-    pub if_token: Token![if],
-    #[syn(parenthesized)]
-    pub condition_paren: token::Paren,
-    #[syn(in = condition_paren)]
-    pub condition: syn::Expr,
-}
-
 impl Operator {
     /// The result read as this operator's input stream, if any.
     pub fn input(&self) -> Option<&Ident> {
         match self {
             Self::Probe(_, k) | Self::Merge(_, k) | Self::Semi(_, k) => Some(&k.left),
             Self::Select(s) => Some(&s.input),
-            Self::Extend(e) => Some(&e.input),
+            Self::Point(_, s) => Some(&s.input),
+            Self::Bind(b) => Some(&b.input),
+            Self::Guard(g) => Some(&g.input),
             Self::Project(p) => Some(&p.input),
-            Self::Range(_, r) => Some(&r.input),
             _ => None,
         }
     }
@@ -164,12 +155,12 @@ pub struct Analysis {
     pub key_reads: BTreeMap<String, Vec<(String, Vec<String>)>>,
     /// For every result read as a merge side: (reader, key columns).
     pub merge_reads: BTreeMap<String, Vec<(String, Vec<String>)>>,
-    /// For every result read as a range: (reader, ordered column).
-    pub range_reads: BTreeMap<String, Vec<(String, String)>>,
+    /// Every keyed read records where its key values come from.
+    pub keyed_reads: BTreeMap<String, Vec<(String, Vec<String>, cq_syntax::SupplyKind)>>,
+    /// One compile-time key per point reader; these reads never need a build.
+    pub point_reads: BTreeMap<String, Vec<(String, Vec<String>)>>,
     /// Results whose rows are enumerated (pipe input, scan of a let).
     pub scanned: BTreeSet<String>,
-    /// Select conditions inside the total comparison fragment.
-    pub fragment: BTreeSet<String>,
     /// Results flagged `canon`.
     pub canon: BTreeSet<String>,
     /// Mode of every result.
@@ -232,13 +223,18 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         .iter()
         .flat_map(|d| match &d.operator {
             Operator::Rename(r) => r.mapping.iter().map(|m| symbol_name(&m.target)).collect(),
-            Operator::Extend(e) => e.columns.iter().map(|c| symbol_name(&c.name)).collect(),
+            Operator::Bind(b) => cq_syntax::rust::bindings(&b.pattern)
+                .into_iter()
+                .map(|i| symbol_name(&i))
+                .collect(),
             _ => Vec::new(),
         })
         .collect();
     let mut analysis = Analysis::default();
     let mut readers: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut operands: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut chains: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut written_chain = Vec::new();
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
         if analysis.rows.contains_key(&name) {
@@ -322,6 +318,22 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     syn::Error::new_spanned(&definition.name, format!("`{name}`: {e}"))
                 })?;
                 deps.extend([symbol_name(&k.left), symbol_name(&k.right)]);
+                let sides = if matches!(definition.operator, Operator::Merge(..)) {
+                    vec![&k.left, &k.right]
+                } else {
+                    vec![&k.right]
+                };
+                for side in sides {
+                    analysis
+                        .keyed_reads
+                        .entry(symbol_name(side))
+                        .or_default()
+                        .push((name.clone(), columns.clone(), cq_syntax::SupplyKind::Stream));
+                }
+                for c in &columns {
+                    check_setoid(&left.types[c], c, &definition.name)?;
+                    check_setoid(&right.types[c], c, &definition.name)?;
+                }
                 if matches!(definition.operator, Operator::Merge(..)) {
                     for side in [&k.left, &k.right] {
                         analysis
@@ -347,61 +359,54 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     row
                 }
             }
-            Operator::Select(s) => {
+            Operator::Select(s) | Operator::Point(_, s) => {
                 let row = of(&s.input)?;
-                check_uses(&s.condition, &row)?;
-                if cq_syntax::predicate::Predicate::from_expr(&s.condition).is_some() {
-                    analysis.fragment.insert(name.clone());
+                for c in s.condition.columns() {
+                    let Some(ty) = row.types.get(&c) else {
+                        return error(s, format!("select `{name}` uses unavailable column `{c}`"));
+                    };
+                    check_setoid(ty, &c, &definition.name)?;
+                }
+                if matches!(definition.operator, Operator::Point(..)) {
+                    let Some(keys) = s.condition.constant_keys() else {
+                        return error(
+                            s,
+                            "point read requires a nonempty conjunction of column = literal equalities",
+                        );
+                    };
+                    let columns: Vec<_> = keys.into_keys().collect();
+                    analysis
+                        .point_reads
+                        .entry(symbol_name(&s.input))
+                        .or_default()
+                        .push((name.clone(), columns.clone()));
+                    analysis
+                        .keyed_reads
+                        .entry(symbol_name(&s.input))
+                        .or_default()
+                        .push((name.clone(), columns, cq_syntax::SupplyKind::Const));
                 }
                 deps.push(symbol_name(&s.input));
                 row
             }
-            Operator::Range(_, r) => {
-                let row = of(&r.input)?;
-                check_uses(&r.condition, &row)?;
-                let column = symbol_name(&r.column);
-                if !row.bindings.contains_key(&column) {
-                    return error(
-                        r,
-                        format!("range `{name}`: `{}` has no column `{column}`", r.input),
-                    );
-                }
-                if let Some(host) = analysis.hosts.get(&symbol_name(&r.input)) {
-                    let leading = symbol_name(
-                        &declarations[host]
-                            .columns
-                            .first()
-                            .expect("positive arity")
-                            .name,
-                    );
-                    if analysis.renames[&symbol_name(&r.input)][&column] != leading {
-                        return error(r, "a host range must read its leading declared column");
-                    }
-                }
-                analysis
-                    .range_reads
-                    .entry(symbol_name(&r.input))
-                    .or_default()
-                    .push((name.clone(), column));
-                deps.push(symbol_name(&r.input));
+            Operator::Guard(g) => {
+                let row = of(&g.input)?;
+                check_uses(&g.condition, &row)?;
+                deps.push(symbol_name(&g.input));
                 row
             }
-            Operator::Extend(e) => {
-                let mut row = of(&e.input)?;
-                check_uses(&e.value, &row)?;
-                for column in &e.columns {
-                    let c = symbol_name(&column.name);
-                    if row
-                        .bindings
-                        .insert(c.clone(), column.name.clone())
-                        .is_some()
-                    {
-                        return error(e, format!("extend `{name}` repeats attribute `{c}`"));
+            Operator::Bind(b) => {
+                let mut row = of(&b.input)?;
+                check_uses(&b.expression, &row)?;
+                for (ident, ty) in b.binding_types() {
+                    let c = symbol_name(&ident);
+                    if row.bindings.insert(c.clone(), ident).is_some() {
+                        return error(b, format!("bind `{name}` repeats attribute `{c}`"));
                     }
                     row.computed.insert(c.clone());
-                    row.types.insert(c, column.ty.clone());
+                    row.types.insert(c, ty);
                 }
-                deps.push(symbol_name(&e.input));
+                deps.push(symbol_name(&b.input));
                 row
             }
             Operator::Project(p) => {
@@ -423,6 +428,35 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 row
             }
         };
+        let mut chain = Vec::new();
+        for dep in &deps {
+            let input_chain = &chains[dep];
+            if !chain.starts_with(input_chain) && !input_chain.starts_with(&chain) {
+                return error(
+                    &definition.name,
+                    "Rust bind/guard nodes must form one ancestry chain",
+                );
+            }
+            if input_chain.len() > chain.len() {
+                chain = input_chain.clone();
+            }
+        }
+        if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
+            if chain != written_chain {
+                return error(
+                    &definition.name,
+                    "Rust bind/guard ancestry must preserve written order",
+                );
+            }
+            chain.push(name.clone());
+            written_chain.push(name.clone());
+        }
+        chains.insert(name.clone(), chain);
+        if definition.canon.is_some() {
+            for (c, ty) in &row.types {
+                check_setoid(ty, c, &definition.name)?;
+            }
+        }
         analysis
             .headings
             .insert(name.clone(), row.bindings.keys().cloned().collect());
@@ -513,9 +547,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         format!("pipe `{name}` must be read exactly once; read {reads} times"),
                     );
                 }
-                if analysis.key_reads.contains_key(&name)
-                    || analysis.range_reads.contains_key(&name)
-                {
+                if analysis.key_reads.contains_key(&name) {
                     return error(
                         &definition.name,
                         format!("`{name}` is read through a key and must be let"),
@@ -607,3 +639,10 @@ pub mod policy;
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
+
+/// Reject syntactically known non-setoid columns; rustc checks aliases.
+fn check_setoid(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn::Result<()> {
+    let column = syn::Ident::new(column, proc_macro2::Span::call_site());
+    cq_syntax::algebra::check_setoid_type(ty, &column)
+        .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
+}

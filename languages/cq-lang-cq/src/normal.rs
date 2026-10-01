@@ -1,34 +1,23 @@
-//! CQ-NF: normalized CQ used by valuation planning.
+//! CQ normal form for `T X = bottom + Set X`.
 //!
-//! Atom arguments become distinct variables: literals and suitable expressions
-//! introduce bindings, repeated variables and dependent expressions introduce
-//! guards, and wildcards become fresh unconstrained witness variables.
-//!
-//! [`Kernel`] equality is elaboration's structural correspondence criterion,
-//! modulo its variable renaming. It is not a complete semantic-equivalence
-//! test for arbitrary programs, nor a local contract shared by all later IRs.
-//!
-//! [`normalize`] preserves declarations and head and rewrites a cloned body.
-//! Literal bindings precede the body; expression bindings independent of names
-//! newly supplied by their atom precede that atom; repeated-variable equalities
-//! and dependent-expression guards follow it. Ordering subsequently schedules
-//! bindings and guards subject to inputs and same-kind source order.
+//! Atoms contain only variables. Relational equality uses the column type's
+//! `Eq`; Rust lets and guards are opaque partial functions. The reference is
+//! written order. Preserving the Rust chain and including every source
+//! relational predecessor before each Rust step is a sufficient refinement
+//! condition. I/O, mutation, counters and evaluation counts are outside the
+//! meaning; no compiler law depends on those effects.
 
-use std::collections::{BTreeMap, BTreeSet};
-
+use super::{Atom, BodyItem, Equality, EqualityValue, Let, Program, Query, rust};
+use crate::symbol_name;
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, format_ident, quote};
+use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 
-use super::{Atom, BodyItem, Filter, Let, Program, Query, rust};
-use crate::symbol_name;
-
-/// Whether a complete CQ program is in normal form.
-/// Formal rule WF-NF: Check CQ plus distinct bare arguments within each body atom.
+/// Formal rule WF-NF: Check CQ, distinct bare atom arguments and variable-only output.
 pub fn check(module: &Program) -> syn::Result<()> {
     super::contract::check(module)?;
-    let query = &module.query;
-    for item in &query.body {
+    for item in &module.query.body {
         match item {
             BodyItem::Positive { atom } if atom.is_normalized() => {}
             BodyItem::Positive { atom } => {
@@ -40,74 +29,135 @@ pub fn check(module: &Program) -> syn::Result<()> {
                     ),
                 ));
             }
+            BodyItem::Equality(equality) => equality.check()?,
             BodyItem::Filter(_) | BodyItem::Let(_) => {}
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
-                    "normal form covers positive queries with guards and bindings",
+                    "normal form covers positive queries with relational equalities, guards and bindings",
                 ));
             }
         }
     }
-    Ok(())
+    if module
+        .query
+        .head
+        .args
+        .iter()
+        .any(|argument| rust::variable(argument).is_none())
+    {
+        return Err(syn::Error::new_spanned(
+            &module.query.head,
+            "normal form: output arguments are variables",
+        ));
+    }
+    let bound: BTreeSet<_> = module
+        .query
+        .body
+        .iter()
+        .flat_map(|item| match item {
+            BodyItem::Positive { atom } => atom.variables().map(symbol_name).collect::<Vec<_>>(),
+            BodyItem::Let(binding) => rust::bindings(&binding.pattern)
+                .iter()
+                .map(symbol_name)
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    if let Some(variable) = module
+        .query
+        .head
+        .variables()
+        .find(|v| !bound.contains(&symbol_name(v)))
+    {
+        return Err(syn::Error::new_spanned(
+            variable,
+            "normal form: output variable is not bound by the body",
+        ));
+    }
+    check_setoids(module)
 }
 
-/// Canonicalize a positive query into normal form.
-/// Formal rule A-Variable: Keep a first bare argument and record its name.
-/// Formal rule A-Repeat: Replace a repeated bare argument and append its equality guard.
-/// Formal rule A-Wildcard: Replace a wildcard by a fresh unconstrained atom variable.
-/// Formal rule A-Constant: Replace a literal and prepend its typed CQ binding.
-/// Formal rule A-Prefix: Emit a CQ binding before the atom when no new atom variable is needed.
-/// Formal rule A-Local: Emit a CQ equality guard after the atom for dependent expressions.
+/// Query variables whose actual values are observed by opaque Rust.
+/// Projection or Eq-key comparison may not substitute another representative
+/// before these variables reach their original Rust consumer.
+pub fn rust_observed(module: &Program) -> BTreeSet<String> {
+    let mut environment = BTreeSet::new();
+    let mut observed = BTreeSet::new();
+    for item in &module.query.body {
+        if let Some(step) = item.rust_step() {
+            observed.extend(step.free_variables.dependencies(&environment));
+            environment.extend(step.bindings.iter().map(symbol_name));
+        } else if let BodyItem::Positive { atom } = item {
+            environment.extend(atom.variables().map(symbol_name));
+        }
+    }
+    observed
+}
+
+/// Canonicalize at each atom's written position.
+/// Formal rule A-Variable: Keep the first occurrence of a bare argument.
+/// Formal rule A-Repeat: Replace a repeated variable and append relational equality.
+/// Formal rule A-Wildcard: Replace a wildcard with an unused witness variable.
+/// Formal rule A-Constant: Replace a literal and append relational literal equality.
+/// Formal rule A-Prefix: Place an opaque binding immediately before its atom.
+/// Formal rule A-Local: Place a dependent binding and relational equality after its atom.
 pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
-    let program = &module;
-    let declarations: BTreeMap<String, &super::RelationDecl> = program
-        .inputs()
-        .map(|d| (symbol_name(&d.name), d))
-        .collect();
+    let declarations: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
     let mut names = reserved(module);
-    let mut prefix: Vec<BodyItem> = Vec::new();
-    let mut body: Vec<BodyItem> = Vec::new();
-    let mut bound: BTreeSet<String> = BTreeSet::new();
-    for (clause, item) in program.query.body.iter().enumerate() {
+    let mut body = Vec::new();
+    let mut bound = BTreeSet::new();
+    let mut atom_seen = BTreeSet::new();
+    for (clause, item) in module.query.body.iter().enumerate() {
         match item {
             BodyItem::Positive { atom } => {
                 let declaration = declarations[&symbol_name(&atom.relation)];
-                let mut seen: BTreeSet<String> = BTreeSet::new();
-                let mut args: Vec<syn::Expr> = Vec::new();
-                let mut after: Vec<BodyItem> = Vec::new();
-                let mut before: Vec<BodyItem> = Vec::new();
+                let local: BTreeSet<_> = atom
+                    .variables()
+                    .map(symbol_name)
+                    .filter(|v| !bound.contains(v))
+                    .collect();
+                let mut args = Vec::new();
+                let mut after = Vec::new();
                 for (position, (argument, column)) in
                     atom.args.iter().zip(&declaration.columns).enumerate()
                 {
-                    let ty = &column.ty;
                     if let Some(variable) = rust::variable(argument) {
-                        if seen.insert(symbol_name(variable)) {
+                        if atom_seen.insert(symbol_name(variable)) {
                             args.push(argument.clone());
                         } else {
                             let key = fresh(&mut names, clause, position);
-                            after.push(guard(quote!(#key == #variable)));
+                            after.push(equality(
+                                variable.clone(),
+                                EqualityValue::Variable(key.clone()),
+                            ));
                             args.push(path(&key));
                         }
                         continue;
                     }
                     let key = fresh(&mut names, clause, position);
                     if matches!(argument, syn::Expr::Infer(_)) {
-                        // A wildcard is a distinct witness column.
-                    } else if rust::literal(argument) {
-                        prefix.push(binding(&key, ty, quote!(#argument)));
+                        // A wildcard binds an unconstrained, unused witness.
+                    } else if super::syntax::equality::literal(argument) {
+                        after.push(equality(
+                            key.clone(),
+                            EqualityValue::Literal(argument.clone()),
+                        ));
                     } else if rust::free_variables(argument)
-                        .dependencies(&seen.difference(&bound).cloned().collect())
+                        .dependencies(&local)
                         .is_empty()
                     {
-                        before.push(binding(&key, ty, quote!(#argument)));
+                        body.push(binding(&key, &column.ty, argument.clone()));
                     } else {
-                        after.push(guard(quote!(#key.eq(&(#argument)))));
+                        let value = fresh(&mut names, clause, position);
+                        after.push(binding(&value, &column.ty, argument.clone()));
+                        after.push(equality(key.clone(), EqualityValue::Variable(value)));
                     }
+                    atom_seen.insert(symbol_name(&key));
                     args.push(path(&key));
                 }
-                body.extend(before);
+                bound.extend(atom.variables().map(symbol_name));
                 body.push(BodyItem::Positive {
                     atom: Atom {
                         relation: atom.relation.clone(),
@@ -115,36 +165,48 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
                         args: args.into_iter().collect(),
                     },
                 });
-                bound.extend(seen);
                 body.extend(after);
             }
-            BodyItem::Filter(_) | BodyItem::Let(_) => body.push(item.clone()),
+            BodyItem::Equality(_) | BodyItem::Filter(_) => body.push(item.clone()),
+            BodyItem::Let(binding) => {
+                bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
+                body.push(item.clone());
+            }
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
-                    "normal form covers positive queries with guards and bindings",
+                    "normal form covers positive queries with relational equalities, guards and bindings",
                 ));
             }
         }
-        if let BodyItem::Let(binding) = item {
-            bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
-        }
     }
-    prefix.extend(body);
     let mut normal = module.clone();
-    normal.query.body = prefix.into_iter().collect();
+    for (position, argument) in normal.query.head.args.iter_mut().enumerate() {
+        if rust::variable(argument).is_some_and(|variable| bound.contains(&symbol_name(variable))) {
+            continue;
+        }
+        let key = fresh(&mut names, module.query.body.len(), position);
+        let column = &module
+            .output()
+            .expect("computed output types checked")
+            .columns[position];
+        body.push(binding(&key, &column.ty, argument.clone()));
+        *argument = path(&key);
+    }
+    normal.query.body = body.into_iter().collect();
     check(&normal)?;
     Ok(normal)
 }
 
-fn guard(condition: TokenStream) -> BodyItem {
-    BodyItem::Filter(Filter {
-        if_token: Default::default(),
-        condition: syn::parse2(condition).expect("a guard expression"),
+fn equality(left: Ident, right: EqualityValue) -> BodyItem {
+    BodyItem::Equality(Equality {
+        left,
+        eq_token: Default::default(),
+        right,
     })
 }
 
-fn binding(key: &Ident, ty: &syn::Type, expression: TokenStream) -> BodyItem {
+fn binding(key: &Ident, ty: &syn::Type, expression: syn::Expr) -> BodyItem {
     BodyItem::Let(Box::new(Let {
         let_token: Default::default(),
         pattern: syn::Pat::Ident(syn::PatIdent {
@@ -159,12 +221,76 @@ fn binding(key: &Ident, ty: &syn::Type, expression: TokenStream) -> BodyItem {
             ty: ty.clone(),
         }),
         eq_token: Default::default(),
-        expression: syn::parse2(expression).expect("an expression"),
+        expression,
     }))
 }
 
 fn path(ident: &Ident) -> syn::Expr {
-    syn::parse2(quote!(#ident)).expect("an identifier expression")
+    syn::parse2(quote!(#ident)).expect("identifier expression")
+}
+
+fn check_setoids(module: &Program) -> syn::Result<()> {
+    let schemas: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
+    let mut columns: BTreeMap<String, Vec<(&syn::Type, String)>> = BTreeMap::new();
+    let mut required = BTreeSet::new();
+    let mut let_bound = BTreeSet::new();
+    for item in &module.query.body {
+        match item {
+            BodyItem::Positive { atom } => {
+                for (variable, column) in atom
+                    .variables()
+                    .zip(&schemas[&symbol_name(&atom.relation)].columns)
+                {
+                    let name = symbol_name(variable);
+                    let entries = columns.entry(name.clone()).or_default();
+                    if !entries.is_empty() || let_bound.contains(&name) {
+                        required.insert(name);
+                    }
+                    entries.push((&column.ty, format!("{}.{}", atom.relation, column.name)));
+                }
+            }
+            BodyItem::Equality(equality) => required.extend(equality.variables().map(symbol_name)),
+            BodyItem::Let(binding) => {
+                let_bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+            }
+            _ => {}
+        }
+    }
+    if let Some(output) = module.output() {
+        for column in &output.columns {
+            super::syntax::algebra::check_setoid_type(&column.ty, &column.name)?;
+        }
+    }
+    for item in &module.query.body {
+        if let BodyItem::Let(binding) = item {
+            for (name, ty) in binding.binding_types() {
+                if module
+                    .query
+                    .head
+                    .variables()
+                    .any(|v| symbol_name(v) == symbol_name(&name))
+                    || required.contains(&symbol_name(&name))
+                {
+                    super::syntax::algebra::check_setoid_type(&ty, &name)?;
+                }
+            }
+        }
+    }
+    required.extend(module.query.head.variables().map(symbol_name));
+    for variable in required {
+        if let Some(entries) = columns.get(&variable) {
+            for (ty, column) in entries {
+                super::syntax::algebra::check_setoid_type(
+                    ty,
+                    &Ident::new(&variable, Span::call_site()),
+                )
+                .map_err(|error| {
+                    syn::Error::new_spanned(ty, format!("column `{column}`: {error}"))
+                })?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Every identifier the module mentions, so fresh names never capture.
@@ -197,8 +323,9 @@ fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident 
 /// Structural query content compared by elaboration after RA erasure.
 ///
 /// Variables are renamed by first occurrence (`v0`, `v1`, …) so kernels
-/// compare up to α-equivalence; embedded expressions are compared as token
-/// text after that renaming.
+/// compare relational structure up to α-equivalence. The opaque Rust chain
+/// retains exact payload tokens: alpha rewriting arbitrary Rust tokens could
+/// capture host names or change fields and local binders.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Kernel {
     /// `(relation, variables)` per positive atom, in body order.
@@ -207,6 +334,12 @@ pub struct Kernel {
     pub guards: Vec<String>,
     /// `(bound variables, type annotation, expression)` per binding.
     pub lets: Vec<(Vec<String>, String, String)>,
+    /// Relational equalities as canonical token text.
+    pub equalities: Vec<String>,
+    /// One chain across both opaque Rust kinds, including pattern and type.
+    pub chain: Vec<String>,
+    /// Relational predecessors of each corresponding Rust chain step.
+    pub before: Vec<BTreeSet<String>>,
     /// Head arguments as token text.
     pub head: Vec<String>,
 }
@@ -214,6 +347,29 @@ pub struct Kernel {
 impl Kernel {
     pub fn of(module: &Program) -> Kernel {
         Kernel::of_query(&module.query)
+    }
+
+    /// Structural sufficient condition for refinement; this is deliberately
+    /// incomplete for arbitrary equivalences between relational programs.
+    pub fn refines(&self, source: &Self) -> bool {
+        let mut atoms = self.atoms.clone();
+        let mut source_atoms = source.atoms.clone();
+        atoms.sort();
+        source_atoms.sort();
+        let mut equalities = self.equalities.clone();
+        let mut source_equalities = source.equalities.clone();
+        equalities.sort();
+        source_equalities.sort();
+        atoms == source_atoms
+            && equalities == source_equalities
+            && self.head == source.head
+            && self.chain == source.chain
+            && self.before.len() == source.before.len()
+            && source
+                .before
+                .iter()
+                .zip(&self.before)
+                .all(|(earlier, later)| earlier.is_subset(later))
     }
 
     fn of_query(query: &Query) -> Kernel {
@@ -231,17 +387,33 @@ impl Kernel {
             atoms: Vec::new(),
             guards: Vec::new(),
             lets: Vec::new(),
+            equalities: Vec::new(),
+            chain: Vec::new(),
+            before: Vec::new(),
             head: Vec::new(),
         };
+        let mut relational = BTreeSet::new();
         for item in &query.body {
             match item {
-                BodyItem::Positive { atom } => kernel.atoms.push((
-                    symbol_name(&atom.relation),
-                    atom.variables().map(|v| renaming.name(v)).collect(),
-                )),
-                BodyItem::Filter(filter) => kernel
-                    .guards
-                    .push(renaming.text(filter.condition.to_token_stream())),
+                BodyItem::Positive { atom } => {
+                    kernel.atoms.push((
+                        symbol_name(&atom.relation),
+                        atom.variables().map(|v| renaming.name(v)).collect(),
+                    ));
+                    relational.insert(format!("atom {}", renaming.text(atom.to_token_stream())));
+                }
+                BodyItem::Equality(equality) => {
+                    let text = renaming.text(equality.to_token_stream());
+                    kernel.equalities.push(text.clone());
+                    relational.insert(format!("eq {text}"));
+                }
+                BodyItem::Filter(filter) => {
+                    kernel
+                        .guards
+                        .push(renaming.text(filter.condition.to_token_stream()));
+                    kernel.chain.push(filter.to_token_stream().to_string());
+                    kernel.before.push(relational.clone());
+                }
                 BodyItem::Let(binding) => {
                     let bound = rust::bindings(&binding.pattern)
                         .iter()
@@ -252,6 +424,8 @@ impl Kernel {
                         .as_ref()
                         .map(|a| renaming.text(a.ty.to_token_stream()))
                         .unwrap_or_default();
+                    kernel.chain.push(binding.to_token_stream().to_string());
+                    kernel.before.push(relational.clone());
                     kernel.lets.push((
                         bound,
                         annotation,

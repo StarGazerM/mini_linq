@@ -1,13 +1,15 @@
 //! IX → Physical: choose operators and retention using plan reads only.
-//! Host renames are reusable pipe reads. Bounded selects on their leading
-//! declared column become range operators; Rust dispatch chooses their storage.
+//! Host renames are reusable pipe reads. Literal selections are one-key point
+//! reads: native leading-prefix dispatch or scan/filter, with no index build.
+//! Meaning is bottom + Set. Opaque partial Rust bind/guard nodes retain their
+//! ancestry chain; relational steps may move earlier, never later across them.
+//! I/O, mutation and evaluation counts are outside the denotation.
 //! Canonicality follows only from plan operators and explicit canon boundaries.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_ix as ix;
 use cq_lang_ix::ra::Operator as Op;
-use cq_lang_ix::syntax as cq;
 use cq_lang_ix::syntax::symbol_name;
 use cq_lang_physical as physical;
 use cq_lang_physical::policy::Policy;
@@ -20,8 +22,6 @@ struct Reads {
     count: usize,
     /// Key columns of every `probe`/`semi` read of the result.
     keyed: Vec<Vec<String>>,
-    /// Ordered column of every `range` read of the result.
-    ranged: Vec<String>,
     /// Key columns of every `merge` read of the result.
     merged: Vec<Vec<String>>,
 }
@@ -120,37 +120,19 @@ fn operators(
             }
             Op::Select(s) => {
                 scan(&mut reads, &s.input);
-                let rename = operations
-                    .iter()
-                    .find(|(name, _)| *name == s.input)
-                    .map(|(_, op)| op);
-                match leading_column(&source.ra.plan.declarations, rename)
-                    .filter(|column| bounded(&s.condition, column))
-                {
-                    Some(column) => {
-                        reads
-                            .get_mut(&symbol_name(&s.input))
-                            .unwrap()
-                            .ranged
-                            .push(column.clone());
-                        physical::Operator::Range(
-                            Default::default(),
-                            physical::Ranged {
-                                bracket: Default::default(),
-                                column: info[&symbol_name(&s.input)].bindings[&column].clone(),
-                                input: s.input.clone(),
-                                if_token: s.if_token,
-                                condition_paren: s.condition_paren,
-                                condition: s.condition.clone(),
-                            },
-                        )
-                    }
-                    None => physical::Operator::Select(s.clone()),
+                if s.condition.constant_keys().is_some() {
+                    physical::Operator::Point(Default::default(), s.clone())
+                } else {
+                    physical::Operator::Select(s.clone())
                 }
             }
-            Op::Extend(e) => {
-                scan(&mut reads, &e.input);
-                physical::Operator::Extend(e.clone())
+            Op::Bind(b) => {
+                scan(&mut reads, &b.input);
+                physical::Operator::Bind(b.clone())
+            }
+            Op::Guard(g) => {
+                scan(&mut reads, &g.input);
+                physical::Operator::Guard(g.clone())
             }
             Op::Project(p) => {
                 scan(&mut reads, &p.input);
@@ -187,7 +169,6 @@ fn modes(
             match op {
                 Op::Rename(_) => physical::Mode::Pipe(Default::default()),
                 _ if !result.keyed.is_empty()
-                    || !result.ranged.is_empty()
                     || result.count >= 2
                     || result
                         .merged
@@ -230,7 +211,8 @@ fn canonical(
             },
             Op::Semijoin(j) => unique.get(&symbol_name(&j.left)).cloned(),
             Op::Select(s) => unique.get(&symbol_name(&s.input)).cloned(),
-            Op::Extend(e) => unique.get(&symbol_name(&e.input)).cloned(),
+            Op::Bind(b) => unique.get(&symbol_name(&b.input)).cloned(),
+            Op::Guard(g) => unique.get(&symbol_name(&g.input)).cloned(),
             Op::Project(p) => unique
                 .get(&symbol_name(&p.input))
                 .filter(|key| key.iter().all(|c| heading.contains(c)))
@@ -246,23 +228,6 @@ fn canonical(
         }
     }
     inherited
-}
-
-/// Translate the leading declared column through a rename; no type facts enter lowering.
-fn leading_column(inputs: &[cq::RelationDecl], rename: Option<&Op>) -> Option<String> {
-    let Op::Rename(r) = rename? else {
-        return None;
-    };
-    let first = &inputs
-        .iter()
-        .find(|d| d.name == r.relation)?
-        .columns
-        .first()?
-        .name;
-    r.mapping
-        .iter()
-        .find(|m| m.source == *first)
-        .map(|m| symbol_name(&m.target))
 }
 
 fn scan(reads: &mut BTreeMap<String, Reads>, operand: &Ident) {
@@ -295,50 +260,6 @@ fn merge(reads: &mut BTreeMap<String, Reads>, left: &Ident, right: &Ident, colum
         .push(columns);
 }
 
-fn conjuncts(expr: &syn::Expr) -> Vec<&syn::Expr> {
-    match cq::rust::unparen(expr) {
-        syn::Expr::Binary(syn::ExprBinary {
-            op: syn::BinOp::And(_),
-            left,
-            right,
-            ..
-        }) => {
-            let mut all = conjuncts(left);
-            all.extend(conjuncts(right));
-            all
-        }
-        other => vec![other],
-    }
-}
-
-/// Whether some conjunct of `condition` bounds `attribute` from below or
-/// above by an integer literal: a comparison in the total fragment other
-/// than `!=`, whose strict bound does not overflow `i32`.
-fn bounded(condition: &syn::Expr, attribute: &str) -> bool {
-    use cq::predicate::{Comparison, Predicate, Term};
-    conjuncts(condition).into_iter().any(|part| {
-        let Some(predicate) = Predicate::from_expr(part) else {
-            return false;
-        };
-        // `literal cmp attribute` reads as the flipped `attribute cmp literal`.
-        let (literal, flipped) = match (&predicate.left, &predicate.right) {
-            (Term::Variable(v), Term::Integer(k)) if symbol_name(v) == attribute => (*k, false),
-            (Term::Integer(k), Term::Variable(v)) if symbol_name(v) == attribute => (*k, true),
-            _ => return false,
-        };
-        match (predicate.comparison, flipped) {
-            (Comparison::Eq(_) | Comparison::Ge(_) | Comparison::Le(_), _) => true,
-            (Comparison::Gt(_), false) | (Comparison::Lt(_), true) => {
-                literal.checked_add(1).is_some()
-            }
-            (Comparison::Lt(_), false) | (Comparison::Gt(_), true) => {
-                literal.checked_sub(1).is_some()
-            }
-            (Comparison::Ne(_), _) => false,
-        }
-    })
-}
-
 /// Erase physical choices to the relational program they implement.
 pub fn erase(target: &physical::Program) -> ix::ra::Program {
     use ix::ra;
@@ -358,8 +279,11 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
                     operator: match &d.operator {
                         physical::Operator::Unit(u) => Op::Unit(u.clone()),
                         physical::Operator::Rename(r) => Op::Rename(r.clone()),
-                        physical::Operator::Select(s) => Op::Select(s.clone()),
-                        physical::Operator::Extend(e) => Op::Extend(e.clone()),
+                        physical::Operator::Select(s) | physical::Operator::Point(_, s) => {
+                            Op::Select(s.clone())
+                        }
+                        physical::Operator::Bind(b) => Op::Bind(b.clone()),
+                        physical::Operator::Guard(g) => Op::Guard(g.clone()),
                         physical::Operator::Project(p) => Op::Project(p.clone()),
                         physical::Operator::Probe(_, k) | physical::Operator::Merge(_, k) => {
                             Op::NaturalJoin(Box::new(ra::NaturalJoin {
@@ -374,13 +298,6 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
                             left: k.left.clone(),
                             with_token: Default::default(),
                             right: k.right.clone(),
-                        })),
-                        physical::Operator::Range(_, r) => Op::Select(Box::new(ra::Select {
-                            select_token: Default::default(),
-                            input: r.input.clone(),
-                            if_token: r.if_token,
-                            condition_paren: r.condition_paren,
-                            condition: r.condition.clone(),
                         })),
                     },
                 })
@@ -404,18 +321,33 @@ fn check_demands(source: &ix::Program, target: &physical::Program) -> syn::Resul
         .iter()
         .map(|i| ix::signature(&i.requirement))
         .collect();
-    for d in &target.program.definitions {
-        if let Some((right, columns)) = d.operator.keyed() {
-            let right_name = symbol_name(right);
+    for (input, reads) in &analysis.keyed_reads {
+        for (reader, columns, supply) in reads {
+            let definition = target
+                .program
+                .definitions
+                .iter()
+                .find(|d| symbol_name(&d.name) == *reader)
+                .expect("reader exists");
+            if matches!(&definition.operator, physical::Operator::Merge(_, k) if symbol_name(&k.left) == *input && k.left != k.right)
+            {
+                continue;
+            }
             if !demands.contains(&(
-                right_name.clone(),
-                physical::ordinals(&analysis, &right_name, &columns),
+                input.clone(),
+                physical::ordinals(&analysis, input, columns),
+                *supply,
             )) {
                 return Err(syn::Error::new_spanned(
-                    &d.name,
+                    &target
+                        .program
+                        .definitions
+                        .iter()
+                        .find(|d| symbol_name(&d.name) == *reader)
+                        .expect("reader exists")
+                        .name,
                     format!(
-                        "probe `{}` needs demand `@{right_name}[{}]`",
-                        d.name,
+                        "read `{reader}` needs demand `@{input}[{}] {supply:?}`",
                         columns.join(",")
                     ),
                 ));

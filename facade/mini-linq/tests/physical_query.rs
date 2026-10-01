@@ -332,9 +332,8 @@ fn yannakakis_plan_executes_through_semijoin_membership() {
     assert_eq!(reduced::run(&l, &r, &s), oracle(&l, &r, &s));
 }
 
-/// A comparison on an ordered host column is pushed into the cursor: the
-/// host map is entered at the lower bound and left at the upper bound; the
-/// remaining conjunct stays a guard.
+/// Ordered hosts still evaluate the complete written Rust predicate as an
+/// opaque guard. Its comparison syntax does not grant a range-read rewrite.
 mod windowed {
     macro_rules! policy {
         ($($ix:tt)*) => {
@@ -362,13 +361,13 @@ mod windowed {
         ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
             struct Windowed;
             relation R(a: i32, b: i32);
-            answer(a, b) :- R(a, b), if a >= 2 && a < 9 && b != 5;
+            answer(a, b) :- R(a, b), if *a >= 2 && *a < 9 && *b != 5;
         })
     }
 }
 
 #[test]
-fn ordered_host_scans_are_bounded_by_pushed_comparisons() {
+fn ordered_host_scans_preserve_the_opaque_rust_guard() {
     let host: BTreeMap<(i32,), Vec<(i32,)>> = [
         ((1,), vec![(0,)]),
         ((2,), vec![(5,), (6,)]),
@@ -430,8 +429,9 @@ fn computed_columns_follow_the_head_order() {
     );
 }
 
-/// Canonical prefixes enumerate each a once before the remaining triangle
-/// variables are bound, even when several R rows share that prefix.
+/// Relational prefix canonicalization preserves the final set. The opaque
+/// guard stays after the complete written join; evaluation counts are outside
+/// the denotation.
 mod generic_canon {
     use std::cell::Cell;
 
@@ -454,7 +454,10 @@ mod generic_canon {
     }
     use wiring as mini_linq;
 
-    fn observe(_a: &i32, visits: &Cell<usize>) -> bool {
+    fn observe(a: &i32, visits: &Cell<usize>) -> bool {
+        // a=4 has an R prefix but no complete triangle. Evaluating this Rust
+        // step on that prefix would move it before a written relational step.
+        assert_ne!(*a, 4, "guard evaluated before the complete written prefix");
         visits.set(visits.get() + 1);
         true
     }
@@ -477,7 +480,7 @@ mod generic_canon {
 }
 
 #[test]
-fn generic_join_canonicalizes_prefixes_before_enumerating_further() {
+fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
     let r = [(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
     let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
     let t = [(1, 3), (1, 4), (2, 1), (4, 7)];
@@ -493,7 +496,10 @@ fn generic_join_canonicalizes_prefixes_before_enumerating_further() {
     }
     assert_eq!(actual.len(), expected.len());
     assert_eq!(actual.into_iter().collect::<HashSet<_>>(), expected);
-    assert_eq!(visits.get(), 3, "each distinct a prefix is enumerated once");
+    assert!(
+        visits.get() > 0,
+        "the surviving tuples reach the final guard"
+    );
 }
 
 /// Generic join: one variable at a time, every atom holding it checked

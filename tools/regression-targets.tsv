@@ -69,3 +69,5 @@ cq-workload-e2e	test	extended	workloads/e2e/tests/extended.rs
 cq-workload-e2e	test	extension_laws	workloads/e2e/tests/extension_laws.rs
 cq-workload-e2e	test	extension_compile_fail	workloads/e2e/tests/extension_compile_fail.rs
 architecture	scenario	closed-core-dependencies	tools/check_dependencies.py
+mini-linq	test	denotation	facade/mini-linq/tests/denotation.rs
+mini-linq	test	provenance	facade/mini-linq/tests/provenance.rs

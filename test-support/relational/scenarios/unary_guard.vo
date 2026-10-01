@@ -1,8 +1,9 @@
 struct UnaryGuard;
 relation R(first: i32, second: i32);
 relation Approved(value: i32);
-answer(x) :- R(x, y), Approved(y);
+answer(x) :- R(x, y), Approved(__cq_1_0), y = __cq_1_0;
 valuation {
     R@0(x, y);
-    Approved@1(y);
+    Approved@1(__cq_1_0);
+    y = __cq_1_0;
 }

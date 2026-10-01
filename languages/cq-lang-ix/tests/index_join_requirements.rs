@@ -20,7 +20,7 @@ fn source(indexes: proc_macro2::TokenStream) -> ix::Program {
 }
 
 fn valid() -> ix::Program {
-    source(quote! { i0 = @r[0,1]; i1 = @reduced[0,1]; i2 = @reduced[0,1,2]; })
+    source(quote! { i0 = @r[0,1] stream; i1 = @reduced[0,1] stream; i2 = @reduced[0,1,2] stream; })
 }
 
 #[test]
@@ -33,13 +33,13 @@ fn complete_ix_round_trips_and_retains_exact_demands() {
     );
     assert_eq!(
         ix::signature(&source.indexes[1].requirement),
-        ("reduced".into(), vec![0, 1])
+        ("reduced".into(), vec![0, 1], ix::SupplyKind::Stream)
     );
 }
 
 #[test]
 fn same_exact_descriptor_is_shared_by_multiple_operations() {
-    let mut source = source(quote! { i0 = @r[0,1]; i1 = @reduced[0,1]; });
+    let mut source = source(quote! { i0 = @r[0,1] stream; i1 = @reduced[0,1] stream; });
     source.ra.plan.definitions[3].operator = syn::parse_quote!(semijoin r with reduced);
     source.ra.plan.definitions[4].operator = syn::parse_quote!(natural_join joined with reduced);
     ix::contract::check(&source).unwrap();
@@ -48,18 +48,21 @@ fn same_exact_descriptor_is_shared_by_multiple_operations() {
 #[test]
 fn invalid_descriptor_is_rejected_with_a_specific_diagnostic() {
     let cases = [
-        (quote! { i0 = @reduced[1,2]; }, "i0"),
-        (quote! { i0 = @s[0,1]; }, "i0"),
-        (quote! { spare = @s[0]; }, "spare"),
+        (quote! { i0 = @reduced[1,2] stream; }, "i0"),
+        (quote! { i0 = @s[0,1] stream; }, "i0"),
+        (quote! { spare = @s[0] stream; }, "spare"),
         (
-            quote! { i0 = @reduced[0,1]; extra = @reduced[0,1]; },
+            quote! { i0 = @reduced[0,1] stream; extra = @reduced[0,1] stream; },
             "reduced",
         ),
-        (quote! { i0 = @r[0,1]; i0 = @reduced[0,1]; }, "i0"),
-        (quote! { i0 = @reduced[1,0]; }, "reduced"),
-        (quote! { i0 = @reduced[0,0]; }, "reduced"),
-        (quote! { i0 = @reduced[0,3]; }, "reduced"),
-        (quote! { i0 = @R[0,1]; }, "R"),
+        (
+            quote! { i0 = @r[0,1] stream; i0 = @reduced[0,1] stream; },
+            "i0",
+        ),
+        (quote! { i0 = @reduced[1,0] stream; }, "reduced"),
+        (quote! { i0 = @reduced[0,0] stream; }, "reduced"),
+        (quote! { i0 = @reduced[0,3] stream; }, "reduced"),
+        (quote! { i0 = @R[0,1] stream; }, "R"),
     ];
     for (indexes, diagnostic) in cases {
         let error = ix::contract::check(&source(indexes))
@@ -74,7 +77,7 @@ fn invalid_descriptor_is_rejected_with_a_specific_diagnostic() {
 
 #[test]
 fn missing_demands_are_left_for_physical_correspondence() {
-    for indexes in [quote! {}, quote! { partial = @reduced[0,1]; }] {
+    for indexes in [quote! {}, quote! { partial = @reduced[0,1] stream; }] {
         ix::contract::check(&source(indexes)).unwrap();
     }
 }
@@ -92,7 +95,7 @@ fn cartesian_and_nonemptiness_joins_share_a_unit_tuple_index() {
                 joined = natural_join reduced with s;
                 output joined as answer(a,b);
             }
-            indexes { i0 = @s[]; }
+            indexes { i0 = @s[] stream; }
         };
     ix::contract::check(&source).unwrap();
 }
@@ -117,5 +120,64 @@ fn each_definition_requires_its_terminating_semicolon() {
             .unwrap_err()
             .to_string()
             .contains("i2")
+    );
+}
+
+#[test]
+fn literal_selections_are_const_reads_and_column_equalities_are_not() {
+    let source: ix::Program = syn::parse_quote! {
+        relational {
+            relation Customer(id: i32, segment: &'static str);
+            c = rename Customer { id -> c, segment -> segment };
+            building = select c if (segment = "BUILDING");
+            output building as answer(c, segment);
+        }
+        indexes { i0 = @c[1] const; }
+    };
+    ix::contract::check(&source).unwrap();
+    assert_eq!(
+        ix::signature(&source.indexes[0].requirement),
+        ("c".into(), vec![1], ix::SupplyKind::Const)
+    );
+    assert_eq!(
+        syn::parse2::<ix::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    let mut wrong_supply = source.clone();
+    wrong_supply.indexes[0].requirement.supply = syn::parse_quote!(stream);
+    assert!(ix::contract::check(&wrong_supply).is_err());
+    let column_equality: ix::Program = syn::parse_quote! {
+        relational {
+            relation R(a: i32, b: i32);
+            r = rename R { a -> x, b -> y };
+            equal = select r if (x = y);
+            output equal as answer(x, y);
+        }
+        indexes { unexpected = @r[0] const; }
+    };
+    assert!(ix::contract::check(&column_equality).is_err());
+}
+
+#[test]
+fn stream_and_const_supply_are_distinct_demand_identities() {
+    let source: ix::Program = syn::parse_quote! {
+        relational {
+            relation R(a: i32); relation S(a: i32);
+            r = rename R { a -> x }; s = rename S { a -> x };
+            constant = select r if (x = 5);
+            joined = natural_join s with r;
+            all = natural_join constant with joined;
+            output all as answer(x);
+        }
+        indexes { constant_key = @r[0] const; stream_key = @r[0] stream; }
+    };
+    ix::contract::check(&source).unwrap();
+    let mut duplicate = source;
+    duplicate.indexes[1].requirement.supply = syn::parse_quote!(const);
+    assert!(
+        ix::contract::check(&duplicate)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate")
     );
 }

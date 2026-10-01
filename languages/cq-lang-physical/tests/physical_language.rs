@@ -3,8 +3,8 @@ use quote::ToTokens;
 const SOURCE: &str = "physical {
     relation R(a:i32,b:i32); relation S(b:i32,c:i32);
     r = pipe rename R {a -> x,b -> y}; s = let rename S {b -> y,c -> z};
-    j = pipe probe[y] r,s; f = pipe select j if (x < z);
-    e = pipe extend f with {w:i32} value (x + z);
+    j = pipe probe[y] r,s; f = pipe guard j if (*x < *z);
+    e = pipe bind f with w:i32 = (*x + *z);
     p = pipe canon project e keep {x,w}; return p as answer(x,w);
 }";
 #[test]
@@ -36,8 +36,8 @@ fn invalid_operators_modes_and_heads_report_the_construct() {
         ("s = let", "r = let", "r"),
         ("probe[y]", "probe[x]", "j"),
         ("probe[y]", "probe[y,y]", "j"),
-        ("value (x + z)", "value (q + w)", "e"),
-        ("{w:i32}", "{x:i32}", "e"),
+        ("= (*x + *z)", "= (*q + *w)", "e"),
+        ("with w:i32", "with x:i32", "e"),
         ("keep {x,w}", "keep {x,missing}", "p"),
         ("keep {x,w}", "keep {x,x}", "p"),
         ("answer(x,w)", "answer(x)", "p"),
@@ -47,7 +47,7 @@ fn invalid_operators_modes_and_heads_report_the_construct() {
             "unused = pipe rename R {a -> a,b -> b}; return p",
             "unused",
         ),
-        ("select j if (x < z)", "select p if (x < z)", "p"),
+        ("guard j if (*x < *z)", "guard p if (*x < *z)", "p"),
     ] {
         let changed: physical::Program = syn::parse_str(&SOURCE.replace(before, after)).unwrap();
         let error = physical::contract::check(&changed).unwrap_err().to_string();
@@ -55,15 +55,13 @@ fn invalid_operators_modes_and_heads_report_the_construct() {
     }
 }
 #[test]
-fn merge_and_range_record_ordered_reads() {
-    let source: physical::Program = syn::parse_str("physical { relation R(a:i32); relation S(a:i32); r = let rename R {a -> x}; s = let rename S {a -> x}; j = let merge[x] r,s; f = pipe range[x] j if (x > 1); return f as answer(x); }").unwrap();
+fn merge_and_point_record_supply_kinds() {
+    let source: physical::Program = syn::parse_str("physical { relation R(a:i32); relation S(a:i32); r = let rename R {a -> x}; s = let rename S {a -> x}; j = pipe merge[x] r,s; f = pipe point select j if (x = 1); return f as answer(x); }").unwrap();
     let a = physical::contract::check(&source).unwrap();
     assert_eq!(a.merge_reads["r"][0].0, "j");
     assert_eq!(a.merge_reads["s"][0].0, "j");
-    assert_eq!(a.range_reads["j"], [("f".into(), "x".into())]);
-    let mut invalid = source.clone();
-    invalid.program.definitions[2].mode = syn::parse_quote!(pipe);
-    assert!(physical::contract::check(&invalid).is_err());
+    assert_eq!(a.point_reads["j"], [("f".into(), vec!["x".into()])]);
+    assert_eq!(a.keyed_reads["j"][0].2, physical::syntax::SupplyKind::Const);
 }
 
 const HASH_CHAIN: &str = "physical {
@@ -113,22 +111,50 @@ fn a_merge_result_read_by_key_stays_materialized() {
 }
 
 #[test]
-fn host_ranges_require_layout_and_canon_host_pipes_require_linear_reads() {
+fn point_reads_require_literal_keys_and_canon_host_pipes_require_linear_reads() {
     let mut p: physical::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:i32); r = pipe rename R {a -> x,b -> y};
-        w = pipe canon range[x] r if (x >= 2); return w as answer(x,y);
+        w = pipe canon point select r if (x = 2); return w as answer(x,y);
     });
     physical::contract::check(&p).unwrap();
-    p.program.definitions[1] = syn::parse_quote!(w = pipe canon range[y] r if (y >= 2););
+    p.program.definitions[1] = syn::parse_quote!(w = pipe canon point select r if (x = y););
     assert!(
         physical::contract::check(&p)
             .unwrap_err()
             .to_string()
-            .contains("leading declared column")
+            .contains("literal")
     );
     let mut p: physical::Program = syn::parse_str(HASH_CHAIN).unwrap();
     p.program.definitions[0].mode = syn::parse_quote!(pipe);
     assert!(physical::contract::check(&p).is_err());
     p.program.definitions[0].canon = None;
     physical::contract::check(&p).unwrap();
+}
+
+#[test]
+fn rust_chain_must_be_ancestral_and_known_float_keys_are_rejected() {
+    let p: physical::Program = syn::parse_quote!(physical {
+        relation R(a:i32); r = pipe rename R {a -> x};
+        g = pipe guard r if (*x != 0);
+        b = pipe bind r with y:i32 = (10 / *x);
+        j = pipe probe[x] g,b; return j as answer(x,y);
+    });
+    assert!(
+        physical::contract::check(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("ancestry")
+    );
+    let p: physical::Program = syn::parse_quote!(physical {
+        relation R(price:f64); r = pipe rename R {price -> price};
+        p = pipe canon point select r if (price = 0.0); return p as answer(price);
+    });
+    let e = physical::contract::check(&p).unwrap_err().to_string();
+    assert!(e.contains("price") && e.contains("Eq"), "{e}");
+    assert!(
+        syn::parse_str::<physical::Program>(
+            "physical { e = pipe extend u with {x:i32} value (1); return e as answer(x); }"
+        )
+        .is_err()
+    );
 }

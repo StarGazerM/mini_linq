@@ -1,7 +1,9 @@
 struct ReturnTrip;
 relation Road(src: i32, dst: i32);
-answer(a) :- Road(a, b), Road(b, a);
+answer(a) :- Road(a, b), Road(__cq_1_0, __cq_1_1), b = __cq_1_0, a = __cq_1_1;
 valuation {
     Road@0(a, b);
-    Road@1(b, a);
+    Road@1(__cq_1_0, __cq_1_1);
+    b = __cq_1_0;
+    a = __cq_1_1;
 }

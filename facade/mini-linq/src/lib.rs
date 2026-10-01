@@ -1,5 +1,12 @@
 //! Procedural entry points at the compiler's explicit language boundaries.
 //!
+//! Queries denote `bottom + Set`: one panic aborts evaluation. Opaque Rust
+//! binds and guards keep their written chain; relational steps may move only
+//! earlier across them. Their free variables determine their partial-function
+//! meaning; I/O, mutation and evaluation counts are outside that meaning.
+//! Equality, keyed storage and deduplication require Eq, with Hash or Ord
+//! supplied by the selected representation.
+//!
 //! CQ planning produces RA; IX records index demands; Physical
 //! fixes one physical operator per result and the mode its reads allow,
 //! under a caller-supplied, query-independent policy; Structures answers
@@ -89,12 +96,12 @@ pub fn cq_to_ra(input: TokenStream) -> TokenStream {
     )
 }
 
-/// CQ → RA variable at a time (generic join): normalize, schedule clauses
-/// as written, bind one variable per step and check every other atom that
-/// holds it before enumerating further, elaborate to named RA.
+/// CQ → RA variable at a time (generic join): normalize, rank connected
+/// prefixes and check every atom holding each bound variable. The Rust chain
+/// and its written relational prerequisites remain fixed.
 #[cfg(feature = "written-order")]
 #[proc_macro]
-/// Formal rule Plan-Generic: Normalize, order Written/Fine, elaborate and continue with RA.
+/// Formal rule Plan-Generic: Normalize, order Prefix(Connected)/Fine, elaborate and continue with RA.
 pub fn cq_to_ra_generic(input: TokenStream) -> TokenStream {
     entry::stage(
         input,
@@ -102,8 +109,8 @@ pub fn cq_to_ra_generic(input: TokenStream) -> TokenStream {
         |source: &cq_lang_cq::Program| {
             let normal = cq_lang_cq::normal::normalize(source)?;
             let options = cq_order::Options {
+                heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
                 split: cq_order::Split::Fine,
-                ..cq_order::Options::default()
             };
             let plan = cq_order::compile(&normal, &options)?;
             cq_elaborate::compile(&plan)

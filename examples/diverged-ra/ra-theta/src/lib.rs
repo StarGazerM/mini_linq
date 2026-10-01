@@ -1,4 +1,10 @@
 //! An independent theta-join surface lowered to a complete IX program.
+//!
+//! Its denotation is `T X = bottom + Set X`: the join is relational and its Rust
+//! guard is an opaque partial function of free variables. One panic aborts the
+//! evaluation. I/O, mutation and evaluation counts are outside this meaning.
+//! The guard remains after both written relation operands; RA laws do not apply
+//! to the guard.
 use cq_lang_ix::{
     self as ix, ra,
     syntax::{self, symbol_name},
@@ -51,7 +57,7 @@ impl Parse for Query {
                 l = rename #lh { #lm };
                 r = rename #rh { #rm };
                 j = natural_join l with r;
-                s = select j if (#condition);
+                s = guard j if (#condition);
                 p = project s keep { #(#kept),* };
                 output p as #head;
             }
@@ -94,6 +100,7 @@ impl Query {
                     name: Ident::new(&format!("theta_key_{}", indexes.len()), join.right.span()),
                     eq_token: Default::default(),
                     requirement: ix::IndexRequirement {
+                        supply: ix::Supply::Stream(Default::default()),
                         at_token: Default::default(),
                         relation: join.right.clone(),
                         bracket_token: Default::default(),

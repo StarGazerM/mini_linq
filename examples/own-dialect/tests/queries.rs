@@ -150,3 +150,39 @@ fn generic_matches_a_nested_loop_oracle() {
         assert_eq!(generic::run(&r, &s, &t), expected);
     }
 }
+
+mod partial {
+    macro_rules! policy {
+        ($($ix:tt)*) => {
+            ::mini_linq::lower_physical! { $($ix)* policy {} }
+        };
+    }
+    pub(crate) use policy as physical_policy;
+    mod wiring {
+        pub(crate) use super::physical_policy;
+        pub(crate) use crate::index_provider;
+        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, select_structures};
+        pub(crate) use own_push::{push as structures_to_rust, set_sink as distinct_state};
+    }
+    use wiring as mini_linq;
+
+    #[allow(non_snake_case)]
+    pub(super) fn run<'a>(
+        R: &'a [(i32,)],
+        S: &[(i32,)],
+    ) -> std::collections::HashSet<(&'a i32, i32)> {
+        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
+            struct Partial;
+            relation R(x: i32);
+            relation S(w: i32);
+            answer(x, y) :- R(x), S(w), if *x != 0 && *w > 1, let y: i32 = 10 / *x;
+        })
+    }
+}
+
+#[test]
+fn push_chain_never_evaluates_division_before_its_guard_or_empty_prefix() {
+    let rows = [(0,), (2,)];
+    assert!(partial::run(&rows, &[]).is_empty());
+    assert_eq!(partial::run(&rows, &[(3,)]), HashSet::from([(&2, 5)]));
+}
