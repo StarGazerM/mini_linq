@@ -52,12 +52,60 @@ pub struct Rename {
     pub mapping: CommaList<AttributeRename>,
 }
 
-/// A conjunction of relational equalities. Rust guards use [`Guard`].
-/// Commas mean conjunction: `select r if (x = 5, y = z)`.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+/// A conjunction of central relational constraints, including boolean
+/// disjunctions. Rust guards use [`Guard`]. Commas mean conjunction:
+/// `select r if (x >= @lower, x < @upper)`. Captures are explicit in IR.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Theta {
-    #[parse(CommaList::parse_terminated)]
     pub equalities: CommaList<crate::Equality>,
+    pub constraints: CommaList<crate::Constraint>,
+}
+
+impl syn::parse::Parse for Theta {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let mut theta = Self::default();
+        while !input.is_empty() {
+            let c: crate::Constraint = input.parse()?;
+            if let Some(e) = c.equality() {
+                theta.equalities.push(e);
+            } else {
+                theta.constraints.push(c);
+            }
+            if input.is_empty() {
+                break;
+            }
+            if !input.peek(Token![,]) {
+                return Err(crate::constraint::unexpected(
+                    input,
+                    "`,` between relational constraints",
+                ));
+            }
+            input.parse::<Token![,]>()?;
+        }
+        Ok(theta)
+    }
+}
+
+impl quote::ToTokens for Theta {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        use quote::quote;
+        for (i, c) in self
+            .equalities
+            .iter()
+            .map(quote::ToTokens::to_token_stream)
+            .chain(
+                self.constraints
+                    .iter()
+                    .map(quote::ToTokens::to_token_stream),
+            )
+            .enumerate()
+        {
+            if i != 0 {
+                tokens.extend(quote!(,));
+            }
+            tokens.extend(c);
+        }
+    }
 }
 
 impl Theta {
@@ -67,6 +115,12 @@ impl Theta {
             .iter()
             .flat_map(crate::Equality::variables)
             .map(crate::symbol_name)
+            .chain(
+                self.constraints
+                    .iter()
+                    .flat_map(crate::Constraint::variables)
+                    .map(crate::symbol_name),
+            )
             .collect()
     }
 
@@ -74,6 +128,9 @@ impl Theta {
     /// Duplicate constraints retain one probe value; selection still checks all
     /// conjuncts, including inconsistent literals on the same column.
     pub fn constant_keys(&self) -> Option<std::collections::BTreeMap<String, syn::Expr>> {
+        if !self.constraints.is_empty() {
+            return None;
+        }
         if self.equalities.is_empty() {
             return None;
         }
@@ -87,6 +144,136 @@ impl Theta {
             })
             .collect()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.equalities.is_empty() && self.constraints.is_empty()
+    }
+
+    pub fn check(&self) -> syn::Result<()> {
+        for e in &self.equalities {
+            e.check()?;
+        }
+        for c in &self.constraints {
+            c.check()?;
+        }
+        if self.is_empty() {
+            return Err(syn::Error::new_spanned(
+                self,
+                "selection requires a relational constraint",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Point demands include literal membership and captured constant keys.
+    /// Multi-point membership can still be realized by a scan and filter.
+    pub fn point_columns(&self) -> Option<std::collections::BTreeSet<String>> {
+        use crate::constraint::{Comparison, Constraint, Term};
+        if self.is_empty() {
+            return None;
+        }
+        let mut columns = std::collections::BTreeSet::new();
+        for e in &self.equalities {
+            if !matches!(e.right, crate::EqualityValue::Literal(_)) {
+                return None;
+            }
+            columns.insert(crate::symbol_name(&e.left));
+        }
+        for c in &self.constraints {
+            let variable = match c {
+                Constraint::Compare {
+                    left: Term::Variable(v),
+                    comparison: Comparison::Eq(_),
+                    right,
+                } if right.constant() => v,
+                Constraint::Compare {
+                    left,
+                    comparison: Comparison::Eq(_),
+                    right: Term::Variable(v),
+                } if left.constant() => v,
+                Constraint::In {
+                    term: Term::Variable(v),
+                    ..
+                } => v,
+                _ => return None,
+            };
+            columns.insert(crate::symbol_name(variable));
+        }
+        (!columns.is_empty()).then_some(columns)
+    }
+
+    /// A conjunction of constant order bounds on exactly one logical column.
+    /// Bounds are retained separately; the printer intersects them with Ord.
+    pub fn range_bounds(&self) -> Option<(String, Vec<RangeBound>)> {
+        use crate::constraint::{Comparison, Constraint, Term};
+        if !self.equalities.is_empty() || self.constraints.is_empty() {
+            return None;
+        }
+        let mut column = None;
+        let mut bounds = Vec::new();
+        for c in &self.constraints {
+            let (v, entries) = match c {
+                Constraint::Between {
+                    term: Term::Variable(v),
+                    low,
+                    high,
+                } if low.constant() && high.constant() => (
+                    v,
+                    vec![
+                        RangeBound {
+                            value: low.clone(),
+                            lower: true,
+                            inclusive: true,
+                        },
+                        RangeBound {
+                            value: high.clone(),
+                            lower: false,
+                            inclusive: true,
+                        },
+                    ],
+                ),
+                Constraint::Compare {
+                    left: Term::Variable(v),
+                    comparison,
+                    right,
+                } if comparison.ordered() && right.constant() => (
+                    v,
+                    vec![RangeBound {
+                        value: right.clone(),
+                        lower: matches!(comparison, Comparison::Gt(_) | Comparison::Ge(_)),
+                        inclusive: matches!(comparison, Comparison::Le(_) | Comparison::Ge(_)),
+                    }],
+                ),
+                Constraint::Compare {
+                    left,
+                    comparison,
+                    right: Term::Variable(v),
+                } if comparison.ordered() && left.constant() => (
+                    v,
+                    vec![RangeBound {
+                        value: left.clone(),
+                        lower: matches!(comparison, Comparison::Lt(_) | Comparison::Le(_)),
+                        inclusive: matches!(comparison, Comparison::Le(_) | Comparison::Ge(_)),
+                    }],
+                ),
+                _ => return None,
+            };
+            let name = crate::symbol_name(v);
+            if column.as_ref().is_some_and(|old| old != &name) {
+                return None;
+            }
+            column = Some(name);
+            bounds.extend(entries);
+        }
+        Some((column?, bounds))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RangeBound {
+    pub value: crate::constraint::Term,
+    pub lower: bool,
+    pub inclusive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -204,4 +391,19 @@ pub fn check_leibniz_type(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Necessary syntactic checks; rustc checks Ord for aliases and user types.
+/// Formal rule ORD-Admissible: Order is total and consistent with Leibniz identity.
+pub fn check_ord_type(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
+    check_leibniz_type(ty, column)?;
+    if matches!(ty, syn::Type::BareFn(_) | syn::Type::TraitObject(_)) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            format!(
+                "column `{column}` requires Ord: a total order consistent with Leibniz equality"
+            ),
+        ));
+    }
+    Ok(())
 }

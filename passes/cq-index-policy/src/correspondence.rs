@@ -3,6 +3,7 @@
 use cq_lang_ix as ix;
 use cq_lang_ra as ra;
 use cq_lang_ra::syntax::symbol_name;
+use std::collections::BTreeSet;
 
 /// Check RA preservation and the IX-Join/Const/Other/New/Reuse derivation in order.
 /// Demand names are fixed by the rules; no compiler decisions are replayed.
@@ -56,18 +57,23 @@ pub fn check(source: &ra::Program, target: &ix::Program) -> syn::Result<()> {
                     .collect();
                 (&j.right, columns, ix::SupplyKind::Stream)
             }
-            // IX-Const: all-literal theta is one keyed read of its input.
+            // IX-Const: column equalities and membership supply constant keys.
             ra::Operator::Select(selection) => {
-                let Some(keys) = selection.condition.constant_keys() else {
+                let (keys, supply) = if let Some(keys) = selection.condition.point_columns() {
+                    (keys, ix::SupplyKind::Const)
+                // IX-Range: one column with constant order bounds supplies a window.
+                } else if let Some((column, _)) = selection.condition.range_bounds() {
+                    (BTreeSet::from([column]), ix::SupplyKind::Range)
+                } else {
                     continue;
                 };
                 let columns = info[&symbol_name(&selection.input)]
                     .heading
                     .iter()
                     .enumerate()
-                    .filter_map(|(ordinal, column)| keys.contains_key(column).then_some(ordinal))
+                    .filter_map(|(i, c)| keys.contains(c).then_some(i))
                     .collect();
-                (&selection.input, columns, ix::SupplyKind::Const)
+                (&selection.input, columns, supply)
             }
             // IX-Other: no demand is introduced by other operators.
             _ => continue,

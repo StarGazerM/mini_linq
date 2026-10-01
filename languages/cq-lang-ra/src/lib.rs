@@ -275,11 +275,39 @@ fn check_in<'a>(
             }
             Operator::Select(select) => {
                 let (name, input) = earlier_relation(&select.input, &relations)?;
-                if select.condition.equalities.is_empty() {
+                if select.condition.is_empty() {
                     return Err(syn::Error::new_spanned(
                         select,
-                        "selection requires a relational equality",
+                        "selection requires a relational constraint",
                     ));
+                }
+                // Formal rule RA-Constraint: Central theta has available columns and checked Eq/Ord premises.
+                select.condition.check()?;
+                for c in &select.condition.constraints {
+                    for p in c.parameters() {
+                        if input.heading.contains(&symbol_name(p)) {
+                            return Err(syn::Error::new_spanned(
+                                p,
+                                "relational parameter names an input column",
+                            ));
+                        }
+                    }
+                    for column in c.variables() {
+                        let n = symbol_name(column);
+                        let Some(ty) = input.types.get(&n) else {
+                            return Err(syn::Error::new_spanned(
+                                column,
+                                format!("selection uses unavailable column `{n}`"),
+                            ));
+                        };
+                        check_leibniz(ty, column)?;
+                    }
+                    for column in c.ordered_variables() {
+                        cq_syntax::algebra::check_ord_type(
+                            &input.types[&symbol_name(column)],
+                            column,
+                        )?;
+                    }
                 }
                 for equality in &select.condition.equalities {
                     equality.check()?;

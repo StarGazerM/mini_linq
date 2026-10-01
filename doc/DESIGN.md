@@ -24,6 +24,17 @@ Before set is a **sufficient** condition for refinement. RA laws apply only
 to relational steps; bind and guard nodes belong to the ordered chain.
 Equality in the relational centre is identity in classical Set.
 
+Relational filters are CQ body syntax: `t op t` with `op` in `= != < <= > >=`,
+inclusive `t between lo and hi`, and `t in { literal, ... }`. Commas mean
+conjunction; `(C and C) or (C and C)` gives parenthesized conjunction branches.
+A term is a query variable, a Syn literal (or negative numeric literal), or a
+bare in-scope identifier not bound by the query: a captured constant, borrowed
+once outside query loops. Other Rust expressions are rejected. Later IRs spell
+captures `@name`. Order requires total `Ord` consistent with Leibniz equality,
+trusted like Eq; `in` is a disjunction of identities. These total predicates are
+central and obey the existing relational movement laws. `if e` stays an opaque
+Rust guard regardless of its text.
+
 1. Leibniz admissibility of a column type: a type may be compared, joined,
    grouped, keyed or deduplicated by the relational centre only if its `==`
    decides Leibniz equality (Rust code cannot distinguish `==`-equal values).
@@ -42,7 +53,9 @@ are sound whenever the Rust step's free variables are retained. `Eq` and the
 selected representation's `Hash`/`Ord` bounds are necessary mechanical checks;
 rustc cannot prove Leibniz admissibility of a hand-written implementation.
 
-At each atom's written position normalization replaces repeated variables
+A query variable shared across atom occurrences stays shared and is joined
+directly. At each atom's written position normalization replaces only variables
+repeated within that occurrence
 and literals with fresh columns and relational equalities. An already-bound
 argument expression becomes an immediately preceding Rust bind; one depending
 on that atom becomes a following bind and equality. Computed heads become
@@ -52,11 +65,11 @@ while allowing only refinement-preserving hoisting.
 
 | Language | Presentation | Decision recorded |
 |---|---|---|
-| CQ-NF | variable-only atoms, equalities, Rust guards and binds | none (canonical form) |
+| CQ-NF | variable-only atoms, relational constraints, Rust guards and binds | none (canonical form) |
 | VO | the order in which valuations are built; granularity of each step | valuation order, split |
 | VO (reduced) | + reductions applied to a clause before it is joined | where reductions go |
 | RA′ | relational operators and an opaque Rust ancestry chain | none (elaboration) |
-| IX | demands: key sets and stream/const supplies | none (derived) |
+| IX | demands: key sets and stream/const/range supplies | none (derived) |
 | Physical | one operator per result; `pipe`/`let` modes | operator, mode, dedup placement |
 | Structures | the bindings Γ: the value answering each keyed read | representation |
 
@@ -87,6 +100,14 @@ answers a read on every prefix `K₁ ∪ … ∪ Kᵢ`. That is a trie
 (`cq_storage::Trie`): `build` is currying, `lookup` is application, and a
 lazily built level is call-by-need. Level order is representation and never
 appears above Structures.
+
+Conjunctions of column identities with constants or literal membership create
+`const` demands. Constant or captured order bounds on one column create
+`@r[c] range`. Physical reads a window on an ordered leading-column host and
+otherwise scans and filters, with no index build for this demand. Copied bound
+keys seek directly on BTreeMap; other ordered cursors step to the lower bound
+without invoking Clone. Disjunctions stay boolean filters. Stream demands and
+their amortized builds are unchanged.
 
 **Modes are binding time.** A derived `pipe` has one stream read; a `let`
 retains rows or built indexes for repeated or keyed reads. A host rename is a

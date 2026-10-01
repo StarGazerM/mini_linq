@@ -50,21 +50,21 @@ fn main() {
     relation V(a:i32);
     relation answer(a:i32,b:i32);
                 r_r = rename R {a -> a, b -> x};
-                r_a = select r_r if (*x > 0);
+                r_a = select r_r if (x > 0);
                 r_s = rename S {a -> a, b -> y};
                 r_rs = natural_join r_a with r_s;
-                r_b = extend r_rs with {k:i32} value ((combine(*x,*y),));
                 r_t = rename T {a -> y, b -> z};
-                r_bt = natural_join r_b with r_t;
-                r_c = select r_bt if (permitted(k,*z));
-                r_keys = extend r_c with {p:i32,q:i32}
-                    value ((left_key(k,*y),right_key(*x,*z)));
-                r_d = project r_keys keep {a,p,q};
+                r_rst = natural_join r_rs with r_t;
+                r_b = bind r_rst with k:i32 = (combine(*x,*y));
+                r_p = bind r_b with p:i32 = (left_key(k,*y));
+                r_q = bind r_p with q:i32 = (right_key(*x,*z));
+                r_d = project r_q keep {a,p,q,k,z};
                 r_u = rename U {a -> p, b -> q, c -> w};
                 r_v = rename V {a -> w};
                 r_uv = semijoin r_u with r_v;
                 r_join = natural_join r_d with r_uv;
-                r_out = project r_join keep {a,w};
+                r_c = guard r_join if (permitted(k,*z));
+                r_out = project r_c keep {a,w};
                 output r_out as answer(a,w);
             }
         };
@@ -78,11 +78,12 @@ fn main() {
         relation V(a:i32); relation answer(a:i32,b:i32);
         answer(a,w) :- R(a,x), S(a,y), T(y,z),
             let k:i32 = combine(*x,*y),
-            U(left_key(k,*y),right_key(*x,*z),w),
-            if *x > 0, if permitted(k,*z), V(w);
+            let p:i32 = left_key(k,*y), let q:i32 = right_key(*x,*z),
+            U(p,q,w), x > 0, if permitted(k,*z), V(w);
     };
     let directory = directory("logical-constraint-planning");
-    boundaries(&directory, "written", &source, false);
+    let checked = boundaries(&directory, "written", &source, false);
+    cq_elaborate::check(&checked.valuation, &authored).unwrap();
     boundaries(&directory, "planned", &source, true);
     write(&directory, "authored-04-relational.tokens", &authored);
     write(&directory, "authored-05-indexes.tokens", &ix);

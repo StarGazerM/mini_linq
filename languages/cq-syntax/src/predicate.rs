@@ -1,6 +1,6 @@
-//! A deliberately total selection fragment: comparisons of i32 variables/literals.
-//! This is an optimizer recognizer, not the CQ expression grammar. CQ and RA
-//! retain syn::Expr; only this proven total subset is eligible for movement.
+//! Legacy syntactic recognizer for integer Rust comparison expressions.
+//! It is never used to classify, schedule, reduce, or elaborate Rust guards.
+//! Recognition grants no relational meaning or right to move an opaque guard.
 use syn::{Ident, Token};
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
@@ -58,7 +58,7 @@ pub struct Predicate {
     pub right: Term,
 }
 impl Predicate {
-    /// Recognize the movable comparison fragment directly in Syn's Rust AST.
+    /// Recognize syntax only; an `if` expression always remains opaque Rust.
     pub fn from_expr(expr: &syn::Expr) -> Option<Self> {
         if let syn::Expr::Paren(paren) = expr {
             if !paren.attrs.is_empty() {

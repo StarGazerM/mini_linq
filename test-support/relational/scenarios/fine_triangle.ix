@@ -1,5 +1,1 @@
-indexes {
-    i0 =@r0[0] stream;
-    i1 =@r3[0] stream;
-    i2 =@r6[0, 1] stream;
-}
+indexes { i0 =@r0 [0] stream;i1 =@r3 [0] stream;i2 =@r5 [0, 1] stream;}

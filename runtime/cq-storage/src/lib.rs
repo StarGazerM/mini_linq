@@ -124,3 +124,80 @@ pub mod require {
 pub fn relational_eq<T: Eq + ?Sized>(left: &T, right: &T) -> bool {
     left == right
 }
+
+/// Ord must be a total order consistent with Leibniz equality. The bound is a
+/// necessary mechanical check; semantic admissibility is a caller premise.
+pub fn relational_cmp<T: Ord + ?Sized>(left: &T, right: &T) -> std::cmp::Ordering {
+    left.cmp(right)
+}
+
+mod string_literal {
+    pub trait Sealed {}
+    impl Sealed for str {}
+    impl Sealed for String {}
+    impl<T: super::StringValue + ?Sized> Sealed for &T {}
+}
+
+/// The standard string representations accepted beside a string literal.
+/// Sealing excludes arbitrary user conversions or cross-type PartialEq code.
+pub trait StringValue: string_literal::Sealed {
+    fn string_value(&self) -> &str;
+}
+impl StringValue for str {
+    fn string_value(&self) -> &str {
+        self
+    }
+}
+impl StringValue for String {
+    fn string_value(&self) -> &str {
+        self.as_str()
+    }
+}
+impl<T: StringValue + ?Sized> StringValue for &T {
+    fn string_value(&self) -> &str {
+        T::string_value(*self)
+    }
+}
+
+pub fn relational_string_eq<L: Eq + StringValue + ?Sized, R: Eq + StringValue + ?Sized>(
+    left: &L,
+    right: &R,
+) -> bool {
+    left.string_value() == right.string_value()
+}
+/// String literals compare the contents of standard String/str values.
+pub fn relational_str_cmp<L: Ord + StringValue + ?Sized, R: Ord + StringValue + ?Sized>(
+    left: &L,
+    right: &R,
+) -> std::cmp::Ordering {
+    left.string_value().cmp(right.string_value())
+}
+
+pub fn intersect_lower<Q: Ord>(a: std::ops::Bound<Q>, b: std::ops::Bound<Q>) -> std::ops::Bound<Q> {
+    use std::ops::Bound::*;
+    match (&a, &b) {
+        (Unbounded, _) => b,
+        (_, Unbounded) => a,
+        (Included(x) | Excluded(x), Included(y) | Excluded(y)) => {
+            if x > y || (x == y && matches!(a, Excluded(_))) {
+                a
+            } else {
+                b
+            }
+        }
+    }
+}
+pub fn intersect_upper<Q: Ord>(a: std::ops::Bound<Q>, b: std::ops::Bound<Q>) -> std::ops::Bound<Q> {
+    use std::ops::Bound::*;
+    match (&a, &b) {
+        (Unbounded, _) => b,
+        (_, Unbounded) => a,
+        (Included(x) | Excluded(x), Included(y) | Excluded(y)) => {
+            if x < y || (x == y && matches!(a, Excluded(_))) {
+                a
+            } else {
+                b
+            }
+        }
+    }
+}

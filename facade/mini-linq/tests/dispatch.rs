@@ -403,3 +403,144 @@ fn literal_point_reads_scan_slices_and_directly_read_leading_map_keys() {
     assert_eq!(Customer.scans.get(), 0);
     assert_eq!(Customer.reads.get(), 1);
 }
+
+#[test]
+fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
+    let map: BTreeMap<(i32,), Vec<(i32,)>> = (0..10_000).map(|x| ((x,), vec![(x + 1,)])).collect();
+    let low = 9_995;
+    let high = 9_998;
+    cq_storage::counters::reset();
+    let rows: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct Range; relation map(key:i32,value:i32);
+        answer(x,y) :- map(x,y), x >= low, x < high;
+    }
+    .map(|(x, y)| (*x, *y))
+    .collect();
+    assert_eq!(rows, [(9_995, 9_996), (9_996, 9_997), (9_997, 9_998)]);
+    let counts = cq_storage::counters::snapshot();
+    assert_eq!(counts.index_builds, 0);
+    assert!(
+        counts.rows_enumerated < 10 && counts.cursor_steps < 12,
+        "{counts:?}"
+    );
+
+    let slice: Vec<_> = (0..10_000).map(|x| (x, x + 1)).collect();
+    cq_storage::counters::reset();
+    let scanned: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct SliceRange; relation slice(key:i32,value:i32);
+        answer(x,y) :- slice(x,y), x >= low, x < high;
+    }
+    .map(|(x, y)| (*x, *y))
+    .collect();
+    assert_eq!(scanned, rows);
+    let counts = cq_storage::counters::snapshot();
+    assert_eq!(counts.index_builds, 0);
+    assert!(counts.rows_enumerated >= 10_000, "{counts:?}");
+
+    // Empty windows are total, including the bounds that BTreeMap::range rejects.
+    for (low, high) in [(5, 5), (9, 2)] {
+        let rows: Vec<_> = ::mini_linq::cq_to_ra! {
+            struct EmptyRange; relation map(key:i32,value:i32);
+            answer(x) :- map(x,_), x > low, x < high;
+        }
+        .collect();
+        assert!(rows.is_empty());
+    }
+}
+
+#[test]
+fn relational_disjunction_membership_and_host_parameters_compute_classical_filters() {
+    let rows = [
+        (0, "a".to_owned()),
+        (1, "b".into()),
+        (2, "a".into()),
+        (3, "c".into()),
+        (4, "b".into()),
+    ];
+    let low = 2;
+    let got: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct Disjunction; relation rows(key:i32,tag:String);
+        answer(x) :- rows(x,tag),
+            (x between 0 and 1 and tag in {"a","b"}) or (x >= low and tag = "c");
+    }
+    .map(|(x,)| *x)
+    .collect();
+    assert_eq!(got, [0, 1, 3]);
+    let tag_param = "b".to_owned();
+    let got: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct Parameters; relation rows(key:i32,tag:String);
+        answer(x) :- rows(x,tag), tag = tag_param, 1 < x, x <= 4;
+    }
+    .map(|(x,)| *x)
+    .collect();
+    assert_eq!(got, [4]);
+    assert_eq!(tag_param, "b");
+}
+
+#[test]
+fn an_ordered_host_and_non_copy_parameter_need_no_cloning_or_scan_fallback() {
+    let r = Observed::new(BTreeMap::from([
+        ((1,), vec![(11,)]),
+        ((2,), vec![(22,)]),
+        ((3,), vec![(33,)]),
+    ]));
+    let cutoff = 2;
+    let got: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct OrderedHost; relation r(k:i32,v:i32);
+        answer(x,y) :- r(x,y), x >= cutoff;
+    }
+    .map(|(x, y)| (*x, *y))
+    .collect();
+    assert_eq!(got, [(2, 22), (3, 33)]);
+    assert_eq!(r.scans.get(), 0);
+    assert_eq!(r.reads.get(), 1);
+
+    // Neither Eq/Ord nor borrowed captures imply Clone. A panicking Clone
+    // implementation must never be called by a relational constant window.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Value(i32);
+    impl Clone for Value {
+        fn clone(&self) -> Self {
+            panic!("opaque Clone is not relational")
+        }
+    }
+    let map = BTreeMap::from([((Value(1),), vec![(10,)]), ((Value(3),), vec![(30,)])]);
+    let cutoff = Value(2);
+    let got: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct BorrowedBounds; relation map(k:Value,v:i32);
+        answer(y) :- map(x,y), x > cutoff;
+    }
+    .map(|(y,)| *y)
+    .collect();
+    assert_eq!(got, [30]);
+}
+
+#[test]
+fn constraints_on_prefix_values_precede_partial_guards_and_later_atoms() {
+    let r = [(0,), (2,)];
+    let s = [(2, 20)];
+    let cutoff = 1;
+    let got: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct LetPrefix; relation r(x:i32); relation s(m:i32,y:i32);
+        answer(y) :- r(x), let m:i32 = *x, m > cutoff, if 10 / *m > 0, s(m,y);
+    }
+    .map(|(y,)| *y)
+    .collect();
+    assert_eq!(got, [20]);
+    let other = [(0,)];
+    let t = [(2, 0, 99)];
+    let got: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct PrefixTuple; relation r(x:i32); relation other(y:i32); relation t(x:i32,y:i32,z:i32);
+        answer(z) :- r(x), other(y), x > y, if 10 / (*x - *y) > 0, t(x,y,z);
+    }
+    .map(|(z,)| *z)
+    .collect();
+    assert_eq!(got, [99]);
+    let got: Vec<_> = ::mini_linq::cq_to_ra! {
+        struct BoundIdentity; relation r(x:i32); relation s(m:i32,y:i32);
+        answer(y) :- r(x), let m:i32 = 2, m = x, s(m,y);
+    }
+    .map(|(y,)| *y)
+    .collect();
+    assert_eq!(got, [20]);
+}

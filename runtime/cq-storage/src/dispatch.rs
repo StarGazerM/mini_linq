@@ -278,6 +278,156 @@ impl<'a, K: Ord + 'static, C: OrderedCursor<Key = &'a K>> std::iter::FusedIterat
 {
 }
 
+/// A constant window never builds a fallback index. Bounds contain borrowed
+/// columns and can outlive the query block without copying captured values.
+pub struct RangeHost<H, Q, F>(H, F, std::marker::PhantomData<fn() -> Q>);
+impl<H, Q, F> RangeHost<H, Q, F> {
+    pub fn new(host: H, fallback: F) -> Self {
+        Self(host, fallback, std::marker::PhantomData)
+    }
+}
+
+pub trait RangeRead<Q> {
+    type Item;
+    type Cursor: Iterator<Item = Self::Item>;
+    fn range(self, low: Bound<Q>, high: Bound<Q>) -> Self::Cursor;
+}
+impl<H, Q, F: Fn() -> I, I: Iterator> RangeRead<Q> for &RangeHost<H, Q, F> {
+    type Item = I::Item;
+    type Cursor = I;
+    fn range(self, _: Bound<Q>, _: Bound<Q>) -> I {
+        (self.1)()
+    }
+}
+
+/// Borrowed ordered handles expose a range cursor independent of the handle's
+/// own lifetime, just as PointLookup does. The cursor borrows the host rows.
+pub trait RangeLookup<Q>: OrderedRead + Copy {
+    type Row: Copy;
+    type RangeCursor: Iterator<Item = Self::Row>;
+    fn range_lookup(self, low: Bound<Q>, high: Bound<Q>) -> Self::RangeCursor;
+}
+/// A seek whose bound can be copied without invoking user Clone code.
+pub trait SeekRangeLookup<Q>: RangeLookup<Q> {
+    fn seek_range_lookup(self, low: Bound<Q>, high: Bound<Q>) -> Self::RangeCursor;
+}
+impl<'a, H: OrderedRead + 'a, Q: Ord + Copy, F> RangeRead<Q> for &&'a RangeHost<H, Q, F>
+where
+    H::Cursor<'a>: OrderedCursor,
+    <H::Cursor<'a> as OrderedCursor>::Key: Columns<Row = Q>,
+    <H::Cursor<'a> as OrderedCursor>::Value: Columns,
+    Q: Concat<<<H::Cursor<'a> as OrderedCursor>::Value as Columns>::Row>,
+{
+    type Item = <Q as Concat<<<H::Cursor<'a> as OrderedCursor>::Value as Columns>::Row>>::Row;
+    type Cursor = RelationalWindow<H::Cursor<'a>, Q>;
+    fn range(self, low: Bound<Q>, high: Bound<Q>) -> Self::Cursor {
+        RelationalWindow {
+            cursor: self.0.ordered(),
+            low,
+            high,
+            done: false,
+        }
+    }
+}
+impl<H: SeekRangeLookup<Q>, Q, F> RangeRead<Q> for &&&RangeHost<H, Q, F> {
+    type Item = H::Row;
+    type Cursor = H::RangeCursor;
+    fn range(self, low: Bound<Q>, high: Bound<Q>) -> Self::Cursor {
+        self.0.seek_range_lookup(low, high)
+    }
+}
+
+/// A total fused ordered window. Inverted/exclusive-equal bounds yield no rows;
+/// unlike a two-sided BTreeMap::range, this never panics on such bounds.
+pub struct RelationalWindow<C, Q> {
+    cursor: C,
+    low: Bound<Q>,
+    high: Bound<Q>,
+    done: bool,
+}
+impl<C, Q> Iterator for RelationalWindow<C, Q>
+where
+    C: OrderedCursor,
+    C::Key: Columns<Row = Q>,
+    Q: Ord + Copy,
+    C::Value: Columns,
+    Q: Concat<<C::Value as Columns>::Row>,
+{
+    type Item = <Q as Concat<<C::Value as Columns>::Row>>::Row;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        for (key, value) in self.cursor.by_ref() {
+            let key = key.columns();
+            let below = match self.low {
+                Bound::Included(b) => key < b,
+                Bound::Excluded(b) => key <= b,
+                Bound::Unbounded => false,
+            };
+            if below {
+                continue;
+            }
+            let above = match self.high {
+                Bound::Included(b) => key > b,
+                Bound::Excluded(b) => key >= b,
+                Bound::Unbounded => false,
+            };
+            if above {
+                self.done = true;
+                return None;
+            }
+            return Some(key.concat(value.columns()));
+        }
+        self.done = true;
+        None
+    }
+}
+impl<C, Q> std::iter::FusedIterator for RelationalWindow<C, Q>
+where
+    C: OrderedCursor,
+    C::Key: Columns<Row = Q>,
+    Q: Ord + Copy,
+    C::Value: Columns,
+    Q: Concat<<C::Value as Columns>::Row>,
+{
+}
+
+impl<'h, T: Ord, V> RangeLookup<(&'h T,)> for &'h BTreeMap<(T,), Vec<V>>
+where
+    &'h V: Columns,
+    (&'h T,): Concat<<&'h V as Columns>::Row>,
+{
+    type Row = <(&'h T,) as Concat<<&'h V as Columns>::Row>>::Row;
+    type RangeCursor = RelationalWindow<crate::ordered::GroupedCursor<'h, (T,), V>, (&'h T,)>;
+    fn range_lookup(self, low: Bound<(&'h T,)>, high: Bound<(&'h T,)>) -> Self::RangeCursor {
+        RelationalWindow {
+            cursor: self.ordered(),
+            low,
+            high,
+            done: false,
+        }
+    }
+}
+impl<'h, T: Ord + Copy, V> SeekRangeLookup<(&'h T,)> for &'h BTreeMap<(T,), Vec<V>>
+where
+    &'h V: Columns,
+    (&'h T,): Concat<<&'h V as Columns>::Row>,
+{
+    fn seek_range_lookup(self, low: Bound<(&'h T,)>, high: Bound<(&'h T,)>) -> Self::RangeCursor {
+        let mut cursor = self.ordered();
+        if let Bound::Included((value,)) | Bound::Excluded((value,)) = low {
+            cursor.seek_value(&(*value,));
+        }
+        RelationalWindow {
+            cursor,
+            low,
+            high,
+            done: false,
+        }
+    }
+}
+
 pub trait CandidateRead<Q> {
     type Item;
     type Cursor: Iterator<Item = Self::Item>;

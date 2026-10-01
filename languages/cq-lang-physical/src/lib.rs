@@ -10,12 +10,13 @@
 //! Program ::= "physical" "{" RelationDecl* Definition* "return" Ident "as" Atom ";" "}"
 //! Definition ::= Ident "=" Mode ["canon"] Operator ";"
 //! Mode ::= "pipe" | "let"
-//! Operator ::= Unit | Rename | Select | Point | Bind | Guard | Project
+//! Operator ::= Unit | Rename | Select | Point | Range | Bind | Guard | Project
 //!            | "probe" "[" Ident,* "]" Ident "," Ident
 //!            | "merge" "[" Ident,* "]" Ident "," Ident
 //!            | "semi" "[" Ident,* "]" Ident "," Ident
 //! ```
 //!
+//! Point/Range ::= ("point" | "range") Select
 //! Unit, Rename, Select, Bind, Guard and Project are shared syntax.
 //! Meaning is Kleisli over bottom + Set: bottom aborts the whole evaluation.
 //! Bind/guard expressions are opaque partial functions. Their ancestry chain
@@ -41,6 +42,7 @@ pub mod kw {
     syn::custom_keyword!(merge);
     syn::custom_keyword!(semi);
     syn::custom_keyword!(point);
+    syn::custom_keyword!(range);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -94,6 +96,8 @@ pub enum Operator {
     Select(Box<cq_syntax::algebra::Select>),
     #[parse(peek = kw::point)]
     Point(kw::point, Box<cq_syntax::algebra::Select>),
+    #[parse(peek = kw::range)]
+    Range(kw::range, Box<cq_syntax::algebra::Select>),
     #[parse(peek = kw::bind)]
     Bind(Box<cq_syntax::algebra::Bind>),
     #[parse(peek = kw::guard)]
@@ -127,7 +131,7 @@ impl Operator {
         match self {
             Self::Probe(_, k) | Self::Merge(_, k) | Self::Semi(_, k) => Some(&k.left),
             Self::Select(s) => Some(&s.input),
-            Self::Point(_, s) => Some(&s.input),
+            Self::Point(_, s) | Self::Range(_, s) => Some(&s.input),
             Self::Bind(b) => Some(&b.input),
             Self::Guard(g) => Some(&g.input),
             Self::Project(p) => Some(&p.input),
@@ -364,7 +368,8 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     row
                 }
             }
-            Operator::Select(s) | Operator::Point(_, s) => {
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
+                s.condition.check()?;
                 let row = of(&s.input)?;
                 for c in s.condition.columns() {
                     let Some(ty) = row.types.get(&c) else {
@@ -372,14 +377,24 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     };
                     check_leibniz(ty, &c, &definition.name)?;
                 }
+                for c in &s.condition.constraints {
+                    for p in c.parameters() {
+                        if row.types.contains_key(&symbol_name(p)) {
+                            return error(p, "relational parameter names an input column");
+                        }
+                    }
+                    for v in c.ordered_variables() {
+                        cq_syntax::algebra::check_ord_type(&row.types[&symbol_name(v)], v)?;
+                    }
+                }
                 if matches!(definition.operator, Operator::Point(..)) {
-                    let Some(keys) = s.condition.constant_keys() else {
+                    let Some(keys) = s.condition.point_columns() else {
                         return error(
                             s,
-                            "point read requires a nonempty conjunction of column = literal equalities",
+                            "point read requires a nonempty conjunction of column = constant or literal membership constraints",
                         );
                     };
-                    let columns: Vec<_> = keys.into_keys().collect();
+                    let columns: Vec<_> = keys.into_iter().collect();
                     analysis
                         .point_reads
                         .entry(symbol_name(&s.input))
@@ -390,6 +405,17 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         .entry(symbol_name(&s.input))
                         .or_default()
                         .push((name.clone(), columns, cq_syntax::SupplyKind::Const));
+                }
+                // Formal rule PH-Range: A window demand is constant order bounds on exactly one column.
+                if matches!(definition.operator, Operator::Range(..)) {
+                    let Some((column, _)) = s.condition.range_bounds() else {
+                        return error(s, "range read requires constant order bounds on one column");
+                    };
+                    analysis
+                        .keyed_reads
+                        .entry(symbol_name(&s.input))
+                        .or_default()
+                        .push((name.clone(), vec![column], cq_syntax::SupplyKind::Range));
                 }
                 deps.push(symbol_name(&s.input));
                 row

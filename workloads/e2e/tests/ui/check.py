@@ -28,7 +28,8 @@ for name, path in {
 }.items():
     manifest += f'{name} = {{ path = {json.dumps(str(ROOT / path))} }}\n'
 fixtures = [(name, Path(__file__).parent / f"{name}.rs", needle)
-            for name, needle in [("ordered", "OrderedRead"), ("extension", "name!"), ("provider", "IndexRead")]]
+            for name, needle in [("ordered", "OrderedRead"), ("extension", "name!"), ("provider", "IndexRead"),
+                                 ("comparison_ord", "Ord"), ("comparison_literal_eq", "mismatched types")]]
 generated = [(p.stem, p.with_suffix(".rs"), None)
              for p in sorted(OUT.glob("rejected_*.tsv")) if p.read_text().strip()]
 for name, path, _ in fixtures + generated:
@@ -75,4 +76,4 @@ for name, path, needle in fixtures + generated:
             raise SystemExit(f"{label}: no attributed {needle!r} error; see {DIRECTORY / (name + '.jsonl')}")
     total += len(expected)
     print(f"PASS: {name}: {len(expected)} independently attributed rejections", flush=True)
-print(f"PASS: {total} compile-fail cases (including three minimal fixtures); logs: {DIRECTORY}", flush=True)
+print(f"PASS: {total} compile-fail cases (including five minimal fixtures); logs: {DIRECTORY}", flush=True)

@@ -62,7 +62,7 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
             .map(|(clause, _)| clause)
             .unwrap()
     };
-    let (mut guards, mut lets, mut equalities) = (0, 0, 0);
+    let (mut guards, mut lets, mut equalities, mut constraints) = (0, 0, 0, 0);
     plan.valuation
         .steps
         .iter()
@@ -71,6 +71,12 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
             valuation::Step::Equality(..) => {
                 equalities += 1;
                 nth(equalities - 1, |item| matches!(item, BodyItem::Equality(_)))
+            }
+            valuation::Step::Constraint(..) => {
+                constraints += 1;
+                nth(constraints - 1, |item| {
+                    matches!(item, BodyItem::Constraint(_))
+                })
             }
             valuation::Step::Guard(..) => {
                 guards += 1;
@@ -106,14 +112,100 @@ fn written_coarse_follows_the_normal_body() {
                 R@0(x, __cq_0_1);
                 __cq_0_1 = 5;
                 S@2(__cq_1_0, z);
-                R@3(__cq_2_0, __cq_2_1);
-                x = __cq_2_0;
+                R@3(x, __cq_2_1);
                 x = __cq_2_1;
                 if z > 1;
                 let w: i32 = x + z;
             }
         )
     );
+}
+
+#[test]
+fn optimizing_orders_place_constraints_at_the_first_available_binding() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Early; relation R(a:i32); relation S(b:i32);
+        answer(x,y) :- R(x), if opaque(x), x < cutoff, S(y);
+    };
+    for heuristic in [
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            let options = Options { heuristic, split };
+            let plan = cq_order::compile(&source, &options).unwrap();
+            cq_order::check(&source, &plan, &options).unwrap();
+            let binder = plan
+                .valuation
+                .steps
+                .iter()
+                .position(|s| matches!(s, valuation::Step::Atom(a, _) if a.clause() == 0))
+                .unwrap();
+            let constraint = plan
+                .valuation
+                .steps
+                .iter()
+                .position(|s| matches!(s, valuation::Step::Constraint(..)))
+                .unwrap();
+            let guard = plan
+                .valuation
+                .steps
+                .iter()
+                .position(|s| matches!(s, valuation::Step::Guard(..)))
+                .unwrap();
+            assert_eq!(constraint, binder + 1, "{heuristic:?}/{split:?}");
+            assert_eq!(guard, constraint + 1, "{heuristic:?}/{split:?}");
+        }
+    }
+}
+
+#[test]
+fn across_atom_sharing_is_a_join_and_only_same_atom_repetition_gets_identity() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Shared; relation Customer(id:i32,segment:&str);
+        relation Orders(id:i32,customer:i32,date:i32);
+        answer(o,c,d) :- Customer(c,s), if *s == "BUILDING", Orders(o,c,d);
+    };
+    let nf = cq::normal::normalize(&source).unwrap();
+    assert_eq!(nf, source);
+    let vo = cq_order::compile(&nf, &Options::default()).unwrap();
+    cq_order::check(&nf, &vo, &Options::default()).unwrap();
+    let text = vo.valuation.to_token_stream().to_string().replace(' ', "");
+    assert!(text.contains("Orders@2(o,c,d);"), "{text}");
+    assert!(
+        !text.contains("__cq_")
+            && !vo
+                .valuation
+                .steps
+                .iter()
+                .any(|s| matches!(s, valuation::Step::Equality(..)))
+    );
+    let mut dropped = vo.clone();
+    let valuation::Step::Atom(a, _) = &mut dropped.valuation.steps[2] else {
+        panic!()
+    };
+    a.columns[1] = valuation::Column::Dropped(Default::default());
+    assert!(
+        valuation::contract::check(&dropped)
+            .unwrap_err()
+            .to_string()
+            .contains("bound")
+    );
+    let mut renamed = vo.clone();
+    let valuation::Step::Atom(a, _) = &mut renamed.valuation.steps[2] else {
+        panic!()
+    };
+    a.columns[1] = valuation::Column::Variable(syn::parse_quote!(__cq_wrong));
+    assert!(cq_order::check(&nf, &renamed, &Options::default()).is_err());
+
+    let repeated: cq::Program =
+        syn::parse_quote! { struct Repeat; relation R(a:i32,b:i32); answer(x) :- R(x,x); };
+    let nf = cq::normal::normalize(&repeated).unwrap();
+    assert_eq!(nf.query.body.len(), 2);
+    let vo = cq_order::compile(&nf, &Options::default()).unwrap();
+    let text = vo.valuation.to_token_stream().to_string().replace(' ', "");
+    assert_eq!(text, "valuation{R@0(x,__cq_0_1);x=__cq_0_1;}");
+    assert_eq!(cq::normal::normalize(&nf).unwrap(), nf);
 }
 
 #[test]
@@ -248,7 +340,7 @@ fn literals_are_relational_steps_after_their_atoms() {
             .iter()
             .filter(|item| matches!(item, BodyItem::Equality(_)))
             .count(),
-        4
+        2
     );
     for heuristic in [
         Heuristic::Written,
@@ -625,9 +717,9 @@ fn generic_join_checks_all_atom_aliases_before_the_next_variable_class() {
         })
         .collect();
     assert_eq!(atoms[0], (0, vec!["a".into()]));
-    assert_eq!(atoms[1], (3, vec!["__cq_2_0".into()]));
+    assert_eq!(atoms[1], (2, vec!["a".into()]));
     assert_eq!(atoms[2], (0, vec!["a".into(), "b".into()]));
-    assert_eq!(atoms[3], (1, vec!["__cq_1_0".into()]));
+    assert_eq!(atoms[3], (1, vec!["b".into()]));
 }
 
 #[test]

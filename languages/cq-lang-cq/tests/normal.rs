@@ -23,9 +23,7 @@ fn normalization_moves_every_non_variable_argument_out_of_atoms() {
     );
     // The wildcard is a distinct witness; repeated variables get relational equality.
     assert!(
-        text.contains(
-            "S (__cq_1_0 , z) , R (__cq_2_0 , __cq_2_1) , x = __cq_2_0 , x = __cq_2_1 , if z > 1"
-        ),
+        text.contains("S (__cq_1_0 , z) , R (x , __cq_2_1) , x = __cq_2_1 , if z > 1"),
         "{text}"
     );
     cq::normal::check(&normal).unwrap();
@@ -83,7 +81,7 @@ fn literal_repeat_and_computed_terms_have_distinct_semantic_kinds() {
         text.contains("if * x != 0 , let __cq_2_0 : i32 = 10 / * x , S"),
         "{text}"
     );
-    assert!(text.contains("y = __cq_3_0 , y = __cq_3_1"), "{text}");
+    assert!(text.contains("R (y , __cq_3_1) , y = __cq_3_1"), "{text}");
     assert!(matches!(
         normal.query.body.last(),
         Some(cq::BodyItem::Let(_))
@@ -297,4 +295,97 @@ fn tuple_annotations_do_not_guess_named_types_or_reference_match_ergonomics() {
                 .all(|(_, ty)| matches!(ty, syn::Type::Infer(_)))
         );
     }
+}
+
+#[test]
+fn comparison_grammar_round_trips_and_captures_only_non_query_names() {
+    for body in [
+        "x = y, x != y, x < y, x <= y, x > y, x >= y",
+        "-3 < x, x <= 5u32, lower < x, x >= upper, lower = upper",
+        "x between -3 and upper, x in { -1, 2, 3, }",
+        "(x between lower and upper and y in {1,2}) or (x != y and y >= 3)",
+        "(x = 1) or (x = 2) or (y = 3)",
+    ] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Q; relation R(a:i32,b:i32); answer(x) :- R(x,y), {body};"
+        ))
+        .unwrap();
+        cq::normal::check(&source).unwrap();
+        let printed = source.to_token_stream();
+        assert!(!printed.to_string().contains('@'));
+        assert_eq!(syn::parse2::<cq::Program>(printed).unwrap(), source);
+        assert_eq!(cq::normal::normalize(&source).unwrap(), source);
+        for c in source.query.body.iter().filter_map(|i| match i {
+            cq::BodyItem::Constraint(c) => Some(c),
+            _ => None,
+        }) {
+            assert!(c.variables().all(|v| v == "x" || v == "y"));
+            assert!(c.parameters().all(|v| v == "lower" || v == "upper"));
+        }
+    }
+}
+
+#[test]
+fn comparison_grammar_rejects_rust_and_names_the_unexpected_token() {
+    for (body, token) in [
+        ("x == 1", "="),
+        ("*x < 1", "*"),
+        ("x < f()", "()"),
+        ("x < cutoff.value", "."),
+        ("x < module::cutoff", ":"),
+        ("x + 1 < y", "+"),
+        ("x < {1}", "{ 1 }"),
+        ("x in { cutoff }", "cutoff"),
+        ("x in [1,2]", "[1 , 2]"),
+        ("(x < 1) || (y < 2)", "|"),
+        ("(x < 1) or y < 2", "y"),
+        ("(x < 1 && y < 2) or (x = 1)", "&"),
+        ("@cutoff < x", "@"),
+    ] {
+        let error = syn::parse_str::<cq::Program>(&format!(
+            "struct Q; relation R(a:i32,b:i32); answer(x) :- R(x,y), {body};"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("unexpected token") && error.contains(token),
+            "{body}: {error}"
+        );
+    }
+}
+
+#[test]
+fn constraint_scope_and_premises_are_local_contract_obligations() {
+    for source in [
+        "struct Q; relation R(a:i32); answer(x) :- x < cutoff, R(x);",
+        "struct Q; relation R(a:i32); answer(x) :- R(x), y < cutoff, let y:i32 = 1;",
+    ] {
+        let p: cq::Program = syn::parse_str(source).unwrap();
+        let e = cq::normal::check(&p).unwrap_err().to_string();
+        assert!(e.contains("before it is bound"), "{e}");
+    }
+    for ty in ["f64", "(i32,f32)", "fn()"] {
+        let p: cq::Program = syn::parse_str(&format!(
+            "struct Q; relation R(a:{ty},b:i32); answer(y) :- R(x,y), x < cutoff;"
+        ))
+        .unwrap();
+        let e = cq::normal::check(&p).unwrap_err().to_string();
+        assert!(e.contains("Eq") || e.contains("Ord"), "{e}");
+    }
+    let mut p: cq::Program =
+        syn::parse_quote! { struct Q; relation R(a:i32); answer(x) :- R(x), x < cutoff; };
+    let cq::BodyItem::Constraint(c) = &mut p.query.body[1] else {
+        panic!()
+    };
+    c.map_terms(&mut |t| {
+        if matches!(t, cq::syntax::constraint::Term::Parameter(_)) {
+            *t = cq::syntax::constraint::Term::Parameter(syn::parse_quote!(x));
+        }
+    });
+    assert!(
+        cq::normal::check(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("query variable")
+    );
 }

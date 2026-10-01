@@ -1,4 +1,4 @@
-//! TPC-H-derived Q19 with a positive join, Rust scalar predicates and exact SUM.
+//! TPC-H-derived Q19 with a positive join, relational comparison predicates and exact SUM.
 //! Part keys are unique in dbgen; retaining the lineitem primary key preserves
 //! SQL multiplicity even when different lineitems have equal revenues.
 
@@ -46,6 +46,12 @@ macro_rules! query_body {
         pub(super) fn execute(data: &Data) -> Vec<Answer> {
             let lineitem = data.lineitem.as_slice();
             let part = data.part.as_slice();
+            let q1_low = Decimal::from_scaled(100).unwrap();
+            let q1_high = Decimal::from_scaled(1100).unwrap();
+            let q2_low = Decimal::from_scaled(1000).unwrap();
+            let q2_high = Decimal::from_scaled(2000).unwrap();
+            let q3_low = Decimal::from_scaled(2000).unwrap();
+            let q3_high = Decimal::from_scaled(3000).unwrap();
             let computed: Vec<(i32, i64, i64, i128)> = query! {
                 struct Query19;
                 relation lineitem(
@@ -57,17 +63,17 @@ macro_rules! query_body {
                 rows(group, orderkey, linenumber, amount) :-
                     part(partkey, brand, container, size),
                     lineitem(partkey, orderkey, linenumber, quantity, price, discount, shipmode, shipinstruct),
-                    if matches!(shipmode.as_str(), "AIR" | "AIR REG"),
-                    if shipinstruct == "DELIVER IN PERSON",
-                    if (brand == "Brand#12"
-                        && matches!(container.as_str(), "SM CASE" | "SM BOX" | "SM PACK" | "SM PKG")
-                        && (100..=1100).contains(&quantity.scaled()) && (1..=5).contains(size))
-                        || (brand == "Brand#23"
-                        && matches!(container.as_str(), "MED BAG" | "MED BOX" | "MED PKG" | "MED PACK")
-                        && (1000..=2000).contains(&quantity.scaled()) && (1..=10).contains(size))
-                        || (brand == "Brand#34"
-                        && matches!(container.as_str(), "LG CASE" | "LG BOX" | "LG PACK" | "LG PKG")
-                        && (2000..=3000).contains(&quantity.scaled()) && (1..=15).contains(size)),
+                    shipmode in { "AIR", "AIR REG" },
+                    shipinstruct = "DELIVER IN PERSON",
+                    (brand = "Brand#12"
+                        and container in { "SM CASE", "SM BOX", "SM PACK", "SM PKG" }
+                        and quantity between q1_low and q1_high and size between 1 and 5)
+                    or (brand = "Brand#23"
+                        and container in { "MED BAG", "MED BOX", "MED PKG", "MED PACK" }
+                        and quantity between q2_low and q2_high and size between 1 and 10)
+                    or (brand = "Brand#34"
+                        and container in { "LG CASE", "LG BOX", "LG PACK", "LG PKG" }
+                        and quantity between q3_low and q3_high and size between 1 and 15),
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * (100 - i128::from(discount.scaled()));
             }.map(|(group, orderkey, linenumber, amount)| (group, *orderkey, *linenumber, amount)).collect();

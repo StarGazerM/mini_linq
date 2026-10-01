@@ -6,6 +6,17 @@
 //! meaning; I/O, mutation and evaluation counts are outside that meaning.
 //! Equality in the relational centre is identity in classical Set.
 //!
+//! CQ body constraints are relational syntax: `t op t` for `= != < <= > >=`,
+//! inclusive `t between lo and hi`, and `t in { literal, ... }`. Commas mean
+//! conjunction; `(C and C) or (C and C)` expresses disjunction. A term is a
+//! query variable, a literal (including negative numbers), or a bare in-scope
+//! capture not bound by the query. Captures are borrowed once outside loops.
+//! No Rust expression is a relational term. `if e` remains an opaque guard.
+//! Equality decides Leibniz identity. Order comparisons require total `Ord`
+//! consistent with identity; Eq/Ord semantics are trusted premises. All these
+//! constraints are total and commute with relational steps, and may move
+//! earlier across Rust steps. `f32`/`f64` are not admissible relational columns.
+//!
 //! CQ planning produces RA; IX records index demands; Physical
 //! fixes one physical operator per result and the mode its reads allow,
 //! under a caller-supplied, query-independent policy; Structures answers

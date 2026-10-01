@@ -11,6 +11,10 @@ abstract laws are explicitly identified and registered as such in
 semantic premises, not properties inferred by these passes. Rust computations
 may be partial; their written chain and Before constraints are retained.
 
+The seen-name set used by A-Variable and A-Repeat is reset for every atom
+occurrence. Sharing a name across atoms creates a natural join directly, not
+a fresh variable and identity. The written bound environment remains global.
+
 \subsection{Normalization: CQ to CQ}
 \label{sec:prefix-planning}
 For an atom at written clause $i$, walk its arguments left to right against the

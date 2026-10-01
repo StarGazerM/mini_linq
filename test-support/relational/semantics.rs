@@ -77,6 +77,11 @@ pub fn evaluate_plan<'a>(
                         .equalities
                         .iter()
                         .all(|e| evaluate_equality(e, row))
+                        && select
+                            .condition
+                            .constraints
+                            .iter()
+                            .all(|c| evaluate_constraint(c, row))
                 });
                 input
             }

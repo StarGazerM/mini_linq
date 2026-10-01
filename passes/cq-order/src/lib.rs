@@ -106,6 +106,8 @@ fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
                 BodyItem::Equality(equality) => {
                     (Vec::new(), equality.variables().map(symbol_name).collect())
                 }
+                // Formal rule D-Constraint: A central constraint requires only its query variables.
+                BodyItem::Constraint(c) => (Vec::new(), c.variables().map(symbol_name).collect()),
                 BodyItem::Filter(filter) => (
                     Vec::new(),
                     rust::free_variables(&filter.condition).dependencies(&prefix),
@@ -140,7 +142,7 @@ fn ready(
 ) -> bool {
     clauses[clause].requires.is_subset(bound)
         && match clauses[clause].item {
-            BodyItem::Positive { .. } | BodyItem::Equality(_) => true,
+            BodyItem::Positive { .. } | BodyItem::Equality(_) | BodyItem::Constraint(_) => true,
             BodyItem::Filter(_) | BodyItem::Let(_) => {
                 pending
                     .iter()
@@ -152,7 +154,9 @@ fn ready(
                         c < clause
                             && matches!(
                                 clauses[c].item,
-                                BodyItem::Positive { .. } | BodyItem::Equality(_)
+                                BodyItem::Positive { .. }
+                                    | BodyItem::Equality(_)
+                                    | BodyItem::Constraint(_)
                             )
                     })
             }
@@ -201,7 +205,8 @@ fn prefix_rank<'a>(
     move |clause, bound| {
         let facts = &clauses[clause];
         if !facts.is_atom() {
-            return (false, false, 0, clause);
+            let priority = usize::from(!matches!(facts.item, BodyItem::Constraint(_)));
+            return (false, false, priority, clause);
         }
         let canonical = |name: &String| canonical_names.get(name).unwrap_or(name).clone();
         let supplied: BTreeSet<_> = facts.provides.iter().map(canonical).collect();
@@ -238,7 +243,12 @@ fn elimination(
         if clauses[clause].is_atom() {
             (true, false, earliest[clause], clause)
         } else {
-            (false, false, 0, clause)
+            (
+                false,
+                false,
+                usize::from(!matches!(clauses[clause].item, BodyItem::Constraint(_))),
+                clause,
+            )
         }
     })?;
     Ok((sequence, order))
@@ -289,6 +299,7 @@ fn coarse(clauses: &[Clause<'_>], sequence: &[usize]) -> Vec<valuation::Step> {
             BodyItem::Equality(equality) => {
                 valuation::Step::Equality(equality.clone(), Default::default())
             }
+            BodyItem::Constraint(c) => valuation::Step::Constraint(c.clone(), Default::default()),
             BodyItem::Filter(filter) => valuation::Step::Guard(filter.clone(), Default::default()),
             BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
@@ -322,7 +333,13 @@ impl Fine<'_> {
                 .waiting
                 .iter()
                 .copied()
-                .find(|&c| ready(self.clauses, &pending, &self.bound, c))
+                .filter(|&c| ready(self.clauses, &pending, &self.bound, c))
+                .min_by_key(|&c| {
+                    (
+                        usize::from(!matches!(self.clauses[c].item, BodyItem::Constraint(_))),
+                        c,
+                    )
+                })
             else {
                 break;
             };
@@ -332,6 +349,9 @@ impl Fine<'_> {
             self.steps.push(match self.clauses[clause].item {
                 BodyItem::Equality(equality) => {
                     valuation::Step::Equality(equality.clone(), Default::default())
+                }
+                BodyItem::Constraint(c) => {
+                    valuation::Step::Constraint(c.clone(), Default::default())
                 }
                 BodyItem::Filter(filter) => {
                     valuation::Step::Guard(filter.clone(), Default::default())
@@ -567,6 +587,13 @@ pub fn check(
                     written.push(position);
                     previous_atom = None;
                 }
+                valuation::Step::Constraint(constraint, _) => {
+                    let position = source.query.body.iter().enumerate().find(|(i, item)|
+                        !written.contains(i) && matches!(item, BodyItem::Constraint(expected) if expected == constraint)
+                    ).map(|(i, _)| i).expect("VO constraint correspondence");
+                    written.push(position);
+                    previous_atom = None;
+                }
                 valuation::Step::Guard(filter, _) => {
                     let position = source
                         .query
@@ -663,6 +690,7 @@ pub fn check(
                 }
             }
             valuation::Step::Equality(..)
+            | valuation::Step::Constraint(..)
             | valuation::Step::Guard(..)
             | valuation::Step::Let(..) => {}
         }

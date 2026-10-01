@@ -44,7 +44,6 @@ mod intersection;
 mod operators;
 
 use cq_print::access::{Access, Side};
-use cq_print::expressions::relational_condition;
 use cq_print::{Context, Repr, error, index, sorted};
 
 /// Caller-resolved macro paths the program is printed into.

@@ -77,6 +77,10 @@ decides Leibniz equality (Rust code cannot distinguish \code{==}-equal values).
 Holds for integers, bool, char, String/\&str, the cq-load Date/Decimal, tuples
 and derived-Eq structs of admissible types; fails for f64/f32
 (\code{0.0 == -0.0}) and hand-written lenient Eq.
+\item When comparisons use order, the column's \code{Ord} terminates normally
+and decides a total order consistent with Leibniz identity:
+$a\leq b\land b\leq a$ iff $a=b$. This is a trusted premise, like the
+admissibility of Eq; Rust checks the necessary trait bound, not its laws.
 \item Functional extensionality of embedded Rust: an embedded expression
 receives query variables as shared references (\code{\&T}, never \code{\&mut}),
 so its value is a function of the values of its free variables; equal (Leibniz)

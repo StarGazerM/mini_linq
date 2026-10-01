@@ -39,7 +39,7 @@ WF-Physical	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule
 PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one stream read for a derived pipe; noncanonical host renames are reusable.
 PH-Let	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Let:	Require every let to be read.
 STR-Key	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Key:	Answer reads by reusable host dispatch or a built level prefix.
-STR-Range	abstract	-	-	Retired by bottom + Set denotation: Rust guards are opaque chain nodes and are never pushed into relational inputs.
+STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-Range:	Const/range reads have direct or scan/filter implementations and never justify a build.
 STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Merge:	Require a direct ordered host read, built entry, or same-key merge pipe.
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
 CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, unified Rust chain, source-before inclusion and exact Written order.
@@ -49,8 +49,8 @@ CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal 
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
 CK-Physical	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Physical:	Check local contracts, RA erasure, IX demands and independent policy premises.
 CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs	/// Formal rule CK-Structures:	Check Physical preservation and independently derived provider and level rules.
-A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Variable:	Keep a first bare argument and record its name.
-A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated bare argument and append relational equality.
+A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Variable:	Keep the first bare occurrence within an atom, including shared query names.
+A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated name only within one atom and append identity.
 A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Wildcard:	Replace a wildcard by a fresh unconstrained atom variable.
 A-Constant	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Constant:	Replace a literal with a fresh atom column and an atom-position relational literal equality.
 A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Prefix:	Emit an opaque Rust binding immediately before its atom when its query inputs are already bound.
@@ -105,3 +105,17 @@ IF-Environment	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-
 IF-Leaf	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Leaf:	Evaluate leaf expressions once under fresh bindings.
 IF-Dispatch	implementation	passes/cq-print/src/access.rs	// Formal rule IF-Dispatch:	Native access is eligible only at a leading declaration prefix.
 IF-Fallback	implementation	runtime/cq-storage/src/dispatch.rs	/// Formal rule IF-Fallback:	Initialize a shared fallback once on first use.
+ORD-Admissible	implementation	languages/cq-syntax/src/algebra.rs	/// Formal rule ORD-Admissible:	Syntactic Eq/Ord checks; a total order consistent with Leibniz identity is trusted.
+CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Bound query terms and captured constants are separate from Rust expressions.
+CQ-Between	implementation	languages/cq-syntax/src/constraint.rs	// Formal rule CQ-Between:	Exactly two inclusive relational bounds.
+CQ-In	implementation	languages/cq-syntax/src/constraint.rs	// Formal rule CQ-In:	Nonempty literal membership means a disjunction of identities.
+CQ-Or	implementation	languages/cq-syntax/src/constraint.rs	// Formal rule CQ-Or:	Disjunction is parenthesized atomic conjunction branches.
+D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constraint:	A central step waits only for its query variables.
+E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Ordinary relational pushdown or prefix select.
+CT-Constraint	implementation	passes/cq-elaborate/src/tableau.rs	/// Formal rule CT-Constraint:	Tableau symbols preserve boolean shape and all column arguments.
+RA-Constraint	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-Constraint:	Relational theta checks scope and Eq/Ord premises without Rust.
+IX-Const	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Const:	Column constant equalities and literal membership produce const supply.
+IX-Range	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Range:	Constant order bounds on one column produce range supply.
+PH-Range	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-Range:	A constant window reads one column with range supply.
+IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Parameter:	Read each capture once outside query loops.
+IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.

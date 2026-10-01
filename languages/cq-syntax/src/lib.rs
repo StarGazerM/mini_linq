@@ -56,7 +56,9 @@ pub fn symbol_name(identifier: &Ident) -> String {
 
 pub mod keyed;
 pub use keyed::SupplyKind;
+pub mod constraint;
 pub mod predicate;
+pub use constraint::Constraint;
 pub mod rust;
 
 /// One named, typed column in a declared input relation.

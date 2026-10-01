@@ -3,13 +3,10 @@ relation F(k1: i32, k2: i32, k3: i32);
 relation A(key: i32, value: i32);
 relation B(key: i32, value: i32);
 relation C(key: i32, value: i32);
-answer(a, b, c) :- F(x, y, z), A(__cq_1_0, a), x = __cq_1_0, B(__cq_2_0, b), y = __cq_2_0, C(__cq_3_0, c), z = __cq_3_0;
+answer(a, b, c) :- F(x, y, z), A(x, a), B(y, b), C(z, c);
 valuation {
     F@0(x, y, z);
-    A@1(__cq_1_0, a);
-    x = __cq_1_0;
-    B@3(__cq_2_0, b);
-    y = __cq_2_0;
-    C@5(__cq_3_0, c);
-    z = __cq_3_0;
+    A@1(x, a);
+    B@2(y, b);
+    C@3(z, c);
 }

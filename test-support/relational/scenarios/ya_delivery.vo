@@ -2,11 +2,9 @@ struct YaDelivery;
 relation D(driver_id: i32, depot_id: i32);
 relation S(depot_id: i32, item_id: i32);
 relation N(job_id: i32, item_id: i32);
-answer(driver, job) :- D(driver, depot), S(__cq_1_0, item), depot = __cq_1_0, N(job, __cq_2_1), item = __cq_2_1;
+answer(driver, job) :- D(driver, depot), S(depot, item), N(job, item);
 valuation {
     D@0(driver, depot);
-    S@1(__cq_1_0, item);
-    depot = __cq_1_0;
-    N@3(job, __cq_2_1);
-    item = __cq_2_1;
+    S@1(depot, item);
+    N@2(job, item);
 }

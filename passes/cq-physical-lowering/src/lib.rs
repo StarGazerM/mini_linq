@@ -125,8 +125,10 @@ fn operators(
             }
             Op::Select(s) => {
                 scan(&mut reads, &s.input);
-                if s.condition.constant_keys().is_some() {
+                if s.condition.point_columns().is_some() {
                     physical::Operator::Point(Default::default(), s.clone())
+                } else if s.condition.range_bounds().is_some() {
+                    physical::Operator::Range(Default::default(), s.clone())
                 } else {
                     physical::Operator::Select(s.clone())
                 }
@@ -284,9 +286,9 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
                     operator: match &d.operator {
                         physical::Operator::Unit(u) => Op::Unit(u.clone()),
                         physical::Operator::Rename(r) => Op::Rename(r.clone()),
-                        physical::Operator::Select(s) | physical::Operator::Point(_, s) => {
-                            Op::Select(s.clone())
-                        }
+                        physical::Operator::Select(s)
+                        | physical::Operator::Point(_, s)
+                        | physical::Operator::Range(_, s) => Op::Select(s.clone()),
                         physical::Operator::Bind(b) => Op::Bind(b.clone()),
                         physical::Operator::Guard(g) => Op::Guard(g.clone()),
                         physical::Operator::Project(p) => Op::Project(p.clone()),
@@ -318,7 +320,7 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
     }
 }
 
-/// Formal rule CK-Demands: Require each probe or semi right-operand descriptor in source IX.
+/// Formal rule CK-Demands: Require each stream/const/range keyed-read descriptor in source IX.
 fn check_demands(source: &ix::Program, target: &physical::Program) -> syn::Result<()> {
     let analysis = physical::contract::check(target)?;
     let demands: BTreeSet<_> = source

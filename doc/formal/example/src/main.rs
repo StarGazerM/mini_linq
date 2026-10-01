@@ -37,7 +37,7 @@ fn main() {
         cq::hypergraph::Analysis::of(&planned.normal).join_tree,
         Some(vec![(0, Some(1)), (1, Some(2)), (2, None)])
     );
-    // The guard on T is pushed onto T; the reducer goes up from R through S
+    // Opaque guards retain their chain. The reducer goes up from R through S
     // to T and down again, before the first atom step.
     let expected_vo: valuation::Program = syn::parse_quote! {
         pub struct Overview;
@@ -47,7 +47,6 @@ fn main() {
         relation answer(a:i32,b:i32);
         answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), if y > 0;
         valuation {
-            reduce T@2 if y > 0;
             reduce S@1 with R@0(_, k, tag, _);
             reduce T@2 with S@1(_, _, z);
             reduce S@1 with T@2(z, _);
@@ -55,22 +54,23 @@ fn main() {
             R@0(x, k, tag, unused);
             S@1(k, tag, z);
             T@2(z, y);
+            if y > 0;
         }
     };
     assert_eq!(planned.valuation, expected_vo);
     let declarations = &source.declarations;
     let expected_ra: ra::Plan = syn::parse_quote! {
         #(#declarations)*
-        r0 = rename T { a -> z, b -> y };
-        r1 = select r0 if (y > 0);
-        r2 = rename S { a -> k, b -> tag, c -> z };
-        r3 = rename R { a -> x, b -> k, c -> tag, d -> unused };
-        r4 = semijoin r2 with r3;
-        r5 = semijoin r1 with r4;
-        r6 = semijoin r4 with r5;
-        r7 = semijoin r3 with r6;
-        r8 = natural_join r7 with r6;
-        r9 = natural_join r8 with r5;
+        r0 = rename S { a -> k, b -> tag, c -> z };
+        r1 = rename R { a -> x, b -> k, c -> tag, d -> unused };
+        r2 = semijoin r0 with r1;
+        r3 = rename T { a -> z, b -> y };
+        r4 = semijoin r3 with r2;
+        r5 = semijoin r2 with r4;
+        r6 = semijoin r1 with r5;
+        r7 = natural_join r6 with r5;
+        r8 = natural_join r7 with r4;
+        r9 = guard r8 if (y > 0);
         r10 = project r9 keep { x, y };
         output r10 as answer(x, y);
     };
@@ -82,7 +82,7 @@ fn main() {
         r2 = natural_join r0 with r1;
         r3 = rename T { a -> z, b -> y };
         r4 = natural_join r2 with r3;
-        r5 = select r4 if (y > 0);
+        r5 = guard r4 if (y > 0);
         r6 = project r5 keep { x, y };
         output r6 as answer(x, y);
     };
@@ -106,10 +106,10 @@ fn main() {
     assert_eq!(
         descriptors(&planned.indexes),
         vec![
-            ("r3".into(), vec![0, 1]),
-            ("r4".into(), vec![2]),
-            ("r5".into(), vec![1]),
-            ("r6".into(), vec![0, 1])
+            ("r1".into(), vec![0, 1]),
+            ("r2".into(), vec![2]),
+            ("r4".into(), vec![1]),
+            ("r5".into(), vec![0, 1])
         ]
     );
     assert_eq!(

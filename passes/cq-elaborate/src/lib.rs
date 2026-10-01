@@ -59,6 +59,7 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
                             .eq(atom.variables().map(symbol_name))
                 }
                 (BodyItem::Equality(a), valuation::Step::Equality(b, _)) => a == b,
+                (BodyItem::Constraint(a), valuation::Step::Constraint(b, _)) => a == b,
                 (BodyItem::Filter(a), valuation::Step::Guard(b, _)) => a == b,
                 (BodyItem::Let(a), valuation::Step::Let(b, _)) => a == b,
                 _ => false,
@@ -74,6 +75,32 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
 
 fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Result<ra::Program> {
     let analysis = valuation::contract::check(source)?;
+    let let_bound: BTreeSet<_> = source
+        .cq
+        .query
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            valuation::cq::BodyItem::Let(b) => Some(cq::rust::bindings(&b.pattern)),
+            _ => None,
+        })
+        .flatten()
+        .map(|v| symbol_name(&v))
+        .collect();
+    let targets = |variables: BTreeSet<String>, before: usize| -> BTreeSet<usize> {
+        if variables.is_empty() || !variables.is_disjoint(&let_bound) {
+            return BTreeSet::new();
+        }
+        analysis
+            .atoms
+            .iter()
+            .filter(|(clause, atom)| {
+                **clause < before
+                    && variables.is_subset(&atom.variables().map(symbol_name).collect())
+            })
+            .map(|(clause, _)| *clause)
+            .collect()
+    };
     let mut state = State {
         inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
         atoms: &analysis.atoms,
@@ -94,13 +121,31 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
             BTreeMap::new()
         },
         relational_hoisting,
+        constraints: source
+            .cq
+            .query
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(clause, item)| match item {
+                valuation::cq::BodyItem::Constraint(c) => Some((
+                    c.clone(),
+                    targets(c.variables().map(symbol_name).collect(), clause),
+                )),
+                _ => None,
+            })
+            .collect(),
         equalities: source
             .cq
             .query
             .body
             .iter()
-            .filter_map(|item| match item {
-                valuation::cq::BodyItem::Equality(equality) => Some(equality.clone()),
+            .enumerate()
+            .filter_map(|(clause, item)| match item {
+                valuation::cq::BodyItem::Equality(e) => Some((
+                    e.clone(),
+                    targets(e.variables().map(symbol_name).collect(), clause),
+                )),
                 _ => None,
             })
             .collect(),
@@ -122,6 +167,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
             }
             valuation::Step::Let(binding, _) => state.bind(binding),
             valuation::Step::Equality(equality, _) => state.equality(equality),
+            valuation::Step::Constraint(c, _) => state.constraint(c),
         }
         let introduced: Vec<_> = introduces
             .iter()
@@ -194,7 +240,8 @@ struct State<'a> {
     heading: BTreeSet<String>,
     aliases: BTreeMap<String, Ident>,
     relational_hoisting: bool,
-    equalities: Vec<ra::Equality>,
+    equalities: Vec<(ra::Equality, BTreeSet<usize>)>,
+    constraints: Vec<(cq::Constraint, BTreeSet<usize>)>,
 }
 
 impl State<'_> {
@@ -230,22 +277,47 @@ impl State<'_> {
         })));
         // A literal equality is a keyed relational read of this occurrence.
         // It may move earlier across Rust because it only restricts its domain.
-        let variables: BTreeSet<_> = atom.variables().map(symbol_name).collect();
         let literals: Vec<_> = self
             .equalities
             .iter()
-            .filter(|e| {
+            .filter(|(e, targets)| {
                 self.relational_hoisting
-                    && variables.contains(&symbol_name(&e.left))
+                    && targets.contains(&clause)
                     && matches!(e.right, ra::EqualityValue::Literal(_))
             })
-            .map(|e| ra::Equality {
+            .map(|(e, _)| ra::Equality {
                 left: self.canonical(&e.left),
                 ..e.clone()
             })
             .collect();
         if !literals.is_empty() {
             result = self.select(result, literals);
+        }
+        // Ordinary relational pushdown: every used column belongs to this
+        // occurrence. Group same-column conjuncts into one range selection.
+        if self.relational_hoisting {
+            let mut groups: Vec<(BTreeSet<String>, Vec<cq::Constraint>)> = Vec::new();
+            for (c, targets) in &self.constraints {
+                let columns: BTreeSet<_> = c.variables().map(symbol_name).collect();
+                if targets.contains(&clause) {
+                    let mut predicate = c.clone();
+                    predicate.map_terms(&mut |t| {
+                        if let cq::constraint::Term::Variable(v) = t {
+                            *v = self.canonical(v);
+                        }
+                    });
+                    if let Some((_, constraints)) =
+                        groups.iter_mut().find(|(key, _)| *key == columns)
+                    {
+                        constraints.push(predicate);
+                    } else {
+                        groups.push((columns, vec![predicate]));
+                    }
+                }
+            }
+            for (_, constraints) in groups {
+                result = self.select_constraints(result, constraints);
+            }
         }
         self.relations.insert(clause, result.clone());
         result
@@ -326,19 +398,55 @@ impl State<'_> {
             condition_paren: Default::default(),
             condition: ra::Theta {
                 equalities: equalities.into_iter().collect(),
+                constraints: Default::default(),
             },
         })))
     }
 
-    fn equality(&mut self, equality: &ra::Equality) {
-        if self.relational_hoisting && matches!(equality.right, ra::EqualityValue::Literal(_)) {
-            // Literal constraints on stored columns already decorate the rename.
-            if self.atoms.values().any(|atom| {
-                atom.variables()
-                    .any(|v| symbol_name(v) == symbol_name(&equality.left))
-            }) {
-                return;
+    fn select_constraints(&mut self, input: Ident, constraints: Vec<cq::Constraint>) -> Ident {
+        self.emit(ra::Operator::Select(Box::new(ra::Select {
+            select_token: Default::default(),
+            input,
+            if_token: Default::default(),
+            condition_paren: Default::default(),
+            condition: ra::Theta {
+                equalities: Default::default(),
+                constraints: constraints.into_iter().collect(),
+            },
+        })))
+    }
+
+    /// Formal rule E-Constraint: Push a central constraint onto its complete binder or select the prefix.
+    fn constraint(&mut self, constraint: &cq::Constraint) {
+        if self.relational_hoisting
+            && self
+                .constraints
+                .iter()
+                .filter(|(c, _)| c == constraint)
+                .all(|(_, targets)| !targets.is_empty())
+        {
+            return;
+        }
+        let mut c = constraint.clone();
+        c.map_terms(&mut |t| {
+            if let cq::constraint::Term::Variable(v) = t {
+                *v = self.canonical(v);
             }
+        });
+        let input = self.prefix_or_unit();
+        self.prefix = Some(self.select_constraints(input, vec![c]));
+    }
+
+    fn equality(&mut self, equality: &ra::Equality) {
+        if self.relational_hoisting
+            && matches!(equality.right, ra::EqualityValue::Literal(_))
+            && self
+                .equalities
+                .iter()
+                .filter(|(e, _)| e == equality)
+                .all(|(_, targets)| !targets.is_empty())
+        {
+            return;
         }
         let left = self.canonical(&equality.left);
         let right = match &equality.right {
@@ -474,9 +582,21 @@ fn aliases(source: &valuation::cq::Program) -> BTreeMap<String, Ident> {
             _ => None,
         })
         .collect();
+    let let_bound: BTreeSet<_> = source
+        .query
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            BodyItem::Let(b) => Some(cq::rust::bindings(&b.pattern)),
+            _ => None,
+        })
+        .flatten()
+        .map(|v| symbol_name(&v))
+        .collect();
     let generators: BTreeSet<_> = atoms
         .iter()
         .flat_map(|atom| atom.variables().map(symbol_name))
+        .filter(|v| !let_bound.contains(v))
         .collect();
     let mut protected: BTreeSet<_> = source.query.head.variables().map(symbol_name).collect();
     for item in &source.query.body {

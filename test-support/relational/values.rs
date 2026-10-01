@@ -106,6 +106,42 @@ pub fn evaluate_equality(e: &cq_syntax::Equality, row: &Binding) -> bool {
     row[&symbol_name(&e.left)] == right
 }
 
+/// Independent integer interpretation of the relational syntax. Parameters,
+/// when used by an IR fixture, are supplied in the external binding map.
+pub fn evaluate_constraint(c: &cq_syntax::Constraint, row: &Binding) -> bool {
+    use cq_syntax::constraint::{Comparison, Constraint, Term};
+    let value = |t: &Term| match t {
+        Term::Variable(v) | Term::Parameter(v) => row[&symbol_name(v)],
+        Term::Literal(l) => evaluate_integer(l, row),
+    };
+    match c {
+        Constraint::Compare {
+            left,
+            comparison,
+            right,
+        } => {
+            let (l, r) = (value(left), value(right));
+            match comparison {
+                Comparison::Eq(_) => l == r,
+                Comparison::Ne(_) => l != r,
+                Comparison::Lt(_) => l < r,
+                Comparison::Le(_) => l <= r,
+                Comparison::Gt(_) => l > r,
+                Comparison::Ge(_) => l >= r,
+            }
+        }
+        Constraint::Between { term, low, high } => {
+            value(low) <= value(term) && value(term) <= value(high)
+        }
+        Constraint::In { term, literals } => literals
+            .iter()
+            .any(|l| value(term) == evaluate_integer(l, row)),
+        Constraint::Or(branches) => branches
+            .iter()
+            .any(|b| b.iter().all(|c| evaluate_constraint(c, row))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

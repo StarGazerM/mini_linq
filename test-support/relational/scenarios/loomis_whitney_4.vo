@@ -3,18 +3,10 @@ relation ABC(first: i32, second: i32, third: i32);
 relation BCD(first: i32, second: i32, third: i32);
 relation ACD(first: i32, second: i32, third: i32);
 relation ABD(first: i32, second: i32, third: i32);
-answer(a, b, c, d) :- ABC(a, b, c), BCD(__cq_1_0, __cq_1_1, d), b = __cq_1_0, c = __cq_1_1, ACD(__cq_2_0, __cq_2_1, __cq_2_2), a = __cq_2_0, c = __cq_2_1, d = __cq_2_2, ABD(__cq_3_0, __cq_3_1, __cq_3_2), a = __cq_3_0, b = __cq_3_1, d = __cq_3_2;
+answer(a, b, c, d) :- ABC(a, b, c), BCD(b, c, d), ACD(a, c, d), ABD(a, b, d);
 valuation {
     ABC@0(a, b, c);
-    BCD@1(__cq_1_0, __cq_1_1, d);
-    b = __cq_1_0;
-    c = __cq_1_1;
-    ACD@4(__cq_2_0, __cq_2_1, __cq_2_2);
-    a = __cq_2_0;
-    c = __cq_2_1;
-    d = __cq_2_2;
-    ABD@8(__cq_3_0, __cq_3_1, __cq_3_2);
-    a = __cq_3_0;
-    b = __cq_3_1;
-    d = __cq_3_2;
+    BCD@1(b, c, d);
+    ACD@2(a, c, d);
+    ABD@3(a, b, d);
 }

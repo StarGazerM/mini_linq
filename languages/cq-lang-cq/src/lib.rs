@@ -6,7 +6,19 @@
 //! Relational steps commute and may move earlier across a Rust step. Rust
 //! steps keep their relative order and follow every free-variable binder.
 //!
-//! Relational equality is Leibniz identity, decided by admissible column `==`.
+//! Relational constraints use `t = t`, `t != t`, `t < t`, `t <= t`, `t > t`,
+//! `t >= t`, inclusive `t between t and t`, or `t in { literal, ... }`.
+//! Conjunction is separate body items; `(C and C) or (C and C)` is a
+//! disjunction of parenthesized atomic conjunctions. Terms are a query
+//! variable, a Syn literal (or negative numeric literal), or a bare enclosing
+//! identifier not among the query's binders. Other Rust expressions are rejected.
+//! Captured parameters are borrowed once per evaluation outside query loops.
+//! `if e` is always an opaque Rust guard, even when e looks like a comparison.
+//! Equality is Leibniz identity, decided by admissible column `==`.
+//! Order requires a total `Ord` consistent with that identity. Constraints are
+//! total and central: they commute with relational steps and may move earlier
+//! across Rust steps. Rust checks Eq/Ord for aliases and user types; semantic
+//! admissibility is a trusted caller premise. f32/f64 are inadmissible.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
@@ -14,6 +26,7 @@
 pub use cq_syntax::predicate::{Comparison, Predicate, Term};
 pub mod hypergraph;
 pub mod normal;
+pub use cq_syntax::Constraint;
 pub use cq_syntax::rust;
 pub use cq_syntax::{Equality, EqualityValue};
 
@@ -75,14 +88,51 @@ pub use cq_syntax::Atom;
 /// ```text
 /// Query ::= Atom ":-" BodyItem ("," BodyItem)* ";"
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Query {
     pub head: Atom,
     pub colon_token: Token![:],
     pub minus_token: Token![-],
-    #[parse(CommaList::parse_separated_nonempty)]
     pub body: CommaList<BodyItem>,
     pub semi_token: Token![;],
+}
+
+impl syn::parse::Parse for Query {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let mut query = Self {
+            head: input.parse()?,
+            colon_token: input.parse()?,
+            minus_token: input.parse()?,
+            body: CommaList::parse_separated_nonempty(input)?,
+            semi_token: input.parse()?,
+        };
+        // Scope is determined by binders, never by identifiers in predicates.
+        // A later query binder is still a query variable and must pass the
+        // written-scope check; an enclosing value is a captured parameter.
+        let logical = query
+            .body
+            .iter()
+            .flat_map(|item| match item {
+                BodyItem::Positive { atom } => atom.variables().cloned().collect(),
+                BodyItem::Let(binding) => rust::bindings(&binding.pattern),
+                _ => Vec::new(),
+            })
+            .map(|v| symbol_name(&v))
+            .collect();
+        for item in &mut query.body {
+            let mut constraint = match item {
+                BodyItem::Equality(e) => Constraint::from_equality(e),
+                BodyItem::Constraint(c) => c.clone(),
+                _ => continue,
+            };
+            constraint.resolve(&logical);
+            *item = match constraint.equality() {
+                Some(e) => BodyItem::Equality(e),
+                None => BodyItem::Constraint(constraint),
+            };
+        }
+        Ok(query)
+    }
 }
 
 impl Query {
@@ -114,7 +164,7 @@ impl Query {
 /// across that chain under the sufficient refinement check.
 ///
 /// ```text
-/// BodyItem ::= Atom | Ident "=" (Ident | Literal)
+/// BodyItem ::= Atom | Constraint
 ///            | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
 ///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
@@ -122,6 +172,7 @@ impl Query {
 #[derive(Clone, Debug)]
 pub enum BodyItem {
     Equality(Equality),
+    Constraint(Constraint),
     Filter(Filter),
     Let(Box<Let>),
     Negation(Negation),
@@ -138,7 +189,7 @@ pub enum BodyItem {
 
 impl syn::parse::Parse for BodyItem {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        Ok(if input.peek(Token![if]) {
+        let item = if input.peek(Token![if]) {
             Self::Filter(input.parse()?)
         } else if input.peek(Token![let]) {
             Self::Let(input.parse()?)
@@ -146,7 +197,7 @@ impl syn::parse::Parse for BodyItem {
             Self::Negation(input.parse()?)
         } else if input.peek(kw::agg) && !input.peek2(Token![!]) {
             Self::Aggregate(input.parse()?)
-        } else if input.peek(Ident) && input.peek2(Token![!]) {
+        } else if input.peek(Ident) && input.peek2(Token![!]) && !input.peek2(Token![!=]) {
             let name = input.parse()?;
             input.parse::<Token![!]>()?;
             let body;
@@ -155,13 +206,30 @@ impl syn::parse::Parse for BodyItem {
                 name,
                 tokens: body.parse()?,
             }
-        } else if input.peek(Ident) && input.peek2(Token![=]) {
-            Self::Equality(input.parse()?)
-        } else {
+        } else if input.peek(Ident) && input.peek2(token::Paren) {
             Self::Positive {
                 atom: input.parse()?,
             }
-        })
+        } else {
+            let constraint: Constraint = input.parse()?;
+            if let Some(parameter) = constraint.parameters().next() {
+                return Err(syn::Error::new_spanned(
+                    parameter,
+                    "unexpected token `@`: CQ parameters are bare identifiers",
+                ));
+            }
+            match constraint.equality() {
+                Some(e) => Self::Equality(e),
+                None => Self::Constraint(constraint),
+            }
+        };
+        if !input.is_empty() && !input.peek(Token![,]) && !input.peek(Token![;]) {
+            return Err(cq_syntax::constraint::unexpected(
+                input,
+                "`,` or `;` after a CQ body item",
+            ));
+        }
+        Ok(item)
     }
 }
 
@@ -169,6 +237,7 @@ impl quote::ToTokens for BodyItem {
     fn to_tokens(&self, output: &mut proc_macro2::TokenStream) {
         match self {
             Self::Equality(x) => x.to_tokens(output),
+            Self::Constraint(x) => output.extend(x.cq_tokens()),
             Self::Filter(x) => x.to_tokens(output),
             Self::Let(x) => x.to_tokens(output),
             Self::Negation(x) => x.to_tokens(output),
@@ -183,6 +252,7 @@ impl PartialEq for BodyItem {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Equality(a), Self::Equality(b)) => a == b,
+            (Self::Constraint(a), Self::Constraint(b)) => a == b,
             (Self::Filter(a), Self::Filter(b)) => a == b,
             (Self::Let(a), Self::Let(b)) => a == b,
             (Self::Negation(a), Self::Negation(b)) => a == b,
@@ -311,6 +381,7 @@ fn check_program(program: &Program) -> syn::Result<()> {
                         .map(|(id, ty)| (symbol_name(&id), ty)),
                 ),
                 BodyItem::Equality(_)
+                | BodyItem::Constraint(_)
                 | BodyItem::Filter(_)
                 | BodyItem::Negation(_)
                 | BodyItem::Aggregate(_)
@@ -347,6 +418,7 @@ fn check_query(
             BodyItem::Positive { atom } => atom.variables().cloned().collect(),
             BodyItem::Let(binding) => rust::bindings(&binding.pattern),
             BodyItem::Equality(_)
+            | BodyItem::Constraint(_)
             | BodyItem::Filter(_)
             | BodyItem::Negation(_)
             | BodyItem::Aggregate(_)
@@ -392,6 +464,27 @@ fn check_query(
                             "relational equality uses a variable before it is bound",
                         ));
                     }
+                }
+            }
+            // Formal rule CQ-Comparison: Constraint terms use bound query names or captured constants.
+            BodyItem::Constraint(constraint) => {
+                constraint.check()?;
+                for variable in constraint.variables() {
+                    if !body_variables.contains(&symbol_name(variable)) {
+                        return Err(syn::Error::new_spanned(
+                            variable,
+                            "relational constraint uses a query variable before it is bound",
+                        ));
+                    }
+                }
+                if let Some(parameter) = constraint
+                    .parameters()
+                    .find(|p| logical.contains(&symbol_name(p)))
+                {
+                    return Err(syn::Error::new_spanned(
+                        parameter,
+                        "relational parameter names a query variable",
+                    ));
                 }
             }
             // Formal rule IF-Surface: No unexpanded extension enters the checked core.

@@ -458,7 +458,9 @@ fn format_index_block(module: &index_requirements::Program) -> String {
                 .join(", ");
             format!(
                 "{} = @{}[{columns}] {};",
-                index.name, index.requirement.relation, compact_tokens(&index.requirement.supply)
+                index.name,
+                index.requirement.relation,
+                compact_tokens(&index.requirement.supply)
             )
         })
         .collect::<Vec<_>>()

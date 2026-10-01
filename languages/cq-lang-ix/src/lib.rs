@@ -21,15 +21,18 @@ use syn::{Ident, Token, token};
 pub mod kw {
     pub use cq_syntax::kw::indexes;
     syn::custom_keyword!(stream);
+    syn::custom_keyword!(range);
 }
 
-/// The source of key values: another runtime result, or one literal tuple.
+/// Key/window supply: another result, fixed point values, or constant order bounds.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Supply {
     #[parse(peek = kw::stream)]
     Stream(kw::stream),
     #[parse(peek = Token![const])]
     Const(Token![const]),
+    #[parse(peek = kw::range)]
+    Range(kw::range),
 }
 
 impl Supply {
@@ -37,6 +40,7 @@ impl Supply {
         match self {
             Self::Stream(_) => SupplyKind::Stream,
             Self::Const(_) => SupplyKind::Const,
+            Self::Range(_) => SupplyKind::Range,
         }
     }
 }
@@ -46,6 +50,7 @@ impl From<SupplyKind> for Supply {
         match kind {
             SupplyKind::Stream => Self::Stream(Default::default()),
             SupplyKind::Const => Self::Const(Default::default()),
+            SupplyKind::Range => Self::Range(Default::default()),
         }
     }
 }
@@ -53,7 +58,7 @@ impl From<SupplyKind> for Supply {
 /// An exact RA result version and its ordered logical column ordinals.
 ///
 /// ```text
-/// IndexRequirement ::= "@" Ident "[" [Column ("," Column)* [","]] "]" ("stream" | "const")
+/// IndexRequirement ::= "@" Ident "[" [Column ("," Column)* [","]] "]" ("stream" | "const" | "range")
 /// ```
 ///
 /// The empty list denotes indexing by the unit tuple, including a Cartesian
@@ -182,17 +187,23 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
             ra::Operator::NaturalJoin(j) => (&j.left, &j.right),
             ra::Operator::Semijoin(j) => (&j.left, &j.right),
             ra::Operator::Select(selection) => {
-                if let Some(keys) = selection.condition.constant_keys() {
+                if let Some(keys) = selection.condition.point_columns() {
                     let input = symbol_name(&selection.input);
                     let columns = info[&input]
                         .heading
                         .iter()
                         .enumerate()
-                        .filter_map(|(ordinal, column)| {
-                            keys.contains_key(column).then_some(ordinal)
-                        })
+                        .filter_map(|(ordinal, column)| keys.contains(column).then_some(ordinal))
                         .collect();
                     expected.insert((input, columns, SupplyKind::Const));
+                } else if let Some((column, _)) = selection.condition.range_bounds() {
+                    let input = symbol_name(&selection.input);
+                    let ordinal = info[&input]
+                        .heading
+                        .iter()
+                        .position(|c| *c == column)
+                        .expect("checked range column");
+                    expected.insert((input, vec![ordinal], SupplyKind::Range));
                 }
                 continue;
             }

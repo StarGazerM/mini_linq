@@ -8,7 +8,7 @@
 //! correlated row has been checked. Rust guards are never reductions.
 //!
 //! ```text
-//! Step ::= Subatom ";" | Ident "=" (Ident | Literal) ";"
+//! Step ::= Subatom ";" | Constraint ";"
 //!        | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
 //!        | "reduce" Ident "@" Int "with" Subatom ";"
 //! ```
@@ -54,6 +54,7 @@ fn parse_steps(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Step>> {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub enum Step {
     Equality(cq::Equality, Token![;]),
+    Constraint(cq::Constraint, Token![;]),
     Guard(cq_syntax::Filter, Token![;]),
     Let(Box<cq_syntax::Let>, Token![;]),
     Reduce(Reduce, Token![;]),
@@ -68,10 +69,14 @@ impl syn::parse::Parse for Step {
             Self::Let(input.parse()?, input.parse()?)
         } else if input.peek(kw::reduce) {
             Self::Reduce(input.parse()?, input.parse()?)
-        } else if input.peek(Ident) && input.peek2(Token![=]) {
-            Self::Equality(input.parse()?, input.parse()?)
-        } else {
+        } else if input.peek(Ident) && input.peek2(Token![@]) {
             Self::Atom(input.parse()?, input.parse()?)
+        } else {
+            let c: cq::Constraint = input.parse()?;
+            match c.equality() {
+                Some(e) => Self::Equality(e, input.parse()?),
+                None => Self::Constraint(c, input.parse()?),
+            }
         })
     }
 }
@@ -172,6 +177,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     let mut rust_chain = Vec::new();
     let mut dependencies = BTreeMap::new();
     let mut equalities = BTreeMap::new();
+    let mut constraints = BTreeMap::new();
     let mut let_bound = BTreeSet::new();
     for (clause, item) in body.iter().enumerate() {
         match item {
@@ -181,6 +187,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
             cq::BodyItem::Equality(equality) => {
                 equalities.insert(clause, equality);
+            }
+            cq::BodyItem::Constraint(c) => {
+                constraints.insert(clause, c);
             }
             cq::BodyItem::Filter(_) | cq::BodyItem::Let(_) => {
                 let step = item.rust_step().expect("Rust step");
@@ -219,6 +228,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     let mut seen_atoms = BTreeSet::new();
     let mut complete = BTreeSet::new();
     let mut placed_equalities = BTreeSet::new();
+    let mut placed_constraints = BTreeSet::new();
     let mut next_rust = 0;
     for step in &program.valuation.steps {
         analysis.bound_before.push(bound.clone());
@@ -289,6 +299,28 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
+            Step::Constraint(constraint, _) => {
+                let Some((&clause, _)) = constraints.iter().find(|(clause, expected)| {
+                    !placed_constraints.contains(*clause) && ***expected == *constraint
+                }) else {
+                    return error(
+                        constraint,
+                        "every relational constraint must appear exactly once from the query",
+                    );
+                };
+                if let Some(variable) = constraint
+                    .variables()
+                    .find(|v| !bound.contains(&symbol_name(v)))
+                {
+                    return error(
+                        constraint,
+                        format!("constraint uses `{variable}` before it is bound"),
+                    );
+                }
+                placed_constraints.insert(clause);
+                complete.insert(clause);
+                analysis.introduces.push(Vec::new());
+            }
             Step::Guard(_, _) | Step::Let(_, _) => {
                 let Some(&clause) = rust_chain.get(next_rust) else {
                     return error(step, "more Rust steps than the query has");
@@ -313,7 +345,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 for earlier in 0..clause {
                     if matches!(
                         &body[earlier],
-                        cq::BodyItem::Positive { .. } | cq::BodyItem::Equality(_)
+                        cq::BodyItem::Positive { .. }
+                            | cq::BodyItem::Equality(_)
+                            | cq::BodyItem::Constraint(_)
                     ) && !complete.contains(&earlier)
                     {
                         return error(
@@ -398,6 +432,12 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         .find(|(clause, _)| !placed_equalities.contains(clause))
     {
         return error(*missing, "every relational equality must be placed");
+    }
+    if let Some((_, missing)) = constraints
+        .iter()
+        .find(|(clause, _)| !placed_constraints.contains(clause))
+    {
+        return error(*missing, "every relational constraint must be placed");
     }
     if next_rust != rust_chain.len() {
         return error(

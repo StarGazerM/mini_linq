@@ -250,7 +250,7 @@ fn analysis_requires_normal_form() {
 }
 
 #[test]
-fn normalization_aliases_preserve_cycles_and_join_tree_connectivity() {
+fn normalization_keeps_shared_names_cycles_and_join_tree_connectivity() {
     for text in [
         "struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32); relation T(a:i32,b:i32); answer(x,y,z) :- R(x,y),S(y,z),T(z,x);",
         "struct Q; relation R(a:i32,b:i32); relation S(a:i32,b:i32); answer(x,z) :- R(x,y),S(y,z);",
@@ -262,7 +262,8 @@ fn normalization_aliases_preserve_cycles_and_join_tree_connectivity() {
         assert_eq!(after.acyclic, before.acyclic);
         assert_eq!(after.chordal, before.chordal);
         assert_eq!(after.conformal, before.conformal);
-        assert!(after.equivalent("y", "__cq_1_0"));
+        assert_eq!(normalized, source);
+        assert!(after.equivalent("y", "y"));
         assert!(!after.shared(0, 1).is_empty());
     }
 }

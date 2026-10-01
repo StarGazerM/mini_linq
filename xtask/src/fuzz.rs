@@ -788,6 +788,9 @@ fn consumer_case(id: usize, case: &Case, c: Config) -> String {
             writeln!(code, "let mut input_{i} = std::collections::{}::<(i32,), Vec<_>>::new();\nfor row in &data[{i}] {{ input_{i}.entry((row[0],)).or_default().push(({tail})); }}\nlet {} = &input_{i};", if c.host == 1 { "HashMap" } else { "BTreeMap" }, relation.name).unwrap();
         }
     }
+    for (name, value) in case.parameters() {
+        writeln!(code, "let {name}: i32 = {value};").unwrap();
+    }
     let fields = (0..case.output_arity())
         .map(|i| format!("crate::integer(row.{i}),"))
         .collect::<String>();
@@ -952,6 +955,7 @@ mod tests {
                     .collect(),
                 bindings: Vec::new(),
                 guards: Vec::new(),
+                constraints: Vec::new(),
                 head: vec![model::Expr::Var(0)],
                 order: Vec::new(),
             },

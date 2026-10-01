@@ -1,10 +1,8 @@
 struct Composite;
 relation R(first: i32, second: i32, value: i32);
 relation S(first: i32, second: i32, value: i32);
-answer(x, y) :- R(a, b, x), S(__cq_1_0, __cq_1_1, y), b = __cq_1_0, a = __cq_1_1;
+answer(x, y) :- R(a, b, x), S(b, a, y);
 valuation {
     R@0(a, b, x);
-    S@1(__cq_1_0, __cq_1_1, y);
-    b = __cq_1_0;
-    a = __cq_1_1;
+    S@1(b, a, y);
 }

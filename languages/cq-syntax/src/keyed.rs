@@ -6,4 +6,5 @@
 pub enum SupplyKind {
     Stream,
     Const,
+    Range,
 }

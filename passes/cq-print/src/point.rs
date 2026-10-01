@@ -2,7 +2,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::{Context, expressions::relational_condition};
+use crate::Context;
 use cq_lang_structures::syntax::{self, symbol_name};
 
 impl Context<'_> {
@@ -14,16 +14,22 @@ impl Context<'_> {
         if !self.analysis.host_read(&input_name) {
             return None;
         }
-        let keys = select
-            .condition
-            .constant_keys()
-            .expect("checked const demand");
-        let condition = relational_condition(&select.condition);
+        let keys = select.condition.constant_keys();
+        let condition = self.relational_condition(&select.condition);
         let pattern = self.borrowed_pattern(&input_name);
-        let access = self.host_access(&input_name, &keys.keys().cloned().collect::<Vec<_>>());
         let rows = self.host_scan(&input_name);
         let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| #condition));
+        let Some(keys) = keys else {
+            return Some(filtered);
+        };
+        let access = self.host_access(&input_name, &keys.keys().cloned().collect::<Vec<_>>());
         if !access.prefix {
+            return Some(filtered);
+        }
+        // A Rust string literal is borrowed str, not an owned String key.
+        // Unsupported exact key types scan without converting or cloning it.
+        if access.key.iter().any(|c| matches!(&keys[c], syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))
+            && !matches!(&self.infos[&input_name].types[c], syn::Type::Reference(r) if matches!(&*r.elem, syn::Type::Path(p) if p.path.is_ident("str")))) {
             return Some(filtered);
         }
         let host = &access.value;

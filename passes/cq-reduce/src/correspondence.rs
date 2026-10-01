@@ -66,6 +66,7 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
                     .map(|s| match s {
                         Step::Atom(a, _) => format!("clause #{} (`{}`)", a.clause(), a.relation),
                         Step::Equality(_, _) => "relational equality".into(),
+                        Step::Constraint(_, _) => "relational constraint".into(),
                         Step::Guard(_, _) => "guard clause".into(),
                         Step::Let(_, _) => "binding clause".into(),
                         Step::Reduce(r, _) => format!("reduction of clause #{}", r.clause()),

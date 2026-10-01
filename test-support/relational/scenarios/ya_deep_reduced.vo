@@ -3,19 +3,16 @@ relation R(first: i32, second: i32);
 relation S(first: i32, second: i32);
 relation T(first: i32, second: i32);
 relation U(first: i32, second: i32);
-answer(a, e) :- R(a, b), S(__cq_1_0, c), b = __cq_1_0, T(__cq_2_0, d), c = __cq_2_0, U(__cq_3_0, e), d = __cq_3_0;
+answer(a, e) :- R(a, b), S(b, c), T(c, d), U(d, e);
 valuation {
     reduce S@1 with R@0(_, b);
-    reduce T@3 with S@1(_, c);
-    reduce U@5 with T@3(_, d);
-    reduce T@3 with U@5(__cq_3_0, _);
-    reduce S@1 with T@3(__cq_2_0, _);
-    reduce R@0 with S@1(__cq_1_0, _);
+    reduce T@2 with S@1(_, c);
+    reduce U@3 with T@2(_, d);
+    reduce T@2 with U@3(d, _);
+    reduce S@1 with T@2(c, _);
+    reduce R@0 with S@1(b, _);
     R@0(a, b);
-    S@1(__cq_1_0, c);
-    b = __cq_1_0;
-    T@3(__cq_2_0, d);
-    c = __cq_2_0;
-    U@5(__cq_3_0, e);
-    d = __cq_3_0;
+    S@1(b, c);
+    T@2(c, d);
+    U@3(d, e);
 }

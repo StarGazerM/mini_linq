@@ -51,16 +51,20 @@ pub fn compile(source: &ra::Program) -> syn::Result<ix::Program> {
                 (&join.right, columns, ix::SupplyKind::Stream)
             }
             ra::Operator::Select(selection) => {
-                let Some(keys) = selection.condition.constant_keys() else {
+                let (keys, supply) = if let Some(keys) = selection.condition.point_columns() {
+                    (keys, ix::SupplyKind::Const)
+                } else if let Some((column, _)) = selection.condition.range_bounds() {
+                    (BTreeSet::from([column]), ix::SupplyKind::Range)
+                } else {
                     continue;
                 };
                 let columns = info[&symbol_name(&selection.input)]
                     .heading
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, c)| keys.contains_key(c).then_some(i))
+                    .filter_map(|(i, c)| keys.contains(c).then_some(i))
                     .collect();
-                (&selection.input, columns, ix::SupplyKind::Const)
+                (&selection.input, columns, supply)
             }
             ra::Operator::Unit(_)
             | ra::Operator::Rename(_)

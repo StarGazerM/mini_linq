@@ -224,3 +224,25 @@ fn rust_chain_nodes_and_column_equalities_create_no_demands() {
     assert_eq!(target.ra, source);
     check(&source, &target).unwrap();
 }
+
+#[test]
+fn membership_and_parameters_are_const_but_disjunction_and_variable_bounds_are_filters() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32);
+        r = rename R {a -> x,b -> y};
+        points = select r if (x = @captured, y in {1,2,3});
+        alternatives = select points if ((x < 0 and y = 2) or (x > 5 and y = 3));
+        variables = select alternatives if (x < y);
+        output variables as answer(x,y);
+    }};
+    let target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+    assert_eq!(target.indexes.len(), 1);
+    assert_eq!(
+        ix::signature(&target.indexes[0].requirement),
+        ("r".into(), vec![0, 1], ix::SupplyKind::Const)
+    );
+    let mut wrong = target.clone();
+    wrong.indexes[0].requirement.supply = syn::parse_quote!(range);
+    assert!(check(&source, &wrong).is_err());
+}

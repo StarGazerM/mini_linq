@@ -19,40 +19,51 @@ and $C$ an ordered list of logical column ordinals. For the present binary
 fragment, $r$ is the right operand of $j=l\bowtie r$ or $j=l\ltimes r$.
 \begin{lstlisting}
 IX  ::= RAProgram indexes { Def* }
-Def ::= i = @r[C];
+Def ::= i = @r[C] (stream | const | range);
 \end{lstlisting}
 IX retains RA unchanged. The listing is the fragment used below; the complete
 grammar is in \path{languages/cq-lang-ix/src/lib.rs}.
 
 \paragraph{IX meaning and construction.}
-Write IX as $(A,D)$, with $D:i\mapsto(r,C)$.
+Write IX as $(A,D)$, with $D:i\mapsto(r,C,supply)$.
 Well-formedness requires well-formed RA, distinct index identities and
 descriptors, and strictly increasing, in-range logical ordinals over exact RA
-results. Every demand must match some RA natural join or semijoin's right
-operand and join columns. Partial demand sets are locally valid; the analysis
+results. Every demand matches an RA join/semijoin stream read, a constant point
+conjunction, or constant order bounds on one column of an exact select input. Partial demand sets are locally valid; the analysis
 correspondence additionally requires the complete sequence in first-use order
 and the names \code{i0}, \code{i1}, etc., as independently checked in
 \path{passes/cq-index-policy/src/correspondence.rs}.
 Erasure preserves meaning: $\sem{A,D}_{IX}=\sem A_{RA}$.
 Traverse the fixed RA definitions in order, starting with empty $D$:
 \begin{mathpar}
-\Rule{IX-Reuse}{D(i)=(r,C)}{D\vdash(r,C)\Downarrow(i,D)}
+\Rule{IX-Reuse}{D(i)=(r,C,supply)}{D\vdash(r,C,supply)\Downarrow(i,D)}
 
-\Rule{IX-New}{(r,C)\notin\operatorname{ran}D\quad i=i_{|D|}}
- {D\vdash(r,C)\Downarrow(i,D[i\mapsto(r,C)])}
+\Rule{IX-New}{(r,C,supply)\notin\operatorname{ran}D\quad i=i_{|D|}}
+ {D\vdash(r,C,supply)\Downarrow(i,D[i\mapsto(r,C,supply)])}
 
 \Rule{IX-Join}{o\in\{\bowtie,\ltimes\}\quad
  C=[c\mid 0\leq c<|H(r)|,\ H(r)_c\in H(l)]_{\rm increasing}\\
- D\vdash(r,C)\Downarrow(i,D')}
+ D\vdash(r,C,stream)\Downarrow(i,D')}
  {D\vdash j=l\mathbin{o}r\Downarrow D'}
 
-\Rule{IX-Other}{d\in\{\mathsf{Unit,Rename,Project,Select,Extend}\}}
+\Rule{IX-Const}{\theta=\bigwedge_k(c_k=constant\text{ or }c_k\in literals)\\
+ C=\operatorname{ordinals}_{H(r)}(\{c_k\})\quad
+ D\vdash(r,C,const)\Downarrow(i,D')}
+ {D\vdash j=\sigma_\theta r\Downarrow D'}
+
+\Rule{IX-Range}{\theta\text{ conjunction of constant/parameter order bounds on }c\\
+ C=[\operatorname{ordinal}_{H(r)}(c)]\quad
+ D\vdash(r,C,range)\Downarrow(i,D')}
+ {D\vdash j=\sigma_\theta r\Downarrow D'}
+
+\Rule{IX-Other}{d\in\{\mathsf{Unit,Rename,Project,Guard,Bind}\}
+ \text{ or a select matching neither IX-Const nor IX-Range}}
  {D\vdash d\Downarrow D}
 \end{mathpar}
 Fresh $i_n$ prints as \code{i0}, \code{i1}, etc. These cases cover the current
 RA operator enum.
 $C=[]$ is the unit tuple for the admitted Cartesian case. Physical lowering
-derives operands from RA and checks their required descriptors in $D$;
+derives operands from RA and checks their required stream/const/range descriptors in $D$;
 this demand-membership check belongs to the IX-to-Physical pass. The standalone
 Physical contract derives local headings, reads and modes without IX. Fine
 plans elaborate to RA operators covered by these same demand rules; no WCOJ

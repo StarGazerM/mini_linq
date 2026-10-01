@@ -35,14 +35,24 @@ pub fn erase(module: &Program, source: &cq::Program) -> cq::Program {
                     body.push(item);
                 }
             }
-            Operator::Select(select) => body.extend(
-                select
-                    .condition
-                    .equalities
-                    .iter()
-                    .cloned()
-                    .map(cq::BodyItem::Equality),
-            ),
+            Operator::Select(select) => {
+                body.extend(
+                    select
+                        .condition
+                        .constraints
+                        .iter()
+                        .cloned()
+                        .map(cq::BodyItem::Constraint),
+                );
+                body.extend(
+                    select
+                        .condition
+                        .equalities
+                        .iter()
+                        .cloned()
+                        .map(cq::BodyItem::Equality),
+                );
+            }
             Operator::Guard(guard) => body.push(cq::BodyItem::Filter(cq::Filter {
                 if_token: guard.if_token,
                 condition: guard.condition.clone(),

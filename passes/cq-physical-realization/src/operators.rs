@@ -15,7 +15,7 @@ impl<'a> Printer<'a> {
             Operator::Select(select) => {
                 let input = self.scan(&select.input)?;
                 let pattern = self.borrowed_pattern(&symbol_name(&select.input));
-                let condition = relational_condition(&select.condition);
+                let condition = self.relational_condition(&select.condition);
                 Ok(quote! {
                     ::core::iter::Iterator::filter(
                         #input,
@@ -24,6 +24,17 @@ impl<'a> Printer<'a> {
                 })
             }
             Operator::Point(_, select) => self.point(name, select),
+            Operator::Range(_, select) => {
+                if let Some(rows) = self.host_range(name, select) {
+                    return Ok(rows);
+                }
+                let input = self.scan(&select.input)?;
+                let pattern = self.borrowed_pattern(&symbol_name(&select.input));
+                let condition = self.relational_condition(&select.condition);
+                Ok(
+                    quote!(::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| #condition)),
+                )
+            }
             Operator::Guard(guard) => {
                 let input = self.scan(&guard.input)?;
                 let pattern = self.borrowed_pattern(&symbol_name(&guard.input));
@@ -362,7 +373,7 @@ impl<'a> Printer<'a> {
     /// Neither path creates a retained structure for this demand.
     fn point(&mut self, name: &str, select: &cq::algebra::Select) -> syn::Result<TokenStream> {
         let input_name = symbol_name(&select.input);
-        let condition = relational_condition(&select.condition);
+        let condition = self.relational_condition(&select.condition);
         let pattern = self.borrowed_pattern(&input_name);
         if !self.analysis.host_read(&input_name) {
             let rows = self.scan(&select.input)?;

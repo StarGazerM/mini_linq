@@ -52,12 +52,17 @@ pub fn check(source: &ix::Program, target: &physical::Program, policy: &Policy) 
             }
             Operator::Semi(_, k) => keys.get(&symbol_name(&k.left)).cloned(),
             Operator::Select(s) => {
-                if s.condition.constant_keys().is_some() {
+                if s.condition.point_columns().is_some() {
                     return Err(fail("literal selection requires a const point read"));
+                }
+                if s.condition.range_bounds().is_some() {
+                    return Err(fail("order selection requires a range read"));
                 }
                 keys.get(&symbol_name(&s.input)).cloned()
             }
-            Operator::Point(_, s) => keys.get(&symbol_name(&s.input)).cloned(),
+            Operator::Point(_, s) | Operator::Range(_, s) => {
+                keys.get(&symbol_name(&s.input)).cloned()
+            }
             Operator::Bind(b) => keys.get(&symbol_name(&b.input)).cloned(),
             Operator::Guard(g) => keys.get(&symbol_name(&g.input)).cloned(),
             Operator::Project(p) => keys

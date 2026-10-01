@@ -48,6 +48,7 @@ fn coarse(source: &cq::Program) -> valuation::Program {
             cq::BodyItem::Filter(filter) => quote!(#filter;),
             cq::BodyItem::Let(binding) => quote!(#binding;),
             cq::BodyItem::Equality(equality) => quote!(#equality;),
+            cq::BodyItem::Constraint(c) => quote!(#c;),
             _ => unreachable!("normal form"),
         });
     vo(source, quote!(#(#steps)*))

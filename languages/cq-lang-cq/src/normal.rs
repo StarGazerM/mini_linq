@@ -31,6 +31,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
                 ));
             }
             BodyItem::Equality(equality) => equality.check()?,
+            BodyItem::Constraint(constraint) => constraint.check()?,
             BodyItem::Filter(_) | BodyItem::Let(_) => {}
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
@@ -80,8 +81,8 @@ pub fn check(module: &Program) -> syn::Result<()> {
 }
 
 /// Canonicalize at each atom's written position.
-/// Formal rule A-Variable: Keep the first occurrence of a bare argument.
-/// Formal rule A-Repeat: Replace a repeated variable and append relational equality.
+/// Formal rule A-Variable: Keep the first occurrence within this atom, including shared query names.
+/// Formal rule A-Repeat: Replace only a variable repeated within one atom and append identity.
 /// Formal rule A-Wildcard: Replace a wildcard with an unused witness variable.
 /// Formal rule A-Constant: Replace a literal and append relational literal equality.
 /// Formal rule A-Prefix: Place an opaque binding immediately before its atom.
@@ -92,10 +93,10 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
     let mut names = reserved(module);
     let mut body = Vec::new();
     let mut bound = BTreeSet::new();
-    let mut atom_seen = BTreeSet::new();
     for (clause, item) in module.query.body.iter().enumerate() {
         match item {
             BodyItem::Positive { atom } => {
+                let mut atom_seen = BTreeSet::new();
                 let declaration = declarations[&symbol_name(&atom.relation)];
                 let local: BTreeSet<_> = atom
                     .variables()
@@ -151,7 +152,9 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
                 });
                 body.extend(after);
             }
-            BodyItem::Equality(_) | BodyItem::Filter(_) => body.push(item.clone()),
+            BodyItem::Equality(_) | BodyItem::Constraint(_) | BodyItem::Filter(_) => {
+                body.push(item.clone())
+            }
             BodyItem::Let(binding) => {
                 bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
                 body.push(item.clone());
@@ -234,10 +237,33 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
                 }
             }
             BodyItem::Equality(equality) => required.extend(equality.variables().map(symbol_name)),
+            BodyItem::Constraint(constraint) => {
+                required.extend(constraint.variables().map(symbol_name))
+            }
             BodyItem::Let(binding) => {
                 let_bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
             _ => {}
+        }
+    }
+    let ordered: BTreeSet<_> = module
+        .query
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            BodyItem::Constraint(c) => Some(c.ordered_variables()),
+            _ => None,
+        })
+        .flatten()
+        .map(symbol_name)
+        .collect();
+    for item in &module.query.body {
+        if let BodyItem::Let(binding) = item {
+            for (name, ty) in binding.binding_types() {
+                if ordered.contains(&symbol_name(&name)) {
+                    super::syntax::algebra::check_ord_type(&ty, &name)?;
+                }
+            }
         }
     }
     if let Some(output) = module.output() {
@@ -271,6 +297,17 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
                 .map_err(|error| {
                     syn::Error::new_spanned(ty, format!("column `{column}`: {error}"))
                 })?;
+            }
+        }
+    }
+    for item in &module.query.body {
+        if let BodyItem::Constraint(c) = item {
+            for variable in c.ordered_variables() {
+                if let Some(entries) = columns.get(&symbol_name(variable)) {
+                    for (ty, _) in entries {
+                        super::syntax::algebra::check_ord_type(ty, variable)?;
+                    }
+                }
             }
         }
     }
@@ -390,6 +427,11 @@ impl Kernel {
                     let text = renaming.text(equality.to_token_stream());
                     kernel.equalities.push(text.clone());
                     relational.insert(format!("eq {text}"));
+                }
+                BodyItem::Constraint(constraint) => {
+                    let text = renaming.text(constraint.to_token_stream());
+                    kernel.equalities.push(text.clone());
+                    relational.insert(format!("constraint {text}"));
                 }
                 BodyItem::Filter(filter) => {
                     kernel

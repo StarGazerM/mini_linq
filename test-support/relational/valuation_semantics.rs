@@ -82,6 +82,7 @@ pub fn evaluate(program: &vo::Program, database: &Database) -> Rows {
                 atoms.insert(r.clause(), relation);
             }
             vo::Step::Equality(e, _) => result.rows.retain(|row| evaluate_equality(e, row)),
+            vo::Step::Constraint(c, _) => result.rows.retain(|row| evaluate_constraint(c, row)),
             vo::Step::Let(..) => panic!("computed columns are checked by generated Rust execution"),
         }
     }

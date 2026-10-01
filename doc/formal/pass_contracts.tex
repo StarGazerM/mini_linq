@@ -24,6 +24,8 @@ Negation and aggregation parse but are rejected by CQ checking. An opaque
 \code{name! \{tokens\}} clause also parses and round-trips, but CQ checking
 rejects it with the name of the unexpanded extension. Visible logical
 uses are checked in written scope; opaque syntax remains Rust's responsibility.
+Central comparison terms admit only bound query names, literals, or captured
+identifiers. Eq/Ord premises and their boolean grammar are checked locally.
 \begin{mathpar}
 
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
@@ -32,25 +34,23 @@ uses are checked in written scope; opaque syntax remains Rust's responsibility.
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 \end{mathpar}
 NF is a restriction of the same \code{cq::Program}, checked by
-\code{normal::check}, not another Rust AST type. The head remains an ordered
-tuple and may repeat variables or contain computed expressions.
+\code{normal::check}, not another Rust AST type. Its head is an ordered tuple
+of variables and may repeat them; computed heads have already become binds.
 
 \paragraph{VO.}
-$\mathsf{Schedule}(t,A)$ checks subatom relation, clause index, arity and original
-column names. A dropped column must be unbound. It accumulates bound names,
-newly introduced names per step, and per-clause variable coverage. Every atom
-variable must eventually be covered. Ordinary guards occur in source guard order
-excluding those
-consumed once by reductions; lets occur in source let order and match their
-source binding exactly. Guards reject visible free names that are unbound query
-variables (atom or let names). Lets inspect the first lexically free name outside
-the bound set and reject it when it is an atom variable. Neither check resolves
-Rust names; these are the actual lexical tests, not a complete dependency proof. Every guard and let must be placed. A reduction precedes
-its target's first subatom. A semijoin reduction names a different atom and
-lists exactly its shared variables with the target; a guard reduction consumes
-one matching source guard and may use no visible query variable outside the
-target atom. This local guard check does not reject opacity; the reduction
-\emph{pass} check does. VO does not require an acyclic reduction graph.
+$\mathsf{Schedule}(t,A)$ checks each subatom's relation, clause, arity,
+original column names and complete correlated-row coverage. Dropped columns
+must be unbound. Each central constraint appears exactly once, uses only bound
+query variables and binds nothing. Rust lets and guards keep one identical
+written chain; every free-variable binder and every source Before relational
+clause must precede them. Relational clauses can move earlier. A semijoin
+reduction precedes its target's first subatom, names a different atom, and
+lists exactly the shared variables (modulo relational identity). No opaque
+Rust guard is a reduction. VO does not require an acyclic reduction graph.
+\begin{mathpar}
+\Rule{D-Constraint}{\vars(C)\subseteq B}
+ {\mathsf{requires}(C)=\vars(C),\quad\mathsf{provides}(C)=\emptyset}
+\end{mathpar}
 \[
 \Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)}
  {\mathsf{WF}_{VO}(t)\Downarrow A}.
@@ -62,8 +62,9 @@ Section~\ref{sec:languages}, valid declarations, fresh result names, earlier
 operands, reachable definitions, visible expression-use checks, and a defined
 output. An all-bare output has exactly its input heading; a computed output may
 use a subset. Analysis carries bindings, symbolic types and computed-column
-provenance, without Rust type unification. For IX let $D(a)$ be the set of exact
-right-result/shared-heading descriptors demanded by its joins and semijoins.
+provenance, without Rust type unification. For IX let $D(a)$ contain the exact stream descriptors of joins/semijoins,
+const descriptors of point/membership conjunctions, and range descriptors of
+constant order conjunctions on one column.
 \begin{mathpar}
 
 \Rule{WF-RA}{\mathsf{RAHeading}(a,A)}{\mathsf{WF}_{RA}(a)\Downarrow A}
@@ -83,12 +84,12 @@ unique results, earlier operands, total one-to-one renames, fresh extension
 columns, subset projections, visible expression uses, defined output and
 reachability. Probe/merge/semi keys are duplicate-free lists whose set is exactly
 the operands' heading intersection; semi keeps the left heading, probe/merge
-take the union. Range checks its column and condition scope, and a host rename
-range must use the leading declared column. It does not itself prove an integer
-bound or ordered representation. Shared algebra operators
+take the union. Range checks a nonempty conjunction of constant/parameter order bounds on
+exactly one available Ord column. Host layout and type choose direct access
+or scan/filter later; no integer recognizer or Rust guard is involved. Shared algebra operators
 have their local heading effects. Analysis derives rows, source identifiers,
 symbolic types, computed columns, hosts/renames, keyed/merge/range reads, scans,
-recognized comparison conditions, modes and canon flags. Output expressions
+central boolean conditions, modes and canon flags. Output expressions
 reject visible unavailable attributes; an all-bare head's dependency set must
 exactly equal the returned heading, while a computed head may use a subset.
 Let $\mathsf{reads}(r)$ count operand occurrences and the return use.
@@ -99,7 +100,7 @@ Let $\mathsf{reads}(r)$ count operand occurrences and the return use.
 
 \Rule{PH-Pipe}{\mathsf{mode}(r)=pipe\\
  (\mathsf{operator}(r)=rename(R,m)\land r\notin A.canon)\ \lor\
- (\mathsf{reads}(r)=1\land r\notin\dom A.key\_reads\land r\notin\dom A.range\_reads)}
+ (\mathsf{reads}(r)=1\land r\notin\dom A.key\_reads)}
  {\mathsf{PModeOK}(r)}
 
 \Rule{PH-Let}{\mathsf{mode}(r)=let\quad\mathsf{reads}(r)>0}
@@ -123,8 +124,8 @@ $\mathsf{built}(r,C)$ for a matching level prefix. No host facts occur in this I
 \Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)}
  {\mathsf{answers}(r,C,probe/semi)}
 
-\Rule{STR-Range}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,\{c\})}
- {\mathsf{answers}(r,\{c\},range)}
+\Rule{STR-Range}{\text{constant window on }r,c}
+ {\mathsf{answers}(r,\{c\},range)\text{ by direct range or scan/filter; no build}}
 
 \Rule{STR-Merge}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)\\
  \text{or }(\mathsf{mode}(r)=pipe\land\mathsf{operator}(r)=merge[C](l,s))}
@@ -154,7 +155,8 @@ at least one subatom per atom clause; Coarse has
 exactly one full subatom per atom; Fine introduces at most one new variable per
 subatom. Under Written, introducing subatom indices are nondecreasing (all
 Coarse subatoms count; in Fine only those introducing a name count).
-Ordinary guard/let placement is constrained by VO, not exact Written expansion.
+Written preserves the complete NF body order (splitting atoms in place);
+optimized guard/let placement is constrained by VO.
 Prefix and Elimination rankings are construction choices checked by fixtures,
 not correspondence obligations.
 \[
@@ -165,17 +167,13 @@ not correspondence obligations.
 
 \paragraph{Reduction.}
 $\mathsf{ReduceObligations}$ requires a reduction-free source, unchanged CQ,
-and equality of surviving target steps with source steps after removing one
-matching ordinary guard per pushed guard. Under guards=None, no guard reduction
-is allowed. Under Atoms, each pushed guard is nonopaque and all its free names
-belong to its chosen atom; the checker does not require pushing every eligible
-guard or choosing the earliest host. Under semijoins=None, no semijoin reduction
-is allowed. Under Tree, the source must be acyclic, each directed GYO tree edge
-occurs exactly once, all upward edges precede all downward edges, children
-precede their parent's upward edge and parents precede their children's downward
-edges. Sibling orders need not be BFS. The local VO check supplies shared-key
-and before-first-subatom constraints; the checker adds no requirement that
-pushed guards precede every tree reduction.
+and exact equality of surviving steps after erasing semijoin reductions.
+Constraints and opaque Rust steps remain present. The legacy guards option
+changes no Rust step. Under semijoins=None, reductions are forbidden; under
+Tree, the source is acyclic, every directed join-tree edge occurs once, all
+upward edges precede downward edges, and each edge respects parent/child
+dependencies. Sibling order is free. Local VO checks shared columns and
+placement before the target's first subatom.
 \[
 \Rule{CK-Reduce}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{VO}(t)\\
  \mathsf{ReduceObligations}(s,t,\chi)}
@@ -183,24 +181,40 @@ pushed guards precede every tree reduction.
 \]
 
 \paragraph{Elaboration.}
-Erasure reconstructs atoms from RA renames, guards from selects and bindings
-from extends; structural join, semijoin, project and Unit definitions contribute
-no items. Duplicate identical atom reconstructions are suppressed. Matching
-items are ordered by the separately supplied CQ source body; remaining items
-follow definition order. It clones that source program with reconstructed body
-and RA head, then compares \code{normal::Kernel} values (atom/guard/let vectors
-and head tokens with variable renaming).
-\[
+An independent tableau represents each relational region by existential
+atom witnesses, relational identities, and predicate symbols for boolean
+constraints. A comparison symbol fixes its literal/parameter spelling and
+boolean shape and carries every query-column term as an argument. Unification,
+projection, joins and freshening transform those arguments with their witnesses.
+The checker proves target containment in the supplied VO at every corresponding
+Rust chain input, and mutual containment of the output tableaux; it requires
+identical opaque payloads in the same chain. It does not infer implications
+between distinct comparison spellings or arbitrary boolean formulas.
+\begin{mathpar}
+\Rule{E-Constraint}{\vars(C)\subseteq\vars(R)\text{ for a binder occurrence}}
+ {C\text{ may select }R\text{ before joining};\quad
+  \text{otherwise select the bound prefix}}
+
+\Rule{CT-Constraint}{\vars(C)=\bar x\quad T(\bar x)=\bar t}
+ {T\longmapsto T\cup\{\mathsf{predicate}_{shape(C)}(\bar t)\}}
+
+\Rule{RA-Constraint}{\vars(\theta)\subseteq V\quad
+ \theta\text{ central and Eq/Ord-admissible}}
+ {\sigma_\theta:\operatorname{Set}(V)\longrightarrow\operatorname{Set}(V)}
+
 \Rule{CK-Elaborate}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
  t.declarations=s.cq.declarations\quad t.head=s.cq.head\\
- \mathsf{kernel}(t,s.cq)=\mathsf{Kernel}(s.cq)}
- {\mathsf{check}_{elaborate}(s,t,())\Downarrow\ok}.
-\]
-This is the implemented structural criterion, not a complete semantic-equality
-procedure or an exact RA-shape comparison.
+ \mathsf{Chain}(t)=\mathsf{Chain}(s)\quad
+ T_{t,i}\subseteq T_{s,i}\text{ at every chain input }i\\
+ T_{t,out}=T_{s,out}\text{ by mutual tableau containment}}
+ {\mathsf{check}_{elaborate}(s,t,())\Downarrow\ok}
+\end{mathpar}
+This is a sufficient refinement criterion, not a complete comparison-implication
+solver or a proof of arbitrary Rust semantics. Structural erasure is available
+for diagnostics; correspondence does not repair chain order by sorting.
 
 \paragraph{Index demands.}
-The independent checker traverses RA definitions using IX-Join, IX-Other,
+The independent checker traverses RA definitions using IX-Join, IX-Const, IX-Range, IX-Other,
 IX-New and IX-Reuse. It requires the next first-use descriptor at the next target position and its
 normalized name \code{iN}; extra entries are rejected.
 \[
@@ -210,30 +224,36 @@ normalized name \code{iN}; extra entries are rejected.
 \]
 
 \paragraph{Physical lowering.}
-Erase probe/merge to natural join, semi to semijoin, range to select, and remove
+Erase probe/merge to natural join, semi to semijoin, point/range to select, and remove
 modes/canon flags, preserving definitions, names, declarations and output.
 $\mathsf{PolicyPhysical}(t,\chi)$ uses strategy and plan facts only. A join
 is merge iff merge policy is set and the shared heading is nonempty; otherwise
-it is probe. A range reads the leading declared column through a host rename
-and has a usable integer bound among conjunction leaves. Recognition excludes
-inequality and strict bounds overflowing \code{i32}; an eligible select need
-not become range. Let/pipe choices may differ when locally admissible.
+it is probe. A const point selection must become point; a conjunction of constant or
+captured order bounds on one column must become range. Disjunctions remain
+central filters. These decisions do not inspect Rust expressions or assume
+integer arithmetic on strict bounds.
+Let/pipe choices may differ when locally admissible.
 Canon may appear only at return or a project=canon projection; that policy
 requires canon on key-dropping projections. Unit, canon boundaries, join key
 unions, left keys for semi, select/range/extend and key-preserving project
 establish uniqueness; hosts and built types do not.
 \begin{mathpar}
 
-\Rule{CK-Demands}{\mathsf{WF}_{Physical}(t)\quad\forall\,probe[C](l,r),semi[C](l,r)\text{ in }t.\\
- (r,\operatorname{ordinals}_{H(r)}(C))\in\operatorname{descs}(s)}
+\Rule{CK-Demands}{\mathsf{WF}_{Physical}(t)\quad
+ \forall(r,C,supply)\in\mathsf{keyedReads}(t)\text{ (excluding merge-left)}.\\
+ (r,\operatorname{ordinals}_{H(r)}(C),supply)\in\operatorname{descs}(s)}
  {\mathsf{demands}(s,t)\Downarrow\ok}
+
+\Rule{PH-Range}{\theta\text{ constant order bounds on one column }c}
+ {\mathsf{reads}(range\ select\ r\ if\ (\theta))=(r,\{c\},range)}
 
 \Rule{CK-Physical}{\mathsf{WF}_{IX}(s)\quad\mathsf{WF}_{Physical}(t)\\
  \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\quad\mathsf{PolicyPhysical}(t,\chi)}
  {\mathsf{check}_{physical}(s,t,\chi)\Downarrow\ok}
 \end{mathpar}
-Demand membership concerns probe/semi right operands only; merge/range have
-separate policy/representation premises. No missing IX demand is synthesized.
+Demand membership includes stream probe/semi reads, const point reads, and
+range reads on their exact input version and supply; merge has its separate
+ordering premise. No missing IX demand is synthesized.
 The checker does not require the constructor's particular materialization
 choices and does not use \code{semijoin = prefer_lazy}.
 
@@ -257,7 +277,8 @@ the sides are materialized, with only compatible prefix/full unordered demands.
 It adds prefix/full membership demands and requires two levels. Conflicting
 prefix choices are excluded. Each extra level wraps the leaf default in
 \code{index\_provider!(trie T)}.
-Every built prefix must discharge an unanswered demand exactly once; missing,
+Const/range supplies never justify a build. Every built prefix must discharge
+an unanswered stream demand exactly once; missing,
 extra, duplicate, wrong-level and wrong-type builds fail. Entry order is free;
 comparison is against these obligations, not the selector's token stream.
 \[
@@ -300,6 +321,12 @@ semantics or Rust expression semantic equality.
  \Gamma_H,\Gamma_Q\vdash_{Rust}e}
  {e\text{ is an expression hole in the closing environment}}
 
+\Rule{IF-Parameter}{p\in\vars_H(\theta)\quad b_p\text{ fresh}}
+ {p\longmapsto\code{let b_p = \&p;}\text{ once outside all query loops}}
+
+\Rule{IF-Range}{C=\{d_1\}\quad H:\code{OrderedRead}\text{ at the matching key type}}
+ {\mathsf{window}(H,C)\text{ is an ordered read; otherwise scan/filter, no build}}
+
 \Rule{IF-Leaf}{d=\code{relation R(...)=}(e)\quad b\text{ fresh}\quad
  \Gamma_H\vdash_{Rust}e}
  {d\longmapsto\code{let b = \&(e);}\quad R\mapsto b}
@@ -312,9 +339,11 @@ semantics or Rust expression semantic equality.
  {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\mathsf{build}(\alpha(H),C))}
 \end{mathpar}
 Stable autoref specialization chooses a native keyed read only at the exact
-leading-prefix key type. Otherwise the query allocates one lazy fallback per
-read key: a hash index, membership set, or ordered structure. Range uses the
-leading column. Merge is direct-only on a leading host key and requires
+leading-prefix key type. Stream reads otherwise allocate one lazy fallback per key; const/range
+reads scan and filter without building. Range uses the leading column when
+its host type orders that key. Copied bound keys permit native BTreeMap
+lower-bound range seeking; other ordered cursors step to the bound using
+borrowed values without invoking Clone. Inverted bounds yield no rows. Merge is direct-only on a leading host key and requires
 OrderedRead, diagnosed by rustc. Canonicality never follows from a host type.
 Grouped answers concatenate the leading key tuple with the remaining columns;
 ungrouped answers supply full rows. Both may retain references. Leaf bindings

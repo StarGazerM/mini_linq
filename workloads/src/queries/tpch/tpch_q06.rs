@@ -38,6 +38,9 @@ macro_rules! query_body {
             let lineitem = data.lineitem.as_slice();
             let first: Date = "1994-01-01".parse().unwrap();
             let after: Date = "1995-01-01".parse().unwrap();
+            let discount_low = Decimal::from_scaled(5).unwrap();
+            let discount_high = Decimal::from_scaled(7).unwrap();
+            let quantity_limit = Decimal::from_scaled(2400).unwrap();
             let computed: Vec<(i32, i64, i64, i128)> = query! {
                 struct Query06;
                 relation lineitem(
@@ -46,9 +49,9 @@ macro_rules! query_body {
                 );
                 rows(group, orderkey, linenumber, amount) :-
                     lineitem(orderkey, linenumber, quantity, price, discount, shipdate),
-                    if *shipdate >= first && *shipdate < after,
-                    if (5..=7).contains(&discount.scaled()),
-                    if quantity.scaled() < 2400,
+                    shipdate >= first, shipdate < after,
+                    discount between discount_low and discount_high,
+                    quantity < quantity_limit,
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * i128::from(discount.scaled());
             }.map(|(group, orderkey, linenumber, amount)| (group, *orderkey, *linenumber, amount)).collect();

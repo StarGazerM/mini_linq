@@ -48,7 +48,7 @@ pub fn check(
     let mut demands = Demands::new();
     for (name, readers) in &facts.keyed_reads {
         for (reader, columns, supply) in readers {
-            if *supply == SupplyKind::Const
+            if *supply != SupplyKind::Stream
                 || matches!(definitions[reader].operator, Operator::Merge(..))
             {
                 continue;

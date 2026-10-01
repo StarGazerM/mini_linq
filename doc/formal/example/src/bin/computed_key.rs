@@ -16,17 +16,11 @@ fn main() {
     let written = boundaries(&directory, "written", &source, false);
     boundaries(&directory, "planned", &source, true);
     // The computed key `next` is bound once `k` is, before S is matched on it.
+    let normal = &written.normal;
     let expected_vo: valuation::Program = syn::parse_quote! {
-        pub struct Overview;
-        relation R(a:i32,b:i32);
-        relation S(a:i32,b:i32);
-        relation answer(a:i32,b:i32);
-        answer(x,*y+1) :- R(x,k), let next:i32 = *k+1, S(next,y), if y > 0;
-        valuation {
-            R@0(x, k);
-            let next: i32 = *k + 1;
-            S@2(next, y);
-            if y > 0;
+        #normal valuation {
+            R@0(x,k); let next:i32 = *k+1; S@2(next,y); if y > 0;
+            let __cq_4_1:i32 = *y+1;
         }
     };
     assert_eq!(written.valuation, expected_vo);
@@ -44,7 +38,7 @@ fn main() {
         answer.into_iter().collect::<Vec<_>>(),
         [(1, 11), (2, 11), (3, 5)]
     );
-    let evidence = "PASS: computed argument CQ→VO→RA→IX with kernel-preserving plans; independent oracle answer [(1,11),(2,11),(3,5)]. This driver does not exercise generated-query execution.\n";
+    let evidence = "PASS: computed argument CQ→VO→RA→IX with plans accepted by independent pass correspondence checks; independent oracle answer [(1,11),(2,11),(3,5)]. This driver does not exercise generated-query execution.\n";
     std::fs::write(directory.join("validation.txt"), evidence).unwrap();
     print!("{evidence}");
 }

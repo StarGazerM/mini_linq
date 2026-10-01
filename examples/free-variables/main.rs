@@ -30,6 +30,13 @@ fn main() {
                     report("atom", expression);
                 }
             }
+            BodyItem::Constraint(c) => {
+                println!(
+                    "relational constraint inputs: {:?}; parameters: {:?}",
+                    c.variables().collect::<Vec<_>>(),
+                    c.parameters().collect::<Vec<_>>()
+                );
+            }
             BodyItem::Equality(e) => println!(
                 "relational equality inputs: {:?}",
                 e.variables().collect::<Vec<_>>()

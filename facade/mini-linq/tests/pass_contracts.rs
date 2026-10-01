@@ -11,7 +11,9 @@ use cq_lang_cq as cq;
 use cq_lang_ix as ix;
 use cq_lang_physical as physical;
 use cq_lang_ra as ra;
-pub use cq_lang_ra::syntax::{Equality, EqualityValue, RelationDecl, predicate, rust, symbol_name};
+pub use cq_lang_ra::syntax::{
+    Constraint, Equality, EqualityValue, RelationDecl, constraint, predicate, rust, symbol_name,
+};
 
 #[allow(dead_code)]
 #[path = "../../../test-support/relational/cases.rs"]
@@ -22,6 +24,257 @@ mod oracle;
 #[allow(dead_code)]
 #[path = "../../../test-support/relational/values.rs"]
 mod values;
+
+#[test]
+fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
+    use quote::ToTokens;
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(k:i32,v:i32);
+        answer(x,y) :- R(x,y), x >= lower, x < upper;
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let vo = cq_order::compile(&normal, &Default::default()).unwrap();
+    cq_order::check(&normal, &vo, &Default::default()).unwrap();
+    let mut missing = vo.clone();
+    missing.valuation.steps.pop();
+    assert!(cq_lang_vo::contract::check(&missing).is_err());
+    let mut duplicate = vo.clone();
+    duplicate
+        .valuation
+        .steps
+        .push(vo.valuation.steps[1].clone());
+    assert!(cq_lang_vo::contract::check(&duplicate).is_err());
+    let mut unbound = vo.clone();
+    unbound.valuation.steps.swap(0, 1);
+    assert!(cq_lang_vo::contract::check(&unbound).is_err());
+    let ra = cq_elaborate::compile(&vo).unwrap();
+    cq_elaborate::check(&vo, &ra).unwrap();
+    let select = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, ra::Operator::Select(_)))
+        .unwrap();
+    assert!(
+        matches!(&ra.plan.definitions[select].operator, ra::Operator::Select(s) if s.condition.range_bounds().is_some())
+    );
+    let mut changed = ra.clone();
+    let ra::Operator::Select(s) = &mut changed.plan.definitions[select].operator else {
+        panic!()
+    };
+    s.condition.constraints[1] = syn::parse_quote!(x <= @upper);
+    assert!(cq_elaborate::check(&vo, &changed).is_err());
+    let mut lost = ra.clone();
+    let ra::Operator::Select(s) = &mut lost.plan.definitions[select].operator else {
+        panic!()
+    };
+    s.condition.constraints.pop();
+    assert!(cq_elaborate::check(&vo, &lost).is_err());
+    let ix = cq_index_policy::compile(&ra).unwrap();
+    cq_index_policy::check(&ra, &ix).unwrap();
+    assert_eq!(ix.indexes.len(), 1);
+    assert_eq!(
+        ix.indexes[0].requirement.supply.kind(),
+        ix::SupplyKind::Range
+    );
+    assert!(ix.to_token_stream().to_string().contains("range"));
+    let mut missing = ix.clone();
+    missing.indexes.clear();
+    ix::contract::check(&missing).unwrap();
+    assert!(cq_index_policy::check(&ra, &missing).is_err());
+    let mut wrong = ix.clone();
+    wrong.indexes[0].requirement.supply = syn::parse_quote!(const);
+    assert!(cq_index_policy::check(&ra, &wrong).is_err());
+    let mut wrong = ix.clone();
+    wrong.indexes[0].requirement.columns = syn::parse_quote!(1);
+    assert!(cq_index_policy::check(&ra, &wrong).is_err());
+    let policy: physical::policy::Policy = syn::parse_quote!(policy {});
+    let physical = cq_physical_lowering::compile(&ix, &policy).unwrap();
+    cq_physical_lowering::check(&ix, &physical, &policy).unwrap();
+    assert!(matches!(
+        physical.program.definitions[select].operator,
+        physical::Operator::Range(..)
+    ));
+    let mut changed = physical.clone();
+    let physical::Operator::Range(_, s) = &changed.program.definitions[select].operator else {
+        panic!()
+    };
+    changed.program.definitions[select].operator = physical::Operator::Select(s.clone());
+    assert!(cq_physical_lowering::check(&ix, &changed, &policy).is_err());
+    assert!(cq_physical_lowering::check(&missing, &physical, &policy).is_err());
+    for tokens in [
+        normal.to_token_stream(),
+        vo.to_token_stream(),
+        ra.to_token_stream(),
+        ix.to_token_stream(),
+        physical.to_token_stream(),
+    ] {
+        assert!(tokens.to_string().contains("lower"));
+    }
+    assert_eq!(
+        syn::parse2::<cq_lang_vo::Program>(vo.to_token_stream()).unwrap(),
+        vo
+    );
+    assert_eq!(
+        syn::parse2::<ra::Program>(ra.to_token_stream()).unwrap(),
+        ra
+    );
+    assert_eq!(
+        syn::parse2::<ix::Program>(ix.to_token_stream()).unwrap(),
+        ix
+    );
+    assert_eq!(
+        syn::parse2::<physical::Program>(physical.to_token_stream()).unwrap(),
+        physical
+    );
+    #[cfg(feature = "structure-selection")]
+    {
+        let structures = cq_structure_selection::compile(&physical, &policy).unwrap();
+        cq_structure_selection::check(&physical, &structures, &policy).unwrap();
+        assert!(structures.structures.entries.is_empty());
+        let mut changed = structures.clone();
+        let input = &ra.plan.definitions[0].result;
+        changed.structures =
+            syn::parse2(quote::quote!(structures { #input = index_provider!(ordered) [x]; }))
+                .unwrap();
+        assert!(cq_structure_selection::check(&physical, &changed, &policy).is_err());
+    }
+}
+
+#[test]
+fn same_text_rust_guard_remains_opaque_and_pinned_while_constraints_hoist() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32); relation S(a:i32);
+        answer(od) :- R(od), S(s), if *od < cutoff, od < cutoff;
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let vo = cq_order::compile(
+        &normal,
+        &cq_order::Options {
+            heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+            split: cq_order::Split::Coarse,
+        },
+    )
+    .unwrap();
+    let rust_step = vo
+        .valuation
+        .steps
+        .iter()
+        .position(|s| matches!(s, cq_lang_vo::Step::Guard(..)))
+        .unwrap();
+    assert!(
+        vo.valuation.steps[..rust_step]
+            .iter()
+            .any(|s| matches!(s,cq_lang_vo::Step::Atom(a,_) if a.clause() == 1))
+    );
+    let mut moved = vo.clone();
+    let guard = moved.valuation.steps.remove(rust_step);
+    moved.valuation.steps.insert(1, guard);
+    assert!(
+        cq_lang_vo::contract::check(&moved)
+            .unwrap_err()
+            .to_string()
+            .contains("Before")
+    );
+    let ra = cq_elaborate::compile(&vo).unwrap();
+    cq_elaborate::check(&vo, &ra).unwrap();
+    assert!(
+        ra.plan
+            .definitions
+            .iter()
+            .any(|d| matches!(d.operator, ra::Operator::Guard(_)))
+    );
+    assert!(
+        ra.plan
+            .definitions
+            .iter()
+            .any(|d| matches!(d.operator, ra::Operator::Select(_)))
+    );
+}
+
+#[test]
+fn a_constraint_on_a_let_result_stays_before_rust_even_if_a_later_atom_uses_it() {
+    for predicate in [quote::quote!(m > cutoff), quote::quote!(m = 2)] {
+        let source: cq::Program = syn::parse2(quote::quote! {
+            struct Bound; relation R(a:i32); relation S(a:i32,b:i32);
+            answer(y) :- R(x), let m:i32 = *x, #predicate, if 10 / *m > 0, S(m,y);
+        })
+        .unwrap();
+        let nf = cq::normal::normalize(&source).unwrap();
+        let vo = cq_order::compile(&nf, &Default::default()).unwrap();
+        let ra = cq_elaborate::compile(&vo).unwrap();
+        cq_elaborate::check(&vo, &ra).unwrap();
+        let select = ra
+            .plan
+            .definitions
+            .iter()
+            .position(|d| matches!(d.operator, ra::Operator::Select(_)))
+            .unwrap();
+        let guard = ra
+            .plan
+            .definitions
+            .iter()
+            .position(|d| matches!(d.operator, ra::Operator::Guard(_)))
+            .unwrap();
+        assert!(select < guard);
+        let mut bad = ra.clone();
+        let ra::Operator::Select(mut s) = bad.plan.definitions[select].operator.clone() else {
+            panic!()
+        };
+        let ra::Operator::Guard(mut g) = bad.plan.definitions[guard].operator.clone() else {
+            panic!()
+        };
+        g.input = s.input.clone();
+        s.input = bad.plan.definitions[select].result.clone();
+        bad.plan.definitions[select].operator = ra::Operator::Guard(g);
+        bad.plan.definitions[guard].operator = ra::Operator::Select(s);
+        ra::contract::check(&bad).unwrap();
+        assert!(
+            cq_elaborate::check(&vo, &bad)
+                .unwrap_err()
+                .to_string()
+                .contains("source-before")
+        );
+    }
+}
+
+#[test]
+fn shared_names_survive_order_reduce_and_elaborate_as_natural_join_columns() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Shared; relation Customer(id:i32,segment:&str);
+        relation Orders(id:i32,customer:i32,date:i32);
+        answer(o,c,d) :- Customer(c,s), if *s == "BUILDING", Orders(o,c,d);
+    };
+    let nf = cq::normal::normalize(&source).unwrap();
+    let vo = cq_order::compile(&nf, &Default::default()).unwrap();
+    let options = cq_reduce::Options {
+        guards: cq_reduce::Pushdown::Atoms,
+        semijoins: cq_reduce::Reductions::Tree,
+    };
+    let reduced = cq_reduce::compile(&vo, &options).unwrap();
+    cq_reduce::check(&vo, &reduced, &options).unwrap();
+    let ra = cq_elaborate::compile(&reduced).unwrap();
+    cq_elaborate::check(&reduced, &ra).unwrap();
+    assert!(
+        !ra.plan
+            .definitions
+            .iter()
+            .any(|d| matches!(d.operator, ra::Operator::Select(_)))
+    );
+    let facts = ra::contract::check(&ra).unwrap();
+    assert!(ra.plan.definitions.iter().any(|d| {
+        match &d.operator {
+            ra::Operator::NaturalJoin(j) => facts[&symbol_name(&j.left)]
+                .heading
+                .intersection(&facts[&symbol_name(&j.right)].heading)
+                .any(|name| name == "c"),
+            _ => false,
+        }
+    }));
+    let mut changed = reduced.clone();
+    changed.cq.query.body[2] = syn::parse_quote!(Orders(o, other, d));
+    assert!(cq_reduce::check(&vo, &changed, &options).is_err());
+}
 
 #[test]
 fn reduced_plans_compute_the_authored_answers() {

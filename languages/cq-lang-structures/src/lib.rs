@@ -252,6 +252,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 .push((columns, keyed.ty.clone()));
         }
     }
+    // Formal rule STR-Range: Const/range supplies always have direct or scan/filter reads without builds.
     // Only stream supplies require reusable storage. Const supplies always
     // have the direct-host or scan-and-filter implementation available.
     let answered = |result: &str, columns: &[String]| -> bool {
@@ -259,7 +260,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     };
     for (result, reads) in &analysis.physical.keyed_reads {
         for (reader, columns, supply) in reads {
-            if *supply == SupplyKind::Const
+            if *supply != SupplyKind::Stream
                 || analysis
                     .physical
                     .merge_reads
@@ -336,7 +337,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
             }
             Operator::Semi(_, k) => analysis.unique.get(&symbol_name(&k.left)).cloned(),
-            Operator::Select(s) | Operator::Point(_, s) => {
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
                 analysis.unique.get(&symbol_name(&s.input)).cloned()
             }
             Operator::Bind(b) => analysis.unique.get(&symbol_name(&b.input)).cloned(),

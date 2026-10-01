@@ -105,6 +105,27 @@ impl Tableau {
         }
     }
 
+    /// Treat the complete boolean predicate as a total relation symbol. This
+    /// conservative proof preserves its syntax and all its column arguments;
+    /// it does not assume implication between distinct comparisons.
+    /// Formal rule CT-Constraint: Preserve the boolean predicate symbol and all its tableau arguments.
+    fn constraint(&mut self, c: &ra::syntax::Constraint) {
+        let arguments = c
+            .variables()
+            .map(|v| self.heading[&symbol_name(v)].clone())
+            .collect();
+        let mut shape = c.clone();
+        shape.map_terms(&mut |t| {
+            if let ra::syntax::constraint::Term::Variable(v) = t {
+                *v = syn::Ident::new("__column", v.span());
+            }
+        });
+        self.atoms.insert(Atom {
+            relation: format!("#constraint {}", shape.to_token_stream()),
+            arguments,
+        });
+    }
+
     fn freshen(&self, context: &mut Context) -> Self {
         let mut renaming = BTreeMap::<usize, Term>::new();
         let mut rename = |term: &Term| match term {
@@ -236,6 +257,7 @@ fn source_tableau(source: &valuation::Program, context: &mut Context) -> (Tablea
                 table = table.join(&input, false, context);
             }
             valuation::Step::Equality(equality, _) => table.equality(equality),
+            valuation::Step::Constraint(c, _) => table.constraint(c),
             valuation::Step::Guard(filter, _) => {
                 let item = BodyItem::Filter(filter.clone());
                 chain.push(ChainNode {
@@ -346,6 +368,9 @@ fn target_tableau(target: &ra::Program, context: &mut Context) -> (Tableau, Vec<
             }
             ra::Operator::Select(select) => {
                 let mut table = results[&symbol_name(&select.input)].clone();
+                for c in &select.condition.constraints {
+                    table.constraint(c);
+                }
                 for equality in &select.condition.equalities {
                     table.equality(equality);
                 }

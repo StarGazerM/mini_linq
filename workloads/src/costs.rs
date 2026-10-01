@@ -77,14 +77,14 @@ configuration!(keep, $, {}, {
         ::mini_linq::cq_to_ra! {
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b),if *a >= 2 && *a < 6;
+            answer(a,b) :- r(a,b), a >= 2, a < 6;
         }.map(|(a,b)| vec![*a,*b]).collect()
     }
     pub(super) fn range_map(r: &std::collections::BTreeMap<(i32,),Vec<(i32,)>>) -> Answers {
         ::mini_linq::cq_to_ra! {
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b),if *a >= 2 && *a < 6;
+            answer(a,b) :- r(a,b), a >= 2, a < 6;
         }.map(|(a,b)| vec![*a,*b]).collect()
     }
     pub(super) fn probe_slice(l: &[(i32,)], r: &[Edge]) -> Answers {
@@ -302,10 +302,10 @@ pub fn run(scale: usize, seed: u64) -> Vec<Observation> {
     let ordered: BTreeMap<_, _> = rows.iter().map(|&(a, b)| ((a,), vec![(b,)])).collect();
     let hash: counters::HashMap<_, _> = rows.iter().map(|&(a, b)| ((a,), vec![(b,)])).collect();
     let probes = [(2,), (3,), (4,), (5,)];
-    results.push(measure("guard", "btree/scan", scale, &expected, || {
+    results.push(measure("range", "btree/direct", scale, &expected, || {
         (keep::range_map(&ordered), 0)
     }));
-    results.push(measure("guard", "slice/scan", scale, &expected, || {
+    results.push(measure("range", "slice/scan", scale, &expected, || {
         (keep::range_slice(&rows), 0)
     }));
     results.push(measure("probe", "map/direct", scale, &expected, || {
@@ -334,7 +334,7 @@ pub fn run(scale: usize, seed: u64) -> Vec<Observation> {
 }
 
 /// Rows at runtime storage boundaries distinguish O(n) from O(n*n) work;
-/// point lookups distinguish O(1) from O(n). Opaque guards scan both hosts.
+/// point lookups distinguish O(1) from O(n). Relational ranges seek on the ordered host and scan the slice.
 /// Multiplication avoids floats.
 /// The slack admits fixed setup while separating asymptotic predictions (2/4,
 /// or 1/2). Both Fine orders enumerate the disconnected query linearly;
@@ -351,8 +351,8 @@ pub fn assert_growth(runs: &[Vec<Observation>]) {
                 | ("chain", "yannakakis")
                 | ("projection", "canon")
                 | ("disconnected", _) => (5, 2, true),
-                ("probe", "map/direct") => (5, 4, true),
-                ("guard", _) | ("probe", _) => (17, 10, false),
+                ("probe", "map/direct") | ("range", "btree/direct") => (5, 4, true),
+                ("range", _) | ("probe", _) => (17, 10, false),
                 _ => (3, 1, false),
             };
             let a = small.counts.rows_enumerated;
@@ -384,7 +384,7 @@ pub fn assert_growth(runs: &[Vec<Observation>]) {
         assert_eq!(elimination.guard_visits, elimination.scale);
         for observation in observations
             .iter()
-            .filter(|o| o.query == "guard" || o.query == "probe")
+            .filter(|o| o.query == "range" || o.query == "probe")
         {
             assert_eq!(
                 observation.counts.index_builds,

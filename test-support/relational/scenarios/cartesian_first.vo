@@ -2,11 +2,9 @@ struct CartesianFirst;
 relation R(first: i32, second: i32);
 relation S(first: i32, second: i32);
 relation T(first: i32, second: i32);
-answer(a, d) :- R(a, b), S(__cq_1_0, c), b = __cq_1_0, T(__cq_2_0, d), c = __cq_2_0;
+answer(a, d) :- R(a, b), S(b, c), T(c, d);
 valuation {
     R@0(a, b);
-    S@1(__cq_1_0, c);
-    b = __cq_1_0;
-    T@3(__cq_2_0, d);
-    c = __cq_2_0;
+    S@1(b, c);
+    T@2(c, d);
 }

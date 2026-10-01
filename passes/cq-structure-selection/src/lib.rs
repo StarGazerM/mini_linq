@@ -105,7 +105,7 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
     };
     for (result, reads) in &analysis.keyed_reads {
         for (reader, columns, supply) in reads {
-            if *supply == SupplyKind::Const || matches!(operators[reader], Operator::Merge(..)) {
+            if *supply != SupplyKind::Stream || matches!(operators[reader], Operator::Merge(..)) {
                 continue;
             }
             let need = match operators[reader] {

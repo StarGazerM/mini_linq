@@ -72,6 +72,16 @@ impl<'a, K: Ord, V> Iterator for GroupedCursor<'a, K, V> {
     }
 }
 
+impl<K: Ord, V> GroupedCursor<'_, K, V> {
+    /// Initial lower-bound seek accepts a borrowed value of any lifetime. The
+    /// map's range stores only its nodes, never a reference to the bound.
+    pub(crate) fn seek_value(&mut self, bound: &K) {
+        crate::count!(cursor_steps);
+        self.current = None;
+        self.keys = self.map.range((Bound::Included(bound), Bound::Unbounded));
+    }
+}
+
 impl<'a, K: Ord, V> OrderedCursor for GroupedCursor<'a, K, V> {
     type Key = &'a K;
     type Value = &'a V;

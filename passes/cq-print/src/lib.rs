@@ -28,6 +28,7 @@ pub mod access;
 pub mod expressions;
 mod ownership;
 mod point;
+mod range;
 pub use ownership::own_captures;
 
 /// A host relation's value: its name in scope, declared column order, and
@@ -57,6 +58,7 @@ pub struct Context<'a> {
     pub infos: BTreeMap<String, physical::Row>,
     pub physical: BTreeMap<String, &'a physical::Definition>,
     pub hosts: BTreeMap<String, Host>,
+    pub parameters: BTreeMap<String, Ident>,
     /// The identifier every result binds each of its columns to.
     pub idents: BTreeMap<String, BTreeMap<String, Ident>>,
     pub reprs: BTreeMap<String, Repr>,
@@ -136,6 +138,33 @@ impl<'a> Context<'a> {
                 },
             );
         }
+        // Formal rule IF-Parameter: Bind each captured relational value once outside all query loops.
+        let mut parameters = BTreeMap::new();
+        for definition in &module.physical.program.definitions {
+            let theta = match &definition.operator {
+                Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => &s.condition,
+                _ => continue,
+            };
+            for parameter in theta
+                .constraints
+                .iter()
+                .flat_map(cq_lang_structures::syntax::Constraint::parameters)
+            {
+                let name = symbol_name(parameter);
+                if parameters.contains_key(&name) {
+                    continue;
+                }
+                let mut n = parameters.len();
+                while used.contains(&format!("__cq_parameter_{n}")) {
+                    n += 1;
+                }
+                let id =
+                    format_ident!("__cq_parameter_{n}", span = proc_macro2::Span::mixed_site());
+                used.insert(id.to_string());
+                statements.push(syn::parse_quote!(let #id = &#parameter;));
+                parameters.insert(name, id);
+            }
+        }
         let mut candidate_reads: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
         for pair in module.physical.program.definitions.windows(2) {
             if let Some((a, b, v)) =
@@ -163,6 +192,7 @@ impl<'a> Context<'a> {
                 .map(|d| (symbol_name(&d.name), d))
                 .collect(),
             hosts,
+            parameters,
             idents: BTreeMap::new(),
             reprs: BTreeMap::new(),
             statements,
@@ -171,6 +201,13 @@ impl<'a> Context<'a> {
             candidate_reads,
             intersect: false,
         }
+    }
+
+    pub fn relational_condition(
+        &self,
+        theta: &cq_lang_structures::syntax::algebra::Theta,
+    ) -> TokenStream {
+        expressions::relational_condition_with(theta, &self.parameters)
     }
 
     /// The sorted logical heading of a result.

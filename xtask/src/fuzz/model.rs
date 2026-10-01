@@ -72,6 +72,7 @@ pub enum Step {
     Atom(usize),
     Binding(usize),
     Guard(usize),
+    Constraint(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +93,82 @@ pub enum Guard {
     Not(Box<Guard>),
 }
 
+/// Relational terms contain no arithmetic or partial operations. Parameters
+/// are enclosing values; their printed CQ names are never query binders.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RelTerm {
+    Var(usize),
+    Literal(i32),
+    Parameter(i32),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Relational {
+    Compare(Comparison, RelTerm, RelTerm),
+    Between(RelTerm, RelTerm, RelTerm),
+    In(RelTerm, Vec<i32>),
+    Or(Vec<Vec<Relational>>),
+}
+fn parameter_name(value: i32) -> String {
+    format!(
+        "parameter_{}{}",
+        if value < 0 { "negative_" } else { "positive_" },
+        value.unsigned_abs()
+    )
+}
+impl Relational {
+    fn terms(&self) -> Vec<&RelTerm> {
+        match self {
+            Self::Compare(_, l, r) => vec![l, r],
+            Self::Between(t, l, h) => vec![t, l, h],
+            Self::In(t, _) => vec![t],
+            Self::Or(bs) => bs.iter().flatten().flat_map(Self::terms).collect(),
+        }
+    }
+    fn variables(&self, output: &mut BTreeSet<usize>) {
+        output.extend(self.terms().into_iter().filter_map(|t| match t {
+            RelTerm::Var(v) => Some(*v),
+            _ => None,
+        }));
+    }
+    fn features(&self, output: &mut BTreeSet<String>) {
+        output.insert("relational-constraint".into());
+        if self
+            .terms()
+            .iter()
+            .any(|t| matches!(t, RelTerm::Parameter(_)))
+        {
+            output.insert("relational-parameter".into());
+        }
+        match self {
+            Self::Compare(op, _, _) => {
+                output.insert(format!(
+                    "relational-{}",
+                    match op {
+                        Comparison::Equal => "eq",
+                        Comparison::NotEqual => "ne",
+                        Comparison::Less => "lt",
+                        Comparison::LessEqual => "le",
+                        Comparison::Greater => "gt",
+                        Comparison::GreaterEqual => "ge",
+                    }
+                ));
+            }
+            Self::Between(..) => {
+                output.insert("relational-between".into());
+            }
+            Self::In(..) => {
+                output.insert("relational-in".into());
+            }
+            Self::Or(bs) => {
+                output.insert("relational-or".into());
+                for c in bs.iter().flatten() {
+                    c.features(output);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
     pub variable: usize,
@@ -104,6 +181,7 @@ pub struct Query {
     pub atoms: Vec<Atom>,
     pub bindings: Vec<Binding>,
     pub guards: Vec<Guard>,
+    pub constraints: Vec<Relational>,
     pub head: Vec<Expr>,
     /// Empty uses the total lane's atoms/bindings/guards order.
     pub order: Vec<Step>,
@@ -137,6 +215,18 @@ impl Case {
             expression.features(&mut features);
         }
         features.contains("partial-term")
+    }
+
+    pub fn parameters(&self) -> BTreeMap<String, i32> {
+        self.query
+            .constraints
+            .iter()
+            .flat_map(Relational::terms)
+            .filter_map(|t| match t {
+                RelTerm::Parameter(v) => Some((parameter_name(*v), *v)),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn output_arity(&self) -> usize {
@@ -195,6 +285,9 @@ impl Case {
                         binding.variable,
                         rust_expression(&binding.expression)
                     ));
+                }
+                Step::Constraint(index) => {
+                    clauses.push(cq_constraint(&self.query.constraints[index]))
                 }
                 Step::Guard(index) => {
                     let guard = &self.query.guards[index];
@@ -261,6 +354,9 @@ impl Case {
         }
         for guard in &self.query.guards {
             conditions.push(sql_guard(guard, &environment));
+        }
+        for c in &self.query.constraints {
+            conditions.push(sql_constraint(c, &environment));
         }
         let projection = self
             .query
@@ -375,6 +471,98 @@ fn rust_guard(guard: &Guard) -> String {
         Guard::And(left, right) => format!("({} && {})", rust_guard(left), rust_guard(right)),
         Guard::Or(left, right) => format!("({} || {})", rust_guard(left), rust_guard(right)),
         Guard::Not(inner) => format!("!({})", rust_guard(inner)),
+    }
+}
+
+fn cq_constraint(c: &Relational) -> String {
+    let term = |t: &RelTerm| match t {
+        RelTerm::Var(v) => format!("v{v}"),
+        RelTerm::Literal(v) => v.to_string(),
+        RelTerm::Parameter(v) => parameter_name(*v),
+    };
+    match c {
+        Relational::Compare(op, l, r) => format!(
+            "{} {} {}",
+            term(l),
+            match op {
+                Comparison::Equal => "=",
+                Comparison::NotEqual => "!=",
+                Comparison::Less => "<",
+                Comparison::LessEqual => "<=",
+                Comparison::Greater => ">",
+                Comparison::GreaterEqual => ">=",
+            },
+            term(r)
+        ),
+        Relational::Between(t, l, h) => format!("{} between {} and {}", term(t), term(l), term(h)),
+        Relational::In(t, ls) => format!(
+            "{} in {{ {} }}",
+            term(t),
+            ls.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Relational::Or(bs) => bs
+            .iter()
+            .map(|b| {
+                format!(
+                    "({})",
+                    b.iter()
+                        .map(cq_constraint)
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" or "),
+    }
+}
+
+/// The SQL printer independently interprets abstract relational nodes.
+fn sql_constraint(c: &Relational, environment: &BTreeMap<usize, String>) -> String {
+    let term = |t: &RelTerm| match t {
+        RelTerm::Var(v) => environment[v].clone(),
+        RelTerm::Literal(v) | RelTerm::Parameter(v) => v.to_string(),
+    };
+    match c {
+        Relational::Compare(op, l, r) => format!(
+            "({} {} {})",
+            term(l),
+            match op {
+                Comparison::Equal => "=",
+                Comparison::NotEqual => "<>",
+                Comparison::Less => "<",
+                Comparison::LessEqual => "<=",
+                Comparison::Greater => ">",
+                Comparison::GreaterEqual => ">=",
+            },
+            term(r)
+        ),
+        Relational::Between(t, l, h) => {
+            format!("({} BETWEEN {} AND {})", term(t), term(l), term(h))
+        }
+        Relational::In(t, ls) => format!(
+            "({} IN ({}))",
+            term(t),
+            ls.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Relational::Or(bs) => format!(
+            "({})",
+            bs.iter()
+                .map(|b| format!(
+                    "({})",
+                    b.iter()
+                        .map(|c| sql_constraint(c, environment))
+                        .collect::<Vec<_>>()
+                        .join(" AND ")
+                ))
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        ),
     }
 }
 
@@ -591,6 +779,7 @@ impl Query {
             .map(Step::Atom)
             .chain((0..self.bindings.len()).map(Step::Binding))
             .chain((0..self.guards.len()).map(Step::Guard))
+            .chain((0..self.constraints.len()).map(Step::Constraint))
             .collect()
     }
 
@@ -619,6 +808,13 @@ impl Query {
                         return false;
                     }
                 }
+                Step::Constraint(index) => {
+                    let mut used = BTreeSet::new();
+                    self.constraints[index].variables(&mut used);
+                    if !used.is_subset(&bound) {
+                        return false;
+                    }
+                }
                 Step::Guard(index) => {
                     let mut used = BTreeSet::new();
                     self.guards[index].variables(&mut used);
@@ -631,6 +827,9 @@ impl Query {
         let mut used = BTreeSet::new();
         for guard in &self.guards {
             guard.variables(&mut used);
+        }
+        for c in &self.constraints {
+            c.variables(&mut used);
         }
         for expression in &self.head {
             expression.variables(&mut used);
@@ -729,6 +928,52 @@ impl Random {
         )
     }
 
+    fn relational_term(&mut self, variables: usize) -> RelTerm {
+        match self.pick(4) {
+            0 => RelTerm::Literal(self.small()),
+            1 => RelTerm::Parameter(self.small()),
+            _ => RelTerm::Var(self.pick(variables)),
+        }
+    }
+    fn relational_atomic(&mut self, variables: usize) -> Relational {
+        let v = RelTerm::Var(self.pick(variables));
+        match self.pick(8) {
+            6 => Relational::Between(
+                v,
+                self.relational_term(variables),
+                self.relational_term(variables),
+            ),
+            7 => Relational::In(v, (0..1 + self.pick(4)).map(|_| self.small()).collect()),
+            op => Relational::Compare(
+                match op {
+                    0 => Comparison::Equal,
+                    1 => Comparison::NotEqual,
+                    2 => Comparison::Less,
+                    3 => Comparison::LessEqual,
+                    4 => Comparison::Greater,
+                    _ => Comparison::GreaterEqual,
+                },
+                self.relational_term(variables),
+                self.relational_term(variables),
+            ),
+        }
+    }
+    fn relational(&mut self, variables: usize) -> Relational {
+        if self.pick(4) == 0 {
+            Relational::Or(
+                (0..2 + self.pick(2))
+                    .map(|_| {
+                        (0..1 + self.pick(3))
+                            .map(|_| self.relational_atomic(variables))
+                            .collect()
+                    })
+                    .collect(),
+            )
+        } else {
+            self.relational_atomic(variables)
+        }
+    }
+
     fn guard(&mut self, variables: usize) -> Guard {
         let left = self.comparison(variables);
         match self.pick(4) {
@@ -810,6 +1055,9 @@ pub fn generate(seed: u64) -> Case {
             }
         })
         .collect();
+    let constraints = (0..1 + random.pick(3))
+        .map(|_| random.relational(variables))
+        .collect();
     let head = (0..1 + random.pick(3))
         .map(|_| {
             if random.pick(3) == 0 {
@@ -862,6 +1110,7 @@ pub fn generate(seed: u64) -> Case {
             atoms,
             bindings,
             guards,
+            constraints,
             head,
             order: Vec::new(),
         },
@@ -927,6 +1176,7 @@ fn generate_partial(seed: u64) -> Case {
         ],
         bindings: Vec::new(),
         guards: vec![safe],
+        constraints: Vec::new(),
         head: vec![Expr::Var(0), Expr::Var(2)],
         order: vec![Step::Atom(0)],
     };
@@ -977,6 +1227,16 @@ fn generate_partial(seed: u64) -> Case {
     }
     if !protected {
         query.order.push(Step::Guard(0));
+    }
+    // Central constraints sample both sides of the opaque Rust chain. The
+    // independent written-order reference retains these exact source positions.
+    for i in 0..1 + random.pick(2) {
+        query.constraints.push(random.relational(1));
+        if random.pick(2) == 0 {
+            query.order.insert(1, Step::Constraint(i));
+        } else {
+            query.order.push(Step::Constraint(i));
+        }
     }
     let values = [-2, -1, 0, 1, 2, i32::MIN, i32::MAX];
     let mut data = vec![
@@ -1065,6 +1325,9 @@ impl Coverage {
                     }
                 }
             }
+        }
+        for c in &query.constraints {
+            c.features(&mut features);
         }
         if !query.guards.is_empty() {
             features.insert("guard".into());
@@ -1169,6 +1432,8 @@ mod tests {
         for seed in 0..2048 {
             let case = generate(seed);
             assert_eq!(case, generate(seed));
+            let params = case.parameters();
+            assert!(params.keys().all(|name| case.cq().contains(name)));
             assert!((1..=4).contains(&case.query.schema.len()));
             assert!((1..=5).contains(&case.query.atoms.len()));
             assert!(case.query.well_bound());
@@ -1221,6 +1486,17 @@ mod tests {
             "partial-let",
             "partial-argument",
             "partial-head",
+            "relational-constraint",
+            "relational-parameter",
+            "relational-eq",
+            "relational-ne",
+            "relational-lt",
+            "relational-le",
+            "relational-gt",
+            "relational-ge",
+            "relational-between",
+            "relational-in",
+            "relational-or",
         ] {
             assert!(coverage.counts[feature] > 30, "{feature}: {coverage}");
         }
@@ -1253,6 +1529,7 @@ mod tests {
                         Box::new(Expr::Var(1)),
                     ),
                 }],
+                constraints: Vec::new(),
                 guards: vec![Guard::Not(Box::new(Guard::Compare(
                     Comparison::Equal,
                     Expr::Var(2),
@@ -1302,6 +1579,7 @@ mod tests {
                         Box::new(Expr::Var(1)),
                     ),
                 }],
+                constraints: Vec::new(),
                 guards: vec![
                     Guard::Or(
                         Box::new(Guard::Compare(

@@ -136,8 +136,8 @@ fn reductions_respect_tree_dependencies_and_exactly_once_obligations() {
 
 #[test]
 fn the_schedules_are_pinned() {
-    // Clause numbers include the relational equalities emitted after repeated
-    // arguments. Chain: up from E@0 to E@7, then down again.
+    // Shared variables are direct joins; atom clause numbers are contiguous.
+    // Chain: up from E@0 to E@4, then down again.
     let (tree, pairs) = schedule(
         "struct Chain; relation E(a:i32,b:i32); answer(a,f) :- E(a,b),E(b,c),E(c,d),E(d,e),E(e,f);",
     );
@@ -145,26 +145,26 @@ fn the_schedules_are_pinned() {
         tree,
         [
             (0, Some(1)),
-            (1, Some(3)),
-            (3, Some(5)),
-            (5, Some(7)),
-            (7, None)
+            (1, Some(2)),
+            (2, Some(3)),
+            (3, Some(4)),
+            (4, None)
         ]
     );
     assert_eq!(
         pairs,
         [
             (1, 0),
-            (3, 1),
-            (5, 3),
-            (7, 5),
-            (5, 7),
-            (3, 5),
-            (1, 3),
+            (2, 1),
+            (3, 2),
+            (4, 3),
+            (3, 4),
+            (2, 3),
+            (1, 2),
             (0, 1)
         ]
     );
-    // Branches: breadth-first from the root E@9, the upward sweep visits the
+    // Branches: breadth-first from the root E@5, the upward sweep visits the
     // deepest edges first and the downward sweep the shallowest.
     let (tree, pairs) = schedule(
         "struct Branches; relation E(a:i32,b:i32); answer(a,c,e,g) :- E(a,b),E(b,c),E(a,d),E(d,e),E(a,f),E(f,g);",
@@ -172,26 +172,26 @@ fn the_schedules_are_pinned() {
     assert_eq!(
         tree,
         [
-            (0, Some(3)),
+            (0, Some(2)),
             (1, Some(0)),
-            (3, Some(7)),
-            (5, Some(3)),
-            (7, Some(9)),
-            (9, None)
+            (2, Some(4)),
+            (3, Some(2)),
+            (4, Some(5)),
+            (5, None)
         ]
     );
     assert_eq!(
         pairs,
         [
             (0, 1),
-            (3, 5),
-            (3, 0),
-            (7, 3),
-            (9, 7),
-            (7, 9),
-            (3, 7),
-            (0, 3),
-            (5, 3),
+            (2, 3),
+            (2, 0),
+            (4, 2),
+            (5, 4),
+            (4, 5),
+            (2, 4),
+            (0, 2),
+            (3, 2),
             (1, 0)
         ]
     );
