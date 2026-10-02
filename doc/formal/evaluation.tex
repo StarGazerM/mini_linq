@@ -19,21 +19,21 @@ complete demand coverage and first-use numbering
 Physical & One operator per result, operand-derived probe/semi demand checks,
 modes checked by use, \code{canon} on the return when uniqueness is not inferred
 (\path{passes/cq-physical-lowering/tests/lowering.rs}).\\
-Structures & Every keyed read answered by a host key fact or a built type,
+Structures & Every keyed read answered by recorded host access or a built type,
 merge sides ordered, canonical return
 (\path{passes/cq-structure-selection/tests/selection.rs}).\\
 Printed program & Borrowed host/built fields and head-order output, owned
-host-key cloning, generated trait guards and authored syntax fixtures
+host-key construction, generated trait guards and authored syntax fixtures
 (\path{passes/cq-physical-realization/tests/realization.rs}).\\
 Storage laws & Abstraction functions of \code{HashIndex}, membership and
 ordered cursors against an independent bag oracle
 (\path{runtime/cq-storage/tests/}).\\
 Whole chain & Host maps probed in place, compiler-built indexes, a
-user-defined \texttt{index\_provider!}, merge joins over host and built ordered maps,
+user-defined recorded index type, merge joins over host and built ordered maps,
 Yannakakis semijoin passes as membership tests, bounded ordered scans and a
 computed head column, each compared with an independent oracle
 (\path{facade/mini-linq/tests/physical_query.rs}); the runnable
-\path{examples/composition/} binds the post-RA slots it uses, with a policy wrapper.\\
+\path{features/composition/} writes all default phases in a named pipeline.\\
 \bottomrule
 \end{tabular}
 \end{center}

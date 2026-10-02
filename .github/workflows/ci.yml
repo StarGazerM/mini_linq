@@ -10,12 +10,14 @@ permissions:
 jobs:
   workspace:
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all --check
       - name: Fetch locked dependencies for isolated and packaged gates
         run: cargo fetch --locked
       - name: Verify component dependency boundaries
@@ -29,11 +31,15 @@ jobs:
       - name: Check reviewed public API snapshots
         run: python3 tools/check_public_api.py
       - name: Test workspace
-        run: cargo test --workspace --locked --no-fail-fast
+        run: cargo test --workspace --locked
       - name: Check Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Check formal source correspondence
         run: python3 doc/formal/check.py
+      - name: Check workload goldens
+        run: cargo xtask golden
+      - name: Run seeded differential fuzzing
+        run: cargo xtask fuzz --cases 200
       - name: Upload regression diagnostics
         if: always()
         uses: actions/upload-artifact@v4

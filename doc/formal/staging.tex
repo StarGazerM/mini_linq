@@ -1,73 +1,78 @@
-\section{Quotation and composition obligations}
+\section{Checked pass pipelines and composition}
 \label{sec:staging}
-Immediate macro expansions distinguish dispatch, intermediate continuation and
-terminal realization. Let $T$ be tokens, $s,t$ complete typed payloads, and
-$\mathsf{quote}$ their token serialization.
+A macro invocation transports a complete program and an explicit queue of
+remaining pass paths. Each path may carry argument tokens interpreted only by
+that pass. Let $T$ be raw tokens, $s,t$ typed programs, $\pi$ a queue, and
+$\mathsf{quote}$ token serialization.
 \begin{mathpar}
+\Rule{ST-Entry}{\pi=\mathsf{resolve}(configuration,defaults)\quad\pi\ne[]}
+ {\code{mini_linq::compile!}\{configuration;\ T\}
+  \longrightarrow\mathsf{start}(\pi,T)}
 
-\Rule{ST-Entry}{\operatorname{parse}_{CQ}(T)=s\quad\mathsf{WF}_{CQ}(s)}
- {\code{mini_linq!}\{T\}\longrightarrow\code{mini_linq::cq_to_ra!}\{\mathsf{quote}(s)\}}
+\Rule{ST-Next}{\operatorname{parse}_L(T)=s\quad\mathsf{WF}_L(s)\\
+ f(s,args)=t\quad\mathsf{WF}_M(t)\quad M\ne Rust\quad\pi=k(args')::\pi'}
+ {\mathsf{pass}_f(args,\pi,T)
+  \longrightarrow k!\{args';\ \pi';\ \mathsf{quote}(t)\}}
 
-\Rule{ST-Next}{\operatorname{parse}_L(T)=s\quad f(s)=t\quad next=\mathsf{Some}(k)}
- {\mathsf{stage}(T,next,f)\longrightarrow k!\{\mathsf{quote}(t)\}}
-
-\Rule{ST-Terminal}{\operatorname{parse}_{Structures+Policy}(T)=(s,\chi)\\
- e=\mathsf{realize}(s,\mathsf{Endpoints}(\code{mini_linq::distinct_state},\chi.intersect))}
- {\code{structures_to_rust!}\{T\}\longrightarrow\mathsf{quote}_{Rust}(e)}
+\Rule{ST-Terminal}{\operatorname{parse}_{Structures}(T)=s\quad
+ \mathsf{WF}_{Structures}(s)\\
+ e=\mathsf{print}(s,args)\quad\pi=[]}
+ {\mathsf{pass}_{print}(args,\pi,T)\longrightarrow\mathsf{quote}_{Rust}(e)}
 \end{mathpar}
-ST-Entry validates CQ and dispatches it unchanged. ST-Next is the shared
-\code{cq-stage} continuation path; parse or transform failures become
-\code{compile_error!}. ST-Terminal uses \code{next=None} and emits a Rust
-expression. Its intersect flag is true precisely for \code{intersect=smallest}.
+ST-Entry resolves named phases, then starts surface expansion on raw tokens.
+The default \code{mini_linq!} uses the same queue with default configuration.
+CQ parsing and its contract occur at the planner, after surface expansion.
+ST-Next is \code{cq_stage::pass}: it checks source and target contracts.
+A language-changing callback supplies its independent correspondence check;
+\code{cq_stage::rewrite} additionally invokes the language's
+\code{check_rewrite}. Parse, contract, transformation, and queue failures emit
+\code{compile_error!}. A nonterminal language requires a remaining pass;
+a terminal Rust expression requires an empty queue. Rust subsequently checks
+the generated expression's types, ownership, and runtime trait obligations.
 
-\paragraph{Wire slots and policy transport.}
-The caller binds these slots:
-\begin{center}\small
-\begin{tabular}{ll}
-\toprule
-Slot & Input or request\\
-\midrule
-\code{cq_to_ra!} & CQ\\
-\code{choose_index_policy!} & RA\\
-\code{physical_policy!} & IX\\
-\code{select_structures!} & Physical with policy\\
-\code{structures_to_rust!} & Structures with policy\\
-\code{distinct_state!} & Runtime distinct-state request\\
-\bottomrule
-\end{tabular}
-\end{center}
-The logical planner implementations are \path{cq_to_ra},
-\path{cq_to_ra_generic} and \path{cq_to_ra_hypergraph}.
-The supplied RA-to-IX implementation is \path{index_demands}. Each logical route emits
-\path{choose_index_policy!} with standalone RA; \path{index_demands!} emits
-\path{physical_policy!} with IX.
-
-A caller policy wrapper appends \code{policy \{...\}} to IX and invokes
-\code{lower_physical!}. The two entries forward the same policy:
+\paragraph{Named grammar and explicit queues.}
+The facade accepts the following grammar, where parentheses are optional:
 \begin{lstlisting}
-select_structures!  { Physical   policy { ... } }
-structures_to_rust! { Structures policy { ... } }
+pipeline {
+    surface = [Path(tokens), ...];
+    plan = Path(tokens); ix = Path; lower = Path;
+    physical = [Path(tokens), ...]; select = Path;
+    structures = [Path(tokens), ...]; print = Path;
+}
 \end{lstlisting}
-Terminal realization consumes that payload and the caller's distinct-state
-and index-provider paths. Canon boundaries use distinct state, including
-before let materialization. Host reads dispatch through runtime traits. The composition example in \path{examples/composition/}
-starts at RA with \code{index_demands!}, defines the policy wrapper, and binds
-the post-RA slots it uses. It does not bind the logical slots.
+The resolved order is surface, plan, ix, lower, Physical rewrites, select,
+Structures rewrites, print. Omitted single phases use
+\code{mini_linq::passes::{plan_written,index_demands,lower,select,print_pull}};
+omitted lists are empty. The protocol does not register or choose external
+pass names. An authored IR can enter directly at a compatible macro:
+\begin{lstlisting}
+Path! {
+    arguments { tokens };
+    pipeline { Next(tokens), Printer };
+    <complete program>
+}
+\end{lstlisting}
+The arguments packet is omitted when empty. Each continuation receives only
+its arguments, the remaining queue, and the complete target program.
+Physical records operators, modes, canonical boundaries, and intersection or
+semijoin choices. Structures records built types and levels, host fallbacks,
+retained rows, and dedup state. The printer consumes these recorded decisions.
 
-\paragraph{Abstract contexts and edge obligations.}
-Let $C[\square^L_\Gamma]$ be a Rust context containing a quotation in language
-$L$, with runtime bindings supplied by $\Gamma$. The implementation uses ordinary Rust macro contexts and replaces one
-quotation with its checked continuation; no residual-hole IR is needed:
+\paragraph{Rust contexts and external consumers.}
+Ordinary Rust contexts contain checked query invocations. The pass expansion
+replaces the invocation in place:
 \[
-\Rule{ST-Hole}{\Gamma\vdash s:L\quad f(s)=t\quad\Gamma\vdash t:M}
- {C[\square^L_\Gamma(s)]\longrightarrow C[\square^M_\Gamma(t)]}.
+\Rule{ST-Context}{\mathsf{pass}_f(args,\pi,\mathsf{quote}(s))\longrightarrow T'}
+ {C[\mathsf{pass}_f(args,\pi,\mathsf{quote}(s))]\longrightarrow C[T']}.
 \]
-ST-Hole is implemented by the stage continuation inside the caller's Rust
-context. Leaf bindings and the four interfaces are checked as specified in
-Section~\ref{sec:pass-contracts}. Each edge declares an admitted source domain, target
-well-formedness, a representation relation and an observation to preserve.
-Closing contexts must supply bindings and ownership lifetimes. A completed
-answer-set observation does not establish a polling or effect-trace observation.
+The protocol does not check arbitrary Rust closing contexts: rustc supplies
+name resolution, typing, and lifetime checking. The input/output and
+environment interfaces are specified in Section~\ref{sec:pass-contracts}.
+The \path{features/composition/} consumer writes a complete named pipeline over
+heterogeneous borrowed hosts. Other standalone feature workspaces insert
+planners, rewrites, languages, surface expansions, and printers through the
+same public protocol. The out-of-tree gate packages the core and builds/tests
+every consumer without core source paths; an in-tree escape fails the gate.
 
 \begin{theorem}[Conditional composition]
 \label{thm:composition}
@@ -79,8 +84,8 @@ under compatible closing contexts, then $g\circ f$ preserves that observation.
 \begin{proof}
 Compose the intermediate and final representation relations and their
 observation equalities. Domain inclusion establishes that $g$ is defined.
-Closing-context adequacy permits the same argument for quotations.
+Closing-context adequacy permits the same argument for macro invocations.
 \end{proof}
 Semantic preservation and authored expansion agreement remain independent
-obligations. The structural checks in Section~\ref{sec:pass-contracts} do not
-prove host adequacy or reproduce every construction choice.
+obligations. Structural checks do not prove host adequacy or reproduce every
+construction choice; completed answer sets do not establish effect traces.

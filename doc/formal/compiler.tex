@@ -1,15 +1,15 @@
 \input{common}
 \title{MiniLinq: Relational Planning and Index Requirements}
 \author{Syntax, semantics, compilation rules, and expansion expectations}
-\date{29 September 2026}
+\date{2 October 2026}
 \begin{document}
 \maketitle
 \begin{abstract}
 MiniLinq compiles conjunctive queries through named relational algebra and IX,
 which records required index demands over exact RA results.
-A caller-supplied, query-independent policy then fixes one physical
-operator per result (Physical) and binds every keyed read to a host key fact or
-a built Rust structure (Structures). Physical derives demand uses from its
+Caller-selected passes and checked rewrites record one physical operator per
+result (Physical), then concrete built, fallback, retention and dedup types
+(Structures). Physical derives demand uses from its
 operands; a printer emits one pull program over the
 runtime operation traits. We specify CQ, CQ-NF, VO, RA and IX with syntax,
 semantics and algorithmic rules, and give local contract rules for Physical and

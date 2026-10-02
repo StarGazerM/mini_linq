@@ -24,7 +24,7 @@
 //! `probe smallest`, `merge`, `semi eager` or `semi lazy`, `point`, and `range`.
 //! Structures records built Rust types and levels, each host read's fallback
 //! type, and each canonical boundary's dedup type, including computed heads.
-//! A printer consumes these decisions without imported macro slots.
+//! A printer consumes these decisions through the checked pass queue.
 //!
 //! ```text
 //! structures {
@@ -201,6 +201,7 @@ impl<L: Parse> Parse for Input<L> {
 /// Parse In, check its contract, run f, check Out, then invoke the next pass.
 /// Arguments are opaque to this crate; a pass records their meaning in its IR.
 /// Formal rule ST-Next: Parse and transform a payload, then emit the selected next macro invocation.
+/// Formal rule ST-Context: Expand the pass invocation in its enclosing Rust context.
 pub fn pass<In: Language, Out: Language>(
     input: TokenStream,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
@@ -316,7 +317,6 @@ impl Configuration {
 }
 
 /// Legacy single-stage library composition, independent of the pipeline facade.
-/// Formal rule ST-Hole: Expand one checked quotation inside its caller-supplied Rust context.
 pub fn stage<S: Parse, T: ToTokens>(
     input: TokenStream,
     next: Option<syn::Path>,

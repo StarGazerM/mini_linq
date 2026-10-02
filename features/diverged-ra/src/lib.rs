@@ -10,6 +10,9 @@
 //! The meaning is `T X = bottom + Set X`, with one abort and an opaque partial
 //! Rust guard after the relational join. Other effects and evaluation counts
 //! are outside this meaning.
+//! From the repository root, run `python3 features/diverged-ra/check.py` to
+//! validate both routes, or `cargo test --manifest-path
+//! features/diverged-ra/Cargo.toml --locked` for the workspace tests.
 include!(concat!(env!("OUT_DIR"), "/query.rs"));
 
 #[cfg(test)]

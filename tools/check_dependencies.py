@@ -33,7 +33,6 @@ LANGUAGES = inventory("languages")
 FAMILIES = inventory("passes")
 RUNTIME = inventory("runtime")
 FACADES = inventory("facade")
-EXTENSIONS = {}
 TESTKIT = inventory("testkit")
 CORE = LANGUAGES | FAMILIES | RUNTIME | FACADES
 PATHS = CORE | TESTKIT
@@ -42,11 +41,11 @@ EDGES = {}
 for name, path in FAMILIES.items():
     spec = tomllib.loads((ROOT / path / "Cargo.toml").read_text())["package"]["metadata"]["cq"]
     EDGES[name] = spec
-ALLOWED = set(PATHS)
-
-# Optional crates are identified from their excluded source manifests.
+# External consumer crates are identified from their standalone manifests.
 FEATURE_NAMES = {tomllib.loads(p.read_text())["package"]["name"]
-    for p in (ROOT / "features").rglob("Cargo.toml") if "package" in tomllib.loads(p.read_text())}
+    for p in (ROOT / "features").rglob("Cargo.toml")
+    if not any(part in {"target", ".git", "vendor"} for part in p.relative_to(ROOT / "features").parts)
+    and "package" in tomllib.loads(p.read_text())}
 
 def toml(value):
     if isinstance(value, bool): return str(value).lower()
@@ -86,26 +85,21 @@ def recomputing_checks(source):
 def check_independent_relations():
     assert list(recomputing_checks('pub fn check() { if true { compile(s); } }')) == [1]
     assert not list(recomputing_checks('pub fn check() { let x = "compile("; /* compile(s) */ }\nfn f() { compile(s); }'))
-    for path in sorted(list((ROOT / "passes").glob("*/src/**/*.rs")) + list((ROOT / "extensions").glob("*/src/**/*.rs"))):
+    for path in sorted((ROOT / "passes").glob("*/src/**/*.rs")):
         for line in recomputing_checks(path.read_text()):
             raise ValueError(f"{path.relative_to(ROOT)}:{line}: check must not call compile")
-    print("PASS: pass and extension check bodies do not call compile", flush=True)
+    print("PASS: pass check bodies do not call compile", flush=True)
 
 
-def forbidden_import(source, extension_names, surface_only=False):
+def forbidden_import(source, feature_names):
     masked = mask_rust(source)
-    names = "|".join(re.escape(name.replace("-", "_")) for name in extension_names)
+    names = "|".join(re.escape(name.replace("-", "_")) for name in feature_names)
     if names and re.search(rf"\b({names})\s*::|\b(?:use|extern\s+crate)\b[^;]*\b({names})\b", masked):
-        return "core imports an extension"
-    if surface_only:
-        aliases = {"cq_lang_cq"} | set(re.findall(r"\bcq_lang_cq\s+as\s+(\w+)", masked))
-        for alias in aliases:
-            if re.search(rf"\b{alias}\s*::\s*(?:contract|normal|hypergraph)\b|\buse\s+{alias}\s*::\s*\{{[^}}]*\b(?:contract|normal|hypergraph)\b", masked):
-                return "extensions may use CQ for surface parsing only"
+        return "core imports an external feature"
     return None
 
 
-def check_extension_sources():
+def check_feature_sources():
     for name, path in CORE.items():
         for source in (ROOT / path / "src").rglob("*.rs"):
             text = source.read_text()
@@ -150,13 +144,11 @@ def check(data, announce=True):
             if package["features"]:
                 raise ValueError(f"pass features are forbidden: {name}")
         elif name in RUNTIME:
-            allowed = {"cq-syntax", "cq-protocol"} - {name}
-        elif name in EXTENSIONS:
-            allowed = {"cq-syntax", "cq-lang-cq", "cq-stage", "cq-storage", "cq-state-providers"} | (set(EXTENSIONS) - {name})
+            allowed = {"cq-syntax"} - {name}
         elif name in TESTKIT:
             allowed = set(LANGUAGES) | set(RUNTIME)
         else:
-            allowed = set(packages) - set(EXTENSIONS) - set(TESTKIT)
+            allowed = set(packages) - set(TESTKIT)
         for dep in package["dependencies"]:
             target = dep["name"]
             if target in FEATURE_NAMES or (dep.get("path") and Path(dep["path"]).resolve().is_relative_to(ROOT / "features")):
@@ -167,7 +159,7 @@ def check(data, announce=True):
                 continue
             if "path" not in dep and target not in packages: continue
             expected = Path(packages[target]["manifest_path"]).parent if target in packages else None
-            permitted = allowed | (set(TESTKIT) if name in CORE | EXTENSIONS and dep["kind"] == "dev" else set())
+            permitted = allowed | (set(TESTKIT) if name in CORE and dep["kind"] == "dev" else set())
             if target not in permitted or "path" not in dep or Path(dep["path"]).resolve() != expected:
                 raise ValueError(f"forbidden {dep['kind'] or 'normal'} dependency: {name} -> {target}")
         for target in package["targets"]:
@@ -193,24 +185,18 @@ def negative_dependency_checks(data):
         mutations += [(owner, language, kind, remote)
                       for language in LANGUAGES if language not in {"cq-syntax", owner}
                       for kind in (None, "build") for remote in (False, True)]
-    if EXTENSIONS:
-        extension = next(iter(EXTENSIONS))
-        mutations += [(extension, "cq-order", None, False),
-                      (extension, "cq-lang-ra", "dev", False),
-                      (extension, "mini-linq", "build", False),
-                      ("mini-linq", extension, "dev", False),
-                      ("cq-storage", extension, None, False),
-                      ("cq-lang-cq", extension, None, True)]
+    if FEATURE_NAMES:
+        feature = sorted(FEATURE_NAMES)[0]
+        mutations += [(owner, feature, kind, True)
+                      for owner in CORE | TESTKIT for kind in (None, "dev", "build")]
     for testkit in TESTKIT:
         mutations += [(testkit, "cq-order", kind, remote)
                       for kind in (None, "dev", "build") for remote in (False, True)]
         mutations += [(testkit, "mini-linq", kind, False) for kind in (None, "dev", "build")]
         mutations += [(testkit, "cq-stage", "dev", False)]
-        if EXTENSIONS:
-            mutations += [(testkit, next(iter(EXTENSIONS)), "dev", False)]
         mutations += [(owner, testkit, kind, remote)
-                      for owner in CORE | EXTENSIONS for kind in (None, "build") for remote in (False, True)]
-        mutations += [(owner, testkit, "dev", True) for owner in CORE | EXTENSIONS]
+                      for owner in CORE for kind in (None, "build") for remote in (False, True)]
+        mutations += [(owner, testkit, "dev", True) for owner in CORE]
     for owner, target, kind, remote in mutations:
         altered = copy.deepcopy(data)
         package = next(p for p in altered["packages"] if p["name"] == owner)
@@ -266,7 +252,7 @@ def copy_component(destination, name, selected, tested):
     output = destination / PATHS[name]
     shutil.copytree(base / "src", output / "src")
     if (base / "tests").exists(): shutil.copytree(base / "tests", output / "tests")
-    for filename in ("README.md", "LICENSE-MIT", "LICENSE-APACHE"):
+    for filename in ("LICENSE-MIT", "LICENSE-APACHE"):
         if (base / filename).exists(): shutil.copy2(base / filename, output / filename)
     manifest = tomllib.loads((base / "Cargo.toml").read_text())
     tests = manifest.pop("test", [])
@@ -308,7 +294,7 @@ def isolate(packages, only=()):
             with (logdir / f"{name}.log").open("w") as log:
                 result = subprocess.run(command, cwd=destination, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"isolation failed: {name}; see {logdir / (name + '.log')}")
-            if name in FAMILIES | LANGUAGES | EXTENSIONS | TESTKIT:
+            if name in FAMILIES | LANGUAGES | TESTKIT:
                 if not re.search(r"test result: ok\. [1-9][0-9]* passed", (logdir / f"{name}.log").read_text()):
                     raise ValueError(f"isolation executed no tests: {name}")
             detail = "with only: " + ", ".join(sorted(selected - {name}))
@@ -334,7 +320,7 @@ def main():
     parser.add_argument("--only", action="append", default=[])
     args = parser.parse_args()
     data = metadata(); packages = check(data)
-    negative_dependency_checks(data); check_independent_relations(); check_extension_sources()
+    negative_dependency_checks(data); check_independent_relations(); check_feature_sources()
     if args.isolate: isolate(packages, args.only)
     if args.frontends: frontends()
     if args.consumers: consumers()

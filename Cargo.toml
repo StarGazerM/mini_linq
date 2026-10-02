@@ -1,5 +1,5 @@
 [package]
-# Crate-owned examples below examples/ have their own completion gates.
+# External consumers under features/ have their own completion gates.
 autoexamples = false
 name = "mini-linq-course"
 version.workspace = true

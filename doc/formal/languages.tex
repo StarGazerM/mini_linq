@@ -226,7 +226,7 @@ The rules show sorts; type/origin metadata is propagated below.
 \end{mathpar}
 Rename inherits positional column types with $C=\emptyset$; Unit has empty
 maps. Other operators restrict/merge maps to their output sort, preferring
-left type spelling on overlap. Extend adds written types (possibly holes)
+left type spelling on overlap. Extend adds written types (possibly inference placeholders)
 and marks $N$ computed; operand computed sets are unioned/restricted. Rust
 must establish concrete type compatibility.
 
@@ -263,7 +263,8 @@ of Section~\ref{sec:ix}, and
 Physical is a complete standalone program with declarations, detailed operators,
 read modes and output metadata. Lowering reads those operators back as RA and
 checks correspondence with the RA contained in IX. Structures extends Physical
-and binds retained-let reads to provider types; host reads dispatch by type. Their local
+and records built, host-fallback, retained-row and dedup types; native host
+reads dispatch by type. Their local
 contract rules and immediate-source correspondence checks are stated separately
 in Section~\ref{sec:pass-contracts}. Complete token grammars are also given in
 the documentation of the language crates under \path{languages/}.

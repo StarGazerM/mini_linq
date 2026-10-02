@@ -48,7 +48,7 @@ CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-El
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
 CK-Physical	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Physical:	Check contracts, RA erasure, IX demands and admissibility of recorded choices.
-CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs	/// Formal rule CK-Structures:	Check Physical preservation and independently derived provider and level rules.
+CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs	/// Formal rule CK-Structures:	Check unchanged Physical and the independently checked Structures contract.
 A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Variable:	Keep the first bare occurrence within an atom, including shared query names.
 A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated name only within one atom and append identity.
 A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Wildcard:	Replace a wildcard by a fresh unconstrained atom variable.
@@ -92,12 +92,12 @@ O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
 O-Join	abstract	-	-	Ghost binary-tree composition on disjoint full-atom coverages.
 L-Retention	abstract	-	-	Leibniz identity and functional extensionality permit canonical projection before an opaque Rust node whenever its free variables are retained.
 Plan-Prefix	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, elaborate and continue with RA.
-Plan-Generic	abstract	-	-	Optional planner variant is an external consumer pending wave 2; only the default planner is core.
-Plan-Graph	abstract	-	-	Optional planner variant is an external consumer pending wave 2; only the default planner is core.
+Plan-Generic	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Generic:	External Written/Fine planner records variable-at-a-time valuation steps.
+Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Graph:	External Hypergraph planner records a complete tree reducer exactly when acyclic.
 ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start surface expansion and the selected checked CQ pipeline.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
 ST-Terminal	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Terminal:	Print checked Structures to final Rust with an empty continuation.
-ST-Hole	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Hole:	Stage continuation replaces a quotation in the caller Rust context; rustc checks closing bindings.
+ST-Context	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Context:	Checked pass invocations expand in their enclosing Rust context; rustc checks closing bindings.
 IF-Surface	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Surface:	Reject every remaining extension clause by name.
 IF-Input	implementation	languages/cq-syntax/src/lib.rs	/// Formal rule IF-Input:	Check declaration names and arity; declaration order is layout.
 IF-Output	implementation	runtime/cq-storage/src/answers.rs	/// Formal rule IF-Output:	Collect distinct rows into a canonical input host.

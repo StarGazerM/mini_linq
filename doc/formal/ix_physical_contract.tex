@@ -6,12 +6,13 @@ no data-structure selection and emits no runtime construction. The compiled
 chain continues
 \[
  \mathrm{RA}\longrightarrow\mathrm{IX}
- \xrightarrow{\text{policy}}\mathrm{Physical}
- \xrightarrow{\text{policy}}\mathrm{Structures}
+ \xrightarrow{\text{lower}}\mathrm{Physical}
+ \xrightarrow{\text{select}}\mathrm{Structures}
  \longrightarrow\mathrm{Rust},
 \]
-The caller resolves the policy steps through \code{physical_policy!}
-and \code{select_structures!}.
+The caller selects lowering, optional rewrites, selection, and printing as
+public macro paths in the checked pipeline. Their arguments are local to each
+pass; the complete target IR records every resulting decision.
 
 \paragraph{Boundary syntax.}
 Let $r,l$ name exact RA versions, $j$ an operator occurrence, $i$ an index,
@@ -72,10 +73,14 @@ complexity guarantee follows.
 \paragraph{Physical and Structures.}
 Physical restates every IX result with one physical operator (probe, merge,
 semi, range, or the logical operator's own name) and the mode its reads allow
-(pipe, let), marking canonical results; Structures records built-let types
-from the provider slot and discharges plan read and uniqueness premises.
+(pipe, let, exists), marking canonical results. Structures records concrete
+built types and key levels, per-read host fallbacks, retained row collections,
+and canonical-boundary and computed-head dedup types. Its local contract
+discharges the recorded plan's read and uniqueness premises.
 Host renames use type dispatch without capability declarations. Below Structures a printer emits one pull program
 over the \code{cq-storage} operation traits. Their local contract rules and
 pass correspondence judgments appear in Section~\ref{sec:pass-contracts}.
 Complete grammars and representation obligations also appear in \path{languages/cq-lang-physical/src/lib.rs},
-\path{languages/cq-lang-structures/src/lib.rs}, and \path{languages/cq-lang-physical/src/policy.rs}.
+\path{languages/cq-lang-structures/src/lib.rs}. The lowering pass checks RA
+erasure and exact IX demands; selection checks unchanged Physical and the
+target contract. Neither independent check reruns its constructor.

@@ -37,7 +37,7 @@ the default program and the `computed_key`, `argument_placement` and
 `constraint_planning` binaries (each `cargo run --manifest-path
 doc/formal/example/Cargo.toml --locked [--bin NAME]`). They exercise
 CQ → CQ-NF → VO → RA → IX, optionally inserting VO reductions, stop at IX and
-supply no physical policy. Each writes typed `.tokens` payloads and plan
+select no physical passes. Each writes typed `.tokens` payloads and plan
 summaries under `doc/formal/build/logical-*/` (an optional argument chooses
 the directory); the default and `computed_key` programs also write
 `validation.txt`.
@@ -53,8 +53,9 @@ the directory); the default and `computed_key` programs also write
   contracts on eight input presentations; it does not claim that automatic
   planning discovers the authored plan.
 
-The drivers check local contracts, reduction correspondence when used and
-elaboration correspondence, not order or index correspondence, and none
+The shared driver checks local contracts and order, reduction (when used),
+elaboration, and index correspondence. The standalone argument-placement and
+constraint-planning drivers check their stated boundaries. None
 compares generated-query execution with its oracle. Runtime answers, Rust
 trait guards and expansion fixtures are covered by the crate tests listed in
 [evaluation.tex](evaluation.tex); realization has no source/target

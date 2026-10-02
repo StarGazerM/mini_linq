@@ -60,6 +60,7 @@ impl Planner {
     }
 
     fn ordering(self) -> Options {
+        // Formal rule Plan-Generic: Written/Fine records variable-at-a-time valuation steps.
         let (heuristic, split) = match self {
             Self::WrittenCoarse | Self::Hypergraph => (Heuristic::Written, Split::Coarse),
             Self::WrittenFine => (Heuristic::Written, Split::Fine),
@@ -74,6 +75,7 @@ impl Planner {
     }
 
     fn reductions(self, source: &cq::Program) -> cq_reduce::Options {
+        // Formal rule Plan-Graph: Hypergraph records a complete tree reducer exactly when acyclic.
         cq_reduce::Options {
             guards: cq_reduce::Pushdown::None,
             semijoins: if self == Self::Hypergraph && cq::hypergraph::Analysis::of(source).acyclic {

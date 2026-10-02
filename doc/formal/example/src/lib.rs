@@ -1,5 +1,5 @@
 //! Typed logical boundary checks for the paper's retained examples.
-//! These functions do not instantiate a physical provider or execute a query.
+//! These functions stop at IX and do not print or execute a physical query.
 //!
 //! The chain is the compiler's: `cq::normal::normalize` (CQ → NF),
 //! `cq_order::compile` (NF → VO, clauses as written, one subatom per atom),
@@ -34,8 +34,9 @@ pub struct Boundaries {
     pub indexes: index_requirements::Program,
 }
 
-/// Plan `source` through the chain, `reduced` selecting the reductions the
-/// `cq_to_ra_hypergraph!` entry applies; write and print every boundary.
+/// Plan `source` through the checked logical passes. `reduced` requests a
+/// complete Yannakakis reducer when acyclic, as the external hypergraph planner
+/// does. Check each pass boundary, then write and print its complete IR.
 pub fn boundaries(
     directory: &Path,
     label: &str,

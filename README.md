@@ -1,69 +1,94 @@
 # MiniLinq
 
-MiniLinq compiles conjunctive queries written inside Rust into Rust iterator
-programs at macro-expansion time. Each stage is a small language whose
-complete program is checked by its own contract, and every pass except the
-printer has an independent check relating its source and target programs.
-The caller binds every stage boundary, supplies a query-independent policy and
-declares facts about its host data; the compiler contains no data-structure
-dispatch or fallback backend. The printed program is one Rust block over the
-`cq-storage` traits that evaluates to an iterator of answer tuples and borrows
-host data instead of copying it.
+MiniLinq compiles conjunctive queries embedded in Rust into iterator programs at
+macro expansion time. Small language crates check complete IR programs; passes
+record planning, execution, and representation decisions in those programs.
+Generated Rust borrows host data through public runtime traits and returns
+distinct answer tuples.
 
 ```text
-CQ → VO → RA → IX → Physical → Structures → Rust
+CQ → CQ-NF → VO → RA′ → IX → Physical → Structures → Rust
 ```
 
-[Design principles and invariants](doc/DESIGN.md) ·
-[examples](examples/README.md) · [workload corpus](workloads/README.md) ·
-[formal specification](doc/formal/README.md). Grammars and APIs are documented
-in each crate's `//!` docs.
+Each structural pass has an independent source/target check. Printers are
+validated by compiling and executing their output against independent oracles.
+Queries denote `bottom + Set`: a panic aborts evaluation, opaque Rust steps
+retain their written ancestry, and relational equality assumes Leibniz identity.
 
 ## Layout
 
 | Folder | Contents |
 |---|---|
-| `languages/` | One crate per language (CQ, VO, RA, IX, Physical, Structures) plus shared `cq-syntax`: program, parser, printer, local contract |
-| `passes/` | One crate per pass: `compile` and an independent `check`; `cq-print` and `cq-physical-realization` print Rust |
-| `runtime/` | `cq-storage` (access traits, structures, answer sets), `cq-protocol`, `cq-state-providers`; no compiler dependency |
-| `facade/` | `cq-stage` (typed macro continuations) and `mini-linq` (procedural entry points) |
-| `examples/` | Composition, inspection and swapped/stacked/diverged stages |
-| `workloads/` | Authored query corpus, deterministic datasets, SQL oracle and golden answers |
-| `testkit/` | Public conformance helpers: per-stage corpus, databases, set evaluators and authored rewrites |
-| `tools/` | Gate scripts and the regression target inventory |
-| `doc/formal/` | Formal specification, rule inventory and executable paper checks |
+| `languages/` | Complete programs, parsers, printers, local contracts, and shared `cq-syntax` |
+| `passes/` | Transformations and independent correspondence checks; Rust printers |
+| `runtime/` | Borrowed access traits, storage, loaders, and distinct-state implementations |
+| `facade/` | `cq-stage` pass protocol and `mini-linq` macro entry points |
+| `testkit/` | Public corpus, semantic oracles, mutation and refinement helpers |
+| `features/` | Standalone external consumers of the packaged public API |
+| `tools/` | Dependency, external-consumer, public-API, and regression gates |
+| `doc/` | Short design notes and the formal specification |
 
-`xtask/` is the workload tool (`cargo xtask`); `teaching/ya/` holds the
-YA-schedule acceptance test run by `cq-reduce`.
+Grammars and extension APIs live in crate `//!` documentation. See
+[the design](doc/DESIGN.md) and [the formal specification](doc/formal/README.md).
+`teaching/ya/` supplies the reduction pass's teaching acceptance fixtures.
+
+## Compose a pipeline
+
+Select macro paths in named phases; omitted phases use the defaults. Pass
+arguments belong to the selected pass, and rewrite phases accept ordered lists.
+
+```rust
+let rows = [(1_i32,), (1,), (2,)];
+let answers: Vec<_> = mini_linq::compile! {
+    pipeline {
+        plan = mini_linq::passes::plan_written;
+        print = mini_linq::passes::print_pull;
+    }
+    struct Q;
+    relation R(x: i32) = (rows);
+    answer(x) :- R(x);
+}.map(|(x,)| *x).collect();
+assert_eq!(answers, vec![1, 2]);
+```
+
+## Features
+
+Every feature is a standalone Cargo workspace and must build and test outside
+the repository against Cargo-packaged core crates.
+
+- `composition`: explicit pass composition over heterogeneous borrowed hosts.
+- `diverged-ra`: an external theta language enters at IX and uses probe/merge routes.
+- `extensions`: surface passes for union, negation, aggregation, recursion, and correlation.
+- `inspection`: public CQ parsing and Rust free-variable inspection.
+- `own-dialect`: a push printer that preserves recorded Structures decisions.
+- `planners`: nine checked CQ-to-RA′ planning choices.
+- `rewrites`: checked Physical rewrites and Structures type replacement.
+- `stacked-ir`: an external Trace language inserted and erased through checked passes.
+- `workloads`: pipeline matrix, deterministic datasets, SQL goldens, fuzzing, and benchmarks.
 
 ## Gates
 
-CI (`.github/workflows/ci.yml`) runs, in order:
+Run from the repository root with the pinned Rust toolchain. Heavy external
+builds disable incremental compilation; workload corpus profiles omit debug
+data while retaining the full matrix. The workload alias enables its DuckDB
+oracle. The PDF build requires `latexmk` and the TeX packages in
+`doc/formal/common.tex`.
 
 ```sh
-cargo fmt --all -- --check
-python3 tools/check_dependencies.py --isolate
-bash tools/test_regressions.sh
-python3 tools/check_dependencies.py --consumers
-python3 tools/check_features.py
-cargo test --workspace --locked --no-fail-fast
+cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --manifest-path xtask/Cargo.toml --locked
-cargo run --manifest-path examples/composition/Cargo.toml --locked
+cargo test --workspace --locked
+bash tools/test_regressions.sh
+python3 tools/check_dependencies.py --isolate --frontends --consumers
+python3 tools/check_external.py
+python3 tools/check_external.py --feature /data/mini_linq-feature-template --out /tmp/template-gate
+python3 tools/check_public_api.py
 python3 doc/formal/check.py
+make -C doc/formal pdf
+cargo xtask golden
+cargo xtask fuzz --cases 200
 ```
 
-`tools/test_regressions.sh` runs every target in
-`tools/regression-targets.tsv` (workspace tests, examples, external manifests
-and scenario scripts), continues past failures, and writes one log per target
-plus `results.tsv` under `target/regression-logs/`.
-
-Other tools:
-
-```sh
-python3 tools/check_dependencies.py --frontends          # invoke each leaf-feature macro
-python3 tools/check_expansions.py DIR [--compare PREV]   # capture/compare physical_query expansions
-make -C doc/formal pdf                                   # build doc/formal/build/compiler.pdf
-```
-
-Ordinary workspace checks do not build DuckDB; only the workload oracle does.
+Regression logs live in `target/regression-logs/`; isolation, external, and API
+gates keep their diagnostics under `target/`. Reviewed API snapshots change
+only through an explicit `tools/check_public_api.py --update` review.

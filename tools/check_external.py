@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Package core and test ready feature workspaces outside the checkout.
+"""Package core and test every feature workspace outside the checkout.
 
 The local directory source contains Cargo-produced .crate archives plus locked
 third-party vendors. No core path dependency is available to feature builds.
-PENDING lists paths relative to features/. The fixture always exercises the gate.
+Every features/ workspace must pass; there are no migration exceptions.
+Mandatory positive and in-tree-only negative fixtures exercise the gate itself.
 Use --feature to select a standalone workspace, including one outside the repo,
 and --out to place logs and build artifacts in another directory.
 """
@@ -205,23 +206,21 @@ def package_core(directory, log):
 
 
 def feature_workspaces():
-    pending={line.strip() for line in (ROOT/"features/PENDING").read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")}
-    ready=[]
+    workspaces=[]
     for manifest in manifests(ROOT/"features"):
         directory=manifest.parent;relative=directory.relative_to(ROOT/"features")
-        if any(relative==Path(p) or Path(p) in relative.parents for p in pending):continue
         spec=tomllib.loads(manifest.read_text())
-        if "workspace" in spec:ready.append(directory)
-        elif not any(parent in ready for parent in directory.parents):
-            raise RuntimeError(f"ready feature has no standalone workspace: {relative}")
-    return ready
+        if "workspace" in spec:workspaces.append(directory)
+        elif not any(parent in workspaces for parent in directory.parents):
+            raise RuntimeError(f"feature has no standalone workspace: {relative}")
+    return workspaces
 
 
 def test_feature(feature, directory, names, vendor, log, builddir):
     destination, closure = copy_feature_closure(feature, directory, names)
     (destination/".cargo").mkdir(exist_ok=True)
     (destination/".cargo/config.toml").write_text('[source.crates-io]\nreplace-with = "packaged"\n[source.packaged]\ndirectory = '+json.dumps(str(vendor))+'\n')
-    env=os.environ.copy();env.setdefault("RUSTUP_TOOLCHAIN", tomllib.loads((ROOT/"rust-toolchain.toml").read_text())["toolchain"]["channel"]);env["CARGO_TARGET_DIR"]=str(builddir);env["CARGO_TERM_COLOR"]="never"
+    env=os.environ.copy();env.setdefault("RUSTUP_TOOLCHAIN", tomllib.loads((ROOT/"rust-toolchain.toml").read_text())["toolchain"]["channel"]);env["CARGO_TARGET_DIR"]=str(builddir);env["CARGO_TERM_COLOR"]="never";env["CARGO_INCREMENTAL"]="0"
     # Metadata must resolve before build and every local crate must be in the
     # copied closure; a leftover absolute/in-tree dependency is a gate failure.
     with log.open("a") as err:
@@ -242,7 +241,7 @@ def test_feature(feature, directory, names, vendor, log, builddir):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--feature",type=Path,action="append",help="standalone feature workspace to test (repeatable; defaults to ready features)")
+    parser.add_argument("--feature",type=Path,action="append",help="standalone feature workspace to test (repeatable; defaults to all features)")
     parser.add_argument("--out",type=Path,help="directory for logs and build artifacts (default: target)")
     args=parser.parse_args()
     selected=[p.expanduser().resolve() for p in args.feature] if args.feature else feature_workspaces()
@@ -272,7 +271,7 @@ def main():
             if "couldn't read" not in (logdir/"negative.log").read_text(): raise RuntimeError("negative fixture failed for the wrong reason") from error
             print("PASS: external gate rejects a feature that only builds in-tree",flush=True)
         else: raise RuntimeError("gate accepted the in-tree-only fixture")
-    print(f"PASS: packaged public API; {len(features)-2} {'selected' if args.feature else 'ready'} features and mandatory fixtures",flush=True)
+    print(f"PASS: packaged public API; {len(features)-2} {'selected' if args.feature else 'all'} features and mandatory fixtures",flush=True)
 
 
 if __name__=="__main__":main()

@@ -14,27 +14,25 @@ follow the stated boundary: physical lowering derives operands from RA and
 checks their demands in IX; it cannot invent a missing demand or substitute
 a different RA version.
 
-\paragraph{Open physical configuration.}
-The post-IX passes take query-independent strategy $\chi$ from the caller
-(merge or probe joins, semijoin preference, projection and intersection choices).
-Declaration order fixes host layout. Types choose direct reads through stable
-autoref dispatch, with lazy per-query fallbacks; \texttt{index\_provider!}
-selects built-let types. Host types never establish plan canonicality.
-Neither pass reselects a choice recorded by the previous one. Whether a value
-implements the operation trait each read needs is Rust's check at a guard the
-printer emits beside the value; those trait laws are stated in
-\path{runtime/cq-storage/src/lib.rs} and checked by its representation tests.
+\paragraph{Recorded physical decisions.}
+The caller selects public lowering, rewrite, selection and printer paths with
+pass-local arguments. Physical records operators, modes and canonical
+boundaries; Structures records concrete built, host-fallback, retained-row and
+dedup types. Arguments are not carried into later programs as configuration.
+Declaration order fixes host layout. Stable autoref dispatch chooses native
+reads when supported, with recorded lazy per-query fallbacks. Host types never
+establish plan canonicality. No later pass reselects an earlier decision.
+Rust checks the emitted operation-trait obligations; their semantic laws are
+stated in \path{runtime/cq-storage/src/lib.rs} and exercised by storage tests.
 
-\paragraph{Residual syntax and ownership.}
-Abstract composition uses $C[h_1,\ldots,h_n]$ for an ordinary Rust context
-containing lower-language quotations (ST-Hole). This notation states the
-remaining compilation obligations; it is not an implementation data structure.
-The current macro entries transport complete next-language payloads; terminal
-realization returns a Rust expression. The printed rows borrow host/built fields;
-host-key lookup constructs an owned key with \code{Clone::clone}, while built
-indexes use reference keys. Owned computed values remain subject to Rust move
-and borrow rules, with no general cloning fallback. Distinct-state providers
-may clone retained rows. Rust typing alone does not establish representation laws.
+\paragraph{Pipeline syntax and ownership.}
+Macro entries transport complete next-language programs with an explicit queue
+of pass paths (ST-Next); only a terminal Rust expression ends the queue.
+An ordinary enclosing Rust context supplies captures and lifetimes
+(ST-Context). Printed rows borrow host/built fields; owned lookup keys and
+retained dedup rows satisfy the chosen representation's Rust bounds. Computed
+values remain subject to move and borrow rules. No general binding-cloning
+fallback is inserted. Rust typing alone does not establish representation laws.
 
 \paragraph{Three independent checks.}
 Acceptance requires

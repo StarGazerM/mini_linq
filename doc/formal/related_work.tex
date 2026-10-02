@@ -4,7 +4,7 @@ AHV supplies the standard semantics of valuations, named algebra, join trees
 and acyclic queries~\cite{ahv}; the course notes connect them to executable
 join planning~\cite{notes}. MiniLinq's occurrence labels preserve repeated
 uses and positional maps without changing the classical graph notions.
-Its greedy arity policy makes no new join-complexity claim.
+Its greedy arity heuristic makes no new join-complexity claim.
 
 Language-integrated-query calculi justify target-fragment
 normalization~\cite{host-linq,host-effective}. Residual Rust additionally needs
@@ -14,7 +14,7 @@ neither semantic adequacy nor hygiene~\cite{host-hygiene}.
 
 Nanopass organizes compilation around small languages and focused
 transformations~\cite{paper-nanopass}. MiniLinq additionally exposes lower
-macro entries and composes them through next-slot invocations before printing
+macro entries and composes them through checked pass queues before printing
 a Rust expression. Its replacement theorem
 therefore assumes contextual adequacy, following the distinction between
 whole-program and compositional compiler correctness~\cite{paper-ccc}.

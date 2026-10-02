@@ -147,12 +147,13 @@ by Structures. Physical checks neither IX demand membership nor canonical
 return evidence.
 
 \paragraph{Structures.}
-$\mathsf{Entries}(t,A)$ validates its embedded Physical and records only
-built entries over existing \code{let} results. Built columns belong to the
+$\mathsf{Entries}(t,A)$ validates its embedded Physical and records built
+entries over retained results, per-reader host fallbacks, retained collections,
+and canonical-boundary/computed-head dedup types. Built columns belong to the
 heading and never repeat across levels; duplicate concatenated keys fail.
 A built key answers the union of a prefix of its levels.
 Write $\mathsf{hostRead}(r)$ when $r$ is a reusable pipe rename and
-$\mathsf{built}(r,C)$ for a matching level prefix. No host facts occur in this IR.
+$\mathsf{built}(r,C)$ for a matching level prefix. Host entries record fallback types, not native trait claims.
 \begin{mathpar}
 
 \Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)}
@@ -172,8 +173,8 @@ $\mathsf{built}(r,C)$ for a matching level prefix. No host facts occur in this I
 Uniqueness starts Unit at the empty key; host renames establish no key.
 Join requires both input keys and unions them; semi keeps the left key;
 select/range/extend preserve it; project preserves it only when no key column
-is dropped. A canon flag establishes the full heading through caller-selected
-distinct state. A built structure alone proves no uniqueness. The return must
+is dropped. A canon flag establishes the full heading through its recorded
+dedup type. A built structure alone proves no uniqueness. The return must
 have a key. Rust checks the traits of built structures and direct host reads;
 trait laws remain representation assumptions, not syntactic conclusions.
 
@@ -258,21 +259,14 @@ normalized name \code{iN}; extra entries are rejected.
 \]
 
 \paragraph{Physical lowering.}
-Erase probe/merge to natural join, semi to semijoin, point/range to select, and remove
-modes/canon flags, preserving definitions, names, declarations and output.
-$\mathsf{PolicyPhysical}(t,\chi)$ uses strategy and plan facts only. A join
-is merge iff merge policy is set and the shared heading is nonempty; otherwise
-it is probe. A const point selection must become point; a conjunction of constant or
-captured order bounds on one column must become range. Disjunctions remain
-central filters. These decisions do not inspect Rust expressions or assume
-integer arithmetic on strict bounds.
-Let/pipe choices may differ when locally admissible.
-Canon may appear only at return or a project=canon projection; that policy
-requires canon on key-dropping projections. Unit, canon boundaries, join key
-unions, left keys for semi, select/range/extend and key-preserving project
-establish uniqueness; hosts and built types do not.
+Erase probe/merge to natural join, semi to semijoin, point/range to select, and
+remove modes/canon flags, preserving definitions, names, declarations and
+output. The checker accepts admissible recorded decisions independently of the
+default constructor. Point and range reads carry their exact const/range
+supplies; central disjunctions remain filters. Let/pipe/exists choices are
+checked by local use and heading premises. Canon boundaries and inferred keys
+must establish a canonical return; host and built types establish no plan key.
 \begin{mathpar}
-
 \Rule{CK-Demands}{\mathsf{WF}_{Physical}(t)\quad
  \forall(r,C,supply)\in\mathsf{keyedReads}(t)\text{ (excluding merge-left)}.\\
  (r,\operatorname{ordinals}_{H(r)}(C),supply)\in\operatorname{descs}(s)}
@@ -282,43 +276,32 @@ establish uniqueness; hosts and built types do not.
  {\mathsf{reads}(range\ select\ r\ if\ (\theta))=(r,\{c\},range)}
 
 \Rule{CK-Physical}{\mathsf{WF}_{IX}(s)\quad\mathsf{WF}_{Physical}(t)\\
- \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\quad\mathsf{PolicyPhysical}(t,\chi)}
- {\mathsf{check}_{physical}(s,t,\chi)\Downarrow\ok}
+ \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\quad
+ \mathsf{unique}(t.returned)\text{ inferred}}
+ {\mathsf{check}_{physical}(s,t)\Downarrow\ok}
 \end{mathpar}
-Demand membership includes stream probe/semi reads, const point reads, and
-range reads on their exact input version and supply; merge has its separate
-ordering premise. No missing IX demand is synthesized.
-The checker does not require the constructor's particular materialization
-choices and does not use \code{semijoin = prefer_lazy}.
+Demand membership includes exact stream probe/semi reads, const point reads,
+and range reads. Merge has a separate ordering premise. No missing IX demand
+is synthesized. The checker does not choose join strategy, canonical-prefix
+placement, intersection, or eagerness by rerunning lowering.
 
 \paragraph{Structure selection.}
-$\mathsf{StorageRules}(s,t,\chi)$ requires unchanged Physical. Independently
-collect reads of retained lets by exact result and key, with strength
-membership $<$ payload $<$ ordered. Reusable host renames dispatch in Rust;
-merge-sorted pipes discharge matching merge reads. Built types are
-\code{index\_provider!(semi)}, \code{index\_provider!(probe)}, and
-\code{index\_provider!(ordered)} by strength.
-
-Strict inclusion chains with membership at each nonmaximal
-key and no ordered maximal read require one curried Trie, its levels the
-successive key differences. The independent check allows an empty first key;
-the constructor's chain builder additionally requires that first key to be
-nonempty. Correspondence checking remains separate from construction. Under intersect=smallest the checker independently
-recognizes adjacent pipe probe/check pairs whose intermediate result is not
-flagged canon and whose second left operand is that intermediate result.
-One new variable completes both candidate headings; both prefixes are nonempty,
-the sides are materialized, with only compatible prefix/full unordered demands.
-It adds prefix/full membership demands and requires two levels. Conflicting
-prefix choices are excluded. Each extra level wraps the leaf default in
-\code{index\_provider!(trie T)}.
-Const/range supplies never justify a build. Every built prefix must discharge
-an unanswered stream demand exactly once; missing,
-extra, duplicate, wrong-level and wrong-type builds fail. Entry order is free;
-comparison is against these obligations, not the selector's token stream.
+Selection preserves Physical unchanged and records concrete types for built
+key levels, each host reader's fallback, retained collections, and canonical
+boundary/computed-head dedup state. The target language independently checks
+read coverage, key levels, entry identity, known representation compatibility,
+and canonicality. Arbitrary aliases or user implementations remain subject to
+the generated Rust trait obligations; a valid target need not use default types.
+Compatible membership prefixes may share a curried structure. A recorded
+smallest intersection requires two candidate levels on every retained side;
+reusable hosts instead record candidate and membership fallbacks. Const/range
+supplies never justify index construction. Native ordered host reads and
+same-key merge pipes discharge their written ordering obligations. Entry order
+is free; checking compares no constructor token stream.
 \[
 \Rule{CK-Structures}{\mathsf{WF}_{Physical}(s)\quad\mathsf{WF}_{Structures}(t)\\
- t.physical=s\quad\mathsf{StorageRules}(s,t,\chi)}
- {\mathsf{check}_{structures}(s,t,\chi)\Downarrow\ok}.
+ t.physical=s}
+ {\mathsf{check}_{structures}(s,t)\Downarrow\ok}.
 \]
 
 \subsection{Realization evidence}
@@ -329,14 +312,14 @@ trait guards at generated uses, and authored expansion fixtures
 (Section~\ref{sec:evaluation}). The optional binary intersection path chooses
 between candidate sets using runtime counts without reordering the RA/VO plan.
 Rows borrow host/built fields, computed columns remain owned, and host lookups
-clone owned key values; distinct providers may clone retained rows. A block
+construct owned lookup keys; the recorded dedup type determines row retention. A block
 with bound storage collects answers before returning \code{Vec::into_iter};
 a block without bound statements may return the lazy iterator. This evidence
 supports the exercised cases, not an arbitrary Rust semantic equality theorem.
 
 \subsection{The four interfaces of the closed core}
-Extensions produce Rust contexts $C[h_1,\ldots,h_n]$; each quotation $h_i$
-passes through the same closed core. Surface extensions introduce no operators.
+Extensions compose checked query invocations in ordinary Rust contexts;
+each invocation passes through the same closed core. Surface extensions introduce no operators.
 The following rules are implementation obligations, not proofs of extension
 semantics or Rust expression semantic equality.
 \begin{mathpar}
@@ -353,7 +336,7 @@ semantics or Rust expression semantic equality.
 
 \Rule{IF-Environment}{\mathsf{visibleLogicalUses}(e)\subseteq\Gamma_Q\quad
  \Gamma_H,\Gamma_Q\vdash_{Rust}e}
- {e\text{ is an expression hole in the closing environment}}
+ {e\text{ is embedded Rust in the closing environment}}
 
 \Rule{IF-Parameter}{p\in\vars_H(\theta)\quad b_p\text{ fresh}}
  {p\longmapsto\code{let b_p = \&p;}\text{ once outside all query loops}}

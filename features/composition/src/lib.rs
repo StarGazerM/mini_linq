@@ -18,6 +18,8 @@
 //! other and their binders. Tests use cq-testkit's independent CQ oracle and
 //! written-order refinement harness. Core dependencies have version and path
 //! entries so the external gate can replace them with packaged crates.
+//! Run `cargo run --manifest-path features/composition/Cargo.toml --locked`
+//! from the repository root to execute the heterogeneous join.
 //!
 //! ```
 //! use mini_linq_composition_example::query;

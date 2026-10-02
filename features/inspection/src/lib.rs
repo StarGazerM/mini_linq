@@ -15,3 +15,6 @@
 //!
 //! This workspace uses version plus path dependencies for local development.
 //! The external gate replaces the core dependencies with packaged public crates.
+//! From the repository root, use `cargo run --manifest-path
+//! features/inspection/Cargo.toml --example cq-inspection --locked` or substitute
+//! `free-variables` for the lexical analysis example.

@@ -1,5 +1,0 @@
-# Wave 2 migration required; paths relative to features/.
-# Every optional workspace is excluded until it consumes the packaged public API.
-# .cargo/config.toml xtask alias removed; reinstate after workloads/xtask migrates.
-protocol
-# Legacy request protocol had no core consumers after slot removal; moved unchanged.

@@ -5,6 +5,12 @@ Run --update only while reviewing an intentional API change. CI/default mode
 never overwrites snapshots. IDs, spans, documentation and bodies are excluded;
 exported declarations, fields, generics, traits, implementations and reexports
 are retained. The JSON payloads are signatures, not a source-code grep.
+
+Each sorted snapshot line pairs an exported path with its normalized signature.
+Numeric rustdoc IDs become stable paths, including derive-generated APIs and
+macro reexports. Blanket implementations are excluded. All runtime features and
+cq-testkit's optional DuckDB/golden helpers are enabled; facades have no Cargo
+features. The pass protocol is documented in facade/cq-stage/src/lib.rs.
 """
 from __future__ import annotations
 import argparse

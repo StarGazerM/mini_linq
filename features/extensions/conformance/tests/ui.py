@@ -43,7 +43,7 @@ expressions += [
 
 # Resolve public package identities from the running workspace. A packaged core
 # dependency stays a registry dependency; a local core dependency retains its
-# public path. No source files or private test-support modules are imported.
+# public path. No source files or private test modules are imported.
 metadata = json.loads(subprocess.check_output(
     [CARGO, "metadata", "--offline", "--format-version=1"], cwd=ROOT, env=env
 ))

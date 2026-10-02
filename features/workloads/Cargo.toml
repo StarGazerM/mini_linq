@@ -59,6 +59,19 @@ debug = false
 [profile.test.package.libduckdb-sys]
 debug = false
 
+# The generated pipeline matrix is large; keep every case without debug data.
+[profile.dev.package.cq-workload-corpus]
+debug = 0
+
+[profile.test.package.cq-workload-corpus]
+debug = 0
+
+[profile.dev.package.cq-workload-e2e]
+debug = 0
+
+[profile.test.package.cq-workload-e2e]
+debug = 0
+
 [dependencies]
 cq-load.workspace = true
 cq-lang-cq.workspace = true

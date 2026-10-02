@@ -26,6 +26,28 @@
 //! Q6/Q19 retain full-query identities; other kernels remain explicitly derived.
 //! Fresh acceptance evidence and final tables belong in the task ledger/stdout.
 
+//!
+//! Run acceptance from this standalone workspace. Corpus and benchmark contracts
+//! are documented here; commands that measure performance print fresh evidence.
+//!
+//! ```sh
+//! cargo fmt --check
+//! cargo clippy --all-targets -- -D warnings
+//! cargo test
+//! cargo test -p cq-workloads --features counters --test growth -- --nocapture
+//! cargo test -p cq-workload-e2e --features parquet
+//! cargo run -p cq-xtask --features oracle -- golden
+//! cargo run -p cq-xtask --features oracle -- fuzz --cases 200 --seed 0
+//! cargo run -p cq-xtask --features oracle -- fuzz --cases 2000 --seed 0
+//! cargo run -p cq-xtask --features oracle -- bench
+//! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 0.1
+//! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1
+//! ```
+//!
+//! From the repository root: `python3 tools/check_external.py`.
+//!
+//! The repository root provides `cargo xtask` for the same tool.
+
 pub mod adversarial;
 pub mod pipelines;
 mod sorted_index;

@@ -57,7 +57,7 @@ preserves declarations and head, and checks normal form. These transformations
 produce CQ lets and guards; RA operators are produced by elaboration later.
 
 \subsection{Dependency facts and ordering}
-\label{sec:planning-policy}
+\label{sec:planning-order}
 Number \emph{all} normal-form body clauses $0,\ldots,m-1$. Atom identifiers in
 VO and hypergraph analysis use these indices, including gaps occupied by guards
 and lets. Let $T$ be all names supplied by lets in the body, $B_w$ the written
@@ -287,7 +287,7 @@ with $B$ is exactly $K$.
 
 Let $\mathsf{unitize}$ return $p$ or emit Unit if absent. A VO guard selects that
 prefix. A let extends it with its pattern binders and symbolic types, using
-\code{binding_types()} (including inference holes).
+\code{binding_types()} (including Rust inference placeholders).
 \begin{mathpar}
 
 \Rule{C-Guard}{\mathsf{step}=\mathsf{Guard}(e)\quad p_0=\mathsf{unitize}(p)\\
@@ -353,15 +353,19 @@ elaboration. Each expression below means fallible composition of constructors.
 \begin{mathpar}
 
 \Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad a=E(v)}
- {\code{cq_to_ra}(q)=a}
+ {\code{mini_linq::passes::plan_written}(q)=a}
 
 \Rule{Plan-Generic}{n=N(q)\quad v=O_{Written,Fine}(n)\quad a=E(v)}
- {\code{cq_to_ra_generic}(q)=a}
+ {\code{cq_planners::order(written, fine)}(q)=a}
 
 \Rule{Plan-Graph}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
  r=\text{if }\mathsf{analysis}(n).acyclic\text{ then Tree else None}\\
- w=R_{Atoms,r}(v)\quad a=E(w)}
- {\code{cq_to_ra_hypergraph}(q)=a}
+ w=R_{None,r}(v)\quad a=E(w)}
+ {\code{cq_planners::order(hypergraph)}(q)=a}
 \end{mathpar}
-The caller selects the named macro route. Each successful route passes its
-standalone RA program to \code{mini_linq::choose_index_policy!}.
+The default planner belongs to the core facade; Generic and Graph are choices
+of the external \code{cq-planners} consumer. The caller selects its path and
+arguments in \code{pipeline { plan = Path(tokens); }}. Each composition checks
+its logical pass boundaries and returns a complete RA program to the next
+queued macro, normally \code{mini_linq::passes::index_demands}. Arguments choose
+the recorded VO schedule; later passes consume the resulting RA graph.
