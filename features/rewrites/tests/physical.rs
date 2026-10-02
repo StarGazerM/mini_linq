@@ -41,7 +41,7 @@ fn conform(source: ir::Program, expected: &str, rewrite: Rewrite, case_name: &st
         check: Box::new(ir::check_rewrite),
         mutations: vec![Box::new(altered_head), Box::new(unknown_key)],
         answers: Some(Box::new(|p, db| {
-            semantics::evaluate_ra(&ir::erase(p), db).output
+            semantics::evaluate_ra(&cq_physical_lowering::erase(p), db).output
         })),
     }
     .run(Some(case))
@@ -242,10 +242,14 @@ fn all_corpus_programs_preserve_erasure_contract_and_set_answers() {
                 rewrite(&source, quote!()).unwrap_or_else(|e| panic!("{}: {e}", scenario.name));
             ir::check_rewrite(&source, &target).unwrap();
             cq_structure_selection::compile(&target).unwrap();
-            assert_eq!(ir::erase(&source), ir::erase(&target));
+            assert_eq!(
+                cq_physical_lowering::erase(&source),
+                cq_physical_lowering::erase(&target)
+            );
             let case = scenario.case().unwrap();
             assert_eq!(
-                semantics::evaluate_ra(&ir::erase(&target), &case.database()).output,
+                semantics::evaluate_ra(&cq_physical_lowering::erase(&target), &case.database())
+                    .output,
                 case.expected_rows(),
                 "{}",
                 scenario.name

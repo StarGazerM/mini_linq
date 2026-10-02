@@ -20,7 +20,8 @@ fn corpus_passes_have_exact_fixtures_correspondence_and_set_answers() {
                 changed
             })],
             answers: Some(Box::new(|target: &trace::Program, database| {
-                semantics::evaluate_ra(&physical::erase(&target.physical), database).output
+                semantics::evaluate_ra(&cq_physical_lowering::erase(&target.physical), database)
+                    .output
             })),
         }
         .run(scenario.case())
@@ -37,7 +38,7 @@ fn corpus_passes_have_exact_fixtures_correspondence_and_set_answers() {
                 changed
             })],
             answers: Some(Box::new(|target: &physical::Program, database| {
-                semantics::evaluate_ra(&physical::erase(target), database).output
+                semantics::evaluate_ra(&cq_physical_lowering::erase(target), database).output
             })),
         }
         .run(scenario.case())

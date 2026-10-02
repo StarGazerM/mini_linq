@@ -52,7 +52,6 @@ dependencies = [
 name = "cq-lang-physical"
 version = "0.1.0"
 dependencies = [
- "cq-lang-ra",
  "cq-stage",
  "cq-syntax",
  "proc-macro2",
@@ -65,7 +64,6 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
- "cq-lang-vo",
  "cq-stage",
  "cq-syntax",
  "proc-macro2",
@@ -170,6 +168,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-physical",
  "cq-lang-structures",
+ "cq-physical-lowering",
  "cq-rewrite-passes",
  "cq-rewrite-test-driver",
  "cq-stage",
