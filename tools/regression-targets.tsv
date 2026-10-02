@@ -38,3 +38,7 @@ mini-linq	test	denotation	facade/mini-linq/tests/denotation.rs
 mini-linq	test	provenance	facade/mini-linq/tests/provenance.rs
 cq-stage	test	protocol	facade/cq-stage/tests/protocol.rs
 mini-linq	test	pipeline	facade/mini-linq/tests/pipeline.rs
+cq-planners	manifest-target-test	plans	features/planners/Cargo.toml
+cq-planners	manifest-target-test	protocol	features/planners/Cargo.toml
+cq-planners	manifest-target-test	elimination_cost	features/planners/Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement	features/planners/Cargo.toml
