@@ -782,29 +782,79 @@ fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn
         .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
 }
 
-/// Physical rewrites preserve logical definitions and satisfy their read contracts.
+/// Physical rewrites preserve the named logical graph and satisfy their read contracts.
 /// Operator choices, retention modes and canonicalization may change while
 /// declarations, operands, relational predicates and Rust payloads remain fixed.
+/// Relational definitions may commute in dependency order and move earlier
+/// across Rust nodes. The Rust chain retains its written relative order, and
+/// every source Before obligation survives: no relational definition moves
+/// later across a Rust node.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
+    let mut target_chain = Vec::new();
+    let target_definitions: BTreeMap<_, _> = target
+        .program
+        .definitions
+        .iter()
+        .map(|definition| {
+            let name = symbol_name(&definition.name);
+            let rust_before = target_chain.len();
+            if is_rust(&definition.operator) {
+                target_chain.push(name.clone());
+            }
+            (name, (definition, rust_before))
+        })
+        .collect();
     if source.program.declarations != target.program.declarations
         || source.program.head != target.program.head
         || source.program.returned != target.program.returned
         || source.program.definitions.len() != target.program.definitions.len()
-        || source
-            .program
-            .definitions
-            .iter()
-            .zip(&target.program.definitions)
-            .any(|(s, t)| s.name != t.name || !same_logical_operator(&s.operator, &t.operator))
+        || source.program.definitions.iter().any(|definition| {
+            target_definitions
+                .get(&symbol_name(&definition.name))
+                .is_none_or(|(target, _)| {
+                    !same_logical_operator(&definition.operator, &target.operator)
+                })
+        })
     {
-        return Err(syn::Error::new_spanned(
+        return error(
             &target.program.returned,
             "Physical rewrite changes RA erasure",
-        ));
+        );
+    }
+
+    // The contracts give unique names, topological operand edges and Rust
+    // ancestry. With the same graph and Rust chain, a relational node retains
+    // all source Before obligations exactly when its preceding Rust prefix
+    // does not grow. Reordering within a relational region is unrestricted.
+    let mut source_rust_before = 0;
+    for definition in &source.program.definitions {
+        let name = symbol_name(&definition.name);
+        let (target_definition, target_rust_before) = target_definitions[&name];
+        if is_rust(&definition.operator) {
+            if target_chain.get(source_rust_before) != Some(&name) {
+                return error(
+                    &target_definition.name,
+                    "Physical rewrite changes Rust bind/guard written order",
+                );
+            }
+            source_rust_before += 1;
+        } else if target_rust_before > source_rust_before {
+            return error(
+                &target_definition.name,
+                format!(
+                    "Physical rewrite moves relational result `{name}` later across Rust node `{}` and loses a source Before obligation",
+                    target_chain[source_rust_before]
+                ),
+            );
+        }
     }
     Ok(())
+}
+
+fn is_rust(operator: &Operator) -> bool {
+    matches!(operator, Operator::Bind(_) | Operator::Guard(_))
 }
 
 // Compare the logical content directly, without importing another language.
@@ -824,7 +874,9 @@ fn same_logical_operator(source: &Operator, target: &Operator) -> bool {
             Operator::Probe(_, s) | Operator::Merge(_, s),
             Operator::Probe(_, t) | Operator::Merge(_, t),
         )
-        | (Operator::Semi(_, s), Operator::Semi(_, t)) => s.left == t.left && s.right == t.right,
+        | (Operator::Semi(_, s), Operator::Semi(_, t)) => {
+            s.left == t.left && s.right == t.right && s.columns == t.columns
+        }
         _ => false,
     }
 }
