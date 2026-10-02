@@ -1,0 +1,12 @@
+struct CycleFour;
+relation R(first: i32, second: i32);
+relation S(first: i32, second: i32);
+relation T(first: i32, second: i32);
+relation U(first: i32, second: i32);
+answer(a, c) :- R(a, b), S(b, c), T(c, d), U(d, a);
+valuation {
+    R@0(a, b);
+    S@1(b, c);
+    T@2(c, d);
+    U@3(d, a);
+}

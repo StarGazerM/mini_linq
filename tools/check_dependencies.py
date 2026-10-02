@@ -34,8 +34,9 @@ FAMILIES = inventory("passes")
 RUNTIME = inventory("runtime")
 FACADES = inventory("facade")
 EXTENSIONS = inventory("extensions")
+TESTKIT = inventory("testkit")
 CORE = LANGUAGES | FAMILIES | RUNTIME | FACADES
-PATHS = CORE | EXTENSIONS
+PATHS = CORE | EXTENSIONS | TESTKIT
 # The crate declares the languages its pass transforms, not an arbitrary allowlist.
 EDGES = {}
 for name, path in FAMILIES.items():
@@ -157,13 +158,16 @@ def check(data, announce=True):
             allowed = {"cq-syntax", "cq-protocol"} - {name}
         elif name in EXTENSIONS:
             allowed = {"cq-syntax", "cq-lang-cq", "cq-stage", "cq-storage", "cq-state-providers"} | (set(EXTENSIONS) - {name})
+        elif name in TESTKIT:
+            allowed = set(LANGUAGES) | set(RUNTIME)
         else:
-            allowed = set(packages) - set(EXTENSIONS)
+            allowed = set(packages) - set(EXTENSIONS) - set(TESTKIT)
         for dep in package["dependencies"]:
             target = dep["name"]
             if "path" not in dep and target not in packages: continue
             expected = Path(packages[target]["manifest_path"]).parent if target in packages else None
-            if target not in allowed or "path" not in dep or Path(dep["path"]).resolve() != expected:
+            permitted = allowed | (set(TESTKIT) if name in CORE | EXTENSIONS and dep["kind"] == "dev" else set())
+            if target not in permitted or "path" not in dep or Path(dep["path"]).resolve() != expected:
                 raise ValueError(f"forbidden {dep['kind'] or 'normal'} dependency: {name} -> {target}")
         for target in package["targets"]:
             if set(target["kind"]) & {"test", "example", "bench"}: continue
@@ -176,7 +180,7 @@ def check(data, announce=True):
     for dep in production(frontend):
         if dep["name"] in FAMILIES and not dep["optional"]:
             raise ValueError(f"frontend unconditionally includes a pass: {dep['name']}")
-    if announce: print("PASS: folder-derived language, pass, runtime, facade and extension boundaries", flush=True)
+    if announce: print("PASS: folder-derived language, pass, runtime, facade, extension and testkit boundaries", flush=True)
     return packages
 
 
@@ -196,6 +200,16 @@ def negative_dependency_checks(data):
                       ("mini-linq", extension, "dev", False),
                       ("cq-storage", extension, None, False),
                       ("cq-lang-cq", extension, None, True)]
+    for testkit in TESTKIT:
+        mutations += [(testkit, "cq-order", kind, remote)
+                      for kind in (None, "dev", "build") for remote in (False, True)]
+        mutations += [(testkit, "mini-linq", kind, False) for kind in (None, "dev", "build")]
+        mutations += [(testkit, "cq-stage", "dev", False)]
+        if EXTENSIONS:
+            mutations += [(testkit, next(iter(EXTENSIONS)), "dev", False)]
+        mutations += [(owner, testkit, kind, remote)
+                      for owner in CORE | EXTENSIONS for kind in (None, "build") for remote in (False, True)]
+        mutations += [(owner, testkit, "dev", True) for owner in CORE | EXTENSIONS]
     for owner, target, kind, remote in mutations:
         altered = copy.deepcopy(data)
         package = next(p for p in altered["packages"] if p["name"] == owner)
@@ -212,6 +226,15 @@ def negative_dependency_checks(data):
         except ValueError: pass
         else: raise ValueError(f"guard accepted language/pass feature: {owner}")
     print(f"PASS: {len(mutations)} forbidden dependency and 2 feature mutations rejected", flush=True)
+    # Core and extension passes can both test against the public corpus.
+    for owner in CORE | EXTENSIONS:
+        for testkit in TESTKIT:
+            altered = copy.deepcopy(data)
+            package = next(p for p in altered["packages"] if p["name"] == owner)
+            package["dependencies"].append({"name": testkit, "kind": "dev", "optional": False,
+                                            "path": str(ROOT / TESTKIT[testkit])})
+            check(altered, announce=False)
+    if TESTKIT: print("PASS: core and extension testkit dev-dependencies are permitted", flush=True)
 
 
 def closure(packages, name):
@@ -220,7 +243,10 @@ def closure(packages, name):
         current = pending.pop()
         if current in selected: continue
         selected.add(current)
-        pending.extend(d["name"] for d in production(packages[current]) if d["name"] in PATHS)
+        # Only the crate under test activates dev-dependencies. This includes
+        # a public testkit and its language dependencies after caller migration.
+        deps = packages[current]["dependencies"] if current == name else production(packages[current])
+        pending.extend(d["name"] for d in deps if d["name"] in PATHS)
     return selected
 
 
@@ -240,6 +266,8 @@ def copy_component(destination, name, selected):
     output = destination / PATHS[name]
     shutil.copytree(base / "src", output / "src")
     if (base / "tests").exists(): shutil.copytree(base / "tests", output / "tests")
+    for filename in ("README.md", "LICENSE-MIT", "LICENSE-APACHE"):
+        if (base / filename).exists(): shutil.copy2(base / filename, output / filename)
     manifest = tomllib.loads((base / "Cargo.toml").read_text())
     tests = manifest.pop("test", [])
     manifest["package"].pop("metadata", None)
@@ -259,23 +287,24 @@ def copy_component(destination, name, selected):
 
 def isolate(packages, only=()):
     logdir = ROOT / "target/component-logs"; logdir.mkdir(parents=True, exist_ok=True)
-    for name in LANGUAGES | RUNTIME | FAMILIES | EXTENSIONS:
+    for name in LANGUAGES | RUNTIME | FAMILIES | EXTENSIONS | TESTKIT:
         if only and name not in only: continue
         selected = closure(packages, name) | {"cq-syntax"}
         with tempfile.TemporaryDirectory(prefix=f"mini-linq-{name}-") as temporary:
             destination = Path(temporary)
             write_workspace(destination, selected)
             for package in selected: copy_component(destination, package, selected)
-            shutil.copytree(ROOT / "test-support", destination / "test-support")
-            shutil.copytree(ROOT / "teaching", destination / "teaching")
-            # Runtime source is a generated-code execution fixture, never a compiler dependency.
-            shutil.copytree(ROOT / "runtime/cq-storage/src", destination / "runtime/cq-storage/src", dirs_exist_ok=True)
+            if name not in TESTKIT:
+                shutil.copytree(ROOT / "test-support", destination / "test-support")
+                shutil.copytree(ROOT / "teaching", destination / "teaching")
+                # Runtime source is a generated-code execution fixture, never a compiler dependency.
+                shutil.copytree(ROOT / "runtime/cq-storage/src", destination / "runtime/cq-storage/src", dirs_exist_ok=True)
             env = os.environ.copy(); env["CARGO_TARGET_DIR"] = str(ROOT / "target/component-isolation"); env["CARGO_TERM_COLOR"] = "never"
             command = ["cargo", "test", "-p", name, "--no-default-features", "--offline"]
             with (logdir / f"{name}.log").open("w") as log:
                 result = subprocess.run(command, cwd=destination, env=env, stdout=log, stderr=subprocess.STDOUT)
             if result.returncode: raise ValueError(f"isolation failed: {name}; see {logdir / (name + '.log')}")
-            if name in FAMILIES | LANGUAGES | EXTENSIONS:
+            if name in FAMILIES | LANGUAGES | EXTENSIONS | TESTKIT:
                 if not re.search(r"test result: ok\. [1-9][0-9]* passed", (logdir / f"{name}.log").read_text()):
                     raise ValueError(f"isolation executed no tests: {name}")
             detail = "with only: " + ", ".join(sorted(selected - {name}))

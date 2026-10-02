@@ -1,0 +1,3 @@
+struct OrientedChain;
+relation Edge(src: i32, dst: i32);
+answer(a, d) :- Edge(a, b), Edge(b, c), Edge(d, c);

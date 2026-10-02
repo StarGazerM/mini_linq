@@ -1,0 +1,24 @@
+physical {
+    relation R(first: i32, second: i32);
+    relation S(first: i32, second: i32);
+    relation T(first: i32, second: i32);
+    relation Bridge(first: i32, second: i32);
+    relation U(first: i32, second: i32);
+    relation V(first: i32, second: i32);
+    relation W(first: i32, second: i32);
+    r0 = pipe rename R { first -> x, second -> y };
+    r1 = pipe rename S { first -> y, second -> z };
+    r2 = pipe probe[y] r0, r1;
+    r3 = pipe rename T { first -> x, second -> z };
+    r4 = pipe probe[x, z] r2, r3;
+    r5 = pipe rename Bridge { first -> x, second -> u };
+    r6 = pipe probe[x] r4, r5;
+    r7 = pipe rename U { first -> u, second -> v };
+    r8 = pipe probe[u] r6, r7;
+    r9 = pipe rename V { first -> v, second -> w };
+    r10 = pipe probe[v] r8, r9;
+    r11 = pipe rename W { first -> u, second -> w };
+    r12 = pipe probe[u, w] r10, r11;
+    r13 = pipe canon project r12 keep { u, v, w, x, y, z };
+    return r13 as answer(x, y, z, u, v, w);
+}

@@ -1,0 +1,10 @@
+relational {
+    relation Edge(src: i32, dst: i32);
+    r0 = rename Edge { src -> a, dst -> b };
+    r1 = rename Edge { src -> b, dst -> c };
+    r2 = natural_join r0 with r1;
+    r3 = rename Edge { src -> d, dst -> c };
+    r4 = natural_join r2 with r3;
+    r5 = project r4 keep { a, d };
+    output r5 as answer(a, d);
+}

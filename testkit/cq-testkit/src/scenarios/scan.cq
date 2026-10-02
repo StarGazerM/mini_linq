@@ -1,0 +1,3 @@
+struct Scan;
+relation R(value: i32);
+answer(x) :- R(x);

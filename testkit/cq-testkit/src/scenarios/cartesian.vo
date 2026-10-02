@@ -1,0 +1,8 @@
+struct Cartesian;
+relation R(value: i32);
+relation S(value: i32);
+answer(y, x) :- R(x), S(y);
+valuation {
+    R@0(x);
+    S@1(y);
+}

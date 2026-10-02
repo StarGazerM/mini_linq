@@ -1,0 +1,5 @@
+structures {
+    r2 = index_provider!(semi) [b , c] ;
+    r4 = index_provider!(probe) [b , c] ;
+    r5 = index_provider!(probe) [a , b] ;
+}

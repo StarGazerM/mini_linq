@@ -1,0 +1,3 @@
+structures {
+    r2 = index_provider!(probe) [] ;
+}

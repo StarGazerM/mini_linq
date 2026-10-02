@@ -1,0 +1,7 @@
+structures {
+    r2 = index_provider!(semi) [c] ;
+    r4 = index_provider!(semi) [d] ;
+    r6 = index_provider!(probe) [d] ;
+    r7 = index_provider!(probe) [c] ;
+    r8 = index_provider!(probe) [b] ;
+}

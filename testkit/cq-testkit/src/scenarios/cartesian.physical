@@ -1,0 +1,9 @@
+physical {
+    relation R(value: i32);
+    relation S(value: i32);
+    r0 = pipe rename R { value -> x };
+    r1 = pipe rename S { value -> y };
+    r2 = pipe probe[] r0, r1;
+    r3 = pipe canon project r2 keep { x, y };
+    return r3 as answer(y, x);
+}

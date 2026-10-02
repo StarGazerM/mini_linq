@@ -1,0 +1,5 @@
+structures {
+    r2 = index_provider!(semi) [item] ;
+    r4 = index_provider!(probe) [item] ;
+    r5 = index_provider!(probe) [depot] ;
+}

@@ -29,6 +29,7 @@ members = [
     "runtime/cq-load",
     "runtime/cq-state-providers",
     "runtime/cq-protocol",
+    "testkit/cq-testkit",
     "facade/cq-stage",
     "facade/mini-linq",
     "workloads",
@@ -47,6 +48,13 @@ resolver = "3"
 [profile.test.package.cq-workload-e2e]
 debug = 0
 
+# Keep optional testkit DuckDB native archives small, as in xtask.
+[profile.dev.package.libduckdb-sys]
+debug = false
+
+[profile.test.package.libduckdb-sys]
+debug = false
+
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -54,6 +62,7 @@ rust-version = "1.85"
 version = "0.1.0"
 
 [workspace.dependencies]
+cq-testkit = { path = "testkit/cq-testkit", version = "0.1.0" }
 cq-print = { path = "passes/cq-print", default-features = false }
 cq-stage = { path = "facade/cq-stage" }
 contracts = "=0.6.10"

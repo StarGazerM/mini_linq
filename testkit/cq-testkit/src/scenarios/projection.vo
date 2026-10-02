@@ -1,0 +1,6 @@
+struct Projection;
+relation R(first: i32, second: i32, witness: i32);
+answer(y, x) :- R(x, y, z);
+valuation {
+    R@0(x, y, z);
+}

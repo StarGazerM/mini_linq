@@ -1,0 +1,12 @@
+relational {
+    relation A(origin: i32, endpoint: i32);
+    relation B(origin: i32, endpoint: i32);
+    relation C(origin: i32, endpoint: i32);
+    r0 = rename A { origin -> h, endpoint -> a };
+    r1 = rename B { origin -> h, endpoint -> b };
+    r2 = natural_join r0 with r1;
+    r3 = rename C { origin -> h, endpoint -> c };
+    r4 = natural_join r2 with r3;
+    r5 = project r4 keep { a, b, c };
+    output r5 as answer(a, b, c);
+}

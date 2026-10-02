@@ -1,0 +1,24 @@
+relational {
+    relation R(first: i32, second: i32);
+    relation S(first: i32, second: i32);
+    relation T(first: i32, second: i32);
+    relation Bridge(first: i32, second: i32);
+    relation U(first: i32, second: i32);
+    relation V(first: i32, second: i32);
+    relation W(first: i32, second: i32);
+    r0 = rename R { first -> x, second -> y };
+    r1 = rename S { first -> y, second -> z };
+    r2 = natural_join r0 with r1;
+    r3 = rename T { first -> x, second -> z };
+    r4 = natural_join r2 with r3;
+    r5 = rename Bridge { first -> x, second -> u };
+    r6 = natural_join r4 with r5;
+    r7 = rename U { first -> u, second -> v };
+    r8 = natural_join r6 with r7;
+    r9 = rename V { first -> v, second -> w };
+    r10 = natural_join r8 with r9;
+    r11 = rename W { first -> u, second -> w };
+    r12 = natural_join r10 with r11;
+    r13 = project r12 keep { u, v, w, x, y, z };
+    output r13 as answer(x, y, z, u, v, w);
+}

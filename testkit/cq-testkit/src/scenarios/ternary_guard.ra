@@ -1,0 +1,15 @@
+relational {
+    relation A(first: i32, second: i32);
+    relation B(first: i32, second: i32);
+    relation C(first: i32, second: i32);
+    relation Stock(depot: i32, item: i32, day: i32);
+    r0 = rename A { first -> d, second -> i };
+    r1 = rename B { first -> i, second -> t };
+    r2 = natural_join r0 with r1;
+    r3 = rename C { first -> d, second -> t };
+    r4 = natural_join r2 with r3;
+    r5 = rename Stock { depot -> d, item -> i, day -> t };
+    r6 = natural_join r4 with r5;
+    r7 = project r6 keep { d, i, t };
+    output r7 as answer(d, i, t);
+}
