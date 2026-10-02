@@ -23,7 +23,10 @@ fn every_generated_case_is_accounted_for() {
             _ => panic!("unclassified case: {line}"),
         }
     }
-    assert_eq!(configurations, 4 * 864 + 16 * 27);
+    assert_eq!(
+        configurations,
+        4 * 3456 + 16 * env!("E2E_PAIRWISE_ROWS").parse::<usize>().unwrap()
+    );
     assert_eq!(cases.to_string(), env!("E2E_DIFFERENTIAL_CASES"));
     assert_eq!(rejected.to_string(), env!("E2E_COMPILE_FAIL_CASES"));
     println!("{cases} differential scenario cases; {rejected} rejected configurations");

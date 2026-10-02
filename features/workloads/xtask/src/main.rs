@@ -4,11 +4,8 @@ mod explain;
 mod extended;
 #[cfg(feature = "oracle")]
 mod fuzz;
-#[cfg(all(test, not(feature = "oracle")))]
-#[path = "fuzz/model.rs"]
-mod fuzz_model;
-#[cfg(any(feature = "oracle", test))]
-mod golden;
+#[cfg(feature = "oracle")]
+use cq_testkit::golden;
 #[cfg(feature = "oracle")]
 mod oracle;
 #[cfg(feature = "oracle")]
@@ -23,6 +20,10 @@ use std::path::{Path, PathBuf};
 use cq_workloads::{GenerationConfig, QueryCase, Scale, Scenario, catalog};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+#[cfg(feature = "oracle")]
+fn testkit_error(error: Box<dyn Error + Send + Sync>) -> Box<dyn Error> {
+    error
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -169,7 +170,8 @@ fn golden(
                     path.display()
                 );
             } else {
-                golden::compare(&path, &expected, module.query.head.args.len())?;
+                golden::compare(&path, &expected, module.query.head.args.len())
+                    .map_err(testkit_error)?;
                 println!(
                     "golden {:<27} {:<11} {} rows",
                     case.name,
@@ -185,7 +187,16 @@ fn golden(
         && scale == Scale::Tiny
         && matches!(scenarios, ScenarioSelection::All)
     {
-        golden::check_inventory(&repository_root().join("workloads/golden"), &checked)?;
+        golden::check_inventory(
+            repository_root()
+                .parent()
+                .and_then(Path::parent)
+                .ok_or("feature has no repository parent")?,
+            Path::new("features/workloads/golden"),
+            &checked,
+        )
+        .map_err(testkit_error)?;
+        println!("verified all {} golden files byte for byte", checked.len());
     }
     Ok(())
 }
@@ -488,13 +499,13 @@ fn generation_config(case: &QueryCase, scenario: Scenario, scale: Scale) -> Gene
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("xtask lives directly under the repository root")
+        .expect("xtask lives inside the workload workspace")
         .to_path_buf()
 }
 
 fn data_directory(case: &QueryCase, scenario: Scenario, scale: Scale) -> PathBuf {
     repository_root()
-        .join("workloads/data")
+        .join("data")
         .join(case.suite.as_str())
         .join(case.name)
         .join(scenario.as_str())
@@ -504,7 +515,7 @@ fn data_directory(case: &QueryCase, scenario: Scenario, scale: Scale) -> PathBuf
 #[cfg_attr(all(not(feature = "oracle"), not(test)), allow(dead_code))]
 fn golden_path(case: &QueryCase, scenario: Scenario, scale: Scale) -> PathBuf {
     repository_root()
-        .join("workloads/golden")
+        .join("golden")
         .join(case.suite.as_str())
         .join(case.name)
         .join(scenario.as_str())

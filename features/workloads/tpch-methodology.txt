@@ -32,16 +32,16 @@ DuckDB normalize trailing fractional zeroes; VARCHAR values are unchanged.
 No float tolerance is used. Q6/Q19 keep lineitem primary keys through distinct
 CQ heads so equal-valued different input rows still contribute to SQL SUM.
 Products/sums use i128 coefficients at scale four. Empty scalar SUM yields NULL.
-Every measured run must reproduce its warm answer and deterministic counters.
+Every timed run must reproduce its warm answer. Two separate untimed counting executions must agree exactly.
 
 Configurations
 Each query compiles the same authored clauses in two configurations:
-- default: the written coarse binary CQ planner and default physical policy;
+- default: the written coarse binary CQ planner and default recorded Physical decisions;
 - hypergraph candidate: single-atom guard pushdown and GYO-tree semijoin
   reduction on H03, H07, H08, D19, D27; the main written atom order is retained;
 - generic_smallest candidate: fine variable-at-a-time planner, canonical
   projections and smallest intersection driver on H05, H09, H21, D72, D85;
-- generic-smallest candidate: the same generic policy for full Q6 and Q19.
+- generic-smallest candidate: the same Fine/canonical/smallest pass pipeline for full Q6 and Q19.
 All hosts are typed Vecs loaded from the same projections. This is a small
 candidate set, not an exhaustive planner search. The metadata records the
 best measured configuration for each query/scale from this set; candidates
@@ -70,8 +70,7 @@ benchmark. Engine/client output layouts and DuckDB's runtime planning differ.
 The optional Linux VmHWM reading is the worker process peak RSS. It includes
 loading, oracle/answer witnesses, warmup, all samples, and canonical comparison;
 it is not incremental query-only memory. Unsupported platforms report NA.
-MiniLinq counter instrumentation is enabled during timing, so its overhead is
-included. DuckDB is timed without equivalent per-operation instrumentation.
+MiniLinq timing uses a release executable compiled with cq-storage instrumentation disabled. Counters come from a separately compiled release executable and two untimed executions, each checked exactly against DuckDB. DuckDB is also timed without operation counters.
 Counters are the existing cq-storage counters: hashes, index builds, lookups,
 cursor steps, row enumeration and distinct insertions. Extension aggregate
 folding and uninstrumented host operations are not covered by those counters.

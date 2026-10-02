@@ -47,7 +47,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let load_ms = start.elapsed().as_secs_f64() * 1000.0;
     // One warm execution; its result is the correctness witness. Keep the
     // canonical witness outside measurement; do not retain warm query state.
+    #[cfg(feature = "counters")]
+    cq_storage::counters::reset();
+    if cfg!(feature = "counters") && runs != 0 {
+        return Err("instrumented workers only count a separate untimed run".into());
+    }
     let warm = query::run(&data, &args[1]);
+    #[cfg(feature = "counters")]
+    let counts = cq_storage::counters::snapshot();
     let expected = comparison::normalize_set(query::canonical(&warm), &decimals);
     if expected != oracle {
         return Err(format!("{} / {} warm answer differs from DuckDB before any measured run: expected {} rows, actual {}; missing {:?}; extra {:?}",
@@ -61,18 +68,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     if runs == 0 {
         std::fs::write(
             &args[4],
-            serde_json::to_vec(&serde_json::json!({"verified":true,"answer_rows":answer_rows}))?,
+            serde_json::to_vec(&{
+                #[allow(unused_mut)]
+                let mut metrics = serde_json::json!({"verified":true,"answer_rows":answer_rows,"instrumented":cfg!(feature="counters")});
+                #[cfg(feature = "counters")]
+                for (name, value) in [
+                    ("hash_computations", counts.hash_computations), ("index_builds", counts.index_builds),
+                    ("lookups", counts.lookups), ("cursor_steps", counts.cursor_steps),
+                    ("rows_enumerated", counts.rows_enumerated), ("distinct_insertions", counts.distinct_insertions),
+                ] { metrics[name] = serde_json::json!(value); }
+                metrics
+            })?,
         )?;
         return Ok(());
     }
     let mut times = Vec::with_capacity(runs);
-    let mut snapshots = Vec::with_capacity(runs);
     for _ in 0..runs {
-        cq_storage::counters::reset();
         let start = Instant::now();
         let answers = query::run(std::hint::black_box(&data), &args[1]);
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        let counts = cq_storage::counters::snapshot();
         std::hint::black_box(&answers);
         // Every measured execution must agree with the warm answer, not just
         // its cardinality. Conversion, sorting, and comparison are untimed.
@@ -81,11 +95,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err("query answer changed between warm and measured runs".into());
         }
         times.push(elapsed);
-        snapshots.push(counts);
-    }
-    let first = snapshots[0];
-    if snapshots.iter().any(|s| s != &first) {
-        return Err("deterministic query counters changed between runs".into());
     }
     times.sort_by(f64::total_cmp);
     std::fs::write(
@@ -93,9 +102,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         serde_json::to_vec_pretty(&serde_json::json!({
             "load_ms": load_ms, "median_ms": times[runs / 2], "samples_ms": times,
             "answer_rows": answer_rows, "peak_rss_kib": peak_rss_kib(),
-            "hash_computations": first.hash_computations, "index_builds": first.index_builds,
-            "lookups": first.lookups, "cursor_steps": first.cursor_steps,
-            "rows_enumerated": first.rows_enumerated, "distinct_insertions": first.distinct_insertions,
+            "instrumented": false,
+
         }))?,
     )?;
     Ok(())

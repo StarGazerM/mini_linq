@@ -1,49 +1,7 @@
-//! Shared by the sampler and its generated proc-macro crate. SQL does not use it.
-
-pub fn plan(
-    source: &cq_lang_cq::Program,
-    planner: usize,
-    fine: bool,
-    reduce: usize,
-    reference: bool,
-) -> syn::Result<cq_lang_ra::Program> {
-    use cq_order::{Heuristic, Ranking, Split};
+//! Exact written-order RA for partial Rust reference executions.
+//! Both the driver tests and the generated protocol pass use this public-API code.
+pub fn written(source: &cq_lang_cq::Program) -> syn::Result<cq_lang_ra::Program> {
     let normal = cq_lang_cq::normal::normalize(source)?;
-    if reference && (planner != 0 || fine || reduce != 0) {
-        return Err(syn::Error::new_spanned(
-            source,
-            "the effect reference requires Written/coarse/no reduction",
-        ));
-    }
-    let options = cq_order::Options {
-        heuristic: match planner {
-            0 => Heuristic::Written,
-            1 => Heuristic::Prefix(Ranking::Connected),
-            2 => Heuristic::Prefix(Ranking::GreedyWidth),
-            3 => Heuristic::Elimination,
-            _ => unreachable!("sampled planner"),
-        },
-        split: if fine { Split::Fine } else { Split::Coarse },
-    };
-    let plan = cq_order::compile(&normal, &options)?;
-    let plan = cq_reduce::compile(
-        &plan,
-        &cq_reduce::Options {
-            guards: if reduce == 0 {
-                cq_reduce::Pushdown::None
-            } else {
-                cq_reduce::Pushdown::Atoms
-            },
-            semijoins: if reduce == 2 && cq_lang_cq::hypergraph::Analysis::of(&normal).acyclic {
-                cq_reduce::Reductions::Tree
-            } else {
-                cq_reduce::Reductions::None
-            },
-        },
-    )?;
-    if reference {
-        cq_elaborate::compile_written(&plan)
-    } else {
-        cq_elaborate::compile(&plan)
-    }
+    let valuation = cq_order::compile(&normal, &cq_order::Options::default())?;
+    cq_elaborate::compile_written(&valuation)
 }

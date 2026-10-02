@@ -1,45 +1,27 @@
-//! Counter providers and the common typed shell for TPC-H-derived CQ kernels.
+//! Explicit pipelines and the common typed shell for TPC-H-derived CQ kernels.
 //! Query collection is timed; answer serialization and comparison are separate.
 
-macro_rules! distinct_state {
-    (operator $op:ident; new) => {
-        ::cq_storage::counters::DistinctSet::new()
-    };
-    (operator $op:ident; insert($state:expr, $row:expr)) => {
-        $state.insert(::core::clone::Clone::clone($row))
-    };
-}
-macro_rules! index_provider {
-    (probe) => { ::cq_storage::HashIndex<'_, _, _> };
-    (semi) => { ::cq_storage::counters::HashSet<_> };
-    (ordered) => { ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> };
-    (trie $inner:ty) => { ::cq_storage::Trie<'_, _, $inner> };
-}
-pub(crate) use {distinct_state, index_provider};
+#[cfg(feature = "counters")]
+pub type Dedup<T> = cq_storage::counters::DistinctSet<T>;
+#[cfg(not(feature = "counters"))]
+pub type Dedup<T> = std::collections::HashSet<T>;
 
-/// One configuration expands the same typed CQ through the selected planner.
-/// Providers are the existing deterministic counters, including deduplication.
+/// Expand the same authored CQ with an explicit sequence of public passes.
 macro_rules! configuration {
-    ($module:ident, $d:tt, $planner:ident, { $($policy:tt)* }, { $($body:tt)* }) => {
+    ($module:ident, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
         mod $module {
             use super::*;
-            macro_rules! physical_policy {
-                ($d($d tokens:tt)*) => {
-                    ::mini_linq::lower_physical! { $d($d tokens)* policy { $($policy)* } }
-                };
-            }
-            pub(crate) use physical_policy;
-            mod wiring {
-                pub(crate) use super::physical_policy;
-                pub(crate) use crate::tpch_runtime::{distinct_state, index_provider};
-                pub(crate) use ::mini_linq::{index_demands as choose_index_policy, select_structures, structures_to_rust};
-                #[allow(unused_imports)]
-                pub(crate) use ::mini_linq::{mini_linq as aggregate_hole, $planner as cq_to_ra};
-            }
-            use wiring as mini_linq;
             #[allow(unused_macros)]
             macro_rules! query {
-                ($d($d tokens:tt)*) => { ::mini_linq::$planner! { $d($d tokens)* } };
+                ($d($d tokens:tt)*) => { ::mini_linq::compile! {
+                    pipeline {
+                        $($stages)*
+                        structures = [::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
+                            ::cq_ext_negation::negation, ::cq_ext_union::union];
+                    }
+                    $d($d tokens)*
+                } };
             }
             $($body)*
         }
@@ -49,11 +31,13 @@ pub(crate) use configuration;
 
 macro_rules! candidate {
     (hypergraph; $d:tt; $($body:tt)*) => {
-        crate::tpch_runtime::configuration!(tuned, $d, cq_to_ra_hypergraph, {}, { $($body)* });
+        crate::tpch_runtime::configuration!(tuned, $d, { plan = ::cq_planners::order(hypergraph); }, { $($body)* });
     };
     (generic_smallest; $d:tt; $($body:tt)*) => {
-        crate::tpch_runtime::configuration!(tuned, $d, cq_to_ra_generic,
-            { project = canon; intersect = smallest; }, { $($body)* });
+        crate::tpch_runtime::configuration!(tuned, $d, {
+            plan = ::cq_planners::order(written, fine);
+            physical = [::cq_rewrites::canon_prefixes, ::cq_rewrites::smallest_intersections];
+        }, { $($body)* });
     };
 }
 pub(crate) use candidate;
@@ -91,7 +75,7 @@ macro_rules! retail_kernel {
                 ::cq_load::ParquetOptions::default(),
             )?,)* })
         }
-        crate::tpch_runtime::configuration!(default, $d, cq_to_ra, {}, {
+        crate::tpch_runtime::configuration!(default, $d, {}, {
             #[allow(non_snake_case)]
             pub(super) fn run(data: &Data) -> Vec<Answer> {
                 $(let $relation = data.$table.as_slice();)*

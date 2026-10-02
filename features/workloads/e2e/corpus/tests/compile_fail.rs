@@ -3,7 +3,7 @@
 #[test]
 fn rejected_configurations_and_invalid_constructs() {
     let result = std::process::Command::new("python3")
-        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/ui/check.py"))
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/ui/check.py"))
         .arg(env!("OUT_DIR"))
         .env(
             "CARGO",

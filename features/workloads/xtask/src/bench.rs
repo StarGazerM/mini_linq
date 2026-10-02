@@ -84,7 +84,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             );
         }
     }
-    let options = Options::parse(arguments)?;
+    let options = Options::parse(arguments.clone())?;
     let start = std::time::Instant::now();
     let mut loaded_rows = 0;
     let mut loaded_cases = 0;
@@ -116,6 +116,21 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         .flat_map(extended_costs::run)
         .collect();
     print!("{}", extended_costs::table(&extended));
+    if !cq_workloads::measurement::INSTRUMENTED {
+        println!(
+            "timing build: instrumentation disabled; counting in a separate release execution"
+        );
+        let status = crate::cargo::command()
+            .args(["run", "--release", "--locked", "--manifest-path"])
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+            .args(["--features", "counters", "--", "bench"])
+            .args(arguments)
+            .env(crate::cargo::BENCH_RELEASE_CHILD, "1")
+            .status()?;
+        if !status.success() {
+            return Err(format!("separate counting run failed: {status}").into());
+        }
+    }
     Ok(())
 }
 

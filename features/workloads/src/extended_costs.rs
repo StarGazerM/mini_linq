@@ -10,20 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cq_storage::counters::{self, Snapshot};
-
-macro_rules! policy { ($($ix:tt)*) => { ::mini_linq::lower_physical! { $($ix)* policy {} } }; }
-pub(crate) use policy as physical_policy;
-#[allow(unused_imports)]
-mod mini_linq {
-    pub(crate) use super::physical_policy;
-    pub(crate) use crate::costs::{distinct_state, index_provider};
-    pub(crate) use ::mini_linq::mini_linq as negation_hole;
-    pub(crate) use ::mini_linq::mini_linq as recursion_hole;
-    pub(crate) use ::mini_linq::{
-        cq_to_ra, index_demands as choose_index_policy, select_structures, structures_to_rust,
-    };
-}
+use crate::measurement::{self as counters, Snapshot};
 
 #[derive(Clone, Debug)]
 pub struct Observation {
@@ -44,12 +31,13 @@ pub fn run(scale: usize) -> Vec<Observation> {
     let delta_rows = Cell::new(0);
     counters::reset();
     let start = Instant::now();
-    let actual: BTreeSet<_> = ::cq_ext_recursion::recursion! {
+    let actual: BTreeSet<_> = ::mini_linq::compile! { pipeline { surface = [::cq_ext_recursion::recursion]; }
+recursion! {
         observe = (|_: usize, rows: usize| { rounds.set(rounds.get()+1); delta_rows.set(delta_rows.get()+rows); });
         struct Path; relation seed(x:i32); relation edges(x:i32,y:i32); relation reach(x:i32);
         reach(*y) :- seed(x), edges(x,y);
         reach(*z) :- reach(y), edges(y,z);
-    }.collect();
+     }}.collect();
     let elapsed = start.elapsed();
     let counts = counters::snapshot();
     assert_eq!(actual, reachable);
@@ -81,7 +69,7 @@ pub fn run(scale: usize) -> Vec<Observation> {
     };
     counters::reset();
     let start = Instant::now();
-    let actual: BTreeSet<_> = ::cq_ext_negation::negation! {
+    let actual: BTreeSet<_> = ::mini_linq::compile! { pipeline { surface = [::cq_ext_negation::negation]; }
         struct Anti; relation candidates(x:i32); relation blocked(x:i32,y:i32); relation answer(x:i32);
         answer(*x) :- candidates(x), if observe(x), neg!{blocked(x,_)};
     }.collect();
@@ -101,8 +89,13 @@ pub fn run(scale: usize) -> Vec<Observation> {
     vec![recursion, negation]
 }
 pub fn table(observations: &[Observation]) -> String {
-    let mut output = String::from(
-        "extension\tscale\thashes\tbuilds\tlookups\tcursor_steps\trows\tdistinct_insertions\trounds\tdelta_rows\tnegative_checks\twall_ms\n",
+    let mut output = format!(
+        "extension\tscale\thashes\tbuilds\tlookups\tcursor_steps\trows\tdistinct_insertions\trounds\tdelta_rows\tnegative_checks\t{}\n",
+        if counters::INSTRUMENTED {
+            "count_run_ms"
+        } else {
+            "timing_ms"
+        },
     );
     for o in observations {
         let c = o.counts;

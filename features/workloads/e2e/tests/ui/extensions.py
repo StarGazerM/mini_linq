@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[4]
+from consumer import WORKSPACE as ROOT, dependencies
 CARGO = os.environ.get("CARGO", "cargo")
 LOGS = ROOT / "target/extension-ui"
 LOGS.mkdir(parents=True, exist_ok=True)
@@ -28,12 +28,16 @@ cases = [
     ("unexpanded", "mini_linq::mini_linq", "struct C; relation A(x:i32); answer(x) :- A(x),name!{opaque tokens};", "name!"),
 ]
 manifest = '[package]\nname = "extension-ui"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
-for name in ["union", "negation", "aggregate", "recursion", "correlated"]:
-    manifest += f'cq-ext-{name} = {{ path = {json.dumps(str(ROOT / "extensions" / ("cq-ext-" + name)))} }}\n'
-manifest += f'mini-linq = {{ path = {json.dumps(str(ROOT / "facade/mini-linq"))} }}\n'
+manifest += dependencies(CARGO, ["mini-linq", "cq-storage", *["cq-ext-" + name for name in ["union", "negation", "aggregate", "recursion", "correlated"]]], env)
 for name, macro, source, _ in cases:
     path = DIRECTORY / f"{name}.rs"
-    path.write_text(f"fn main() {{ let _ = ::{macro}! {{ {source} }}; }}\n")
+    if macro.startswith("cq_ext_"):
+        family = macro.split("::")[1]
+        authored = f"{family}! {{ {source} }}" if family in {"union", "aggregate", "recursion"} else source
+        invocation = f"::mini_linq::compile! {{ pipeline {{ surface = [::{macro}]; }} {authored} }}"
+    else:
+        invocation = f"::{macro}! {{ {source} }}"
+    path.write_text(f"fn main() {{ let _ = {invocation}; }}\n")
     manifest += f'[[bin]]\nname = "{name}"\npath = "{name}.rs"\n'
 (DIRECTORY / "Cargo.toml").write_text(manifest)
 shutil.copy2(ROOT / "Cargo.lock", DIRECTORY / "Cargo.lock")

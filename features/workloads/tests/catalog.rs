@@ -207,9 +207,11 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
     ]);
     expected_paths.extend(cq_workloads::extended::CASES.iter().map(|case| {
         let path = PathBuf::from(case.rust_path);
-        path.strip_prefix(&repository_root)
-            .unwrap_or(&path)
-            .to_path_buf()
+        if path.is_absolute() {
+            path.strip_prefix(&repository_root).unwrap().to_path_buf()
+        } else {
+            PathBuf::from("workloads").join(path)
+        }
     }));
     for case in cq_workloads::tpch::CASES {
         assert!(
@@ -239,7 +241,7 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
                 })
                 .to_path_buf()
         } else {
-            source_path
+            PathBuf::from("workloads").join(source_path)
         };
         assert!(
             expected_path.starts_with("workloads/src/queries"),

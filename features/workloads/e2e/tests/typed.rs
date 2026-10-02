@@ -1,16 +1,5 @@
 //! Execute typed authored queries against CSV and DuckDB-produced Parquet.
 
-mod wiring {
-    pub use cq_state_providers::{
-        default_indexes as index_provider, hash_distinct as distinct_state,
-    };
-    pub use mini_linq::{
-        index_demands as choose_index_policy, select_structures, structures_to_rust,
-    };
-    macro_rules! policy { ($($tokens:tt)*) => { ::mini_linq::lower_physical! { $($tokens)* policy {} } }; }
-    pub(crate) use policy as physical_policy;
-}
-
 #[derive(Clone, Copy)]
 enum Source {
     Csv,
@@ -40,7 +29,7 @@ macro_rules! execute_typed {
                 };
                 let $relation = $relation.as_slice();
             )*
-            let rows = ::mini_linq::cq_to_ra! { $($cq)* }
+            let rows = ::mini_linq::mini_linq! { $($cq)* }
                 .map(|(a, b, c, d)| vec![a.to_string(), b.to_string(), c.to_string(), d.to_string()])
                 .collect();
             cq_workloads::typed::check(stringify!($case), rows);
@@ -52,7 +41,6 @@ macro_rules! typed_case {
     ($d:tt; $case:ident) => {
         mod $case {
             use cq_load::{Date, Decimal};
-            use super::wiring as mini_linq;
 
             macro_rules! instantiate {
                 ($d vis:vis struct $d name:ident; $d($d tail:tt)*) => {

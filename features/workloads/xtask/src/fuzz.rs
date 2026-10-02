@@ -7,10 +7,10 @@
 //! proc macro runs the selected logical passes, then calls the public facade
 //! for physical lowering and realization. Each batch is compiled once; runtime
 //! data travels over stdin so row minimization does not require recompilation.
+#[cfg(test)]
 #[path = "fuzz/compiler.rs"]
 mod compiler;
-#[path = "fuzz/model.rs"]
-mod model;
+use cq_testkit::fuzz as model;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use cq_workloads::dataset::RelationData;
 use model::Case;
 
 use crate::Result;
@@ -28,36 +27,27 @@ const BATCH: usize = 64;
 type Answers = Vec<Vec<i32>>;
 type ConsumerResult = std::result::Result<Answers, String>;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Config {
     reference: bool,
     planner: usize,
-    fine: bool,
-    reduce: usize,
     merge: bool,
     canon: bool,
     smallest: bool,
     host: usize,
     ordered_distinct: bool,
     custom_index: bool,
+    lazy: bool,
+    push: bool,
 }
 
 impl Config {
     fn written_reference() -> Self {
         Self {
             reference: true,
-            planner: 0,
-            fine: false,
-            reduce: 0,
-            merge: false,
-            canon: false,
-            smallest: false,
-            host: 0,
-            ordered_distinct: false,
-            custom_index: false,
+            ..Default::default()
         }
     }
-
     fn sample(seed: &mut u64) -> Self {
         fn next(seed: &mut u64, n: u64) -> usize {
             *seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
@@ -67,68 +57,74 @@ impl Config {
             ((x ^ (x >> 31)) % n) as usize
         }
         Self {
-            reference: false,
-            planner: next(seed, 4),
-            fine: next(seed, 2) == 1,
-            reduce: next(seed, 3),
+            planner: next(seed, 9),
             merge: next(seed, 2) == 1,
             canon: next(seed, 2) == 1,
             smallest: next(seed, 2) == 1,
             host: next(seed, 3),
             ordered_distinct: next(seed, 2) == 1,
             custom_index: next(seed, 2) == 1,
+            lazy: next(seed, 2) == 1,
+            push: next(seed, 2) == 1,
+            reference: false,
         }
     }
-
     fn axes(self) -> [(&'static str, &'static str); 9] {
         [
             (
-                "planner",
-                [
-                    "written",
-                    "prefix-connected",
-                    "prefix-greedy",
-                    "elimination",
-                ][self.planner],
+                "plan",
+                cq_workloads::pipelines::Planner::ALL[self.planner].name(),
             ),
-            ("split", if self.fine { "fine" } else { "coarse" }),
             (
-                "reduce",
-                ["none", "none-compat", "acyclic-tree"][self.reduce],
+                "physical/merge_joins",
+                if self.merge { "apply" } else { "omit" },
             ),
-            ("join", if self.merge { "merge" } else { "seek" }),
-            ("project", if self.canon { "canon" } else { "keep" }),
             (
-                "intersect",
-                if self.smallest { "smallest" } else { "first" },
+                "physical/canon_prefixes",
+                if self.canon { "apply" } else { "omit" },
+            ),
+            (
+                "physical/smallest_intersections",
+                if self.smallest { "apply" } else { "omit" },
             ),
             ("host", ["slice", "hashmap", "btreemap"][self.host]),
             (
-                "distinct",
+                "structures/retype",
                 if self.ordered_distinct {
-                    "ordered"
-                } else {
-                    "hash"
-                },
-            ),
-            (
-                "indexes",
-                if self.custom_index {
-                    "sorted"
+                    "ordered-dedup"
                 } else {
                     "default"
                 },
             ),
+            (
+                "structures/sorted_payload",
+                if self.custom_index { "apply" } else { "omit" },
+            ),
+            (
+                "physical/lazy_semijoins",
+                if self.lazy { "apply" } else { "omit" },
+            ),
+            (
+                "print",
+                if self.push {
+                    "own_push::push"
+                } else {
+                    "print_pull"
+                },
+            ),
         ]
     }
-
-    fn policy(self) -> String {
-        format!(
-            "policy {{ join = {}; project = {}; intersect = {}; }}",
-            self.axes()[3].1,
-            self.axes()[4].1,
-            self.axes()[5].1
-        )
+    fn pipeline(self) -> cq_workloads::pipelines::Pipeline {
+        cq_workloads::pipelines::Pipeline {
+            plan: self.planner,
+            merge: self.merge,
+            canon: self.canon,
+            smallest: self.smallest,
+            ordered_dedup: self.ordered_distinct,
+            sorted_payload: self.custom_index,
+            lazy: self.lazy,
+            push: self.push,
+        }
     }
 }
 
@@ -160,32 +156,7 @@ fn eligible(case: &Case, c: Config) -> Result<bool> {
 
 fn eligible_inner(case: &Case, c: Config) -> Result<bool> {
     let source = syn::parse_str(&case.cq())?;
-    let ra = compiler::plan(&source, c.planner, c.fine, c.reduce, c.reference)?;
-    let ix = cq_index_policy::compile(&ra)?;
-    let policy = syn::parse_str(&c.policy())?;
-    let physical = cq_physical_lowering::compile(&ix, &policy)?;
-    let structures = cq_structure_selection::compile(&physical, &policy)?;
-    let analysis = cq_lang_structures::contract::check(&structures)?;
-    for (result, reads) in &analysis.physical.merge_reads {
-        if !analysis.host_read(result) {
-            continue;
-        }
-        let host = &analysis.physical.hosts[result];
-        let inverse: BTreeMap<_, _> = analysis.physical.renames[result]
-            .iter()
-            .map(|(t, s)| (s, t))
-            .collect();
-        let layout: Vec<_> = analysis.host_layouts[host]
-            .iter()
-            .map(|column| inverse[column].clone())
-            .collect();
-        for (_, columns) in reads {
-            if layout[..columns.len()] == *columns && (c.host != 2 || columns.len() != 1) {
-                return Ok(false);
-            }
-        }
-    }
-    Ok(true)
+    Ok(c.pipeline().rejection(&source, c.host)?.is_none())
 }
 
 pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
@@ -216,11 +187,21 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
     let mut rejected = 0;
     let mut cases = Vec::with_capacity(count);
     println!("fuzz: {count} cases, seed {seed}, batches of {BATCH}");
+    let progress = root.join("target/fuzz/preflight-current.txt");
+    std::fs::create_dir_all(progress.parent().ok_or("preflight parent")?)?;
     for index in 0..count {
         let case = model::generate(seed.wrapping_add(index as u64));
         let mut config_seed = case.seed ^ 0x434f_4e46_4947;
         let config = loop {
             let config = Config::sample(&mut config_seed);
+            std::fs::write(
+                &progress,
+                format!(
+                    "case {index} seed {}\npipeline {config}\n{}\n",
+                    case.seed,
+                    case.cq()
+                ),
+            )?;
             match eligible(&case, config) {
                 Ok(true) => break config,
                 Ok(false) => rejected += 1,
@@ -428,23 +409,7 @@ fn reference(case: &Case) -> Result<Vec<Vec<i32>>> {
     if case.has_partial_terms() {
         return Err("partial terms require the compiled written-order reference".into());
     }
-    let relations = case
-        .query
-        .schema
-        .iter()
-        .zip(&case.data)
-        .map(|(relation, rows)| RelationData {
-            name: relation.name.clone(),
-            arity: relation.arity,
-            rows: rows.clone(),
-        })
-        .collect::<Vec<_>>();
-    let mut rows = crate::oracle::evaluate_sql(&relations, &case.sql())?;
-    rows.sort();
-    if rows.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err("independent SQL printer failed to enforce DISTINCT".into());
-    }
-    Ok(rows)
+    cq_testkit::duckdb::evaluate_fuzz(case).map_err(crate::testkit_error)
 }
 
 fn refines(target: &ConsumerResult, written: &ConsumerResult) -> bool {
@@ -579,31 +544,31 @@ impl Runner {
         let executable = target.join("debug").join(&package);
         std::fs::create_dir_all(directory.join("src"))?;
         std::fs::create_dir_all(directory.join("planner/src"))?;
-        let dependency =
-            |name: &str, path: &str| format!("{name} = {{ path = {:?} }}\n", root.join(path));
         let mut manifest = format!(
             "[package]\nname = {package:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[profile.dev]\ndebug = 0\n[dependencies]\ncq-fuzz-planner = {{ path = \"planner\" }}\n",
         );
-        for (name, path) in [
-            ("mini-linq", "facade/mini-linq"),
-            ("cq-storage", "runtime/cq-storage"),
-            ("cq-state-providers", "runtime/cq-state-providers"),
-        ] {
-            manifest.push_str(&dependency(name, path));
-        }
+        manifest.push_str(&crate::cargo::dependencies(&[
+            "mini-linq",
+            "cq-storage",
+            "cq-workloads",
+            "cq-planners",
+            "cq-rewrites",
+            "cq-workload-passes",
+            "own-push",
+        ])?);
         std::fs::write(directory.join("Cargo.toml"), manifest)?;
         let mut manifest = String::from(
             "[package]\nname = \"cq-fuzz-planner\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[lib]\nproc-macro = true\n[dependencies]\nsyn = { version = \"2\", features = [\"full\"] }\nquote = \"1\"\n",
         );
-        for (name, path) in [
-            ("cq-lang-cq", "languages/cq-lang-cq"),
-            ("cq-lang-ra", "languages/cq-lang-ra"),
-            ("cq-order", "passes/cq-order"),
-            ("cq-reduce", "passes/cq-reduce"),
-            ("cq-elaborate", "passes/cq-elaborate"),
-        ] {
-            manifest.push_str(&dependency(name, path));
-        }
+        manifest.push_str(&crate::cargo::dependencies(&[
+            "cq-stage",
+            "cq-lang-cq",
+            "cq-lang-ra",
+            "cq-order",
+            "cq-reduce",
+            "cq-elaborate",
+            "cq-planners-plan",
+        ])?);
         std::fs::write(directory.join("planner/Cargo.toml"), manifest)?;
         std::fs::copy(root.join("Cargo.lock"), directory.join("Cargo.lock"))?;
         std::fs::write(
@@ -611,10 +576,6 @@ impl Runner {
             include_str!("fuzz/compiler.rs"),
         )?;
         std::fs::write(directory.join("planner/src/lib.rs"), PLANNER)?;
-        std::fs::copy(
-            root.join("workloads/e2e/tests/support/mod.rs"),
-            directory.join("src/support.rs"),
-        )?;
         Ok(Self {
             directory,
             target,
@@ -624,7 +585,7 @@ impl Runner {
 
     fn compile(&mut self, cases: &[(Case, Config)]) -> Result<()> {
         let mut source = String::from(
-            "#![recursion_limit = \"512\"]\n#![allow(unused_imports, unused_variables, dead_code, unused_macros, unused_parens)]\nmod support;\n",
+            "#![recursion_limit = \"512\"]\n#![allow(unused_imports, unused_variables, dead_code, unused_macros, unused_parens)]\n",
         );
         source.push_str(include_str!("fuzz/harness.rs"));
         source.push_str("\nfn dispatch(id: usize, data: &Data) -> Vec<Vec<i32>> { match id {\n");
@@ -757,24 +718,7 @@ impl Runner {
 
 fn consumer_case(id: usize, case: &Case, c: Config) -> String {
     let mut code = format!("\nmod case_{id} {{\n");
-    writeln!(code, "macro_rules! policy {{ ($($t:tt)*) => {{ ::mini_linq::lower_physical! {{ $($t)* {} }} }}; }}", c.policy()).unwrap();
-    code.push_str("pub(super) use policy as physical_policy;\nmod mini_linq {\n pub(super) use super::physical_policy;\n pub(super) use ::mini_linq::{select_structures, structures_to_rust};\n");
-    writeln!(
-        code,
-        "pub(super) use cq_state_providers::{} as distinct_state;",
-        if c.ordered_distinct {
-            "ordered_distinct"
-        } else {
-            "hash_distinct"
-        }
-    )
-    .unwrap();
-    if c.custom_index {
-        code.push_str("macro_rules! indexes { (probe) => { crate::support::SortedIndex<_, _> }; ($($t:tt)*) => { cq_state_providers::default_indexes!($($t)*) }; }\npub(super) use indexes as index_provider;\n");
-    } else {
-        code.push_str("pub(super) use cq_state_providers::default_indexes as index_provider;\n");
-    }
-    code.push_str("}\npub(super) fn run(data: &crate::Data) -> Vec<Vec<i32>> {\n");
+    code.push_str("pub(super) fn run(data: &crate::Data) -> Vec<Vec<i32>> {\n");
     for (i, relation) in case.query.schema.iter().enumerate() {
         let fields = (0..relation.arity)
             .map(|j| format!("row[{j}],"))
@@ -794,33 +738,36 @@ fn consumer_case(id: usize, case: &Case, c: Config) -> String {
     let fields = (0..case.output_arity())
         .map(|i| format!("crate::integer(row.{i}),"))
         .collect::<String>();
+    let invocation = if c.reference {
+        format!(
+            "::mini_linq::compile! {{ pipeline {{ plan = cq_fuzz_planner::written_reference; }} {} }}",
+            case.written_cq()
+        )
+    } else {
+        let source = syn::parse_str(&case.cq()).expect("preflight checked CQ");
+        let configuration = c
+            .pipeline()
+            .configuration(&source)
+            .expect("checked pipeline");
+        format!("::mini_linq::compile! {{ {configuration} {} }}", case.cq())
+    };
     writeln!(
         code,
-        "cq_fuzz_planner::query! {{ [{} {} {} {}] {} }}.map(|row| vec![{fields}]).collect()\n}}\n}}",
-        c.planner,
-        c.fine,
-        c.reduce,
-        c.reference,
-        if c.reference { case.written_cq() } else { case.cq() }
+        "{invocation}.map(|row| vec![{fields}]).collect()\n}}\n}}"
     )
     .unwrap();
+
     code
 }
 
 const PLANNER: &str = r#"
 mod compiler;
-use syn::parse::Parse;
-struct Request { planner: usize, fine: bool, reduce: usize, reference: bool, source: cq_lang_cq::Program }
-impl Parse for Request {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let header; syn::bracketed!(header in input);
-        Ok(Self { planner: header.parse::<syn::LitInt>()?.base10_parse()?, fine: header.parse::<syn::LitBool>()?.value, reduce: header.parse::<syn::LitInt>()?.base10_parse()?, reference: header.parse::<syn::LitBool>()?.value, source: input.parse()? })
-    }
-}
 #[proc_macro]
-pub fn query(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let result = syn::parse::<Request>(tokens).and_then(|request| compiler::plan(&request.source, request.planner, request.fine, request.reduce, request.reference));
-    match result { Ok(ra) => quote::quote!(::mini_linq::index_demands! { #ra }), Err(error) => error.into_compile_error() }.into()
+pub fn written_reference(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(tokens.into(), |source, arguments| {
+        if !arguments.is_empty() { return Err(syn::Error::new_spanned(arguments, "written_reference takes no arguments")); }
+        compiler::written(source)
+    }).into()
 }
 "#;
 
@@ -848,16 +795,13 @@ mod tests {
         let config = Config::written_reference();
         assert_eq!(config.planner, 0);
         assert!(config.reference);
-        assert!(!config.fine);
-        assert_eq!(config.reduce, 0);
-        assert_eq!(
-            config.policy(),
-            "policy { join = seek; project = keep; intersect = first; }"
-        );
+        let pipeline = config.pipeline();
+        assert_eq!(pipeline.plan, 0);
+        assert!(!pipeline.merge && !pipeline.canon && !pipeline.smallest);
         let case = model::generate(0);
         assert!(case.has_partial_terms());
         let source = consumer_case(BATCH, &case, config);
-        assert!(source.contains("[0 false 0 true]"));
+        assert!(source.contains("cq_fuzz_planner::written_reference"));
         assert!(
             reference(&case)
                 .unwrap_err()
@@ -874,7 +818,7 @@ mod tests {
             relation answer(a: i32);
             answer(x) :- R(x, 10 / *x, 5);
         };
-        let reference = compiler::plan(&source, 0, false, 0, true).unwrap();
+        let reference = compiler::written(&source).unwrap();
         let definitions: Vec<_> = reference.plan.definitions.iter().collect();
         let bind = definitions
             .iter()
@@ -893,7 +837,6 @@ mod tests {
             bind < literal,
             "a failing literal cannot suppress an earlier reference panic"
         );
-        assert!(compiler::plan(&source, 1, false, 0, true).is_err());
     }
 
     #[test]

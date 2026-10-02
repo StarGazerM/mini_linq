@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[4]
+from consumer import WORKSPACE as ROOT, dependencies
 OUT = Path(sys.argv[1]).resolve()
 UI_ROOT = ROOT / "target/workload-ui"
 UI_ROOT.mkdir(parents=True, exist_ok=True)
@@ -18,15 +18,7 @@ DIRECTORY = Path(tempfile.mkdtemp(prefix=OUT.parent.name + "-", dir=UI_ROOT))
 CARGO = os.environ.get("CARGO", "cargo")
 env = dict(os.environ, CARGO_TARGET_DIR=str(UI_ROOT / "target"), CARGO_TERM_COLOR="never")
 manifest = '[package]\nname = "workload-ui"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
-for name, path in {
-    "mini-linq": "facade/mini-linq",
-        "cq-storage": "runtime/cq-storage",
-        "cq-load": "runtime/cq-load",
-    "cq-state-providers": "runtime/cq-state-providers",
-    "cq-workloads": "workloads",
-    "cq-workload-e2e": "workloads/e2e",
-}.items():
-    manifest += f'{name} = {{ path = {json.dumps(str(ROOT / path))} }}\n'
+manifest += dependencies(CARGO, ["mini-linq", "cq-storage", "cq-load", "cq-workloads", "cq-workload-e2e", "cq-planners", "cq-rewrites", "cq-workload-passes", "own-push"], env)
 fixtures = [(name, Path(__file__).parent / f"{name}.rs", needle)
             for name, needle in [("ordered", "OrderedRead"), ("extension", "name!"), ("provider", "IndexRead"),
                                  ("comparison_ord", "Ord"), ("comparison_literal_eq", "mismatched types")]]

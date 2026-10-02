@@ -50,7 +50,7 @@ pub(super) fn golden(
             std::fs::create_dir_all(path.parent().expect("golden parent"))?;
             std::fs::write(&path, &bytes)?;
         } else {
-            crate::golden::compare_bytes(&path, &bytes)?;
+            crate::golden::compare_bytes(&path, &bytes).map_err(crate::testkit_error)?;
         }
         println!("golden {:<27} typed CSV + Parquet", case.name);
         checked.push(path);

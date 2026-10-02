@@ -44,7 +44,8 @@ pub(super) fn golden(
                     path.display()
                 );
             } else {
-                crate::golden::compare(&path, &expected, case.arity)?;
+                crate::golden::compare(&path, &expected, case.arity)
+                    .map_err(crate::testkit_error)?;
                 println!(
                     "golden {:<27} {:<11} {} rows",
                     case.name,

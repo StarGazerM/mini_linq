@@ -81,12 +81,12 @@ macro_rules! query_body {
             // the authored CQ's computed rows, then compose the aggregate hole.
             // This allocation and both CQ executions remain inside query time.
             let computed = computed.as_slice();
-            let aggregates = ::cq_ext_aggregate::aggregate! {
+            let aggregates = query! {aggregate! {
                 by (group); revenue = sum(amount);
                 struct Revenue;
                 relation computed(group: i32, orderkey: i64, linenumber: i64, amount: i128);
                 rows(group, orderkey, linenumber, amount) :- computed(group, orderkey, linenumber, amount);
-            };
+             }};
             vec![aggregates
                 .iter()
                 .flat_map(|(_, values)| values.iter())
@@ -96,11 +96,11 @@ macro_rules! query_body {
     };
 }
 
-crate::tpch_runtime::configuration!(default, $, cq_to_ra, {}, {
+crate::tpch_runtime::configuration!(default, $, {}, {
     query_body!();
 });
-crate::tpch_runtime::configuration!(generic_smallest, $, cq_to_ra_generic,
-    { project = canon; intersect = smallest; }, {
+crate::tpch_runtime::configuration!(generic_smallest, $,
+    { plan = ::cq_planners::order(written, fine); physical = [::cq_rewrites::canon_prefixes, ::cq_rewrites::smallest_intersections]; }, {
     query_body!();
 });
 

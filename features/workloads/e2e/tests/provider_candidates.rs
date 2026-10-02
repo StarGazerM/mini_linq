@@ -1,10 +1,8 @@
-mod support;
-
 use cq_storage::{Build, Candidates, IndexRead, Keys, Trie};
-use support::SortedIndex;
+use cq_workloads::SortedIndex;
 
 #[test]
-fn sorted_provider_supplies_distinct_trie_candidates_with_duplicate_payloads() {
+fn sorted_representation_supplies_distinct_trie_candidates_with_duplicate_payloads() {
     let rows = [(2, (7, 70)), (2, (7, 71)), (2, (8, 80)), (2, (7, 70))];
     let trie: Trie<'_, _, SortedIndex<_, _>> = Build::build(rows.into_iter());
     assert_eq!(Candidates::count(&&trie, &2), 2);

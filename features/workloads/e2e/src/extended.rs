@@ -65,23 +65,21 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
             #name.iter().map(|row| vec![#(row.#fields,)*]).collect()).unwrap())
     });
     let family_name = family.to_string();
-    let extension: syn::Path = match family_name.as_str() {
-        "surface" => syn::parse_quote!(::mini_linq::mini_linq),
-        "union" | "stacked" => syn::parse_quote!(::cq_ext_union::union),
-        "negation" => syn::parse_quote!(::cq_ext_negation::negation),
-        "aggregate" => syn::parse_quote!(::cq_ext_aggregate::aggregate),
-        "recursion" => syn::parse_quote!(::cq_ext_recursion::recursion),
-        "correlated" => syn::parse_quote!(::cq_ext_correlated::correlated),
+    let surfaces = match family_name.as_str() {
+        "surface" => quote!(),
+        "union" => quote!(::cq_ext_union::union),
+        "stacked" => quote!(::cq_ext_union::union, ::cq_ext_negation::negation),
+        "negation" => quote!(::cq_ext_negation::negation),
+        "aggregate" => quote!(::cq_ext_aggregate::aggregate),
+        "recursion" => quote!(::cq_ext_recursion::recursion),
+        "correlated" => quote!(::cq_ext_correlated::correlated),
         _ => return Err(syn::Error::new_spanned(family, "unknown extension family")),
     };
-    let union_slot = if family_name == "stacked" {
-        quote!(
-            pub(crate) use ::cq_ext_negation::negation as union_hole;
-        )
-    } else {
-        quote!(
-            pub(crate) use ::mini_linq::mini_linq as union_hole;
-        )
+    let authored = match family_name.as_str() {
+        "union" | "stacked" => quote!(union! { #source }),
+        "aggregate" => quote!(aggregate! { #source }),
+        "recursion" => quote!(recursion! { #source }),
+        _ => source.clone(),
     };
     let output_arity = arity.base10_parse::<usize>()?;
     let output = if family_name == "aggregate" {
@@ -110,20 +108,6 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
         #[allow(non_snake_case)]
         mod #module {
             mod loaders { ::mini_linq::relation_loaders! { #(#schema)* } }
-            macro_rules! policy { ($($ix:tt)*) => { ::mini_linq::lower_physical! { $($ix)* policy {} } }; }
-            pub(crate) use policy as physical_policy;
-            #[allow(unused_imports)]
-            mod mini_linq {
-                pub(crate) use super::physical_policy;
-                pub(crate) use ::mini_linq::{cq_to_ra, index_demands as choose_index_policy, select_structures, structures_to_rust};
-                pub(crate) use ::mini_linq::mini_linq as negation_hole;
-                pub(crate) use ::mini_linq::mini_linq as aggregate_hole;
-                pub(crate) use ::mini_linq::mini_linq as recursion_hole;
-                pub(crate) use ::mini_linq::mini_linq as correlated_hole;
-                #union_slot
-                pub(crate) use ::cq_state_providers::hash_distinct as distinct_state;
-                pub(crate) use ::cq_state_providers::default_indexes as index_provider;
-            }
             pub(super) fn execute(case: ::cq_workloads::extended::Case, scenario: ::cq_workloads::Scenario) -> ::std::vec::Vec<::std::vec::Vec<i32>> {
                 let directory = case.path("data").join(scenario.as_str()).join("tiny");
                 #(#setup)*
@@ -133,7 +117,7 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
                 dataset.validate_provenance(::cq_workloads::Suite::Extended, case.name, case.config(scenario)).unwrap();
                 assert_eq!(dataset, case.generate(scenario).unwrap(), "stale extension fixture: {}", case.name);
                 #parameters
-                let result = #extension! { #source }; #output
+                let result = ::mini_linq::compile! { pipeline { surface = [#surfaces]; } #authored }; #output
             }
             #[test]
             fn duckdb_scenarios() {

@@ -1,46 +1,53 @@
+# Workloads external consumer
+
+Run commands from `features/workloads/`. This is a standalone Cargo workspace;
+core dependencies have versions and local paths, and planners, rewrites, printers
+and surface extensions are sibling external consumers. The feature-local xtask
+alias works here; the root alias is requested in `/tmp/codex/w2/workloads.core_requests.md`.
+
 ```sh
-cargo test -p cq-workload-e2e --locked              # compiler vs tiny DuckDB goldens; generated matrix + compile-fail cases
-cargo test -p cq-workload-e2e --test census --locked -- --nocapture
-cargo test --manifest-path examples/own-dialect/Cargo.toml --test corpus --locked  # pull/push vs the same goldens
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo test -p cq-workload-corpus --test census -- --nocapture
+cargo test -p cq-workload-corpus --test compile_fail
+cargo test -p cq-workload-e2e --features parquet
+cargo test -p cq-workloads --features counters --test growth -- --nocapture
 cargo xtask list
 cargo xtask generate all tiny --scenario all
-cargo xtask golden all tiny --scenario all
-cargo xtask golden                              # byte comparison of every checked-in golden, all scenarios
-cargo xtask fuzz --cases 200 --seed 0            # gated deterministic compiled-query comparison with DuckDB
-cargo xtask fuzz --cases 5000 --seed 0           # larger local run; generated Rust stays under target/
-cargo xtask differential --cases 200 --seed 0    # alias for fuzz
-cargo xtask golden all tiny --scenario all --write
-cargo xtask explain triangle --through index-requirements
-cargo test -p cq-storage --features counters --test counters --locked
-cargo test -p cq-workloads --features counters --test growth --locked -- --nocapture
+cargo xtask golden
+cargo xtask fuzz --cases 200 --seed 0
+cargo xtask fuzz --cases 2000 --seed 0
+cargo xtask explain triangle --through structures
+cargo xtask explain triangle --through final-rust
 cargo xtask bench
 cargo xtask bench --scale 512 --seed 7
-cargo xtask generate extended tiny --scenario all
-cargo xtask golden extended tiny --scenario all --write
-cargo xtask golden extended tiny --scenario all
-cargo test -p cq-workload-e2e --test extended --locked
-cargo test -p cq-workload-e2e --test extension_laws --locked
-cargo test -p cq-workload-e2e --test extension_compile_fail --locked
-cargo test -p cq-workloads --test extended_catalog --locked
+cargo xtask bench --tpch --sf 0.1
+cargo xtask bench --tpch --sf 1
 ```
 
-```sh
-cargo test -p cq-load --locked
-cargo test -p cq-load --features parquet --locked
-cargo test -p mini-linq --test relation_loaders --locked
-cargo test -p cq-workload-e2e --test typed --locked
-cargo test -p cq-workload-e2e --test typed --features parquet --locked
-cargo xtask golden typed --write                 # DuckDB COPY creates typed Parquet fixtures and SQL goldens
-cargo xtask golden typed                         # both formats execute against the same golden gate
-mkdir -p target/load-bench
-duckdb :memory: -c "CREATE TABLE lineitem AS SELECT (5000000000+i)::BIGINT AS orderkey, (i%7+1)::INTEGER AS linenumber, ((i%1000000)::DECIMAL(18,2)/100)::DECIMAL(18,2) AS price, DATE '1992-01-01'+(i%2500)::INTEGER AS shipdate, 'lineitem-'||(i%1000)::VARCHAR AS comment FROM range(1000000) AS rows(i); COPY lineitem TO 'target/load-bench/lineitem.csv' (FORMAT CSV, HEADER false); COPY lineitem TO 'target/load-bench/lineitem.parquet' (FORMAT PARQUET, COMPRESSION SNAPPY);"
-cargo bench -p cq-workload-e2e --bench load --features parquet --locked -- target/load-bench
-```
+The matrix contains all nine planner passes; merge, canonical-prefix, smallest
+intersection and lazy-semijoin rewrites; recorded hash/ordered dedup types and a
+caller-owned sorted payload index; pull/push printers; and slice/HashMap/BTreeMap
+hosts. Four kernels use full products of 3,456 pipelines each. All 27 previous
+pairwise rows are retained and extended by a deterministic, exhaustively checked
+cover of the added axes. Unsupported ordered hosts and printer shapes are
+individually attributed compile failures. Matrix generation is a mandatory
+workspace crate so its proof work does not delay unrelated typed/extension tests.
 
-```sh
-cargo xtask bench --tpch --sf 0.1                 # TPC-H-derived; automatic release build and DuckDB oracle; exact SF 0.1 gate
-cargo xtask bench --tpch --sf 1                   # TPC-H-derived; repeats the SF 0.1 correctness gate before SF 1 measurement
-cargo xtask bench --tpch --sf 0.1 --runs 9        # one explicit warm execution, median of an odd number >= 3; never a time gate
-cat target/bench/tpch-0.1.tsv target/bench/tpch-1.tsv
-cat workloads/tpch-methodology.txt workloads/tpch/coverage.tsv
-```
+The authored inventory remains 20 primary and 29 extended MiniLinq/SQL pairs,
+including 17 extension queries, plus five typed pairs. Shared fuzz generation,
+SQL evaluation and strict golden comparison use the public cq-testkit package.
+There are 151 tracked goldens. Typed CSV and Parquet use the same goldens.
+
+Synthetic timing uses an uninstrumented release build and counting uses a
+separate release execution. TPC workers are independently compiled without/with
+instrumentation; timed runs and both untimed counting runs each require exact
+DuckDB answers. TPC query selection (`--query NAME`) creates a separately named
+report; it does not imply full-catalog coverage.
+
+Current source exposes core blockers in the generic-Fine smallest adjacency and
+Hypergraph correspondence proof. Strict growth assertions and all matrix rows
+remain mandatory. The live acceptance ledger and exact reproductions are in
+`/tmp/codex/w2/workloads.ledger.md` and `workloads.core_requests.md`; completed
+commands must be distinguished from implemented or blocked checks.

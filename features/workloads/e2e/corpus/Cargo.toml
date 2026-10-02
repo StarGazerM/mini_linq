@@ -1,0 +1,22 @@
+[package]
+name = "cq-workload-corpus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[build-dependencies]
+cq-workloads = { path = "../.." }
+
+[dev-dependencies]
+cq-workload-e2e = { path = ".." }
+cq-workloads = { path = "../.." }
+cq-testkit.workspace = true
+cq-load.workspace = true
+cq-storage.workspace = true
+mini-linq.workspace = true
+cq-planners.workspace = true
+cq-rewrites.workspace = true
+cq-workload-passes.workspace = true
+own-push.workspace = true

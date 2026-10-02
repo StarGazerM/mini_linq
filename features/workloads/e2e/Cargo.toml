@@ -25,27 +25,17 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 
-[build-dependencies]
-cq-workloads = { path = ".." }
-cq-lang-cq.workspace = true
-cq-order.workspace = true
-cq-reduce.workspace = true
-cq-elaborate.workspace = true
-cq-index-policy.workspace = true
-cq-physical-lowering.workspace = true
-cq-lang-physical.workspace = true
-cq-structure-selection.workspace = true
-cq-lang-structures.workspace = true
-syn.workspace = true
-
 [dev-dependencies]
+cq-testkit.workspace = true
 cq-load.workspace = true
-cq-ext-union = { path = "../../extensions/cq-ext-union" }
-cq-ext-negation = { path = "../../extensions/cq-ext-negation" }
-cq-ext-aggregate = { path = "../../extensions/cq-ext-aggregate" }
-cq-ext-recursion = { path = "../../extensions/cq-ext-recursion" }
-cq-ext-correlated = { path = "../../extensions/cq-ext-correlated" }
-cq-workloads = { path = ".." }
 mini-linq.workspace = true
 cq-storage.workspace = true
-cq-state-providers.workspace = true
+cq-planners.workspace = true
+cq-rewrites.workspace = true
+cq-workload-passes.workspace = true
+own-push.workspace = true
+cq-ext-union.workspace = true
+cq-ext-negation.workspace = true
+cq-ext-aggregate.workspace = true
+cq-ext-recursion.workspace = true
+cq-ext-correlated.workspace = true

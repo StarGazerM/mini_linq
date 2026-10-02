@@ -16,16 +16,21 @@ use std::time::Instant;
 struct Options {
     sf: String,
     runs: usize,
+    query: Option<String>,
 }
 impl Options {
     fn parse(arguments: Vec<String>) -> Result<Self> {
         let mut tpch = false;
         let mut sf = None;
         let mut runs = None;
+        let mut query = None;
         let mut args = arguments.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--tpch" if !tpch => tpch = true,
+                "--query" if query.is_none() => {
+                    query = Some(args.next().ok_or("--query requires a catalog query")?)
+                }
                 "--sf" if sf.is_none() => sf = Some(args.next().ok_or("--sf requires 0.1 or 1")?),
                 "--runs" if runs.is_none() => {
                     runs = Some(
@@ -49,7 +54,7 @@ impl Options {
         if runs < 3 || runs % 2 == 0 {
             return Err("--runs must be odd and at least 3".into());
         }
-        Ok(Self { sf, runs })
+        Ok(Self { sf, runs, query })
     }
 }
 
@@ -131,9 +136,27 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let database = data::dbgen(&root, &options.sf)?;
     // Compile all queries before measuring any of them. Build activity must not
     // overlap query timings or change the comparison's CPU contention.
+    if let Some(name) = &options.query {
+        if !cq_workloads::tpch::CASES
+            .iter()
+            .any(|case| case.name == name)
+        {
+            return Err(format!("unknown TPC query {name}").into());
+        }
+    }
     let queries = cq_workloads::tpch::CASES
         .iter()
-        .map(|case| describe(&root, &root.join(case.rust_path)))
+        .filter(|case| options.query.as_ref().is_none_or(|name| case.name == name))
+        .map(|case| {
+            describe(
+                &root,
+                &root.join(
+                    case.rust_path
+                        .strip_prefix("workloads/")
+                        .unwrap_or(case.rust_path),
+                ),
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     // Gate every query/configuration on SF 0.1 before any timed measurements,
     // even when this invocation requests SF 1. Use the freshly compiled workers.
@@ -162,7 +185,11 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             );
         }
     }
-    let path = bench.join(format!("tpch-{}.tsv", options.sf));
+    let suffix = options
+        .query
+        .as_ref()
+        .map_or(String::new(), |name| format!("-{name}"));
+    let path = bench.join(format!("tpch-{}{suffix}.tsv", options.sf));
     let pending = path.with_extension("tsv.partial");
     let mut table = String::from(
         "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\n",
@@ -207,6 +234,43 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 &artifact,
                 &expected,
             )?;
+            let mut measured = measured;
+            let counted = execute_worker_binary(
+                query,
+                &query.built.count_binary,
+                &directory,
+                config,
+                0,
+                &artifact.with_extension("counts"),
+                &expected,
+            )?;
+            let repeated = execute_worker_binary(
+                query,
+                &query.built.count_binary,
+                &directory,
+                config,
+                0,
+                &artifact.with_extension("counts-repeat"),
+                &expected,
+            )?;
+            if repeated != counted {
+                return Err("separate deterministic counting runs disagree".into());
+            }
+            if measured["instrumented"].as_bool() != Some(false)
+                || counted["instrumented"].as_bool() != Some(true)
+            {
+                return Err("TPC timing/counting build separation failed".into());
+            }
+            for name in [
+                "hash_computations",
+                "index_builds",
+                "lookups",
+                "cursor_steps",
+                "rows_enumerated",
+                "distinct_insertions",
+            ] {
+                measured[name] = counted[name].clone();
+            }
             let load = number(&measured, "load_ms")?;
             let median = number(&measured, "median_ms")?;
             println!(
@@ -258,14 +322,14 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         .arg("--version")
         .output()?;
     let metadata = serde_json::json!({
-        "label":"TPC-H-derived", "sf":options.sf,"runs":options.runs,"warm_runs":1,
+        "label":"TPC-H-derived", "selection":options.query, "sf":options.sf,"runs":options.runs,"warm_runs":1,
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
         "compile_method":"Cargo --release --timings per-query binary unit (both configurations); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time",
         "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop; DuckDB includes prepare/optimization and Arrow result materialization",
         "sf_0_1_gate":"all freshly compiled query/configuration workers checked before timing either scale",
         "memory_method":"Linux /proc/self/status VmHWM per configuration worker process, includes load, warmup, answers and correctness; not incremental query-only memory; NA elsewhere",
-        "counter_scope":"cq-storage counters enabled during timing (instrumentation overhead included); extension aggregate folds and uninstrumented host work are not counted; DuckDB lacks equivalent instrumentation",
+        "counter_scope":"cq-storage instrumentation disabled in timed binary; counters collected in a separately compiled binary and untimed execution; extension aggregate folds and uninstrumented host work are not counted; DuckDB lacks equivalent instrumentation",
         "cpu_model":std::fs::read_to_string("/proc/cpuinfo").ok().and_then(|text| text.lines().find_map(|line| line.strip_prefix("model name").and_then(|v|v.split_once(':').map(|(_,v)|v.trim().to_owned())))),
         "coverage":coverage,"queries":details,
     });
@@ -288,6 +352,26 @@ fn execute_worker(
     artifact: &Path,
     expected: &Answers,
 ) -> Result<Value> {
+    execute_worker_binary(
+        query,
+        &query.built.binary,
+        directory,
+        config,
+        runs,
+        artifact,
+        expected,
+    )
+}
+
+fn execute_worker_binary(
+    query: &Query,
+    binary: &Path,
+    directory: &Path,
+    config: &str,
+    runs: usize,
+    artifact: &Path,
+    expected: &Answers,
+) -> Result<Value> {
     std::fs::create_dir_all(artifact)?;
     let answers = artifact.join("answers.json");
     let metrics = artifact.join("metrics.json");
@@ -298,7 +382,7 @@ fn execute_worker(
             &serde_json::json!({"rows":expected.rows,"decimal_columns":expected.decimal_columns}),
         )?,
     )?;
-    let status = std::process::Command::new(&query.built.binary)
+    let status = std::process::Command::new(binary)
         .arg(directory)
         .arg(config)
         .arg(runs.to_string())
@@ -397,7 +481,8 @@ mod tests {
             parse(&["--tpch", "--sf", "0.1"]).unwrap(),
             Options {
                 sf: "0.1".into(),
-                runs: 5
+                runs: 5,
+                query: None,
             }
         );
         for args in [

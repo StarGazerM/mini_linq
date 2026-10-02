@@ -10,7 +10,7 @@ use cq_workloads::{Scenario, extended::CASES};
 fn authored_callbacks_schemas_and_sql_cover_all_families() {
     let mut counts = BTreeMap::new();
     let mut names = BTreeSet::new();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for case in CASES {
         assert!(names.insert(case.name));
         *counts.entry(case.family).or_insert(0) += 1;
@@ -39,11 +39,8 @@ fn authored_callbacks_schemas_and_sql_cover_all_families() {
         assert!(!case.schema().unwrap().is_empty());
         assert_eq!(
             case.sql,
-            fs::read_to_string(
-                root.join("workloads/sql/extended")
-                    .join(format!("{}.sql", case.name))
-            )
-            .unwrap()
+            fs::read_to_string(root.join("sql/extended").join(format!("{}.sql", case.name)))
+                .unwrap()
         );
         let operator = match case.family {
             "surface" => "SELECT DISTINCT",

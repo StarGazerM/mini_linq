@@ -52,6 +52,54 @@ fn remove_package_identity(
     }
 }
 
+/// Resolve generated consumers against the same public packages as this workspace.
+/// Local core dependencies keep version + path; packaged core remains registry-only.
+#[cfg(feature = "oracle")]
+pub(super) fn dependencies(names: &[&str]) -> crate::Result<String> {
+    static PACKAGES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    if PACKAGES.get().is_none() {
+        let output = command()
+            .args([
+                "metadata",
+                "--offline",
+                "--locked",
+                "--format-version=1",
+                "--manifest-path",
+            ])
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../Cargo.toml"))
+            .output()?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
+        }
+        let _ = PACKAGES.set(serde_json::from_slice(&output.stdout)?);
+    }
+    let packages = PACKAGES.get().expect("resolved packages")["packages"]
+        .as_array()
+        .ok_or("invalid cargo metadata")?;
+    let mut manifest = String::new();
+    for name in names {
+        let package = packages
+            .iter()
+            .find(|p| p["name"].as_str() == Some(name))
+            .ok_or_else(|| format!("missing dependency {name}"))?;
+        let version = package["version"].as_str().ok_or("missing version")?;
+        let path = if package["source"].is_null() {
+            let path = std::path::Path::new(
+                package["manifest_path"]
+                    .as_str()
+                    .ok_or("missing manifest")?,
+            )
+            .parent()
+            .ok_or("manifest parent")?;
+            format!(", path = {:?}", path)
+        } else {
+            String::new()
+        };
+        manifest.push_str(&format!("{name} = {{ version = \"={version}\"{path} }}\n"));
+    }
+    Ok(manifest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

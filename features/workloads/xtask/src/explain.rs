@@ -20,21 +20,31 @@ enum Stage {
     Cq,
     RelationalPlan,
     IndexRequirements,
+    Physical,
+    Structures,
+    Rust,
 }
 
 impl Stage {
-    const ALL: [Self; 3] = [Self::Cq, Self::RelationalPlan, Self::IndexRequirements];
+    const ALL: [Self; 6] = [
+        Self::Cq,
+        Self::RelationalPlan,
+        Self::IndexRequirements,
+        Self::Physical,
+        Self::Structures,
+        Self::Rust,
+    ];
 
     fn parse(value: &str) -> Result<Self> {
         match value {
             "cq" => Ok(Self::Cq),
             "relational-plan" => Ok(Self::RelationalPlan),
             "index-requirements" => Ok(Self::IndexRequirements),
-            "physical" | "final-rust" => Err(
-                "explain stops at IX: workload-wide physical provider assignments and the new host input/output contract are not specified; the retired whole-query backend cannot be used".into()
-            ),
+            "physical" => Ok(Self::Physical),
+            "structures" => Ok(Self::Structures),
+            "final-rust" => Ok(Self::Rust),
             _ => Err(format!(
-                "unknown explain stage `{value}`; expected cq, relational-plan, or index-requirements"
+                "unknown explain stage `{value}`; expected cq, relational-plan, index-requirements, physical, structures, or final-rust"
             )
             .into()),
         }
@@ -45,6 +55,9 @@ impl Stage {
             Self::Cq => "cq",
             Self::RelationalPlan => "relational-plan",
             Self::IndexRequirements => "index-requirements",
+            Self::Physical => "physical",
+            Self::Structures => "structures",
+            Self::Rust => "final-rust",
         }
     }
 
@@ -53,6 +66,9 @@ impl Stage {
             Self::Cq => "01-cq.tokens",
             Self::RelationalPlan => "02-relational-plan.tokens",
             Self::IndexRequirements => "03-index-requirements.tokens",
+            Self::Physical => "04-physical.tokens",
+            Self::Structures => "05-structures.tokens",
+            Self::Rust => "06-final-rust.tokens",
         }
     }
 
@@ -61,6 +77,9 @@ impl Stage {
             Self::Cq => "the complete source conjunctive query",
             Self::RelationalPlan => "the complete named logical relational-algebra plan",
             Self::IndexRequirements => "the logical plan plus named index demands",
+            Self::Physical => "recorded execution decisions",
+            Self::Structures => "recorded runtime representations and boundaries",
+            Self::Rust => "Rust realization of the recorded Structures program",
         }
     }
 }
@@ -101,7 +120,7 @@ impl Options {
 
         Ok(Self {
             case: case.ok_or("`cargo xtask explain` requires a catalog case name")?,
-            through: through.unwrap_or(Stage::IndexRequirements),
+            through: through.unwrap_or(Stage::Structures),
         })
     }
 }
@@ -142,6 +161,32 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
         Stage::IndexRequirements,
         &render_index_requirements(&indexes),
     )?;
+    if through == Stage::IndexRequirements {
+        return artifacts.finish(through);
+    }
+    let physical =
+        artifacts.attempt("IX -> Physical", || cq_physical_lowering::compile(&indexes))?;
+    artifacts.write_stage(
+        Stage::Physical,
+        &format!("{}\n", physical.to_token_stream()),
+    )?;
+    if through == Stage::Physical {
+        return artifacts.finish(through);
+    }
+    let structures = artifacts.attempt("Physical -> Structures", || {
+        cq_structure_selection::compile(&physical)
+    })?;
+    artifacts.write_stage(
+        Stage::Structures,
+        &format!("{}\n", structures.to_token_stream()),
+    )?;
+    if through == Stage::Structures {
+        return artifacts.finish(through);
+    }
+    let rust = artifacts.attempt("Structures -> Rust", || {
+        cq_physical_realization::compile(&structures)
+    })?;
+    artifacts.write_stage(Stage::Rust, &format!("{}\n", rust.to_token_stream()))?;
     artifacts.finish(through)
 }
 
@@ -307,9 +352,7 @@ fn panic_diagnostic(payload: &(dyn std::any::Any + Send)) -> String {
 /// CQ → RA in written order: normalize, schedule the clauses as written, one
 /// full subatom per atom, elaborate to named RA.
 fn compile_cq(source: &cq::Program) -> syn::Result<ra::Program> {
-    let normal = cq::normal::normalize(source)?;
-    let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
-    cq_elaborate::compile(&plan)
+    cq_planners_plan::compile(source, cq_planners_plan::Planner::WrittenCoarse)
 }
 
 fn render_cq(source: &cq::Program) -> String {

@@ -6,16 +6,18 @@
 //! the catalog build. Executable provider compositions are separate examples.
 
 pub mod adversarial;
+pub mod pipelines;
+mod sorted_index;
+pub use sorted_index::SortedIndex;
 pub mod catalog;
-#[cfg(feature = "counters")]
 pub mod costs;
 pub mod dataset;
 pub mod execution;
 pub mod extended;
-#[cfg(feature = "counters")]
 pub mod extended_costs;
 pub mod generate;
 mod loading;
+pub mod measurement;
 pub mod queries;
 pub mod sql;
 pub mod tpch;

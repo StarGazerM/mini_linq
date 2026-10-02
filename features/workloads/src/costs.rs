@@ -1,67 +1,46 @@
 //! One execution path shared by the gated growth tests and xtask bench.
 //! All answers are checked against independent ordered-set relational oracles.
 use crate::adversarial::{self, Edge, Join};
-use cq_storage::counters::{self, Snapshot};
+use crate::measurement::{self as counters, Snapshot};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 type Answers = BTreeSet<Vec<i32>>;
 
-macro_rules! distinct_state {
-    (operator $op:ident; new) => {
-        ::cq_storage::counters::DistinctSet::new()
-    };
-    (operator $op:ident; insert($state:expr, $row:expr)) => {
-        $state.insert(::core::clone::Clone::clone($row))
-    };
-}
-macro_rules! index_provider {
-    (probe) => { ::cq_storage::HashIndex<'_, _, _> };
-    (semi) => { ::cq_storage::counters::HashSet<_> };
-    (ordered) => { ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> };
-    (trie $inner:ty) => { ::cq_storage::Trie<'_, _, $inner> };
-}
-pub(crate) use {distinct_state, index_provider};
-
-// The dollar token keeps the inner policy macro's metavariables independent.
+// The selected passes write Physical and Structures decisions before printing.
 macro_rules! configuration {
-    ($module:ident, $d:tt, { $($policy:tt)* }, { $($functions:tt)* }) => {
+    ($module:ident, { $($functions:tt)* }) => {
         mod $module {
             use super::{Answers, Edge};
-            macro_rules! policy {
-                ($d($d tokens:tt)*) => {
-                    ::mini_linq::lower_physical! { $d($d tokens)* policy { $($policy)* } }
-                };
-            }
-            pub(crate) use policy as physical_policy;
-            mod wiring {
-                pub(crate) use super::physical_policy;
-                pub(crate) use super::super::{distinct_state, index_provider};
-                pub(crate) use ::mini_linq::{index_demands as choose_index_policy, select_structures, structures_to_rust};
-            }
-            use wiring as mini_linq;
             $($functions)*
         }
     };
 }
 
-configuration!(keep, $, {}, {
+configuration!(keep, {
     pub(super) fn triangle(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
-        ::mini_linq::cq_to_ra! {
+        ::mini_linq::compile! {
+            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Triangle;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(a:i32,c:i32);
             answer(a,b,c) :- r(a,b),s(b,c),t(a,c);
-        }.map(|(a,b,c)| vec![*a,*b,*c]).collect()
+        }
+        .map(|(a, b, c)| vec![*a, *b, *c])
+        .collect()
     }
     pub(super) fn chain(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
-        ::mini_linq::cq_to_ra! {
+        ::mini_linq::compile! {
+            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Chain;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(c:i32,d:i32);
             answer(a,b,c,d) :- r(a,b),s(b,c),t(c,d);
-        }.map(|(a,b,c,d)| vec![*a,*b,*c,*d]).collect()
+        }
+        .map(|(a, b, c, d)| vec![*a, *b, *c, *d])
+        .collect()
     }
     pub(super) fn projection(r: &[Edge], s: &[Edge]) -> Answers {
-        ::mini_linq::index_demands! {
+        ::mini_linq::passes::index_demands! {
+            pipeline { mini_linq::passes::lower, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::print_pull };
             relational {
                 relation r(a:i32,dropped:i32); relation s(a:i32,b:i32);
                 r0 = rename r { a -> a, dropped -> dropped };
@@ -74,65 +53,94 @@ configuration!(keep, $, {}, {
         }.map(|(b,)| vec![*b]).collect()
     }
     pub(super) fn range_slice(r: &[Edge]) -> Answers {
-        ::mini_linq::cq_to_ra! {
+        ::mini_linq::compile! {
+            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Range;
             relation r(a:i32,b:i32);
             answer(a,b) :- r(a,b), if * a >= 2, if * a < 6;
-        }.map(|(a,b)| vec![*a,*b]).collect()
+        }
+        .map(|(a, b)| vec![*a, *b])
+        .collect()
     }
-    pub(super) fn range_map(r: &std::collections::BTreeMap<(i32,),Vec<(i32,)>>) -> Answers {
-        ::mini_linq::cq_to_ra! {
+    pub(super) fn range_map(r: &std::collections::BTreeMap<(i32,), Vec<(i32,)>>) -> Answers {
+        ::mini_linq::compile! {
+            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Range;
             relation r(a:i32,b:i32);
             answer(a,b) :- r(a,b), if * a >= 2, if * a < 6;
-        }.map(|(a,b)| vec![*a,*b]).collect()
+        }
+        .map(|(a, b)| vec![*a, *b])
+        .collect()
     }
     pub(super) fn probe_slice(l: &[(i32,)], r: &[Edge]) -> Answers {
-        ::mini_linq::cq_to_ra! {
+        ::mini_linq::compile! {
+            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Probe;
             relation l(a:i32); relation r(a:i32,b:i32);
             answer(a,b) :- l(a),r(a,b);
-        }.map(|(a,b)| vec![*a,*b]).collect()
+        }
+        .map(|(a, b)| vec![*a, *b])
+        .collect()
     }
-    pub(super) fn probe_map(l: &[(i32,)], r: &cq_storage::counters::HashMap<(i32,),Vec<(i32,)>>) -> Answers {
-        ::mini_linq::cq_to_ra! {
+    pub(super) fn probe_map(
+        l: &[(i32,)],
+        r: &crate::measurement::HashMap<(i32,), Vec<(i32,)>>,
+    ) -> Answers {
+        ::mini_linq::compile! {
+            pipeline { structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Probe;
             relation l(a:i32); relation r(a:i32,b:i32);
             answer(a,b) :- l(a),r(a,b);
-        }.map(|(a,b)| vec![*a,*b]).collect()
+        }
+        .map(|(a, b)| vec![*a, *b])
+        .collect()
     }
-    pub(super) fn disconnected(r: &[Edge], s: &[(i32,)], t: &[(i32,i32,i32)]) -> (Answers,usize) {
+    pub(super) fn disconnected(
+        r: &[Edge],
+        s: &[(i32,)],
+        t: &[(i32, i32, i32)],
+    ) -> (Answers, usize) {
         let visits = std::cell::Cell::new(0);
-        let observe = |_: &i32, _: &i32| { visits.set(visits.get()+1); true };
-        let answers = ::mini_linq::cq_to_ra_generic! {
+        let observe = |_: &i32, _: &i32| {
+            visits.set(visits.get() + 1);
+            true
+        };
+        let answers = ::mini_linq::compile! {
+            pipeline { plan = cq_planners::order(prefix connected, fine); structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Disconnected;
             relation r(b:i32,a:i32); relation s(c:i32); relation t(b:i32,c:i32,k:i32);
             answer(k) :- r(b,a),s(c),t(b,c,k),if observe(b,c);
         }.map(|(k,)| vec![*k]).collect();
-        (answers,visits.get())
+        (answers, visits.get())
     }
-    pub(super) fn elimination(r: &[Edge], s: &[(i32,)], t: &[(i32,i32,i32)]) -> (Answers,usize) {
+    pub(super) fn elimination(r: &[Edge], s: &[(i32,)], t: &[(i32, i32, i32)]) -> (Answers, usize) {
         let visits = std::cell::Cell::new(0);
-        let observe = |_: &i32, _: &i32| { visits.set(visits.get()+1); true };
-        let answers = ::mini_linq::cq_to_ra_elimination_fine! {
+        let observe = |_: &i32, _: &i32| {
+            visits.set(visits.get() + 1);
+            true
+        };
+        let answers = ::mini_linq::compile! {
+            pipeline { plan = cq_planners::order(elimination, fine); structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Disconnected;
             relation r(b:i32,a:i32); relation s(c:i32); relation t(b:i32,c:i32,k:i32);
             answer(k) :- r(b,a),s(c),t(b,c,k),if observe(b,c);
         }.map(|(k,)| vec![*k]).collect();
-        (answers,visits.get())
+        (answers, visits.get())
     }
 });
 
-configuration!(canon, $, { project = canon; }, {
+configuration!(canon, {
     pub(super) fn triangle(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
-        ::mini_linq::cq_to_ra_generic! {
+        ::mini_linq::compile! {
+            pipeline { plan = cq_planners::order(written, fine); physical = [cq_rewrites::canon_prefixes]; structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Triangle;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(a:i32,c:i32);
             answer(a,b,c) :- r(a,b),s(b,c),t(a,c);
         }.map(|(a,b,c)| vec![*a,*b,*c]).collect()
     }
     pub(super) fn projection(r: &[Edge], s: &[Edge]) -> Answers {
-        ::mini_linq::index_demands! {
+        ::mini_linq::passes::index_demands! {
+            pipeline { mini_linq::passes::lower, cq_rewrites::canon_prefixes, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::print_pull };
             relational {
                 relation r(a:i32,dropped:i32); relation s(a:i32,b:i32);
                 r0 = rename r { a -> a, dropped -> dropped };
@@ -146,9 +154,10 @@ configuration!(canon, $, { project = canon; }, {
     }
 });
 
-configuration!(smallest, $, { project = canon; intersect = smallest; }, {
+configuration!(smallest, {
     pub(super) fn triangle(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
-        ::mini_linq::cq_to_ra_generic! {
+        ::mini_linq::compile! {
+            pipeline { plan = cq_planners::order(written, fine); physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections]; structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Triangle;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(a:i32,c:i32);
             answer(a,b,c) :- r(a,b),s(b,c),t(a,c);
@@ -156,9 +165,10 @@ configuration!(smallest, $, { project = canon; intersect = smallest; }, {
     }
 });
 
-configuration!(reduced, $, {}, {
+configuration!(reduced, {
     pub(super) fn chain(r: &[Edge], s: &[Edge], t: &[Edge]) -> Answers {
-        ::mini_linq::cq_to_ra_hypergraph! {
+        ::mini_linq::compile! {
+            pipeline { plan = cq_planners::order(hypergraph); structures = [cq_rewrites::retype(dedup => crate::measurement::Dedup<_>)]; }
             struct Chain;
             relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(c:i32,d:i32);
             answer(a,b,c,d) :- r(a,b),s(b,c),t(c,d);
@@ -340,10 +350,24 @@ pub fn run(scale: usize, seed: u64) -> Vec<Observation> {
 /// or 1/2). Both Fine orders enumerate the disconnected query linearly;
 /// their guards still run after every written relational prerequisite.
 pub fn assert_growth(runs: &[Vec<Observation>]) {
+    assert_growth_where(runs, |_| true);
+}
+
+/// Check the independent remaining predictions while the generated fan is blocked.
+/// The complete suite above still requires every original fan assertion.
+pub fn assert_non_fan_growth(runs: &[Vec<Observation>]) {
+    assert_growth_where(runs, |observation| observation.query != "triangle");
+}
+
+fn assert_growth_where(runs: &[Vec<Observation>], include: impl Fn(&Observation) -> bool) {
     assert_eq!(runs.len(), 3);
     assert!(runs.iter().all(|observations| observations.len() == 13));
     for pair in runs.windows(2) {
-        for (small, large) in pair[0].iter().zip(&pair[1]) {
+        for (small, large) in pair[0]
+            .iter()
+            .zip(&pair[1])
+            .filter(|(small, _)| include(small))
+        {
             assert_eq!((small.query, small.config), (large.query, large.config));
             assert_eq!(large.scale, small.scale * 2);
             let (numerator, denominator, winner) = match (small.query, small.config) {
@@ -396,8 +420,13 @@ pub fn assert_growth(runs: &[Vec<Observation>]) {
 
 pub fn table(observations: &[Observation]) -> String {
     use std::fmt::Write;
-    let mut output = String::from(
-        "query\tconfig\tscale\thashes\tbuilds\tlookups\tcursor_steps\trows\tdistinct_insertions\tguard_visits\twall_ms\n",
+    let mut output = format!(
+        "query\tconfig\tscale\thashes\tbuilds\tlookups\tcursor_steps\trows\tdistinct_insertions\tguard_visits\t{}\n",
+        if counters::INSTRUMENTED {
+            "count_run_ms"
+        } else {
+            "timing_ms"
+        },
     );
     for o in observations {
         let c = o.counts;

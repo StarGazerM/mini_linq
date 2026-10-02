@@ -22,6 +22,8 @@ struct Request {
     host: Ident,
     distinct: Ident,
     indexes: Ident,
+    lazy: Ident,
+    printer: Ident,
     case: LitStr,
     tokens: Tokens,
 }
@@ -38,6 +40,8 @@ impl Parse for Request {
             host: header.parse()?,
             distinct: header.parse()?,
             indexes: header.parse()?,
+            lazy: header.parse()?,
+            printer: header.parse()?,
             case: {
                 header.parse::<Token![;]>()?;
                 header.parse()?
@@ -89,15 +93,11 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
         host,
         distinct,
         indexes,
+        lazy,
+        printer,
         case,
         tokens,
     } = request;
-    // The policy's authored name for a probe join is `seek`.
-    let join = if join == "probe" {
-        syn::parse_quote!(seek)
-    } else {
-        join
-    };
     let query: cq_lang_cq::Program = syn::parse2(tokens.clone())?;
     let mut setup = Vec::new();
     let mut validation = Vec::new();
@@ -132,49 +132,41 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
         };
         setup.push(quote!(let #storage = #init; let #name = #view;));
     }
-    let provider = match indexes.to_string().as_str() {
-        "default" => quote! {
-            pub(super) use cq_state_providers::default_indexes as index_provider;
-        },
-        "custom" => quote! {
-            #[allow(unused_macros)]
-            macro_rules! custom_indexes {
-                (probe) => { crate::support::SortedIndex<_, _> };
-                ($($rest:tt)*) => { cq_state_providers::default_indexes!($($rest)*) };
-            }
-            pub(super) use custom_indexes as index_provider;
-        },
-        _ => return Err(syn::Error::new_spanned(indexes, "unknown index provider")),
+    let plan = cq_workloads::pipelines::Planner::ALL
+        .iter()
+        .position(|p| planner == p.name())
+        .ok_or_else(|| syn::Error::new_spanned(planner, "unknown planner pass"))?;
+    let selected = cq_workloads::pipelines::Pipeline {
+        plan,
+        merge: join == "merge",
+        canon: project == "canon",
+        smallest: intersect == "smallest",
+        ordered_dedup: distinct == "ordered_dedup",
+        sorted_payload: indexes == "sorted",
+        lazy: lazy == "lazy",
+        push: printer == "push",
     };
+    let configuration = selected.configuration(&query)?;
     let fields: Vec<_> = (0..query.query.head.args.len())
         .map(syn::Index::from)
         .collect();
-    let compare = matches!(mode, Mode::Push).then(|| quote! {
-        let pushed = {
-            mod push_wiring {
-                pub(super) use super::mini_linq::{choose_index_policy, physical_policy, select_structures, index_provider};
-                pub(super) use own_push::{push as structures_to_rust, set_sink as distinct_state};
-            }
-            use push_wiring as mini_linq;
-            ::mini_linq::#planner! { #tokens }.map(|row| vec![#(*row.#fields),*]).collect()
-        };
-        cq_workloads::execution::check(#case, scenario, pushed);
-    });
+    let compare = if matches!(mode, Mode::Push) {
+        let pushed_configuration = cq_workloads::pipelines::Pipeline {
+            push: true,
+            ..selected
+        }
+        .configuration(&query)?;
+        Some(quote! {
+            let pushed = ::mini_linq::compile! { #pushed_configuration #tokens }
+                .map(|row| vec![#(*row.#fields),*]).collect();
+            cq_workloads::execution::check(#case, scenario, pushed);
+        })
+    } else {
+        None
+    };
     let test = (!matches!(mode, Mode::Compile)).then(|| quote!(#[test]));
     Ok(quote! {
         mod loaders { ::mini_linq::relation_loaders! { #tokens } }
-        macro_rules! strategy {
-            ($($ix:tt)*) => { ::mini_linq::lower_physical! {
-                $($ix)* policy { join = #join; project = #project; intersect = #intersect; }
-            } };
-        }
-        use strategy as physical_policy;
-        mod mini_linq {
-            pub(super) use super::physical_policy;
-            pub(super) use ::mini_linq::{index_demands as choose_index_policy, select_structures, structures_to_rust};
-            pub(super) use cq_state_providers::#distinct as distinct_state;
-            #provider
-        }
         #test
         #[allow(non_snake_case)]
         pub fn corpus() {
@@ -187,7 +179,7 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
                     &directory,
                     vec![#(#validation,)*],
                 ).unwrap();
-                let answers = ::mini_linq::#planner! { #tokens }
+                let answers = ::mini_linq::compile! { #configuration #tokens }
                     .map(|row| vec![#(*row.#fields),*]).collect();
                 cq_workloads::execution::check(#case, scenario, answers);
                 #compare

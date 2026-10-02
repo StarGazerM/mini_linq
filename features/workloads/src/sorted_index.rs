@@ -1,5 +1,4 @@
 //! A caller-owned built index, shared by the generated tests and UI consumers.
-#![allow(dead_code)]
 
 pub struct SortedIndex<K, V>(Vec<(K, Vec<V>)>);
 
