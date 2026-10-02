@@ -1,0 +1,18 @@
+[package]
+name = "cq-planners-plan"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+license = "MIT OR Apache-2.0"
+description = "Public API implementation of external MiniLinq planners"
+
+[dependencies]
+cq-lang-cq.workspace = true
+cq-lang-vo.workspace = true
+cq-lang-ra.workspace = true
+cq-order.workspace = true
+cq-reduce.workspace = true
+cq-elaborate.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true

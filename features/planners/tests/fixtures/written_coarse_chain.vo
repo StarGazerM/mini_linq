@@ -1,0 +1,1 @@
+struct OrientedChain ; relation Edge (src : i32 , dst : i32) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ; valuation { Edge @ 0 (a , b) ; Edge @ 1 (b , c) ; Edge @ 2 (d , c) ; }
