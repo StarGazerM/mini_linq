@@ -14,7 +14,13 @@
 //! are rejected. This finite active domain, immutable hosts and pure expressions
 //! are the fixpoint premises. Optional `observe=(|round, delta_len| ...);` before
 //! the CQ header observes nonempty rounds. Distinctness across seeds and rounds
-//! uses the caller's distinct state, while delta is a canonical `Answers` host.
+//! uses a concrete HashSet, while delta is a canonical `Answers` host.
+//! Select `pipeline { surface = [cq_ext_recursion::recursion]; }` and wrap this
+//! surface in `recursion! { ... }` inside `mini_linq::compile!`. Seed and delta
+//! queries each resume the caller's remaining queue. Unowned quotations are
+//! forwarded unchanged. Leibniz equality and faithful Clone on owned results are
+//! required; observer effects and evaluation counts are outside the denotation.
+//! Every opaque Rust chain within a rule retains its written order.
 //!
 //! Each crate's `expansion::check(source, context)` is an independently callable
 //! internal structural relation exercised by its unit tests. It checks rule/hole
@@ -27,8 +33,14 @@ mod expansion;
 
 #[proc_macro]
 pub fn recursion(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    cq_stage::stage(input.into(), None, |source: &expansion::Source| {
-        expansion::compile(source).map(|plan| expansion::render(&plan))
+    cq_ext_support::surface(input.into(), |tokens, pipeline| {
+        let Some(tokens) = cq_ext_support::quotation(tokens, "recursion")? else {
+            return Ok(None);
+        };
+        let source = syn::parse2(tokens)?;
+        let plan = expansion::compile(&source)?;
+        expansion::check(&source, &plan)?;
+        expansion::render(&plan, pipeline).map(Some)
     })
     .into()
 }

@@ -6,7 +6,7 @@ use cq_ext_support::{
 use cq_lang_cq::{BodyItem, Program};
 use cq_syntax::{Atom, RelationDecl, rust, symbol_name};
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::{Ident, Token, parse::Parse};
 
 mod kw {
@@ -40,14 +40,14 @@ impl Parse for Negative {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Anti {
     pub position: usize,
     pub binding: Ident,
     pub keys: Vec<Ident>,
     pub hole: Program,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Context {
     pub main: Program,
     pub leaves: Vec<Leaf>,
@@ -184,7 +184,6 @@ pub fn compile(source: &Program) -> syn::Result<Context> {
 
 /// Erase each membership guard back to its source clause and verify the
 /// projected negative atoms, wildcard binding, leaf sharing, and dependency DAG.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn check(source: &Program, target: &Context) -> syn::Result<()> {
     let clauses = clauses(source)?;
     check_fresh(
@@ -303,26 +302,49 @@ pub fn check(source: &Program, target: &Context) -> syn::Result<()> {
     )
 }
 
-pub fn render(context: &Context) -> TokenStream {
+pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<TokenStream> {
     let leaves = &context.leaves;
     let initializations = context.negatives.iter().map(|anti| {
         let Anti { binding, hole, keys, .. } = anti;
-        if keys.is_empty() { quote!(let #binding = ::cq_storage::GroupedAnswers::collect_from(mini_linq::negation_hole! { #hole }.map(|(_unit,)| ((), ())));) }
-        else { quote!(let #binding = ::cq_storage::GroupedAnswers::collect_from(mini_linq::negation_hole! { #hole }.map(|row| (row, ())));) }
-    });
+        let invocation = pipeline.clone().start(hole.to_token_stream())?;
+        Ok(if keys.is_empty() { quote!(let #binding = ::cq_storage::GroupedAnswers::collect_from(#invocation.map(|(_unit,)| ((), ())));) }
+        else { quote!(let #binding = ::cq_storage::GroupedAnswers::collect_from(#invocation.map(|row| (row, ())));) })
+    }).collect::<syn::Result<Vec<_>>>()?;
     let main = &context.main;
     let answers = distinct(
-        quote!(mini_linq::negation_hole! { #main }),
+        pipeline.clone().start(main.to_token_stream())?,
         &mut Fresh::new(main),
         "negative_answers",
     );
     // A surface extension may itself own leaves; close their lifetimes here.
-    quote!({ #(#leaves)* #(#initializations)* #answers.collect::<::std::vec::Vec<_>>().into_iter() })
+    Ok(
+        quote!({ #(#leaves)* #(#initializations)* #answers.collect::<::std::vec::Vec<_>>().into_iter() }),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn testkit_checks_negative_correspondence() {
+        cq_testkit::PassCase {
+            source: syn::parse_quote! {
+                struct N; relation A(x:i32); relation S(x:i32,y:i32);
+                answer(x) :- A(x), neg!{S(x,_)};
+            },
+            expected_next: None,
+            compile: Box::new(compile),
+            check: Box::new(check),
+            mutations: vec![Box::new(|context: &Context| {
+                let mut changed = context.clone();
+                changed.negatives[0].keys.clear();
+                changed
+            })],
+            answers: None,
+        }
+        .run(None)
+        .unwrap();
+    }
     #[test]
     fn aliasing_negative_hosts_is_rejected_even_when_both_guards_match() {
         let source: Program = syn::parse_quote! {

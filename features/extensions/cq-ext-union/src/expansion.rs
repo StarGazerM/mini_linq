@@ -5,7 +5,7 @@ use cq_lang_cq::Program;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Context {
     pub holes: Vec<Program>,
     pub leaves: Vec<Leaf>,
@@ -52,7 +52,6 @@ pub fn compile(source: &Rules) -> syn::Result<Context> {
 
 /// Rule bijection, unchanged heads/bodies/schema, and one shared distinct sink.
 /// Core validity is checked after caller-selected surface expansion, not here.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn check(source: &Rules, target: &Context) -> syn::Result<()> {
     domain(source)?;
     check_fresh(source, target.leaves.iter().map(|leaf| &leaf.binding))?;
@@ -77,7 +76,7 @@ pub fn check(source: &Rules, target: &Context) -> syn::Result<()> {
     Ok(())
 }
 
-pub fn render(context: &Context) -> TokenStream {
+pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<TokenStream> {
     let mut fresh = Fresh::new(
         context
             .holes
@@ -88,10 +87,11 @@ pub fn render(context: &Context) -> TokenStream {
     let leaves = &context.leaves;
     let mut holes = context.holes.iter();
     let first = holes.next().expect("a parsed union has a rule");
-    let mut stream =
-        quote!(::core::iter::once_with(|| mini_linq::union_hole! { #first }).flatten());
+    let first = pipeline.clone().start(first.to_token_stream())?;
+    let mut stream = quote!(::core::iter::once_with(|| #first).flatten());
     for hole in holes {
-        stream = quote!(#stream.chain(::core::iter::once_with(|| mini_linq::union_hole! { #hole }).flatten()));
+        let invocation = pipeline.clone().start(hole.to_token_stream())?;
+        stream = quote!(#stream.chain(::core::iter::once_with(|| #invocation).flatten()));
     }
     let filtered = distinct(stream, &mut fresh, "union_seen");
     let result = if leaves.is_empty() {
@@ -100,10 +100,10 @@ pub fn render(context: &Context) -> TokenStream {
         // Local owned leaves cannot be borrowed by an escaping lazy closure.
         quote!(#filtered.collect::<::std::vec::Vec<_>>().into_iter())
     };
-    quote!({
+    Ok(quote!({
         #(#leaves)*
         #result
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -114,6 +114,23 @@ mod tests {
             struct U; relation A(x:i32) = (make()); relation B(x:i32);
             answer(x) :- A(x), arbitrary!{opaque tokens}; answer(x) :- B(x);
         }
+    }
+    #[test]
+    fn testkit_checks_disjunct_correspondence() {
+        cq_testkit::PassCase {
+            source: source(),
+            expected_next: None,
+            compile: Box::new(compile),
+            check: Box::new(check),
+            mutations: vec![Box::new(|context: &Context| {
+                let mut changed = context.clone();
+                changed.holes.pop();
+                changed
+            })],
+            answers: None,
+        }
+        .run(None)
+        .unwrap();
     }
     #[test]
     fn correspondence_accepts_passthrough_and_rejects_four_mutations() {
