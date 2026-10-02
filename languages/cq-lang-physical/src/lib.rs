@@ -782,71 +782,51 @@ fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn
         .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
 }
 
-/// Erase physical choices to the relational program they implement.
-pub fn erase(target: &Program) -> cq_lang_ra::Program {
-    use cq_lang_ra as ra;
-    use ra::Operator as Op;
-    ra::Program {
-        relational_token: Default::default(),
-        relational_brace: Default::default(),
-        plan: ra::Plan {
-            declarations: target.program.declarations.clone(),
-            definitions: target
-                .program
-                .definitions
-                .iter()
-                .map(|d| ra::Definition {
-                    result: d.name.clone(),
-                    eq_token: d.eq_token,
-                    semi_token: d.semi_token,
-                    operator: match &d.operator {
-                        Operator::Unit(u) => Op::Unit(u.clone()),
-                        Operator::Rename(r) => Op::Rename(r.clone()),
-                        Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
-                            Op::Select(s.clone())
-                        }
-                        Operator::Bind(b) => Op::Bind(b.clone()),
-                        Operator::Guard(g) => Op::Guard(g.clone()),
-                        Operator::Project(p) => Op::Project(p.clone()),
-                        Operator::Probe(_, k) | Operator::Merge(_, k) => {
-                            Op::NaturalJoin(Box::new(ra::NaturalJoin {
-                                natural_join_token: Default::default(),
-                                left: k.left.clone(),
-                                with_token: Default::default(),
-                                right: k.right.clone(),
-                            }))
-                        }
-                        Operator::Semi(_, k) => Op::Semijoin(Box::new(ra::Semijoin {
-                            semijoin_token: Default::default(),
-                            left: k.left.clone(),
-                            with_token: Default::default(),
-                            right: k.right.clone(),
-                        })),
-                    },
-                })
-                .collect(),
-            output: ra::Output {
-                output_token: Default::default(),
-                input: target.program.returned.clone(),
-                as_token: target.program.as_token,
-                head: target.program.head.clone(),
-                semi_token: target.program.return_semi,
-            },
-        },
-    }
-}
-
-/// Physical rewrites preserve RA′ erasure and every recorded read's supply.
+/// Physical rewrites preserve logical definitions and satisfy their read contracts.
+/// Operator choices, retention modes and canonicalization may change while
+/// declarations, operands, relational predicates and Rust payloads remain fixed.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    if erase(source) != erase(target) {
+    if source.program.declarations != target.program.declarations
+        || source.program.head != target.program.head
+        || source.program.returned != target.program.returned
+        || source.program.definitions.len() != target.program.definitions.len()
+        || source
+            .program
+            .definitions
+            .iter()
+            .zip(&target.program.definitions)
+            .any(|(s, t)| s.name != t.name || !same_logical_operator(&s.operator, &t.operator))
+    {
         return Err(syn::Error::new_spanned(
             &target.program.returned,
             "Physical rewrite changes RA erasure",
         ));
     }
     Ok(())
+}
+
+// Compare the logical content directly, without importing another language.
+// Probe/merge implement the same join; point/range retain the same selection.
+fn same_logical_operator(source: &Operator, target: &Operator) -> bool {
+    match (source, target) {
+        (Operator::Unit(s), Operator::Unit(t)) => s == t,
+        (Operator::Rename(s), Operator::Rename(t)) => s == t,
+        (
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s),
+            Operator::Select(t) | Operator::Point(_, t) | Operator::Range(_, t),
+        ) => s == t,
+        (Operator::Bind(s), Operator::Bind(t)) => s == t,
+        (Operator::Guard(s), Operator::Guard(t)) => s == t,
+        (Operator::Project(s), Operator::Project(t)) => s == t,
+        (
+            Operator::Probe(_, s) | Operator::Merge(_, s),
+            Operator::Probe(_, t) | Operator::Merge(_, t),
+        )
+        | (Operator::Semi(_, s), Operator::Semi(_, t)) => s.left == t.left && s.right == t.right,
+        _ => false,
+    }
 }
 
 impl cq_stage::Language for Program {

@@ -254,7 +254,60 @@ fn probe(reads: &mut BTreeMap<String, Reads>, right: &Ident, columns: Vec<String
 }
 
 pub use physical::check_rewrite;
-pub use physical::erase;
+
+/// Erase physical choices to the relational program they implement.
+pub fn erase(target: &physical::Program) -> ix::ra::Program {
+    use ix::ra;
+    use ra::Operator as Op;
+    ra::Program {
+        relational_token: Default::default(),
+        relational_brace: Default::default(),
+        plan: ra::Plan {
+            declarations: target.program.declarations.clone(),
+            definitions: target
+                .program
+                .definitions
+                .iter()
+                .map(|d| ra::Definition {
+                    result: d.name.clone(),
+                    eq_token: d.eq_token,
+                    semi_token: d.semi_token,
+                    operator: match &d.operator {
+                        physical::Operator::Unit(u) => Op::Unit(u.clone()),
+                        physical::Operator::Rename(r) => Op::Rename(r.clone()),
+                        physical::Operator::Select(s)
+                        | physical::Operator::Point(_, s)
+                        | physical::Operator::Range(_, s) => Op::Select(s.clone()),
+                        physical::Operator::Bind(b) => Op::Bind(b.clone()),
+                        physical::Operator::Guard(g) => Op::Guard(g.clone()),
+                        physical::Operator::Project(p) => Op::Project(p.clone()),
+                        physical::Operator::Probe(_, k) | physical::Operator::Merge(_, k) => {
+                            Op::NaturalJoin(Box::new(ra::NaturalJoin {
+                                natural_join_token: Default::default(),
+                                left: k.left.clone(),
+                                with_token: Default::default(),
+                                right: k.right.clone(),
+                            }))
+                        }
+                        physical::Operator::Semi(_, k) => Op::Semijoin(Box::new(ra::Semijoin {
+                            semijoin_token: Default::default(),
+                            left: k.left.clone(),
+                            with_token: Default::default(),
+                            right: k.right.clone(),
+                        })),
+                    },
+                })
+                .collect(),
+            output: ra::Output {
+                output_token: Default::default(),
+                input: target.program.returned.clone(),
+                as_token: target.program.as_token,
+                head: target.program.head.clone(),
+                semi_token: target.program.return_semi,
+            },
+        },
+    }
+}
 
 /// Formal rule CK-Demands: Require each stream/const/range keyed-read descriptor in source IX.
 fn check_demands(source: &ix::Program, target: &physical::Program) -> syn::Result<()> {

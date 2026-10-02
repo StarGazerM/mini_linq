@@ -4,6 +4,8 @@
 The local directory source contains Cargo-produced .crate archives plus locked
 third-party vendors. No core path dependency is available to feature builds.
 PENDING lists paths relative to features/. The fixture always exercises the gate.
+Use --feature to select a standalone workspace, including one outside the repo,
+and --out to place logs and build artifacts in another directory.
 """
 from __future__ import annotations
 import argparse
@@ -139,12 +141,12 @@ def feature_workspaces():
     return ready
 
 
-def test_feature(feature, directory, names, vendor, log):
+def test_feature(feature, directory, names, vendor, log, builddir):
     destination=directory/"feature";shutil.copytree(feature,destination,ignore=shutil.ignore_patterns("target",".git","Cargo.lock"))
     point_core(destination,names)
     (destination/".cargo").mkdir(exist_ok=True)
     (destination/".cargo/config.toml").write_text('[source.crates-io]\nreplace-with = "packaged"\n[source.packaged]\ndirectory = '+json.dumps(str(vendor))+'\n')
-    env=os.environ.copy();env.setdefault("RUSTUP_TOOLCHAIN", tomllib.loads((ROOT/"rust-toolchain.toml").read_text())["toolchain"]["channel"]);env["CARGO_TARGET_DIR"]=str(ROOT/"target/external");env["CARGO_TERM_COLOR"]="never"
+    env=os.environ.copy();env.setdefault("RUSTUP_TOOLCHAIN", tomllib.loads((ROOT/"rust-toolchain.toml").read_text())["toolchain"]["channel"]);env["CARGO_TARGET_DIR"]=str(builddir);env["CARGO_TERM_COLOR"]="never"
     # Metadata must resolve before build and every local crate must be in the
     # copied workspace; a leftover absolute/in-tree dependency is a gate failure.
     with log.open("a") as err:
@@ -154,28 +156,48 @@ def test_feature(feature, directory, names, vendor, log):
         manifest=Path(package["manifest_path"]).resolve()
         if manifest.is_relative_to(ROOT):raise RuntimeError(f"feature escaped to in-tree crate: {manifest}")
         if package["source"] is None and not manifest.is_relative_to(destination):raise RuntimeError(f"feature escaped copied workspace: {manifest}")
+        if package["name"] in names:
+            expected=(vendor/f"{package['name']}-{names[package['name']]}"/"Cargo.toml").resolve()
+            if manifest != expected:raise RuntimeError(f"core crate did not resolve from packaged source: {manifest}")
     run(["cargo","build","--workspace","--all-targets","--offline","--locked"],destination,log,env)
     run(["cargo","test","--workspace","--offline","--locked"],destination,log,env)
-    print(f"PASS: outside-repo build + test: {feature.relative_to(ROOT)}",flush=True)
+    label=feature.relative_to(ROOT) if feature.is_relative_to(ROOT) else feature
+    print(f"PASS: outside-repo build + test: {label}",flush=True)
 
 
 def main():
-    argparse.ArgumentParser(description=__doc__).parse_args()
-    logdir=ROOT/"target/external-logs";logdir.mkdir(parents=True,exist_ok=True)
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--feature",type=Path,action="append",help="standalone feature workspace to test (repeatable; defaults to ready features)")
+    parser.add_argument("--out",type=Path,help="directory for logs and build artifacts (default: target)")
+    args=parser.parse_args()
+    selected=[p.expanduser().resolve() for p in args.feature] if args.feature else feature_workspaces()
+    for feature in selected:
+        manifest=feature/"Cargo.toml"
+        if not manifest.is_file() or "workspace" not in tomllib.loads(manifest.read_text()):
+            parser.error(f"feature must be a standalone Cargo workspace: {feature}")
+    out=args.out.expanduser().resolve() if args.out else ROOT/"target"
+    if args.out and any(out.is_relative_to(feature) for feature in [ROOT/"tools/fixtures/external",ROOT/"tools/fixtures/in-tree-only"]+selected):
+        parser.error("--out must be outside the tested workspaces to avoid copying artifacts into themselves")
+    logdir=out/"external-logs";logdir.mkdir(parents=True,exist_ok=True)
+    (logdir/"package.log").write_text("")
+    # Sources must stay outside the checkout even when --out is inside target/.
     with tempfile.TemporaryDirectory(prefix="mini-linq-packaged-") as tmp:
         directory=Path(tmp);names,vendor=package_core(directory,logdir/"package.log")
-        features=[ROOT/"tools/fixtures/external"]+feature_workspaces()
+        features=[ROOT/"tools/fixtures/external"]+selected
         for i,feature in enumerate(features):
-            target=directory/f"consumer-{i}";target.mkdir();test_feature(feature,target,names,vendor,logdir/f"consumer-{i}.log")
-        negative_env=os.environ.copy();negative_env["CARGO_TARGET_DIR"]=str(ROOT/"target/external-negative")
-        run(["cargo","build","--manifest-path",str(ROOT/"tools/fixtures/in-tree-only/Cargo.toml"),"--offline"],ROOT,logdir/"negative-in-tree.log",negative_env)
+            log=logdir/f"consumer-{i}.log";log.write_text("")
+            target=directory/f"consumer-{i}";target.mkdir();test_feature(feature,target,names,vendor,log,out/"external")
+        negative_env=os.environ.copy();negative_env["CARGO_TARGET_DIR"]=str(out/"external-negative")
+        (logdir/"negative-in-tree.log").write_text("")
+        run(["cargo","build","--manifest-path",str(ROOT/"tools/fixtures/in-tree-only/Cargo.toml"),"--offline","--locked"],ROOT,logdir/"negative-in-tree.log",negative_env)
         target=directory/"negative";target.mkdir()
-        try: test_feature(ROOT/"tools/fixtures/in-tree-only",target,names,vendor,logdir/"negative.log")
+        (logdir/"negative.log").write_text("")
+        try: test_feature(ROOT/"tools/fixtures/in-tree-only",target,names,vendor,logdir/"negative.log",out/"external")
         except (RuntimeError, subprocess.CalledProcessError) as error:
             if "couldn't read" not in (logdir/"negative.log").read_text(): raise RuntimeError("negative fixture failed for the wrong reason") from error
             print("PASS: external gate rejects a feature that only builds in-tree",flush=True)
         else: raise RuntimeError("gate accepted the in-tree-only fixture")
-    print(f"PASS: packaged public API; {len(features)-1} ready features and mandatory fixture",flush=True)
+    print(f"PASS: packaged public API; {len(features)-1} {'selected' if args.feature else 'ready'} features and mandatory fixture",flush=True)
 
 
 if __name__=="__main__":main()

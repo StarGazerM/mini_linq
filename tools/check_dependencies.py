@@ -136,7 +136,7 @@ def check(data, announce=True):
         package = packages[name]
         internal = {d["name"] for d in production(package) if "path" in d or d["name"] in packages}
         if name in LANGUAGES:
-            base = {"cq-lang-vo": "cq-lang-cq", "cq-lang-ix": "cq-lang-ra", "cq-lang-structures": "cq-lang-physical", "cq-lang-physical": "cq-lang-ra", "cq-lang-ra": "cq-lang-vo"}.get(name)
+            base = {"cq-lang-vo": "cq-lang-cq", "cq-lang-ix": "cq-lang-ra", "cq-lang-structures": "cq-lang-physical"}.get(name)
             allowed = ({"cq-syntax", "cq-stage", base} - {None, name})
             if package["features"]:
                 raise ValueError(f"language features are forbidden: {name}")
@@ -189,6 +189,10 @@ def negative_dependency_checks(data):
                  ("cq-lang-ix", "cq-lang-physical", None, False),
                  ("cq-physical-lowering", "cq-lang-vo", "build", False),
                  ("cq-physical-realization", "cq-storage", None, True)]
+    for owner in ("cq-lang-ra", "cq-lang-physical"):
+        mutations += [(owner, language, kind, remote)
+                      for language in LANGUAGES if language not in {"cq-syntax", owner}
+                      for kind in (None, "build") for remote in (False, True)]
     if EXTENSIONS:
         extension = next(iter(EXTENSIONS))
         mutations += [(extension, "cq-order", None, False),
