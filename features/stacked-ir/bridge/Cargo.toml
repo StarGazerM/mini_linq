@@ -8,10 +8,10 @@ publish = false
 proc-macro = true
 
 [dependencies]
-cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
-cq-lang-trace = { path = "../trace" }
-physical-to-trace = { path = "../physical-to-trace" }
-trace-to-physical = { path = "../trace-to-physical" }
-cq-stage = { path = "../../../facade/cq-stage" }
-quote = "1"
-syn = { version = "2", features = ["full"] }
+cq-lang-physical.workspace = true
+cq-lang-trace.workspace = true
+physical-to-trace.workspace = true
+trace-to-physical.workspace = true
+cq-stage.workspace = true
+proc-macro2.workspace = true
+syn.workspace = true

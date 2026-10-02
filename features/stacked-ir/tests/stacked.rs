@@ -1,8 +1,6 @@
-//! The real chain, CQ through Physical and Structures to executed Rust,
-//! under several policies: host maps read in place, compiler-built hash
-//! indexes, a user-defined index type, merge joins over compiler-built
-//! ordered maps, the acyclic planner's Yannakakis plan, and a bounded scan
-//! of an ordered host. Every query evaluates to an iterator of answers.
+//! Feature-owned copy of every facade physical_query scenario.
+//! Reference and stacked targets share the same authored inputs and answers.
+//! Supporting passes are implemented here using public core APIs.
 #![recursion_limit = "1024"]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -49,6 +47,30 @@ fn oracle<'a>(
             }
         }
     }
+    let query: cq_testkit::cq::Program = syn::parse_quote! {
+        struct Chain;
+        relation L(a: i32);
+        relation R(a: i32, b: i32);
+        relation S(b: i32, c: i32);
+        answer(a, c) :- L(a), R(a, b), S(b, c);
+    };
+    cq_testkit::cq::contract::check(&query).unwrap();
+    let database = cq_testkit::Database::from([
+        ("L".to_owned(), l.iter().map(|(a,)| vec![a.0]).collect()),
+        (
+            "R".to_owned(),
+            r.iter().map(|(a, b)| vec![a.0, b.0]).collect(),
+        ),
+        (
+            "S".to_owned(),
+            s.iter().map(|(b, c)| vec![b.0, c.0]).collect(),
+        ),
+    ]);
+    let actual: cq_testkit::Rows = out.iter().map(|(a, c)| vec![a.0, c.0]).collect();
+    assert_eq!(
+        actual,
+        cq_testkit::cq_semantics::evaluate_cq(&query, &database)
+    );
     out
 }
 
@@ -66,37 +88,21 @@ fn fixture() -> Fixture {
 mod hosted {
     use super::*;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a [(Value,)],
         R: &'a HashMap<(Value,), Vec<(Value,)>>,
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> HashSet<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
-            struct Chain;
-            relation L(a: Value);
-            relation R(a: Value, b: Value);
-            relation S(b: Value, c: Value);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline {   physical = [::stacked_ir::round_trip]; }
+                struct Chain;
+                relation L(a: Value);
+                relation R(a: Value, b: Value);
+                relation S(b: Value, c: Value);
+                answer(a, c) :- L(a), R(a, b), S(b, c);
+            },
+        )
     }
 }
 
@@ -113,37 +119,21 @@ fn host_maps_are_probed_in_place() {
 mod built {
     use super::*;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a [(Value,)],
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
-            struct Chain;
-            relation L(a: Value);
-            relation R(a: Value, b: Value);
-            relation S(b: Value, c: Value);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline {   physical = [::stacked_ir::round_trip]; }
+                struct Chain;
+                relation L(a: Value);
+                relation R(a: Value, b: Value);
+                relation S(b: Value, c: Value);
+                answer(a, c) :- L(a), R(a, b), S(b, c);
+            },
+        )
     }
 }
 
@@ -157,7 +147,7 @@ fn compiler_built_indexes_feed_the_pull_program() {
     assert_eq!(built::run(&doubled, &r, &s).len(), oracle(&l, &r, &s).len());
 }
 
-/// A caller-selected provider builds a user index for materialized results.
+/// A Structures rewrite records a user index for materialized results.
 mod custom_indexes {
     use super::*;
 
@@ -195,35 +185,23 @@ mod custom_indexes {
         }
     }
 
-    mod wiring {
-        pub(crate) use super::index_provider;
-        pub(crate) use ::mini_linq::structures_to_rust;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    macro_rules! indexes {
-        (probe) => { SortedIndex<_, _> };
-        ($($rest:tt)*) => { cq_state_providers::default_indexes!($($rest)*) };
-    }
-    pub(crate) use indexes as index_provider;
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a [(Value,)],
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(mini_linq::select_structures! {
-            physical {
-                relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
-                l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
-                s = let rename S {b -> b, c -> c};
-                j = pipe probe[a] l, r; p = pipe probe[b] j, s;
-                out = pipe canon project p keep {a, c}; return out as answer(a, c);
-            }
-            policy {}
-        })
+        ::core::iter::Iterator::collect(
+            ::stacked_ir::enter! { pipeline { ::stacked_ir::leave, ::mini_linq::passes::select, ::stacked_ir_test_passes::custom_indexes, ::mini_linq::passes::print_pull };
+                physical {
+                    relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
+                    l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
+                    s = let rename S {b -> b, c -> c};
+                    j = pipe probe first [a] l, r; p = pipe probe first [b] j, s;
+                    out = pipe canon project p keep {a, c}; return out as answer(a, c);
+                }
+            },
+        )
     }
 }
 
@@ -234,29 +212,11 @@ fn a_user_defined_index_type_is_built_and_probed() {
     assert_eq!(actual, oracle(&l, &r, &s));
 }
 
-/// `join = merge`: both operands of every join are read in key order and
+/// Written merge operators read both operands of every join in key order and
 /// co-iterated; intermediates whose key changes are materialized into
 /// ordered maps, an intermediate merged on its own key streams on.
 mod merged {
     use super::*;
-
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    join = merge; }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::ordered_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
@@ -264,13 +224,15 @@ mod merged {
         R: &'a BTreeMap<(Value,), Vec<(Value,)>>,
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
-            struct Chain;
-            relation L(a: Value);
-            relation R(a: Value, b: Value);
-            relation S(b: Value, c: Value);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { physical = [::stacked_ir_test_passes::merged, ::stacked_ir::round_trip]; structures = [::stacked_ir_test_passes::ordered_dedup]; }
+                struct Chain;
+                relation L(a: Value);
+                relation R(a: Value, b: Value);
+                relation S(b: Value, c: Value);
+                answer(a, c) :- L(a), R(a, b), S(b, c);
+            },
+        )
     }
 }
 
@@ -289,37 +251,21 @@ fn merge_joins_over_host_and_built_ordered_maps_agree() {
 mod reduced {
     use super::*;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a [(Value,)],
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> HashSet<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_hypergraph! {
-            struct Chain;
-            relation L(a: Value);
-            relation R(a: Value, b: Value);
-            relation S(b: Value, c: Value);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::stacked_ir_test_passes::plan_hypergraph;  physical = [::stacked_ir::round_trip]; }
+                struct Chain;
+                relation L(a: Value);
+                relation R(a: Value, b: Value);
+                relation S(b: Value, c: Value);
+                answer(a, c) :- L(a), R(a, b), S(b, c);
+            },
+        )
     }
 }
 
@@ -329,41 +275,26 @@ fn yannakakis_plan_executes_through_semijoin_membership() {
     assert_eq!(reduced::run(&l, &r, &s), oracle(&l, &r, &s));
 }
 
-/// Ordered hosts still evaluate the complete written Rust predicate as an
-/// opaque guard. Its comparison syntax does not grant a range-read rewrite.
+/// Rust comparisons become relational constraints; the leading key window
+/// reads the ordered host range while the remaining column predicate filters.
 mod windowed {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {  }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run(
         R: &std::collections::BTreeMap<(i32,), Vec<(i32,)>>,
     ) -> std::collections::HashSet<(&i32, &i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
-            struct Windowed;
-            relation R(a: i32, b: i32);
-            answer(a, b) :- R(a, b), if *a >= 2 && *a < 9 && *b != 5;
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline {   physical = [::stacked_ir::round_trip]; }
+                struct Windowed;
+                relation R(a: i32, b: i32);
+                answer(a, b) :- R(a, b), if *a >= 2 && *a < 9 && *b != 5;
+            },
+        )
     }
 }
 
 #[test]
-fn ordered_host_scans_preserve_the_opaque_rust_guard() {
+fn ordered_host_range_preserves_the_rust_comparison_answer() {
     let host: BTreeMap<(i32,), Vec<(i32,)>> = [
         ((1,), vec![(0,)]),
         ((2,), vec![(5,), (6,)]),
@@ -384,35 +315,20 @@ fn ordered_host_scans_preserve_the_opaque_rust_guard() {
 /// follows `answer(a, s, c)`, not the sorted heading, and the column
 /// reference inside a nested macro resolves.
 mod computed {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {   }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         R: &'a [(i32, i32)],
         S: &'a [(i32, i32)],
     ) -> Vec<(&'a i32, String, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
-            struct Computed;
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            answer(a, s, c) :- R(a, b), S(b, c), let s: String = format!("{}", a);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline {   physical = [::stacked_ir::round_trip]; }
+                struct Computed;
+                relation R(a: i32, b: i32);
+                relation S(b: i32, c: i32);
+                answer(a, s, c) :- R(a, b), S(b, c), let s: String = format!("{}", a);
+            },
+        )
     }
 }
 
@@ -430,24 +346,6 @@ fn computed_columns_follow_the_head_order() {
 mod generic_canon {
     use std::cell::Cell;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    project = canon; }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
-
     fn observe(a: &i32, visits: &Cell<usize>) -> bool {
         // a=4 has an R prefix but no complete triangle. Evaluating this Rust
         // step on that prefix would move it before a written relational step.
@@ -463,13 +361,15 @@ mod generic_canon {
         T: &'a [(i32, i32)],
         visits: &Cell<usize>,
     ) -> Vec<(&'a i32, &'a i32, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
-            struct Triangle;
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            relation T(a: i32, c: i32);
-            answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if observe(a, visits);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::stacked_ir_test_passes::plan_generic; physical = [::stacked_ir_test_passes::canonical_projects, ::stacked_ir::round_trip]; }
+                struct Triangle;
+                relation R(a: i32, b: i32);
+                relation S(b: i32, c: i32);
+                relation T(a: i32, c: i32);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if observe(a, visits);
+            },
+        )
     }
 }
 
@@ -500,23 +400,6 @@ fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
 /// before enumeration continues. `T` is read on `[a]` and then `[a, c]` —
 /// several keys, dispatched independently with shared per-read fallback state.
 mod generic {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
@@ -524,34 +407,19 @@ mod generic {
         S: &'a [(i32, i32)],
         T: &'a [(i32, i32)],
     ) -> std::collections::HashSet<(&'a i32, &'a i32, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
-            struct Triangle;
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            relation T(a: i32, c: i32);
-            answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::stacked_ir_test_passes::plan_generic;  physical = [::stacked_ir::round_trip]; }
+                struct Triangle;
+                relation R(a: i32, b: i32);
+                relation S(b: i32, c: i32);
+                relation T(a: i32, c: i32);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+            },
+        )
     }
 }
 
 mod generic_smallest {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    intersect = smallest; }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{index_demands as choose_index_policy, structures_to_rust};
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-        pub(crate) use trace_bridge::enter as select_structures;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
@@ -559,13 +427,15 @@ mod generic_smallest {
         S: &'a [(i32, i32)],
         T: &'a [(i32, i32)],
     ) -> std::collections::HashSet<(&'a i32, &'a i32, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
-            struct Triangle;
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            relation T(a: i32, c: i32);
-            answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::stacked_ir_test_passes::plan_generic; physical = [::stacked_ir_test_passes::smallest, ::stacked_ir::round_trip]; }
+                struct Triangle;
+                relation R(a: i32, b: i32);
+                relation S(b: i32, c: i32);
+                relation T(a: i32, c: i32);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+            },
+        )
     }
 }
 

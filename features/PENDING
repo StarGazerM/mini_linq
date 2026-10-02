@@ -8,7 +8,6 @@ extensions/cq-ext-aggregate
 extensions/cq-ext-recursion
 extensions/cq-ext-correlated
 own-dialect
-stacked-ir
 diverged-ra
 composition
 inspection
@@ -19,10 +18,6 @@ workloads/xtask
 protocol
 # Legacy request protocol had no core consumers after slot removal; moved unchanged.
 own-dialect/printer
-stacked-ir/physical-to-trace
-stacked-ir/trace-to-physical
-stacked-ir/bridge
-stacked-ir/trace
 diverged-ra/ra-theta
 inspection/cq-inspection
 inspection/free-variables
