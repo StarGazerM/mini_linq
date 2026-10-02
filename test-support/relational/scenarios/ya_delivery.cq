@@ -1,5 +1,0 @@
-struct YaDelivery;
-relation D(driver_id: i32, depot_id: i32);
-relation S(depot_id: i32, item_id: i32);
-relation N(job_id: i32, item_id: i32);
-answer(driver, job) :- D(driver, depot), S(depot, item), N(job, item);

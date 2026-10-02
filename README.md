@@ -29,7 +29,7 @@ in each crate's `//!` docs.
 | `facade/` | `cq-stage` (typed macro continuations) and `mini-linq` (procedural entry points) |
 | `examples/` | Composition, inspection and swapped/stacked/diverged stages |
 | `workloads/` | Authored query corpus, deterministic datasets, SQL oracle and golden answers |
-| `test-support/` | Relational fixtures: per-stage scenarios, databases and set evaluators |
+| `testkit/` | Public conformance helpers: per-stage corpus, databases, set evaluators and authored rewrites |
 | `tools/` | Gate scripts and the regression target inventory |
 | `doc/formal/` | Formal specification, rule inventory and executable paper checks |
 

@@ -1,8 +1,0 @@
-relational {
-    relation Road(src: i32, dst: i32);
-    r0 = rename Road { src -> a, dst -> b };
-    r1 = rename Road { src -> b, dst -> c };
-    r2 = natural_join r0 with r1;
-    r3 = project r2 keep { a, c };
-    output r3 as answer(a, c);
-}

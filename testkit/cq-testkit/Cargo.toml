@@ -5,7 +5,6 @@ version.workspace = true
 edition.workspace = true
 rust-version = "1.85.1"
 license.workspace = true
-readme = "README.md"
 documentation = "https://docs.rs/cq-testkit"
 keywords = ["datalog", "relational-algebra", "testing", "compiler"]
 categories = ["development-tools::testing"]

@@ -83,7 +83,7 @@ def point_core(workspace, names, paths=None):
 
 def package_core(directory, log):
     data = json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version=1","--locked"],cwd=ROOT))
-    packages = [p for p in data["packages"] if Path(p["manifest_path"]).parent.parent.name in {"languages","passes","runtime","facade"}]
+    packages = [p for p in data["packages"] if Path(p["manifest_path"]).parent.parent.name in {"languages","passes","runtime","facade","testkit"}]
     names = {p["name"]:p["version"] for p in packages}
     source = directory/"source"; source.mkdir()
     # Pin the derive fork too. cargo package normalizes git dependencies to a

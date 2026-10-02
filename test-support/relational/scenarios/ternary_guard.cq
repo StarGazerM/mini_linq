@@ -1,6 +1,0 @@
-struct TernaryGuard;
-relation A(first: i32, second: i32);
-relation B(first: i32, second: i32);
-relation C(first: i32, second: i32);
-relation Stock(depot: i32, item: i32, day: i32);
-answer(d, i, t) :- A(d, i), B(i, t), C(d, t), Stock(d, i, t);

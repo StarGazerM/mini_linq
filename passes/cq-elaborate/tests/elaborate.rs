@@ -1,17 +1,6 @@
 //! RA prime correspondence: independent relational tableaux between opaque
 //! chain nodes, with source-prefix containment and equal final sets.
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/cq_semantics.rs"]
-mod cq_oracle;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/databases.rs"]
-mod databases;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/semantics.rs"]
-mod oracle;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/values.rs"]
-mod values;
+use cq_testkit::{corpus as scenarios, cq_semantics as cq_oracle, databases, semantics as oracle};
 
 use cq_elaborate::check;
 use cq_lang_ra as ra;
@@ -366,8 +355,6 @@ fn differing_literal_spellings_are_not_assumed_unequal() {
     assert!(check(&coarse(&source), &changed).is_err());
 }
 
-#[path = "../../../test-support/relational/scenarios.rs"]
-mod scenarios;
 #[test]
 fn shared_scenarios_and_mutated_output_correspondence() {
     for case in scenarios::SCENARIOS {

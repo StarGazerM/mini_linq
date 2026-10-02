@@ -1,7 +1,0 @@
-struct SelfChain;
-relation Road(src: i32, dst: i32);
-answer(a, c) :- Road(a, b), Road(b, c);
-valuation {
-    Road@0(a, b);
-    Road@1(b, c);
-}

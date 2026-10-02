@@ -1,17 +1,7 @@
 use cq_lang_vo as valuation;
 use cq_reduce::{Options, Pushdown, Reductions, check, compile};
+use cq_testkit::{corpus as scenarios, databases, valuation_semantics as evaluator};
 use valuation::cq;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/databases.rs"]
-mod databases;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/valuation_semantics.rs"]
-mod evaluator;
-#[path = "../../../test-support/relational/scenarios.rs"]
-mod scenarios;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/values.rs"]
-mod values;
 #[test]
 fn reductions_preserve_answers_and_correspond_to_options() {
     for case in scenarios::SCENARIOS

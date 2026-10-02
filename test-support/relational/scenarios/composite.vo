@@ -1,8 +1,0 @@
-struct Composite;
-relation R(first: i32, second: i32, value: i32);
-relation S(first: i32, second: i32, value: i32);
-answer(x, y) :- R(a, b, x), S(b, a, y);
-valuation {
-    R@0(a, b, x);
-    S@1(b, a, y);
-}

@@ -1,6 +1,0 @@
-struct Scan;
-relation R(value: i32);
-answer(x) :- R(x);
-valuation {
-    R@0(x);
-}

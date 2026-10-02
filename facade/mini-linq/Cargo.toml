@@ -9,6 +9,7 @@ license.workspace = true
 mini-linq-macros = { path = "../mini-linq-macros", version = "0.1.0" }
 
 [dev-dependencies]
+cq-testkit.workspace = true
 cq-load.workspace = true
 cq-state-providers.workspace = true
 syn_derive.workspace = true

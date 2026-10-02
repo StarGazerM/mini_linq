@@ -1,9 +1,0 @@
-struct Barbell;
-relation R(first: i32, second: i32);
-relation S(first: i32, second: i32);
-relation T(first: i32, second: i32);
-relation Bridge(first: i32, second: i32);
-relation U(first: i32, second: i32);
-relation V(first: i32, second: i32);
-relation W(first: i32, second: i32);
-answer(x, y, z, u, v, w) :- R(x, y), S(y, z), T(x, z), Bridge(x, u), U(u, v), V(v, w), W(u, w);

@@ -1,5 +1,4 @@
-#[path = "../../../test-support/relational/rewrites.rs"]
-mod authored;
+use cq_testkit::rewrites as authored;
 // Leibniz identity and functional extensionality permit canonical projection.
 // Compile and execute both optimized queries and the written-order reference.
 use proc_macro2::TokenStream;

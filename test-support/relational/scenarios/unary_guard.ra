@@ -1,9 +1,0 @@
-relational {
-    relation R(first: i32, second: i32);
-    relation Approved(value: i32);
-    r0 = rename R { first -> x, second -> y };
-    r1 = rename Approved { value -> y };
-    r2 = natural_join r0 with r1;
-    r3 = project r2 keep { x };
-    output r3 as answer(x);
-}

@@ -1,4 +1,0 @@
-struct Intersection;
-relation R(first: i32, second: i32);
-relation S(first: i32, second: i32);
-answer(x, y) :- R(x, y), S(x, y);

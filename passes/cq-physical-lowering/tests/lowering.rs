@@ -1,23 +1,11 @@
-#[path = "../../../test-support/relational/rewrites.rs"]
-mod authored;
-use cq_lang_ix::{self as ix, ra};
+use cq_lang_ix as ix;
 use cq_lang_physical as physical;
 use cq_physical_lowering::{check, compile, erase};
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/cases.rs"]
-mod cases;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/semantics.rs"]
-mod oracle;
-#[path = "../../../test-support/relational/scenarios.rs"]
-mod scenarios;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/values.rs"]
-mod values;
+use cq_testkit::{cases, corpus as scenarios, rewrites as authored, semantics as oracle, values};
 #[test]
 fn scenarios_preserve_relational_answers_under_probe_and_merge() {
     for case in scenarios::SCENARIOS {
-        let source: ix::Program = syn::parse_str(&case.ix()).unwrap();
+        let source = case.parse_ix().unwrap();
         for merge in [false, true] {
             let mut target = compile(&source).unwrap();
             if merge {
@@ -63,7 +51,7 @@ fn demands_are_a_pass_obligation() {
         .iter()
         .find(|c| c.name == "triangle")
         .unwrap();
-    let source: ix::Program = syn::parse_str(&case.ix()).unwrap();
+    let source = case.parse_ix().unwrap();
     let target = compile(&source).unwrap();
     let mut missing = source.clone();
     missing.indexes.clear();

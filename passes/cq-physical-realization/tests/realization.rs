@@ -4,6 +4,7 @@
 //! opaque binds/guards, and the distinct wrapper — with answers in head order.
 use cq_lang_structures as structures;
 use cq_physical_realization::compile;
+use cq_testkit::{cases, corpus as scenarios};
 use quote::{ToTokens, quote};
 
 fn text(tokens: impl ToTokens) -> String {
@@ -18,11 +19,6 @@ fn program(module: &structures::Program) -> String {
 
 /// `answer(c, a) :- L(a), R(b, a), S(b, c)`: the head reverses the sorted
 /// heading `[a, c]`, and `R` declares `b` before `a`.
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/cases.rs"]
-mod cases;
-#[path = "../../../test-support/relational/scenarios.rs"]
-mod scenarios;
 #[test]
 fn complete_scenarios_compile_and_execute_against_authored_answers() {
     use std::process::Command;
@@ -30,7 +26,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     std::fs::create_dir_all(&directory).unwrap();
     let mut checks = Vec::new();
     for case in scenarios::SCENARIOS {
-        let source: structures::Program = syn::parse_str(&case.structured()).unwrap();
+        let source = case.parse_structures().unwrap();
         let expression = compile(&source).unwrap();
         let data_name = if case.name == "fine_triangle" {
             "triangle"

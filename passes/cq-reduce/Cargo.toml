@@ -12,6 +12,7 @@ proc-macro2.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+cq-testkit.workspace = true
 cq-syntax.workspace = true
 
 quote.workspace = true

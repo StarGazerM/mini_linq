@@ -171,7 +171,7 @@ Four kinds of evidence stay separate; none substitutes for another.
 |---|---|---|
 | Language contract | `contract::check(&Program)` in each language crate | Is this one program well formed? It returns the analysis consumers use. |
 | Pass correspondence | `check(&source, &target, options…)` in each pass except the printer | Does this target preserve source meaning and discharge its recorded decisions? |
-| Fixtures | per-stage scenario files in `test-support/relational/scenarios`, expansion captures | Is this the output the compiler is meant to produce? |
+| Fixtures | cq-testkit's corpus in `testkit/cq-testkit/src/scenarios`, expansion captures | Is this the output the compiler is meant to produce? |
 | Oracles | set evaluators, SQL, independent reference answers | Does the executed plan compute the query's answers? |
 
 **A language contract is local.** It sees one program; an extension's

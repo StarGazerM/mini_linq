@@ -1,6 +1,0 @@
-relational {
-    relation R(first: i32, second: i32, witness: i32);
-    r0 = rename R { first -> x, second -> y, witness -> z };
-    r1 = project r0 keep { x, y };
-    output r1 as answer(y, x);
-}

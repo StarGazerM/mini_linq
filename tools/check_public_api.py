@@ -98,7 +98,7 @@ def snapshot(data):
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--update",action="store_true");args=parser.parse_args()
     data=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version=1","--locked"],cwd=ROOT))
-    packages=sorted(p["name"] for p in data["packages"] if Path(p["manifest_path"]).parent.parent.name in {"languages","passes","runtime","facade"})
+    packages=sorted(p["name"] for p in data["packages"] if Path(p["manifest_path"]).parent.parent.name in {"languages","passes","runtime","facade","testkit"})
     env=os.environ.copy();env["RUSTC_BOOTSTRAP"]="1"
     logdir=ROOT/"target/public-api-logs";logdir.mkdir(parents=True,exist_ok=True)
     # cargo rustdoc supports a single package; reuse artifacts between packages.

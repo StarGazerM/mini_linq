@@ -1,8 +1,0 @@
-struct UnaryGuard;
-relation R(first: i32, second: i32);
-relation Approved(value: i32);
-answer(x) :- R(x, y), Approved(y);
-valuation {
-    R@0(x, y);
-    Approved@1(y);
-}

@@ -1,5 +1,0 @@
-physical { relation R (value : i32);
- r0 = pipe rename R { value - > x };
- r1 = pipe canon project r0 keep { x };
- return r1 as answer (x);
- }

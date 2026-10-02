@@ -257,7 +257,7 @@ def write_workspace(destination, selected):
     shutil.copy2(ROOT / "rust-toolchain.toml", destination / "rust-toolchain.toml")
 
 
-def copy_component(destination, name, selected):
+def copy_component(destination, name, selected, tested):
     base = ROOT / PATHS[name]
     output = destination / PATHS[name]
     shutil.copytree(base / "src", output / "src")
@@ -267,6 +267,8 @@ def copy_component(destination, name, selected):
     manifest = tomllib.loads((base / "Cargo.toml").read_text())
     tests = manifest.pop("test", [])
     manifest["package"].pop("metadata", None)
+    # Match closure(): dependency crates do not activate their own test deps.
+    if name != tested: manifest.pop("dev-dependencies", None)
     for kind in ("dependencies", "dev-dependencies", "build-dependencies"):
         for dep in manifest.get(kind, {}):
             if dep in PATHS and dep not in selected:
@@ -289,10 +291,10 @@ def isolate(packages, only=()):
         with tempfile.TemporaryDirectory(prefix=f"mini-linq-{name}-") as temporary:
             destination = Path(temporary)
             write_workspace(destination, selected)
-            for package in selected: copy_component(destination, package, selected)
+            for package in selected: copy_component(destination, package, selected, name)
             if name not in TESTKIT:
-                shutil.copytree(ROOT / "test-support", destination / "test-support")
-                shutil.copytree(ROOT / "teaching", destination / "teaching")
+                if "cq-reduce" in selected:
+                    shutil.copytree(ROOT / "teaching", destination / "teaching")
                 if "mini-linq" in selected:
                     shutil.copytree(ROOT / "tools/fixtures/pass-macros", destination / "tools/fixtures/pass-macros", ignore=shutil.ignore_patterns("target", "Cargo.lock"))
                 # Runtime source is a generated-code execution fixture, never a compiler dependency.

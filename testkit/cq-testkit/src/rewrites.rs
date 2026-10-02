@@ -1,9 +1,14 @@
-//! Authored test rewrites; each test still checks public correspondence.
-#![allow(dead_code)]
+//! Authored rewrite candidates for correspondence and execution tests.
+//!
+//! These helpers depend only on language contracts. They do not prove pass
+//! correspondence; callers must check each candidate against its source and
+//! compare execution with their independent reference.
+//! `merged` also adjusts retention modes for the rewritten readers.
 use cq_lang_physical::{self as physical, Choice, Mode, Operator};
 use cq_lang_structures::Structure;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Replace keyed probes with merges and adjust retention for their readers.
 pub fn merged(source: &physical::Program) -> syn::Result<physical::Program> {
     let mut target = source.clone();
     for definition in &mut target.program.definitions {
@@ -19,6 +24,7 @@ pub fn merged(source: &physical::Program) -> syn::Result<physical::Program> {
     Ok(target)
 }
 
+/// Mark projections and the returned relation canonical where no key is inherited.
 pub fn canonical_projects(source: &physical::Program) -> syn::Result<physical::Program> {
     let mut target = source.clone();
     let facts = physical::contract::check(source)?;
@@ -54,6 +60,7 @@ pub fn canonical_projects(source: &physical::Program) -> syn::Result<physical::P
     Ok(target)
 }
 
+/// Select the smallest branch for recognized binary intersections.
 pub fn smallest(source: &physical::Program) -> syn::Result<physical::Program> {
     let mut target = source.clone();
     let facts = physical::contract::check(source)?;
@@ -73,6 +80,7 @@ pub fn smallest(source: &physical::Program) -> syn::Result<physical::Program> {
     Ok(target)
 }
 
+/// Replace deduplication state types with a native ordered set.
 pub fn ordered_dedup(
     source: &cq_lang_structures::Program,
 ) -> syn::Result<cq_lang_structures::Program> {

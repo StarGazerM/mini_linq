@@ -1,24 +1,10 @@
 //! Cross-pass checks live here so each pass keeps only its two language dependencies.
-// The shared interpreters import syntax through this name; use RA's public
-// re-export without adding another dependency to the facade.
-extern crate self as cq_syntax;
 use cq_lang_cq as cq;
 use cq_lang_ix as ix;
 use cq_lang_physical as physical;
 use cq_lang_ra as ra;
-pub use cq_lang_ra::syntax::{
-    Constraint, Equality, EqualityValue, RelationDecl, constraint, predicate, rust, symbol_name,
-};
-
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/cases.rs"]
-mod cases;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/semantics.rs"]
-mod oracle;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/values.rs"]
-mod values;
+use cq_lang_ra::syntax::{RelationDecl, symbol_name};
+use cq_testkit::{cases, semantics as oracle, values};
 
 #[test]
 fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
@@ -455,8 +441,12 @@ fn lowering_preserves_authored_demands_but_index_policy_requires_first_use_names
 
 #[test]
 fn complete_program_parsers_reject_wrong_stage_payloads() {
-    let cq = include_str!("../../../test-support/relational/scenarios/scan.cq");
-    let ra = include_str!("../../../test-support/relational/scenarios/scan.ra");
+    let scan = cq_testkit::SCENARIOS
+        .iter()
+        .find(|scenario| scenario.name == "scan")
+        .unwrap();
+    let cq = scan.cq;
+    let ra = scan.ra;
     let ix = format!("{ra} indexes {{}}");
     assert!(syn::parse_str::<ix::Program>(cq).is_err());
     assert!(syn::parse_str::<ix::Program>(ra).is_err());

@@ -12,6 +12,7 @@ cq-lang-ra = { workspace = true, default-features = false }
 quote.workspace = true
 syn.workspace = true
 [dev-dependencies]
+cq-testkit.workspace = true
 cq-syntax.workspace = true
 
 [package.metadata.cq]

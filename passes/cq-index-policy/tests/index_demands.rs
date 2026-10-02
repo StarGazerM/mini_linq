@@ -1,29 +1,14 @@
 use cq_index_policy::{check, compile};
 use cq_lang_ix as ix;
 use cq_lang_ra as ra;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/cases.rs"]
-mod cases;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/semantics.rs"]
-mod oracle;
-#[path = "../../../test-support/relational/scenarios.rs"]
-mod scenarios;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/values.rs"]
-mod values;
+use cq_testkit::{cases, corpus as scenarios, semantics as oracle, values};
 #[test]
 fn demands_cover_joins_preserve_answers_and_reject_mutation() {
     for case in scenarios::SCENARIOS {
         let source: ra::Program = syn::parse_str(case.ra).unwrap();
         let target = compile(&source).unwrap();
         check(&source, &target).unwrap();
-        assert_eq!(
-            target,
-            syn::parse_str::<ix::Program>(&case.ix()).unwrap(),
-            "{}",
-            case.name
-        );
+        assert_eq!(target, case.parse_ix().unwrap(), "{}", case.name);
         let mut changed = target.clone();
         changed.ra.plan.output.head.relation = syn::parse_quote!(wrong_answer);
         assert!(check(&source, &changed).is_err());
@@ -117,10 +102,12 @@ fn logical_heading_coordinates_ignore_declaration_and_rename_order() {
 
 #[test]
 fn join_free_plan_has_no_demands_and_missing_operands_are_diagnostic() {
-    let source: ra::Program = syn::parse_str(include_str!(
-        "../../../test-support/relational/scenarios/scan.ra"
-    ))
-    .unwrap();
+    let source = scenarios::SCENARIOS
+        .iter()
+        .find(|scenario| scenario.name == "scan")
+        .unwrap()
+        .parse_ra()
+        .unwrap();
     let expected: ix::Program = syn::parse_quote!(#source indexes {});
     assert_eq!(compile(&source).unwrap(), expected);
     let mut invalid = versions();

@@ -1,3 +1,0 @@
-struct SelfChain;
-relation Road(src: i32, dst: i32);
-answer(a, c) :- Road(a, b), Road(b, c);

@@ -1,4 +1,0 @@
-struct Existential;
-relation R(value: i32);
-relation S(first: i32, second: i32);
-answer(x) :- R(x), S(y, z);

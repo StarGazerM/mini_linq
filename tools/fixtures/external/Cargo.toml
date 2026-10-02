@@ -10,3 +10,6 @@ members = ["pass"]
 mini-linq = "=0.1.0"
 cq-storage = "=0.1.0"
 external-pass-fixture = { path = "pass" }
+
+[dev-dependencies]
+cq-testkit = "=0.1.0"

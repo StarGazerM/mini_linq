@@ -1,8 +1,7 @@
 use cq_lang_physical as physical;
 use cq_lang_structures as structures;
 use cq_structure_selection::{check, compile};
-#[path = "../../../test-support/relational/scenarios.rs"]
-mod scenarios;
+use cq_testkit::corpus as scenarios;
 #[test]
 fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
     for case in scenarios::SCENARIOS {

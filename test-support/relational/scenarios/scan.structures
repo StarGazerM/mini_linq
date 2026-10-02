@@ -1,3 +1,0 @@
-structures { r0 host scan = :: core :: iter :: Map < _ , _ > [];
- r1 canon = :: std :: collections :: HashSet < _ >;
- }

@@ -6,6 +6,9 @@ use cq_lang_cq as cq;
 use cq_lang_cq::BodyItem;
 use cq_lang_vo as valuation;
 use cq_order::{Heuristic, Options, Ranking, Split};
+use cq_testkit::{
+    corpus as scenarios, cq_semantics as cq_oracle, databases, valuation_semantics as evaluator,
+};
 use quote::{ToTokens, quote};
 
 fn cq(tokens: proc_macro2::TokenStream) -> cq::Program {
@@ -512,20 +515,6 @@ fn every_heuristic_and_split_ends_each_clause_fully_covered() {
     }
 }
 
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/cq_semantics.rs"]
-mod cq_oracle;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/databases.rs"]
-mod databases;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/valuation_semantics.rs"]
-mod evaluator;
-#[path = "../../../test-support/relational/scenarios.rs"]
-mod scenarios;
-#[allow(dead_code)]
-#[path = "../../../test-support/relational/values.rs"]
-mod values;
 #[test]
 fn shared_scenarios_preserve_answers_and_reject_changed_schedules() {
     for case in scenarios::SCENARIOS {
