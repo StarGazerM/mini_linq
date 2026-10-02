@@ -17,6 +17,10 @@ pub const PLAN_ARGUMENTS: [&str; 9] = [
     "elimination, fine",
 ];
 
+/// Default selection explicitly refuses conflicting retained candidate layouts.
+pub const SMALLEST_LAYOUT_REJECTION: &str =
+    "smallest requires a two-level candidate structure on each retained side";
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Pipeline {
     pub plan: usize,
@@ -121,6 +125,13 @@ impl Pipeline {
         target: &cq_lang_physical::Program,
         host: usize,
     ) -> syn::Result<Option<&'static str>> {
+        let structures = match cq_structure_selection::compile(target) {
+            Ok(structures) => structures,
+            Err(error) if error.to_string().ends_with(SMALLEST_LAYOUT_REJECTION) => {
+                return Ok(Some(SMALLEST_LAYOUT_REJECTION));
+            }
+            Err(error) => return Err(error),
+        };
         if self.push
             && target.program.definitions.iter().any(|d| {
                 matches!(d.operator, cq_lang_physical::Operator::Merge(..))
@@ -132,7 +143,6 @@ impl Pipeline {
                 "push printer refuses ordered merge or smallest intersection",
             ));
         }
-        let structures = cq_structure_selection::compile(target)?;
         let analysis = cq_lang_structures::contract::check(&structures)?;
         for (result, reads) in &analysis.physical.merge_reads {
             if !analysis.host_read(result) {

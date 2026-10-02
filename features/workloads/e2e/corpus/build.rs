@@ -53,7 +53,9 @@ fn main() {
                 let (target, entry) = if let Some(reason) = &reason {
                     compile_fail += 1;
                     let line = negative.lines().count() + 1;
-                    let needle = if reason.starts_with("push printer") {
+                    let needle = if reason == cq_workloads::pipelines::SMALLEST_LAYOUT_REJECTION {
+                        reason.as_str()
+                    } else if reason.starts_with("push printer") {
                         "own_push:"
                     } else if c[4] == 2 {
                         "leading declaration prefix"

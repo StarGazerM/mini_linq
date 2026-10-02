@@ -1,6 +1,16 @@
 //! A caller-owned built index, shared by the generated tests and UI consumers.
 
-pub struct SortedIndex<K, V>(Vec<(K, Vec<V>)>);
+use std::collections::BTreeSet;
+use std::rc::Rc;
+
+type Bucket<K, V> = (K, Rc<Vec<V>>);
+pub struct SortedIndex<K, V>(Rc<Vec<Bucket<K, V>>>);
+
+impl<K, V> Clone for SortedIndex<K, V> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
 
 impl<K: Ord, V, I: Iterator<Item = (K, V)>> cq_storage::Build<I> for SortedIndex<K, V> {
     fn build(source: I) -> Self {
@@ -13,32 +23,89 @@ impl<K: Ord, V, I: Iterator<Item = (K, V)>> cq_storage::Build<I> for SortedIndex
                 _ => groups.push((key, vec![value])),
             }
         }
-        Self(groups)
+        Self(Rc::new(
+            groups
+                .into_iter()
+                .map(|(key, values)| (key, Rc::new(values)))
+                .collect(),
+        ))
     }
 }
 
 impl<K: Ord, V> SortedIndex<K, V> {
-    fn matching(&self, key: &K) -> &[V] {
+    fn matching(&self, key: &K) -> Option<&Rc<Vec<V>>> {
         self.0
             .binary_search_by(|(k, _)| k.cmp(key))
-            .map_or(&[], |position| self.0[position].1.as_slice())
+            .ok()
+            .map(|position| &self.0[position].1)
     }
 }
 
-impl<'a, K: Ord, V: Copy> cq_storage::IndexRead for &'a SortedIndex<K, V> {
+/// An independent lookup cursor keeps its bucket alive without cloning referents.
+pub struct SortedCursor<V> {
+    rows: Option<Rc<Vec<V>>>,
+    position: usize,
+}
+
+impl<V: Copy> Iterator for SortedCursor<V> {
+    type Item = V;
+
+    fn next(&mut self) -> Option<V> {
+        let value = self.rows.as_ref()?.get(self.position).copied()?;
+        self.position += 1;
+        Some(value)
+    }
+}
+
+impl<K: Ord, V: Copy> cq_storage::IndexRead for SortedIndex<K, V> {
     type Key = K;
     type Item = V;
-    type Cursor = std::iter::Copied<std::slice::Iter<'a, V>>;
+    type Cursor = SortedCursor<V>;
 
     fn lookup(&self, key: &K) -> Self::Cursor {
-        self.matching(key).iter().copied()
+        SortedCursor {
+            rows: self.matching(key).cloned(),
+            position: 0,
+        }
+    }
+}
+
+/// Flat candidate enumeration preserves first occurrence order and set semantics.
+pub struct SortedCandidates<V> {
+    source: SortedCursor<V>,
+    seen: BTreeSet<V>,
+}
+
+impl<V: Copy + Ord> Iterator for SortedCandidates<V> {
+    type Item = V;
+
+    fn next(&mut self) -> Option<V> {
+        self.source.find(|value| self.seen.insert(*value))
+    }
+}
+
+impl<K: Ord, V: Copy + Ord> cq_storage::Candidates for SortedIndex<K, V> {
+    type Key = K;
+    type Item = V;
+    type Iter = SortedCandidates<V>;
+
+    fn count(&self, key: &K) -> usize {
+        // Bucket length is an admissible upper bound; counting never enumerates.
+        self.matching(key).map_or(0, |rows| rows.len())
+    }
+
+    fn keys(&self, key: &K) -> Self::Iter {
+        SortedCandidates {
+            source: cq_storage::IndexRead::lookup(self, key),
+            seen: BTreeSet::new(),
+        }
     }
 }
 
 impl<K, V> cq_storage::Keys for SortedIndex<K, V> {
     type Key = K;
     type Iter<'a>
-        = std::iter::Map<std::slice::Iter<'a, (K, Vec<V>)>, fn(&'a (K, Vec<V>)) -> &'a K>
+        = std::iter::Map<std::slice::Iter<'a, Bucket<K, V>>, fn(&'a Bucket<K, V>) -> &'a K>
     where
         Self: 'a;
 
@@ -53,6 +120,6 @@ impl<K, V> cq_storage::Keys for SortedIndex<K, V> {
 
 impl<K: Ord, V> cq_storage::ExactMembership<K> for SortedIndex<K, V> {
     fn contains(&self, key: &K) -> bool {
-        !self.matching(key).is_empty()
+        self.matching(key).is_some()
     }
 }

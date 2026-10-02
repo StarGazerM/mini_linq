@@ -20,3 +20,22 @@ fn sorted_representation_supplies_distinct_trie_candidates_with_duplicate_payloa
     assert_eq!(empty.key_count(), 0);
     assert!(empty.distinct_keys().next().is_none());
 }
+
+#[test]
+fn owned_lookup_cursors_are_independent_and_keep_buckets_alive() {
+    let index: SortedIndex<_, _> = Build::build([(2, 70), (1, 10), (2, 71), (2, 70)].into_iter());
+    let clone = index.clone();
+    assert_eq!(Candidates::count(&index, &2), 3);
+    assert_eq!(Candidates::keys(&index, &2).collect::<Vec<_>>(), [70, 71]);
+    assert_eq!(Candidates::count(&index, &9), 0);
+    assert!(Candidates::keys(&index, &9).next().is_none());
+    let mut first = index.lookup(&2);
+    let second = clone.lookup(&2);
+    assert_eq!(first.next(), Some(70));
+    assert!(index.lookup(&9).next().is_none());
+    drop(index);
+    drop(clone);
+    assert_eq!(first.by_ref().collect::<Vec<_>>(), [71, 70]);
+    assert!(first.next().is_none());
+    assert_eq!(second.collect::<Vec<_>>(), [70, 71, 70]);
+}
