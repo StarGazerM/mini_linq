@@ -1,0 +1,17 @@
+[package]
+name = "cq-rewrite-test-driver"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit" }
+cq-stage = { version = "0.1.0", path = "../../../facade/cq-stage" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }

@@ -42,3 +42,4 @@ cq-planners	manifest-target-test	plans	features/planners/Cargo.toml
 cq-planners	manifest-target-test	protocol	features/planners/Cargo.toml
 cq-planners	manifest-target-test	elimination_cost	features/planners/Cargo.toml
 cq-planners-test-driver	manifest-target-test	refinement	features/planners/Cargo.toml
+cq-rewrites	manifest-test	rewrites	features/rewrites/Cargo.toml
