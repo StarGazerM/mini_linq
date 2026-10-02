@@ -61,3 +61,5 @@ mini-linq-composition-example	manifest-run	composition	features/composition/Carg
 mini-linq-composition-example	manifest-test	conformance	features/composition/Cargo.toml
 mini-linq-inspection-examples	scenario	cq-inspection	features/inspection/cq-inspection/check.py
 mini-linq-inspection-examples	scenario	free-variables	features/inspection/free-variables/check.py
+stacked-ir	manifest-test	conformance	features/stacked-ir/Cargo.toml
+stacked-ir	scenario	expansions	features/stacked-ir/check_expansions.py

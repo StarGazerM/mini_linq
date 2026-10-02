@@ -27,6 +27,7 @@ dependencies = [
 name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -39,6 +40,7 @@ name = "cq-lang-ix"
 version = "0.1.0"
 dependencies = [
  "cq-lang-ra",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -50,6 +52,8 @@ dependencies = [
 name = "cq-lang-physical"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-ra",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -61,6 +65,8 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-vo",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -73,6 +79,7 @@ name = "cq-lang-structures"
 version = "0.1.0"
 dependencies = [
  "cq-lang-physical",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -85,7 +92,7 @@ name = "cq-lang-trace"
 version = "0.0.0"
 dependencies = [
  "cq-lang-physical",
- "cq-syntax",
+ "cq-stage",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -96,6 +103,7 @@ name = "cq-lang-vo"
 version = "0.1.0"
 dependencies = [
  "cq-lang-cq",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -147,16 +155,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-protocol"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "syn_derive",
-]
-
-[[package]]
 name = "cq-reduce"
 version = "0.1.0"
 dependencies = [
@@ -169,16 +167,6 @@ dependencies = [
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-state-providers"
-version = "0.1.0"
-dependencies = [
- "cq-protocol",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -210,7 +198,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-testkit"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-lang-vo",
+ "cq-syntax",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "mini-linq"
+version = "0.1.0"
+dependencies = [
+ "mini-linq-macros",
+]
+
+[[package]]
+name = "mini-linq-macros"
 version = "0.1.0"
 dependencies = [
  "cq-elaborate",
@@ -220,11 +229,9 @@ dependencies = [
  "cq-lang-physical",
  "cq-lang-ra",
  "cq-lang-structures",
- "cq-lang-vo",
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
- "cq-reduce",
  "cq-stage",
  "cq-structure-selection",
  "proc-macro2",
@@ -263,10 +270,36 @@ dependencies = [
 name = "stacked-ir"
 version = "0.0.0"
 dependencies = [
- "cq-state-providers",
+ "cq-lang-trace",
+ "cq-physical-realization",
+ "cq-stage",
  "cq-storage",
+ "cq-structure-selection",
+ "cq-testkit",
  "mini-linq",
+ "physical-to-trace",
+ "proc-macro2",
+ "quote",
+ "stacked-ir-test-passes",
+ "syn 2.0.119",
  "trace-bridge",
+ "trace-to-physical",
+]
+
+[[package]]
+name = "stacked-ir-test-passes"
+version = "0.0.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-order",
+ "cq-reduce",
+ "cq-stage",
+ "proc-macro2",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -309,7 +342,7 @@ dependencies = [
  "cq-lang-trace",
  "cq-stage",
  "physical-to-trace",
- "quote",
+ "proc-macro2",
  "syn 2.0.119",
  "trace-to-physical",
 ]

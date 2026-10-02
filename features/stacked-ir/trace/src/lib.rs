@@ -1,4 +1,11 @@
-//! Trace extends the complete Physical program with an identity annotation.
+//! An external, nonterminal language extending the complete Physical program.
+//!
+//! Text is `physical { ... } trace {}`. The empty annotation adds no execution
+//! or representation decision; the base records every operator, mode and key.
+//! Its denotation is the Physical denotation under the core's written-order
+//! refinement and Leibniz equality premises. Embedded Rust remains opaque.
+//! The local contract checks Physical; rewrites use Physical correspondence.
+//! This language can be passed to [`cq_stage::pass`] or [`cq_stage::rewrite`].
 pub use cq_lang_physical as physical;
 pub mod kw {
     syn::custom_keyword!(trace);
@@ -46,7 +53,23 @@ impl quote::ToTokens for Program {
     }
 }
 pub mod contract {
+    /// Check the complete base program; the annotation is empty by construction.
     pub fn check(program: &super::Program) -> syn::Result<super::physical::Analysis> {
         super::physical::contract::check(&program.physical)
+    }
+}
+
+/// Trace rewrites preserve Physical's RA erasure and admissible decisions.
+pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
+    physical::check_rewrite(&source.physical, &target.physical)
+}
+
+impl cq_stage::Language for Program {
+    fn check(&self) -> syn::Result<()> {
+        contract::check(self).map(|_| ())
+    }
+
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        check_rewrite(source, target)
     }
 }
