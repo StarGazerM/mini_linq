@@ -63,3 +63,5 @@ mini-linq-inspection-examples	scenario	cq-inspection	features/inspection/cq-insp
 mini-linq-inspection-examples	scenario	free-variables	features/inspection/free-variables/check.py
 stacked-ir	manifest-test	conformance	features/stacked-ir/Cargo.toml
 stacked-ir	scenario	expansions	features/stacked-ir/check_expansions.py
+cq-rewrites	manifest-target-test	generated	features/rewrites/Cargo.toml
+cq-rewrites	manifest-target-test	growth	features/rewrites/Cargo.toml

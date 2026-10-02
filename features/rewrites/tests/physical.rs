@@ -138,7 +138,7 @@ fn canon_does_not_require_equality_on_unobserved_float_columns() {
 }
 
 #[test]
-fn smallest_output_is_pinned_and_nonadjacent_corpus_is_unchanged() {
+fn smallest_output_is_pinned_for_adjacent_and_hoisted_corpus_pairs() {
     let source: ir::Program = syn::parse_str(include_str!("fixtures/adjacent.physical")).unwrap();
     conform(
         source.clone(),
@@ -152,8 +152,21 @@ fn smallest_output_is_pinned_and_nonadjacent_corpus_is_unchanged() {
         smallest_intersections(&source, quote!(all)).unwrap()
     );
     let source = scenario("fine_triangle").parse_physical().unwrap();
-    assert_eq!(smallest_intersections(&source, quote!()).unwrap(), source);
-    assert!(smallest_intersections(&source, quote!(r4)).is_err());
+    let expected = include_str!("fixtures/smallest_hoisted.physical");
+    conform(
+        source.clone(),
+        expected,
+        smallest_intersections,
+        "fine_triangle",
+    );
+    let target = syn::parse_str::<ir::Program>(expected).unwrap();
+    for args in [quote!(), quote!(all), quote!(r4), quote!(r#r4)] {
+        assert_eq!(smallest_intersections(&source, args).unwrap(), target);
+    }
+    assert_eq!(smallest_intersections(&target, quote!()).unwrap(), target);
+    for args in [quote!(r2), quote!(r6), quote!(missing)] {
+        assert!(smallest_intersections(&source, args).is_err());
+    }
 }
 
 #[test]
@@ -173,6 +186,168 @@ fn smallest_rejects_mutations_of_its_local_premises() {
     }
     let structures = cq_structure_selection::compile(&target).unwrap();
     cq_testkit::structures::contract::check(&structures).unwrap();
+}
+
+#[test]
+fn smallest_hoists_relational_dependency_chains_in_order() {
+    let source: ir::Program = syn::parse_quote!(physical {
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        l = pipe rename L {a -> a,b -> b};
+        r = let rename R {b -> b,c -> c};
+        candidate = pipe probe first [b] l,r;
+        s0 = pipe rename S {a -> a,c -> c};
+        s1 = pipe point select s0 if (a = 1);
+        s2 = pipe range select s1 if (c >= 0);
+        s = let project s2 keep {a,c};
+        checked = pipe canon semi eager [a,c] candidate,s;
+        return checked as answer(a,b,c);
+    });
+    let expected: ir::Program = syn::parse_quote!(physical {
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        l = pipe rename L {a -> a,b -> b};
+        r = let rename R {b -> b,c -> c};
+        s0 = pipe rename S {a -> a,c -> c};
+        s1 = pipe point select s0 if (a = 1);
+        s2 = pipe range select s1 if (c >= 0);
+        s = let project s2 keep {a,c};
+        candidate = pipe probe smallest [b] l,r;
+        checked = pipe canon semi eager [a,c] candidate,s;
+        return checked as answer(a,b,c);
+    });
+    let target = smallest_intersections(&source, quote!(candidate)).unwrap();
+    assert_eq!(target, expected);
+    assert_eq!(smallest_intersections(&target, quote!()).unwrap(), target);
+    ir::check_rewrite(&source, &target).unwrap();
+    cq_structure_selection::compile(&target).unwrap();
+    let database: cq_testkit::Database = [
+        ("L".into(), [vec![1, 10], vec![2, 20]].into_iter().collect()),
+        (
+            "R".into(),
+            [vec![10, 3], vec![10, -1], vec![20, 4]]
+                .into_iter()
+                .collect(),
+        ),
+        (
+            "S".into(),
+            [vec![1, 3], vec![1, -1], vec![2, 4]].into_iter().collect(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let source_ra = cq_physical_lowering::erase(&source);
+    let target_ra = cq_physical_lowering::erase(&target);
+    cq_testkit::ra::check_rewrite(&source_ra, &target_ra).unwrap();
+    assert_eq!(
+        semantics::evaluate_ra(&source_ra, &database).output,
+        semantics::evaluate_ra(&target_ra, &database).output
+    );
+    assert_eq!(
+        semantics::evaluate_ra(&target_ra, &database).output,
+        cq_testkit::Rows::from([vec![1, 10, 3]])
+    );
+}
+
+#[test]
+fn smallest_visits_independent_pairs_hoisted_before_the_current_candidate() {
+    let source: ir::Program = syn::parse_quote!(physical {
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        relation U(d:i32,e:i32); relation V(e:i32,f:i32); relation W(d:i32,f:i32);
+        l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
+        u = pipe rename U {d -> d,e -> e}; v = pipe rename V {e -> e,f -> f};
+        candidate = pipe probe first [b] l,r;
+        inner = pipe probe first [e] u,v;
+        w = pipe rename W {d -> d,f -> f};
+        inner_checked = let probe first [d,f] inner,w;
+        s = pipe rename S {a -> a,c -> c};
+        checked = pipe probe first [a,c] candidate,s;
+        out = pipe canon probe first [] checked,inner_checked;
+        return out as answer(a,b,c,d,e,f);
+    });
+    let expected: ir::Program = syn::parse_quote!(physical {
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        relation U(d:i32,e:i32); relation V(e:i32,f:i32); relation W(d:i32,f:i32);
+        l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
+        u = pipe rename U {d -> d,e -> e}; v = pipe rename V {e -> e,f -> f};
+        w = pipe rename W {d -> d,f -> f};
+        inner = pipe probe smallest [e] u,v;
+        inner_checked = let probe first [d,f] inner,w;
+        s = pipe rename S {a -> a,c -> c};
+        candidate = pipe probe smallest [b] l,r;
+        checked = pipe probe first [a,c] candidate,s;
+        out = pipe canon probe first [] checked,inner_checked;
+        return out as answer(a,b,c,d,e,f);
+    });
+    let target = smallest_intersections(&source, quote!(all)).unwrap();
+    assert_eq!(target, expected);
+    assert_eq!(
+        smallest_intersections(&source, quote!(candidate, inner)).unwrap(),
+        target
+    );
+    assert_eq!(smallest_intersections(&target, quote!()).unwrap(), target);
+    ir::check_rewrite(&source, &target).unwrap();
+    cq_structure_selection::compile(&target).unwrap();
+    let named = smallest_intersections(&source, quote!(candidate)).unwrap();
+    assert!(named.program.definitions.iter().any(|d| d.name == "inner"
+        && matches!(&d.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::First(_))))));
+}
+
+#[test]
+fn smallest_never_moves_interposed_rust_guards_or_bindings() {
+    let sources: [ir::Program; 2] = [
+        syn::parse_quote!(physical {
+            relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+            l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
+            candidate = pipe probe first [b] l,r;
+            s0 = pipe rename S {a -> a,c -> c};
+            s = let guard s0 if (opaque(a,c));
+            checked = pipe canon probe first [a,c] candidate,s;
+            return checked as answer(a,b,c);
+        }),
+        syn::parse_quote!(physical {
+            relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+            l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
+            candidate = pipe probe first [b] l,r;
+            s0 = pipe rename S {a -> a,c -> c};
+            value = pipe bind s0 with unused:i32 = (partial(a));
+            s = let project value keep {a,c};
+            checked = pipe canon probe first [a,c] candidate,s;
+            return checked as answer(a,b,c);
+        }),
+    ];
+    for source in sources {
+        let facts = ir::contract::check(&source).unwrap();
+        let candidate = source
+            .program
+            .definitions
+            .iter()
+            .find(|d| d.name == "candidate")
+            .unwrap();
+        let checked = source
+            .program
+            .definitions
+            .iter()
+            .find(|d| d.name == "checked")
+            .unwrap();
+        assert!(ir::binary_intersection(candidate, checked, &facts).is_some());
+        assert_eq!(smallest_intersections(&source, quote!()).unwrap(), source);
+        assert!(smallest_intersections(&source, quote!(candidate)).is_err());
+    }
+}
+
+#[test]
+fn smallest_does_not_bypass_a_candidate_consumer() {
+    let source: ir::Program = syn::parse_quote!(physical {
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
+        candidate = pipe probe first [b] l,r;
+        projected = pipe project candidate keep {a,b,c};
+        s = pipe rename S {a -> a,c -> c};
+        checked = pipe canon probe first [a,c] projected,s;
+        return checked as answer(a,b,c);
+    });
+    ir::contract::check(&source).unwrap();
+    assert_eq!(smallest_intersections(&source, quote!()).unwrap(), source);
+    assert!(smallest_intersections(&source, quote!(candidate)).is_err());
 }
 
 #[test]
@@ -242,14 +417,12 @@ fn all_corpus_programs_preserve_erasure_contract_and_set_answers() {
                 rewrite(&source, quote!()).unwrap_or_else(|e| panic!("{}: {e}", scenario.name));
             ir::check_rewrite(&source, &target).unwrap();
             cq_structure_selection::compile(&target).unwrap();
-            assert_eq!(
-                cq_physical_lowering::erase(&source),
-                cq_physical_lowering::erase(&target)
-            );
+            let source_ra = cq_physical_lowering::erase(&source);
+            let target_ra = cq_physical_lowering::erase(&target);
+            cq_testkit::ra::check_rewrite(&source_ra, &target_ra).unwrap();
             let case = scenario.case().unwrap();
             assert_eq!(
-                semantics::evaluate_ra(&cq_physical_lowering::erase(&target), &case.database())
-                    .output,
+                semantics::evaluate_ra(&target_ra, &case.database()).output,
                 case.expected_rows(),
                 "{}",
                 scenario.name

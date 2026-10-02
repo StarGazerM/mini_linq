@@ -21,6 +21,7 @@ cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-struct
 cq-rewrite-passes = { version = "0.1.0", path = "passes" }
 
 [dev-dependencies]
+cq-planners = { version = "0.1.0", path = "../planners" }
 cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-lowering" }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 cq-rewrite-test-driver = { version = "0.1.0", path = "test-driver" }
