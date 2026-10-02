@@ -8,10 +8,9 @@ publish = false
 proc-macro = true
 
 [dependencies]
-cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
-cq-print = { path = "../../../passes/cq-print" }
-cq-protocol = { path = "../../../runtime/cq-protocol" }
-cq-stage = { path = "../../../facade/cq-stage" }
+cq-lang-structures = { version = "0.1.0", path = "../../../languages/cq-lang-structures" }
+cq-print = { version = "0.1.0", path = "../../../passes/cq-print" }
+cq-stage = { version = "0.1.0", path = "../../../facade/cq-stage" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }

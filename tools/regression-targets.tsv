@@ -53,3 +53,6 @@ cq-extensions-conformance	manifest-target-test	behavior	features/extensions/conf
 cq-extensions-conformance	manifest-target-test	oracles	features/extensions/conformance/Cargo.toml
 cq-extensions-conformance	manifest-target-test	pipeline	features/extensions/conformance/Cargo.toml
 cq-extensions-conformance	manifest-target-test	compile_fail	features/extensions/conformance/Cargo.toml
+own-dialect	manifest-test	queries	features/own-dialect/Cargo.toml
+own-dialect	manifest-target-test	corpus	features/own-dialect/Cargo.toml
+own-dialect	manifest-target-test	compile_fail	features/own-dialect/Cargo.toml

@@ -6,18 +6,17 @@ publish = false
 
 [workspace]
 members = ["printer"]
+default-members = [".", "printer"]
+resolver = "3"
 
 [dependencies]
-own-push = { path = "printer" }
-mini-linq = { path = "../../facade/mini-linq", default-features = false, features = ["written-order", "index-demands", "physical-lowering", "structure-selection"] }
-cq-storage = { path = "../../runtime/cq-storage" }
+own-push = { version = "0.0.0", path = "printer" }
+mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
+cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
 
 [build-dependencies]
-cq-workloads = { path = "../../workloads" }
+cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
+quote = "1"
 
 [dev-dependencies]
-cq-load = { path = "../../runtime/cq-load" }
-cq-workload-e2e = { path = "../../workloads/e2e" }
-cq-workloads = { path = "../../workloads" }
-cq-state-providers = { path = "../../runtime/cq-state-providers" }
-mini-linq = { path = "../../facade/mini-linq" }
+cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
