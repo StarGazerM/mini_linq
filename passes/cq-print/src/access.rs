@@ -210,7 +210,8 @@ impl<'a> Context<'a> {
     }
 
     /// A built structure whose leading levels' union is `columns`: its
-    /// levels and how many of them a read on `columns` applies.
+    /// levels and how many of them a read on `columns` applies. Complete
+    /// keys take precedence over candidate prefixes, as in Structures.
     pub fn built_levels(
         &self,
         name: &str,
@@ -219,9 +220,12 @@ impl<'a> Context<'a> {
         let Some(Repr::Let { structures, .. }) = self.reprs.get(name) else {
             return None;
         };
-        structures.iter().find_map(|(levels, _)| {
-            structures::prefix_depth(levels, columns).map(|depth| (levels, depth))
-        })
+        structures
+            .iter()
+            .filter_map(|(levels, _)| {
+                structures::prefix_depth(levels, columns).map(|depth| (levels, depth))
+            })
+            .min_by_key(|(levels, depth)| (levels.len() != *depth, levels.len()))
     }
 
     pub fn built_ident(&self, name: &str, levels: &[Vec<String>]) -> Ident {

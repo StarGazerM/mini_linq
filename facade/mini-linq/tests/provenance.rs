@@ -42,6 +42,11 @@ fn realize(ra: &cq_lang_ra::Program, decisions: &str) -> TokenStream {
     }
     cq_physical_lowering::check(&ix, &physical).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
+    let structures = if decisions.contains("ordered_dedup") {
+        authored::ordered_dedup(&structures).unwrap()
+    } else {
+        structures
+    };
     cq_structure_selection::check(&physical, &structures).unwrap();
     let expression = cq_physical_realization::compile(&structures).unwrap();
     quote!(#expression)
@@ -185,6 +190,246 @@ fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
         assert_eq!((#written).count(), 0);
         assert_eq!((#optimized).count(), 0);
         assert_eq!(visits.get(), 0);
+    })]);
+}
+
+fn hypergraph_programs(
+    normal: &cq_lang_cq::Program,
+) -> (
+    cq_lang_vo::Program,
+    cq_lang_ra::Program,
+    cq_lang_ra::Program,
+) {
+    let ordering = cq_order::Options {
+        heuristic: cq_order::Heuristic::Written,
+        split: cq_order::Split::Coarse,
+    };
+    let written_vo = cq_order::compile(normal, &ordering).unwrap();
+    cq_order::check(normal, &written_vo, &ordering).unwrap();
+    let reference = cq_elaborate::compile_written(&written_vo).unwrap();
+    cq_elaborate::check(&written_vo, &reference).unwrap();
+    let reductions = cq_reduce::Options {
+        guards: cq_reduce::Pushdown::Atoms,
+        semijoins: cq_reduce::Reductions::Tree,
+    };
+    let reduced = cq_reduce::compile(&written_vo, &reductions).unwrap();
+    cq_reduce::check(&written_vo, &reduced, &reductions).unwrap();
+    let target = cq_elaborate::compile(&reduced).unwrap();
+    cq_elaborate::check(&reduced, &target).unwrap();
+    cq_lang_ra::check_rewrite(&reference, &target).unwrap();
+    (written_vo, reference, target)
+}
+
+fn seed_997_normal() -> cq_lang_cq::Program {
+    cq_lang_cq::normal::normalize(
+        &syn::parse_str(include_str!(
+            "../../../passes/cq-elaborate/tests/fixtures/fuzz_997.cq"
+        ))
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn seed_997_hypergraph_executes_against_the_written_reference() {
+    let (_, reference, target) = hypergraph_programs(&seed_997_normal());
+    let written = realize(&reference, "ordered_dedup");
+    let hypergraph = realize(&target, "ordered_dedup");
+    // Saved data.txt is `0 2 3 0 2 0`: both declared inputs are empty.
+    let generated = cq_testkit::fuzz::generate(997);
+    let inputs = [
+        [Vec::new(), Vec::new()],
+        [generated.data[0].clone(), generated.data[1].clone()],
+        [
+            vec![
+                vec![-3, 1, -3],
+                vec![0, 1, -3],
+                vec![2, 1, -3],
+                vec![4, 0, -3],
+                vec![-4, 1, 0],
+                vec![-3, 1, -3],
+            ],
+            vec![
+                vec![1, 3],
+                vec![-2, 3],
+                vec![2, 3],
+                vec![7, -3],
+                vec![8, 0],
+                vec![9, 2],
+                vec![1, 3],
+                vec![4, 3],
+            ],
+        ],
+    ];
+    let mut cases = Vec::new();
+    for (i, inputs) in inputs.iter().enumerate() {
+        let r0_rows = inputs[0].iter().map(|row| {
+            let (a, b, c) = (row[0], row[1], row[2]);
+            quote!((#a, #b, #c))
+        });
+        let r1_rows = inputs[1].iter().map(|row| {
+            let (a, b) = (row[0], row[1]);
+            quote!((#a, #b))
+        });
+        let rows = quote! {
+            let rows0: &[(i32,i32,i32)] = &[#(#r0_rows),*];
+            let rows1: &[(i32,i32)] = &[#(#r1_rows),*];
+        };
+        for host in [
+            quote!(let r0 = rows0; let r1 = rows1;),
+            // The failing configuration uses native HashMap hosts.
+            quote! {
+                let mut map0 = ::std::collections::HashMap::<(i32,),Vec<(i32,i32)>>::new();
+                for &(a,b,c) in rows0 { map0.entry((a,)).or_default().push((b,c)); }
+                let mut map1 = ::std::collections::HashMap::<(i32,),Vec<(i32,)>>::new();
+                for &(a,b) in rows1 { map1.entry((a,)).or_default().push((b,)); }
+                let r0 = &map0; let r1 = &map1;
+            },
+        ] {
+            cases.push(quote!({
+                #rows #host
+                let expected: ::std::collections::BTreeSet<_> = (#written).map(|(a,b)| (a,*b)).collect();
+                let actual: ::std::collections::BTreeSet<_> = (#hypergraph).map(|(a,b)| (a,*b)).collect();
+                assert_eq!(actual, expected, "seed 997 input {}", #i);
+                if #i == 2 {
+                    assert_eq!(actual, ::std::collections::BTreeSet::from([(0,-3),(0,0)]));
+                }
+            }));
+        }
+    }
+    run_cases(&cases);
+}
+
+#[test]
+fn seed_997_source_before_literals_prevent_a_panic_in_rust_step_zero() {
+    let mut normal = seed_997_normal();
+    let assertions: Vec<_> = normal
+        .query
+        .body
+        .iter()
+        .filter_map(|item| {
+            let cq_lang_cq::BodyItem::Equality(e) = item else {
+                return None;
+            };
+            let cq_lang_cq::EqualityValue::Literal(literal) = &e.right else {
+                return None;
+            };
+            let column = &e.left;
+            Some(quote!(assert!(*#column == #literal);))
+        })
+        .collect();
+    let first_guard = normal
+        .query
+        .body
+        .iter_mut()
+        .find_map(|item| match item {
+            cq_lang_cq::BodyItem::Filter(g) => Some(g),
+            _ => None,
+        })
+        .unwrap();
+    let condition = &first_guard.condition;
+    first_guard.condition = syn::parse_quote!({ #(#assertions)* #condition });
+    let (written_vo, reference, target) = hypergraph_programs(&normal);
+    let mut late = reference.clone();
+    let literal = late.plan.definitions.iter().position(|d|
+        matches!(&d.operator, cq_lang_ra::Operator::Select(s) if s.condition.constant_keys().is_some())
+    ).unwrap();
+    let cq_lang_ra::Operator::Select(select) = &mut late.plan.definitions[literal].operator else {
+        unreachable!()
+    };
+    let delayed = select.clone();
+    for e in &mut select.condition.equalities {
+        e.right = cq_lang_ra::EqualityValue::Variable(e.left.clone());
+    }
+    let guard = late
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, cq_lang_ra::Operator::Guard(_)))
+        .unwrap();
+    let guard_result = late.plan.definitions[guard].result.clone();
+    let cq_lang_ra::Operator::Guard(next) = &mut late.plan.definitions[guard + 1].operator else {
+        unreachable!()
+    };
+    next.input = syn::parse_quote!(late_literal);
+    let delayed_condition = &delayed.condition;
+    late.plan.definitions.insert(
+        guard + 1,
+        syn::parse_quote!(
+            late_literal = select #guard_result if (#delayed_condition);
+        ),
+    );
+    cq_lang_ra::contract::check(&late).unwrap();
+    assert!(
+        cq_elaborate::check(&written_vo, &late)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
+    assert!(
+        cq_lang_ra::check_rewrite(&reference, &late)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
+    let written = realize(&reference, "ordered_dedup");
+    let hypergraph = realize(&target, "ordered_dedup");
+    let delayed = realize(&late, "ordered_dedup");
+    run_cases(&[quote!({
+        let r0: &[(i32,i32,i32)] = &[(-3,1,-3)];
+        let r1: &[(i32,i32)] = &[(1,0),(7,-3)];
+        let expected: ::std::collections::BTreeSet<_> = (#written).collect();
+        let actual: ::std::collections::BTreeSet<_> = (#hypergraph).collect();
+        assert!(expected.is_empty()); assert_eq!(actual, expected);
+        assert!(::std::panic::catch_unwind(|| (#delayed).collect::<Vec<_>>()).is_err());
+    })]);
+}
+
+#[test]
+fn seed_997_equality_class_reductions_can_suppress_a_written_panic() {
+    let mut normal = seed_997_normal();
+    let first_guard = normal
+        .query
+        .body
+        .iter_mut()
+        .find_map(|item| match item {
+            cq_lang_cq::BodyItem::Filter(g) => Some(g),
+            _ => None,
+        })
+        .unwrap();
+    let condition = &first_guard.condition;
+    first_guard.condition = syn::parse_quote!({ assert_ne!(*v3, 0); #condition });
+    let (_, reference, target) = hypergraph_programs(&normal);
+    let mut unmatched = target.clone();
+    for definition in &mut unmatched.plan.definitions {
+        if matches!(definition.operator, cq_lang_ra::Operator::Guard(_)) {
+            break;
+        }
+        if let cq_lang_ra::Operator::Select(select) = &mut definition.operator {
+            for equality in &mut select.condition.equalities {
+                if matches!(equality.right, cq_lang_ra::EqualityValue::Variable(_)) {
+                    equality.right = cq_lang_ra::EqualityValue::Variable(equality.left.clone());
+                }
+            }
+        }
+    }
+    cq_lang_ra::contract::check(&unmatched).unwrap();
+    assert!(
+        cq_lang_ra::check_rewrite(&target, &unmatched)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
+    let written = realize(&reference, "ordered_dedup");
+    let hypergraph = realize(&target, "ordered_dedup");
+    let unmatched = realize(&unmatched, "ordered_dedup");
+    run_cases(&[quote!({
+        let r0: &[(i32, i32, i32)] = &[(-3, 1, -3)];
+        let r1: &[(i32, i32)] = &[(1, 3), (7, 0)];
+        assert!(::std::panic::catch_unwind(|| (#written).collect::<Vec<_>>()).is_err());
+        // Earlier relational restriction may lawfully turn bottom into a Set.
+        assert!((#hypergraph).collect::<Vec<_>>().is_empty());
+        assert!(::std::panic::catch_unwind(|| (#unmatched).collect::<Vec<_>>()).is_err());
     })]);
 }
 

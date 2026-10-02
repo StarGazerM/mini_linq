@@ -2,6 +2,7 @@ use cq_lang_physical as physical;
 use cq_lang_structures as structures;
 use cq_structure_selection::{check, compile};
 use cq_testkit::corpus as scenarios;
+use quote::ToTokens;
 #[test]
 fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
     for case in scenarios::SCENARIOS {
@@ -196,6 +197,144 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
     };
     keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
     assert!(check(&source, &changed).is_err());
+}
+
+#[test]
+fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
+    for (retained, host, prefix) in [("r", "s", "b"), ("s", "r", "a")] {
+        let r = if retained == "r" {
+            "r0 = pipe rename R {b -> b,c -> c}; r = let project r0 keep {b,c};"
+        } else {
+            "r = pipe rename R {b -> b,c -> c};"
+        };
+        let s = if retained == "s" {
+            "s0 = pipe rename S {a -> a,c -> c}; s = let project s0 keep {a,c};"
+        } else {
+            "s = pipe rename S {a -> a,c -> c};"
+        };
+        let source: physical::Program = syn::parse_str(&format!(
+            "physical {{
+                relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+                l = pipe rename L {{a -> a,b -> b}}; {r} {s}
+                candidate = pipe probe smallest [b] l,r;
+                checked = pipe canon semi eager [a,c] candidate,s;
+                return checked as answer(a,b,c);
+            }}"
+        ))
+        .unwrap();
+        physical::contract::check(&source).unwrap();
+        let target = compile(&source).unwrap();
+        check(&source, &target).unwrap();
+        assert_eq!(target.physical, source);
+        assert_eq!(
+            built_entries(&target),
+            syn::parse_str::<structures::Structures>(&format!(
+                "structures {{ {retained} = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [{prefix}][c]; }}"
+            ))
+            .unwrap()
+        );
+        assert_eq!(
+            syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
+            target
+        );
+
+        let entry = target
+            .structures
+            .entries
+            .iter()
+            .position(|e| matches!(e.structure, structures::Structure::Built { .. }))
+            .unwrap();
+        let mut missing = target.clone();
+        missing.structures.entries.remove(entry);
+        let diagnostic = structures::contract::check(&missing)
+            .unwrap_err()
+            .to_string();
+        assert!(diagnostic.contains("two-level candidate"), "{diagnostic}");
+        assert!(check(&source, &missing).is_err());
+        for replacement in [
+            format!("{retained} = ::cq_storage::HashIndex<'_, _, _> [{prefix},c];"),
+            format!(
+                "{retained} = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [c][{prefix}];"
+            ),
+            format!("{retained} = ::std::collections::HashSet<_> [{prefix}][c];"),
+        ] {
+            let mut changed = target.clone();
+            changed.structures.entries[entry] = syn::parse_str(&replacement).unwrap();
+            assert!(
+                structures::contract::check(&changed).is_err(),
+                "{replacement}"
+            );
+            assert!(check(&source, &changed).is_err(), "{replacement}");
+        }
+        for reader in ["candidates", "membership"] {
+            let mut missing = target.clone();
+            missing.structures.entries.retain(|e| {
+                !(e.name == host
+                    && matches!(&e.structure, structures::Structure::Host { reader: r, .. } if r == reader))
+            });
+            assert!(
+                structures::contract::check(&missing).is_err(),
+                "{host}/{reader}"
+            );
+            assert!(check(&source, &missing).is_err(), "{host}/{reader}");
+        }
+    }
+}
+
+#[test]
+fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
+    let source: physical::Program = syn::parse_quote!(physical {
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        l0 = pipe rename L {a -> a,b -> b};
+        r0 = pipe rename R {b -> b,c -> c}; r = let project r0 keep {b,c};
+        s = pipe rename S {a -> a,c -> c};
+        payload = pipe probe first [b] l0,r;
+        l1 = pipe project payload keep {a,b};
+        members = let semi eager [c] s,r;
+        l2 = pipe semi eager [a] l1,members;
+        ordered = let merge[b,c] r,r;
+        l = pipe semi eager [b] l2,ordered;
+        candidate = pipe probe smallest [b] l,r;
+        checked = pipe canon semi eager [a,c] candidate,s;
+        return checked as answer(a,b,c);
+    });
+    let target = compile(&source).unwrap();
+    assert_eq!(
+        built_entries(&target),
+        syn::parse_quote!(structures {
+            r = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [b][c];
+            r = ::cq_storage::HashIndex<'_, _, _> [b];
+            r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [b,c];
+            r = ::std::collections::HashSet<_> [c];
+            members = ::std::collections::HashSet<_> [a];
+            ordered = ::std::collections::HashSet<_> [b];
+        })
+    );
+    let mut reordered = target.clone();
+    reordered.structures.entries.reverse();
+    for target in [&target, &reordered] {
+        check(&source, target).unwrap();
+        let analysis = structures::contract::check(target).unwrap();
+        assert_eq!(
+            analysis.built_on("r", &["b".into()]).unwrap(),
+            (&syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>), 1)
+        );
+        assert_eq!(
+            analysis.built_on("r", &["b".into(), "c".into()]).unwrap(),
+            (
+                &syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>),
+                1
+            )
+        );
+    }
+    for missing in 0..4 {
+        let mut changed = target.clone();
+        changed.structures.entries.remove(missing);
+        assert!(
+            check(&source, &changed).is_err(),
+            "missing built entry {missing}"
+        );
+    }
 }
 
 #[test]

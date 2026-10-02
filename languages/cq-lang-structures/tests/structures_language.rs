@@ -101,6 +101,49 @@ fn leveled_entries_cover_prefixes_but_do_not_prove_uniqueness() {
 }
 
 #[test]
+fn complete_read_structures_take_precedence_over_candidate_prefixes() {
+    let source: structures::Program = syn::parse_quote!(physical {
+        relation L(x:i32); relation R(x:i32,y:i32);
+        l = pipe rename L {x -> x}; r = let rename R {x -> x,y -> y};
+        j = pipe probe first [x] l,r;
+        checked = pipe canon probe first [x,y] j,r;
+        return checked as answer(x,y);
+    } structures {
+        r = Curried [x][y]; r = Full [x,y]; r = Payload [x];
+        r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> [];
+        l host scan = ::core::iter::Map<_, _> [];
+        checked canon = ::std::collections::HashSet<_>;
+    });
+    let mut reordered = source.clone();
+    reordered.structures.entries.reverse();
+    for program in [&source, &reordered] {
+        let analysis = structures::contract::check(program).unwrap();
+        assert_eq!(
+            analysis.built_on("r", &["x".into()]).unwrap(),
+            (&syn::parse_quote!(Payload), 1)
+        );
+        assert_eq!(
+            analysis.built_on("r", &["x".into(), "y".into()]).unwrap(),
+            (&syn::parse_quote!(Full), 1)
+        );
+    }
+    let mut missing = source.clone();
+    missing.structures.entries.remove(2);
+    assert!(
+        structures::contract::check(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("payload probe must read all built levels")
+    );
+    let mut duplicate = source.clone();
+    duplicate
+        .structures
+        .entries
+        .push(source.structures.entries[0].clone());
+    assert!(structures::contract::check(&duplicate).is_err());
+}
+
+#[test]
 fn a_const_only_read_cannot_justify_a_built_entry() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation R(a: i32);

@@ -1,6 +1,8 @@
 //! Structures records only built let structures, their provider types and trie levels.
 //! Host renames need no entry: type dispatch selects their direct or lazy built reads.
 //! Contracts discharge plan premises, never host capability claims.
+//! Smallest intersections require two candidate levels on every retained side,
+//! alongside any structures needed by other reads of the same result.
 //! The denotation is `bottom + Set`; opaque Rust binds and guards stay in their
 //! written chain. Const supplies use one point read and never justify a build.
 //! ```text
@@ -183,7 +185,13 @@ impl Analysis {
         self.built
             .get(result)?
             .iter()
-            .find_map(|(levels, ty)| prefix_depth(levels, &wanted).map(|depth| (ty, depth)))
+            .filter_map(|(levels, ty)| {
+                prefix_depth(levels, &wanted).map(|depth| (levels, ty, depth))
+            })
+            // Complete keys take precedence over candidate prefixes: an
+            // ordinary probe needs rows, not the next trie level.
+            .min_by_key(|(levels, _, depth)| (levels.len() != *depth, levels.len()))
+            .map(|(_, ty, depth)| (ty, depth))
     }
 }
 
@@ -388,7 +396,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     "a built structure must serve a stream demand; const-only reads use direct access or scan and filter",
                 );
             }
-            if !seen.insert((name.clone(), Some(columns.concat()))) {
+            if !seen.insert((name.clone(), columns.clone())) {
                 return error(&entry.name, "duplicate structure on these columns");
             }
             analysis

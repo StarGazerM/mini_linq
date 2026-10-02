@@ -1,5 +1,7 @@
 //! Select provider types for built let reads, independently of host capabilities.
 //! Compatible membership prefixes share trie levels; ordered reads retain their own structure.
+//! Smallest intersections select candidate levels independently for each retained
+//! side; reusable hosts retain their candidate and membership fallbacks.
 //! The denotation is `bottom + Set`: Rust chain positions are preserved. A
 //! const supply is one fixed key, answered directly or by scan and filter;
 //! only stream supplies can justify building reusable keyed storage.
@@ -107,6 +109,12 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             if *supply != SupplyKind::Stream || matches!(operators[reader], Operator::Merge(..)) {
                 continue;
             }
+            // Smallest enumerates candidate keys, rather than probing the
+            // prefix for row payloads. Its two-level demand is recorded below.
+            if matches!(operators[reader], Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
+            {
+                continue;
+            }
             let need = match operators[reader] {
                 Operator::Semi(..) => Need::Contains,
                 _ => Need::Seek,
@@ -128,54 +136,6 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     // The binary smallest-candidate rewrite also reads each relation at
     // prefix + new-column for membership. Keep these two-level demands
     // local: host reads, other keys and ordered reads retain their paths.
-    let mut intersections = BTreeMap::new();
-    {
-        for pair in program.definitions.windows(2) {
-            if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
-            {
-                continue;
-            }
-            let Some((a, b, variable)) =
-                physical::binary_intersection(&pair[0], &pair[1], &analysis)
-            else {
-                continue;
-            };
-            let ak = sorted(&a.columns.iter().map(symbol_name).collect::<Vec<_>>());
-            let bk = sorted(
-                &b.columns
-                    .iter()
-                    .map(symbol_name)
-                    .filter(|c| c != &variable)
-                    .collect::<Vec<_>>(),
-            );
-            let sides = [(symbol_name(&a.right), ak), (symbol_name(&b.right), bk)];
-            let eligible = sides.iter().all(|(name, prefix)| {
-                analysis.modes[name] == ModeKind::Let
-                    && needs
-                        .iter()
-                        .filter(|((n, _), _)| n == name)
-                        .all(|((_, c), ns)| {
-                            !ns.contains(&Need::Ordered)
-                                && (*c == *prefix || *c == analysis.headings[name])
-                        })
-                    && intersections.get(name).is_none_or(|p| p == prefix)
-            });
-            if eligible {
-                for (name, prefix) in sides {
-                    needs
-                        .entry((name.clone(), prefix.clone()))
-                        .or_default()
-                        .insert(Need::Contains);
-                    needs
-                        .entry((name.clone(), analysis.headings[&name].clone()))
-                        .or_default()
-                        .insert(Need::Contains);
-                    intersections.insert(name, prefix);
-                }
-            }
-        }
-    }
-
     let mut candidate_keys = BTreeSet::new();
     for pair in program.definitions.windows(2) {
         if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
@@ -203,13 +163,13 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
         let ident = &definition.name;
-        let reads: Vec<(&Vec<String>, &BTreeSet<Need>)> = needs
+        let prefixes: Vec<_> = candidate_keys
             .iter()
-            .filter(|((n, _), _)| *n == name)
-            .map(|((_, columns), needs)| (columns, needs))
+            .filter(|(n, _)| *n == name && analysis.modes[n] == ModeKind::Let)
+            .map(|(_, prefix)| prefix)
             .collect();
-        if let Some(prefix) = intersections.get(&name) {
-            let full = &analysis.headings[&name];
+        let full = &analysis.headings[&name];
+        for prefix in &prefixes {
             let tail = full
                 .iter()
                 .filter(|c| !prefix.contains(c))
@@ -217,16 +177,43 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
             let columns = prefix
                 .iter()
                 .map(|c| analysis.rows[&name].bindings[c].clone());
-            let inner = needs[&(name.clone(), full.clone())]
-                .iter()
+            // The inner value enumerates the new column and checks full-key
+            // membership. A full-key payload probe may share it too; ordered
+            // reads keep their separate structure.
+            let inner = needs
+                .get(&(name.clone(), full.clone()))
+                .into_iter()
+                .flatten()
+                .filter(|need| **need != Need::Ordered)
                 .max()
-                .expect("nonempty")
+                .copied()
+                .unwrap_or(Need::Contains)
                 .default_type();
             entries.extend(
                 quote! { #ident = ::cq_storage::Trie<'_, _, #inner> [#(#columns),*][#(#tail),*]; },
             );
-            continue;
         }
+        let remaining: Vec<_> = needs
+            .iter()
+            .filter(|((n, _), _)| *n == name)
+            .filter_map(|((_, columns), needs)| {
+                let remaining: BTreeSet<_> = needs
+                    .iter()
+                    .copied()
+                    // Candidate levels answer full-key reads and prefix
+                    // membership, but ordinary prefix payloads and ordered
+                    // cursors still need their own storage.
+                    .filter(|need| {
+                        prefixes.is_empty()
+                            || *need == Need::Ordered
+                            || (columns != full
+                                && (*need != Need::Contains || !prefixes.contains(&columns)))
+                    })
+                    .collect();
+                (!remaining.is_empty()).then_some((columns, remaining))
+            })
+            .collect();
+        let reads: Vec<_> = remaining.iter().map(|(c, ns)| (*c, ns)).collect();
         {
             if let Some(chain) = chain(&reads) {
                 let (_, needs) = reads
