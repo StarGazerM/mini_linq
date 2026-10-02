@@ -1,0 +1,31 @@
+[workspace]
+members = ["passes", "test-driver"]
+default-members = [".", "passes", "test-driver"]
+resolver = "3"
+
+[package]
+name = "cq-rewrites"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Checked Physical and Structures rewrite macros for MiniLinq"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
+cq-lang-physical = { version = "0.1.0", path = "../../languages/cq-lang-physical" }
+cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
+cq-rewrite-passes = { version = "0.1.0", path = "passes" }
+
+[dev-dependencies]
+cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
+cq-rewrite-test-driver = { version = "0.1.0", path = "test-driver" }
+cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
+cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage", features = ["counters"] }
+mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }

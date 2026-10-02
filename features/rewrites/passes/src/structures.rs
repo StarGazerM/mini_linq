@@ -1,0 +1,159 @@
+use cq_lang_structures::{self as ir, Structure, physical::Operator, symbol_name};
+use proc_macro2::TokenStream;
+use syn::parse::{Parse, ParseStream};
+use syn::{Ident, Token, Type};
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Payload,
+    Membership,
+    Ordered,
+    Trie,
+    Dedup,
+    Rows,
+}
+
+impl Kind {
+    fn named(name: &Ident) -> Option<Self> {
+        match name.to_string().as_str() {
+            "payload" => Some(Self::Payload),
+            "membership" => Some(Self::Membership),
+            "ordered" => Some(Self::Ordered),
+            "trie" => Some(Self::Trie),
+            "dedup" => Some(Self::Dedup),
+            "rows" => Some(Self::Rows),
+            _ => None,
+        }
+    }
+
+    fn reads(self, operator: &Operator) -> bool {
+        matches!(
+            (self, operator),
+            (Self::Payload, Operator::Probe(..))
+                | (Self::Membership, Operator::Semi(..))
+                | (Self::Ordered, Operator::Merge(..))
+        )
+    }
+}
+
+enum Selector {
+    Result(Ident),
+    Kind(Kind),
+}
+
+struct Retype {
+    selector: Selector,
+    at: Ident,
+    ty: Type,
+}
+
+impl Parse for Retype {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let at: Ident = input.parse()?;
+        let selector =
+            if (at == "result" || at == "kind") && input.peek(syn::token::Paren) {
+                let contents;
+                syn::parenthesized!(contents in input);
+                let name: Ident = contents.parse()?;
+                if !contents.is_empty() {
+                    return Err(contents.error("expected one selector name"));
+                }
+                if at == "result" {
+                    Selector::Result(name)
+                } else {
+                    Selector::Kind(Kind::named(&name).ok_or_else(|| {
+                        syn::Error::new_spanned(name, "unknown representation kind")
+                    })?)
+                }
+            } else {
+                Kind::named(&at).map_or_else(|| Selector::Result(at.clone()), Selector::Kind)
+            };
+        input.parse::<Token![=>]>()?;
+        let ty = input.parse()?;
+        Ok(Self { selector, at, ty })
+    }
+}
+
+/// Retype keyed representations on a named result, or entries serving the
+/// selected read kind. Scan/point/range adapters are not keyed representations.
+/// Levels, reader names and Physical are preserved, even for custom types.
+/// Dedup includes both canon and computed-head state; rows selects buffers.
+pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    let analysis = ir::contract::check(source)?;
+    let request: Retype = syn::parse2(arguments)?;
+    ir::concrete_type(&request.ty)?;
+    let mut target = source.clone();
+    let mut changed = false;
+    for entry in &mut target.structures.entries {
+        let name = symbol_name(&entry.name);
+        let matches = match request.selector {
+            Selector::Result(ref result) => {
+                name == symbol_name(result) && keyed_read(&entry.structure, source)
+            }
+            Selector::Kind(kind) => match &entry.structure {
+                Structure::Dedup { .. } | Structure::HeadDedup { .. } => {
+                    matches!(kind, Kind::Dedup)
+                }
+                Structure::Rows { .. } => matches!(kind, Kind::Rows),
+                Structure::Host { reader, .. } => {
+                    matches!(kind, Kind::Membership) && reader == "membership"
+                        || source.physical.program.definitions.iter().any(|d| {
+                            symbol_name(&d.name) == symbol_name(reader) && kind.reads(&d.operator)
+                        })
+                }
+                Structure::Built { keyed, .. } => {
+                    matches!(kind, Kind::Trie) && keyed.levels.len() > 1
+                        || analysis
+                            .physical
+                            .keyed_reads
+                            .get(&name)
+                            .into_iter()
+                            .flatten()
+                            .any(|(reader, columns, _)| {
+                                ir::prefix_depth(&keyed.level_names(), columns).is_some()
+                                    && source.physical.program.definitions.iter().any(|d| {
+                                        symbol_name(&d.name) == *reader && kind.reads(&d.operator)
+                                    })
+                            })
+                }
+            },
+        };
+        if matches {
+            match &mut entry.structure {
+                Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => {
+                    keyed.ty = request.ty.clone();
+                }
+                Structure::Dedup { ty, .. }
+                | Structure::HeadDedup { ty, .. }
+                | Structure::Rows { ty, .. } => *ty = request.ty.clone(),
+            }
+            changed = true;
+        }
+    }
+    if !changed {
+        return Err(syn::Error::new_spanned(
+            request.at,
+            "selector matches no recorded representation",
+        ));
+    }
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
+fn keyed_read(structure: &Structure, source: &ir::Program) -> bool {
+    match structure {
+        Structure::Built { .. } => true,
+        Structure::Host { reader, .. } => {
+            reader == "membership"
+                || reader == "candidates"
+                || source.physical.program.definitions.iter().any(|d| {
+                    symbol_name(&d.name) == symbol_name(reader)
+                        && matches!(
+                            d.operator,
+                            Operator::Probe(..) | Operator::Semi(..) | Operator::Merge(..)
+                        )
+                })
+        }
+        _ => false,
+    }
+}
