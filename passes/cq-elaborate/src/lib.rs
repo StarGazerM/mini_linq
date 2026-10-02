@@ -104,6 +104,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
     let mut state = State {
         inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
         atoms: &analysis.atoms,
+        hypergraph: valuation::cq::hypergraph::Analysis::of(&source.cq),
         definitions: Vec::new(),
         reserved: source
             .cq
@@ -232,6 +233,7 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
 struct State<'a> {
     inputs: &'a [cq::RelationDecl],
     atoms: &'a BTreeMap<usize, cq::Atom>,
+    hypergraph: valuation::cq::hypergraph::Analysis,
     definitions: Vec<ra::Definition>,
     reserved: BTreeSet<String>,
     next_result: usize,
@@ -361,14 +363,52 @@ impl State<'_> {
         });
     }
 
-    /// Formal rule E-ReduceWith: Semijoin current clause relations and replace only the target entry.
+    /// Formal rule E-ReduceWith: Match every listed support column to its target equality class and retain only the target heading.
     fn reduce(&mut self, reduce: &valuation::Reduce) {
         let clause = reduce.clause();
         let left = self.relation(clause);
         let result = match &reduce.reduction {
             valuation::Reduction::With(_, subatom) => {
                 let right = self.relation(subatom.clause());
-                self.semijoin(left, right)
+                let mut equalities = Vec::new();
+                for variable in self.atoms[&clause].variables() {
+                    for (_, support) in subatom.variables() {
+                        if self
+                            .hypergraph
+                            .equivalent(&symbol_name(variable), &symbol_name(support))
+                        {
+                            let left = self.canonical(variable);
+                            let right = self.canonical(support);
+                            if symbol_name(&left) != symbol_name(&right) {
+                                equalities.push(ra::Equality {
+                                    left,
+                                    eq_token: Default::default(),
+                                    right: ra::EqualityValue::Variable(right),
+                                });
+                            }
+                        }
+                    }
+                }
+                if equalities.is_empty() {
+                    self.semijoin(left, right)
+                } else {
+                    // Opaque Rust may protect both names in an equality class.
+                    // A natural semijoin would then check only support existence.
+                    // Express the equality-class semijoin as join/select/project,
+                    // without renaming Rust inputs or adding any Rust chain node.
+                    let joined = self.emit(ra::Operator::NaturalJoin(Box::new(ra::NaturalJoin {
+                        natural_join_token: Default::default(),
+                        left,
+                        with_token: Default::default(),
+                        right,
+                    })));
+                    let matched = self.select(joined, equalities);
+                    let attributes = self.atoms[&clause]
+                        .variables()
+                        .map(|v| self.canonical(v))
+                        .collect();
+                    self.project(matched, attributes)
+                }
             }
         };
         self.relations.insert(clause, result);

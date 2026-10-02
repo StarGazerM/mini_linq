@@ -216,6 +216,81 @@ fn semijoin_reductions_restrict_clause_relations() {
 }
 
 #[test]
+fn seed_997_reductions_match_equality_classes_before_rust() {
+    let surface = syn::parse_str(include_str!("fixtures/fuzz_997.cq")).unwrap();
+    let normal = cq::normal::normalize(&surface).unwrap();
+    let written = coarse(&normal);
+    let steps = &written.valuation.steps;
+    // The full upward/downward tree schedule from fuzz seed 997. Both v3
+    // and v4 occur in opaque Rust, so alias solving must preserve their names.
+    let reduced = vo(
+        &normal,
+        quote! {
+            reduce r1@2 with r1@0(_, _);
+            reduce r0@3 with r1@2(_, v3);
+            reduce r1@2 with r0@3(v4, _, _);
+            reduce r1@0 with r1@2(_, _);
+            #(#steps)*
+        },
+    );
+    let target = compile(&reduced).unwrap();
+    let reference = cq_elaborate::compile_written(&written).unwrap();
+    ra::check_rewrite(&reference, &target).unwrap();
+    let first_rust = target
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, ra::Operator::Guard(_)))
+        .unwrap();
+    let mut mutations = 0;
+    for (i, definition) in target.plan.definitions[..first_rust].iter().enumerate() {
+        let ra::Operator::Select(select) = &definition.operator else {
+            continue;
+        };
+        for (j, equality) in select.condition.equalities.iter().enumerate() {
+            let ra::EqualityValue::Variable(right) = &equality.right else {
+                continue;
+            };
+            if equality.left == *right {
+                continue;
+            }
+            let mut changed = target.clone();
+            let ra::Operator::Select(select) = &mut changed.plan.definitions[i].operator else {
+                unreachable!()
+            };
+            // The written equality still occurs after the guards, so output
+            // equality alone cannot detect this lost reducer input constraint.
+            select.condition.equalities[j].right =
+                ra::EqualityValue::Variable(equality.left.clone());
+            ra::contract::check(&changed).unwrap();
+            let error = check(&reduced, &changed).unwrap_err();
+            assert!(error.to_string().contains("source-before"), "{error}");
+            mutations += 1;
+        }
+    }
+    assert_eq!(mutations, 2, "each direction must actually match v3 and v4");
+}
+
+#[test]
+fn reductions_match_every_protected_column_in_an_equality_class() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32,b:i32); relation S(c:i32);
+        answer(x,z,y) :- R(x,z), S(y), if accept(x,z,y),
+            if *x == *y, if *z == *y;
+    });
+    let target = compile(&vo(
+        &source,
+        quote! {
+            reduce R@0 with S@1(y); reduce S@1 with R@0(x,z);
+            R@0(x,z); S@1(y); if accept(x,z,y); x = y; z = y;
+        },
+    ))
+    .unwrap();
+    let reference = cq_elaborate::compile_written(&coarse(&source)).unwrap();
+    ra::check_rewrite(&reference, &target).unwrap();
+}
+
+#[test]
 fn relational_hoisting_is_accepted_but_moving_a_relation_later_is_rejected() {
     let source = cq(quote! {
         struct Q; relation R(a: i32); relation S(b: i32);
