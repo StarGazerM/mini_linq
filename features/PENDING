@@ -7,7 +7,6 @@ extensions/cq-ext-negation
 extensions/cq-ext-aggregate
 extensions/cq-ext-recursion
 extensions/cq-ext-correlated
-own-dialect
 stacked-ir
 diverged-ra
 composition
@@ -18,7 +17,6 @@ workloads/xtask
 # .cargo/config.toml xtask alias removed; reinstate after workloads/xtask migrates.
 protocol
 # Legacy request protocol had no core consumers after slot removal; moved unchanged.
-own-dialect/printer
 stacked-ir/physical-to-trace
 stacked-ir/trace-to-physical
 stacked-ir/bridge

@@ -7,8 +7,6 @@ cq-xtask	oracle-test	oracle-unit	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle	golden	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle	fuzz	features/workloads/xtask/Cargo.toml
 mini-linq-composition-example	manifest-run	composition	features/composition/Cargo.toml
-own-dialect	manifest-test	queries	features/own-dialect/Cargo.toml
-own-dialect	manifest-target-test	corpus	features/own-dialect/Cargo.toml
 stacked-ir	scenario	expansions	features/stacked-ir/check_expansions.py
 diverged-ra	scenario	downstream-reuse	features/diverged-ra/check.py
 cq-workload-e2e	test	typed	features/workloads/e2e/tests/typed.rs
