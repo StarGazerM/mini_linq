@@ -4,7 +4,7 @@ use cq_ext_support::{Fresh, Leaf, bound, check_fresh, distinct, ensure, same_sym
 use cq_lang_cq::{BodyItem, Program};
 use cq_syntax::{Atom, CommaList, RelationDecl, rust, symbol_name};
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::{Expr, Ident, Token, Type, parse::Parse};
 
 mod kw {
@@ -103,13 +103,13 @@ fn specs(source: &Program) -> syn::Result<Vec<(usize, Spec, Vec<Ident>)>> {
     }
     Ok(specs)
 }
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subquery {
     pub position: usize,
     pub hole: Program,
     pub links: Vec<(Ident, Ident)>,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Context {
     pub main: Program,
     pub leaves: Vec<Leaf>,
@@ -241,15 +241,27 @@ fn inner(
     (with_query(source, declarations, query, Some(output)), links)
 }
 
-fn clause(spec: &Spec, hole: &Program, fresh: &mut Fresh) -> BodyItem {
+fn clause(
+    spec: &Spec,
+    hole: &Program,
+    fresh: &mut Fresh,
+    pipeline: &cq_stage::Pipeline,
+) -> syn::Result<BodyItem> {
     let rows = fresh.id("subquery_iter");
     let first = fresh.id("scalar_first");
-    quoted_clause(spec, hole, &rows, &first)
+    quoted_clause(spec, hole, &rows, &first, pipeline)
 }
-fn quoted_clause(spec: &Spec, hole: &Program, rows: &Ident, first: &Ident) -> BodyItem {
-    match spec {
+fn quoted_clause(
+    spec: &Spec,
+    hole: &Program,
+    rows: &Ident,
+    first: &Ident,
+    pipeline: &cq_stage::Pipeline,
+) -> syn::Result<BodyItem> {
+    let invocation = pipeline.clone().start(hole.to_token_stream())?;
+    Ok(match spec {
         Spec::Exists(_) => {
-            syn::parse_quote!(if { let mut #rows = mini_linq::correlated_hole! { #hole }; #rows.next().is_some() })
+            syn::parse_quote!(if { let mut #rows = #invocation; #rows.next().is_some() })
         }
         Spec::Scalar(s) => {
             let Scalar {
@@ -260,16 +272,16 @@ fn quoted_clause(spec: &Spec, hole: &Program, rows: &Ident, first: &Ident) -> Bo
                 default = &paren.expr;
             }
             syn::parse_quote!(let #name: #ty = {
-                let mut #rows = ::cq_storage::Answers::collect_from(mini_linq::correlated_hole! { #hole }).into_iter();
+                let mut #rows = ::cq_storage::Answers::collect_from(#invocation).into_iter();
                 let #first = #rows.next();
                 assert!(#rows.next().is_none(), "scalar subquery returned multiple distinct rows");
                 match #first { Some((value,)) => value, None => #default }
             })
         }
-    }
+    })
 }
 
-pub fn compile(source: &Program) -> syn::Result<Context> {
+pub fn compile(source: &Program, pipeline: &cq_stage::Pipeline) -> syn::Result<Context> {
     let specs = specs(source)?;
     let mut fresh = Fresh::new(source);
     let (declarations, leaves) = close_inputs(source, &mut fresh);
@@ -278,7 +290,7 @@ pub fn compile(source: &Program) -> syn::Result<Context> {
     let mut subqueries = Vec::new();
     for (position, spec, outer) in specs {
         let (hole, links) = inner(source, &declarations, &spec, &outer, &mut fresh);
-        main.query.body[position] = clause(&spec, &hole, &mut fresh);
+        main.query.body[position] = clause(&spec, &hole, &mut fresh, pipeline)?;
         subqueries.push(Subquery {
             position,
             hole,
@@ -294,8 +306,7 @@ pub fn compile(source: &Program) -> syn::Result<Context> {
 
 /// Verify capture links by erasing fresh atom arguments and equality guards;
 /// the per-row quotation itself is checked structurally, not by executing Rust.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn check(source: &Program, target: &Context) -> syn::Result<()> {
+pub fn check(source: &Program, target: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<()> {
     let specs = specs(source)?;
     check_fresh(source, target.leaves.iter().map(|leaf| &leaf.binding))?;
     check_inputs(source, target)?;
@@ -435,7 +446,7 @@ pub fn check(source: &Program, target: &Context) -> syn::Result<()> {
             .body
             .get(*position)
             .ok_or_else(|| syn::Error::new_spanned(source, "missing subquery clause"))?;
-        check_quote(actual, spec, &subquery.hole, source)?;
+        check_quote(actual, spec, &subquery.hole, source, pipeline)?;
         erased.query.body[*position] = source.query.body[*position].clone();
     }
     ensure(
@@ -450,6 +461,7 @@ fn check_quote(
     spec: &Spec,
     hole: &Program,
     source: &Program,
+    pipeline: &cq_stage::Pipeline,
 ) -> syn::Result<()> {
     // Recognize the block's closing operation and quotation. Arbitrary Rust
     // semantics are outside correspondence, just as for the core printer.
@@ -543,15 +555,25 @@ fn check_quote(
     let Expr::Macro(invocation) = quotation else {
         return Err(syn::Error::new_spanned(
             expression,
-            "missing caller slot quotation",
+            "missing remaining-pipeline quotation",
         ));
     };
+    let expected: syn::ExprMacro = syn::parse2(pipeline.clone().start(hole.to_token_stream())?)?;
     ensure(
-        invocation.mac.path == syn::parse_quote!(mini_linq::correlated_hole),
+        invocation.mac.path == expected.mac.path,
         invocation,
-        "subquery bypassed the caller slot",
+        "subquery bypassed the caller's remaining pipeline",
     )?;
-    let parsed: Program = syn::parse2(invocation.mac.tokens.clone())?;
+    let packet: cq_ext_support::SurfaceInput = syn::parse2(invocation.mac.tokens.clone())?;
+    let expected: cq_ext_support::SurfaceInput = syn::parse2(expected.mac.tokens)?;
+    ensure(
+        packet.arguments.to_string() == expected.arguments.to_string()
+            && packet.pipeline.to_token_stream().to_string()
+                == expected.pipeline.to_token_stream().to_string(),
+        invocation,
+        "subquery changed the remaining pipeline or pass arguments",
+    )?;
+    let parsed: Program = syn::parse2(packet.program)?;
     ensure(
         parsed == *hole,
         &parsed,
@@ -576,7 +598,7 @@ fn check_quote(
         ids.iter()
             .chain(matches!(spec, Spec::Scalar(_)).then_some(&first)),
     )?;
-    let expected = quoted_clause(spec, hole, &ids[0], &first);
+    let expected = quoted_clause(spec, hole, &ids[0], &first, pipeline)?;
     ensure(
         *actual == expected,
         actual,
@@ -584,24 +606,77 @@ fn check_quote(
     )
 }
 
-pub fn render(context: &Context) -> TokenStream {
+pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<TokenStream> {
     let leaves = &context.leaves;
     let main = &context.main;
     let answers = distinct(
-        quote!(mini_linq::correlated_hole! { #main }),
+        pipeline.clone().start(main.to_token_stream())?,
         &mut Fresh::new(main),
         "correlated_answers",
     );
-    if leaves.is_empty() {
+    Ok(if leaves.is_empty() {
         answers
     } else {
         quote!({ #(#leaves)* #answers.collect::<::std::vec::Vec<_>>().into_iter() })
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn pipeline() -> cq_stage::Pipeline {
+        syn::parse_quote!(pipeline { next::plan(opaque arguments), last::print })
+    }
+    fn compile(source: &Program) -> syn::Result<Context> {
+        super::compile(source, &pipeline())
+    }
+    fn check(source: &Program, target: &Context) -> syn::Result<()> {
+        super::check(source, target, &pipeline())
+    }
+    #[test]
+    fn testkit_checks_capture_correspondence() {
+        cq_testkit::PassCase {
+            source: syn::parse_quote! {
+                struct C; relation A(x:i32); relation S(x:i32,y:i32);
+                answer(x) :- A(x), exists!{S(x,y)};
+            },
+            expected_next: None,
+            compile: Box::new(compile),
+            check: Box::new(check),
+            mutations: vec![Box::new(|context: &Context| {
+                let mut changed = context.clone();
+                changed.subqueries[0].links.clear();
+                changed
+            })],
+            answers: None,
+        }
+        .run(None)
+        .unwrap();
+    }
+    #[test]
+    fn nested_quote_cannot_change_the_queue_or_its_arguments() {
+        let source: Program = syn::parse_quote! {
+            struct C; relation A(x:i32); relation S(x:i32,y:i32);
+            answer(x) :- A(x), exists!{S(x,y)};
+        };
+        let target = compile(&source).unwrap();
+        assert!(
+            super::check(
+                &source,
+                &target,
+                &syn::parse_quote!(pipeline { next::plan(different), last::print })
+            )
+            .is_err()
+        );
+        assert!(
+            super::check(
+                &source,
+                &target,
+                &syn::parse_quote!(pipeline { next::plan(opaque arguments), different::print })
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn raw_and_bare_outer_occurrences_share_a_capture_without_changing_spelling() {
         let source: Program = syn::parse_quote! {

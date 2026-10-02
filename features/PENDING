@@ -1,28 +1,8 @@
 # Wave 2 migration required; paths relative to features/.
 # Every optional workspace is excluded until it consumes the packaged public API.
-extensions
-extensions/cq-ext-support
-extensions/cq-ext-union
-extensions/cq-ext-negation
-extensions/cq-ext-aggregate
-extensions/cq-ext-recursion
-extensions/cq-ext-correlated
-own-dialect
-stacked-ir
-diverged-ra
-composition
-inspection
 workloads
 workloads/e2e
 workloads/xtask
 # .cargo/config.toml xtask alias removed; reinstate after workloads/xtask migrates.
 protocol
 # Legacy request protocol had no core consumers after slot removal; moved unchanged.
-own-dialect/printer
-stacked-ir/physical-to-trace
-stacked-ir/trace-to-physical
-stacked-ir/bridge
-stacked-ir/trace
-diverged-ra/ra-theta
-inspection/cq-inspection
-inspection/free-variables

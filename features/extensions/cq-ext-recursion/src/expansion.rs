@@ -43,7 +43,7 @@ impl ToTokens for Source {
         rules.to_tokens(tokens);
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Context {
     pub declarations: Vec<RelationDecl>,
     pub leaves: Vec<Leaf>,
@@ -198,7 +198,6 @@ pub fn compile(source: &Source) -> syn::Result<Context> {
 /// Erase delta renames to result reads, verify the rule partition, schema and
 /// observer, and require an active-domain, linear source. Fixpoint execution
 /// and ownership are validated by runtime oracles and Rust.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
     domain(source)?;
     check_fresh(
@@ -313,7 +312,7 @@ pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
         "missing round rule",
     )
 }
-pub fn render(context: &Context) -> TokenStream {
+pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<TokenStream> {
     let leaves = &context.leaves;
     let delta = &context.delta;
     let mut fresh = Fresh::new(
@@ -329,20 +328,32 @@ pub fn render(context: &Context) -> TokenStream {
     let next = fresh.id("next_delta");
     let round = fresh.id("round");
     let observer = fresh.id("observer");
-    let seed_runs = context.seeds.iter().map(|(_, hole)| quote!(
-        for row in mini_linq::recursion_hole! { #hole } {
-            if mini_linq::distinct_state! { operator #seen; insert(#seen, &row) } { #all.push(row); }
-        }
-    ));
-    let step_runs = context.steps.iter().map(|(_, hole)| {
-        quote!(
-            for row in mini_linq::recursion_hole! { #hole } {
-                if mini_linq::distinct_state! { operator #seen; insert(#seen, &row) } {
-                    #all.push(::core::clone::Clone::clone(&row)); #next.push(row);
+    let seed_runs = context
+        .seeds
+        .iter()
+        .map(|(_, hole)| {
+            let invocation = pipeline.clone().start(hole.to_token_stream())?;
+            Ok(quote!(
+                for row in #invocation {
+                    if #seen.insert(::core::clone::Clone::clone(&row)) { #all.push(row); }
                 }
-            }
-        )
-    });
+            ))
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    let step_runs = context
+        .steps
+        .iter()
+        .map(|(_, hole)| {
+            let invocation = pipeline.clone().start(hole.to_token_stream())?;
+            Ok(quote!(
+                for row in #invocation {
+                    if #seen.insert(::core::clone::Clone::clone(&row)) {
+                        #all.push(::core::clone::Clone::clone(&row)); #next.push(row);
+                    }
+                }
+            ))
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
     let observe_binding = context.observer.as_ref().map(|expression| {
         let expression = unparen(expression);
         quote!(#[allow(unused_mut)] let mut #observer = #expression;)
@@ -351,9 +362,9 @@ pub fn render(context: &Context) -> TokenStream {
         .observer
         .as_ref()
         .map(|_| quote!((#observer)(#round, #delta.len());));
-    quote!({
+    Ok(quote!({
         #(#leaves)* #observe_binding
-        let mut #seen = mini_linq::distinct_state! { operator #seen; new };
+        let mut #seen = ::std::collections::HashSet::new();
         let mut #all = ::std::vec::Vec::new(); #(#seed_runs)*
         let mut #delta = ::cq_storage::Answers::collect_from(#all.iter().cloned());
         let mut #round = 0usize;
@@ -364,7 +375,7 @@ pub fn render(context: &Context) -> TokenStream {
             #round += 1;
         }
         #all.into_iter()
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -384,6 +395,23 @@ mod tests {
             struct Reach; relation E(a:i32,b:i32); relation reach(a:i32,b:i32);
             reach(*x,*y) :- E(x,y); reach(*x,*z) :- reach(x,y), E(y,z);
         }
+    }
+    #[test]
+    fn testkit_checks_delta_correspondence() {
+        cq_testkit::PassCase {
+            source: source(),
+            expected_next: None,
+            compile: Box::new(compile),
+            check: Box::new(check),
+            mutations: vec![Box::new(|context: &Context| {
+                let mut changed = context.clone();
+                changed.steps[0].1.declarations[0].value = None;
+                changed
+            })],
+            answers: None,
+        }
+        .run(None)
+        .unwrap();
     }
     #[test]
     fn correspondence_rejects_partition_delta_and_rule_mutations() {

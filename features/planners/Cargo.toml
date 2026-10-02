@@ -1,0 +1,40 @@
+[package]
+name = "cq-planners"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.1"
+license = "MIT OR Apache-2.0"
+description = "External checked CQ to RA prime planner passes"
+
+[workspace]
+members = ["plan", "macros", "test-driver"]
+default-members = [".", "plan", "macros", "test-driver"]
+resolver = "3"
+
+[workspace.dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
+cq-lang-vo = { version = "0.1.0", path = "../../languages/cq-lang-vo" }
+cq-lang-ra = { version = "0.1.0", path = "../../languages/cq-lang-ra" }
+cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
+cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
+cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
+cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
+cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
+mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
+cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
+
+[dependencies]
+cq-planners-plan = { version = "0.1.0", path = "plan" }
+cq-planners-macros = { version = "0.1.0", path = "macros" }
+
+[dev-dependencies]
+cq-testkit.workspace = true
+cq-stage.workspace = true
+cq-elaborate.workspace = true
+mini-linq.workspace = true
+cq-storage.workspace = true
+quote.workspace = true
+syn.workspace = true

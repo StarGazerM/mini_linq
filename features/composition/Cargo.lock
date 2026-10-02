@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "cq-elaborate"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -16,6 +27,7 @@ dependencies = [
 name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -28,6 +40,7 @@ name = "cq-lang-ix"
 version = "0.1.0"
 dependencies = [
  "cq-lang-ra",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -39,6 +52,8 @@ dependencies = [
 name = "cq-lang-physical"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-ra",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -50,6 +65,8 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-vo",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -62,6 +79,7 @@ name = "cq-lang-structures"
 version = "0.1.0"
 dependencies = [
  "cq-lang-physical",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -74,11 +92,23 @@ name = "cq-lang-vo"
 version = "0.1.0"
 dependencies = [
  "cq-lang-cq",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
  "syn_derive",
+]
+
+[[package]]
+name = "cq-order"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -114,29 +144,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-protocol"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "syn_derive",
-]
-
-[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-state-providers"
-version = "0.1.0"
-dependencies = [
- "cq-protocol",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -168,16 +178,48 @@ dependencies = [
 ]
 
 [[package]]
-name = "mini-linq"
+name = "cq-testkit"
 version = "0.1.0"
 dependencies = [
- "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-ix",
  "cq-lang-physical",
  "cq-lang-ra",
  "cq-lang-structures",
  "cq-lang-vo",
+ "cq-syntax",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "mini-linq"
+version = "0.1.0"
+dependencies = [
+ "mini-linq-macros",
+]
+
+[[package]]
+name = "mini-linq-composition-example"
+version = "0.0.0"
+dependencies = [
+ "cq-storage",
+ "cq-testkit",
+ "mini-linq",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "mini-linq-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-index-policy",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
  "cq-stage",
@@ -185,15 +227,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "mini-linq-composition-example"
-version = "0.0.0"
-dependencies = [
- "cq-state-providers",
- "cq-storage",
- "mini-linq",
 ]
 
 [[package]]

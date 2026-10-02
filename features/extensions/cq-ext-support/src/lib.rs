@@ -1,11 +1,110 @@
-//! Surface-only helpers for extension contexts. No core check or pass runs here.
+//! Surface contexts over the public pass protocol.
+//!
+//! Each surface pass receives raw text and a remaining [`cq_stage::Pipeline`].
+//! Unowned text continues unchanged. An owned quotation emits a Rust context
+//! with nested calls to that remaining pipeline, before contracted CQ parsing.
+//! Contexts use concrete set collectors written into their generated Rust;
+//! customizing inner execution means composing passes in the caller's pipeline.
+//! Structural checks preserve leaves, declaration order, and fresh binders.
+//! Runtime evidence assumes finite immutable hosts, Leibniz equality and pure
+//! opaque Rust expressions, with the core's written-order refinement meaning.
 use std::collections::BTreeSet;
 
 use cq_lang_cq::{BodyItem, Program, Query};
 use cq_syntax::{RelationDecl, rust, symbol_name};
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
-use syn::{Expr, Ident, parse::Parse};
+use syn::{Expr, Ident, Token, parse::Parse};
+
+mod kw {
+    syn::custom_keyword!(arguments);
+}
+
+/// Public surface packet; the queue is already past the current pass.
+pub struct SurfaceInput {
+    pub arguments: TokenStream,
+    pub pipeline: cq_stage::Pipeline,
+    pub program: TokenStream,
+}
+impl Parse for SurfaceInput {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let arguments = if input.peek(kw::arguments) {
+            input.parse::<kw::arguments>()?;
+            let contents;
+            syn::braced!(contents in input);
+            let arguments = contents.parse()?;
+            input.parse::<Token![;]>()?;
+            arguments
+        } else {
+            TokenStream::new()
+        };
+        let pipeline = input.parse()?;
+        input.parse::<Token![;]>()?;
+        Ok(Self {
+            arguments,
+            pipeline,
+            program: input.parse()?,
+        })
+    }
+}
+
+/// Expand an owned surface or forward raw text. A context finishes this macro
+/// invocation; its nested queries each resume the same remaining queue.
+pub fn surface(
+    input: TokenStream,
+    expand: impl FnOnce(&TokenStream, &cq_stage::Pipeline) -> syn::Result<Option<TokenStream>>,
+) -> TokenStream {
+    (|| {
+        let input: SurfaceInput = syn::parse2(input)?;
+        ensure(
+            input.arguments.is_empty(),
+            &input.arguments,
+            "this surface pass accepts no arguments",
+        )?;
+        ensure(
+            !input.pipeline.passes.is_empty(),
+            &input.program,
+            "surface pass requires a remaining pipeline with a Rust printer",
+        )?;
+        if let Some(context) = expand(&input.program, &input.pipeline)? {
+            Ok(context)
+        } else {
+            input.pipeline.start(input.program)
+        }
+    })()
+    .unwrap_or_else(syn::Error::into_compile_error)
+}
+
+/// Match only a whole owned quotation. Other surfaces stay opaque.
+pub fn quotation(tokens: &TokenStream, owner: &str) -> syn::Result<Option<TokenStream>> {
+    let mut trees = tokens.clone().into_iter();
+    let Some(TokenTree::Ident(name)) = trees.next() else {
+        return Ok(None);
+    };
+    if symbol_name(&name) != owner {
+        return Ok(None);
+    }
+    if !matches!(trees.next(), Some(TokenTree::Punct(p)) if p.as_char() == '!') {
+        return Ok(None);
+    }
+    let Some(TokenTree::Group(contents)) = trees.next() else {
+        return Err(syn::Error::new_spanned(
+            tokens,
+            "expected a surface quotation",
+        ));
+    };
+    ensure(
+        trees.next().is_none(),
+        tokens,
+        "unexpected text after surface quotation",
+    )?;
+    Ok(Some(contents.stream()))
+}
+
+/// Detect ordinary CQ without trying to parse another extension's quotation.
+pub fn is_cq(tokens: &TokenStream) -> bool {
+    matches!(tokens.clone().into_iter().next(), Some(TokenTree::Ident(id)) if id == "struct" || id == "pub")
+}
 
 pub fn same_symbol(left: &Ident, right: &Ident) -> bool {
     symbol_name(left) == symbol_name(right)
@@ -184,13 +283,13 @@ pub fn ensure(condition: bool, source: impl ToTokens, message: &str) -> syn::Res
 }
 
 /// A context's final answer values form a set even when computed heads map
-/// several core valuations to the same value. Use the caller's state law.
+/// several core valuations to the same value. Its concrete type is in the context.
 pub fn distinct(stream: TokenStream, fresh: &mut Fresh, role: &str) -> TokenStream {
     let state = fresh.id(role);
     let row = fresh.id("answer_value");
     quote!({
-        let mut #state = mini_linq::distinct_state! { operator #state; new };
-        #stream.filter(move |#row| mini_linq::distinct_state! { operator #state; insert(#state, #row) })
+        let mut #state = ::std::collections::HashSet::new();
+        #stream.filter(move |#row| #state.insert(::core::clone::Clone::clone(#row)))
     })
 }
 
@@ -225,6 +324,31 @@ pub fn with_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn forwarding_keeps_next_arguments_and_the_rest_of_the_queue() {
+        let result = surface(
+            quote!(pipeline { next::pass(alpha + beta), last::print }; foreign!{opaque}),
+            |_, _| Ok(None),
+        );
+        assert_eq!(
+            result.to_string(),
+            quote!(next::pass! {
+                arguments { alpha + beta }; pipeline { last::print }; foreign!{opaque}
+            })
+            .to_string()
+        );
+    }
+    #[test]
+    fn quotation_ownership_and_missing_printer_are_checked() {
+        assert!(
+            quotation(&quote!(other! {opaque}), "union")
+                .unwrap()
+                .is_none()
+        );
+        assert!(quotation(&quote!(union!{opaque} extra), "union").is_err());
+        let result = surface(quote!(pipeline {}; struct Q;), |_, _| Ok(None));
+        assert!(result.to_string().contains("requires a remaining pipeline"));
+    }
     #[test]
     fn source_capture_and_aliases_are_rejected() {
         let source = quote!(hidden! {occupied});

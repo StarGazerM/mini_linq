@@ -5,6 +5,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-cq-lang-ix = { path = "../../../languages/cq-lang-ix", default-features = false }
+cq-lang-ix = { version = "0.1.0", path = "../../../languages/cq-lang-ix" }
 syn = { version = "2", features = ["full", "extra-traits"] }
 quote = "1"
+
+[dev-dependencies]
+cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit" }

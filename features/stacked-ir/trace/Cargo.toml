@@ -5,8 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-cq-syntax = { path = "../../../languages/cq-syntax" }
-syn = { version = "2", features = ["full", "extra-traits"] }
-quote = "1"
-proc-macro2 = "1"
-cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
+cq-stage.workspace = true
+cq-lang-physical.workspace = true
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true

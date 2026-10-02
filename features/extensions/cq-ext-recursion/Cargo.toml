@@ -17,3 +17,6 @@ quote.workspace = true
 syn.workspace = true
 cq-stage.workspace = true
 cq-ext-support = { path = "../cq-ext-support" }
+
+[dev-dependencies]
+cq-testkit.workspace = true

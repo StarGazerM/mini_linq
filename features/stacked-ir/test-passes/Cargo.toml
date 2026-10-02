@@ -1,0 +1,20 @@
+[package]
+name = "stacked-ir-test-passes"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-stage.workspace = true
+cq-lang-cq.workspace = true
+cq-lang-ra.workspace = true
+cq-lang-physical.workspace = true
+cq-lang-structures.workspace = true
+cq-order.workspace = true
+cq-reduce.workspace = true
+cq-elaborate.workspace = true
+proc-macro2.workspace = true
+syn.workspace = true
