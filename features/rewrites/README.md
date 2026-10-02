@@ -31,14 +31,38 @@ to preserve a key needs no additional canonical boundary.
 |---|---|---|
 | `merge_joins` | `probe` becomes `merge` | Nonempty Ord key; each side is retained, a reusable host, or a merge stream ordered on that same key. Native ordered host reads still require `OrderedRead` from rustc. |
 | `canon_prefixes` | Adds `canon` on a projection | Drops columns without retaining an inferred uniqueness key; retained columns satisfy the language's Leibniz checks. Existing canonical boundaries remain. |
-| `smallest_intersections` | `probe first` becomes `probe smallest` | The public Physical `binary_intersection` predicate accepts the adjacent probe/check pair. |
+| `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `binary_intersection` predicate accepts the probe/check pair, and every interposed definition can move before the probe without moving Rust or breaking dependencies. |
 | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
 
 These passes preserve the operator graph, declarations, keys, modes, return
-head, and opaque Rust expressions. They do not change definition order.
-In particular, the corpus `fine_triangle` has interposed renames and its
-smallest rewrite is a no-op. The adjacent triangle fixture is an explicitly
-authored Physical program used to exercise the active choice.
+head, and opaque Rust expressions. `smallest_intersections` moves interposed
+relational definitions earlier, preserving their dependency order, to make
+the candidate probe and its check adjacent. This includes reusable host
+renames and retained relational chains. Bind/guard nodes stay at their original
+positions with the same payloads. An interposed Rust node or a consumer of the
+candidate blocks the rewrite; an explicit named selection then reports an
+inadmissible result. Other passes preserve definition order.
+
+The generated generic-fine triangle and the corpus `fine_triangle` both get
+an active smallest choice. For example:
+
+```rust
+let r = [(1, 10), (1, 11)];
+let s = [(10, 100), (11, 101)];
+let t = [(1, 100)];
+let answer: Vec<_> = mini_linq::compile! {
+    pipeline {
+        plan = cq_planners::order(written, fine);
+        physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections];
+    }
+    struct Triangle;
+    relation r(a:i32,b:i32) = (r);
+    relation s(b:i32,c:i32) = (s);
+    relation t(a:i32,c:i32) = (t);
+    answer(a,b,c) :- r(a,b),s(b,c),t(a,c);
+}.map(|(a,b,c)| (*a,*b,*c)).collect();
+assert_eq!(answer, vec![(1,10,100)]);
+```
 
 `retype(selector => RustType)` replaces only recorded types. It preserves
 Physical, entry order, reader identities, and index levels. A bare result name
@@ -101,7 +125,7 @@ at corpus IX or Physical and use the default lower/select/print macros. Other
 tests exercise active merge and smallest choices, custom runtime traits,
 representation obligations, exact IR fixtures, duplicates, and empty inputs.
 
-The finite 48-wide fan test resets runtime counters after fixture/oracle
+The authored adjacent triangle's finite 48-wide fan test resets runtime counters after fixture/oracle
 construction and exhausts a fresh query before each snapshot:
 
 | Rewrites | Lookups | Enumerated rows | Cursor steps | Index builds |
@@ -116,6 +140,36 @@ membership build, so some counters increase. This experiment establishes
 work reduction on this instance; the full WCOJ growth proof belongs to wave 3.
 Counts are outside the denotation: rewrites retain Kleisli bottom + Set,
 written-order refinement, opaque Rust steps, and Leibniz equality.
+
+The mandatory `generated` regression uses `cq_planners::order(written, fine)`
+through the public macro pipeline, captures its selected Physical program,
+and checks its active smallest intersection, both contracts, and public
+correspondence. Executed triangle and fan answers, duplicates, and empty inputs
+agree with cq-testkit's CQ oracle. A generated query with opaque guards and a
+partial division bind retains the exact Rust definitions and positions after
+the active hoist, and refines executed written-order answers. The mandatory
+`growth` regression uses the workload's symmetric fan with linear input size
+and a planted triangle at scales 24, 48, and 96:
+
+| Scale | Binary enumerated rows | Generic-fine + both rewrites |
+|---|---:|---:|
+| 24 | 770 | 422 |
+| 48 | 2,666 | 806 |
+| 96 | 9,914 | 1,574 |
+
+Both plans' answers match the independent CQ oracle at every scale. The test
+requires at least 3x row growth per doubling for binary and at most 2.5x for
+generic-fine plus both rewrites. Observed ratios are 3.462/3.719 for binary
+and 1.910/1.953 for generic-fine. The optimized plan builds five indexes at
+each scale, versus two for binary. These finite measurements validate the
+specified growth regression; they do not establish a general complexity bound.
+
+`cargo run --example hoist_contract` demonstrates the public Physical contract
+and correspondence accepting an independent rename hoist. The separate
+`mixed_smallest_selection` example reproduces a default-selector limitation:
+a mixed reusable-host/retained candidate intersection passes Physical, but
+default selection omits the retained side's candidate levels. That core request
+is separate from the generated all-host triangle/fan evidence above.
 
 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
 `cargo test` here. The workspace defaults include both support crates.
