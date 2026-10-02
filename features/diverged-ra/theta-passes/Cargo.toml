@@ -1,0 +1,24 @@
+[package]
+name = "theta-passes"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-stage = { version = "0.1.0", path = "../../../facade/cq-stage" }
+cq-lang-ix = { version = "0.1.0", path = "../../../languages/cq-lang-ix" }
+cq-lang-physical = { version = "0.1.0", path = "../../../languages/cq-lang-physical" }
+cq-lang-structures = { version = "0.1.0", path = "../../../languages/cq-lang-structures" }
+cq-physical-lowering = { version = "0.1.0", path = "../../../passes/cq-physical-lowering" }
+cq-structure-selection = { version = "0.1.0", path = "../../../passes/cq-structure-selection" }
+cq-physical-realization = { version = "0.1.0", path = "../../../passes/cq-physical-realization" }
+proc-macro2 = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit" }
+ra-theta = { version = "0.0.0", path = "../ra-theta" }
+quote = "1"

@@ -1,52 +1,6 @@
-//! A caller-written host composes RA → IX → Physical → Structures → Rust.
-//!
-//! The policy contains query-independent strategy; host types decide native reads.
-//! `R` and `S` are host maps keyed
-//! on their join columns, so the compiler probes them in place and builds no
-//! structure of its own; `L` is only scanned.
-#![recursion_limit = "512"]
-
-use std::collections::{BTreeMap, HashMap, HashSet};
-
-macro_rules! policy {
-    ($($ix:tt)*) => {
-        ::mini_linq::lower_physical! {
-            $($ix)*
-            policy {}
-        }
-    };
-}
-use policy as physical_policy;
-mod wiring {
-    pub(crate) use super::physical_policy;
-    pub(crate) use ::mini_linq::{select_structures, structures_to_rust};
-    pub(crate) use cq_state_providers::default_indexes as index_provider;
-    pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-}
-use wiring as mini_linq;
-
-// The host owns its signature; the query is an iterator of borrowed answers.
-// Host maps hold tuples: keys over the key columns, payloads over the rest.
-#[allow(non_snake_case)]
-fn query<'a>(
-    L: &'a [(i32,)],
-    R: &'a HashMap<(i32,), Vec<(i32,)>>,
-    S: &'a BTreeMap<(i32,), Vec<(i32,)>>,
-) -> HashSet<(&'a i32, &'a i32, &'a i32)> {
-    ::core::iter::Iterator::collect(::mini_linq::index_demands! {
-        relational {
-        relation L(a: i32);
-        relation R(a: i32, b: i32);
-        relation S(b: i32, c: i32);
-            l = rename L {a -> a};
-            r = rename R {a -> a, b -> b};
-            s = rename S {b -> b, c -> c};
-            j0 = natural_join l with r;
-            j1 = natural_join j0 with s;
-            output j1 as answer(a, b, c);
-        }
-    })
-}
+//! Run the explicitly composed caller query over heterogeneous borrowed hosts.
+use mini_linq_composition_example::query;
+use std::collections::{BTreeMap, HashMap};
 
 fn main() {
     let left = [(1,), (1,), (2,), (9,)];

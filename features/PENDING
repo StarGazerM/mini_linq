@@ -9,9 +9,6 @@ extensions/cq-ext-recursion
 extensions/cq-ext-correlated
 own-dialect
 stacked-ir
-diverged-ra
-composition
-inspection
 workloads
 workloads/e2e
 workloads/xtask
@@ -23,6 +20,3 @@ stacked-ir/physical-to-trace
 stacked-ir/trace-to-physical
 stacked-ir/bridge
 stacked-ir/trace
-diverged-ra/ra-theta
-inspection/cq-inspection
-inspection/free-variables

@@ -38,3 +38,8 @@ mini-linq	test	denotation	facade/mini-linq/tests/denotation.rs
 mini-linq	test	provenance	facade/mini-linq/tests/provenance.rs
 cq-stage	test	protocol	facade/cq-stage/tests/protocol.rs
 mini-linq	test	pipeline	facade/mini-linq/tests/pipeline.rs
+diverged-ra	scenario	downstream-reuse	features/diverged-ra/check.py
+mini-linq-composition-example	manifest-run	composition	features/composition/Cargo.toml
+mini-linq-composition-example	manifest-test	conformance	features/composition/Cargo.toml
+mini-linq-inspection-examples	scenario	cq-inspection	features/inspection/cq-inspection/check.py
+mini-linq-inspection-examples	scenario	free-variables	features/inspection/free-variables/check.py
