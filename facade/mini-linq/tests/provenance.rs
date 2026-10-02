@@ -1,20 +1,22 @@
-//! Leibniz identity and functional extensionality permit canonical projection.
-//! Compile and execute both optimized queries and the written-order reference.
+#[path = "../../../test-support/relational/rewrites.rs"]
+mod authored;
+// Leibniz identity and functional extensionality permit canonical projection.
+// Compile and execute both optimized queries and the written-order reference.
 use proc_macro2::TokenStream;
 use quote::quote;
 
-fn expression(source: &str, options: cq_order::Options, policy: &str) -> TokenStream {
-    elaborate_expression(source, options, policy, false)
+fn expression(source: &str, options: cq_order::Options, decisions: &str) -> TokenStream {
+    elaborate_expression(source, options, decisions, false)
 }
 
-fn written_expression(source: &str, policy: &str) -> TokenStream {
-    elaborate_expression(source, cq_order::Options::default(), policy, true)
+fn written_expression(source: &str, decisions: &str) -> TokenStream {
+    elaborate_expression(source, cq_order::Options::default(), decisions, true)
 }
 
 fn elaborate_expression(
     source: &str,
     options: cq_order::Options,
-    policy: &str,
+    decisions: &str,
     written: bool,
 ) -> TokenStream {
     let source = cq_lang_cq::normal::normalize(&syn::parse_str(source).unwrap()).unwrap();
@@ -26,26 +28,23 @@ fn elaborate_expression(
         cq_elaborate::compile(&vo).unwrap()
     };
     cq_elaborate::check(&vo, &ra).unwrap();
-    realize(&ra, policy)
+    realize(&ra, decisions)
 }
 
-fn realize(ra: &cq_lang_ra::Program, policy: &str) -> TokenStream {
+fn realize(ra: &cq_lang_ra::Program, decisions: &str) -> TokenStream {
     let ix = cq_index_policy::compile(ra).unwrap();
     cq_index_policy::check(ra, &ix).unwrap();
-    let policy = syn::parse_str(policy).unwrap();
-    let physical = cq_physical_lowering::compile(&ix, &policy).unwrap();
-    cq_physical_lowering::check(&ix, &physical, &policy).unwrap();
-    let structures = cq_structure_selection::compile(&physical, &policy).unwrap();
-    cq_structure_selection::check(&physical, &structures, &policy).unwrap();
-    let expression = cq_physical_realization::compile(
-        &structures,
-        &cq_physical_realization::Endpoints {
-            distinct_state: syn::parse_quote!(distinct),
-            index_provider: syn::parse_quote!(indexes),
-            intersect: false,
-        },
-    )
-    .unwrap();
+    let mut physical = cq_physical_lowering::compile(&ix).unwrap();
+    if decisions.contains("merge") {
+        physical = authored::merged(&physical).unwrap();
+    }
+    if decisions.contains("canon") {
+        physical = authored::canonical_projects(&physical).unwrap();
+    }
+    cq_physical_lowering::check(&ix, &physical).unwrap();
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    cq_structure_selection::check(&physical, &structures).unwrap();
+    let expression = cq_physical_realization::compile(&structures).unwrap();
     quote!(#expression)
 }
 
@@ -60,16 +59,11 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
         cq_order::Heuristic::Elimination,
     ] {
         for split in [cq_order::Split::Coarse, cq_order::Split::Fine] {
-            for policy in [
-                "policy {join=seek; project=keep;}",
-                "policy {join=seek; project=canon;}",
-                "policy {join=merge; project=keep;}",
-                "policy {join=merge; project=canon;}",
-            ] {
-                let label = format!("{heuristic:?}/{split:?}/{policy}");
+            for decisions in ["probe keep", "probe canon", "merge keep", "merge canon"] {
+                let label = format!("{heuristic:?}/{split:?}/{decisions}");
                 // A slice has no native OrderedRead. Merge fixtures group on
                 // the declared leading key and retain all payload rows.
-                let (r_host, s_host) = if policy.contains("join=merge") {
+                let (r_host, s_host) = if decisions.contains("merge") {
                     (
                         quote!(let R: ::std::collections::BTreeMap<(Key,),Vec<(i32,)>> = rows_r.iter().cloned().fold(::std::collections::BTreeMap::new(), |mut map,(key,row)| { map.entry((key,)).or_default().push((row,)); map });),
                         quote!(let S: ::std::collections::BTreeMap<(Key,),Vec<()>> = rows_s.iter().cloned().map(|row| (row,vec![()])).collect();),
@@ -82,8 +76,8 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
                 };
                 let source = "struct Q; relation R(k:Key,r:i32); relation S(k:Key); \
                               answer(y) :- R(x,z), S(x), let y:bool = x.flag;";
-                let written = written_expression(source, policy);
-                let query = expression(source, cq_order::Options { heuristic, split }, policy);
+                let written = written_expression(source, decisions);
+                let query = expression(source, cq_order::Options { heuristic, split }, decisions);
                 cases.push(quote!({
                     let rows_r = [(Key { id: 1, flag: false }, 0)];
                     let rows_s = [(Key { id: 1, flag: false },), (Key { id: 1, flag: true },)];
@@ -93,8 +87,9 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
                     assert_eq!(actual, expected, "Leibniz join: {}", #label);
                 }));
                 let source = "struct Q; relation R(k:Key,r:i32); answer(flag,z) :- R(x,z), let flag:bool=x.flag;";
-                let written = written_expression(source, policy);
-                let correlated = expression(source, cq_order::Options { heuristic, split }, policy);
+                let written = written_expression(source, decisions);
+                let correlated =
+                    expression(source, cq_order::Options { heuristic, split }, decisions);
                 cases.push(quote!({
                     let rows_r = [(Key {id:1,flag:false},0),(Key {id:1,flag:true},1)];
                     #r_host
@@ -104,8 +99,8 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
                     assert_eq!(actual,written,"full-row correlation: {}",#label);
                 }));
                 let source = "struct Q; relation R(k:Key,r:i32); answer(y) :- R(x,z), let y:i32=if x.flag {10 / *z} else {0};";
-                let written = written_expression(source, policy);
-                let partial = expression(source, cq_order::Options { heuristic, split }, policy);
+                let written = written_expression(source, decisions);
+                let partial = expression(source, cq_order::Options { heuristic, split }, decisions);
                 cases.push(quote!({
                     let rows_r = [(Key {id:1,flag:true},1),(Key {id:1,flag:false},0)];
                     #r_host
@@ -119,8 +114,8 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
     }
     let source = "struct Q; relation R(k:i32,p:i32); \
                   answer(y) :- R(x,z), if * x == 5, let y:i32 = *x + 1;";
-    let written = written_expression(source, "policy {}");
-    let point = expression(source, cq_order::Options::default(), "policy {}");
+    let written = written_expression(source, "decisions {}");
+    let point = expression(source, cq_order::Options::default(), "decisions {}");
     cases.push(quote!({
         let rows = [(5_i32,7_i32), (5,8), (6,9)];
         let R = rows.as_slice();
@@ -152,8 +147,8 @@ fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
         p = project b keep {y}; output p as answer(y);
     });
     cq_elaborate::check(&vo, &ra).unwrap();
-    let optimized = realize(&ra, "policy {project=canon;}");
-    let written = written_expression(source, "policy {}");
+    let optimized = realize(&ra, "decisions {project=canon;}");
+    let written = written_expression(source, "decisions {}");
     run_cases(&[quote!({
         fn observe(x: &i32, visits: &::std::cell::Cell<usize>) -> bool {
             assert_ne!(*x, 0, "both full written atoms must constrain the guard");
@@ -197,16 +192,6 @@ fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
 fn run_cases(cases: &[TokenStream]) {
     let program = quote! {
         #![allow(non_snake_case, unused_variables, unused_macros)]
-        macro_rules! distinct {
-            (operator $id:ident; new) => { ::std::collections::HashSet::new() };
-            (operator $id:ident; insert($set:expr,$row:expr)) => { $set.insert(Clone::clone($row)) };
-        }
-        macro_rules! indexes {
-            (probe) => { ::cq_storage::HashIndex<'_,_,_> };
-            (semi) => { ::std::collections::HashSet<_> };
-            (ordered) => { ::std::collections::BTreeMap<_,Vec<_>> };
-            (trie $inner:ty) => { ::cq_storage::Trie<'_,_,$inner> };
-        }
         #[derive(Clone,Debug,PartialEq,Eq,Hash,PartialOrd,Ord)]
         struct Key { id:i32, flag:bool }
         fn main() { #(#cases)* }

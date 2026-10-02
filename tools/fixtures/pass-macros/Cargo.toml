@@ -1,0 +1,26 @@
+[package]
+name = "core-pass-fixtures"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-stage = { path = "../../../facade/cq-stage" }
+cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
+cq-lang-ra = { path = "../../../languages/cq-lang-ra" }
+cq-lang-ix = { path = "../../../languages/cq-lang-ix" }
+cq-lang-physical = { path = "../../../languages/cq-lang-physical" }
+cq-lang-structures = { path = "../../../languages/cq-lang-structures" }
+cq-order = { path = "../../../passes/cq-order" }
+cq-reduce = { path = "../../../passes/cq-reduce" }
+cq-elaborate = { path = "../../../passes/cq-elaborate" }
+cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }
+cq-structure-selection = { path = "../../../passes/cq-structure-selection" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }

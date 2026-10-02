@@ -1,5 +1,7 @@
 # MiniLinq design
 
+Every execution and representation decision lives in an IR program. Customization means a stage pass A → B, a checked rewrite L → L, or an authored IR.
+
 The principles and invariants the code enforces. Grammars, APIs and the exact
 obligations of each language and pass live in that crate's `//!`
 documentation; formal rules (`ST-Hole`, `IF-Dispatch`, …) are listed with their
@@ -76,8 +78,8 @@ while allowing only refinement-preserving hoisting.
 | VO (reduced) | + reductions applied to a clause before it is joined | where reductions go |
 | RA′ | relational operators and an opaque Rust ancestry chain | none (elaboration) |
 | IX | demands: key sets and stream/const/range supplies | none (derived) |
-| Physical | one operator per result; `pipe`/`let` modes | operator, mode, dedup placement |
-| Structures | the bindings Γ: the value answering each keyed read | representation |
+| Physical | one operator per result; `pipe`/`let`/`exists` modes | operator, intersection and semijoin choice, mode, dedup placement |
+| Structures | built types, each host fallback type, boundary dedup types | representation |
 
 Step `i` of a valuation plan denotes the partial valuations on the variables
 bound so far that satisfy every subatom seen; the last step denotes `⟦Q⟧`.
@@ -88,7 +90,7 @@ and `α` of a built value is exactly the rows it was built from
 (`α ∘ build = id`). The laws are tested in `runtime/cq-storage/tests/`.
 
 **Canonicality is a plan property.** A `canon` boundary deduplicates through
-`distinct_state!`, including before a let is materialized. Uniqueness propagates
+the concrete dedup type recorded in Structures, including before a let is materialized. Uniqueness propagates
 through joins of unique inputs, semijoins, selects, binds, guards, and projections
 that retain an inferred key. Host types supply no canonicity premises.
 
@@ -116,7 +118,7 @@ without invoking Clone. Disjunctions stay boolean filters. Stream demands and
 their amortized builds are unchanged.
 
 **Modes are binding time.** A derived `pipe` has one stream read; a `let`
-retains rows or built indexes for repeated or keyed reads. A host rename is a
+retains rows or built indexes for repeated or keyed reads. An `exists` retains a unit relation as nonemptiness while consuming its entire source; its default collection is `cq_storage::Exists`. A host rename is a
 reusable `pipe` read. Merge requires ordered inputs: rustc checks a direct
 host's `OrderedRead`; a built let or a same-key merge pipe supplies plan order.
 
@@ -130,7 +132,7 @@ holds no CQ and Physical no IX.
 
 **Languages make no capability claims.** Declarations contain only a name,
 ordered columns and an optional leaf expression. Rust types and traits decide
-host access. Structures records built lets, never host capabilities.
+host access. Structures records built lets and the fallback type for each host read, without claiming which native traits a host implements.
 
 **Declaration order is layout.** A grouped host key occupies the leading
 columns. Only a read whose column set equals a leading prefix is eligible for
@@ -146,17 +148,19 @@ payload and cannot preserve a Rust-visible key binding. Unsupported point
 reads scan the original full rows. Its fallback is initialized once on first use within the
 query block, shared by all probes, and never built on the native path.
 
-**Provider slots select built types and distinct state.** `index_provider!`
-accepts `probe`, `semi`, `ordered`, or `trie Type`. The default provider selects
-HashIndex, HashSet, BTreeMap, and Trie respectively. A caller can bind any
-provider whose types implement the reads used by its plan. `distinct_state!`
-handles canonical boundaries. Missing IX demands and unserved derived pipe
-reads remain independent contract errors.
+**Structures chooses concrete types.** Built entries name Rust types such as
+`::cq_storage::HashIndex<'_, _, _>`, `::std::collections::HashSet<_>`,
+`::std::collections::BTreeMap<_, ::std::vec::Vec<_>>`, or a curried
+`::cq_storage::Trie<'_, _, Inner>`. Each host read records a fallback type;
+each `canon` boundary and noninjective computed head records a dedup type.
+Retained row buffers record their collection type. The printer reads these
+entries directly. Rust verifies the selected types' Build/read/insert laws;
+contracts reject missing reads and known incompatible standard representations.
 
 **The printer inserts no binding clones.** Rows borrow host and built fields,
 and a value bound by an outer source is used by its inner loops as that source
 produced it. The only copies are those a type imposes: an owned host lookup
-key constructed from bound columns, and the rows a distinct-state provider
+key constructed from bound columns, and the rows the recorded dedup type
 retains. The head expression alone decides what the result owns.
 
 ## Contracts and evidence
@@ -166,20 +170,19 @@ Four kinds of evidence stay separate; none substitutes for another.
 | Evidence | Owner | Question it answers |
 |---|---|---|
 | Language contract | `contract::check(&Program)` in each language crate | Is this one program well formed? It returns the analysis consumers use. |
-| Pass correspondence | `check(&source, &target, options…)` in each pass except the printer | Does this target correspond to this source under these options? |
+| Pass correspondence | `check(&source, &target, options…)` in each pass except the printer | Does this target preserve source meaning and discharge its recorded decisions? |
 | Fixtures | per-stage scenario files in `test-support/relational/scenarios`, expansion captures | Is this the output the compiler is meant to produce? |
 | Oracles | set evaluators, SQL, independent reference answers | Does the executed plan compute the query's answers? |
 
 **A language contract is local.** It sees one program; an extension's
 contract also checks its base. Every `compile` ends by checking its target
-contract, so an invalid program never leaves a pass. `compile` never invokes
-`check`; tests, tools and callers do.
+contract, so an invalid program never leaves a pass. Compilation may also call its public correspondence check; the check itself never re-runs compilation.
 
 **A pass check is independent of compile.** It checks that the source is in
 the pass's domain, the target contract, the erasure or kernel relation, and
 the obligations of every explicit choice (split granularity, reduction tree
-edges, demand derivation and names, policy-mandated operators, declaration
-layout, read admissibility, provider slots). Choices the options leave free
+edges, demand derivation and names, recorded operators, declaration
+layout, read admissibility, concrete representation types). Choices the options leave free
 (a prefix or elimination ranking, sibling reduction order, let/pipe
 when several are admissible, structure entry order) are accepted in any
 admissible form; the selector is never re-run to compare.
@@ -188,7 +191,7 @@ admissible form; the selector is never re-run to compare.
 **The printer has no check.** Nothing independent can decide whether Rust
 means a Structures program. Its evidence is oracle agreement of the executed
 expansion and rustc's trait guards; expansion captures pin the emitted syntax,
-and `tools/check_expansions.py` compares them byte for byte across a refactor.
+and `tools/check_expansions.py` compares them byte for byte across a refactor; `--review` captures every intentional type/slot difference.
 
 **Fixtures pin what checks leave free.** Each pass test pins `compile(stage)`
 to the next stage of every scenario, requires `check` to accept it and to
@@ -213,8 +216,8 @@ no residual-hole IR. The core opens in four places:
   leaves the context intact; rustc checks the closing bindings. A context may
   collect an answer and feed it to another quotation, or supply a leaf.
 - **Below the core.** Host representations dispatch through Rust traits;
-  `index_provider!` and `distinct_state!` select built types and state. Every
-  stage boundary is a caller import (see Modularity).
+  Structures records built types and state. Every
+  stage boundary is a pipeline pass path (see Extending).
 
 Each crossing between the core and its outside is one of four checked
 interfaces:
@@ -230,7 +233,7 @@ interfaces:
 `GroupedAnswers::collect_from` deduplicates `(key, payload)` pairs and supports
 native keyed reads on the leading declared columns. Rows may hold `&T`, and
 neither collector clones referents. A later query still establishes its own
-plan uniqueness through the caller's distinct-state provider.
+plan uniqueness through the recorded dedup type.
 
 ## Planning
 
@@ -250,44 +253,37 @@ reduce check erases reductions back to the source plan and verifies that tree
 semijoins form a full reducer of a join tree; tree reduction requires an
 acyclic body.
 
-**Policy is strategy only.** The caller supplies one query-independent
-`policy { … }` (`join`, `semijoin`, `project`, `intersect`); no policy names a query's results.
+**Default passes choose deterministic IR.** Default lowering uses probe,
+keep, first, and eager decisions, marking the canonical return as needed.
+Other choices are authored in Physical by a custom lowering or rewrite.
+`probe smallest` is admissible only for its adjacent binary intersection;
+`semi lazy` requires reusable host membership reads on its shared key.
 
 **No pass reselects.** A later pass never revisits a choice an earlier one
-recorded. IX derives demands from the fixed RA plan; lowering respects `join`,
-`project` and declaration layout; selection preserves the Physical program
+recorded. IX derives demands from the fixed RA plan; lowering records concrete operators and modes using declaration layout; selection preserves the Physical program
 unchanged; the printer preserves the operator graph and storage choices and
 decides only Rust control flow and layout.
 
 **Worst-case-optimal join is a configuration, not an IR.** Generic join
 decomposes into `Split::Fine` in the order pass (bind one variable at a
-time), `project = canon` (enumerate each prefix as a set), prefix checks as
-semijoins over built lets can share a curried structure; host reads dispatch by type. `intersect = smallest`
-(enumerate the smaller candidate set, test the other). On the fan instance in
-`facade/mini-linq/tests/wcoj.rs`, the hash-operation count of that
-configuration grows at most 2.5× per doubling of `n`, while the binary and
-first-candidate plans grow at least 3.5×. This is measured, not a proven
-complexity bound.
+time), canonical Physical projections (enumerate each prefix as a set), prefix checks as
+semijoins over built lets can share a curried structure; host reads dispatch by type. `probe smallest`
+(enumerate the smaller candidate set, test the other). The core execution tests compare these authored pipelines against independent
+set answers. Optional growth/performance experiments are pending migration in
+`features/workloads/`; no current complexity bound is claimed by the core gate.
 
 ## Modularity
 
-**Dependencies follow folders.** A language depends on `cq-syntax` and at most
-its base; a pass on exactly its source and target languages (a printer also on
+**Dependencies follow folders.** A language depends on `cq-syntax`, `cq-stage`, its base and the languages needed by its public correspondence proof; a pass on exactly its source and target languages (a printer also on
 `cq-print`). Runtime crates depend on no compiler crate; passes name runtime
-items only in emitted Rust tokens. Language and pass crates have no Cargo
+items only in emitted Rust tokens. Language, pass and facade crates have no Cargo
 features. `tools/check_dependencies.py` derives the rule from the folders;
 `--isolate` tests each crate with only its declared chain present.
 
-**Every boundary is a caller import.** Each stage macro continues through a
-caller-resolved slot (`mini_linq::cq_to_ra!`, `mini_linq::choose_index_policy!`,
-`mini_linq::physical_policy!`, `mini_linq::select_structures!`,
-`mini_linq::structures_to_rust!`, `mini_linq::distinct_state!`) using the
-`cq-stage` continuation ABI. A stage can therefore be swapped, stacked or
-diverged by crate choice ([examples](../examples/README.md)):
-
-- swap: `own-dialect` replaces the printer with a push dialect;
-- stack: `stacked-ir` inserts Physical → Trace → Physical, byte-identical output;
-- diverge: `diverged-ra` builds IX from its own surface, without CQ, VO or planning.
+**Every boundary is a public pass path.** The facade exposes only the default
+planner and passes in `mini_linq::passes`. Optional planner variants, dialects,
+stacked languages and extensions belong to external consumer workspaces under
+`features/`. `features/PENDING` records the wave-2 migration boundary.
 
 **Dialects are printers.** A dialect (pull, push, parallel, batched,
 incremental) is a printer and its runtime, checked by running it against
@@ -306,34 +302,50 @@ oracles and the reference printer, not by proof. Every printed program meets:
   expression and no printer copies a binding; ownership is created only by a
   CQ `let`, a final computed column, or the endpoint.
 
-## Extensions
+## Extending
 
-The crates in `extensions/` exercise the four openings without edits to
-`languages/`, `passes/`, `runtime/` or `facade/`. They emit core quotations into
-caller-resolved slots and never run passes. `cq-ext-union` makes one hole per
-disjunct and shares a lazy distinct sink; `cq-ext-negation` projects a negative
-hole into `GroupedAnswers` and uses an environment membership guard;
-`cq-ext-aggregate` folds a hole's distinct rows into grouped output;
-`cq-ext-recursion` runs linear delta holes to a finite active-domain fixpoint,
-feeding `Answers` through leaf declarations; `cq-ext-correlated` closes borrowed
-hosts and caller parameters around per-row existential/scalar quotations.
-Union and negation stack only by binding `union_hole!` to negation: neither
-crate depends on or recognizes the other. Authored leaves run once per context.
-Union streams when no local leaves must be retained; contexts retaining leaves
-collect before returning to close their lifetimes.
+`mini_linq::mini_linq! { <CQ> }` runs the defaults. A caller can select any
+public macro path without registering it in the core:
 
-Each extension has an independent structural correspondence check and mutation
-tests; executed programs are compared with 51 DuckDB scenarios from 17 authored
-queries. These checks establish the recorded context/quotation correspondence,
-not arbitrary Rust semantics. Negation checks declared transitive host dependency
-edges (opaque leaf dependencies must be supplied by the caller). Group-by folds
-use the explicitly projected CQ row set; recursive heads only copy active-domain
-columns; scalar subqueries require at most one distinct result and have an
-explicit empty default. Each extension crate's `//!` documentation gives its surface syntax and premises.
-The permanent boundary gate is `tools/check_dependencies.py`: extensions may
-depend only on surface CQ/syntax, stage/storage/state-provider openings and other
-extensions, and the core cannot depend on or import an extension. An incidental
-diff against an old commit is not the long-term architectural gate.
+```rust,ignore
+mini_linq::compile! {
+    pipeline {
+        plan = my_passes::plan(arguments);
+        physical = [my_passes::rewrite];
+        structures = [my_passes::types];
+        surface = [my_surface::expand];
+    }
+    struct Q; relation R(x: i32); answer(x) :- R(x);
+}
+```
+
+The named phases are `plan`, `ix`, `lower`, `physical`, `select`, `structures`,
+`print`, and `surface`. Single stage entries are paths with optional argument
+tokens in parentheses; rewrite/surface entries are lists of those paths.
+Omitted entries use `mini_linq::passes::{plan_written, index_demands, lower,
+select, print_pull}`. Surface passes run before CQ parsing and its contract.
+The pass owns the meaning of its arguments and records all resulting choices
+in its target IR.
+
+Each macro calls `cq_stage::pass::<In, Out>(input, |source, arguments| ...)`
+or `cq_stage::rewrite::<L>(input, |source, arguments| ...)`. The checked
+language implements `cq_stage::Language`. Continuations receive
+`pipeline { remaining_paths }; <program>`; opaque arguments are forwarded as
+`arguments { tokens };` before that packet. Only a terminal Rust printer can
+end the pipeline. A default pass rejects nonempty arguments.
+
+Physical rewrites preserve RA′ erasure and admissible read supplies; Structures
+rewrites preserve Physical and discharge all reads/boundaries. RA′ reuses the
+elaboration tableau/Rust-chain proof. VO preserves CQ and valuation erasure,
+retains existing reductions, and checks the target's existing coverage and
+Before contract. The exact protocol and IR fields are documented in cq-stage.
+
+Optional extensions and dialects were moved unchanged to `features/` for wave 2.
+They are excluded from the core workspace until they consume these public APIs.
+`tools/check_external.py` packages the core and tests every ready feature from a
+copy outside the repository; its positive and in-tree-only negative fixtures
+always run, even when every feature is pending. `tools/check_public_api.py`
+checks reviewed rustdoc-derived public API snapshots.
 
 ## Open
 

@@ -196,8 +196,8 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
 }
 
 mod kernel;
-mod tableau;
 pub use kernel::{erase, kernel};
+use ra::correspondence as tableau;
 
 /// The RA definitions refine the supplied VO schedule, retaining its Rust
 /// chain and preceding relational constraints.

@@ -100,7 +100,7 @@ impl Printer<'_> {
                 }
                 Repr::Pipe(Some(rows))
             }
-            physical::ModeKind::Let => {
+            physical::ModeKind::Let | physical::ModeKind::Exists => {
                 if second.canon.is_some() {
                     rows = self.distinct(&second.name, rows);
                 }

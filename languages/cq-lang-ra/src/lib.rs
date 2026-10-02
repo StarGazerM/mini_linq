@@ -606,3 +606,14 @@ pub use cq_syntax as syntax;
 fn check_leibniz(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
     cq_syntax::algebra::check_leibniz_type(ty, column)
 }
+
+pub mod correspondence;
+pub use correspondence::check_rewrite;
+impl cq_stage::Language for Program {
+    fn check(&self) -> syn::Result<()> {
+        contract::check(self).map(|_| ())
+    }
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        check_rewrite(source, target)
+    }
+}

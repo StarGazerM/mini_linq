@@ -28,24 +28,12 @@ members = [
     "runtime/cq-storage",
     "runtime/cq-load",
     "runtime/cq-state-providers",
-    "runtime/cq-protocol",
     "facade/cq-stage",
     "facade/mini-linq",
-    "workloads",
-    "workloads/e2e",
-    "extensions/cq-ext-support",
-    "extensions/cq-ext-union",
-    "extensions/cq-ext-negation",
-    "extensions/cq-ext-aggregate",
-    "extensions/cq-ext-recursion",
-    "extensions/cq-ext-correlated",
+    "facade/mini-linq-macros",
 ]
+exclude = ["features", "tools/fixtures"]
 resolver = "3"
-
-# The generated corpus has thousands of distinct Rust iterator types.
-# Keep its test binaries small without changing compiler/runtime profiles.
-[profile.test.package.cq-workload-e2e]
-debug = 0
 
 [workspace.package]
 edition = "2024"
@@ -54,33 +42,32 @@ rust-version = "1.85"
 version = "0.1.0"
 
 [workspace.dependencies]
-cq-print = { path = "passes/cq-print", default-features = false }
-cq-stage = { path = "facade/cq-stage" }
+cq-print = { path = "passes/cq-print", version = "0.1.0", default-features = false }
+cq-stage = { path = "facade/cq-stage", version = "0.1.0" }
 contracts = "=0.6.10"
-cq-lang-physical = { path = "languages/cq-lang-physical", default-features = false }
-cq-lang-cq = { path = "languages/cq-lang-cq", default-features = false }
-cq-lang-structures = { path = "languages/cq-lang-structures", default-features = false }
-cq-lang-ra = { path = "languages/cq-lang-ra", default-features = false }
-cq-syntax = { path = "languages/cq-syntax" }
-cq-lang-ix = { path = "languages/cq-lang-ix", default-features = false }
-cq-lang-vo = { path = "languages/cq-lang-vo", default-features = false }
-cq-protocol = { path = "runtime/cq-protocol" }
-cq-storage = { path = "runtime/cq-storage" }
-cq-load = { path = "runtime/cq-load" }
-cq-order = { path = "passes/cq-order", default-features = false }
-cq-elaborate = { path = "passes/cq-elaborate", default-features = false }
-cq-reduce = { path = "passes/cq-reduce", default-features = false }
-cq-index-policy = { path = "passes/cq-index-policy", default-features = false }
-cq-structure-selection = { path = "passes/cq-structure-selection", default-features = false }
-cq-physical-lowering = { path = "passes/cq-physical-lowering", default-features = false }
-cq-physical-realization = { path = "passes/cq-physical-realization", default-features = false }
-cq-state-providers = { path = "runtime/cq-state-providers" }
-mini-linq = { path = "facade/mini-linq" }
+cq-lang-physical = { path = "languages/cq-lang-physical", version = "0.1.0", default-features = false }
+cq-lang-cq = { path = "languages/cq-lang-cq", version = "0.1.0", default-features = false }
+cq-lang-structures = { path = "languages/cq-lang-structures", version = "0.1.0", default-features = false }
+cq-lang-ra = { path = "languages/cq-lang-ra", version = "0.1.0", default-features = false }
+cq-syntax = { path = "languages/cq-syntax", version = "0.1.0" }
+cq-lang-ix = { path = "languages/cq-lang-ix", version = "0.1.0", default-features = false }
+cq-lang-vo = { path = "languages/cq-lang-vo", version = "0.1.0", default-features = false }
+cq-storage = { path = "runtime/cq-storage", version = "0.1.0" }
+cq-load = { path = "runtime/cq-load", version = "0.1.0" }
+cq-order = { path = "passes/cq-order", version = "0.1.0", default-features = false }
+cq-elaborate = { path = "passes/cq-elaborate", version = "0.1.0", default-features = false }
+cq-reduce = { path = "passes/cq-reduce", version = "0.1.0", default-features = false }
+cq-index-policy = { path = "passes/cq-index-policy", version = "0.1.0", default-features = false }
+cq-structure-selection = { path = "passes/cq-structure-selection", version = "0.1.0", default-features = false }
+cq-physical-lowering = { path = "passes/cq-physical-lowering", version = "0.1.0", default-features = false }
+cq-physical-realization = { path = "passes/cq-physical-realization", version = "0.1.0", default-features = false }
+cq-state-providers = { path = "runtime/cq-state-providers", version = "0.1.0" }
+mini-linq = { path = "facade/mini-linq", version = "0.1.0" }
 proc-macro2 = "1"
 prettyplease = "0.2"
 quote = "1"
 syn = { version = "2", features = ["extra-traits", "full", "visit"] }
-syn_derive = { git = "https://github.com/StarGazerM/syn_derive", rev = "97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562" }
+syn_derive = { version = "0.2.0", git = "https://github.com/StarGazerM/syn_derive", rev = "97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562" }
 
 [dependencies]
 cq-lang-cq.workspace = true
@@ -88,14 +75,6 @@ cq-syntax.workspace = true
 mini-linq.workspace = true
 quote.workspace = true
 syn.workspace = true
-
-[[example]]
-name = "cq-inspection"
-path = "examples/cq-inspection/main.rs"
-
-[[example]]
-name = "free-variables"
-path = "examples/free-variables/main.rs"
 
 [dev-dependencies]
 cq-lang-ra.workspace = true

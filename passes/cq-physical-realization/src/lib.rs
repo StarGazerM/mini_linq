@@ -12,15 +12,15 @@
 //! guards; authored expansion fixtures separately pin the emitted syntax.
 //!
 //! The printer preserves the physical operator graph and storage choices. It
-//! chooses Rust control flow and layout. When `Endpoints.intersect` is enabled,
+//! chooses Rust control flow and layout. When Physical records `probe smallest`,
 //! supported adjacent probe/check pairs enumerate the smaller runtime candidate
 //! set without changing RA/VO order.
 //!
 //! Rows borrow declared host columns and retain owned computed columns. The
 //! printer binds hosts once and dispatches reusable host reads by type. Only
 //! leading declaration prefixes are eligible for native keyed reads; other
-//! reads use one lazy fallback. Built lets use the caller's index provider.
-//! Canon boundaries use the caller's distinct provider before materialization
+//! reads use one lazy fallback. Built lets use their recorded Rust types.
+//! Canon boundaries use the recorded dedup type before materialization
 //! or stream consumption. Merge requires ordered inputs; mixed cursors normalize
 //! key references. Host-only iterators own their shared lazy dispatch state;
 //! answers borrowing materialized block-local storage are collected.
@@ -46,30 +46,29 @@ mod operators;
 use cq_print::access::{Access, Side};
 use cq_print::{Context, Repr, error, index, sorted};
 
-/// Caller-resolved macro paths the program is printed into.
-pub struct Endpoints {
-    /// Distinct-state provider (`cq-protocol`): `new`, `insert`.
-    pub distinct_state: syn::Path,
-    pub index_provider: syn::Path,
-    /// Enumerate the smaller candidate set for supported binary intersections.
-    pub intersect: bool,
-}
-
 /// Print a complete Structures program as a Rust pull expression.
-pub fn compile(module: &structures::Program, endpoints: &Endpoints) -> syn::Result<Expr> {
+pub fn compile(module: &structures::Program) -> syn::Result<Expr> {
     let analysis = structures::contract::check(module)?;
     let mut printer = Printer {
         context: Context::new(module, &analysis),
-        endpoints,
     };
-    printer.intersect = endpoints.intersect;
     let definitions = &module.physical.program.definitions;
     let mut position = 0;
     while position < definitions.len() {
-        if endpoints.intersect
-            && position + 1 < definitions.len()
-            && printer.intersection(&definitions[position], &definitions[position + 1])?
+        if matches!(&definitions[position].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
         {
+            let Some(second) = definitions.get(position + 1) else {
+                return error(
+                    &definitions[position].name,
+                    "smallest requires its adjacent check",
+                );
+            };
+            if !printer.intersection(&definitions[position], second)? {
+                return error(
+                    &definitions[position].name,
+                    "Structures does not discharge smallest candidate reads",
+                );
+            }
             position += 2;
         } else {
             printer.define(&definitions[position])?;
@@ -89,16 +88,13 @@ pub fn compile(module: &structures::Program, endpoints: &Endpoints) -> syn::Resu
             )
         }
     };
-    let provider = &endpoints.index_provider;
-    let import = quote!(#[allow(unused_imports)] use #provider as index_provider;);
-    let mut expression = syn::parse2(quote! { { #import #(#statements)* #value } })?;
+    let mut expression = syn::parse2(quote! { { #(#statements)* #value } })?;
     cq_print::own_captures(&mut expression, &printer.owned);
     Ok(expression)
 }
 
 struct Printer<'a> {
     context: Context<'a>,
-    endpoints: &'a Endpoints,
 }
 impl<'a> std::ops::Deref for Printer<'a> {
     type Target = Context<'a>;
@@ -126,7 +122,7 @@ impl Printer<'_> {
                 }
                 Repr::Pipe(Some(rows))
             }
-            physical::ModeKind::Let => {
+            physical::ModeKind::Let | physical::ModeKind::Exists => {
                 let mut rows = self.produce(&name, definition)?;
                 if definition.canon.is_some() {
                     rows = self.distinct(&definition.name, rows);
@@ -165,11 +161,11 @@ impl Printer<'_> {
     }
 
     pub(crate) fn distinct(&self, operator: &Ident, rows: TokenStream) -> TokenStream {
-        self.distinct_width(operator, rows, self.heading(&symbol_name(operator)).len())
+        let ty = &self.analysis.dedup[&symbol_name(operator)];
+        self.distinct_width(ty, rows, self.heading(&symbol_name(operator)).len())
     }
 
-    fn distinct_width(&self, operator: &Ident, rows: TokenStream, width: usize) -> TokenStream {
-        let provider = &self.endpoints.distinct_state;
+    fn distinct_width(&self, ty: &syn::Type, rows: TokenStream, width: usize) -> TokenStream {
         // Std implements tuple Eq/Hash/Ord only through arity twelve. Keep
         // iterator rows flat, but recursively group wider equality keys. Clone
         // fields instead of borrowing the filter's temporary row: a provider
@@ -194,10 +190,10 @@ impl Printer<'_> {
             quote!(&#nested)
         };
         quote! {{
-            let mut __cq_seen = #provider! { operator #operator; new };
+            let mut __cq_seen = <#ty>::new();
             ::core::iter::Iterator::filter(#rows, move |__cq_row| {
                 ::cq_storage::require::leibniz(#key);
-                #provider! { operator #operator; insert(__cq_seen, #key) }
+                __cq_seen.insert(::core::clone::Clone::clone(#key))
             })
         }}
     }
@@ -261,7 +257,7 @@ impl Printer<'_> {
         }) {
             mapped
         } else {
-            self.distinct_width(&self.physical[result].name, mapped, head.args.len())
+            self.distinct_width(&self.analysis.head_dedup[result], mapped, head.args.len())
         }
     }
 }

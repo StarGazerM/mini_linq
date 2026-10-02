@@ -1,0 +1,12 @@
+[package]
+name = "external-core-fixture"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = ["pass"]
+
+[dependencies]
+mini-linq = "=0.1.0"
+cq-storage = "=0.1.0"
+external-pass-fixture = { path = "pass" }

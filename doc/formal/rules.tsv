@@ -47,7 +47,7 @@ CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule 
 CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check supplied VO relational regions, exact Rust chain, original binding witnesses and projection safety.
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
-CK-Physical	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Physical:	Check local contracts, RA erasure, IX demands and independent policy premises.
+CK-Physical	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Physical:	Check contracts, RA erasure, IX demands and admissibility of recorded choices.
 CK-Structures	implementation	passes/cq-structure-selection/src/correspondence.rs	/// Formal rule CK-Structures:	Check Physical preservation and independently derived provider and level rules.
 A-Variable	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Variable:	Keep the first bare occurrence within an atom, including shared query names.
 A-Repeat	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Repeat:	Replace a repeated name only within one atom and append identity.
@@ -91,12 +91,12 @@ C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
 O-Join	abstract	-	-	Ghost binary-tree composition on disjoint full-atom coverages.
 L-Retention	abstract	-	-	Leibniz identity and functional extensionality permit canonical projection before an opaque Rust node whenever its free variables are retained.
-Plan-Prefix	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, elaborate and continue with RA.
-Plan-Generic	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Generic:	Normalize, order Prefix(Connected)/Fine, elaborate and continue with RA.
-Plan-Graph	implementation	facade/mini-linq/src/lib.rs	/// Formal rule Plan-Graph:	Normalize, Written/Coarse order, no Rust guard pushdown, Tree iff acyclic, elaborate.
-ST-Entry	implementation	facade/mini-linq/src/lib.rs	/// Formal rule ST-Entry:	Check and dispatch unchanged CQ to the caller-resolved logical slot.
+Plan-Prefix	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, elaborate and continue with RA.
+Plan-Generic	abstract	-	-	Optional planner variant is an external consumer pending wave 2; only the default planner is core.
+Plan-Graph	abstract	-	-	Optional planner variant is an external consumer pending wave 2; only the default planner is core.
+ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start surface expansion and the selected checked CQ pipeline.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
-ST-Terminal	implementation	facade/mini-linq/src/lib.rs	/// Formal rule ST-Terminal:	Realize the policed Structures payload with no next continuation.
+ST-Terminal	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Terminal:	Print checked Structures to final Rust with an empty continuation.
 ST-Hole	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Hole:	Stage continuation replaces a quotation in the caller Rust context; rustc checks closing bindings.
 IF-Surface	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Surface:	Reject every remaining extension clause by name.
 IF-Input	implementation	languages/cq-syntax/src/lib.rs	/// Formal rule IF-Input:	Check declaration names and arity; declaration order is layout.
@@ -109,7 +109,7 @@ ORD-Admissible	implementation	languages/cq-syntax/src/algebra.rs	/// Formal rule
 CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Bound query terms and captured constants are separate from Rust expressions.
 D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constraint:	A central step waits only for its query variables.
 E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Ordinary relational pushdown or prefix select.
-CT-Constraint	implementation	passes/cq-elaborate/src/tableau.rs	/// Formal rule CT-Constraint:	Tableau symbols preserve boolean shape and all column arguments.
+CT-Constraint	implementation	languages/cq-lang-ra/src/correspondence.rs	/// Formal rule CT-Constraint:	Tableau symbols preserve boolean shape and all column arguments.
 RA-Constraint	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-Constraint:	Relational theta checks scope and Eq/Ord premises without Rust.
 IX-Const	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Const:	Column constant equalities and literal membership produce const supply.
 IX-Range	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Range:	Constant order bounds on one column produce range supply.

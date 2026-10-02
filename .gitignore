@@ -10,3 +10,8 @@
 tmp
 .pi
 __pycache__/
+**/target/
+/features/workloads/data/**/medium/
+/features/workloads/data/**/large/
+/features/workloads/golden/**/medium.csv
+/features/workloads/golden/**/large.csv

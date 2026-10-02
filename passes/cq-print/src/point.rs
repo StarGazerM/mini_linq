@@ -33,6 +33,7 @@ impl Context<'_> {
             return Some(filtered);
         }
         let host = &access.value;
+        let fallback_ty = self.fallback_type(&input_name, name, &access.key);
         let types = access.key.iter().map(|c| &self.infos[&input_name].types[c]);
         let values = access.key.iter().map(|c| &keys[c]);
         let fields = access
@@ -45,7 +46,7 @@ impl Context<'_> {
             use ::cq_storage::dispatch::PointRead as _;
             ::core::iter::Iterator::map(
                 (&&::cq_storage::dispatch::PointHost::<_, (#(#types,)*), _>::new(
-                    #host, move || ::cq_storage::rows::Rows::rows(#host)
+                    #host, move || { let __cq_scan: #fallback_ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#host), ::core::convert::identity); __cq_scan }
                 )).point(&(#(#values,)*)),
                 move |(#(#fields,)*)| #row
             )

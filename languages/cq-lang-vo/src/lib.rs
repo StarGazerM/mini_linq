@@ -456,3 +456,40 @@ pub struct Program {
 }
 
 pub use cq_syntax as syntax;
+
+pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
+    contract::check(source)?;
+    contract::check(target)?;
+    let erase = |program: &Program| {
+        program
+            .valuation
+            .steps
+            .iter()
+            .filter(|s| !matches!(s, Step::Reduce(..)))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    if source.cq != target.cq
+        || erase(source) != erase(target)
+        || source
+            .valuation
+            .steps
+            .iter()
+            .filter(|s| matches!(s, Step::Reduce(..)))
+            .any(|s| !target.valuation.steps.contains(s))
+    {
+        return Err(syn::Error::new_spanned(
+            &target.valuation,
+            "VO rewrite must preserve CQ, valuation erasure and existing reductions",
+        ));
+    }
+    Ok(())
+}
+impl cq_stage::Language for Program {
+    fn check(&self) -> syn::Result<()> {
+        contract::check(self).map(|_| ())
+    }
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        check_rewrite(source, target)
+    }
+}

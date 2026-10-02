@@ -203,87 +203,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "core-pass-fixtures"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-order",
+ "cq-physical-lowering",
+ "cq-reduce",
+ "cq-stage",
+ "cq-structure-selection",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
  "cq-lang-ra",
  "cq-lang-vo",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-ext-aggregate"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-ext-correlated"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-ext-negation"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-ext-recursion"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-ext-support"
-version = "0.1.0"
-dependencies = [
- "cq-lang-cq",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-ext-union"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -305,6 +249,7 @@ dependencies = [
 name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -317,6 +262,7 @@ name = "cq-lang-ix"
 version = "0.1.0"
 dependencies = [
  "cq-lang-ra",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -328,6 +274,8 @@ dependencies = [
 name = "cq-lang-physical"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-ra",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -339,6 +287,8 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-vo",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -351,6 +301,7 @@ name = "cq-lang-structures"
 version = "0.1.0"
 dependencies = [
  "cq-lang-physical",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -363,6 +314,7 @@ name = "cq-lang-vo"
 version = "0.1.0"
 dependencies = [
  "cq-lang-cq",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -398,6 +350,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-ix",
  "cq-lang-physical",
+ "cq-lang-structures",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -410,6 +363,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-structures",
  "cq-print",
+ "cq-structure-selection",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -424,16 +378,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-protocol"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "syn_derive",
 ]
 
 [[package]]
@@ -459,12 +403,6 @@ dependencies = [
 [[package]]
 name = "cq-state-providers"
 version = "0.1.0"
-dependencies = [
- "cq-protocol",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "cq-storage"
@@ -490,51 +428,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
-]
-
-[[package]]
-name = "cq-workload-e2e"
-version = "0.1.0"
-dependencies = [
- "cq-elaborate",
- "cq-ext-aggregate",
- "cq-ext-correlated",
- "cq-ext-negation",
- "cq-ext-recursion",
- "cq-ext-union",
- "cq-index-policy",
- "cq-lang-cq",
- "cq-lang-physical",
- "cq-lang-structures",
- "cq-load",
- "cq-order",
- "cq-physical-lowering",
- "cq-reduce",
- "cq-state-providers",
- "cq-storage",
- "cq-structure-selection",
- "cq-workloads",
- "mini-linq",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-workloads"
-version = "0.1.0"
-dependencies = [
- "cq-ext-negation",
- "cq-ext-recursion",
- "cq-ext-support",
- "cq-lang-cq",
- "cq-load",
- "cq-storage",
- "cq-syntax",
- "mini-linq",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -721,6 +614,7 @@ name = "mini-linq"
 version = "0.1.0"
 dependencies = [
  "contracts",
+ "core-pass-fixtures",
  "cq-elaborate",
  "cq-index-policy",
  "cq-lang-cq",
@@ -738,6 +632,7 @@ dependencies = [
  "cq-state-providers",
  "cq-storage",
  "cq-structure-selection",
+ "mini-linq-macros",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -755,6 +650,27 @@ dependencies = [
  "cq-storage",
  "cq-syntax",
  "mini-linq",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "mini-linq-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-index-policy",
+ "cq-lang-cq",
+ "cq-lang-ix",
+ "cq-lang-physical",
+ "cq-lang-ra",
+ "cq-lang-structures",
+ "cq-order",
+ "cq-physical-lowering",
+ "cq-physical-realization",
+ "cq-stage",
+ "cq-structure-selection",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

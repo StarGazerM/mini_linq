@@ -7,9 +7,8 @@ mod scenarios;
 fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
     for case in scenarios::SCENARIOS {
         let source = syn::parse_str(case.physical).unwrap();
-        let policy = syn::parse_str(case.policy).unwrap();
-        let target = compile(&source, &policy).unwrap();
-        check(&source, &target, &policy).unwrap();
+        let target = compile(&source).unwrap();
+        check(&source, &target).unwrap();
         assert_eq!(
             target.structures,
             syn::parse_str::<structures::Structures>(case.structures).unwrap(),
@@ -18,7 +17,7 @@ fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
         );
         let mut changed = target;
         changed.physical.program.head.relation = syn::parse_quote!(mutated);
-        assert!(check(&source, &changed, &policy).is_err());
+        assert!(check(&source, &changed).is_err());
     }
 }
 
@@ -26,56 +25,66 @@ fn chain() -> physical::Program {
     syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32);
         l = let rename L {a -> a}; r = let rename R {a -> a,b -> b}; s = pipe rename S {b -> b};
-        j = pipe probe[a] l,r; x = pipe semi[a] j,l; p = pipe canon semi[b] x,s; return p as answer(a,b);
+        j = pipe probe first [a] l,r; x = pipe semi eager [a] j,l; p = pipe canon semi eager [b] x,s; return p as answer(a,b);
     } }
 }
 
 #[test]
-fn provider_slot_types_and_preservation_are_checked_independently() {
+fn concrete_types_and_preservation_are_checked_independently() {
     let source = chain();
-    let policy = syn::parse_quote!(policy {});
-    let target = compile(&source, &policy).unwrap();
+    let target = compile(&source).unwrap();
     assert_eq!(
-        target.structures,
-        syn::parse_quote!(structures { l = index_provider!(semi) [a]; r = index_provider!(probe) [a]; })
+        built_entries(&target),
+        syn::parse_quote!(structures { l = ::std::collections::HashSet<_> [a]; r = ::cq_storage::HashIndex<'_, _, _> [a]; })
     );
-    check(&source, &target, &policy).unwrap();
+    check(&source, &target).unwrap();
     let mut reordered = target.clone();
     reordered.structures.entries.reverse();
-    check(&source, &reordered, &policy).unwrap();
+    check(&source, &reordered).unwrap();
     for replacement in [
-        syn::parse_quote!(l = index_provider!(probe) [a];),
+        syn::parse_quote!(l = ::cq_storage::HashIndex<'_, _, _> [a];),
         syn::parse_quote!(l = Custom [a];),
     ] {
         let mut q = target.clone();
         q.structures.entries[0] = replacement;
-        assert!(check(&source, &q, &policy).is_err());
+        check(&source, &q).unwrap();
     }
     let mut q = target.clone();
     q.structures.entries.remove(1);
-    assert!(check(&source, &q, &policy).is_err());
+    assert!(check(&source, &q).is_err());
     let mut q = target.clone();
     q.structures
         .entries
-        .push(syn::parse_quote!(s = index_provider!(semi) [b];));
-    assert!(check(&source, &q, &policy).is_err());
+        .push(syn::parse_quote!(s = ::std::collections::HashSet<_> [b];));
+    assert!(check(&source, &q).is_err());
     let mut q = target;
     q.physical.program.declarations[0].value = Some(syn::parse_quote!(= (rows())));
-    assert!(check(&source, &q, &policy).is_err());
+    assert!(check(&source, &q).is_err());
 }
 
 #[test]
-fn host_renames_have_no_structure_entries_for_any_read_kind() {
-    for op in ["probe[a] l,r", "semi[a] l,r", "merge[a] l,r"] {
+fn host_reads_record_fallback_types_for_every_read_kind() {
+    for op in ["probe first [a] l,r", "semi eager [a] l,r", "merge[a] l,r"] {
         let p: physical::Program = syn::parse_str(&format!("physical {{ relation L(a:i32); relation R(a:i32); l = pipe rename L {{a -> a}}; r = pipe rename R {{a -> a}}; j = pipe canon {op}; return j as answer(a); }}")).unwrap();
-        let policy = syn::parse_quote!(policy {});
-        let target = compile(&p, &policy).unwrap();
-        assert!(target.structures.entries.is_empty());
-        check(&p, &target, &policy).unwrap();
+        let target = compile(&p).unwrap();
+        assert!(
+            target
+                .structures
+                .entries
+                .iter()
+                .all(|e| !matches!(e.structure, structures::Structure::Built { .. }))
+        );
+        check(&p, &target).unwrap();
     }
     let p: physical::Program = syn::parse_quote!(physical { relation R(a:i32); r = pipe rename R {a -> x}; w = pipe canon point select r if (x = 2); return w as answer(x); });
-    let target = compile(&p, &syn::parse_quote!(policy {})).unwrap();
-    assert!(target.structures.entries.is_empty());
+    let target = compile(&p).unwrap();
+    assert!(
+        target
+            .structures
+            .entries
+            .iter()
+            .all(|e| !matches!(e.structure, structures::Structure::Built { .. }))
+    );
 }
 
 #[test]
@@ -84,16 +93,21 @@ fn const_supplies_on_host_and_materialized_inputs_never_build() {
         let p: physical::Program = syn::parse_str(&format!(
             "physical {{ relation R(a:i32); r = {mode} rename R {{a -> x}}; w = pipe canon point select r if (x = 2); return w as answer(x); }}"
         )).unwrap();
-        let policy = syn::parse_quote!(policy {});
-        let target = compile(&p, &policy).unwrap();
-        assert!(target.structures.entries.is_empty());
-        check(&p, &target, &policy).unwrap();
+        let target = compile(&p).unwrap();
+        assert!(
+            target
+                .structures
+                .entries
+                .iter()
+                .all(|e| !matches!(e.structure, structures::Structure::Built { .. }))
+        );
+        check(&p, &target).unwrap();
         let mut unnecessary = target;
         unnecessary
             .structures
             .entries
-            .push(syn::parse_quote!(r = index_provider!(probe) [x];));
-        assert!(check(&p, &unnecessary, &policy).is_err());
+            .push(syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [x];));
+        assert!(check(&p, &unnecessary).is_err());
     }
 }
 
@@ -104,32 +118,30 @@ fn ordered_read_types_and_changed_key_streams_have_mutation_coverage() {
         l = pipe rename L {a -> x}; r = let rename R {a -> x};
         w = pipe canon merge[x] l,r; return w as answer(x);
     });
-    let policy = syn::parse_quote!(policy {});
-    let target = compile(&p, &policy).unwrap();
+    let target = compile(&p).unwrap();
     assert_eq!(
-        target.structures,
-        syn::parse_quote!(structures { r = index_provider!(ordered) [x]; })
+        built_entries(&target),
+        syn::parse_quote!(structures { r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x]; })
     );
     let mut q = target;
-    q.structures.entries[0] = syn::parse_quote!(r = index_provider!(probe) [x];);
-    assert!(check(&p, &q, &policy).is_err());
+    q.structures.entries[0] = syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [x];);
+    assert!(check(&p, &q).is_err());
 }
 
 #[test]
-fn compatible_membership_chains_use_provider_selected_trie_levels() {
+fn compatible_membership_chains_use_recorded_trie_levels() {
     let p: physical::Program = syn::parse_quote!(physical {
         relation L(a:i32,b:i32); relation R(a:i32,b:i32);
         l = pipe rename L {a -> a,b -> b}; r = let rename R {a -> a,b -> b};
-        p = pipe project l keep {a}; x = pipe semi[a] p,r;
-        j = pipe canon probe[a,b] r,r;
-        k = pipe canon semi[a] j,x; return k as answer(a,b);
+        p = pipe project l keep {a}; x = pipe semi eager [a] p,r;
+        j = pipe canon probe first [a,b] r,r;
+        k = pipe canon semi eager [a] j,x; return k as answer(a,b);
     });
     // x is a keyed intermediate and must be retained.
     let mut p = p;
     p.program.definitions[3].mode = syn::parse_quote!(let);
-    let policy = syn::parse_quote!(policy {});
-    let target = compile(&p, &policy).unwrap();
-    check(&p, &target, &policy).unwrap();
+    let target = compile(&p).unwrap();
+    check(&p, &target).unwrap();
     let entry = target
         .structures
         .entries
@@ -138,11 +150,11 @@ fn compatible_membership_chains_use_provider_selected_trie_levels() {
         .unwrap();
     assert_eq!(
         target.structures.entries[entry],
-        syn::parse_quote!(r = index_provider!(trie index_provider!(probe)) [a][b];)
+        syn::parse_quote!(r = ::cq_storage::Trie<'_, _, ::cq_storage::HashIndex<'_, _, _>> [a][b];)
     );
     let mut q = target;
-    q.structures.entries[entry] = syn::parse_quote!(r = index_provider!(probe) [a,b];);
-    assert!(check(&p, &q, &policy).is_err());
+    q.structures.entries[entry] = syn::parse_quote!(r = ::cq_storage::HashIndex<'_, _, _> [a,b];);
+    assert!(check(&p, &q).is_err());
 }
 
 #[test]
@@ -155,32 +167,36 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
         l = pipe rename L { a -> a, b -> b };
         a = let rename A { a -> a, c -> c };
         b = let rename B { b -> b, c -> c };
-        p = pipe probe[a] l,a;
-        result = pipe canon semi[b,c] p,b;
+        p = pipe probe smallest [a] l,a;
+        result = pipe canon semi eager [b,c] p,b;
         return result as answer(a,b,c);
     }};
-    let policy = syn::parse_quote!(policy { intersect = smallest; });
-    let target = compile(&source, &policy).unwrap();
-    check(&source, &target, &policy).unwrap();
+    let target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
     let entry = target
         .structures
         .entries
         .iter()
         .position(|e| {
-            let structures::Structure::Built { keyed, .. } = &e.structure;
-            keyed.levels.len() == 2
+            matches!(&e.structure, structures::Structure::Built { keyed, .. } if keyed.levels.len() == 2)
         })
         .unwrap();
     let mut changed = target.clone();
     let structures::Structure::Built { keyed, .. } =
-        &mut changed.structures.entries[entry].structure;
+        &mut changed.structures.entries[entry].structure
+    else {
+        panic!()
+    };
     keyed.levels.reverse();
-    assert!(check(&source, &changed, &policy).is_err());
+    assert!(check(&source, &changed).is_err());
     let mut changed = target;
     let structures::Structure::Built { keyed, .. } =
-        &mut changed.structures.entries[entry].structure;
-    keyed.ty = syn::parse_quote!(index_provider!(semi));
-    assert!(check(&source, &changed, &policy).is_err());
+        &mut changed.structures.entries[entry].structure
+    else {
+        panic!()
+    };
+    keyed.ty = syn::parse_quote!(::std::collections::HashSet<_>);
+    assert!(check(&source, &changed).is_err());
 }
 
 #[test]
@@ -189,18 +205,25 @@ fn nonemptiness_and_keyed_membership_share_a_trie_with_an_empty_first_level() {
         relation L(a: i32); relation R(a: i32);
         l = pipe rename L { a -> x }; r = let rename R { a -> x };
         unit = pipe unit;
-        nonempty = pipe semi[] unit,r;
-        members = pipe probe[] nonempty,l;
-        result = pipe canon semi[x] members,r;
+        nonempty = pipe semi eager [] unit,r;
+        members = pipe probe first [] nonempty,l;
+        result = pipe canon semi eager [x] members,r;
         return result as answer(x);
     }};
-    let policy = syn::parse_quote!(policy {});
-    let target = compile(&p, &policy).unwrap();
+    let target = compile(&p).unwrap();
     assert_eq!(
-        target.structures,
+        built_entries(&target),
         syn::parse_quote!(structures {
-            r = index_provider!(trie index_provider!(semi)) [][x];
+            r = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [][x];
         })
     );
-    check(&p, &target, &policy).unwrap();
+    check(&p, &target).unwrap();
+}
+
+fn built_entries(target: &structures::Program) -> structures::Structures {
+    let mut entries = target.structures.clone();
+    entries
+        .entries
+        .retain(|e| matches!(e.structure, structures::Structure::Built { .. }));
+    entries
 }

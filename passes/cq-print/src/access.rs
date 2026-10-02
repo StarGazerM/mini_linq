@@ -33,6 +33,12 @@ pub enum Side {
 }
 
 impl<'a> Context<'a> {
+    pub fn fallback_type(&self, result: &str, reader: &str, columns: &[String]) -> &syn::Type {
+        let mut columns = columns.to_vec();
+        columns.sort();
+        &self.analysis.fallbacks[&(result.to_owned(), reader.to_owned(), columns)]
+    }
+
     /// The host behind a rename, with its key and payload in the rename's
     /// attribute names.
     pub fn host_access(&self, result: &str, columns: &[String]) -> HostAccess {
@@ -70,7 +76,8 @@ impl<'a> Context<'a> {
         let value = &access.value;
         let row = self.pattern(result);
         let payload = access.payload.iter().map(|c| self.ident(result, c));
-        quote! { ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#value), move |(#(#payload,)*)| #row) }
+        let ty = self.fallback_type(result, "scan", &[]);
+        quote! { { let __cq_scan: #ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#value), move |(#(#payload,)*)| #row); __cq_scan } }
     }
 
     /// Allocate one lazy fallback for each host read key, outside all probe closures.
@@ -97,7 +104,7 @@ impl<'a> Context<'a> {
                 keys.entry(self.heading(result).to_vec()).or_insert(false);
             }
         }
-        for (columns, probe) in keys {
+        for (columns, _probe) in keys {
             let a = self.host_access(result, &columns);
             let fallback = a.fallback;
             let rows = self.host_scan(result);
@@ -111,11 +118,23 @@ impl<'a> Context<'a> {
                 }
             });
             let payload = a.payload.iter().map(|c| self.ident(result, c));
-            let ty = if probe {
-                quote!(::cq_storage::HashIndex<'_, _, _>)
-            } else {
-                quote!(::cq_storage::dispatch::KeySet<_>)
-            };
+            let ty = self
+                .analysis
+                .fallbacks
+                .iter()
+                .find_map(|((n, rd, cs), ty)| {
+                    (n == result
+                        && cs == &columns
+                        && rd != "scan"
+                        && !self.physical.get(rd).is_some_and(|d| {
+                            matches!(
+                                d.operator,
+                                Operator::Merge(..) | Operator::Point(..) | Operator::Range(..)
+                            )
+                        }))
+                    .then_some(ty)
+                })
+                .expect("checked fallback");
             self.statements.push(syn::parse_quote! {
                 let #fallback: ::cq_storage::dispatch::Lazy<#ty, _> = ::cq_storage::dispatch::Lazy::new(move || <#ty as ::cq_storage::Build<_>>::build(
                     ::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*), (#(#payload,)*)))
@@ -124,7 +143,7 @@ impl<'a> Context<'a> {
             self.owned.push(fallback);
         }
         let mut merged = std::collections::BTreeSet::new();
-        for (_, columns) in self
+        for (reader, columns) in self
             .physical_analysis
             .merge_reads
             .get(result)
@@ -143,6 +162,7 @@ impl<'a> Context<'a> {
                 );
             } else {
                 let name = format_ident!("__cq_{}_merge_{}", result, columns.join("_"));
+                let ty = self.fallback_type(result, reader, columns);
                 let rows = self.host_scan(result);
                 let pattern = self.pattern(result);
                 let key = columns.iter().map(|c| self.ident(result, c));
@@ -152,7 +172,7 @@ impl<'a> Context<'a> {
                     .filter(|c| !columns.contains(c))
                     .map(|c| self.ident(result, c));
                 self.statements.push(syn::parse_quote! {
-                    let #name = &<::std::collections::BTreeMap<_,::std::vec::Vec<_>> as ::cq_storage::Build<_>>::build(
+                    let #name = &<#ty as ::cq_storage::Build<_>>::build(
                         ::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*),(#(#payload,)*)))
                     );
                 });

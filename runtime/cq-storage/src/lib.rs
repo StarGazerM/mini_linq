@@ -201,3 +201,6 @@ pub fn intersect_upper<Q: Ord>(a: std::ops::Bound<Q>, b: std::ops::Bound<Q>) -> 
         }
     }
 }
+
+mod exists;
+pub use exists::Exists;

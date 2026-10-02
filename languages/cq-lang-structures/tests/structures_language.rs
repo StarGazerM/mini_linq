@@ -6,8 +6,8 @@ fn program() -> structures::Program {
     syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
         l = pipe rename L {a -> x}; r = let rename R {a -> x,b -> y};
-        j = pipe canon probe[x] l,r; return j as answer(x,y);
-    } structures { r = UserIndex [x]; } }
+        j = pipe canon probe first [x] l,r; return j as answer(x,y);
+    } structures { r = UserIndex [x]; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; l host scan = ::core::iter::Map<_, _> []; j canon = ::std::collections::HashSet<_>; } }
 }
 
 #[test]
@@ -40,7 +40,11 @@ fn only_built_lets_have_entries_and_host_reads_make_no_claims() {
     let mut q = p;
     q.physical.program.definitions[1].mode = syn::parse_quote!(pipe);
     assert!(structures::contract::check(&q).is_err());
-    q.structures.entries.clear();
+    q.structures = syn::parse_quote!(structures {
+        l host scan = ::core::iter::Map<_, _> [];
+        r host scan = ::core::iter::Map<_, _> [];
+        r host j = UserIndex [x]; j canon = ::std::collections::HashSet<_>;
+    });
     structures::contract::check(&q).unwrap();
 }
 
@@ -51,7 +55,7 @@ fn canonicality_comes_only_from_plan_boundaries_and_key_preservation() {
         r = let canon rename R {a -> a,b -> b};
         e = pipe bind r with n: i32 = (1);
         p = pipe project e keep {a,b}; return p as answer(a,b);
-    } structures {} };
+    } structures { r canon = ::std::collections::HashSet<_>; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; } };
     let a = structures::contract::check(&p).unwrap();
     assert_eq!(a.unique["p"], ["a", "b"]);
     let mut q = p.clone();
@@ -69,7 +73,11 @@ fn ordered_premises_require_storage_or_a_same_key_merge_stream() {
         relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32);
         l = pipe rename L {a -> a}; r = pipe rename R {a -> a,b -> b}; s = pipe rename S {b -> b};
         j = let merge[a] l,r; k = pipe canon merge[b] j,s; return k as answer(a,b);
-    } structures { j = Ordered [b]; } };
+    } structures {
+        j = Ordered [b]; j rows = ::std::vec::Vec<_>; k canon = ::std::collections::HashSet<_>;
+        l host scan = ::core::iter::Map<_, _> []; r host scan = ::core::iter::Map<_, _> []; s host scan = ::core::iter::Map<_, _> [];
+        l host j = Ordered [a]; r host j = Ordered [a]; s host k = Ordered [b];
+    } };
     structures::contract::check(&p).unwrap();
     let mut q = p.clone();
     q.structures.entries.clear();
@@ -84,10 +92,10 @@ fn ordered_premises_require_storage_or_a_same_key_merge_stream() {
 #[test]
 fn leveled_entries_cover_prefixes_but_do_not_prove_uniqueness() {
     let mut p = program();
-    p.structures.entries[0] = syn::parse_quote!(r = MyTrie [x][y];);
+    p.structures.entries[0] = syn::parse_quote!(r = MyTrie [][x];);
     let a = structures::contract::check(&p).unwrap();
-    assert_eq!(a.built_on("r", &["x".into()]).unwrap().1, 1);
-    assert_eq!(a.built_on("r", &["x".into(), "y".into()]).unwrap().1, 2);
+    assert_eq!(a.built_on("r", &["x".into()]).unwrap().1, 2);
+    assert_eq!(a.built_on("r", &[]).unwrap().1, 1);
     p.physical.program.definitions[2].canon = None;
     assert!(structures::contract::check(&p).is_err());
 }
@@ -99,7 +107,7 @@ fn a_const_only_read_cannot_justify_a_built_entry() {
         r = let rename R { a -> x };
         p = pipe canon point select r if (x = 5);
         return p as answer(x);
-    } structures {} };
+    } structures { r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; p canon = ::std::collections::HashSet<_>; } };
     structures::contract::check(&p).unwrap();
     let mut invalid = p;
     invalid
@@ -118,10 +126,10 @@ fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
         relation L(a: i32); relation R(a: i32);
         l = pipe rename L { a -> x }; r = let rename R { a -> x };
         p = let point select r if (x = 5);
-        j = pipe probe[x] l,r;
-        out = pipe canon semi[x] j,p;
+        j = pipe probe first [x] l,r;
+        out = pipe canon semi eager [x] j,p;
         return out as answer(x);
-    } structures { r = UserIndex [x]; p = UserIndex [x]; } };
+    } structures { r = UserIndex [x]; p = UserIndex [x]; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; p rows = ::std::vec::Vec<_>; out canon = ::std::collections::HashSet<_>; l host scan = ::core::iter::Map<_, _> []; } };
     structures::contract::check(&p).unwrap();
 }
 
@@ -131,7 +139,7 @@ fn every_built_key_level_requires_the_leibniz_premise() {
         relation L(a: i32); relation R(a: i32, payload: f64);
         l = pipe rename L { a -> x };
         r = let rename R { a -> x, payload -> y };
-        j = pipe probe[x] l,r;
+        j = pipe probe first [x] l,r;
         out = pipe canon project j keep {x};
         return out as answer(x);
     } structures { r = UserTrie [x][y]; } };

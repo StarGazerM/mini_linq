@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path, help="directory for captured expansions")
     parser.add_argument("--compare", type=Path, help="previous capture to compare byte for byte")
+    parser.add_argument("--review", action="store_true", help="capture every difference for an intentional reviewed expansion change")
     args = parser.parse_args()
     args.directory.mkdir(parents=True, exist_ok=True)
     source = ROOT / "facade/mini-linq/tests/physical_query.rs"
@@ -41,10 +42,10 @@ def main():
                     fromfile=str(args.compare / path.name), tofile=str(path),
                 ))
                 (args.directory / (name + ".diff")).write_text(diff)
-                raise SystemExit(diff)
+                if not args.review: raise SystemExit(diff)
         hashes.append(f"{hashlib.sha256(expanded).hexdigest()}  {path.name}")
     (args.directory / "SHA256SUMS").write_text("\n".join(hashes) + "\n")
-    print(f"PASS: {len(modules)} expansions " + ("byte-identical" if args.compare else "captured"))
+    print(f"PASS: {len(modules)} expansions " + ("captured for review" if args.review else "byte-identical" if args.compare else "captured"))
 
 
 if __name__ == "__main__":

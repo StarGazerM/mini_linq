@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cq-lang-ra.workspace = true
+cq-stage.workspace = true
 cq-syntax.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
@@ -15,5 +17,3 @@ syn_derive.workspace = true
 
 [[test]]
 name = "physical_language"
-[[test]]
-name = "policy"

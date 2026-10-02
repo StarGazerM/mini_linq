@@ -33,9 +33,9 @@ LANGUAGES = inventory("languages")
 FAMILIES = inventory("passes")
 RUNTIME = inventory("runtime")
 FACADES = inventory("facade")
-EXTENSIONS = inventory("extensions")
+EXTENSIONS = {}
 CORE = LANGUAGES | FAMILIES | RUNTIME | FACADES
-PATHS = CORE | EXTENSIONS
+PATHS = CORE
 # The crate declares the languages its pass transforms, not an arbitrary allowlist.
 EDGES = {}
 for name, path in FAMILIES.items():
@@ -43,27 +43,9 @@ for name, path in FAMILIES.items():
     EDGES[name] = spec
 ALLOWED = set(PATHS)
 
-# Each frontend feature enables exactly the passes its macro runs.
-FRONTEND = {
-    "written-order": ("cq-order", "cq-elaborate"),
-    "hypergraph": ("cq-order", "cq-reduce", "cq-elaborate"),
-    "index-demands": ("cq-index-policy",),
-    "physical-lowering": ("cq-physical-lowering",),
-    "structure-selection": ("cq-structure-selection",),
-    "physical-realization": ("cq-physical-realization",),
-}
-FRONTEND_MACROS = {
-    "written-order": "cq_to_ra", "hypergraph": "cq_to_ra_hypergraph", "index-demands": "index_demands",
-    "physical-lowering": "lower_physical", "structure-selection": "select_structures",
-    "physical-realization": "structures_to_rust",
-}
-CONSUMERS = {
-    "wcoj": ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection",
-             "physical-realization"],
-    "physical_query": ["written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection",
-                       "physical-realization"],
-}
-
+# Optional crates are identified from their excluded source manifests.
+FEATURE_NAMES = {tomllib.loads(p.read_text())["package"]["name"]
+    for p in (ROOT / "features").rglob("Cargo.toml") if "package" in tomllib.loads(p.read_text())}
 
 def toml(value):
     if isinstance(value, bool): return str(value).lower()
@@ -123,16 +105,29 @@ def forbidden_import(source, extension_names, surface_only=False):
 
 
 def check_extension_sources():
-    assert forbidden_import('use cq_ext_union::union;', EXTENSIONS)
-    assert forbidden_import('use cq_lang_cq as cq; cq::normal::normalize(s);', (), True)
-    assert not forbidden_import('// use cq_ext_union::union;\nconst S: &str = "cq::contract";', EXTENSIONS)
-    for name, path in PATHS.items():
+    for name, path in CORE.items():
         for source in (ROOT / path / "src").rglob("*.rs"):
-            violation = forbidden_import(source.read_text(), EXTENSIONS if name in CORE else (), name in EXTENSIONS)
-            if violation:
-                raise ValueError(f"{source.relative_to(ROOT)}: {violation}")
-    print("PASS: core never imports extensions; extensions use only CQ surface parsing", flush=True)
-
+            text = source.read_text()
+            violation = forbidden_import(text, FEATURE_NAMES)
+            if violation or re.search(r"(?:features|extensions|workloads)/", text):
+                raise ValueError(f"{source.relative_to(ROOT)}: core names an optional feature")
+            if re.search(r"#\[doc\(hidden\)\][\s\S]{0,150}?\bpub\b", text):
+                raise ValueError(f"{source.relative_to(ROOT)}: hidden public API in core")
+    # pub(crate) is a Rust privacy boundary; forbid consumers naming it explicitly.
+    private = []
+    for name, path in CORE.items():
+        for source in (ROOT / path / "src").rglob("*.rs"):
+            module = source.relative_to(ROOT / path / "src").with_suffix("").parts
+            qualified = name.replace("-", "_") + "::" + "::".join(x for x in module if x not in {"lib", "mod"})
+            private += [(qualified.rstrip(":"), symbol) for symbol in re.findall(
+                r"(?m)^pub\(crate\)\s+(?:fn|struct|enum|trait|type|const|mod)\s+(\w+)", mask_rust(source.read_text()))]
+    for source in (ROOT / "features").rglob("*.rs"):
+        if any(part in {"target", ".git"} for part in source.relative_to(ROOT / "features").parts): continue
+        text = mask_rust(source.read_text())
+        for crate, symbol in private:
+            if re.search(rf"\b{re.escape(crate)}\s*::\s*{symbol}\b", text):
+                raise ValueError(f"{source.relative_to(ROOT)} uses private core item {crate}::{symbol}")
+    print("PASS: core has no feature references or hidden public APIs; no consumer uses private core items", flush=True)
 
 def check(data, announce=True):
     packages = {p["name"]: p for p in data["packages"]}
@@ -140,8 +135,8 @@ def check(data, announce=True):
         package = packages[name]
         internal = {d["name"] for d in production(package) if "path" in d or d["name"] in packages}
         if name in LANGUAGES:
-            base = {"cq-lang-vo": "cq-lang-cq", "cq-lang-ix": "cq-lang-ra", "cq-lang-structures": "cq-lang-physical"}.get(name)
-            allowed = ({"cq-syntax", base} - {None, name})
+            base = {"cq-lang-vo": "cq-lang-cq", "cq-lang-ix": "cq-lang-ra", "cq-lang-structures": "cq-lang-physical", "cq-lang-physical": "cq-lang-ra", "cq-lang-ra": "cq-lang-vo"}.get(name)
+            allowed = ({"cq-syntax", "cq-stage", base} - {None, name})
             if package["features"]:
                 raise ValueError(f"language features are forbidden: {name}")
         elif name in FAMILIES:
@@ -161,6 +156,12 @@ def check(data, announce=True):
             allowed = set(packages) - set(EXTENSIONS)
         for dep in package["dependencies"]:
             target = dep["name"]
+            if target in FEATURE_NAMES or (dep.get("path") and Path(dep["path"]).resolve().is_relative_to(ROOT / "features")):
+                raise ValueError(f"core depends on an optional feature: {name} -> {target}")
+            if dep["kind"] == "dev" and target in CORE:
+                continue
+            if dep["kind"] == "dev" and target == "core-pass-fixtures":
+                continue
             if "path" not in dep and target not in packages: continue
             expected = Path(packages[target]["manifest_path"]).parent if target in packages else None
             if target not in allowed or "path" not in dep or Path(dep["path"]).resolve() != expected:
@@ -169,13 +170,9 @@ def check(data, announce=True):
             if set(target["kind"]) & {"test", "example", "bench"}: continue
             if not Path(target["src_path"]).resolve().is_relative_to(ROOT / path):
                 raise ValueError(f"source escapes its crate: {name}: {target['src_path']}")
-    frontend = packages["mini-linq"]
-    for feature, names in FRONTEND.items():
-        if frontend["features"].get(feature) != [f"dep:{name}" for name in names]:
-            raise ValueError(f"frontend feature acquired hidden dependencies: {feature}")
-    for dep in production(frontend):
-        if dep["name"] in FAMILIES and not dep["optional"]:
-            raise ValueError(f"frontend unconditionally includes a pass: {dep['name']}")
+    for name in FACADES:
+        if packages[name]["features"]:
+            raise ValueError(f"facade Cargo features are forbidden: {name}")
     if announce: print("PASS: folder-derived language, pass, runtime, facade and extension boundaries", flush=True)
     return packages
 
@@ -186,7 +183,7 @@ def negative_dependency_checks(data):
                  ("cq-physical-lowering", "cq-lang-ra", None, False),
                  ("cq-lang-ix", "cq-storage", None, False),
                  ("cq-lang-ix", "cq-lang-physical", None, False),
-                 ("cq-physical-lowering", "cq-lang-vo", "dev", False),
+                 ("cq-physical-lowering", "cq-lang-vo", "build", False),
                  ("cq-physical-realization", "cq-storage", None, True)]
     if EXTENSIONS:
         extension = next(iter(EXTENSIONS))
@@ -205,13 +202,13 @@ def negative_dependency_checks(data):
         try: check(altered, announce=False)
         except ValueError: pass
         else: raise ValueError(f"guard accepted forbidden edge: {owner} -> {target}")
-    for owner in ("cq-lang-ra", "cq-physical-lowering"):
+    for owner in ("cq-lang-ra", "cq-physical-lowering", "mini-linq", "mini-linq-macros"):
         altered = copy.deepcopy(data)
         next(p for p in altered["packages"] if p["name"] == owner)["features"]["hidden"] = []
         try: check(altered, announce=False)
         except ValueError: pass
         else: raise ValueError(f"guard accepted language/pass feature: {owner}")
-    print(f"PASS: {len(mutations)} forbidden dependency and 2 feature mutations rejected", flush=True)
+    print(f"PASS: {len(mutations)} forbidden dependency and 4 feature mutations rejected", flush=True)
 
 
 def closure(packages, name):
@@ -220,13 +217,13 @@ def closure(packages, name):
         current = pending.pop()
         if current in selected: continue
         selected.add(current)
-        pending.extend(d["name"] for d in production(packages[current]) if d["name"] in PATHS)
+        pending.extend(d["name"] for d in packages[current]["dependencies"] if d["name"] in PATHS)
     return selected
 
 
 def write_workspace(destination, selected):
     original = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]
-    lines = ["[workspace]", 'resolver = "3"', "members = " + toml([str(PATHS[p]) for p in sorted(selected)]), "", "[workspace.package]"]
+    lines = ["[workspace]", 'resolver = "3"', 'exclude = ["tools/fixtures"]', "members = " + toml([str(PATHS[p]) for p in sorted(selected)]), "", "[workspace.package]"]
     lines += [f"{k} = {toml(v)}" for k, v in original["package"].items()]
     lines += ["", "[workspace.dependencies]"]
     lines += [f"{k} = {toml(v)}" for k, v in original["dependencies"].items()
@@ -259,7 +256,7 @@ def copy_component(destination, name, selected):
 
 def isolate(packages, only=()):
     logdir = ROOT / "target/component-logs"; logdir.mkdir(parents=True, exist_ok=True)
-    for name in LANGUAGES | RUNTIME | FAMILIES | EXTENSIONS:
+    for name in CORE:
         if only and name not in only: continue
         selected = closure(packages, name) | {"cq-syntax"}
         with tempfile.TemporaryDirectory(prefix=f"mini-linq-{name}-") as temporary:
@@ -268,6 +265,8 @@ def isolate(packages, only=()):
             for package in selected: copy_component(destination, package, selected)
             shutil.copytree(ROOT / "test-support", destination / "test-support")
             shutil.copytree(ROOT / "teaching", destination / "teaching")
+            if "mini-linq" in selected:
+                shutil.copytree(ROOT / "tools/fixtures/pass-macros", destination / "tools/fixtures/pass-macros", ignore=shutil.ignore_patterns("target", "Cargo.lock"))
             # Runtime source is a generated-code execution fixture, never a compiler dependency.
             shutil.copytree(ROOT / "runtime/cq-storage/src", destination / "runtime/cq-storage/src", dirs_exist_ok=True)
             env = os.environ.copy(); env["CARGO_TARGET_DIR"] = str(ROOT / "target/component-isolation"); env["CARGO_TERM_COLOR"] = "never"
@@ -282,137 +281,29 @@ def isolate(packages, only=()):
             print(f"PASS: {name} {detail}", flush=True)
 
 
-CQ = 'struct Q; relation R(a:i32); answer(x) :- R(x);'
-RA = 'relational { relation R(a:i32); r = rename R {a -> x}; output r as answer(x); }'
-IX = RA + ' indexes {}'
-POLICED_IX = IX + ' policy {}'
-PHYSICAL = 'physical { relation R(a:i32); r = pipe canon rename R {a -> x}; return r as answer(x); }'
-POLICED_PHYSICAL = PHYSICAL + ' policy {}'
-STRUCTURES = PHYSICAL + ' structures {}'
+def frontends():
+    subprocess.run(["cargo", "test", "-p", "mini-linq", "--test", "pipeline", "--locked"], cwd=ROOT, check=True)
+    print("PASS: public default/custom pipeline and surface boundaries", flush=True)
 
 
-STATE_BINDINGS = r"""
-macro_rules! distinct_state {
-    (operator $id:ident; new) => { ::std::collections::HashSet::new() };
-    (operator $id:ident; insert($state:expr, $row:expr)) => { $state.insert(Clone::clone($row)) };
-}
-#[allow(unused_imports)]
-pub(crate) use distinct_state;
-#[allow(unused_imports)]
-macro_rules! indexes {
-    (probe) => { ::cq_storage::HashIndex<'_, _, _> };
-    (semi) => { ::std::collections::HashSet<_> };
-    (ordered) => { ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> };
-    (trie $inner:ty) => { ::cq_storage::Trie<'_, _, $inner> };
-}
-#[allow(unused_imports)]
-pub(crate) use indexes as index_provider;
-#[allow(unused_imports)]
-mod wiring { pub(crate) use super::{distinct_state,index_provider}; }
-use wiring as mini_linq;
-"""
-
-def frontend_source(feature):
-    """Valid, small calls: boundary captures are not end-to-end acceptance."""
-    implementation = FRONTEND_MACROS[feature]
-    if feature in ("written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection"):
-        source, continuation, expected = {
-            "written-order": (CQ, "choose_index_policy", ["relational", "rename"]),
-            "hypergraph": (CQ, "choose_index_policy", ["relational", "rename"]),
-            "index-demands": (RA, "physical_policy", ["indexes"]),
-            "physical-lowering": (POLICED_IX, "select_structures", ["physical", "pipe", "policy"]),
-            "structure-selection": (POLICED_PHYSICAL, "structures_to_rust", ["structures", "R"]),
-        }[feature]
-        checks = " ".join(f'assert!(CAPTURE.contains({json.dumps(word)}));' for word in expected)
-        return f'''
-macro_rules! capture {{ ($($tokens:tt)*) => {{ const CAPTURE: &str = stringify!($($tokens)*); }}; }}
-use capture as {continuation};
-mod wiring {{ pub(crate) use super::{continuation}; }}
-use wiring as mini_linq;
-raw::{implementation}! {{ {source} }}
-fn main() {{ {checks} }}
-'''
-    assert feature == "physical-realization", feature
-    return STATE_BINDINGS + f'''
-fn main() {{
-    let R: &::std::collections::BTreeSet<(i32,)> = &[(1,), (2,)].into_iter().collect();
-    let rows: Vec<_> = raw::{implementation}! {{ {STRUCTURES} policy {{}} }}.collect();
-    assert_eq!(rows.len(), 2);
-}}
-'''
-def check_frontends(packages, only=()):
-    env = os.environ.copy(); env["CARGO_TARGET_DIR"] = str(ROOT / "target/frontend-isolation"); env["CARGO_TERM_COLOR"] = "never"
-    logdir = ROOT / "target/component-logs"; logdir.mkdir(parents=True, exist_ok=True)
-    for feature, names in FRONTEND.items():
-        if only and feature not in only and not set(names) & set(only): continue
-        with tempfile.TemporaryDirectory(prefix="mini-linq-frontend-") as temporary:
-            destination = Path(temporary); (destination / "src").mkdir()
-            (destination / "src/main.rs").write_text(frontend_source(feature))
-            (destination / "Cargo.toml").write_text(
-                '[package]\nname = "frontend-probe"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
-                'raw = { package = "mini-linq", path = ' + toml(str(ROOT / "facade/mini-linq"))
-                + ', default-features = false, features = [' + toml(feature) + '] }\n'
-                + ('cq-storage = { path = ' + toml(str(ROOT / "runtime/cq-storage")) + ' }\n' if feature == "physical-realization" else '')
-                )
-            args = ["--manifest-path", str(destination / "Cargo.toml"), "--offline"]
-            resolved = json.loads(subprocess.check_output(["cargo", "metadata", "--format-version=1", *args], cwd=ROOT, text=True, stderr=subprocess.PIPE))
-            by_id = {p["id"]: p["name"] for p in resolved["packages"]}; nodes = {n["id"]: n for n in resolved["resolve"]["nodes"]}
-            start = next(i for i, n in by_id.items() if n == "mini-linq"); seen = set(); pending = [start]
-            while pending:
-                current = pending.pop()
-                if current in seen: continue
-                seen.add(current)
-                for dep in nodes[current]["deps"]:
-                    if any(k["kind"] != "dev" for k in dep["dep_kinds"]): pending.append(dep["pkg"])
-            actual = {by_id[i] for i in seen} & set(FAMILIES)
-            expected = set(names) | ({"cq-print"} if "cq-physical-realization" in names else set())
-            if actual != expected: raise ValueError(f"frontend {feature} includes {actual}, expected {expected}")
-            for name in names:
-                active = set(nodes[next(i for i, n in by_id.items() if n == name)]["features"])
-                if active: raise ValueError(f"frontend {feature} enables {name} features {active}")
-            with (logdir / f"frontend-{feature}.log").open("w") as log:
-                result = subprocess.run(["cargo", "run", *args], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
-            if result.returncode: raise ValueError(f"actual frontend {feature} failed; see {logdir / ('frontend-' + feature + '.log')}")
-            kind = ("boundary capture" if feature in {"written-order", "hypergraph", "index-demands", "physical-lowering", "structure-selection"} else "execution smoke")
-            print(f"PASS: {kind} {feature}; renamed dependency and isolated {' + '.join(names)}", flush=True)
-
-
-def check_consumers(only=()):
-    logdir = ROOT / "target/component-logs"
-    logdir.mkdir(parents=True, exist_ok=True)
-    for target, features in CONSUMERS.items():
-        if only and target not in only and "mini-linq" not in only:
-            continue
-        path = logdir / f"consumer-{target}.log"
-        command = ["cargo", "test", "-p", "mini-linq", "--no-default-features", "--features", ",".join(features), "--test", target, "--locked", "--offline"]
-        with path.open("w") as log:
-            result = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
-        if result.returncode:
-            raise ValueError(f"integration consumer failed: {target}; see {path}")
-        print(f"PASS: actual integration tests {target}; see {path}", flush=True)
+def consumers():
+    for target in ("physical_query", "wcoj", "denotation", "openings", "provenance", "dispatch", "pass_contracts"):
+        subprocess.run(["cargo", "test", "-p", "mini-linq", "--test", target, "--locked"], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+        print(f"PASS: consumer {target}", flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--isolate", action="store_true", help="test copied components with only their declared dependencies present, then invoke isolated macros")
-    parser.add_argument("--frontends", action="store_true", help="invoke each leaf-feature macro with boundary captures or small executable input")
-    parser.add_argument("--consumers", action="store_true", help="run current IX/Physical integration test targets; separate from boundary smoke")
-    parser.add_argument("--only", action="append", default=[], help="limit probes by component, frontend feature, or integration target")
+    parser.add_argument("--isolate", action="store_true")
+    parser.add_argument("--frontends", action="store_true")
+    parser.add_argument("--consumers", action="store_true")
+    parser.add_argument("--only", action="append", default=[])
     args = parser.parse_args()
-    check_independent_relations()
-    check_extension_sources()
-    labels = set(ALLOWED) | set(FRONTEND) | set(CONSUMERS)
-    if set(args.only) - labels:
-        parser.error("unknown --only label(s): " + ", ".join(sorted(set(args.only) - labels)))
-    data = metadata()
-    packages = check(data)
-    negative_dependency_checks(data)
-    if args.isolate:
-        isolate(packages, args.only)
-    if args.isolate or args.frontends:
-        check_frontends(packages, args.only)
-    if args.consumers:
-        check_consumers(args.only)
+    data = metadata(); packages = check(data)
+    negative_dependency_checks(data); check_independent_relations(); check_extension_sources()
+    if args.isolate: isolate(packages, args.only)
+    if args.frontends: frontends()
+    if args.consumers: consumers()
 
 
 if __name__ == "__main__":

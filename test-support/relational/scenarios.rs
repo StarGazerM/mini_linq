@@ -8,7 +8,6 @@ pub struct Scenario {
     pub indexes: &'static str,
     pub physical: &'static str,
     pub structures: &'static str,
-    pub policy: &'static str,
 }
 impl Scenario {
     pub fn ix(&self) -> String {
@@ -28,7 +27,6 @@ macro_rules! scenario {
             indexes: include_str!(concat!("scenarios/", $name, ".ix")),
             physical: include_str!(concat!("scenarios/", $name, ".physical")),
             structures: include_str!(concat!("scenarios/", $name, ".structures")),
-            policy: include_str!(concat!("scenarios/", $name, ".policy")),
         }
     };
 }

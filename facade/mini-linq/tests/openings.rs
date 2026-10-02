@@ -1,25 +1,6 @@
 //! The four interfaces compose ordinary Rust contexts around checked core holes.
-#![cfg(all(
-    feature = "logical-selection",
-    feature = "hypergraph",
-    feature = "index-demands",
-    feature = "physical-lowering",
-    feature = "structure-selection",
-    feature = "physical-realization"
-))]
 #![allow(non_snake_case)]
-mod mini_linq {
-    pub use crate::strategy as physical_policy;
-    pub use ::mini_linq::{
-        cq_to_ra, index_demands as choose_index_policy, select_structures, structures_to_rust,
-    };
-    pub(crate) use cq_state_providers::default_indexes as index_provider;
-    pub use cq_state_providers::hash_distinct as distinct_state;
-}
-#[macro_export]
-macro_rules! strategy {
-    ($($ix:tt)*) => { ::mini_linq::lower_physical! { $($ix)* policy {} } };
-}
+
 use cq_storage::{Answers, GroupedAnswers};
 
 #[test]
@@ -89,35 +70,23 @@ fn literal_and_arithmetic_keys_use_owned_host_fallbacks() {
 #[test]
 fn reduced_literal_keys_probe_built_indexes() {
     let R = [(1, 7), (2, 7), (-1, 7), (1, 7)];
-    let actual: std::collections::BTreeSet<_> = ::mini_linq::cq_to_ra_hypergraph! {
-        struct ReducedLiteral; relation R(x: i32, tag: i32); relation answer(x: i32);
-        answer(*x) :- R(x, 7), if *x > 0;
-    }
-    .collect();
+    let actual: std::collections::BTreeSet<_> =
+        ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_hypergraph; }
+            struct ReducedLiteral; relation R(x: i32, tag: i32); relation answer(x: i32);
+            answer(*x) :- R(x, 7), if *x > 0;
+        }
+        .collect();
     assert_eq!(actual, [(1,), (2,)].into());
 }
 
 mod computed_candidate_keys {
-    macro_rules! policy {
-        ($($ix:tt)*) => { ::mini_linq::lower_physical! { $($ix)* policy { intersect = smallest; } } };
-    }
-    pub(crate) use policy as physical_policy;
-    mod mini_linq {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::{
-            default_indexes as index_provider, hash_distinct as distinct_state,
-        };
-    }
 
     #[test]
     fn arithmetic_prefix_keys_intersect_borrowed_candidates() {
         let Seed = [(1,)];
         let R = [(2, 5), (2, 6), (2, 5)];
         let S = [(2, 6), (3, 8)];
-        let actual: Vec<_> = ::mini_linq::cq_to_ra_generic! {
+        let actual: Vec<_> = ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_generic; physical = [::core_pass_fixtures::smallest]; }
             struct Candidates;
             relation Seed(k: i32); relation R(k: i32, x: i32); relation S(k: i32, x: i32);
             relation answer(x: i32);
@@ -263,28 +232,12 @@ fn generated_result_names_do_not_shadow_input_or_output_relations() {
 }
 
 mod fuzz_owned_merge_keys {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)* policy { join = merge; project = canon; }
-            }
-        };
-    }
-    pub(super) use policy as physical_policy;
-    mod mini_linq {
-        pub(super) use super::physical_policy;
-        pub(super) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(super) use cq_state_providers::default_indexes as index_provider;
-        pub(super) use cq_state_providers::hash_distinct as distinct_state;
-    }
 
     #[test]
     fn constant_atom_merges_owned_literal_with_borrowed_host() {
         // Differential seed 2: the two merge cursors exposed i32 and &i32 keys.
         let R = std::collections::BTreeMap::from([((2,), vec![(), ()]), ((3,), vec![()])]);
-        let rows: Vec<_> = ::mini_linq::cq_to_ra! {
+        let rows: Vec<_> = ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::merged, ::core_pass_fixtures::canonical_projects]; }
             struct LiteralMerge;
             relation R(x: i32);
             relation answer(value: i32);
@@ -299,7 +252,7 @@ mod fuzz_owned_merge_keys {
 fn repeated_plain_head_variables_preserve_positions_and_input_references() {
     // Differential seed 4: the CQ normal-form check rejected answer(x, x).
     let R = [(String::from("left"),), (String::from("right"),)];
-    let mut rows: Vec<_> = ::mini_linq::cq_to_ra_prefix_connected_fine! {
+    let mut rows: Vec<_> = ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_prefix_connected_fine; }
         struct RepeatedHead;
         relation R(value: String);
         answer(x, x) :- R(x);
@@ -315,43 +268,27 @@ fn repeated_plain_head_variables_preserve_positions_and_input_references() {
 fn fine_plan_probes_a_nonleading_literal_key() {
     // The fine-plan case found beside differential seed 5's computed keys.
     let R = [(1, -3, 4), (2, -3, 5), (2, -3, 5), (3, 7, 8)];
-    let mut rows: Vec<_> = ::mini_linq::cq_to_ra_prefix_greedy_fine! {
-        struct FineLiteral;
-        relation R(witness: i32, tag: i32, value: i32);
-        answer(x) :- R(_, -3, x);
-    }
-    .collect();
+    let mut rows: Vec<_> =
+        ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_prefix_greedy_fine; }
+            struct FineLiteral;
+            relation R(witness: i32, tag: i32, value: i32);
+            answer(x) :- R(_, -3, x);
+        }
+        .collect();
     rows.sort();
     assert_eq!(rows, [(&4,), (&5,)]);
 }
 
 macro_rules! wide_distinct_regressions {
-    ($d:tt; $module:ident, $provider:ident) => {
+    ($module:ident, $provider:path) => {
         mod $module {
-            macro_rules! policy {
-                ($d($d ix:tt)*) => {
-                    ::mini_linq::lower_physical! {
-                        $d($d ix)* policy { project = canon; }
-                    }
-                };
-            }
-            pub(super) use policy as physical_policy;
-            mod mini_linq {
-                pub(super) use super::physical_policy;
-                pub(super) use ::mini_linq::{
-                    index_demands as choose_index_policy, select_structures, structures_to_rust,
-                };
-                pub(super) use cq_state_providers::default_indexes as index_provider;
-                pub(super) use cq_state_providers::$provider as distinct_state;
-            }
-
             #[test]
             fn thirteen_internal_columns_have_unbounded_distinct_keys() {
                 // Differential seed 27 exposed std tuples' twelve-field Ord limit.
                 // Five atoms of arity at most three legitimately bind thirteen columns.
                 let R = [(1, 2, 3), (4, 5, 6), (1, 2, 3)];
                 let S = [(7,), (8,), (7,)];
-                let mut rows: Vec<_> = ::mini_linq::cq_to_ra! {
+                let mut rows: Vec<_> = ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::canonical_projects]; structures = [$provider]; }
                     struct Wide;
                     relation R(x: i32, y: i32, z: i32);
                     relation S(x: i32);
@@ -381,7 +318,7 @@ macro_rules! wide_distinct_regressions {
             #[test]
             fn computed_output_width_is_independent_of_input_heading() {
                 let R = [(1, 0), (1, 2), (1, 1), (1, 3)];
-                let rows: Vec<_> = ::mini_linq::cq_to_ra! {
+                let rows: Vec<_> = ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::canonical_projects]; structures = [$provider]; }
                     struct WideHead;
                     relation R(x: i32, y: i32);
                     relation answer(c0: i32, c1: i32, c2: i32, c3: i32, c4: i32,
@@ -397,5 +334,5 @@ macro_rules! wide_distinct_regressions {
         }
     };
 }
-wide_distinct_regressions!($; wide_hash, hash_distinct);
-wide_distinct_regressions!($; wide_ordered, ordered_distinct);
+wide_distinct_regressions!(wide_hash, core_pass_fixtures::identity_structures);
+wide_distinct_regressions!(wide_ordered, core_pass_fixtures::ordered_dedup);

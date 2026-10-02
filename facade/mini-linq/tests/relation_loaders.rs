@@ -200,28 +200,9 @@ mod names {
     }
 }
 
-#[cfg(all(
-    feature = "written-order",
-    feature = "index-demands",
-    feature = "structure-selection",
-    feature = "physical-lowering",
-    feature = "physical-realization"
-))]
 mod dispatch {
     use super::{CsvOptions, File};
     crate::authored::with_query!(::mini_linq::relation_loaders);
-    mod mini_linq {
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::{
-            default_indexes as index_provider, ordered_distinct as distinct_state,
-        };
-        macro_rules! policy {
-            ($($tokens:tt)*) => { ::mini_linq::lower_physical! { $($tokens)* policy {} } };
-        }
-        pub(crate) use policy as physical_policy;
-    }
 
     #[test]
     #[allow(non_snake_case)]
@@ -239,7 +220,7 @@ mod dispatch {
                         let $relation = <relation_loader!($relation)>::$method::<$prefix>(
                             file.path(), CsvOptions::default(),
                         ).unwrap();
-                        let mut actual = ::mini_linq::cq_to_ra! {
+                        let mut actual = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
                             struct $query; relation $relation($($columns)*); $($rest)*
                         }
                             .map(|(id, label, amount)| (*id, label.clone(), *amount))

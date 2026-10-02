@@ -28,6 +28,7 @@ impl Context<'_> {
         }
         let ty = &self.infos[&input].types[&column];
         let host = &access.value;
+        let fallback_ty = self.fallback_type(&input, name, &access.key);
         let bound = |lower: bool| {
             let mut result = quote!(::core::ops::Bound::Unbounded);
             for b in bounds.iter().filter(|b| b.lower == lower) {
@@ -57,7 +58,7 @@ impl Context<'_> {
             use ::cq_storage::dispatch::RangeRead as _;
             ::core::iter::Iterator::map(
                 (&&&::cq_storage::dispatch::RangeHost::<_, (&#ty,), _>::new(
-                    #host, move || ::cq_storage::rows::Rows::rows(#host)
+                    #host, move || { let __cq_scan: #fallback_ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#host), ::core::convert::identity); __cq_scan }
                 )).range(#low, #high),
                 move |(#(#fields,)*)| #row
             )

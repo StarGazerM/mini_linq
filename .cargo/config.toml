@@ -1,2 +1,1 @@
-[alias]
-xtask = "run --manifest-path xtask/Cargo.toml --locked --"
+# Optional workload tooling is pending migration in features/PENDING.

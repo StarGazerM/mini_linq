@@ -1,2 +1,15 @@
-structures {
-}
+structures { r0 host scan = :: core :: iter :: Map < _ , _ > [];
+ r1 host scan = :: core :: iter :: Map < _ , _ > [];
+ r1 host r2 = :: cq_storage :: HashIndex < '_ , _ , _ > [y];
+ r3 host scan = :: core :: iter :: Map < _ , _ > [];
+ r3 host r4 = :: cq_storage :: HashIndex < '_ , _ , _ > [x , z];
+ r5 host scan = :: core :: iter :: Map < _ , _ > [];
+ r5 host r6 = :: cq_storage :: HashIndex < '_ , _ , _ > [x];
+ r7 host scan = :: core :: iter :: Map < _ , _ > [];
+ r7 host r8 = :: cq_storage :: HashIndex < '_ , _ , _ > [u];
+ r9 host scan = :: core :: iter :: Map < _ , _ > [];
+ r9 host r10 = :: cq_storage :: HashIndex < '_ , _ , _ > [v];
+ r11 host scan = :: core :: iter :: Map < _ , _ > [];
+ r11 host r12 = :: cq_storage :: HashIndex < '_ , _ , _ > [u , w];
+ r13 canon = :: std :: collections :: HashSet < _ >;
+ }

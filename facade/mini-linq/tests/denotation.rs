@@ -40,21 +40,11 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
                         cq_elaborate::check(&vo, &ra).unwrap();
                         let ix = cq_index_policy::compile(&ra).unwrap();
                         cq_index_policy::check(&ra, &ix).unwrap();
-                        let policy = syn::parse_quote!(policy {});
-                        let physical = cq_physical_lowering::compile(&ix, &policy).unwrap();
-                        cq_physical_lowering::check(&ix, &physical, &policy).unwrap();
-                        let structures =
-                            cq_structure_selection::compile(&physical, &policy).unwrap();
-                        cq_structure_selection::check(&physical, &structures, &policy).unwrap();
-                        let expression = cq_physical_realization::compile(
-                            &structures,
-                            &cq_physical_realization::Endpoints {
-                                distinct_state: syn::parse_quote!(distinct),
-                                index_provider: syn::parse_quote!(indexes),
-                                intersect: false,
-                            },
-                        )
-                        .unwrap();
+                        let physical = cq_physical_lowering::compile(&ix).unwrap();
+                        cq_physical_lowering::check(&ix, &physical).unwrap();
+                        let structures = cq_structure_selection::compile(&physical).unwrap();
+                        cq_structure_selection::check(&physical, &structures).unwrap();
+                        let expression = cq_physical_realization::compile(&structures).unwrap();
                         tests.push(quote!({ #bindings let rows: Vec<_> = (#expression).collect(); assert!(rows.is_empty()); }));
                     }
                 }
@@ -73,10 +63,9 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
         p = project indexed keep {x,y}; output p as answer(x,y);
     });
     let ix = cq_index_policy::compile(&ra).unwrap();
-    let policy = syn::parse_quote!(policy {});
-    let physical = cq_physical_lowering::compile(&ix, &policy).unwrap();
-    cq_physical_lowering::check(&ix, &physical, &policy).unwrap();
-    let structures = cq_structure_selection::compile(&physical, &policy).unwrap();
+    let physical = cq_physical_lowering::compile(&ix).unwrap();
+    cq_physical_lowering::check(&ix, &physical).unwrap();
+    let structures = cq_structure_selection::compile(&physical).unwrap();
     assert!(
         structures
             .structures
@@ -84,31 +73,13 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
             .iter()
             .any(|entry| entry.name == "b")
     );
-    let expression = cq_physical_realization::compile(
-        &structures,
-        &cq_physical_realization::Endpoints {
-            distinct_state: syn::parse_quote!(distinct),
-            index_provider: syn::parse_quote!(indexes),
-            intersect: false,
-        },
-    )
-    .unwrap();
+    let expression = cq_physical_realization::compile(&structures).unwrap();
     tests.push(quote!({
         let R: &[(i32,)] = &[(0,)]; let S: &[(i32,)] = &[]; let T: &[(i32,)] = &[(1,)];
         let rows: Vec<_> = (#expression).collect(); assert!(rows.is_empty());
     }));
     let program = quote! {
         #![allow(non_snake_case, unused_variables)]
-        macro_rules! distinct {
-            (operator $id:ident; new) => { ::std::collections::HashSet::new() };
-            (operator $id:ident; insert($set:expr, $row:expr)) => { $set.insert(Clone::clone($row)) };
-        }
-        macro_rules! indexes {
-            (probe) => { ::cq_storage::HashIndex<'_, _, _> };
-            (semi) => { ::std::collections::HashSet<_> };
-            (ordered) => { ::std::collections::BTreeMap<_, Vec<_>> };
-            (trie $inner:ty) => { ::cq_storage::Trie<'_, _, $inner> };
-        }
         fn main() { #(#tests)* }
     };
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

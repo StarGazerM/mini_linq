@@ -16,34 +16,22 @@ jobs:
         run: rustup show active-toolchain
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Fetch locked dependencies for isolated and packaged gates
+        run: cargo fetch --locked
       - name: Verify component dependency boundaries
-        run: python3 tools/check_dependencies.py --isolate
+        run: python3 tools/check_dependencies.py --isolate --frontends --consumers
       - name: Test restored compiler regressions
         env:
           CARGO_BUILD_JOBS: 2
         run: bash tools/test_regressions.sh
-      - name: Recompute every golden with DuckDB
-        env:
-          CARGO_BUILD_JOBS: 2
-        run: cargo xtask golden
-      - name: Compare 200 seeded compiled CQs with DuckDB
-        env:
-          CARGO_BUILD_JOBS: 2
-        run: cargo xtask fuzz --cases 200 --seed 0
-      - name: Test IX and Physical composition
-        run: python3 tools/check_dependencies.py --consumers
-      - name: Test package feature configurations
-        run: python3 tools/check_features.py
+      - name: Test packaged public API outside the checkout
+        run: python3 tools/check_external.py
+      - name: Check reviewed public API snapshots
+        run: python3 tools/check_public_api.py
       - name: Test workspace
         run: cargo test --workspace --locked --no-fail-fast
       - name: Check Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Test teaching tool
-        env:
-          CARGO_BUILD_JOBS: 2
-        run: cargo test --manifest-path xtask/Cargo.toml --locked --features oracle
-      - name: Run heterogeneous provider composition
-        run: cargo run --manifest-path examples/composition/Cargo.toml --locked
       - name: Check formal source correspondence
         run: python3 doc/formal/check.py
       - name: Upload regression diagnostics

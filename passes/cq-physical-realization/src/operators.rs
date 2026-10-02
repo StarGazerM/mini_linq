@@ -105,7 +105,7 @@ impl<'a> Printer<'a> {
                 let all = self.levels_of(&right, structure);
                 // The opt-in binary case has exactly one remaining key,
                 // which is the entire payload of this prefix read.
-                if !self.endpoints.intersect
+                if !self.intersect
                     || levels.len() != 1
                     || all.len() != 2
                     || all[1].len() != 1

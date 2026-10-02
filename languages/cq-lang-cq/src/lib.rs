@@ -613,3 +613,23 @@ fn check_input_atom<'a>(
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
+
+pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
+    contract::check(source)?;
+    contract::check(target)?;
+    if source != target {
+        return Err(syn::Error::new_spanned(
+            target,
+            "CQ rewrite requires an unchanged contracted query; surface expansion precedes this boundary",
+        ));
+    }
+    Ok(())
+}
+impl cq_stage::Language for Program {
+    fn check(&self) -> syn::Result<()> {
+        contract::check(self).map(|_| ())
+    }
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        check_rewrite(source, target)
+    }
+}

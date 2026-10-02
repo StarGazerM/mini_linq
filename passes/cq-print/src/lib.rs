@@ -167,6 +167,10 @@ impl<'a> Context<'a> {
         }
         let mut candidate_reads: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
         for pair in module.physical.program.definitions.windows(2) {
+            if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
+            {
+                continue;
+            }
             if let Some((a, b, v)) =
                 physical::binary_intersection(&pair[0], &pair[1], &analysis.physical)
             {
@@ -199,7 +203,10 @@ impl<'a> Context<'a> {
             bound,
             owned: Vec::new(),
             candidate_reads,
-            intersect: false,
+            intersect: module.physical.program.definitions.iter().any(|d| {
+                matches!(&d.operator,
+                Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
+            }),
         }
     }
 
@@ -324,12 +331,16 @@ impl<'a> Context<'a> {
         let scanned = self.physical_analysis.scanned.contains(name);
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
-        let rows = (scanned || structures.len() > 1).then(|| format_ident!("__cq_{}_rows", name));
+        let rows = (scanned
+            || structures.len() > 1
+            || self.physical_analysis.modes[name] == physical::ModeKind::Exists)
+            .then(|| format_ident!("__cq_{}_rows", name));
         let mut statements: Vec<Stmt> = Vec::new();
         let source = match &rows {
             Some(rows) => {
+                let ty = &self.analysis.retained[name];
                 statements.push(syn::parse_quote! {
-                    let #rows: &::std::vec::Vec<_> = &::core::iter::Iterator::collect(#source);
+                    let #rows: &#ty = &::core::iter::Iterator::collect(#source);
                 });
                 quote!(::core::iter::Iterator::copied(#rows.iter()))
             }

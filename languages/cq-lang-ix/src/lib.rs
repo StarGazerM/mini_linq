@@ -234,3 +234,20 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
 
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
+
+pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
+    contract::check(source)?;
+    contract::check(target)?;
+    if source.ra != target.ra {
+        return Err(syn::Error::new_spanned(&target.ra, "IX rewrite changes RA"));
+    }
+    Ok(())
+}
+impl cq_stage::Language for Program {
+    fn check(&self) -> syn::Result<()> {
+        contract::check(self).map(|_| ())
+    }
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        check_rewrite(source, target)
+    }
+}

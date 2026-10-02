@@ -3,23 +3,16 @@
 //! read in place, merges over native or sorted cursors, point reads,
 //! opaque binds/guards, and the distinct wrapper — with answers in head order.
 use cq_lang_structures as structures;
-use cq_physical_realization::{Endpoints, compile};
+use cq_physical_realization::compile;
 use quote::{ToTokens, quote};
-
-fn endpoints() -> Endpoints {
-    Endpoints {
-        intersect: false,
-        distinct_state: syn::parse_quote!(mini_linq::distinct_state),
-        index_provider: syn::parse_quote!(mini_linq::index_provider),
-    }
-}
 
 fn text(tokens: impl ToTokens) -> String {
     tokens.to_token_stream().to_string()
 }
 
 fn program(module: &structures::Program) -> String {
-    let expr = compile(module, &endpoints()).unwrap();
+    let complete = cq_structure_selection::compile(&module.physical).unwrap();
+    let expr = compile(&complete).unwrap();
     text(expr)
 }
 
@@ -35,15 +28,10 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     use std::process::Command;
     let directory = std::env::temp_dir().join(format!("cq-realization-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
-    let endpoints = Endpoints {
-        distinct_state: syn::parse_quote!(state),
-        index_provider: syn::parse_quote!(indexes),
-        intersect: false,
-    };
     let mut checks = Vec::new();
     for case in scenarios::SCENARIOS {
         let source: structures::Program = syn::parse_str(&case.structured()).unwrap();
-        let expression = compile(&source, &endpoints).unwrap();
+        let expression = compile(&source).unwrap();
         let data_name = if case.name == "fine_triangle" {
             "triangle"
         } else {
@@ -76,16 +64,6 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     }
     let source = quote! {
         #![allow(non_snake_case, unused_variables)]
-        macro_rules! state {
-            (operator $id:ident; new) => { ::std::collections::HashSet::new() };
-            (operator $id:ident; insert($state:expr, $row:expr)) => { $state.insert(Clone::clone($row)) };
-        }
-        macro_rules! indexes {
-            (probe) => { ::cq_storage::HashIndex<'_, _, _> };
-            (semi) => { ::std::collections::HashSet<_> };
-            (ordered) => { ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> };
-            (trie $inner:ty) => { ::cq_storage::Trie<'_, _, $inner> };
-        }
         fn main() { #(#checks)* }
     };
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
@@ -141,7 +119,8 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         l = pipe rename L {a -> a}; r = pipe rename R {a -> a};
         j = pipe canon merge[a] l,r; return j as answer(a);
     } structures {});
-    let expression = compile(&unordered, &endpoints).unwrap();
+    let complete = cq_structure_selection::compile(&unordered.physical).unwrap();
+    let expression = compile(&complete).unwrap();
     let invalid = quote!(#source
         #[allow(non_snake_case)] fn unordered_merge() {
             let L: &[(i32,)] = &[(1,)]; let R: &[(i32,)] = &[(1,)];
@@ -175,7 +154,7 @@ fn dispatch_uses_layout_and_allocates_fallbacks_outside_probe_closures() {
     let p: structures::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32,b:i32);
         l = pipe rename L {a -> x}; r = pipe rename R {a -> x,b -> y};
-        j = pipe canon probe[x] l,r; return j as answer(x,y);
+        j = pipe canon probe first [x] l,r; return j as answer(x,y);
     } structures {});
     let text = program(&p);
     assert_eq!(text.matches("Lazy :: new").count(), 1);
@@ -184,7 +163,7 @@ fn dispatch_uses_layout_and_allocates_fallbacks_outside_probe_closures() {
         "{text}"
     );
     assert!(text.contains(". seek ("), "{text}");
-    assert!(text.contains("distinct_state !"), "{text}");
+    assert!(text.contains("HashSet < _ > > :: new"), "{text}");
     let mut nonleading = p;
     nonleading.physical.program.declarations[1] = syn::parse_quote!(relation R(b:i32,a:i32););
     let text = program(&nonleading);
@@ -203,6 +182,6 @@ fn point_prints_build_free_dispatch_and_canonical_lets_use_the_distinct_provider
     assert_eq!(text.matches("Lazy :: new").count(), 0);
     assert!(text.contains("dispatch :: PointHost"));
     assert!(text.contains(". point ("));
-    assert!(text.contains("distinct_state ! { operator w"));
+    assert!(text.contains("HashSet < _ > > :: new"));
     assert!(text.contains("(y , x ,)"));
 }

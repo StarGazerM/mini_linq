@@ -464,12 +464,12 @@ where
 
 /// A deferred membership set. Construction imposes no key capability on a
 /// direct host path; hashing is required only when the fallback is selected.
-pub struct KeySet<I: Iterator> {
+pub struct KeySet<I: Iterator, const EAGER: bool = true> {
     source: RefCell<Option<I>>,
-    keys: OnceCell<crate::instrument::HashSet<I::Item>>,
+    keys: OnceCell<RefCell<crate::instrument::HashSet<I::Item>>>,
 }
-impl<K, V, I: Iterator<Item = (K, V)>> crate::Build<I>
-    for KeySet<std::iter::Map<I, fn((K, V)) -> K>>
+impl<K, V, I: Iterator<Item = (K, V)>, const EAGER: bool> crate::Build<I>
+    for KeySet<std::iter::Map<I, fn((K, V)) -> K>, EAGER>
 {
     fn build(source: I) -> Self {
         Self {
@@ -478,19 +478,46 @@ impl<K, V, I: Iterator<Item = (K, V)>> crate::Build<I>
         }
     }
 }
-impl<K: Eq + std::hash::Hash, I: Iterator<Item = K>> ExactMembership<K> for KeySet<I> {
+impl<K: Eq + std::hash::Hash, I: Iterator<Item = K>, const EAGER: bool> ExactMembership<K>
+    for KeySet<I, EAGER>
+{
     fn contains(&self, key: &K) -> bool {
         crate::count!(lookups);
-        self.keys
+        let mut keys = self
+            .keys
             .get_or_init(|| {
                 crate::count!(index_builds);
-                let source = self.source.borrow_mut().take().expect("one initialization");
-                #[cfg(feature = "counters")]
-                let source = source.inspect(|_| {
-                    crate::count!(distinct_insertions);
-                });
-                source.collect()
+                let keys = if EAGER {
+                    let source = self.source.borrow_mut().take().expect("one initialization");
+                    #[cfg(feature = "counters")]
+                    let source = source.inspect(|_| {
+                        crate::count!(distinct_insertions);
+                    });
+                    source.collect()
+                } else {
+                    crate::instrument::HashSet::default()
+                };
+                RefCell::new(keys)
             })
-            .contains(key)
+            .borrow_mut();
+        if keys.contains(key) {
+            return true;
+        }
+        if EAGER {
+            return false;
+        }
+        let mut source = self.source.borrow_mut();
+        if let Some(rows) = source.as_mut() {
+            for candidate in rows.by_ref() {
+                let found = &candidate == key;
+                crate::count!(distinct_insertions);
+                keys.insert(candidate);
+                if found {
+                    return true;
+                }
+            }
+        }
+        *source = None;
+        false
     }
 }

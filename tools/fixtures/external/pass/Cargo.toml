@@ -1,0 +1,13 @@
+[package]
+name = "external-pass-fixture"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+cq-stage = "=0.1.0"
+cq-lang-structures = "=0.1.0"
+proc-macro2 = "1"
+syn = { version = "2", features = ["full"] }

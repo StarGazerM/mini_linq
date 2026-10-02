@@ -1,15 +1,14 @@
-physical {
-    relation F(k1: i32, k2: i32, k3: i32);
-    relation A(key: i32, value: i32);
-    relation B(key: i32, value: i32);
-    relation C(key: i32, value: i32);
-    r0 = pipe rename F { k1 -> x, k2 -> y, k3 -> z };
-    r1 = pipe rename A { key -> x, value -> a };
-    r2 = pipe probe[x] r0, r1;
-    r3 = pipe rename B { key -> y, value -> b };
-    r4 = pipe probe[y] r2, r3;
-    r5 = pipe rename C { key -> z, value -> c };
-    r6 = pipe probe[z] r4, r5;
-    r7 = pipe canon project r6 keep { a, b, c };
-    return r7 as answer(a, b, c);
-}
+physical { relation F (k1 : i32 , k2 : i32 , k3 : i32);
+ relation A (key : i32 , value : i32);
+ relation B (key : i32 , value : i32);
+ relation C (key : i32 , value : i32);
+ r0 = pipe rename F { k1 - > x , k2 - > y , k3 - > z };
+ r1 = pipe rename A { key - > x , value - > a };
+ r2 = pipe probe first [x] r0 , r1;
+ r3 = pipe rename B { key - > y , value - > b };
+ r4 = pipe probe first [y] r2 , r3;
+ r5 = pipe rename C { key - > z , value - > c };
+ r6 = pipe probe first [z] r4 , r5;
+ r7 = pipe canon project r6 keep { a , b , c };
+ return r7 as answer (a , b , c);
+ }

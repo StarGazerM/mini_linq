@@ -1,5 +1,12 @@
-structures {
-    r2 = index_provider!(semi) [item] ;
-    r4 = index_provider!(probe) [item] ;
-    r5 = index_provider!(probe) [depot] ;
-}
+structures { r2 = :: std :: collections :: HashSet < _ > [item];
+ r4 = :: cq_storage :: HashIndex < '_ , _ , _ > [item];
+ r5 = :: cq_storage :: HashIndex < '_ , _ , _ > [depot];
+ r0 host scan = :: core :: iter :: Map < _ , _ > [];
+ r1 host scan = :: core :: iter :: Map < _ , _ > [];
+ r1 host r2 = :: cq_storage :: dispatch :: KeySet < _ > [depot];
+ r2 rows = :: std :: vec :: Vec < _ >;
+ r3 host scan = :: core :: iter :: Map < _ , _ > [];
+ r4 rows = :: std :: vec :: Vec < _ >;
+ r5 rows = :: std :: vec :: Vec < _ >;
+ r9 canon = :: std :: collections :: HashSet < _ >;
+ }

@@ -17,7 +17,6 @@ use cq_lang_ix as ix;
 use cq_lang_ix::ra::Operator as Op;
 use cq_lang_ix::syntax::symbol_name;
 use cq_lang_physical as physical;
-use cq_lang_physical::policy::Policy;
 use syn::Ident;
 
 /// How one result is read, gathered from every reader in RA order.
@@ -31,8 +30,8 @@ struct Reads {
     merged: Vec<Vec<String>>,
 }
 
-/// Lower IX to Physical under the policy, then check the Physical contract.
-pub fn compile(source: &ix::Program, policy: &Policy) -> syn::Result<physical::Program> {
+/// Lower IX to Physical with deterministic defaults, then check the Physical contract.
+pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
     ix::contract::check(source)?;
     let info = ix::ra::contract::check(&source.ra)?;
     let operations: Vec<_> = source
@@ -43,21 +42,25 @@ pub fn compile(source: &ix::Program, policy: &Policy) -> syn::Result<physical::P
         .map(|d| (d.result.clone(), d.operator.clone()))
         .collect();
     let returned = source.ra.plan.output.input.clone();
-    let (operators, reads) = operators(source, &info, &operations, policy)?;
+    let (operators, reads) = operators(source, &info, &operations)?;
     let modes = modes(&operations, &operators, &reads);
-    let unique = canonical(&info, &operations, policy, &returned);
+    let unique = canonical(&info, &operations, &returned);
     let definitions = operations
         .iter()
         .zip(modes)
         .zip(operators)
-        .map(|(((name, op), mode), operator)| physical::Definition {
+        .map(|(((name, _op), mode), operator)| physical::Definition {
             name: name.clone(),
             eq_token: Default::default(),
-            mode,
-            canon: (!unique.contains(&symbol_name(name))
-                && (name == &returned
-                    || (policy.canon_projections() && matches!(op, Op::Project(_)))))
-            .then(Default::default),
+            mode: if matches!(mode, physical::Mode::Let(_))
+                && info[&symbol_name(name)].heading.is_empty()
+            {
+                physical::Mode::Exists(Default::default())
+            } else {
+                mode
+            },
+            canon: (!unique.contains(&symbol_name(name)) && name == &returned)
+                .then(Default::default),
             operator,
             semi_token: Default::default(),
         })
@@ -76,7 +79,7 @@ pub fn compile(source: &ix::Program, policy: &Policy) -> syn::Result<physical::P
         },
     };
     physical::contract::check(&target)?;
-    check_demands(source, &target)?;
+    check(source, &target)?;
     Ok(target)
 }
 
@@ -84,7 +87,6 @@ fn operators(
     source: &ix::Program,
     info: &ix::ra::Analysis,
     operations: &[(Ident, Op)],
-    policy: &Policy,
 ) -> syn::Result<(Vec<physical::Operator>, BTreeMap<String, Reads>)> {
     let mut reads: BTreeMap<String, Reads> = operations
         .iter()
@@ -106,6 +108,11 @@ fn operators(
                 let columns: Vec<String> = lh.heading.intersection(&rh.heading).cloned().collect();
                 scan(&mut reads, left);
                 let keyed = physical::Keyed {
+                    choice: Some(if matches!(op, Op::Semijoin(_)) {
+                        physical::Choice::Eager(Default::default())
+                    } else {
+                        physical::Choice::First(Default::default())
+                    }),
                     bracket: Default::default(),
                     columns: columns.iter().map(|c| lh.bindings[c].clone()).collect(),
                     left: left.clone(),
@@ -115,9 +122,6 @@ fn operators(
                 if matches!(op, Op::Semijoin(_)) {
                     probe(&mut reads, right, columns);
                     physical::Operator::Semi(Default::default(), keyed)
-                } else if policy.merge_joins() && !columns.is_empty() {
-                    merge(&mut reads, left, right, columns);
-                    physical::Operator::Merge(Default::default(), keyed)
                 } else {
                     probe(&mut reads, right, columns);
                     physical::Operator::Probe(Default::default(), keyed)
@@ -193,7 +197,6 @@ fn modes(
 fn canonical(
     info: &ix::ra::Analysis,
     operations: &[(Ident, Op)],
-    policy: &Policy,
     returned: &Ident,
 ) -> BTreeSet<String> {
     let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -228,9 +231,7 @@ fn canonical(
         if let Some(key) = key {
             inherited.insert(name.clone());
             unique.insert(name, key);
-        } else if name == symbol_name(returned)
-            || (policy.canon_projections() && matches!(op, Op::Project(_)))
-        {
+        } else if name == symbol_name(returned) {
             unique.insert(name, heading);
         }
     }
@@ -252,73 +253,8 @@ fn probe(reads: &mut BTreeMap<String, Reads>, right: &Ident, columns: Vec<String
     right.keyed.push(columns);
 }
 
-/// Both merge sides are enumerated in key order; the left side's scan is
-/// already counted by the caller.
-fn merge(reads: &mut BTreeMap<String, Reads>, left: &Ident, right: &Ident, columns: Vec<String>) {
-    let right = reads
-        .get_mut(&symbol_name(right))
-        .expect("operand is a result");
-    right.count += 1;
-    right.merged.push(columns.clone());
-    reads
-        .get_mut(&symbol_name(left))
-        .expect("operand is a result")
-        .merged
-        .push(columns);
-}
-
-/// Erase physical choices to the relational program they implement.
-pub fn erase(target: &physical::Program) -> ix::ra::Program {
-    use ix::ra;
-    ra::Program {
-        relational_token: Default::default(),
-        relational_brace: Default::default(),
-        plan: ra::Plan {
-            declarations: target.program.declarations.clone(),
-            definitions: target
-                .program
-                .definitions
-                .iter()
-                .map(|d| ra::Definition {
-                    result: d.name.clone(),
-                    eq_token: d.eq_token,
-                    semi_token: d.semi_token,
-                    operator: match &d.operator {
-                        physical::Operator::Unit(u) => Op::Unit(u.clone()),
-                        physical::Operator::Rename(r) => Op::Rename(r.clone()),
-                        physical::Operator::Select(s)
-                        | physical::Operator::Point(_, s)
-                        | physical::Operator::Range(_, s) => Op::Select(s.clone()),
-                        physical::Operator::Bind(b) => Op::Bind(b.clone()),
-                        physical::Operator::Guard(g) => Op::Guard(g.clone()),
-                        physical::Operator::Project(p) => Op::Project(p.clone()),
-                        physical::Operator::Probe(_, k) | physical::Operator::Merge(_, k) => {
-                            Op::NaturalJoin(Box::new(ra::NaturalJoin {
-                                natural_join_token: Default::default(),
-                                left: k.left.clone(),
-                                with_token: Default::default(),
-                                right: k.right.clone(),
-                            }))
-                        }
-                        physical::Operator::Semi(_, k) => Op::Semijoin(Box::new(ra::Semijoin {
-                            semijoin_token: Default::default(),
-                            left: k.left.clone(),
-                            with_token: Default::default(),
-                            right: k.right.clone(),
-                        })),
-                    },
-                })
-                .collect(),
-            output: ra::Output {
-                output_token: Default::default(),
-                input: target.program.returned.clone(),
-                as_token: target.program.as_token,
-                head: target.program.head.clone(),
-                semi_token: target.program.return_semi,
-            },
-        },
-    }
-}
+pub use physical::check_rewrite;
+pub use physical::erase;
 
 /// Formal rule CK-Demands: Require each stream/const/range keyed-read descriptor in source IX.
 fn check_demands(source: &ix::Program, target: &physical::Program) -> syn::Result<()> {

@@ -1,15 +1,14 @@
-physical {
-    relation R(first: i32, second: i32);
-    relation S(first: i32, second: i32);
-    relation T(first: i32, second: i32);
-    relation U(first: i32, second: i32);
-    r0 = pipe rename R { first -> a, second -> b };
-    r1 = pipe rename S { first -> b, second -> c };
-    r2 = pipe probe[b] r0, r1;
-    r3 = pipe rename T { first -> c, second -> d };
-    r4 = pipe probe[c] r2, r3;
-    r5 = pipe rename U { first -> d, second -> a };
-    r6 = pipe probe[a, d] r4, r5;
-    r7 = pipe canon project r6 keep { a, c };
-    return r7 as answer(a, c);
-}
+physical { relation R (first : i32 , second : i32);
+ relation S (first : i32 , second : i32);
+ relation T (first : i32 , second : i32);
+ relation U (first : i32 , second : i32);
+ r0 = pipe rename R { first - > a , second - > b };
+ r1 = pipe rename S { first - > b , second - > c };
+ r2 = pipe probe first [b] r0 , r1;
+ r3 = pipe rename T { first - > c , second - > d };
+ r4 = pipe probe first [c] r2 , r3;
+ r5 = pipe rename U { first - > d , second - > a };
+ r6 = pipe probe first [a , d] r4 , r5;
+ r7 = pipe canon project r6 keep { a , c };
+ return r7 as answer (a , c);
+ }

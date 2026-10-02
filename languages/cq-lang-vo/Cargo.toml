@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cq-stage.workspace = true
 cq-lang-cq = { workspace = true }
 cq-syntax.workspace = true
 proc-macro2.workspace = true

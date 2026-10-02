@@ -7,7 +7,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_physical as physical;
-use cq_lang_physical::policy::Policy;
 use cq_lang_physical::syntax::{SupplyKind, symbol_name};
 use cq_lang_physical::{ModeKind, Operator};
 use cq_lang_structures as structures;
@@ -25,10 +24,10 @@ enum Need {
 impl Need {
     fn default_type(self) -> syn::Type {
         match self {
-            Need::Contains => syn::parse_quote!(index_provider!(semi)),
-            Need::Seek => syn::parse_quote!(index_provider!(probe)),
+            Need::Contains => syn::parse_quote!(::std::collections::HashSet<_>),
+            Need::Seek => syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
             Need::Ordered => {
-                syn::parse_quote!(index_provider!(ordered))
+                syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>)
             }
         }
     }
@@ -75,7 +74,7 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
     Some(levels)
 }
 
-pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<structures::Program> {
+pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     let analysis = physical::contract::check(source)?;
     let program = &source.program;
     let operators: BTreeMap<String, &Operator> = program
@@ -95,7 +94,7 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
         .collect();
     let mut needs: BTreeMap<(String, Vec<String>), BTreeSet<Need>> = BTreeMap::new();
     let mut require = |result: &str, columns: &[String], need: Need| {
-        if analysis.modes[result] != ModeKind::Let {
+        if analysis.modes[result] == ModeKind::Pipe {
             return;
         }
         needs
@@ -130,8 +129,12 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
     // prefix + new-column for membership. Keep these two-level demands
     // local: host reads, other keys and ordered reads retain their paths.
     let mut intersections = BTreeMap::new();
-    if policy.smallest_intersections() {
+    {
         for pair in program.definitions.windows(2) {
+            if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
+            {
+                continue;
+            }
             let Some((a, b, variable)) =
                 physical::binary_intersection(&pair[0], &pair[1], &analysis)
             else {
@@ -173,6 +176,29 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
         }
     }
 
+    let mut candidate_keys = BTreeSet::new();
+    for pair in program.definitions.windows(2) {
+        if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
+        {
+            continue;
+        }
+        if let Some((a, b, v)) = physical::binary_intersection(&pair[0], &pair[1], &analysis) {
+            candidate_keys.insert((
+                symbol_name(&a.right),
+                sorted(&a.columns.iter().map(symbol_name).collect::<Vec<_>>()),
+            ));
+            candidate_keys.insert((
+                symbol_name(&b.right),
+                sorted(
+                    &b.columns
+                        .iter()
+                        .map(symbol_name)
+                        .filter(|c| *c != v)
+                        .collect::<Vec<_>>(),
+                ),
+            ));
+        }
+    }
     let mut entries = TokenStream::new();
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
@@ -197,7 +223,7 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
                 .expect("nonempty")
                 .default_type();
             entries.extend(
-                quote! { #ident = index_provider!(trie #inner) [#(#columns),*][#(#tail),*]; },
+                quote! { #ident = ::cq_storage::Trie<'_, _, #inner> [#(#columns),*][#(#tail),*]; },
             );
             continue;
         }
@@ -216,7 +242,7 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
                     levels = quote! { [#(#columns),*] #levels };
                 }
                 for _ in 1..chain.len() {
-                    ty = syn::parse_quote!(index_provider!(trie #ty));
+                    ty = syn::parse_quote!(::cq_storage::Trie<'_, _, #ty>);
                 }
                 entries.extend(quote! { #ident = #ty #levels; });
                 continue;
@@ -230,13 +256,129 @@ pub fn compile(source: &physical::Program, policy: &Policy) -> syn::Result<struc
             entries.extend(quote! { #ident = #ty [#(#columns),*]; });
         }
     }
+    for definition in &program.definitions {
+        let name = symbol_name(&definition.name);
+        let ident = &definition.name;
+        if definition.canon.is_some() {
+            entries.extend(quote!(#ident canon = ::std::collections::HashSet<_>;));
+        }
+        if analysis.modes[&name] != ModeKind::Pipe {
+            let ty: syn::Type = if analysis.modes[&name] == ModeKind::Exists {
+                syn::parse_quote!(::cq_storage::Exists)
+            } else {
+                syn::parse_quote!(::std::vec::Vec<_>)
+            };
+            entries.extend(quote!(#ident rows = #ty;));
+        }
+        if analysis.hosts.contains_key(&name) {
+            entries.extend(quote!(#ident host scan = ::core::iter::Map<_, _> [];));
+        }
+        if analysis.hosts.contains_key(&name) && analysis.modes[&name] == ModeKind::Pipe {
+            for (reader, columns, supply) in analysis.keyed_reads.get(&name).into_iter().flatten() {
+                let rd = &program
+                    .definitions
+                    .iter()
+                    .find(|d| symbol_name(&d.name) == *reader)
+                    .expect("checked reader")
+                    .name;
+                let ty: syn::Type = match supply {
+                    SupplyKind::Const | SupplyKind::Range => {
+                        syn::parse_quote!(::core::iter::Map<_, _>)
+                    }
+                    SupplyKind::Stream if matches!(operators[reader], Operator::Merge(..)) => {
+                        Need::Ordered.default_type()
+                    }
+                    SupplyKind::Stream => {
+                        let payload = candidate_keys.contains(&(name.clone(), columns.clone()))
+                            || analysis.key_reads[&name].iter().any(|(r, c)| {
+                                c == columns && matches!(operators[r], Operator::Probe(..))
+                            });
+                        if payload {
+                            Need::Seek.default_type()
+                        } else if matches!(operators[reader], Operator::Semi(_, k) if matches!(k.choice, Some(physical::Choice::Lazy(_))))
+                        {
+                            syn::parse_quote!(::cq_storage::dispatch::KeySet<_, false>)
+                        } else {
+                            syn::parse_quote!(::cq_storage::dispatch::KeySet<_>)
+                        }
+                    }
+                };
+                let columns = columns.iter().map(|c| &analysis.rows[&name].bindings[c]);
+                entries.extend(quote!(#ident host #rd = #ty [#(#columns),*];));
+            }
+        }
+    }
+    let mut extra = BTreeSet::new();
+    for pair in program.definitions.windows(2) {
+        if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
+        {
+            continue;
+        }
+        let (a, b, v) = physical::binary_intersection(&pair[0], &pair[1], &analysis)
+            .expect("checked intersection");
+        for (name, prefix) in [
+            (
+                symbol_name(&a.right),
+                sorted(&a.columns.iter().map(symbol_name).collect::<Vec<_>>()),
+            ),
+            (
+                symbol_name(&b.right),
+                sorted(
+                    &b.columns
+                        .iter()
+                        .map(symbol_name)
+                        .filter(|c| *c != v)
+                        .collect::<Vec<_>>(),
+                ),
+            ),
+        ] {
+            if !analysis.hosts.contains_key(&name) || analysis.modes[&name] != ModeKind::Pipe {
+                continue;
+            }
+            let ident = &program
+                .definitions
+                .iter()
+                .find(|d| symbol_name(&d.name) == name)
+                .expect("host result")
+                .name;
+            for (reader, cols) in [
+                ("candidates", prefix),
+                ("membership", analysis.headings[&name].clone()),
+            ] {
+                if !extra.insert((name.clone(), reader, cols.clone())) {
+                    continue;
+                }
+                let columns = cols.iter().map(|c| &analysis.rows[&name].bindings[c]);
+                let rd = syn::Ident::new(reader, proc_macro2::Span::call_site());
+                let payload = reader == "candidates"
+                    || analysis
+                        .key_reads
+                        .get(&name)
+                        .into_iter()
+                        .flatten()
+                        .any(|(r, c)| *c == cols && matches!(operators[r], Operator::Probe(..)));
+                let ty: syn::Type = if payload {
+                    Need::Seek.default_type()
+                } else {
+                    syn::parse_quote!(::cq_storage::dispatch::KeySet<_>)
+                };
+                entries.extend(quote!(#ident host #rd = #ty [#(#columns),*];));
+            }
+        }
+    }
+    if structures::head_needs_dedup(source, &analysis) {
+        let returned = &program.returned;
+        entries.extend(quote!(#returned head = ::std::collections::HashSet<_>;));
+    }
     let target = structures::Program {
         physical: source.clone(),
         structures: syn::parse2(quote! { structures { #entries } })?,
     };
-    structures::contract::check(&target)?;
+    check(source, &target)?;
     Ok(target)
 }
 
 mod correspondence;
 pub use correspondence::check;
+
+pub use structures::check_rewrite;

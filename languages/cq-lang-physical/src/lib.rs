@@ -43,6 +43,11 @@ pub mod kw {
     syn::custom_keyword!(semi);
     syn::custom_keyword!(point);
     syn::custom_keyword!(range);
+    syn::custom_keyword!(exists);
+    syn::custom_keyword!(first);
+    syn::custom_keyword!(smallest);
+    syn::custom_keyword!(eager);
+    syn::custom_keyword!(lazy);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -84,6 +89,8 @@ pub enum Mode {
     Pipe(kw::pipe),
     #[parse(peek = Token![let])]
     Let(Token![let]),
+    #[parse(peek = kw::exists)]
+    Exists(kw::exists),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -115,6 +122,8 @@ pub enum Operator {
 /// `[a, b] left, right`: the join columns by name, then both operands.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Keyed {
+    #[parse(parse_choice)]
+    pub choice: Option<Choice>,
     #[syn(bracketed)]
     pub bracket: token::Bracket,
     #[syn(in = bracket)]
@@ -123,6 +132,31 @@ pub struct Keyed {
     pub left: Ident,
     pub comma: Token![,],
     pub right: Ident,
+}
+
+/// Per-operator execution choice; never a query-wide strategy.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub enum Choice {
+    #[parse(peek = kw::first)]
+    First(kw::first),
+    #[parse(peek = kw::smallest)]
+    Smallest(kw::smallest),
+    #[parse(peek = kw::eager)]
+    Eager(kw::eager),
+    #[parse(peek = kw::lazy)]
+    Lazy(kw::lazy),
+}
+
+fn parse_choice(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Choice>> {
+    if input.peek(kw::first)
+        || input.peek(kw::smallest)
+        || input.peek(kw::eager)
+        || input.peek(kw::lazy)
+    {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 impl Operator {
@@ -180,6 +214,7 @@ pub struct Analysis {
 pub enum ModeKind {
     Pipe,
     Let,
+    Exists,
 }
 
 impl From<&Mode> for ModeKind {
@@ -187,6 +222,7 @@ impl From<&Mode> for ModeKind {
         match mode {
             Mode::Pipe(_) => ModeKind::Pipe,
             Mode::Let(_) => ModeKind::Let,
+            Mode::Exists(_) => ModeKind::Exists,
         }
     }
 }
@@ -319,6 +355,22 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 row
             }
             Operator::Probe(_, k) | Operator::Merge(_, k) | Operator::Semi(_, k) => {
+                let valid = match &definition.operator {
+                    Operator::Probe(..) => {
+                        matches!(k.choice, Some(Choice::First(_) | Choice::Smallest(_)))
+                    }
+                    Operator::Semi(..) => {
+                        matches!(k.choice, Some(Choice::Eager(_) | Choice::Lazy(_)))
+                    }
+                    Operator::Merge(..) => k.choice.is_none() && !k.columns.is_empty(),
+                    _ => unreachable!(),
+                };
+                if !valid {
+                    return error(
+                        k,
+                        "probe requires first/smallest; semi requires eager/lazy; merge requires a nonempty ordered key",
+                    );
+                }
                 let left = of(&k.left)?;
                 let right = of(&k.right)?;
                 let lh = left.bindings.keys().cloned().collect::<Vec<_>>();
@@ -342,6 +394,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 for c in &columns {
                     check_leibniz(&left.types[c], c, &definition.name)?;
                     check_leibniz(&right.types[c], c, &definition.name)?;
+                    if matches!(definition.operator, Operator::Merge(..)) {
+                        let ident = syn::Ident::new(c, proc_macro2::Span::call_site());
+                        cq_syntax::algebra::check_ord_type(&left.types[c], &ident)?;
+                        cq_syntax::algebra::check_ord_type(&right.types[c], &ident)?;
+                    }
                 }
                 if matches!(definition.operator, Operator::Merge(..)) {
                     for side in [&k.left, &k.right] {
@@ -503,6 +560,9 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             analysis.scanned.remove(&symbol_name(&k.left));
         }
         let mode = ModeKind::from(&definition.mode);
+        if mode == ModeKind::Exists && !analysis.headings[&name].is_empty() {
+            return error(&definition.name, "exists mode requires an empty heading");
+        }
         analysis.modes.insert(name.clone(), mode);
         if definition.canon.is_some() {
             analysis.canon.insert(name);
@@ -585,10 +645,56 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     );
                 }
             }
-            ModeKind::Let if reads == 0 => {
+            ModeKind::Let | ModeKind::Exists if reads == 0 => {
                 return error(&definition.name, format!("`{name}` is never read"));
             }
             _ => (),
+        }
+    }
+    for (position, definition) in program.definitions.iter().enumerate() {
+        if matches!(&definition.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_))))
+            && program
+                .definitions
+                .get(position + 1)
+                .and_then(|next| binary_intersection(definition, next, &analysis))
+                .is_none()
+        {
+            return error(
+                &definition.name,
+                "smallest requires an admissible adjacent binary intersection",
+            );
+        }
+        if let Operator::Semi(_, k) = &definition.operator {
+            if matches!(k.choice, Some(Choice::Lazy(_))) {
+                let right = symbol_name(&k.right);
+                if !analysis.hosts.contains_key(&right) || analysis.modes[&right] != ModeKind::Pipe
+                {
+                    return error(
+                        &definition.name,
+                        "lazy semi requires a reusable host rename",
+                    );
+                }
+                if program
+                    .definitions
+                    .iter()
+                    .any(|reader| match &reader.operator {
+                        Operator::Probe(_, other) => {
+                            other.right == k.right && other.columns == k.columns
+                        }
+                        Operator::Semi(_, other) => {
+                            other.right == k.right
+                                && other.columns == k.columns
+                                && !matches!(other.choice, Some(Choice::Lazy(_)))
+                        }
+                        _ => false,
+                    })
+                {
+                    return error(
+                        &definition.name,
+                        "lazy semi requires exclusively lazy membership reads on its shared key",
+                    );
+                }
+            }
         }
     }
     Ok(analysis)
@@ -666,8 +772,6 @@ pub fn binary_intersection<'a>(
     Some((a, b, v.clone()))
 }
 
-pub mod policy;
-
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
 
@@ -676,4 +780,80 @@ fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn
     let column = syn::Ident::new(column, proc_macro2::Span::call_site());
     cq_syntax::algebra::check_leibniz_type(ty, &column)
         .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
+}
+
+/// Erase physical choices to the relational program they implement.
+pub fn erase(target: &Program) -> cq_lang_ra::Program {
+    use cq_lang_ra as ra;
+    use ra::Operator as Op;
+    ra::Program {
+        relational_token: Default::default(),
+        relational_brace: Default::default(),
+        plan: ra::Plan {
+            declarations: target.program.declarations.clone(),
+            definitions: target
+                .program
+                .definitions
+                .iter()
+                .map(|d| ra::Definition {
+                    result: d.name.clone(),
+                    eq_token: d.eq_token,
+                    semi_token: d.semi_token,
+                    operator: match &d.operator {
+                        Operator::Unit(u) => Op::Unit(u.clone()),
+                        Operator::Rename(r) => Op::Rename(r.clone()),
+                        Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
+                            Op::Select(s.clone())
+                        }
+                        Operator::Bind(b) => Op::Bind(b.clone()),
+                        Operator::Guard(g) => Op::Guard(g.clone()),
+                        Operator::Project(p) => Op::Project(p.clone()),
+                        Operator::Probe(_, k) | Operator::Merge(_, k) => {
+                            Op::NaturalJoin(Box::new(ra::NaturalJoin {
+                                natural_join_token: Default::default(),
+                                left: k.left.clone(),
+                                with_token: Default::default(),
+                                right: k.right.clone(),
+                            }))
+                        }
+                        Operator::Semi(_, k) => Op::Semijoin(Box::new(ra::Semijoin {
+                            semijoin_token: Default::default(),
+                            left: k.left.clone(),
+                            with_token: Default::default(),
+                            right: k.right.clone(),
+                        })),
+                    },
+                })
+                .collect(),
+            output: ra::Output {
+                output_token: Default::default(),
+                input: target.program.returned.clone(),
+                as_token: target.program.as_token,
+                head: target.program.head.clone(),
+                semi_token: target.program.return_semi,
+            },
+        },
+    }
+}
+
+/// Physical rewrites preserve RA′ erasure and every recorded read's supply.
+pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
+    contract::check(source)?;
+    contract::check(target)?;
+    if erase(source) != erase(target) {
+        return Err(syn::Error::new_spanned(
+            &target.program.returned,
+            "Physical rewrite changes RA erasure",
+        ));
+    }
+    Ok(())
+}
+
+impl cq_stage::Language for Program {
+    fn check(&self) -> syn::Result<()> {
+        contract::check(self).map(|_| ())
+    }
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        check_rewrite(source, target)
+    }
 }

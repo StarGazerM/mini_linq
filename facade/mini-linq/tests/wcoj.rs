@@ -9,25 +9,10 @@ type Answer<'a> = BTreeSet<(&'a V, &'a V, &'a V)>;
 
 mod binary {
     use super::{Answer, V};
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! { $($ix)* policy {    } }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(R: &'a [(V, V)], S: &'a [(V, V)], T: &'a [(V, V)]) -> Answer<'a> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
+        ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Triangle;
             relation R(a: V, b: V);
             relation S(b: V, c: V);
@@ -39,61 +24,35 @@ mod binary {
 
 mod first {
     use super::{Answer, V};
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! { $($ix)* policy {    project = canon; } }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(R: &'a [(V, V)], S: &'a [(V, V)], T: &'a [(V, V)]) -> Answer<'a> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
-            struct Triangle;
-            relation R(a: V, b: V);
-            relation S(b: V, c: V);
-            relation T(a: V, c: V);
-            answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_generic; physical = [::core_pass_fixtures::canonical_projects]; }
+                struct Triangle;
+                relation R(a: V, b: V);
+                relation S(b: V, c: V);
+                relation T(a: V, c: V);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+            },
+        )
     }
 }
 
 mod smallest {
     use super::{Answer, V};
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! { $($ix)* policy {    project = canon; intersect = smallest; } }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(R: &'a [(V, V)], S: &'a [(V, V)], T: &'a [(V, V)]) -> Answer<'a> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
-            struct Triangle;
-            relation R(a: V, b: V);
-            relation S(b: V, c: V);
-            relation T(a: V, c: V);
-            answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_generic; physical = [::core_pass_fixtures::canonical_projects, ::core_pass_fixtures::smallest]; }
+                struct Triangle;
+                relation R(a: V, b: V);
+                relation S(b: V, c: V);
+                relation T(a: V, c: V);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+            },
+        )
     }
 }
 

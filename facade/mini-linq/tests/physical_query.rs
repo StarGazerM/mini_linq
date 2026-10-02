@@ -66,32 +66,13 @@ fn fixture() -> Fixture {
 mod hosted {
     use super::*;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a [(Value,)],
         R: &'a HashMap<(Value,), Vec<(Value,)>>,
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> HashSet<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
+        ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
@@ -114,32 +95,13 @@ fn host_maps_are_probed_in_place() {
 mod built {
     use super::*;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a [(Value,)],
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
+        ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Chain;
             relation L(a: Value);
             relation R(a: Value, b: Value);
@@ -197,34 +159,23 @@ mod custom_indexes {
         }
     }
 
-    mod wiring {
-        pub(crate) use super::index_provider;
-        pub(crate) use ::mini_linq::{select_structures, structures_to_rust};
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    macro_rules! indexes {
-        (probe) => { SortedIndex<_, _> };
-        ($($rest:tt)*) => { cq_state_providers::default_indexes!($($rest)*) };
-    }
-    pub(crate) use indexes as index_provider;
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a [(Value,)],
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> Vec<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(mini_linq::select_structures! {
-            physical {
-                relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
-                l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
-                s = let rename S {b -> b, c -> c};
-                j = pipe probe[a] l, r; p = pipe probe[b] j, s;
-                out = pipe canon project p keep {a, c}; return out as answer(a, c);
-            }
-            policy {}
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::custom_indexes, ::mini_linq::passes::print_pull };
+                physical {
+                    relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
+                    l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
+                    s = let rename S {b -> b, c -> c};
+                    j = pipe probe first [a] l, r; p = pipe probe first [b] j, s;
+                    out = pipe canon project p keep {a, c}; return out as answer(a, c);
+                }
+            },
+        )
     }
 }
 
@@ -241,38 +192,21 @@ fn a_user_defined_index_type_is_built_and_probed() {
 mod merged {
     use super::*;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    join = merge; }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::ordered_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a BTreeMap<(Value,), Vec<()>>,
         R: &'a BTreeMap<(Value,), Vec<(Value,)>>,
         S: &'a BTreeMap<(Value,), Vec<(Value,)>>,
     ) -> std::collections::BTreeSet<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
-            struct Chain;
-            relation L(a: Value);
-            relation R(a: Value, b: Value);
-            relation S(b: Value, c: Value);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::merged]; structures = [::core_pass_fixtures::ordered_dedup]; }
+                struct Chain;
+                relation L(a: Value);
+                relation R(a: Value, b: Value);
+                relation S(b: Value, c: Value);
+                answer(a, c) :- L(a), R(a, b), S(b, c);
+            },
+        )
     }
 }
 
@@ -291,38 +225,21 @@ fn merge_joins_over_host_and_built_ordered_maps_agree() {
 mod reduced {
     use super::*;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
-
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         L: &'a [(Value,)],
         R: &'a [(Value, Value)],
         S: &'a [(Value, Value)],
     ) -> HashSet<(&'a Value, &'a Value)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_hypergraph! {
-            struct Chain;
-            relation L(a: Value);
-            relation R(a: Value, b: Value);
-            relation S(b: Value, c: Value);
-            answer(a, c) :- L(a), R(a, b), S(b, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_hypergraph; }
+                struct Chain;
+                relation L(a: Value);
+                relation R(a: Value, b: Value);
+                relation S(b: Value, c: Value);
+                answer(a, c) :- L(a), R(a, b), S(b, c);
+            },
+        )
     }
 }
 
@@ -335,30 +252,12 @@ fn yannakakis_plan_executes_through_semijoin_membership() {
 /// Rust comparisons become relational constraints; the leading key window
 /// reads the ordered host range while the remaining column predicate filters.
 mod windowed {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {  }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run(
         R: &std::collections::BTreeMap<(i32,), Vec<(i32,)>>,
     ) -> std::collections::HashSet<(&i32, &i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
+        ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Windowed;
             relation R(a: i32, b: i32);
             answer(a, b) :- R(a, b), if *a >= 2 && *a < 9 && *b != 5;
@@ -388,31 +287,13 @@ fn ordered_host_range_preserves_the_rust_comparison_answer() {
 /// follows `answer(a, s, c)`, not the sorted heading, and the column
 /// reference inside a nested macro resolves.
 mod computed {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {   }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
         R: &'a [(i32, i32)],
         S: &'a [(i32, i32)],
     ) -> Vec<(&'a i32, String, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra! {
+        ::core::iter::Iterator::collect(::mini_linq::compile! { pipeline {  }
             struct Computed;
             relation R(a: i32, b: i32);
             relation S(b: i32, c: i32);
@@ -435,25 +316,6 @@ fn computed_columns_follow_the_head_order() {
 mod generic_canon {
     use std::cell::Cell;
 
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    project = canon; }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
-
     fn observe(a: &i32, visits: &Cell<usize>) -> bool {
         // a=4 has an R prefix but no complete triangle. Evaluating this Rust
         // step on that prefix would move it before a written relational step.
@@ -469,13 +331,15 @@ mod generic_canon {
         T: &'a [(i32, i32)],
         visits: &Cell<usize>,
     ) -> Vec<(&'a i32, &'a i32, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
-            struct Triangle;
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            relation T(a: i32, c: i32);
-            answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if observe(a, visits);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_generic; physical = [::core_pass_fixtures::canonical_projects]; }
+                struct Triangle;
+                relation R(a: i32, b: i32);
+                relation S(b: i32, c: i32);
+                relation T(a: i32, c: i32);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if observe(a, visits);
+            },
+        )
     }
 }
 
@@ -506,24 +370,6 @@ fn generic_prefix_canonicalization_preserves_the_written_guard_domain() {
 /// before enumeration continues. `T` is read on `[a]` and then `[a, c]` —
 /// several keys, dispatched independently with shared per-read fallback state.
 mod generic {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
@@ -531,35 +377,19 @@ mod generic {
         S: &'a [(i32, i32)],
         T: &'a [(i32, i32)],
     ) -> std::collections::HashSet<(&'a i32, &'a i32, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
-            struct Triangle;
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            relation T(a: i32, c: i32);
-            answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_generic; }
+                struct Triangle;
+                relation R(a: i32, b: i32);
+                relation S(b: i32, c: i32);
+                relation T(a: i32, c: i32);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+            },
+        )
     }
 }
 
 mod generic_smallest {
-    macro_rules! policy {
-        ($($ix:tt)*) => {
-            ::mini_linq::lower_physical! {
-                $($ix)*
-                policy {    intersect = smallest; }
-            }
-        };
-    }
-    pub(crate) use policy as physical_policy;
-    mod wiring {
-        pub(crate) use super::physical_policy;
-        pub(crate) use ::mini_linq::{
-            index_demands as choose_index_policy, select_structures, structures_to_rust,
-        };
-        pub(crate) use cq_state_providers::default_indexes as index_provider;
-        pub(crate) use cq_state_providers::hash_distinct as distinct_state;
-    }
-    use wiring as mini_linq;
 
     #[allow(non_snake_case)]
     pub(super) fn run<'a>(
@@ -567,13 +397,15 @@ mod generic_smallest {
         S: &'a [(i32, i32)],
         T: &'a [(i32, i32)],
     ) -> std::collections::HashSet<(&'a i32, &'a i32, &'a i32)> {
-        ::core::iter::Iterator::collect(::mini_linq::cq_to_ra_generic! {
-            struct Triangle;
-            relation R(a: i32, b: i32);
-            relation S(b: i32, c: i32);
-            relation T(a: i32, c: i32);
-            answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
-        })
+        ::core::iter::Iterator::collect(
+            ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_generic; physical = [::core_pass_fixtures::smallest]; }
+                struct Triangle;
+                relation R(a: i32, b: i32);
+                relation S(b: i32, c: i32);
+                relation T(a: i32, c: i32);
+                answer(a, b, c) :- R(a, b), S(b, c), T(a, c);
+            },
+        )
     }
 }
 

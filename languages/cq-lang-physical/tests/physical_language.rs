@@ -3,7 +3,7 @@ use quote::ToTokens;
 const SOURCE: &str = "physical {
     relation R(a:i32,b:i32); relation S(b:i32,c:i32);
     r = pipe rename R {a -> x,b -> y}; s = let rename S {b -> y,c -> z};
-    j = pipe probe[y] r,s; f = pipe guard j if (*x < *z);
+    j = pipe probe first [y] r,s; f = pipe guard j if (*x < *z);
     e = pipe bind f with w:i32 = (*x + *z);
     p = pipe canon project e keep {x,w}; return p as answer(x,w);
 }";
@@ -34,8 +34,8 @@ fn invalid_operators_modes_and_heads_report_the_construct() {
         ("a -> x,b -> y", "a -> x,q -> y", "r"),
         ("r,s", "r,missing", "missing"),
         ("s = let", "r = let", "r"),
-        ("probe[y]", "probe[x]", "j"),
-        ("probe[y]", "probe[y,y]", "j"),
+        ("probe first [y]", "probe first [x]", "j"),
+        ("probe first [y]", "probe first [y,y]", "j"),
         ("= (*x + *z)", "= (*q + *w)", "e"),
         ("with w:i32", "with x:i32", "e"),
         ("keep {x,w}", "keep {x,missing}", "p"),
@@ -69,9 +69,9 @@ const HASH_CHAIN: &str = "physical {
     l = let canon rename L {a -> a};
     r = let canon rename R {a -> a, b -> b};
     s = let canon rename S {b -> b, c -> c};
-    j0 = pipe canon probe[a] l, r;
-    j1 = pipe canon probe[b] j0, s;
-    x = pipe canon semi[a] j1, l;
+    j0 = pipe canon probe first [a] l, r;
+    j1 = pipe canon probe first [b] j0, s;
+    x = pipe canon semi eager [a] j1, l;
     p = pipe canon project x keep {a, c}; return p as answer(a, c);
 }";
 
@@ -98,7 +98,7 @@ fn a_merge_result_read_by_key_stays_materialized() {
         s = let rename S {b -> b, c -> c};
         j0 = let merge[a] l, r;
         j1 = let merge[b] j0, s;
-        x = pipe semi[a] l, j1;
+        x = pipe semi eager [a] l, j1;
         p = pipe canon project x keep {a}; return p as answer(a);
     }};
     let analysis = physical::contract::check(&source).unwrap();
@@ -137,7 +137,7 @@ fn rust_chain_must_be_ancestral_and_known_float_keys_are_rejected() {
         relation R(a:i32); r = pipe rename R {a -> x};
         g = pipe guard r if (*x != 0);
         b = pipe bind r with y:i32 = (10 / *x);
-        j = pipe probe[x] g,b; return j as answer(x,y);
+        j = pipe probe first [x] g,b; return j as answer(x,y);
     });
     assert!(
         physical::contract::check(&p)

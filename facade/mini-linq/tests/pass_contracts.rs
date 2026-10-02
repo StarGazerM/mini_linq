@@ -1,9 +1,4 @@
 //! Cross-pass checks live here so each pass keeps only its two language dependencies.
-#![cfg(all(
-    feature = "hypergraph",
-    feature = "index-demands",
-    feature = "physical-lowering"
-))]
 // The shared interpreters import syntax through this name; use RA's public
 // re-export without adding another dependency to the facade.
 extern crate self as cq_syntax;
@@ -88,9 +83,8 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
     let mut wrong = ix.clone();
     wrong.indexes[0].requirement.columns = syn::parse_quote!(1);
     assert!(cq_index_policy::check(&ra, &wrong).is_err());
-    let policy: physical::policy::Policy = syn::parse_quote!(policy {});
-    let physical = cq_physical_lowering::compile(&ix, &policy).unwrap();
-    cq_physical_lowering::check(&ix, &physical, &policy).unwrap();
+    let physical = cq_physical_lowering::compile(&ix).unwrap();
+    cq_physical_lowering::check(&ix, &physical).unwrap();
     assert!(matches!(
         physical.program.definitions[select].operator,
         physical::Operator::Range(..)
@@ -100,8 +94,8 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
         panic!()
     };
     changed.program.definitions[select].operator = physical::Operator::Select(s.clone());
-    assert!(cq_physical_lowering::check(&ix, &changed, &policy).is_err());
-    assert!(cq_physical_lowering::check(&missing, &physical, &policy).is_err());
+    cq_physical_lowering::check(&ix, &changed).unwrap();
+    assert!(cq_physical_lowering::check(&missing, &physical).is_err());
     for tokens in [
         normal.to_token_stream(),
         vo.to_token_stream(),
@@ -127,17 +121,23 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
         syn::parse2::<physical::Program>(physical.to_token_stream()).unwrap(),
         physical
     );
-    #[cfg(feature = "structure-selection")]
     {
-        let structures = cq_structure_selection::compile(&physical, &policy).unwrap();
-        cq_structure_selection::check(&physical, &structures, &policy).unwrap();
-        assert!(structures.structures.entries.is_empty());
+        let structures = cq_structure_selection::compile(&physical).unwrap();
+        cq_structure_selection::check(&physical, &structures).unwrap();
+        assert!(
+            structures
+                .structures
+                .entries
+                .iter()
+                .all(|e| !matches!(e.structure, cq_lang_structures::Structure::Built { .. }))
+        );
         let mut changed = structures.clone();
         let input = &ra.plan.definitions[0].result;
-        changed.structures =
-            syn::parse2(quote::quote!(structures { #input = index_provider!(ordered) [x]; }))
-                .unwrap();
-        assert!(cq_structure_selection::check(&physical, &changed, &policy).is_err());
+        changed.structures = syn::parse2(
+            quote::quote!(structures { #input = ::std::collections::BTreeMap<_, Vec<_>> [x]; }),
+        )
+        .unwrap();
+        assert!(cq_structure_selection::check(&physical, &changed).is_err());
     }
 }
 
@@ -421,8 +421,7 @@ fn lowering_preserves_authored_demands_but_index_policy_requires_first_use_names
         j0 = natural_join l with r; j1 = natural_join j0 with s;
         x = semijoin j1 with l; p = project x keep {a, c}; output p as answer(a, c);
     } indexes { membership = @l[0] stream; second = @s[0] stream; first = @r[0] stream; }};
-    let policy: physical::policy::Policy = syn::parse_quote!(policy {});
-    let target = cq_physical_lowering::compile(&source, &policy).unwrap();
+    let target = cq_physical_lowering::compile(&source).unwrap();
     ix::contract::check(&source).unwrap();
     let error = cq_index_policy::check(&source.ra, &source)
         .unwrap_err()
@@ -431,7 +430,7 @@ fn lowering_preserves_authored_demands_but_index_policy_requires_first_use_names
         error.contains("j0") && error.contains("first-use"),
         "{error}"
     );
-    cq_physical_lowering::check(&source, &target, &policy).unwrap();
+    cq_physical_lowering::check(&source, &target).unwrap();
     for (missing, reader) in [(0, "x"), (1, "j1"), (2, "j0")] {
         let mut changed = source.clone();
         changed.indexes = source
@@ -445,8 +444,8 @@ fn lowering_preserves_authored_demands_but_index_policy_requires_first_use_names
         ix::contract::check(&changed).unwrap();
         assert!(cq_index_policy::check(&source.ra, &changed).is_err());
         for result in [
-            cq_physical_lowering::check(&changed, &target, &policy),
-            cq_physical_lowering::compile(&changed, &policy).map(|_| ()),
+            cq_physical_lowering::check(&changed, &target),
+            cq_physical_lowering::compile(&changed).map(|_| ()),
         ] {
             let error = result.unwrap_err().to_string();
             assert!(error.contains(&format!("`{reader}`")), "{error}");
@@ -466,7 +465,6 @@ fn complete_program_parsers_reject_wrong_stage_payloads() {
 }
 
 #[test]
-#[cfg(all(feature = "structure-selection", feature = "physical-realization"))]
 fn declaration_layout_and_leaf_expressions_are_preserved_at_every_edge() {
     use quote::ToTokens;
     let source: cq::Program = syn::parse_quote! {
@@ -480,9 +478,8 @@ fn declaration_layout_and_leaf_expressions_are_preserved_at_every_edge() {
     let reduced = cq_reduce::compile(&vo, &reduction).unwrap();
     let ra = cq_elaborate::compile(&reduced).unwrap();
     let ix = cq_index_policy::compile(&ra).unwrap();
-    let policy = syn::parse_quote!(policy {});
-    let physical = cq_physical_lowering::compile(&ix, &policy).unwrap();
-    let structures = cq_structure_selection::compile(&physical, &policy).unwrap();
+    let physical = cq_physical_lowering::compile(&ix).unwrap();
+    let structures = cq_structure_selection::compile(&physical).unwrap();
     assert_eq!(source.declarations, nf.declarations);
     assert_eq!(source.declarations, vo.cq.declarations);
     assert_eq!(source.declarations, reduced.cq.declarations);
@@ -516,10 +513,10 @@ fn declaration_layout_and_leaf_expressions_are_preserved_at_every_edge() {
         assert!(cq_index_policy::check(&ra, &t).is_err());
         let mut t = physical.clone();
         t.program.declarations[0] = replacement.clone();
-        assert!(cq_physical_lowering::check(&ix, &t, &policy).is_err());
+        assert!(cq_physical_lowering::check(&ix, &t).is_err());
         let mut t = structures.clone();
         t.physical.program.declarations[0] = replacement;
-        assert!(cq_structure_selection::check(&physical, &t, &policy).is_err());
+        assert!(cq_structure_selection::check(&physical, &t).is_err());
     }
 }
 
