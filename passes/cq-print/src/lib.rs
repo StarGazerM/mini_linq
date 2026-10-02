@@ -384,8 +384,17 @@ impl<'a> Context<'a> {
             statements.push(syn::parse_quote! { let #structure = &#build; });
             // A type lacking a trait a read uses on it fails at a one-line
             // call naming the trait, rather than inside a closure.
-            for guard in self.guards(name, &columns, false) {
-                statements.push(syn::parse_quote! { ::cq_storage::require::#guard(#structure); });
+            // Guard the selected read structure: a candidate trie can share
+            // its full key with a separate ordered representation.
+            if self
+                .analysis
+                .built_on(name, &columns)
+                .is_some_and(|(selected, _)| selected == ty)
+            {
+                for guard in self.guards(name, &columns, false) {
+                    statements
+                        .push(syn::parse_quote! { ::cq_storage::require::#guard(#structure); });
+                }
             }
             built.push((levels.clone(), structure));
         }

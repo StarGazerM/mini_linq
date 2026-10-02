@@ -17,6 +17,144 @@ fn program(module: &structures::Program) -> String {
     text(expr)
 }
 
+/// Default selection and printed Rust must agree with an independent CQ Set
+/// oracle for every host/retained orientation, including shared storage reads.
+fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
+    let query: cq_testkit::cq::Program = syn::parse_quote!(
+        struct Mixed;
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        answer(a,b,c) :- L(a,b), R(b,c), S(a,c);
+    );
+    let mut inputs = vec![[
+        vec![
+            vec![1, 1],
+            vec![1, 1],
+            vec![2, 2],
+            vec![3, 3],
+            vec![4, 4],
+            vec![5, 5],
+            vec![6, 6],
+        ],
+        vec![
+            vec![1, 10],
+            vec![1, 11],
+            vec![1, 12],
+            vec![1, 12],
+            vec![2, 20],
+            vec![3, 30],
+            vec![3, 31],
+            vec![4, 40],
+            vec![6, 60],
+        ],
+        vec![
+            vec![1, 10],
+            vec![2, 20],
+            vec![2, 21],
+            vec![2, 21],
+            vec![3, 32],
+            vec![5, 50],
+            vec![6, 60],
+        ],
+    ]];
+    for seed in 0..24 {
+        let database = cq_testkit::databases::binary_database(&query, seed);
+        inputs.push(["L", "R", "S"].map(|name| {
+            let mut rows: Vec<_> = database[name].iter().cloned().collect();
+            if let Some(first) = rows.first().cloned() {
+                rows.push(first);
+            }
+            rows
+        }));
+    }
+    let fixtures: Vec<_> = inputs
+        .into_iter()
+        .map(|inputs| {
+            let database = ["L", "R", "S"]
+                .into_iter()
+                .zip(&inputs)
+                .map(|(name, rows)| (name.to_owned(), rows.iter().cloned().collect()))
+                .collect();
+            let expected = cq_testkit::cq_semantics::evaluate_cq(&query, &database);
+            (inputs, expected)
+        })
+        .collect();
+    assert!(!fixtures[0].1.is_empty());
+
+    let mut programs = Vec::new();
+    for (r_retained, s_retained) in [(false, true), (true, false), (true, true), (false, false)] {
+        let r = if r_retained {
+            "r0 = pipe rename R {b -> b,c -> c}; r = let project r0 keep {b,c};"
+        } else {
+            "r = pipe rename R {b -> b,c -> c};"
+        };
+        let s = if s_retained {
+            "s0 = pipe rename S {a -> a,c -> c}; s = let project s0 keep {a,c};"
+        } else {
+            "s = pipe rename S {a -> a,c -> c};"
+        };
+        let physical: structures::physical::Program = syn::parse_str(&format!(
+            "physical {{
+                relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+                l = pipe rename L {{a -> a,b -> b}}; {r} {s}
+                candidate = pipe probe smallest [b] l,r;
+                checked = pipe canon semi eager [a,c] candidate,s;
+                return checked as answer(a,b,c);
+            }}"
+        ))
+        .unwrap();
+        programs.push((format!("retained R={r_retained}, S={s_retained}"), physical));
+    }
+    programs.push((
+        "shared payload, membership and ordered reads".into(),
+        syn::parse_quote!(physical {
+            relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+            l0 = pipe rename L {a -> a,b -> b};
+            r0 = pipe rename R {b -> b,c -> c}; r = let project r0 keep {b,c};
+            s = pipe rename S {a -> a,c -> c};
+            payload = pipe probe first [b] l0,r;
+            l1 = pipe project payload keep {a,b};
+            members = let semi eager [c] s,r;
+            l2 = pipe semi eager [a] l1,members;
+            ordered = let merge[b,c] r,r;
+            l = pipe semi eager [b] l2,ordered;
+            candidate = pipe probe smallest [b] l,r;
+            checked = pipe canon semi eager [a,c] candidate,s;
+            return checked as answer(a,b,c);
+        }),
+    ));
+
+    let mut checks = Vec::new();
+    for (label, physical) in programs {
+        let target = cq_structure_selection::compile(&physical).unwrap();
+        let mut reversed = target.clone();
+        reversed.structures.entries.reverse();
+        for target in [target, reversed] {
+            let expression = compile(&target).unwrap();
+            assert!(text(&expression).contains("__cq_choose_a"));
+            let assertions = fixtures.iter().enumerate().map(|(case, (inputs, expected))| {
+                    let bindings = ["L", "R", "S"].into_iter().zip(inputs).map(|(name, rows)| {
+                        let name = syn::Ident::new(name, proc_macro2::Span::call_site());
+                        let rows = rows.iter().map(|row| quote!((#(#row,)*)));
+                        quote!(let #name: &[(i32, i32)] = &[#(#rows),*];)
+                    });
+                    let expected = expected.iter().map(|row| quote!((#(#row,)*)));
+                    quote!({
+                        #(#bindings)*
+                        let expected: ::std::collections::BTreeSet<_> = [#(#expected),*].into_iter().collect();
+                        assert_eq!(run(L, R, S), expected, "{} case {}", #label, #case);
+                    })
+                });
+            checks.push(quote!({
+                    fn run(L: &[(i32, i32)], R: &[(i32, i32)], S: &[(i32, i32)]) -> ::std::collections::BTreeSet<(i32, i32, i32)> {
+                        (#expression).map(|(a, b, c)| (*a, *b, *c)).collect()
+                    }
+                    #(#assertions)*
+                }));
+        }
+    }
+    checks
+}
+
 /// `answer(c, a) :- L(a), R(b, a), S(b, c)`: the head reverses the sorted
 /// heading `[a, c]`, and `R` declares `b` before `a`.
 #[test]
@@ -58,6 +196,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
             assert_eq!(actual, expected, #label);
         }));
     }
+    checks.extend(mixed_smallest_checks());
     let source = quote! {
         #![allow(non_snake_case, unused_variables)]
         fn main() { #(#checks)* }
