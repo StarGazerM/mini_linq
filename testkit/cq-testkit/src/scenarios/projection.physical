@@ -1,0 +1,5 @@
+physical { relation R (first : i32 , second : i32 , witness : i32);
+ r0 = pipe rename R { first - > x , second - > y , witness - > z };
+ r1 = pipe canon project r0 keep { x , y };
+ return r1 as answer (y , x);
+ }

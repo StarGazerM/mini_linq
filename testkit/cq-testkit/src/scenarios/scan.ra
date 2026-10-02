@@ -1,0 +1,6 @@
+relational {
+    relation R(value: i32);
+    r0 = rename R { value -> x };
+    r1 = project r0 keep { x };
+    output r1 as answer(x);
+}

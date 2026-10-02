@@ -67,7 +67,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         fn main() { #(#checks)* }
     };
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let runtime = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
         .join("../../runtime/cq-storage/src/lib.rs");
     let compiled = Command::new(&rustc)
         .args([

@@ -1,0 +1,6 @@
+struct FactStar;
+relation F(k1: i32, k2: i32, k3: i32);
+relation A(key: i32, value: i32);
+relation B(key: i32, value: i32);
+relation C(key: i32, value: i32);
+answer(a, b, c) :- F(x, y, z), A(x, a), B(y, b), C(z, c);

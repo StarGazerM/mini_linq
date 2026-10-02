@@ -1,0 +1,8 @@
+physical { relation R (first : i32 , second : i32 , value : i32);
+ relation S (first : i32 , second : i32 , value : i32);
+ r0 = pipe rename R { first - > a , second - > b , value - > x };
+ r1 = pipe rename S { first - > b , second - > a , value - > y };
+ r2 = pipe probe first [a , b] r0 , r1;
+ r3 = pipe canon project r2 keep { x , y };
+ return r3 as answer (x , y);
+ }

@@ -1,0 +1,12 @@
+relational {
+    relation R(first: i32, second: i32, value: i32);
+    relation S(first: i32, second: i32, third: i32);
+    relation T(first: i32, second: i32, value: i32);
+    r0 = rename R { first -> a, second -> b, value -> u };
+    r1 = rename S { first -> a, second -> b, third -> c };
+    r2 = natural_join r0 with r1;
+    r3 = rename T { first -> b, second -> c, value -> v };
+    r4 = natural_join r2 with r3;
+    r5 = project r4 keep { u, v };
+    output r5 as answer(u, v);
+}

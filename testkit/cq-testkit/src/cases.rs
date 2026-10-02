@@ -1,0 +1,253 @@
+//! Independently authored raw inputs and answers, copied from the corpus.
+//!
+//! `inputs` preserves duplicates; `database` converts to finite Set semantics.
+
+use crate::{Database, Rows};
+
+/// An authored CQ input/answer example, independent of pass compilation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Case {
+    pub name: &'static str,
+    pub cq: &'static str,
+    pub inputs: &'static [(&'static str, &'static [&'static [i32]])],
+    pub expected: &'static [&'static [i32]],
+}
+
+impl Case {
+    /// Parse the authored CQ text without invoking a pass or its checker.
+    pub fn parse_cq(&self) -> syn::Result<crate::cq::Program> {
+        syn::parse_str(self.cq)
+    }
+
+    /// Convert raw tables into sets, collapsing duplicate input rows.
+    pub fn database(&self) -> Database {
+        self.inputs
+            .iter()
+            .map(|(name, rows)| {
+                (
+                    (*name).to_owned(),
+                    rows.iter().map(|row| row.to_vec()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// The authored output as a set of ordered tuples.
+    pub fn expected_rows(&self) -> Rows {
+        self.expected.iter().map(|row| row.to_vec()).collect()
+    }
+}
+
+// Input tables and expected rows are authored independently of every pass;
+// the query text is the scenario corpus's CQ stage.
+macro_rules! case {
+    ($name:literal, $inputs:expr, $expected:expr) => {
+        Case {
+            name: $name,
+            cq: include_str!(concat!("scenarios/", $name, ".cq")),
+            inputs: $inputs,
+            expected: $expected,
+        }
+    };
+}
+
+/// All 25 independently authored data cases.
+pub const CASES: &[Case] = &[
+    case!("scan", &[("R", &[&[1], &[1], &[2]])], &[&[1], &[2]]),
+    case!(
+        "projection",
+        &[("R", &[&[1, 2, 3], &[1, 2, 4], &[5, 6, 7]])],
+        &[&[2, 1], &[6, 5]]
+    ),
+    case!(
+        "self_chain",
+        &[("Road", &[&[1, 2], &[2, 3], &[2, 4], &[9, 10]])],
+        &[&[1, 3], &[1, 4]]
+    ),
+    case!(
+        "return_trip",
+        &[("Road", &[&[1, 2], &[2, 1], &[3, 4]])],
+        &[&[1], &[2]]
+    ),
+    case!(
+        "intersection",
+        &[("R", &[&[1, 2], &[1, 3]]), ("S", &[&[1, 2], &[2, 3]])],
+        &[&[1, 2]]
+    ),
+    case!(
+        "unary_guard",
+        &[
+            ("R", &[&[1, 2], &[3, 4], &[5, 2]]),
+            ("Approved", &[&[2], &[9]])
+        ],
+        &[&[1], &[5]]
+    ),
+    case!(
+        "chain_projection",
+        &[
+            ("R", &[&[1, 10], &[1, 11], &[2, 12]]),
+            ("S", &[&[10, 20], &[11, 20], &[12, 21]]),
+            ("T", &[&[20, 30]])
+        ],
+        &[&[1, 30]]
+    ),
+    case!(
+        "claw",
+        &[
+            ("A", &[&[0, 1], &[0, 2], &[9, 9]]),
+            ("B", &[&[0, 3], &[9, 8]]),
+            ("C", &[&[0, 4]])
+        ],
+        &[&[1, 3, 4], &[2, 3, 4]]
+    ),
+    case!(
+        "fact_star",
+        &[
+            ("F", &[&[1, 2, 3], &[1, 2, 4]]),
+            ("A", &[&[1, 10]]),
+            ("B", &[&[2, 20]]),
+            ("C", &[&[3, 30]])
+        ],
+        &[&[10, 20, 30]]
+    ),
+    case!(
+        "triangle",
+        &[
+            ("R", &[&[0, 1], &[1, 0]]),
+            ("S", &[&[1, 2], &[0, 2]]),
+            ("T", &[&[2, 0]])
+        ],
+        &[&[0, 1, 2]]
+    ),
+    case!(
+        "cycle4",
+        &[
+            ("R", &[&[0, 1], &[1, 2]]),
+            ("S", &[&[1, 3], &[2, 4]]),
+            ("T", &[&[3, 5], &[4, 6]]),
+            ("U", &[&[5, 0], &[6, 0]])
+        ],
+        &[&[0, 3]]
+    ),
+    case!(
+        "cartesian",
+        &[("R", &[&[1], &[2]]), ("S", &[&[7], &[8]])],
+        &[&[7, 1], &[7, 2], &[8, 1], &[8, 2]]
+    ),
+    case!(
+        "existential",
+        &[("R", &[&[1], &[2]]), ("S", &[&[7, 8], &[9, 10]])],
+        &[&[1], &[2]]
+    ),
+    case!(
+        "ternary_guard",
+        &[
+            ("A", &[&[0, 0], &[0, 1], &[1, 0]]),
+            ("B", &[&[0, 0], &[1, 1], &[0, 1]]),
+            ("C", &[&[0, 0], &[0, 1], &[1, 1]]),
+            ("Stock", &[&[0, 0, 0], &[0, 1, 1], &[1, 0, 1]])
+        ],
+        &[&[0, 0, 0], &[0, 1, 1], &[1, 0, 1]]
+    ),
+    case!(
+        "composite",
+        &[
+            ("R", &[&[1, 2, 10], &[3, 4, 11]]),
+            ("S", &[&[2, 1, 20], &[2, 3, 21], &[4, 9, 22]])
+        ],
+        &[&[10, 20]]
+    ),
+    case!(
+        "bushy",
+        &[
+            ("R", &[&[1, 10], &[2, 11]]),
+            ("S", &[&[10, 20], &[11, 21]]),
+            ("T", &[&[20, 30], &[21, 31]]),
+            ("U", &[&[30, 40]])
+        ],
+        &[&[1, 40]]
+    ),
+    case!(
+        "ya_delivery",
+        &[
+            ("D", &[&[1, 10], &[2, 10], &[3, 11], &[4, 12]]),
+            ("S", &[&[10, 20], &[11, 21], &[12, 22], &[99, 20]]),
+            ("N", &[&[5, 20], &[6, 20], &[7, 99]])
+        ],
+        &[&[1, 5], &[1, 6], &[2, 5], &[2, 6]]
+    ),
+    case!(
+        "oriented_chain",
+        &[("Edge", &[&[0, 1], &[1, 2], &[3, 2]])],
+        &[&[0, 1], &[0, 3]]
+    ),
+    case!(
+        "spade",
+        &[
+            ("R", &[&[0, 1], &[2, 1]]),
+            ("S", &[&[1, 2]]),
+            ("T", &[&[0, 2], &[2, 2]]),
+            ("H", &[&[0, 3], &[0, 4], &[3, 4]])
+        ],
+        &[&[0, 1, 2, 3], &[0, 1, 2, 4]]
+    ),
+    case!(
+        "barbell",
+        &[
+            ("R", &[&[0, 1]]),
+            ("S", &[&[1, 2]]),
+            ("T", &[&[0, 2]]),
+            ("Bridge", &[&[0, 2], &[0, 3]]),
+            ("U", &[&[2, 3], &[3, 3]]),
+            ("V", &[&[3, 4]]),
+            ("W", &[&[2, 4]])
+        ],
+        &[&[0, 1, 2, 2, 3, 4]]
+    ),
+    case!(
+        "loomis_whitney_4",
+        &[
+            ("ABC", &[&[0, 1, 2], &[0, 1, 3], &[1, 1, 2]]),
+            ("BCD", &[&[1, 2, 3], &[1, 3, 3], &[1, 2, 2]]),
+            ("ACD", &[&[0, 2, 3], &[0, 3, 3]]),
+            ("ABD", &[&[0, 1, 3]])
+        ],
+        &[&[0, 1, 2, 3], &[0, 1, 3, 3]]
+    ),
+    case!(
+        "ya_deep",
+        &[
+            ("R", &[&[0, 0], &[2, 2]]),
+            ("S", &[&[0, 0], &[1, 1], &[2, 2]]),
+            ("T", &[&[0, 0], &[1, 1], &[2, 2]]),
+            ("U", &[&[0, 0], &[1, 1], &[3, 3]])
+        ],
+        &[&[0, 0]]
+    ),
+    case!(
+        "ya_composite",
+        &[
+            ("R", &[&[0, 0, 10], &[0, 1, 11], &[1, 0, 12], &[1, 1, 13]]),
+            (
+                "S",
+                &[&[0, 0, 0], &[0, 1, 1], &[1, 0, 1], &[1, 1, 0], &[2, 2, 2]]
+            ),
+            ("T", &[&[0, 0, 20], &[1, 1, 21]])
+        ],
+        &[&[10, 20], &[11, 21]]
+    ),
+    case!(
+        "ya_disconnected",
+        &[("R", &[&[1], &[2]]), ("S", &[&[3, 4]])],
+        &[&[1], &[2]]
+    ),
+    case!(
+        "cartesian_first",
+        &[
+            ("R", &[&[0, 0]]),
+            ("S", &[&[0, 0], &[0, 1], &[0, 2], &[1, 0], &[2, 0]]),
+            ("T", &[&[0, 1]])
+        ],
+        &[&[0, 1]]
+    ),
+];

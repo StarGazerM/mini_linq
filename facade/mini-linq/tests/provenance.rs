@@ -196,7 +196,8 @@ fn run_cases(cases: &[TokenStream]) {
         struct Key { id:i32, flag:bool }
         fn main() { #(#cases)* }
     };
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root =
+        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     let dir = std::env::temp_dir()
         .join(format!("cq-provenance-{}", std::process::id()))
         .join(std::thread::current().name().unwrap());

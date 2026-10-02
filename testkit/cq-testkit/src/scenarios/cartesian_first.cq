@@ -1,0 +1,5 @@
+struct CartesianFirst;
+relation R(first: i32, second: i32);
+relation S(first: i32, second: i32);
+relation T(first: i32, second: i32);
+answer(a, d) :- R(a, b), S(b, c), T(c, d);

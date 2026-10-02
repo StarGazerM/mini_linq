@@ -1,0 +1,7 @@
+struct ReturnTrip;
+relation Road(src: i32, dst: i32);
+answer(a) :- Road(a, b), Road(b, a);
+valuation {
+    Road@0(a, b);
+    Road@1(b, a);
+}

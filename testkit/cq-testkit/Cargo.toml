@@ -1,0 +1,26 @@
+[package]
+name = "cq-testkit"
+description = "Independent corpora, semantic oracles, and pass conformance tools for MiniLinq"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.85.1"
+license.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/cq-testkit"
+keywords = ["datalog", "relational-algebra", "testing", "compiler"]
+categories = ["development-tools::testing"]
+
+[features]
+default = []
+duckdb = ["dep:duckdb"]
+
+[dependencies]
+cq-lang-cq = { path = "../../languages/cq-lang-cq", version = "0.1.0" }
+cq-lang-vo = { path = "../../languages/cq-lang-vo", version = "0.1.0" }
+cq-lang-ra = { path = "../../languages/cq-lang-ra", version = "0.1.0" }
+cq-lang-ix = { path = "../../languages/cq-lang-ix", version = "0.1.0" }
+cq-lang-physical = { path = "../../languages/cq-lang-physical", version = "0.1.0" }
+cq-lang-structures = { path = "../../languages/cq-lang-structures", version = "0.1.0" }
+cq-syntax = { path = "../../languages/cq-syntax", version = "0.1.0" }
+syn.workspace = true
+duckdb = { version = "=1.10505.0", features = ["bundled"], optional = true }

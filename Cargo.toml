@@ -28,12 +28,20 @@ members = [
     "runtime/cq-storage",
     "runtime/cq-load",
     "runtime/cq-state-providers",
+    "testkit/cq-testkit",
     "facade/cq-stage",
     "facade/mini-linq",
     "facade/mini-linq-macros",
 ]
 exclude = ["features", "tools/fixtures"]
 resolver = "3"
+
+# Keep optional testkit DuckDB native archives small.
+[profile.dev.package.libduckdb-sys]
+debug = false
+
+[profile.test.package.libduckdb-sys]
+debug = false
 
 [workspace.package]
 edition = "2024"
@@ -42,6 +50,7 @@ rust-version = "1.85"
 version = "0.1.0"
 
 [workspace.dependencies]
+cq-testkit = { path = "testkit/cq-testkit", version = "0.1.0" }
 cq-print = { path = "passes/cq-print", version = "0.1.0", default-features = false }
 cq-stage = { path = "facade/cq-stage", version = "0.1.0" }
 contracts = "=0.6.10"

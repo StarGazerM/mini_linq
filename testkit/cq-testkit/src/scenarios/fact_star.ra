@@ -1,0 +1,15 @@
+relational {
+    relation F(k1: i32, k2: i32, k3: i32);
+    relation A(key: i32, value: i32);
+    relation B(key: i32, value: i32);
+    relation C(key: i32, value: i32);
+    r0 = rename F { k1 -> x, k2 -> y, k3 -> z };
+    r1 = rename A { key -> x, value -> a };
+    r2 = natural_join r0 with r1;
+    r3 = rename B { key -> y, value -> b };
+    r4 = natural_join r2 with r3;
+    r5 = rename C { key -> z, value -> c };
+    r6 = natural_join r4 with r5;
+    r7 = project r6 keep { a, b, c };
+    output r7 as answer(a, b, c);
+}

@@ -82,7 +82,8 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
         #![allow(non_snake_case, unused_variables)]
         fn main() { #(#tests)* }
     };
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root =
+        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     let dir = std::env::temp_dir().join(format!("cq-denotation-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("main.rs"), program.to_token_stream().to_string()).unwrap();

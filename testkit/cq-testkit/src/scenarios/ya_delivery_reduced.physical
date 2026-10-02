@@ -1,0 +1,15 @@
+physical { relation D (driver_id : i32 , depot_id : i32);
+ relation S (depot_id : i32 , item_id : i32);
+ relation N (job_id : i32 , item_id : i32);
+ r0 = pipe rename S { depot_id - > depot , item_id - > item };
+ r1 = pipe rename D { driver_id - > driver , depot_id - > depot };
+ r2 = let semi eager [depot] r0 , r1;
+ r3 = pipe rename N { job_id - > job , item_id - > item };
+ r4 = let semi eager [item] r3 , r2;
+ r5 = let semi eager [item] r2 , r4;
+ r6 = pipe semi eager [depot] r1 , r5;
+ r7 = pipe probe first [depot] r6 , r5;
+ r8 = pipe probe first [item] r7 , r4;
+ r9 = pipe canon project r8 keep { driver , job };
+ return r9 as answer (driver , job);
+ }

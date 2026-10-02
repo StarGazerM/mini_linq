@@ -1,0 +1,15 @@
+relational {
+    relation ABC(first: i32, second: i32, third: i32);
+    relation BCD(first: i32, second: i32, third: i32);
+    relation ACD(first: i32, second: i32, third: i32);
+    relation ABD(first: i32, second: i32, third: i32);
+    r0 = rename ABC { first -> a, second -> b, third -> c };
+    r1 = rename BCD { first -> b, second -> c, third -> d };
+    r2 = natural_join r0 with r1;
+    r3 = rename ACD { first -> a, second -> c, third -> d };
+    r4 = natural_join r2 with r3;
+    r5 = rename ABD { first -> a, second -> b, third -> d };
+    r6 = natural_join r4 with r5;
+    r7 = project r6 keep { a, b, c, d };
+    output r7 as answer(a, b, c, d);
+}

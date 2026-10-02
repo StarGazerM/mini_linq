@@ -1,0 +1,4 @@
+indexes {
+    i0 =@r1[0] stream;
+    i1 =@r3[0] stream;
+}
