@@ -1,6 +1,6 @@
 //! Relational equality is Leibniz identity in classical Set. An admissible
 //! column type's `==` is the generated decision procedure for that identity.
-//! Rust expressions are never recognized as relational equalities.
+//! CQ recognizes the corresponding Rust comparison trait operations in guards.
 use syn::{Ident, Token};
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]

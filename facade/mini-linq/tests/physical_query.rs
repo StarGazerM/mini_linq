@@ -332,8 +332,8 @@ fn yannakakis_plan_executes_through_semijoin_membership() {
     assert_eq!(reduced::run(&l, &r, &s), oracle(&l, &r, &s));
 }
 
-/// Ordered hosts still evaluate the complete written Rust predicate as an
-/// opaque guard. Its comparison syntax does not grant a range-read rewrite.
+/// Rust comparisons become relational constraints; the leading key window
+/// reads the ordered host range while the remaining column predicate filters.
 mod windowed {
     macro_rules! policy {
         ($($ix:tt)*) => {
@@ -367,7 +367,7 @@ mod windowed {
 }
 
 #[test]
-fn ordered_host_scans_preserve_the_opaque_rust_guard() {
+fn ordered_host_range_preserves_the_rust_comparison_answer() {
     let host: BTreeMap<(i32,), Vec<(i32,)>> = [
         ((1,), vec![(0,)]),
         ((2,), vec![(5,), (6,)]),

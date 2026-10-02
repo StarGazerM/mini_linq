@@ -1,6 +1,6 @@
 //! Legacy syntactic recognizer for integer Rust comparison expressions.
-//! It is never used to classify, schedule, reduce, or elaborate Rust guards.
-//! Recognition grants no relational meaning or right to move an opaque guard.
+//! Used by the small integer reference interpreters. CQ guard recognition is
+//! defined by `crate::guard`, with explicit query and host scope.
 use syn::{Ident, Token};
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
@@ -58,7 +58,7 @@ pub struct Predicate {
     pub right: Term,
 }
 impl Predicate {
-    /// Recognize syntax only; an `if` expression always remains opaque Rust.
+    /// Recognize the legacy integer oracle fragment without query-scope resolution.
     pub fn from_expr(expr: &syn::Expr) -> Option<Self> {
         if let syn::Expr::Paren(paren) = expr {
             if !paren.attrs.is_empty() {

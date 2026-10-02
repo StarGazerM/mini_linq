@@ -320,6 +320,13 @@ pub fn check(source: &Program, target: &Context) -> syn::Result<()> {
             source,
             "subquery position changed",
         )?;
+        let query = &subquery.hole.query;
+        let parsed: cq_lang_cq::Query = syn::parse2(quote!(#query))?;
+        ensure(
+            parsed == *query,
+            query,
+            "noncanonical recognized guard or capture",
+        )?;
         let mut body = subquery.hole.query.body.clone();
         let mut locals = std::collections::BTreeSet::new();
         for (local, external) in subquery.links.iter().rev() {
@@ -330,22 +337,26 @@ pub fn check(source: &Program, target: &Context) -> syn::Result<()> {
                 source,
                 "invalid capture link",
             )?;
-            let expected: BodyItem = syn::parse_quote!(if #local == #external);
+            let expected = BodyItem::Constraint(cq_syntax::Constraint::Compare {
+                left: cq_syntax::constraint::Term::Variable(local.clone()),
+                comparison: cq_syntax::constraint::Comparison::Eq(Default::default()),
+                right: cq_syntax::constraint::Term::Parameter(external.clone()),
+            });
             ensure(
                 body.pop().map(|pair| pair.into_value()) == Some(expected),
                 &subquery.hole,
-                "missing correlation equality guard",
+                "missing correlation equality constraint",
             )?;
             let mut uses = 0;
-            for (position, item) in body.iter_mut().enumerate() {
+            let mut original_atoms = spec.body().iter().filter_map(BodyItem::atom);
+            for item in &mut body {
                 if let BodyItem::Positive { atom } = item {
+                    let original_atom = original_atoms.next().ok_or_else(|| {
+                        syn::Error::new_spanned(&*atom, "capture position changed")
+                    })?;
                     for (column, expression) in atom.args.iter_mut().enumerate() {
                         if rust::variable(expression) == Some(local) {
-                            let original = match spec.body().get(position) {
-                                Some(BodyItem::Positive { atom }) => atom.args.get(column),
-                                _ => None,
-                            }
-                            .ok_or_else(|| {
+                            let original = original_atom.args.get(column).ok_or_else(|| {
                                 syn::Error::new_spanned(&*expression, "capture position changed")
                             })?;
                             ensure(
@@ -362,8 +373,16 @@ pub fn check(source: &Program, target: &Context) -> syn::Result<()> {
             }
             ensure(uses > 0, source, "unused capture link")?;
         }
+        // Reparse the erased surface body: recognition can split guards and
+        // resolve captures differently once original atom names are restored.
+        // Atom occurrence order, rather than clause indices, preserves links.
+        let head = &subquery.hole.query.head;
+        body.pop_punct();
+        let original = spec.body();
+        let erased_query: cq_lang_cq::Query = syn::parse2(quote!(#head :- #body;))?;
+        let expected: cq_lang_cq::Query = syn::parse2(quote!(#head :- #original;))?;
         ensure(
-            body.iter().eq(spec.body().iter()),
+            erased_query == expected,
             &subquery.hole,
             "inner body changed",
         )?;
@@ -605,6 +624,14 @@ mod tests {
         changed.subqueries[0].links.clear();
         assert!(check(&source, &changed).is_err());
         let mut changed = target.clone();
+        let capture = changed.subqueries[0].hole.query.body.last_mut().unwrap();
+        let BodyItem::Constraint(cq_syntax::Constraint::Compare { comparison, .. }) = capture
+        else {
+            panic!()
+        };
+        *comparison = cq_syntax::constraint::Comparison::Ne(Default::default());
+        assert!(check(&source, &changed).is_err());
+        let mut changed = target.clone();
         changed.main.query.body[1] = syn::parse_quote!(if true);
         assert!(check(&source, &changed).is_err());
         let mut changed = target.clone();
@@ -623,5 +650,30 @@ mod tests {
             .unwrap();
             assert!(compile(&source).is_err());
         }
+    }
+
+    #[test]
+    fn recognized_inner_guards_preserve_capture_occurrences_and_residual_order() {
+        let source: Program = syn::parse_quote! {
+            struct C; relation R(x:i32); relation S(x:i32,a:i32); relation T(a:i32);
+            answer(x) :- R(x), exists! {
+                S(x,a), if a > cutoff && f(a) && a != 0 && g(a), T(a)
+            };
+        };
+        let target = compile(&source).unwrap();
+        check(&source, &target).unwrap();
+        let mut changed = target.clone();
+        let BodyItem::Filter(f) = changed.subqueries[0]
+            .hole
+            .query
+            .body
+            .iter_mut()
+            .find(|i| matches!(i, BodyItem::Filter(_)))
+            .unwrap()
+        else {
+            panic!()
+        };
+        f.condition = syn::parse_quote!(g(a) && f(a));
+        assert!(check(&source, &changed).is_err());
     }
 }

@@ -801,7 +801,7 @@ fn consumer_case(id: usize, case: &Case, c: Config) -> String {
         c.fine,
         c.reduce,
         c.reference,
-        case.cq()
+        if c.reference { case.written_cq() } else { case.cq() }
     )
     .unwrap();
     code

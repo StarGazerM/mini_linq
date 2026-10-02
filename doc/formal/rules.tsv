@@ -107,9 +107,6 @@ IF-Dispatch	implementation	passes/cq-print/src/access.rs	// Formal rule IF-Dispa
 IF-Fallback	implementation	runtime/cq-storage/src/dispatch.rs	/// Formal rule IF-Fallback:	Initialize a shared fallback once on first use.
 ORD-Admissible	implementation	languages/cq-syntax/src/algebra.rs	/// Formal rule ORD-Admissible:	Syntactic Eq/Ord checks; a total order consistent with Leibniz identity is trusted.
 CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Bound query terms and captured constants are separate from Rust expressions.
-CQ-Between	implementation	languages/cq-syntax/src/constraint.rs	// Formal rule CQ-Between:	Exactly two inclusive relational bounds.
-CQ-In	implementation	languages/cq-syntax/src/constraint.rs	// Formal rule CQ-In:	Nonempty literal membership means a disjunction of identities.
-CQ-Or	implementation	languages/cq-syntax/src/constraint.rs	// Formal rule CQ-Or:	Disjunction is parenthesized atomic conjunction branches.
 D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constraint:	A central step waits only for its query variables.
 E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Ordinary relational pushdown or prefix select.
 CT-Constraint	implementation	passes/cq-elaborate/src/tableau.rs	/// Formal rule CT-Constraint:	Tableau symbols preserve boolean shape and all column arguments.
@@ -119,3 +116,5 @@ IX-Range	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Range
 PH-Range	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-Range:	A constant window reads one column with range supply.
 IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Parameter:	Read each capture once outside query loops.
 IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.
+CQ-GuardRecognize	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardRecognize:	Rust comparison trait operations and pure boolean structure under Eq/Ord premises.
+CQ-GuardSplit	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardSplit:	Extract total conjuncts; keep one written-order residual; selecting earlier only shrinks opaque evaluation domains.

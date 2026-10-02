@@ -49,9 +49,9 @@ macro_rules! query_body {
                 );
                 rows(group, orderkey, linenumber, amount) :-
                     lineitem(orderkey, linenumber, quantity, price, discount, shipdate),
-                    shipdate >= first, shipdate < after,
-                    discount between discount_low and discount_high,
-                    quantity < quantity_limit,
+                    if *shipdate >= first && *shipdate < after,
+                    if *discount >= discount_low && *discount <= discount_high,
+                    if *quantity < quantity_limit,
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * i128::from(discount.scaled());
             }.map(|(group, orderkey, linenumber, amount)| (group, *orderkey, *linenumber, amount)).collect();

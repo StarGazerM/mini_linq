@@ -24,16 +24,22 @@ Before set is a **sufficient** condition for refinement. RA laws apply only
 to relational steps; bind and guard nodes belong to the ordered chain.
 Equality in the relational centre is identity in classical Set.
 
-Relational filters are CQ body syntax: `t op t` with `op` in `= != < <= > >=`,
-inclusive `t between lo and hi`, and `t in { literal, ... }`. Commas mean
-conjunction; `(C and C) or (C and C)` gives parenthesized conjunction branches.
-A term is a query variable, a Syn literal (or negative numeric literal), or a
-bare in-scope identifier not bound by the query: a captured constant, borrowed
-once outside query loops. Other Rust expressions are rejected. Later IRs spell
-captures `@name`. Order requires total `Ord` consistent with Leibniz equality,
-trusted like Eq; `in` is a disjunction of identities. These total predicates are
-central and obey the existing relational movement laws. `if e` stays an opaque
-Rust guard regardless of its text.
+Relational comparisons use Rust's syntax inside `if`: `==`/`!=` are
+`PartialEq` operations and `< <= > >=` are `PartialOrd` operations. Under the
+Leibniz Eq and total, consistent Ord premises, operands may be query variables
+(bare, `*x`, `&x`), literals including negative numbers, or bare host parameters.
+`&&`, `||`, `!` and parentheses over such comparisons are classical connectives.
+Calls, arithmetic, methods, casts, indexing, blocks, macros and field access
+remain opaque; mixed disjunctions and negations remain entirely opaque.
+
+A top-level `&&` splits into relational constraints and one residual opaque
+guard in written order at the written position. For `a && f(x)`, Rust already
+runs f exactly where a holds. Applying total relational a earlier gives that
+same domain. For `f(x) && a`, Rust runs f on a superset, so applying a earlier
+only shrinks its domain: a refinement. The relative order of opaque conjuncts
+is preserved. Internal paired bounds and literal disjunctions retain the
+existing RA′ select, IX const/range and Physical point/range representations;
+they are not another CQ syntax. Captures are borrowed once outside query loops.
 
 1. Leibniz admissibility of a column type: a type may be compared, joined,
    grouped, keyed or deduplicated by the relational centre only if its `==`

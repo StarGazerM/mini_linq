@@ -25,9 +25,9 @@ AND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'"#;
     }
     answer(order_key: i64, supplier_nation: i32, customer_nation: i32) :-
         Supplier(supplier_key, supplier_nation),
-        Lineitem(order_key, supplier_key, ship_date), ship_date between start and end,
+        Lineitem(order_key, supplier_key, ship_date), if *ship_date >= start && *ship_date <= end,
         Orders(order_key, customer_key), Customer(customer_key, customer_nation),
         Nation(supplier_nation, supplier_name), Nation(customer_nation, customer_name),
-        (supplier_name = "FRANCE" and customer_name = "GERMANY") or
-            (supplier_name = "GERMANY" and customer_name = "FRANCE");
+        if (supplier_name == "FRANCE" && customer_name == "GERMANY") ||
+            (supplier_name == "GERMANY" && customer_name == "FRANCE");
 }

@@ -21,7 +21,7 @@ fn main() {
     let expected_vo: valuation::Program = syn::parse_quote! {
         struct Placement;
         relation R(a:i32,b:i32,c:i32);
-        answer(x) :- let __cq_0_2: i32 = g(), R(x, __cq_0_1, __cq_0_2), let __cq_0_1_:i32 = f(x), __cq_0_1 = __cq_0_1_;
+        answer(x) :- let __cq_0_2: i32 = g(), R(x, __cq_0_1, __cq_0_2), let __cq_0_1_:i32 = f(x), if * __cq_0_1 == * __cq_0_1_;
         valuation {
             let __cq_0_2: i32 = g();
             R@1(x, __cq_0_1, __cq_0_2);

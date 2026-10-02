@@ -1,7 +1,8 @@
 \section{Languages and local judgments}
 \label{sec:languages}
-CQ rules end in semicolons; Rust expressions are opaque leaves
-except for the lexical dependency checks below. This specification covers
+CQ rules end in semicolons; Rust comparison guards are recognized under
+the relational premises below. Other Rust expressions are opaque leaves
+with lexical dependency checks. This specification covers
 positive queries without aggregates. It defines the admitted language, not
 every form accepted by a current parser.
 \subsection{Lexical dependency analysis}
@@ -73,7 +74,7 @@ Rust expressions, guards, and bindings; these extend AHV Definition~4.2.1:
 \[
 \begin{aligned}
 q&=h(\bar e)\mathrel{:-}c_0,\ldots,c_{n-1};\\
-c&::=R(\bar a)\mid\theta\mid\mathsf{if}\ e\mid\mathsf{let}\ p[:\tau]=e,\\
+c&::=R(\bar a)\mid\mathsf{if}\ e\mid\mathsf{let}\ p[:\tau]=e,\\
 a&::=x\mid\_\mid e.
 \end{aligned}
 \]
@@ -106,24 +107,27 @@ a guard retains true environments and a let extends them by its pattern
 result. Compose from $\mathbf1$ and take the set of ordered head results to
 define $\sem q_I$. This agrees with classical $q(I)$ on its domain and gives
 no effectful evaluation-order semantics.
-\subsection{Central comparison constraints}
+\subsection{Rust comparison guards}
 Let $Q$ contain every query binder, $B\subseteq Q$ the written bound names,
-and $P$ the closing host parameters. The exact CQ grammar is:
+and $P$ the closing host parameters. CQ parses Rust expressions with Syn;
+there is no separate comparison grammar. The following is a recognition
+judgment over that Rust AST:
 \begin{lstlisting}
-t ::= query-variable | literal | -numeric-literal | captured-identifier
-A ::= t = t | t != t | t < t | t <= t | t > t | t >= t
-    | t between t and t | t in { literal, ... }
-C ::= A | (A and ... and A) or ... or (A and ... and A)
+t ::= query-variable | *query-variable | &query-variable
+    | literal | -numeric-literal | bare-host-identifier
+C ::= t == t | t != t | t < t | t <= t | t > t | t >= t
+    | C && C | C || C | !C | (C)
 \end{lstlisting}
-The final alternative has at least two nonempty parenthesized branches;
-conjunction of body items uses commas. A bare name in $Q$ is a query variable;
-any other bare identifier is a captured value resolved by Rust in $P$. A query
-name used before its binder fails scope checking. Paths, calls, dereferences,
-arithmetic, and other Rust expressions are not relational terms. Later IRs
-spell parameters \code{@name}, preserving this distinction without CQ context.
-Write $\vars(\theta)$ for its query names. The judgment
-$\theta\checkmark_{B,P}$ requires term grammar, $\vars(\theta)\subseteq B$,
-Eq admissibility, and Ord admissibility for ordered comparisons.
+Parentheses may surround operands too. A bare name in $Q$ is a query variable;
+any other bare identifier must resolve in the enclosing Rust scope $P$.
+Guard-local pattern bindings are not host parameters. A query name used before
+its binder fails scope checking. Attributes, arithmetic, calls, methods,
+casts, indexing, blocks, macros, qualified paths and field access are opaque.
+Only query names admit one shared reference or dereference wrapper.
+Rust desugars equality comparisons to \code{PartialEq::eq}/\code{ne}, and order
+comparisons to the corresponding \code{PartialOrd} methods. We recognize these
+trait operations under the existing admissibility premises, not arbitrary
+Rust behavior. Write $\vars(\theta)$ for the recognized query names.
 \begin{mathpar}
 \Rule{ORD-Admissible}{\tau:\code{Ord}\quad
  \leq_\tau\text{ total, terminating and consistent with Leibniz identity}}
@@ -131,28 +135,27 @@ Eq admissibility, and Ord admissibility for ordered comparisons.
 
 \Rule{CQ-Comparison}{\vars(t_1,t_2)\subseteq B\quad
  t_1,t_2\text{ well typed and admissible}\quad
- op\in\{=,\ne,<,\leq,>,\geq\}}
+ op\in\{==,\ne,<,\leq,>,\geq\}}
  {\Sigma;B;P\vdash t_1\ op\ t_2\Rightarrow B}
 
-\Rule{CQ-Between}{t,\ell,h\text{ scoped, well typed, Ord-admissible}}
- {\sem{t\ \mathsf{between}\ \ell\ \mathsf{and}\ h}
-   =\sem{\ell\leq t}\land\sem{t\leq h}}
-
-\Rule{CQ-In}{n>0\quad \ell_1,\ldots,\ell_n\text{ literals}\quad
- t,\ell_i\text{ Eq-admissible}}
- {\sem{t\ \mathsf{in}\ \{\ell_1,\ldots,\ell_n\}}
-   =\bigvee_{i=1}^n\sem{t=\ell_i}}
-
-\Rule{CQ-Or}{m\geq2\quad n_i>0\quad A_{ij}\checkmark_{B,P}}
- {\sem{(A_{11}\ \mathsf{and}\ \cdots)\ \mathsf{or}\ \cdots}
-   =\bigvee_{i=1}^m\bigwedge_{j=1}^{n_i}\sem{A_{ij}}}
+\Rule{CQ-GuardRecognize}{e\text{ has only recognized comparisons and boolean nodes}\\
+ \text{all comparison operations satisfy the Eq/Ord premises}}
+ {\mathsf{recognize}_{Q,P}(e)=\theta\quad\sem e=\sem\theta}
 \end{mathpar}
-All these decisions are total central predicates in Set. They commute with
-relational steps and may move earlier across the opaque Rust chain. Parameters
-are read once outside query loops. Equality is Leibniz identity; floats fail
-its admissibility. Ord is required even on a scanning implementation. The
-Rust guard \code{if *od < cutoff} remains opaque and pinned; no recognizer
-converts it to \code{od < cutoff}.
+Every recognized comparison is terminating and cannot panic under the
+premises. Rust short-circuit \code{\&\&}/\code{||}, boolean \code{!} and
+parentheses therefore have the classical connective meaning on this fragment.
+Negation uses comparison complements and De Morgan's laws. Normalization
+retains paired inclusive bounds, literal equality disjunctions and nested
+boolean branches in the existing internal constraint IR; no distributive DNF
+expansion is needed. Later IRs spell parameters \code{@name}. Parameters are
+borrowed once outside query loops. Equality is Leibniz identity; floats fail
+its admissibility. Ord is required even for a scan implementation.
+
+A mixed \code{||} or \code{!} expression is entirely opaque. Only the top-level
+conjunction may split, by CQ-GuardSplit below. Thus \code{if *od < cutoff}
+becomes a relational constraint; \code{if f(*od) || *od < cutoff} remains one
+pinned Rust guard, as does \code{if *od + 1 < 5}.
 
 \subsection{Normal form and valuation plans}
 \label{sec:nf-vo}

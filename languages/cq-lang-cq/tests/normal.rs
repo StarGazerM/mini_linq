@@ -18,12 +18,12 @@ fn normalization_moves_every_non_variable_argument_out_of_atoms() {
     let text = normal.query.to_token_stream().to_string();
     // The constant becomes a relational selection at its atom position.
     assert!(
-        text.starts_with("answer (x , z) : - R (x , __cq_0_1) , __cq_0_1 = 5"),
+        text.starts_with("answer (x , z) : - R (x , __cq_0_1) , if __cq_0_1 == 5"),
         "{text}"
     );
     // The wildcard is a distinct witness; repeated variables get relational equality.
     assert!(
-        text.contains("S (__cq_1_0 , z) , R (x , __cq_2_1) , x = __cq_2_1 , if z > 1"),
+        text.contains("S (__cq_1_0 , z) , R (x , __cq_2_1) , if x == __cq_2_1 , if z > 1"),
         "{text}"
     );
     cq::normal::check(&normal).unwrap();
@@ -76,12 +76,15 @@ fn literal_repeat_and_computed_terms_have_distinct_semantic_kinds() {
     });
     let normal = cq::normal::normalize(&source).unwrap();
     let text = normal.to_token_stream().to_string();
-    assert!(text.contains("__cq_0_1 = - 1"), "{text}");
+    assert!(text.contains("if __cq_0_1 == - 1"), "{text}");
     assert!(
-        text.contains("if * x != 0 , let __cq_2_0 : i32 = 10 / * x , S"),
+        text.contains("if x != 0 , let __cq_2_0 : i32 = 10 / * x , S"),
         "{text}"
     );
-    assert!(text.contains("R (y , __cq_3_1) , y = __cq_3_1"), "{text}");
+    assert!(
+        text.contains("R (y , __cq_3_1) , if y == __cq_3_1"),
+        "{text}"
+    );
     assert!(matches!(
         normal.query.body.last(),
         Some(cq::BodyItem::Let(_))
@@ -137,7 +140,7 @@ fn rust_metadata_includes_host_captures_and_pattern_bindings() {
 fn kernels_preserve_cross_kind_chain_and_relational_predecessors() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(a:i32);
-        answer(x) :- R(x), S(w), if *x != 0, let y:i32 = 10 / *x;
+        answer(x) :- R(x), S(w), if { *x != 0 }, let y:i32 = 10 / *x;
     });
     let original = Kernel::of(&source);
     let mut changed = source.clone();
@@ -152,7 +155,7 @@ fn kernels_preserve_cross_kind_chain_and_relational_predecessors() {
     assert!(!Kernel::of(&changed).refines(&original));
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(a:i32);
-        answer(x) :- R(x), if *x != 0, S(w);
+        answer(x) :- R(x), if { *x != 0 }, S(w);
     });
     let mut earlier = source.clone();
     let item = earlier.query.body[1].clone();
@@ -220,7 +223,7 @@ fn tuple_annotations_expose_known_float_columns_to_the_leibniz_check() {
     for source in [
         quote! {
             struct Q; relation R(t:i32);
-            answer(t) :- R(t), let (x,y):(f64,i32)=(1.0,2), x=1.0;
+            answer(t) :- R(t), let (x,y):(f64,i32)=(1.0,2), if * x == 1.0;
         },
         quote! {
             struct Q; relation R(t:i32);
@@ -298,13 +301,15 @@ fn tuple_annotations_do_not_guess_named_types_or_reference_match_ergonomics() {
 }
 
 #[test]
-fn comparison_grammar_round_trips_and_captures_only_non_query_names() {
+fn rust_comparisons_round_trip_and_capture_only_host_names() {
     for body in [
-        "x = y, x != y, x < y, x <= y, x > y, x >= y",
-        "-3 < x, x <= 5u32, lower < x, x >= upper, lower = upper",
-        "x between -3 and upper, x in { -1, 2, 3, }",
-        "(x between lower and upper and y in {1,2}) or (x != y and y >= 3)",
-        "(x = 1) or (x = 2) or (y = 3)",
+        "if x == y, if *x != &y, if x < y, if x <= y, if x > y, if x >= y",
+        "if -3 < *x, if x <= 5u32, if lower < x, if x >= upper, if lower == upper",
+        "if x >= -3 && x <= upper, if x == -1 || x == 2 || x == 3",
+        "if (x >= lower && x <= upper && (y == 1 || y == 2)) || (x != y && y >= 3)",
+        "if (x == 1) || (x == 2) || (y == 3)",
+        "if !(!(x == y) || (x < lower && !(y >= upper)))",
+        "if (x < 0 || y < 0) && (x > -3 || y > -3)",
     ] {
         let source: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:i32,b:i32); answer(x) :- R(x,y), {body};"
@@ -315,6 +320,13 @@ fn comparison_grammar_round_trips_and_captures_only_non_query_names() {
         assert!(!printed.to_string().contains('@'));
         assert_eq!(syn::parse2::<cq::Program>(printed).unwrap(), source);
         assert_eq!(cq::normal::normalize(&source).unwrap(), source);
+        assert!(
+            source
+                .query
+                .body
+                .iter()
+                .all(|i| !matches!(i, cq::BodyItem::Filter(_)))
+        );
         for c in source.query.body.iter().filter_map(|i| match i {
             cq::BodyItem::Constraint(c) => Some(c),
             _ => None,
@@ -326,30 +338,28 @@ fn comparison_grammar_round_trips_and_captures_only_non_query_names() {
 }
 
 #[test]
-fn comparison_grammar_rejects_rust_and_names_the_unexpected_token() {
-    for (body, token) in [
-        ("x == 1", "="),
-        ("*x < 1", "*"),
-        ("x < f()", "()"),
-        ("x < cutoff.value", "."),
-        ("x < module::cutoff", ":"),
-        ("x + 1 < y", "+"),
-        ("x < {1}", "{ 1 }"),
-        ("x in { cutoff }", "cutoff"),
-        ("x in [1,2]", "[1 , 2]"),
-        ("(x < 1) || (y < 2)", "|"),
-        ("(x < 1) or y < 2", "y"),
-        ("(x < 1 && y < 2) or (x = 1)", "&"),
-        ("@cutoff < x", "@"),
+fn custom_cq_constraint_syntax_is_rejected() {
+    for body in [
+        "x = 1",
+        "x != y",
+        "*x < 1",
+        "x <= upper",
+        "x between -1 and 3",
+        "x in {1,2}",
+        "(x = 1) or (x = 2)",
+        "(x < 1 and y < 2) or (x = 1)",
+        "x == 1",
+        "(x < 1) || (y < 2)",
+        "@cutoff < x",
+        "if x between 1 and 3",
+        "if x in {1,2}",
     ] {
-        let error = syn::parse_str::<cq::Program>(&format!(
-            "struct Q; relation R(a:i32,b:i32); answer(x) :- R(x,y), {body};"
-        ))
-        .unwrap_err()
-        .to_string();
         assert!(
-            error.contains("unexpected token") && error.contains(token),
-            "{body}: {error}"
+            syn::parse_str::<cq::Program>(&format!(
+                "struct Q; relation R(a:i32,b:i32); answer(x) :- R(x,y), {body};"
+            ))
+            .is_err(),
+            "{body}"
         );
     }
 }
@@ -357,8 +367,8 @@ fn comparison_grammar_rejects_rust_and_names_the_unexpected_token() {
 #[test]
 fn constraint_scope_and_premises_are_local_contract_obligations() {
     for source in [
-        "struct Q; relation R(a:i32); answer(x) :- x < cutoff, R(x);",
-        "struct Q; relation R(a:i32); answer(x) :- R(x), y < cutoff, let y:i32 = 1;",
+        "struct Q; relation R(a:i32); answer(x) :- if * x < cutoff, R(x);",
+        "struct Q; relation R(a:i32); answer(x) :- R(x), if * y < cutoff, let y:i32 = 1;",
     ] {
         let p: cq::Program = syn::parse_str(source).unwrap();
         let e = cq::normal::check(&p).unwrap_err().to_string();
@@ -366,14 +376,14 @@ fn constraint_scope_and_premises_are_local_contract_obligations() {
     }
     for ty in ["f64", "(i32,f32)", "fn()"] {
         let p: cq::Program = syn::parse_str(&format!(
-            "struct Q; relation R(a:{ty},b:i32); answer(y) :- R(x,y), x < cutoff;"
+            "struct Q; relation R(a:{ty},b:i32); answer(y) :- R(x,y), if * x < cutoff;"
         ))
         .unwrap();
         let e = cq::normal::check(&p).unwrap_err().to_string();
         assert!(e.contains("Eq") || e.contains("Ord"), "{e}");
     }
     let mut p: cq::Program =
-        syn::parse_quote! { struct Q; relation R(a:i32); answer(x) :- R(x), x < cutoff; };
+        syn::parse_quote! { struct Q; relation R(a:i32); answer(x) :- R(x), if * x < cutoff; };
     let cq::BodyItem::Constraint(c) = &mut p.query.body[1] else {
         panic!()
     };

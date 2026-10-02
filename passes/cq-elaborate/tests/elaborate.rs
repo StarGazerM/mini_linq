@@ -99,7 +99,7 @@ fn coarse_plans_elaborate_relation_at_a_time() {
 fn literals_are_relational_reads_and_repeats_are_relational_equalities() {
     let source = cq(quote! {
         struct Q; relation R(a: i32, b: i32); relation S(b: i32, c: i32);
-        answer(x, y) :- R(x, 5), S(x, x), if *x > 0, let y: i32 = *x + 1;
+        answer(x, y) :- R(x, 5), S(x, x), if { *x > 0 }, let y: i32 = *x + 1;
     });
     let normal = cq::normal::normalize(&source).unwrap();
     let target = compile(&coarse(&normal)).unwrap();
@@ -261,11 +261,11 @@ fn relational_hoisting_is_accepted_but_moving_a_relation_later_is_rejected() {
 #[test]
 fn opaque_chain_reorder_and_payload_mutations_are_rejected() {
     let source = cq(quote! {
-        struct Q; relation R(a:i32); answer(x,y) :- R(x), if *x != 0, let y:i32 = 10 / *x;
+        struct Q; relation R(a:i32); answer(x,y) :- R(x), if { *x != 0 }, let y:i32 = 10 / *x;
     });
     let target: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); r = rename R {a -> x};
-        b = bind r with y:i32 = (10 / *x); g = guard b if (*x != 0);
+        b = bind r with y:i32 = (10 / *x); g = guard b if ({ *x != 0 });
         output g as answer(x,y);
     }};
     ra::contract::check(&target).unwrap();
@@ -296,7 +296,7 @@ fn opaque_chain_reorder_and_payload_mutations_are_rejected() {
 fn guard_and_division_chain_keeps_the_complete_written_prefix() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(b:i32);
-        answer(x,y) :- R(x), S(w), if *x != 0 && *w > 1, let y:i32 = 10 / *x;
+        answer(x,y) :- R(x), S(w), if { *x != 0 && *w > 1 }, let y:i32 = 10 / *x;
     });
     let target = compile(&coarse(&source)).unwrap();
     let chain: Vec<_> = target
@@ -336,7 +336,7 @@ fn projection_cannot_discard_a_join_correlation() {
 #[test]
 fn source_before_equality_cannot_move_after_rust() {
     let source = cq(quote! {
-        struct Q; relation R(a:i32); answer(x) :- R(x), x = 1, if 10 / *x > 0;
+        struct Q; relation R(a:i32); answer(x) :- R(x), if * x == 1, if 10 / *x > 0;
     });
     let broken: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); r = rename R {a -> x};
@@ -355,7 +355,7 @@ fn source_before_equality_cannot_move_after_rust() {
 #[test]
 fn differing_literal_spellings_are_not_assumed_unequal() {
     let source = cq(quote! {
-        struct Q; relation R(a:i32); answer(x) :- R(x), x = 1, x = 0x1;
+        struct Q; relation R(a:i32); answer(x) :- R(x), if * x == 1, if * x == 0x1;
     });
     let target = compile(&coarse(&source)).unwrap();
     let mut changed = target.clone();

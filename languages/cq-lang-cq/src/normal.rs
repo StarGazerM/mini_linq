@@ -1,7 +1,7 @@
 //! CQ normal form for `T X = bottom + Set X`.
 //!
 //! Atoms contain only variables. Relational equality is Leibniz identity,
-//! decided by an admissible column's `==`. Rust lets and guards are opaque
+//! decided by an admissible column's `==`. Residual Rust lets and guards are opaque
 //! partial functions under functional extensionality. The reference is
 //! written order. Preserving the Rust chain and including every source
 //! relational predecessor before each Rust step is a sufficient refinement

@@ -27,10 +27,10 @@ AND o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate <= DATE '1996-12-31'"#;
     }
     answer(order_key: i64, part_key: i64, supplier_key: i64) :-
         Lineitem(order_key, part_key, supplier_key),
-        Part(part_key, part_type), part_type = "ECONOMY ANODIZED STEEL",
+        Part(part_key, part_type), if part_type == "ECONOMY ANODIZED STEEL",
         Supplier(supplier_key, supplier_nation),
-        Orders(order_key, customer_key, order_date), order_date between start and end,
+        Orders(order_key, customer_key, order_date), if *order_date >= start && *order_date <= end,
         Customer(customer_key, customer_nation), Nation(customer_nation, customer_region),
-        Region(customer_region, region_name), region_name = "AMERICA",
+        Region(customer_region, region_name), if region_name == "AMERICA",
         Nation(supplier_nation, _supplier_region);
 }

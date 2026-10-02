@@ -198,7 +198,7 @@ fn first_answer_owns_and_initializes_the_fallback_only_on_demand() {
 }
 
 #[test]
-fn opaque_guard_iterators_survive_the_generated_block() {
+fn relational_range_iterators_survive_the_generated_block() {
     let rows: Vec<_> = (0..100_000).map(|a| (a, a)).collect();
     let r = Observed::new(
         rows.iter()
@@ -206,9 +206,9 @@ fn opaque_guard_iterators_survive_the_generated_block() {
             .collect::<BTreeMap<_, _>>(),
     );
     let mut answers = window!(r);
-    assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
+    assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
     assert_eq!(answers.next(), Some((&2, &2)));
-    assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
+    assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
     let r = Observed::new(rows.as_slice());
     let mut answers = window!(r);
     assert_eq!(r.rows.get(), 0);
@@ -218,7 +218,7 @@ fn opaque_guard_iterators_survive_the_generated_block() {
 }
 
 #[test]
-fn opaque_guards_scan_both_ordered_hosts_and_slices() {
+fn rust_comparison_windows_seek_ordered_hosts_and_scan_slices() {
     let r = Observed::new(BTreeMap::from([
         ((1,), vec![(0,)]),
         ((2,), vec![(5,), (6,)]),
@@ -227,13 +227,13 @@ fn opaque_guards_scan_both_ordered_hosts_and_slices() {
     ]));
     let got: Vec<_> = window!(r).collect();
     assert_eq!(got.len(), 3);
-    assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
+    assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
     let rows = [(1, 0), (2, 5), (2, 6), (8, 1), (9, 1)];
     let r = Observed::new(rows.as_slice());
     let got: Vec<_> = window!(r).collect();
     assert_eq!(got.len(), 3);
     assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
-    println!("opaque guards: maps and slices scan; no indexes built");
+    println!("relational windows: maps seek and slices scan; no indexes built");
 }
 
 #[test]
@@ -258,7 +258,7 @@ fn ordered_key_types_need_no_hash_implementation_on_direct_reads() {
 }
 
 #[test]
-fn opaque_guards_follow_the_declared_numeric_type() {
+fn relational_comparisons_follow_the_declared_numeric_type() {
     let r = BTreeMap::from([
         ((1_u64,), vec![(0,)]),
         ((2,), vec![(5,)]),
@@ -345,7 +345,7 @@ fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
 }
 
 #[test]
-fn ordered_key_sets_scan_for_opaque_guards() {
+fn ordered_key_sets_support_relational_comparison_windows() {
     let r = std::collections::BTreeSet::from([(1,), (2,), (9,)]);
     let got: Vec<_> = ::mini_linq::cq_to_ra! { struct Q; relation r(a:i32); answer(a) :- r(a), if *a >= 2 && *a < 9; }.collect();
     assert_eq!(got, [(&2,)]);
@@ -412,7 +412,7 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     cq_storage::counters::reset();
     let rows: Vec<_> = ::mini_linq::cq_to_ra! {
         struct Range; relation map(key:i32,value:i32);
-        answer(x,y) :- map(x,y), x >= low, x < high;
+        answer(x,y) :- map(x,y), if * x >= low, if * x < high;
     }
     .map(|(x, y)| (*x, *y))
     .collect();
@@ -428,7 +428,7 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     cq_storage::counters::reset();
     let scanned: Vec<_> = ::mini_linq::cq_to_ra! {
         struct SliceRange; relation slice(key:i32,value:i32);
-        answer(x,y) :- slice(x,y), x >= low, x < high;
+        answer(x,y) :- slice(x,y), if * x >= low, if * x < high;
     }
     .map(|(x, y)| (*x, *y))
     .collect();
@@ -441,7 +441,7 @@ fn relational_range_reads_seek_ordered_hosts_and_scan_slices_without_builds() {
     for (low, high) in [(5, 5), (9, 2)] {
         let rows: Vec<_> = ::mini_linq::cq_to_ra! {
             struct EmptyRange; relation map(key:i32,value:i32);
-            answer(x) :- map(x,_), x > low, x < high;
+            answer(x) :- map(x,_), if * x > low, if * x < high;
         }
         .collect();
         assert!(rows.is_empty());
@@ -461,7 +461,7 @@ fn relational_disjunction_membership_and_host_parameters_compute_classical_filte
     let got: Vec<_> = ::mini_linq::cq_to_ra! {
         struct Disjunction; relation rows(key:i32,tag:String);
         answer(x) :- rows(x,tag),
-            (x between 0 and 1 and tag in {"a","b"}) or (x >= low and tag = "c");
+            if ((((* x >= 0 && * x <= 1)) && ((* tag == "a" || * tag == "b"))) || ((* x >= low) && (* tag == "c")));
     }
     .map(|(x,)| *x)
     .collect();
@@ -469,7 +469,7 @@ fn relational_disjunction_membership_and_host_parameters_compute_classical_filte
     let tag_param = "b".to_owned();
     let got: Vec<_> = ::mini_linq::cq_to_ra! {
         struct Parameters; relation rows(key:i32,tag:String);
-        answer(x) :- rows(x,tag), tag = tag_param, 1 < x, x <= 4;
+        answer(x) :- rows(x,tag), if * tag == tag_param, if 1 < * x, if * x <= 4;
     }
     .map(|(x,)| *x)
     .collect();
@@ -487,7 +487,7 @@ fn an_ordered_host_and_non_copy_parameter_need_no_cloning_or_scan_fallback() {
     let cutoff = 2;
     let got: Vec<_> = ::mini_linq::cq_to_ra! {
         struct OrderedHost; relation r(k:i32,v:i32);
-        answer(x,y) :- r(x,y), x >= cutoff;
+        answer(x,y) :- r(x,y), if * x >= cutoff;
     }
     .map(|(x, y)| (*x, *y))
     .collect();
@@ -508,7 +508,7 @@ fn an_ordered_host_and_non_copy_parameter_need_no_cloning_or_scan_fallback() {
     let cutoff = Value(2);
     let got: Vec<_> = ::mini_linq::cq_to_ra! {
         struct BorrowedBounds; relation map(k:Value,v:i32);
-        answer(y) :- map(x,y), x > cutoff;
+        answer(y) :- map(x,y), if * x > cutoff;
     }
     .map(|(y,)| *y)
     .collect();
@@ -522,7 +522,7 @@ fn constraints_on_prefix_values_precede_partial_guards_and_later_atoms() {
     let cutoff = 1;
     let got: Vec<_> = ::mini_linq::cq_to_ra! {
         struct LetPrefix; relation r(x:i32); relation s(m:i32,y:i32);
-        answer(y) :- r(x), let m:i32 = *x, m > cutoff, if 10 / *m > 0, s(m,y);
+        answer(y) :- r(x), let m:i32 = *x, if * m > cutoff, if 10 / *m > 0, s(m,y);
     }
     .map(|(y,)| *y)
     .collect();
@@ -531,14 +531,14 @@ fn constraints_on_prefix_values_precede_partial_guards_and_later_atoms() {
     let t = [(2, 0, 99)];
     let got: Vec<_> = ::mini_linq::cq_to_ra! {
         struct PrefixTuple; relation r(x:i32); relation other(y:i32); relation t(x:i32,y:i32,z:i32);
-        answer(z) :- r(x), other(y), x > y, if 10 / (*x - *y) > 0, t(x,y,z);
+        answer(z) :- r(x), other(y), if * x > * y, if 10 / (*x - *y) > 0, t(x,y,z);
     }
     .map(|(z,)| *z)
     .collect();
     assert_eq!(got, [99]);
     let got: Vec<_> = ::mini_linq::cq_to_ra! {
         struct BoundIdentity; relation r(x:i32); relation s(m:i32,y:i32);
-        answer(y) :- r(x), let m:i32 = 2, m = x, s(m,y);
+        answer(y) :- r(x), let m:i32 = 2, if * m == * x, s(m,y);
     }
     .map(|(y,)| *y)
     .collect();

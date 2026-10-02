@@ -143,7 +143,9 @@ impl Push<'_> {
                     self.emit(&symbol_name(&select.input), quote!(if #condition { #sink }))
                 }
             }
-            Operator::Select(select) => {
+            // This push consumer realizes a range by scanning and filtering.
+            // CQ Rust comparisons can now generate Range without custom syntax.
+            Operator::Select(select) | Operator::Range(_, select) => {
                 let condition = cq_print::expressions::relational_condition(&select.condition);
                 self.emit(&symbol_name(&select.input), quote!(if #condition { #sink }))
             }
@@ -218,7 +220,7 @@ impl Push<'_> {
             }
             _ => error(
                 &p.name,
-                "this push example implements unit, rename, project, select, point, bind, guard, probe and semi",
+                "this push example implements unit, rename, project, select, point, range, bind, guard, probe and semi",
             ),
         }
     }

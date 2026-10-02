@@ -19,7 +19,7 @@ fn main() {
     let normal = &written.normal;
     let expected_vo: valuation::Program = syn::parse_quote! {
         #normal valuation {
-            R@0(x,k); let next:i32 = *k+1; S@2(next,y); if y > 0;
+            R@0(x,k); let next:i32 = *k+1; S@2(next,y); y > 0;
             let __cq_4_1:i32 = *y+1;
         }
     };

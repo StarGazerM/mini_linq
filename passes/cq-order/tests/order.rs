@@ -102,7 +102,7 @@ fn written_coarse_follows_the_normal_body() {
         struct Q;
         relation R(a: i32, b: i32);
         relation S(b: i32, c: i32);
-        answer(x, z) :- R(x, 5), S(_, z), R(x, x), if z > 1, let w: i32 = x + z;
+        answer(x, z) :- R(x, 5), S(_, z), R(x, x), if { z > 1 }, let w: i32 = x + z;
     });
     assert_eq!(
         plan(&messy, Heuristic::Written, Split::Coarse),
@@ -114,7 +114,7 @@ fn written_coarse_follows_the_normal_body() {
                 S@2(__cq_1_0, z);
                 R@3(x, __cq_2_1);
                 x = __cq_2_1;
-                if z > 1;
+                if { z > 1 };
                 let w: i32 = x + z;
             }
         )
@@ -125,7 +125,7 @@ fn written_coarse_follows_the_normal_body() {
 fn optimizing_orders_place_constraints_at_the_first_available_binding() {
     let source: cq::Program = syn::parse_quote! {
         struct Early; relation R(a:i32); relation S(b:i32);
-        answer(x,y) :- R(x), if opaque(x), x < cutoff, S(y);
+        answer(x,y) :- R(x), if opaque(x), if * x < cutoff, S(y);
     };
     for heuristic in [
         Heuristic::Prefix(Ranking::Connected),
@@ -178,7 +178,7 @@ fn across_atom_sharing_is_a_join_and_only_same_atom_repetition_gets_identity() {
                 .valuation
                 .steps
                 .iter()
-                .any(|s| matches!(s, valuation::Step::Equality(..)))
+                .any(|s| matches!(s, valuation::Step::Equality(e, _) if matches!(e.right,cq::EqualityValue::Variable(_))))
     );
     let mut dropped = vo.clone();
     let valuation::Step::Atom(a, _) = &mut dropped.valuation.steps[2] else {
@@ -224,7 +224,7 @@ fn written_fine_splits_each_atom_in_its_reference_position() {
         relation R(a: i32, b: i32);
         relation S(b: i32, c: i32);
         relation T(a: i32, c: i32);
-        answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if a > 0, let d: i32 = a + c;
+        answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if { a > 0 }, let d: i32 = a + c;
     });
     assert_eq!(
         plan(&guarded, Heuristic::Written, Split::Fine),
@@ -232,7 +232,7 @@ fn written_fine_splits_each_atom_in_its_reference_position() {
             &guarded,
             quote! {
                 R@0(a, _); R@0(a, b);
-                S@1(b, c); T@2(a, c); if a > 0; let d: i32 = a + c;
+                S@1(b, c); T@2(a, c); if { a > 0 }; let d: i32 = a + c;
             }
         )
     );
@@ -275,7 +275,7 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
                 relation R(a: i32, b: i32);
                 relation S(a: i32, b: i32);
                 relation T(a: i32, b: i32);
-                answer(x) :- R(x, y), S(z, w), T(y, z), if x != z, if w > 1;
+                answer(x) :- R(x, y), S(z, w), T(y, z), if { x != z }, if { w > 1 };
             }),
             &[0, 1, 2, 3, 4],
             &[0, 2, 1, 3, 4],
@@ -297,7 +297,7 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
                 relation R(a: i32, b: i32);
                 relation S(a: i32, b: i32);
                 relation T(a: i32, b: i32);
-                answer(x, z) :- R(x, y), S(y, z), T(x, z), if y > x;
+                answer(x, z) :- R(x, y), S(y, z), T(x, z), if { y > x };
             }),
             &[0, 1, 2, 3],
             &[0, 1, 2, 3],
@@ -404,13 +404,13 @@ fn elimination_defers_an_atom_to_the_binding_that_supplies_its_column() {
         struct Q;
         relation R(a: i32);
         relation S(b: i32, c: i32);
-        answer(x, y) :- R(x), let k: i32 = x + 1, S(k, y), if y > k;
+        answer(x, y) :- R(x), let k: i32 = x + 1, S(k, y), if { y > k };
     });
     assert_eq!(
         plan(&source, Heuristic::Elimination, Split::Coarse),
         expected(
             &source,
-            quote! { R@0(x); let k: i32 = x + 1; S@2(k, y); if y > k; }
+            quote! { R@0(x); let k: i32 = x + 1; S@2(k, y); if { y > k }; }
         )
     );
     let fine = plan(&source, Heuristic::Elimination, Split::Fine);
@@ -477,7 +477,7 @@ fn every_heuristic_and_split_ends_each_clause_fully_covered() {
             relation S(b: i32, c: i32);
             relation T(c: i32, d: i32);
             relation U(d: i32, a: i32);
-            answer(w, y) :- R(w, x), S(x, y), T(y, z), U(z, w), let k: i32 = w * 2, if k > y;
+            answer(w, y) :- R(w, x), S(x, y), T(y, z), U(z, w), let k: i32 = w * 2, if { k > y };
         }),
     ];
     let heuristics = [
@@ -638,11 +638,11 @@ fn partial_rust_steps_keep_cross_kind_order_and_all_written_relations() {
     for source in [
         normal(quote! {
             struct Q; relation R(a:i32); relation S(a:i32);
-            answer(x,y) :- R(x), S(w), if *x != 0 && *w > 1, let y:i32 = 10 / *x;
+            answer(x,y) :- R(x), S(w), if { *x != 0 && *w > 1 }, let y:i32 = 10 / *x;
         }),
         normal(quote! {
             struct Q; relation R(a:i32); relation S(a:i32,b:i32);
-            answer(x,y) :- R(x), if *x != 0, S(10 / *x,y);
+            answer(x,y) :- R(x), if { *x != 0 }, S(10 / *x,y);
         }),
     ] {
         for heuristic in [
@@ -679,7 +679,7 @@ fn partial_rust_steps_keep_cross_kind_order_and_all_written_relations() {
 fn before_condition_rejects_a_relational_step_moved_after_rust() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(a:i32);
-        answer(x,y) :- R(x), S(w), if *x != 0, let y:i32 = 10 / *x;
+        answer(x,y) :- R(x), S(w), if { *x != 0 }, let y:i32 = 10 / *x;
     });
     let mut target = plan(&source, Heuristic::Written, Split::Coarse);
     target.valuation.steps.swap(1, 2);

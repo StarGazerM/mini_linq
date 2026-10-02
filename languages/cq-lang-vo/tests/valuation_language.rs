@@ -8,7 +8,7 @@ fn plan(steps: proc_macro2::TokenStream) -> syn::Result<valuation::Program> {
         relation R(a: i32, b: i32);
         relation S(b: i32, c: i32);
         relation T(a: i32, c: i32);
-        answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if a > 0, let d: i32 = a + c;
+        answer(a, b, c) :- R(a, b), S(b, c), T(a, c), if { a > 0 }, let d: i32 = a + c;
         valuation { #steps }
     })
 }
@@ -16,7 +16,7 @@ fn plan(steps: proc_macro2::TokenStream) -> syn::Result<valuation::Program> {
 #[test]
 fn complete_coarse_and_fine_plans_check_and_round_trip() {
     let coarse = plan(quote! {
-        R@0(a, b); S@1(b, c); T@2(a, c); if a > 0; let d: i32 = a + c;
+        R@0(a, b); S@1(b, c); T@2(a, c); if { a > 0 }; let d: i32 = a + c;
     })
     .unwrap();
     let analysis = valuation::contract::check(&coarse).unwrap();
@@ -24,7 +24,7 @@ fn complete_coarse_and_fine_plans_check_and_round_trip() {
     assert_eq!(analysis.introduces[2], Vec::<String>::new());
     let fine = plan(quote! {
         R@0(_, b); R@0(a, b); S@1(b, c); T@2(a, c);
-        if a > 0; let d: i32 = a + c;
+        if { a > 0 }; let d: i32 = a + c;
     })
     .unwrap();
     let analysis = valuation::contract::check(&fine).unwrap();
@@ -39,11 +39,11 @@ fn complete_coarse_and_fine_plans_check_and_round_trip() {
 #[test]
 fn contract_rejects_dropped_columns_missing_steps_and_early_rust() {
     for steps in [
-        quote! { R@0(a,b); S@1(b,c); T@2(_,c); if a > 0; let d:i32 = a+c; },
-        quote! { R@0(a,_); S@1(_,c); T@2(a,c); if a > 0; let d:i32 = a+c; },
-        quote! { if a > 0; R@0(a,b); S@1(b,c); T@2(a,c); let d:i32 = a+c; },
-        quote! { R@0(a,b); S@1(b,c); T@2(a,c); if a > 0; },
-        quote! { R@0(a,b); S@1(b,c); S@2(a,c); if a > 0; let d:i32 = a+c; },
+        quote! { R@0(a,b); S@1(b,c); T@2(_,c); if { a > 0 }; let d:i32 = a+c; },
+        quote! { R@0(a,_); S@1(_,c); T@2(a,c); if { a > 0 }; let d:i32 = a+c; },
+        quote! { if { a > 0 }; R@0(a,b); S@1(b,c); T@2(a,c); let d:i32 = a+c; },
+        quote! { R@0(a,b); S@1(b,c); T@2(a,c); if { a > 0 }; },
+        quote! { R@0(a,b); S@1(b,c); S@2(a,c); if { a > 0 }; let d:i32 = a+c; },
     ] {
         assert!(valuation::contract::check(&plan(steps).unwrap()).is_err());
     }
@@ -53,12 +53,12 @@ fn contract_rejects_dropped_columns_missing_steps_and_early_rust() {
 fn reductions_are_relational_and_never_consume_a_rust_guard() {
     let reduced = plan(quote! {
         reduce R@0 with T@2(a, _); reduce T@2 with R@0(a, _);
-        R@0(a,b); S@1(b,c); T@2(a,c); if a > 0; let d:i32 = a+c;
+        R@0(a,b); S@1(b,c); T@2(a,c); if { a > 0 }; let d:i32 = a+c;
     })
     .unwrap();
     let analysis = valuation::contract::check(&reduced).unwrap();
     assert!(analysis.introduces[..2].iter().all(Vec::is_empty));
-    assert!(plan(quote! { reduce R@0 if a > 0; }).is_err());
+    assert!(plan(quote! { reduce R@0 if { a > 0 }; }).is_err());
 }
 
 #[test]
@@ -71,23 +71,23 @@ fn contract_rejects_late_misaligned_and_foreign_reductions() {
         assert!(error.contains(needle), "{error}");
     };
     rejects(
-        quote! { R@0(a, b); reduce R@0 with T@2(a, _); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        quote! { R@0(a, b); reduce R@0 with T@2(a, _); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
         "R",
     );
     rejects(
-        quote! { reduce R@0 with T@2(a, c); R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        quote! { reduce R@0 with T@2(a, c); R@0(a, b); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
         "T",
     );
     rejects(
-        quote! { reduce R@0 with T@2(_, _); R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        quote! { reduce R@0 with T@2(_, _); R@0(a, b); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
         "T",
     );
     rejects(
-        quote! { reduce R@0 with R@0(a, b); R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        quote! { reduce R@0 with R@0(a, b); R@0(a, b); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
         "R",
     );
     rejects(
-        quote! { reduce S@0 with T@2(a, _); R@0(a, b); if a > 0; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
+        quote! { reduce S@0 with T@2(a, _); R@0(a, b); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
         "R",
     );
 }

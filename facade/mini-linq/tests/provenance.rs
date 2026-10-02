@@ -118,7 +118,7 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
         }
     }
     let source = "struct Q; relation R(k:i32,p:i32); \
-                  answer(y) :- R(x,z), x=5, let y:i32 = *x + 1;";
+                  answer(y) :- R(x,z), if * x == 5, let y:i32 = *x + 1;";
     let written = written_expression(source, "policy {}");
     let point = expression(source, cq_order::Options::default(), "policy {}");
     cases.push(quote!({

@@ -3,7 +3,7 @@
 //! The meaning is `T X = bottom + Set X`: one panic aborts evaluation.
 //! Each Rust step is a partial function of its free variables; I/O, mutation
 //! and evaluation counts are outside the meaning. Relational equalities are
-//! Leibniz identities decided by admissible `==`; Rust guards remain opaque.
+//! Leibniz identities decided by admissible `==`; residual Rust guards remain opaque.
 //! Relational constraints may
 //! move earlier across a Rust node, shrinking its domain, while Rust nodes retain
 //! written order. Identical chain payloads and source-before constraints retained

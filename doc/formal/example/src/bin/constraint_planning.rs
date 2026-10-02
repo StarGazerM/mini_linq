@@ -79,7 +79,7 @@ fn main() {
         answer(a,w) :- R(a,x), S(a,y), T(y,z),
             let k:i32 = combine(*x,*y),
             let p:i32 = left_key(k,*y), let q:i32 = right_key(*x,*z),
-            U(p,q,w), x > 0, if permitted(k,*z), V(w);
+            U(p,q,w), if * x > 0, if permitted(k,*z), V(w);
     };
     let directory = directory("logical-constraint-planning");
     let checked = boundaries(&directory, "written", &source, false);

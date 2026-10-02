@@ -37,7 +37,7 @@ fn main() {
         cq::hypergraph::Analysis::of(&planned.normal).join_tree,
         Some(vec![(0, Some(1)), (1, Some(2)), (2, None)])
     );
-    // Opaque guards retain their chain. The reducer goes up from R through S
+    // The Rust comparison is relational. The reducer goes up from R through S
     // to T and down again, before the first atom step.
     let expected_vo: valuation::Program = syn::parse_quote! {
         pub struct Overview;
@@ -54,7 +54,7 @@ fn main() {
             R@0(x, k, tag, unused);
             S@1(k, tag, z);
             T@2(z, y);
-            if y > 0;
+            y > 0;
         }
     };
     assert_eq!(planned.valuation, expected_vo);
@@ -65,12 +65,12 @@ fn main() {
         r1 = rename R { a -> x, b -> k, c -> tag, d -> unused };
         r2 = semijoin r0 with r1;
         r3 = rename T { a -> z, b -> y };
-        r4 = semijoin r3 with r2;
-        r5 = semijoin r2 with r4;
-        r6 = semijoin r1 with r5;
-        r7 = natural_join r6 with r5;
-        r8 = natural_join r7 with r4;
-        r9 = guard r8 if (y > 0);
+        r4 = select r3 if (y > 0);
+        r5 = semijoin r4 with r2;
+        r6 = semijoin r2 with r5;
+        r7 = semijoin r1 with r6;
+        r8 = natural_join r7 with r6;
+        r9 = natural_join r8 with r5;
         r10 = project r9 keep { x, y };
         output r10 as answer(x, y);
     };
@@ -81,8 +81,8 @@ fn main() {
         r1 = rename S { a -> k, b -> tag, c -> z };
         r2 = natural_join r0 with r1;
         r3 = rename T { a -> z, b -> y };
-        r4 = natural_join r2 with r3;
-        r5 = guard r4 if (y > 0);
+        r4 = select r3 if (y > 0);
+        r5 = natural_join r2 with r4;
         r6 = project r5 keep { x, y };
         output r6 as answer(x, y);
     };
@@ -107,14 +107,19 @@ fn main() {
         descriptors(&planned.indexes),
         vec![
             ("r1".into(), vec![0, 1]),
+            ("r3".into(), vec![0]),
             ("r2".into(), vec![2]),
-            ("r4".into(), vec![1]),
-            ("r5".into(), vec![0, 1])
+            ("r5".into(), vec![1]),
+            ("r6".into(), vec![0, 1])
         ]
     );
     assert_eq!(
         descriptors(&written.indexes),
-        vec![("r1".into(), vec![0, 1]), ("r3".into(), vec![1])]
+        vec![
+            ("r1".into(), vec![0, 1]),
+            ("r3".into(), vec![0]),
+            ("r4".into(), vec![1])
+        ]
     );
     let r = [
         (1, 10, 1, 100),

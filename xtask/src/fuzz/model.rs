@@ -41,6 +41,7 @@ pub enum Expr {
     Binary(Arithmetic, Box<Expr>, Box<Expr>),
     Negate(Box<Expr>),
     Partial(PartialOp, Box<Expr>),
+    OpaqueCall(Box<Expr>),
 }
 
 /// Ordinary Rust expressions whose partiality is observable as whole-query abort.
@@ -235,6 +236,24 @@ impl Case {
 
     /// Emit a full macro input, with explicitly typed computed output columns.
     pub fn cq(&self) -> String {
+        self.print_cq(false)
+    }
+
+    /// Keep the original short-circuit guard opaque in the executable written
+    /// reference, so the recognizer cannot split both sides of the comparison.
+    #[cfg(any(feature = "oracle", test))]
+    pub fn written_cq(&self) -> String {
+        self.print_cq(true)
+    }
+
+    fn print_cq(&self, opaque_guards: bool) -> String {
+        let guard_clause = |expression: String| {
+            if opaque_guards {
+                format!("if {{ {expression} }}")
+            } else {
+                format!("if {expression}")
+            }
+        };
         let mut source = String::from("struct Fuzz;\n");
         for relation in &self.query.schema {
             writeln!(
@@ -286,12 +305,12 @@ impl Case {
                         rust_expression(&binding.expression)
                     ));
                 }
-                Step::Constraint(index) => {
-                    clauses.push(cq_constraint(&self.query.constraints[index]))
-                }
+                Step::Constraint(index) => clauses.push(guard_clause(rust_constraint(
+                    &self.query.constraints[index],
+                ))),
                 Step::Guard(index) => {
                     let guard = &self.query.guards[index];
-                    clauses.push(format!("if {}", rust_guard(guard)));
+                    clauses.push(guard_clause(rust_guard(guard)));
                 }
             }
         }
@@ -422,6 +441,7 @@ fn rust_expression(expression: &Expr) -> String {
         Expr::Var(variable) => format!("v{variable}.to_owned()"),
         Expr::Constant(value) => value.to_string(),
         Expr::Negate(inner) => format!("(-({}))", rust_expression(inner)),
+        Expr::OpaqueCall(inner) => format!("std::convert::identity({})", rust_expression(inner)),
         Expr::Partial(operator, inner) => {
             let value = rust_expression(inner);
             match operator {
@@ -474,9 +494,9 @@ fn rust_guard(guard: &Guard) -> String {
     }
 }
 
-fn cq_constraint(c: &Relational) -> String {
+fn rust_constraint(c: &Relational) -> String {
     let term = |t: &RelTerm| match t {
-        RelTerm::Var(v) => format!("v{v}"),
+        RelTerm::Var(v) => format!("*v{v}"),
         RelTerm::Literal(v) => v.to_string(),
         RelTerm::Parameter(v) => parameter_name(*v),
     };
@@ -485,7 +505,7 @@ fn cq_constraint(c: &Relational) -> String {
             "{} {} {}",
             term(l),
             match op {
-                Comparison::Equal => "=",
+                Comparison::Equal => "==",
                 Comparison::NotEqual => "!=",
                 Comparison::Less => "<",
                 Comparison::LessEqual => "<=",
@@ -494,14 +514,15 @@ fn cq_constraint(c: &Relational) -> String {
             },
             term(r)
         ),
-        Relational::Between(t, l, h) => format!("{} between {} and {}", term(t), term(l), term(h)),
+        Relational::Between(t, l, h) => {
+            format!("({} >= {} && {} <= {})", term(t), term(l), term(t), term(h))
+        }
         Relational::In(t, ls) => format!(
-            "{} in {{ {} }}",
-            term(t),
+            "({})",
             ls.iter()
-                .map(ToString::to_string)
+                .map(|v| format!("{} == {v}", term(t)))
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(" || ")
         ),
         Relational::Or(bs) => bs
             .iter()
@@ -509,13 +530,13 @@ fn cq_constraint(c: &Relational) -> String {
                 format!(
                     "({})",
                     b.iter()
-                        .map(cq_constraint)
+                        .map(rust_constraint)
                         .collect::<Vec<_>>()
-                        .join(" and ")
+                        .join(" && ")
                 )
             })
             .collect::<Vec<_>>()
-            .join(" or "),
+            .join(" || "),
     }
 }
 
@@ -572,6 +593,7 @@ fn sql_expression(expression: &Expr, environment: &BTreeMap<usize, String>) -> S
         Expr::Var(variable) => environment[variable].clone(),
         Expr::Constant(value) => value.to_string(),
         Expr::Negate(inner) => format!("(-({}))", sql_expression(inner, environment)),
+        Expr::OpaqueCall(inner) => sql_expression(inner, environment),
         Expr::Binary(operator, left, right) => {
             let token = match operator {
                 Arithmetic::Add => "+",
@@ -643,6 +665,10 @@ impl Expr {
                 left.features(output);
                 right.features(output);
             }
+            Self::OpaqueCall(inner) => {
+                output.insert("opaque-call".into());
+                inner.features(output);
+            }
             Self::Negate(inner) => {
                 output.insert("expression-negate".into());
                 inner.features(output);
@@ -660,7 +686,9 @@ impl Expr {
                 left.variables(output);
                 right.variables(output);
             }
-            Self::Negate(inner) | Self::Partial(_, inner) => inner.variables(output),
+            Self::Negate(inner) | Self::Partial(_, inner) | Self::OpaqueCall(inner) => {
+                inner.variables(output)
+            }
         }
     }
 
@@ -674,6 +702,7 @@ impl Expr {
             Self::Var(variable) => environment[*variable],
             Self::Constant(value) => *value,
             Self::Negate(inner) => -inner.value(environment),
+            Self::OpaqueCall(inner) => inner.value(environment),
             Self::Binary(operator, left, right) => {
                 let left = left.value(environment);
                 let right = right.value(environment);
@@ -689,6 +718,17 @@ impl Expr {
 }
 
 impl Guard {
+    fn recognizable(&self) -> bool {
+        match self {
+            Self::Compare(_, l, r) => {
+                matches!(l, Expr::Var(_) | Expr::Constant(_))
+                    && matches!(r, Expr::Var(_) | Expr::Constant(_))
+            }
+            Self::And(l, r) | Self::Or(l, r) => l.recognizable() && r.recognizable(),
+            Self::Not(g) => g.recognizable(),
+        }
+    }
+
     fn features(&self, output: &mut BTreeSet<String>) {
         match self {
             Self::Compare(comparison, left, right) => {
@@ -715,11 +755,24 @@ impl Guard {
                     }
                     .into(),
                 );
+                if left.recognizable() != right.recognizable() {
+                    output.insert(
+                        if matches!(self, Self::And(..)) {
+                            "mixed-and"
+                        } else {
+                            "mixed-or"
+                        }
+                        .into(),
+                    );
+                }
                 left.features(output);
                 right.features(output);
             }
             Self::Not(inner) => {
                 output.insert("boolean-not".into());
+                if !inner.recognizable() {
+                    output.insert("opaque-not".into());
+                }
                 inner.features(output);
             }
         }
@@ -975,12 +1028,43 @@ impl Random {
     }
 
     fn guard(&mut self, variables: usize) -> Guard {
-        let left = self.comparison(variables);
-        match self.pick(4) {
-            0 => left,
-            1 => Guard::Not(Box::new(left)),
-            2 => Guard::And(Box::new(left), Box::new(self.comparison(variables))),
-            _ => Guard::Or(Box::new(left), Box::new(self.comparison(variables))),
+        let relational = Guard::Compare(
+            match self.pick(6) {
+                0 => Comparison::Equal,
+                1 => Comparison::NotEqual,
+                2 => Comparison::Less,
+                3 => Comparison::LessEqual,
+                4 => Comparison::Greater,
+                _ => Comparison::GreaterEqual,
+            },
+            Expr::Var(self.pick(variables)),
+            Expr::Constant(self.small()),
+        );
+        let opaque = if self.pick(2) == 0 {
+            Guard::Compare(
+                Comparison::Less,
+                Expr::OpaqueCall(Box::new(Expr::Var(self.pick(variables)))),
+                Expr::Constant(self.small()),
+            )
+        } else {
+            Guard::Compare(
+                Comparison::Greater,
+                Expr::Binary(
+                    Arithmetic::Add,
+                    Box::new(Expr::Var(self.pick(variables))),
+                    Box::new(Expr::Constant(self.small())),
+                ),
+                Expr::Constant(self.small()),
+            )
+        };
+        match self.pick(7) {
+            0 => self.comparison(variables),
+            1 => Guard::Not(Box::new(relational)),
+            2 => Guard::And(Box::new(relational), Box::new(opaque)),
+            3 => Guard::And(Box::new(opaque), Box::new(relational)),
+            4 => Guard::Or(Box::new(relational), Box::new(opaque)),
+            5 => Guard::Or(Box::new(opaque), Box::new(relational)),
+            _ => Guard::Not(Box::new(Guard::And(Box::new(relational), Box::new(opaque)))),
         }
     }
 }
@@ -1228,6 +1312,35 @@ fn generate_partial(seed: u64) -> Case {
     if !protected {
         query.order.push(Step::Guard(0));
     }
+    if position == 0 {
+        let mixed = match random.pick(6) {
+            0 => Guard::And(
+                Box::new(query.guards[0].clone()),
+                Box::new(query.guards[1].clone()),
+            ),
+            1 => Guard::And(
+                Box::new(query.guards[1].clone()),
+                Box::new(query.guards[0].clone()),
+            ),
+            2 => Guard::Or(
+                Box::new(query.guards[0].clone()),
+                Box::new(query.guards[1].clone()),
+            ),
+            3 => Guard::Or(
+                Box::new(query.guards[1].clone()),
+                Box::new(query.guards[0].clone()),
+            ),
+            4 => Guard::Not(Box::new(Guard::And(
+                Box::new(query.guards[0].clone()),
+                Box::new(query.guards[1].clone()),
+            ))),
+            _ => Guard::Not(Box::new(Guard::Or(
+                Box::new(query.guards[1].clone()),
+                Box::new(query.guards[0].clone()),
+            ))),
+        };
+        query.guards[1] = mixed;
+    }
     // Central constraints sample both sides of the opaque Rust chain. The
     // independent written-order reference retains these exact source positions.
     for i in 0..1 + random.pick(2) {
@@ -1427,6 +1540,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn written_reference_keeps_the_original_guards_unsplit() {
+        for seed in 0..64 {
+            let case = generate(seed);
+            let written: cq_lang_cq::Program = syn::parse_str(&case.written_cq()).unwrap();
+            cq_lang_cq::contract::check(&written).unwrap();
+            assert_eq!(written.query.body.len(), case.query.body_order().len());
+            assert!(written.query.body.iter().all(|item| match item {
+                cq_lang_cq::BodyItem::Filter(f) => matches!(f.condition, syn::Expr::Block(_)),
+                cq_lang_cq::BodyItem::Equality(_) | cq_lang_cq::BodyItem::Constraint(_) => false,
+                _ => true,
+            }));
+        }
+    }
+
+    #[test]
     fn seeded_cases_cover_every_required_feature_and_stay_bounded() {
         let mut coverage = Coverage::default();
         for seed in 0..2048 {
@@ -1471,6 +1599,10 @@ mod tests {
             "boolean-and",
             "boolean-or",
             "boolean-not",
+            "mixed-and",
+            "mixed-or",
+            "opaque-not",
+            "opaque-call",
             "expression-add",
             "expression-subtract",
             "expression-multiply",

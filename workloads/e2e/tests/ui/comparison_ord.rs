@@ -9,6 +9,6 @@ fn main() {
     let cutoff = EqOnly(2);
     let _ = ::mini_linq::cq_to_ra! {
         struct MissingOrd; relation rows(key:EqOnly, value:i32);
-        answer(y) :- rows(x,y), x < cutoff;
+        answer(y) :- rows(x,y), if * x < cutoff;
     }.count();
 }

@@ -1,6 +1,7 @@
 //! Shared syntax, declarations and Rust free-variable/pattern analysis.
 //!
 //! Compiler programs denote `bottom + Set`: one panic aborts evaluation.
+//! Guard comparisons recognized under the premises below are relational. Other
 //! Rust expressions are opaque partial functions of their free variables;
 //! only relational steps commute or move earlier across the written Rust chain.
 //! Equality in the relational centre is identity in classical Set.
@@ -57,6 +58,7 @@ pub fn symbol_name(identifier: &Ident) -> String {
 pub mod keyed;
 pub use keyed::SupplyKind;
 pub mod constraint;
+pub mod guard;
 pub mod predicate;
 pub use constraint::Constraint;
 pub mod rust;

@@ -233,10 +233,10 @@ fn recursion_owns_non_copy_delta_rows_and_hoists_leaves_once() {
 fn correlated_exists_evaluates_with_each_outer_value_and_borrowed_parameters() {
     let A = [(1,), (2,), (3,)];
     let S = [(1, 5), (2, 1), (9, 9)];
-    let calls = Cell::new(0);
+    let observed = std::cell::RefCell::new(Vec::new());
     let parameter = 2;
-    let observe = |_: &i32| {
-        calls.set(calls.get() + 1);
+    let observe = |x: &i32| {
+        observed.borrow_mut().push(*x);
         true
     };
     let result: Vec<_> = cq_ext_correlated::correlated! {
@@ -245,7 +245,10 @@ fn correlated_exists_evaluates_with_each_outer_value_and_borrowed_parameters() {
     }
     .collect();
     assert_eq!(result, [(1,)]);
-    assert!(calls.get() >= 3);
+    // The recognized capture equality and y bound now restrict the opaque
+    // observation's domain. Evaluation counts are outside query denotation.
+    assert!(!observed.borrow().is_empty());
+    assert!(observed.borrow().iter().all(|x| *x == 1));
 }
 
 #[test]

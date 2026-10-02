@@ -30,7 +30,7 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
     use quote::ToTokens;
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(k:i32,v:i32);
-        answer(x,y) :- R(x,y), x >= lower, x < upper;
+        answer(x,y) :- R(x,y), if * x >= lower, if * x < upper;
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let vo = cq_order::compile(&normal, &Default::default()).unwrap();
@@ -142,20 +142,65 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
 }
 
 #[test]
-fn same_text_rust_guard_remains_opaque_and_pinned_while_constraints_hoist() {
+fn rust_comparison_is_a_relational_select_with_a_host_bound() {
     let source: cq::Program = syn::parse_quote! {
         struct Q; relation R(a:i32); relation S(a:i32);
-        answer(od) :- R(od), S(s), if *od < cutoff, od < cutoff;
+        answer(od) :- R(od), S(s), if *od < cutoff;
     };
+    assert!(matches!(source.query.body[2], cq::BodyItem::Constraint(_)));
     let normal = cq::normal::normalize(&source).unwrap();
-    let vo = cq_order::compile(
-        &normal,
-        &cq_order::Options {
-            heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
-            split: cq_order::Split::Coarse,
-        },
-    )
-    .unwrap();
+    let vo = cq_order::compile(&normal, &Default::default()).unwrap();
+    let ra = cq_elaborate::compile(&vo).unwrap();
+    cq_elaborate::check(&vo, &ra).unwrap();
+    assert!(
+        ra.plan
+            .definitions
+            .iter()
+            .all(|d| !matches!(d.operator, ra::Operator::Guard(_)))
+    );
+    let select = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, ra::Operator::Select(_)))
+        .unwrap();
+    let later = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "S"))
+        .unwrap();
+    assert!(select < later);
+    let ix = cq_index_policy::compile(&ra).unwrap();
+    assert!(
+        ix.indexes
+            .iter()
+            .any(|i| i.requirement.supply.kind() == ix::SupplyKind::Range)
+    );
+}
+
+#[test]
+fn mixed_conjunction_pushes_the_comparison_and_pins_the_residual_in_written_order() {
+    use quote::ToTokens;
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32,b:i32); relation S(a:i32);
+        answer(od) :- R(od,x), S(s), if *od < cutoff && f(*x) && g(*x);
+    };
+    assert_eq!(source.query.body.len(), 4);
+    assert!(matches!(source.query.body[2], cq::BodyItem::Constraint(_)));
+    let cq::BodyItem::Filter(residual) = &source.query.body[3] else {
+        panic!()
+    };
+    assert_eq!(
+        residual.condition.to_token_stream().to_string(),
+        "f (* x) && g (* x)"
+    );
+    let normal = cq::normal::normalize(&source).unwrap();
+    let options = cq_order::Options {
+        heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+        split: cq_order::Split::Coarse,
+    };
+    let vo = cq_order::compile(&normal, &options).unwrap();
     let rust_step = vo
         .valuation
         .steps
@@ -165,7 +210,7 @@ fn same_text_rust_guard_remains_opaque_and_pinned_while_constraints_hoist() {
     assert!(
         vo.valuation.steps[..rust_step]
             .iter()
-            .any(|s| matches!(s,cq_lang_vo::Step::Atom(a,_) if a.clause() == 1))
+            .any(|s| matches!(s,cq_lang_vo::Step::Atom(a,_) if a.clause()==1))
     );
     let mut moved = vo.clone();
     let guard = moved.valuation.steps.remove(rust_step);
@@ -176,25 +221,78 @@ fn same_text_rust_guard_remains_opaque_and_pinned_while_constraints_hoist() {
             .to_string()
             .contains("Before")
     );
+    let mut reversed = vo.clone();
+    let cq_lang_vo::Step::Guard(g, _) = &mut reversed.valuation.steps[rust_step] else {
+        panic!()
+    };
+    g.condition = syn::parse_quote!(g(*x) && f(*x));
+    assert!(cq_order::check(&normal, &reversed, &options).is_err());
     let ra = cq_elaborate::compile(&vo).unwrap();
     cq_elaborate::check(&vo, &ra).unwrap();
-    assert!(
-        ra.plan
-            .definitions
-            .iter()
-            .any(|d| matches!(d.operator, ra::Operator::Guard(_)))
-    );
-    assert!(
-        ra.plan
-            .definitions
-            .iter()
-            .any(|d| matches!(d.operator, ra::Operator::Select(_)))
-    );
+    let select = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, ra::Operator::Select(_)))
+        .unwrap();
+    let later = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(&d.operator,ra::Operator::Rename(r) if r.relation=="S"))
+        .unwrap();
+    let guard = ra
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(d.operator, ra::Operator::Guard(_)))
+        .unwrap();
+    assert!(select < later && later < guard);
+    let mut changed = ra.clone();
+    let ra::Operator::Guard(g) = &mut changed.plan.definitions[guard].operator else {
+        panic!()
+    };
+    g.condition = syn::parse_quote!(g(*x) && f(*x));
+    assert!(cq_elaborate::check(&vo, &changed).is_err());
+}
+
+#[test]
+fn mixed_disjunction_negation_and_arithmetic_stay_wholly_opaque() {
+    for expression in [
+        quote::quote!(f(*od) || *od < cutoff),
+        quote::quote!(!(*od < cutoff && f(*od))),
+        quote::quote!(*od + 1 < 5),
+    ] {
+        let source: cq::Program = syn::parse2(quote::quote! {
+            struct Q; relation R(a:i32); relation S(a:i32);
+            answer(od) :- R(od), S(s), if #expression;
+        })
+        .unwrap();
+        assert_eq!(source.query.body.len(), 3);
+        assert!(matches!(source.query.body[2], cq::BodyItem::Filter(_)));
+        let vo = cq_order::compile(&source, &Default::default()).unwrap();
+        let ra = cq_elaborate::compile(&vo).unwrap();
+        assert!(
+            ra.plan
+                .definitions
+                .iter()
+                .any(|d| matches!(d.operator, ra::Operator::Guard(_)))
+        );
+        assert!(
+            ra.plan
+                .definitions
+                .iter()
+                .all(|d| !matches!(d.operator, ra::Operator::Select(_)))
+        );
+        let mut moved = vo.clone();
+        moved.valuation.steps.swap(1, 2);
+        assert!(cq_lang_vo::contract::check(&moved).is_err());
+    }
 }
 
 #[test]
 fn a_constraint_on_a_let_result_stays_before_rust_even_if_a_later_atom_uses_it() {
-    for predicate in [quote::quote!(m > cutoff), quote::quote!(m = 2)] {
+    for predicate in [quote::quote!(if m > cutoff), quote::quote!(if m == 2)] {
         let source: cq::Program = syn::parse2(quote::quote! {
             struct Bound; relation R(a:i32); relation S(a:i32,b:i32);
             answer(y) :- R(x), let m:i32 = *x, #predicate, if 10 / *m > 0, S(m,y);
@@ -255,12 +353,16 @@ fn shared_names_survive_order_reduce_and_elaborate_as_natural_join_columns() {
     cq_reduce::check(&vo, &reduced, &options).unwrap();
     let ra = cq_elaborate::compile(&reduced).unwrap();
     cq_elaborate::check(&reduced, &ra).unwrap();
-    assert!(
-        !ra.plan
-            .definitions
-            .iter()
-            .any(|d| matches!(d.operator, ra::Operator::Select(_)))
-    );
+    assert!(!ra.plan.definitions.iter().any(|d| {
+        match &d.operator {
+            ra::Operator::Select(s) => s
+                .condition
+                .equalities
+                .iter()
+                .any(|e| matches!(e.right, ra::EqualityValue::Variable(_))),
+            _ => false,
+        }
+    }));
     let facts = ra::contract::check(&ra).unwrap();
     assert!(ra.plan.definitions.iter().any(|d| {
         match &d.operator {

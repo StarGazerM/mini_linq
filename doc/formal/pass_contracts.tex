@@ -8,6 +8,39 @@ establish Rust expression semantics, representation laws, or equality of
 arbitrary program meanings. Rules below summarize the predicates defined here;
 each implementation rule is registered at the function that checks them.
 
+\subsection{Guard recognition and short-circuit refinement}
+The CQ parser recognizes the trait operations in CQ-GuardRecognize after
+collecting all query binders. Its output contains relational clauses and only
+residual opaque guards. The CQ contract rejects a recognizable, unsplit guard.
+Let $e_1,\ldots,e_n$ be the leaves of the top-level Rust conjunction, with
+parentheses removed only for this analysis. Partition them into recognized
+total predicates $A$ and opaque leaves $F$, preserving each written sequence.
+Mixed disjunctions and negations are single opaque leaves.
+\begin{mathpar}
+\Rule{CQ-GuardSplit}{e=e_1\mathbin{\&\&}\cdots\mathbin{\&\&}e_n\\
+ A=\text{recognized leaves}\quad F=\text{remaining leaves in written order}}
+ {\mathsf{if}\ e\rightsquigarrow \mathsf{select}_{\bigwedge A};
+   \mathsf{guard}_{\bigwedge F}\quad
+   \sem{\mathsf{select}_{\bigwedge A};\mathsf{guard}_{\bigwedge F}}
+   \sqsupseteq\sem{\mathsf{if}\ e}}
+\end{mathpar}
+The residual is omitted when $F$ is empty, and otherwise remains at the
+written guard position. The recognized predicates may then move earlier
+under the existing relational pass contracts.
+\begin{proof}
+Rust evaluates $f(x)$ in \code{a \&\& f(x)} exactly where $a$ holds. Selecting
+by total relational $a$ earlier yields exactly that domain. In
+\code{f(x) \&\& a}, Rust evaluates $f$ on a superset of that domain, so selecting
+$a$ earlier only shrinks it. Iterate over the conjunction while retaining
+opaque leaves in their written order. Removing a total relational leaf cannot
+introduce a panic: on every input where the written evaluation returns, either
+some relational leaf rejects the input before any residual evaluation, or all
+relational leaves hold and the residual evaluates the same opaque leaves in
+the same order. Returned sets agree. Earlier relational selection may avoid a
+written panic, as permitted by $\bot+\mathrm{Set}$ refinement. Extracting
+through a mixed disjunction or negation lacks this argument and is forbidden.
+\end{proof}
+
 \subsection{Language-local contracts}
 \paragraph{CQ and CQ-NF.}
 $\mathsf{CQScope}(s)$ consists of the CQ clause rules in
@@ -25,7 +58,8 @@ Negation and aggregation parse but are rejected by CQ checking. An opaque
 rejects it with the name of the unexpanded extension. Visible logical
 uses are checked in written scope; opaque syntax remains Rust's responsibility.
 Central comparison terms admit only bound query names, literals, or captured
-identifiers. Eq/Ord premises and their boolean grammar are checked locally.
+identifiers. Recognizer shape and known Eq/Ord type failures are checked locally;
+trait laws and semantic admissibility remain trusted premises.
 \begin{mathpar}
 
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}

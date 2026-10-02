@@ -1,19 +1,9 @@
-//! Total relational predicates, separate from opaque Rust expressions.
-//!
-//! ```text
-//! Term ::= Ident | Literal | "-" NumericLiteral
-//! Atomic ::= Term ("=" | "!=" | "<" | "<=" | ">" | ">=") Term
-//!          | Term "between" Term "and" Term
-//!          | Term "in" "{" Literal ("," Literal)* [","] "}"
-//! Constraint ::= Atomic | "(" Atomic ("and" Atomic)* ")"
-//!                        ("or" "(" Atomic ("and" Atomic)* ")")+
-//! ```
-//!
-//! CQ resolves identifiers against all query binders: other identifiers are
-//! captured parameters. Later IRs spell those parameters `@name`. Parameters
-//! are reads of values, taken once outside query loops; no Rust expression is
-//! admitted here. Equality decides Leibniz identity; order uses a trusted total
-//! `Ord` consistent with that identity. These predicates are central in Set.
+//! Normalized total predicates shared by RA/IX/Physical, not CQ source syntax.
+//! The internal wire format keeps the existing comparison, paired inclusive
+//! bounds, literal equality disjunction and boolean branch representations.
+//! CQ accepts only Rust guards and constructs these forms through `guard`.
+//! Nested branches represent arbitrary boolean structure without DNF expansion.
+//! Parameters use `@name` internally; CQ Rust guards use bare host names.
 
 use crate::{CommaList, Equality, EqualityValue, symbol_name};
 use proc_macro2::TokenStream;
@@ -21,7 +11,7 @@ use quote::{ToTokens, quote};
 use std::collections::BTreeSet;
 use syn::{Ident, Token, parse::ParseStream};
 
-pub mod kw {
+mod kw {
     syn::custom_keyword!(between);
     syn::custom_keyword!(and);
     syn::custom_keyword!(or);
@@ -161,7 +151,7 @@ impl syn::parse::Parse for Constraint {
         if !input.peek(syn::token::Paren) {
             return atomic(input);
         }
-        // Formal rule CQ-Or: Disjunction contains parenthesized atomic conjunctions.
+        // IR branches serialize conjunctions, including nested boolean predicates.
         let mut branches = vec![conjunction(input)?];
         if !input.peek(kw::or) {
             return Err(unexpected(input, "`or` after a parenthesized conjunction"));
@@ -179,7 +169,7 @@ impl syn::parse::Parse for Constraint {
 
 fn atomic(input: ParseStream<'_>) -> syn::Result<Constraint> {
     let term = input.parse()?;
-    // Formal rule CQ-Between: Parse exactly two inclusive relational bounds.
+    // Internal paired inclusive bounds.
     if input.peek(kw::between) {
         input.parse::<kw::between>()?;
         let low = input.parse()?;
@@ -196,7 +186,7 @@ fn atomic(input: ParseStream<'_>) -> syn::Result<Constraint> {
             high: input.parse()?,
         });
     }
-    // Formal rule CQ-In: Membership admits only a nonempty literal set.
+    // Internal literal equality disjunction.
     if input.peek(Token![in]) {
         input.parse::<Token![in]>()?;
         if !input.peek(syn::token::Brace) {
@@ -240,13 +230,13 @@ fn atomic(input: ParseStream<'_>) -> syn::Result<Constraint> {
 fn conjunction(input: ParseStream<'_>) -> syn::Result<Vec<Constraint>> {
     let body;
     syn::parenthesized!(body in input);
-    let mut constraints = vec![atomic(&body)?];
+    let mut constraints = vec![body.parse()?];
     while !body.is_empty() {
         if !body.peek(kw::and) {
             return Err(unexpected(&body, "`and` between atomic constraints"));
         }
         body.parse::<kw::and>()?;
-        constraints.push(atomic(&body)?);
+        constraints.push(body.parse()?);
     }
     Ok(constraints)
 }
@@ -380,15 +370,43 @@ impl Constraint {
         }
     }
 
-    /// CQ spells captures as bare names; other IRs retain explicit `@` markers.
+    /// Rust guard spelling for normalized constraints; captures are bare names.
     pub fn cq_tokens(&self) -> TokenStream {
-        let mut source = self.clone();
-        source.map_terms(&mut |t| {
-            if let Term::Parameter(v) = t {
-                *t = Term::Variable(v.clone());
+        let term = |t: &Term| match t {
+            Term::Variable(v) | Term::Parameter(v) => quote!(#v),
+            Term::Literal(l) => quote!(#l),
+        };
+        match self {
+            Self::Compare {
+                left,
+                comparison,
+                right,
+            } => {
+                let left = term(left);
+                let right = term(right);
+                let op = match comparison {
+                    Comparison::Eq(_) => quote!(==),
+                    _ => comparison.to_token_stream(),
+                };
+                quote!(#left #op #right)
             }
-        });
-        source.to_token_stream()
+            Self::Between { term: t, low, high } => {
+                let (t, low, high) = (term(t), term(low), term(high));
+                quote!((#t >= #low && #t <= #high))
+            }
+            Self::In { term: t, literals } => {
+                let t = term(t);
+                let tests: Vec<_> = literals.iter().map(|l| quote!(#t == #l)).collect();
+                quote!((#(#tests)||*))
+            }
+            Self::Or(branches) => {
+                let branches = branches.iter().map(|branch| {
+                    let tests = branch.iter().map(Self::cq_tokens);
+                    quote!((#((#tests))&&*))
+                });
+                quote!((#(#branches)||*))
+            }
+        }
     }
 
     pub fn check(&self) -> syn::Result<()> {
@@ -419,12 +437,6 @@ impl Constraint {
                     ));
                 }
                 for c in branches.iter().flatten() {
-                    if matches!(c, Self::Or(_)) {
-                        return Err(syn::Error::new_spanned(
-                            c,
-                            "nested disjunction is outside the relational grammar",
-                        ));
-                    }
                     c.check()?;
                 }
             }

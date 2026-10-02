@@ -63,17 +63,17 @@ macro_rules! query_body {
                 rows(group, orderkey, linenumber, amount) :-
                     part(partkey, brand, container, size),
                     lineitem(partkey, orderkey, linenumber, quantity, price, discount, shipmode, shipinstruct),
-                    shipmode in { "AIR", "AIR REG" },
-                    shipinstruct = "DELIVER IN PERSON",
-                    (brand = "Brand#12"
-                        and container in { "SM CASE", "SM BOX", "SM PACK", "SM PKG" }
-                        and quantity between q1_low and q1_high and size between 1 and 5)
-                    or (brand = "Brand#23"
-                        and container in { "MED BAG", "MED BOX", "MED PKG", "MED PACK" }
-                        and quantity between q2_low and q2_high and size between 1 and 10)
-                    or (brand = "Brand#34"
-                        and container in { "LG CASE", "LG BOX", "LG PACK", "LG PKG" }
-                        and quantity between q3_low and q3_high and size between 1 and 15),
+                    if *shipmode == "AIR" || *shipmode == "AIR REG",
+                    if *shipinstruct == "DELIVER IN PERSON",
+                    if (*brand == "Brand#12"
+                        && (*container == "SM CASE" || *container == "SM BOX" || *container == "SM PACK" || *container == "SM PKG")
+                        && *quantity >= q1_low && *quantity <= q1_high && *size >= 1 && *size <= 5)
+                    || (*brand == "Brand#23"
+                        && (*container == "MED BAG" || *container == "MED BOX" || *container == "MED PKG" || *container == "MED PACK")
+                        && *quantity >= q2_low && *quantity <= q2_high && *size >= 1 && *size <= 10)
+                    || (*brand == "Brand#34"
+                        && (*container == "LG CASE" || *container == "LG BOX" || *container == "LG PACK" || *container == "LG PKG")
+                        && *quantity >= q3_low && *quantity <= q3_high && *size >= 1 && *size <= 15),
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * (100 - i128::from(discount.scaled()));
             }.map(|(group, orderkey, linenumber, amount)| (group, *orderkey, *linenumber, amount)).collect();

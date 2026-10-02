@@ -48,7 +48,7 @@ fn reductions_preserve_answers_and_correspond_to_options() {
 }
 #[test]
 fn legacy_guard_option_never_pushes_opaque_rust_steps() {
-    let source: valuation::Program = syn::parse_str("struct Q; relation R(a:i32,b:i32); answer(a) :- R(a,b), if b > 0; valuation { R@0(a,b); if b > 0; }").unwrap();
+    let source: valuation::Program = syn::parse_str("struct Q; relation R(a:i32,b:i32); answer(a) :- R(a,b), if { b > 0 }; valuation { R@0(a,b); if { b > 0 }; }").unwrap();
     let options = Options {
         guards: Pushdown::Atoms,
         semijoins: Reductions::None,
@@ -59,7 +59,7 @@ fn legacy_guard_option_never_pushes_opaque_rust_steps() {
 }
 #[test]
 fn opaque_and_multi_atom_guards_remain_steps() {
-    for guard in ["opaque!(a)", "a < c"] {
+    for guard in ["opaque!(a)", "{ a < c }"] {
         let text = format!(
             "struct Q; relation R(a:i32,b:i32); relation S(b:i32,c:i32); answer(a,c) :- R(a,b), S(b,c), if {guard}; valuation {{ R@0(a,b); S@1(b,c); if {guard}; }}"
         );
@@ -120,8 +120,14 @@ fn tree_reduction_pins_both_sweeps_and_rejects_missing_or_foreign_reducers() {
 
 #[test]
 fn all_guard_kinds_keep_their_schedule_around_tree_reductions() {
-    let query = CHAIN.replace("S(b, c);", "S(b, c), if b > 0, if a != c, if a > 0;");
-    let source = schedule(&query, &format!("{ATOMS} if b > 0; if a != c; if a > 0;"));
+    let query = CHAIN.replace(
+        "S(b, c);",
+        "S(b, c), if { b > 0 }, if { a != c }, if { a > 0 };",
+    );
+    let source = schedule(
+        &query,
+        &format!("{ATOMS} if {{ b > 0 }}; if {{ a != c }}; if {{ a > 0 }};"),
+    );
     for semijoins in [Reductions::None, Reductions::Tree] {
         let options = Options {
             guards: Pushdown::Atoms,
@@ -144,8 +150,8 @@ fn all_guard_kinds_keep_their_schedule_around_tree_reductions() {
 fn computed_and_opaque_guards_keep_their_schedule() {
     let source = schedule(
         "struct Q; relation L(a: i32);
-        answer(a) :- L(a), let d: i32 = a + 1, if d > 0, if matches!(a, 1 | 2);",
-        "L@0(a); let d: i32 = a + 1; if d > 0; if matches!(a, 1 | 2);",
+        answer(a) :- L(a), let d: i32 = a + 1, if { d > 0 }, if matches!(a, 1 | 2);",
+        "L@0(a); let d: i32 = a + 1; if { d > 0 }; if matches!(a, 1 | 2);",
     );
     let options = Options {
         guards: Pushdown::Atoms,

@@ -77,14 +77,14 @@ configuration!(keep, $, {}, {
         ::mini_linq::cq_to_ra! {
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b), a >= 2, a < 6;
+            answer(a,b) :- r(a,b), if * a >= 2, if * a < 6;
         }.map(|(a,b)| vec![*a,*b]).collect()
     }
     pub(super) fn range_map(r: &std::collections::BTreeMap<(i32,),Vec<(i32,)>>) -> Answers {
         ::mini_linq::cq_to_ra! {
             struct Range;
             relation r(a:i32,b:i32);
-            answer(a,b) :- r(a,b), a >= 2, a < 6;
+            answer(a,b) :- r(a,b), if * a >= 2, if * a < 6;
         }.map(|(a,b)| vec![*a,*b]).collect()
     }
     pub(super) fn probe_slice(l: &[(i32,)], r: &[Edge]) -> Answers {

@@ -6,19 +6,21 @@
 //! Relational steps commute and may move earlier across a Rust step. Rust
 //! steps keep their relative order and follow every free-variable binder.
 //!
-//! Relational constraints use `t = t`, `t != t`, `t < t`, `t <= t`, `t > t`,
-//! `t >= t`, inclusive `t between t and t`, or `t in { literal, ... }`.
-//! Conjunction is separate body items; `(C and C) or (C and C)` is a
-//! disjunction of parenthesized atomic conjunctions. Terms are a query
-//! variable, a Syn literal (or negative numeric literal), or a bare enclosing
-//! identifier not among the query's binders. Other Rust expressions are rejected.
-//! Captured parameters are borrowed once per evaluation outside query loops.
-//! `if e` is always an opaque Rust guard, even when e looks like a comparison.
-//! Equality is Leibniz identity, decided by admissible column `==`.
-//! Order requires a total `Ord` consistent with that identity. Constraints are
-//! total and central: they commute with relational steps and may move earlier
-//! across Rust steps. Rust checks Eq/Ord for aliases and user types; semantic
-//! admissibility is a trusted caller premise. f32/f64 are inadmissible.
+//! Comparisons inside `if` guards use Rust syntax and trait meaning: `==`/`!=`
+//! call PartialEq and `<`/`<=`/`>`/`>=` call PartialOrd. Under the existing
+//! Leibniz Eq and total, consistent Ord premises, comparisons on query names
+//! (bare, `*x`, or `&x`), literals (including negative numbers), and bare host
+//! parameters are total relational constraints. `&&`, `||`, `!`, and parentheses
+//! over these comparisons are classical connectives. Host parameters are
+//! borrowed once outside query loops. Known inadmissible types are rejected;
+//! Rust checks Eq/Ord for aliases and user types; admissibility is trusted.
+//! A top-level conjunction extracts these relational conjuncts and leaves one
+//! opaque residual guard at the written position, in written order. In `a && f`,
+//! f already runs only where a holds; in `f && a`, moving total a earlier only
+//! shrinks f's domain. Mixed disjunctions and negations stay wholly opaque.
+//! Arithmetic, calls, methods, casts, indexing, blocks, macros and field access
+//! remain opaque. Bare comparisons, `between`, and set membership are not CQ
+//! syntax. Normalized internal constraints retain the RA/IX/Physical forms.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
@@ -119,18 +121,31 @@ impl syn::parse::Parse for Query {
             })
             .map(|v| symbol_name(&v))
             .collect();
-        for item in &mut query.body {
-            let mut constraint = match item {
-                BodyItem::Equality(e) => Constraint::from_equality(e),
-                BodyItem::Constraint(c) => c.clone(),
-                _ => continue,
-            };
-            constraint.resolve(&logical);
-            *item = match constraint.equality() {
-                Some(e) => BodyItem::Equality(e),
-                None => BodyItem::Constraint(constraint),
-            };
-        }
+        query.body = query
+            .body
+            .into_iter()
+            .flat_map(|item| {
+                let BodyItem::Filter(filter) = item else {
+                    return vec![item];
+                };
+                let split = cq_syntax::guard::split(&filter.condition, &logical);
+                let mut items: Vec<_> = split
+                    .constraints
+                    .into_iter()
+                    .map(|c| match c.equality() {
+                        Some(e) => BodyItem::Equality(e),
+                        None => BodyItem::Constraint(c),
+                    })
+                    .collect();
+                if let Some(condition) = split.residual {
+                    items.push(BodyItem::Filter(Filter {
+                        condition,
+                        ..filter
+                    }));
+                }
+                items
+            })
+            .collect();
         Ok(query)
     }
 }
@@ -159,19 +174,21 @@ impl Query {
 
 /// One source-ordered logical body clause.
 ///
-/// Rust expressions retain their syntax as opaque partial functions. Lets
+/// After guard recognition, residual Rust expressions retain their syntax as
+/// opaque partial functions. Lets
 /// and guards share one written chain; relational steps alone may move earlier
 /// across that chain under the sufficient refinement check.
 ///
 /// ```text
-/// BodyItem ::= Atom | Constraint
-///            | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
+/// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
 ///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
 /// ```
 #[derive(Clone, Debug)]
 pub enum BodyItem {
+    /// Internal relational identity extracted from a Rust guard or atom.
     Equality(Equality),
+    /// Internal total predicate extracted from a Rust guard.
     Constraint(Constraint),
     Filter(Filter),
     Let(Box<Let>),
@@ -211,17 +228,10 @@ impl syn::parse::Parse for BodyItem {
                 atom: input.parse()?,
             }
         } else {
-            let constraint: Constraint = input.parse()?;
-            if let Some(parameter) = constraint.parameters().next() {
-                return Err(syn::Error::new_spanned(
-                    parameter,
-                    "unexpected token `@`: CQ parameters are bare identifiers",
-                ));
-            }
-            match constraint.equality() {
-                Some(e) => Self::Equality(e),
-                None => Self::Constraint(constraint),
-            }
+            return Err(cq_syntax::constraint::unexpected(
+                input,
+                "an atom, `if` Rust guard, `let` binding, or extension",
+            ));
         };
         if !input.is_empty() && !input.peek(Token![,]) && !input.peek(Token![;]) {
             return Err(cq_syntax::constraint::unexpected(
@@ -236,8 +246,14 @@ impl syn::parse::Parse for BodyItem {
 impl quote::ToTokens for BodyItem {
     fn to_tokens(&self, output: &mut proc_macro2::TokenStream) {
         match self {
-            Self::Equality(x) => x.to_tokens(output),
-            Self::Constraint(x) => output.extend(x.cq_tokens()),
+            Self::Equality(x) => {
+                let expr = Constraint::from_equality(x).cq_tokens();
+                output.extend(quote::quote!(if #expr));
+            }
+            Self::Constraint(x) => {
+                let expr = x.cq_tokens();
+                output.extend(quote::quote!(if #expr));
+            }
             Self::Filter(x) => x.to_tokens(output),
             Self::Let(x) => x.to_tokens(output),
             Self::Negation(x) => x.to_tokens(output),
@@ -473,7 +489,9 @@ fn check_query(
                     if !body_variables.contains(&symbol_name(variable)) {
                         return Err(syn::Error::new_spanned(
                             variable,
-                            "relational constraint uses a query variable before it is bound",
+                            format!(
+                                "relational constraint uses query variable `{variable}` before it is bound"
+                            ),
                         ));
                     }
                 }
@@ -501,7 +519,18 @@ fn check_query(
                 ));
             }
             // Formal rule IF-Environment: Check logical scope; Rust resolves enclosing values.
-            BodyItem::Filter(filter) => check_uses(&filter.condition, &body_variables)?,
+            BodyItem::Filter(filter) => {
+                if !cq_syntax::guard::split(&filter.condition, &logical)
+                    .constraints
+                    .is_empty()
+                {
+                    return Err(syn::Error::new_spanned(
+                        filter,
+                        "recognizable Rust guard must be split into relational constraints and its opaque residual",
+                    ));
+                }
+                check_uses(&filter.condition, &body_variables)?;
+            }
             BodyItem::Let(binding) => {
                 check_uses(&binding.expression, &body_variables)?;
                 for variable in rust::bindings(&binding.pattern) {
