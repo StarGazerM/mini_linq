@@ -5,10 +5,12 @@ edition = "2024"
 publish = false
 
 [workspace]
+resolver = "3"
 
 [dependencies]
-mini-linq = { path = "../../facade/mini-linq", default-features = false, features = [
-    "index-demands", "physical-lowering", "structure-selection", "physical-realization",
-] }
-cq-state-providers = { path = "../../runtime/cq-state-providers" }
-cq-storage = { path = "../../runtime/cq-storage" }
+mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
+cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
+
+[dev-dependencies]
+cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
+syn = { version = "2", features = ["full", "extra-traits"] }

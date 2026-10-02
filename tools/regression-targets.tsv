@@ -56,3 +56,8 @@ cq-extensions-conformance	manifest-target-test	compile_fail	features/extensions/
 own-dialect	manifest-test	queries	features/own-dialect/Cargo.toml
 own-dialect	manifest-target-test	corpus	features/own-dialect/Cargo.toml
 own-dialect	manifest-target-test	compile_fail	features/own-dialect/Cargo.toml
+diverged-ra	scenario	downstream-reuse	features/diverged-ra/check.py
+mini-linq-composition-example	manifest-run	composition	features/composition/Cargo.toml
+mini-linq-composition-example	manifest-test	conformance	features/composition/Cargo.toml
+mini-linq-inspection-examples	scenario	cq-inspection	features/inspection/cq-inspection/check.py
+mini-linq-inspection-examples	scenario	free-variables	features/inspection/free-variables/check.py

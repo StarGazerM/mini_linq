@@ -1,14 +1,9 @@
 # package	kind	target	source
 cq-workloads	test	growth	features/workloads/tests/growth.rs
-mini-linq-course	example	cq-inspection	features/inspection/cq-inspection/main.rs
-mini-linq-course	example	free-variables	features/inspection/free-variables/main.rs
 cq-xtask	manifest-test	restored	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle-test	oracle-unit	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle	golden	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle	fuzz	features/workloads/xtask/Cargo.toml
-mini-linq-composition-example	manifest-run	composition	features/composition/Cargo.toml
-stacked-ir	scenario	expansions	features/stacked-ir/check_expansions.py
-diverged-ra	scenario	downstream-reuse	features/diverged-ra/check.py
 cq-workload-e2e	test	typed	features/workloads/e2e/tests/typed.rs
 cq-workload-e2e	test	census	features/workloads/e2e/tests/census.rs
 cq-workload-e2e	test	provider_candidates	features/workloads/e2e/tests/provider_candidates.rs

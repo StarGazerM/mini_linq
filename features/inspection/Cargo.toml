@@ -1,0 +1,28 @@
+[package]
+name = "mini-linq-inspection-examples"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
+mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
+cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
+
+[[example]]
+name = "cq-inspection"
+path = "cq-inspection/main.rs"
+test = true
+
+[[example]]
+name = "free-variables"
+path = "free-variables/main.rs"
+test = true
