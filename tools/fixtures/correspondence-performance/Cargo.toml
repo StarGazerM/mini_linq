@@ -1,0 +1,13 @@
+[package]
+name = "correspondence-performance-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+cq-planners-plan = { path = "../../../features/planners/plan" }
+cq-lang-ra = { path = "../../../languages/cq-lang-ra" }
+cq-testkit = { path = "../../../testkit/cq-testkit" }
+syn = { version = "2", features = ["full"] }

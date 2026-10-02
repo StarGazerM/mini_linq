@@ -1,11 +1,13 @@
 //! Independent relational-region proof. A tableau records existential rows,
 //! literal equalities and the opaque Rust relations already traversed. Projection
-//! and semijoin keep existential witnesses; each right operand gets fresh witness
-//! variables. Containment uses finite conjunctive-query homomorphisms. Leibniz
+//! and semijoin keep independent existential witnesses. Memoized DAG results
+//! share alpha-normalized bodies; witnesses are folded only with a certified
+//! output-fixing homomorphism. Containment uses indexed, memoized search. Leibniz
 //! equality unifies terms; functional extensionality makes projection sound
 //! before Rust whenever its free variables remain in the heading.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate as ra;
 use quote::ToTokens;
@@ -24,19 +26,31 @@ struct Atom {
     arguments: Vec<Term>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct Tableau {
     heading: BTreeMap<String, Term>,
-    atoms: BTreeSet<Atom>,
+    atoms: Rc<BTreeSet<Atom>>,
     impossible: bool,
 }
 
 #[derive(Default)]
 struct Context {
     next_variable: usize,
+    joins: BTreeMap<(Tableau, Tableau, bool), Tableau>,
+    bodies: BTreeSet<Rc<BTreeSet<Atom>>>,
 }
 
 impl Context {
+    fn share(&mut self, mut table: Tableau) -> Tableau {
+        table.normalize();
+        if let Some(atoms) = self.bodies.get(&table.atoms) {
+            table.atoms = atoms.clone();
+        } else {
+            self.bodies.insert(table.atoms.clone());
+        }
+        table
+    }
+
     fn fresh(&mut self) -> Term {
         let variable = self.next_variable;
         self.next_variable += 1;
@@ -69,17 +83,20 @@ impl Tableau {
                 *value = keep.clone();
             }
         }
-        self.atoms = std::mem::take(&mut self.atoms)
-            .into_iter()
-            .map(|mut atom| {
-                for term in &mut atom.arguments {
-                    if *term == replace {
-                        *term = keep.clone();
+        self.atoms = Rc::new(
+            self.atoms
+                .iter()
+                .cloned()
+                .map(|mut atom| {
+                    for term in &mut atom.arguments {
+                        if *term == replace {
+                            *term = keep.clone();
+                        }
                     }
-                }
-                atom
-            })
-            .collect();
+                    atom
+                })
+                .collect(),
+        );
         Some((replace, keep))
     }
 
@@ -93,7 +110,7 @@ impl Tableau {
             ra::EqualityValue::Literal(literal) => {
                 // Keep literal predicates syntactic. Inferring contradiction
                 // from differing token spellings (1 versus 0x1) is unsound.
-                self.atoms.insert(Atom {
+                Rc::make_mut(&mut self.atoms).insert(Atom {
                     relation: "#literal".into(),
                     arguments: vec![left, Term::Literal(literal.to_token_stream().to_string())],
                 });
@@ -116,7 +133,7 @@ impl Tableau {
                 *v = syn::Ident::new("__column", v.span());
             }
         });
-        self.atoms.insert(Atom {
+        Rc::make_mut(&mut self.atoms).insert(Atom {
             relation: format!("#constraint {}", shape.to_token_stream()),
             arguments,
         });
@@ -146,16 +163,49 @@ impl Tableau {
             .collect();
         Self {
             heading,
-            atoms,
+            atoms: Rc::new(atoms),
             impossible: self.impossible,
         }
     }
 
     fn join(&self, right: &Self, semijoin: bool, context: &mut Context) -> Self {
+        let key = (self.clone(), right.clone(), semijoin);
+        if let Some(result) = context.joins.get(&key) {
+            return result.clone();
+        }
+        let common = self
+            .heading
+            .keys()
+            .filter(|name| right.heading.contains_key(*name))
+            .cloned()
+            .collect();
+        // Idempotence/subsumption is certified before any freshening. The
+        // operands are memoized DAG results, not recursively unfolded trees.
+        let redundant_right = (semijoin
+            || right
+                .heading
+                .keys()
+                .all(|name| self.heading.contains_key(name)))
+            && contained(self, right, &common);
+        let redundant_left = !semijoin
+            && self
+                .heading
+                .keys()
+                .all(|name| right.heading.contains_key(name))
+            && contained(right, self, &common);
+        if redundant_right || redundant_left {
+            let result = if redundant_right {
+                self.clone()
+            } else {
+                right.clone()
+            };
+            context.joins.insert(key, result.clone());
+            return result;
+        }
         let right = right.freshen(context);
         let mut joined = self.clone();
         joined.impossible |= right.impossible;
-        joined.atoms.extend(right.atoms);
+        Rc::make_mut(&mut joined.atoms).extend(right.atoms.iter().cloned());
         let mut equalities = Vec::new();
         for (name, term) in right.heading {
             match joined.heading.get(&name) {
@@ -178,7 +228,77 @@ impl Tableau {
                 }
             }
         }
+        let joined = context.share(joined);
+        context.joins.insert(key, joined.clone());
         joined
+    }
+
+    /// Fold only certified redundant witnesses, fixing every visible column.
+    /// The homomorphic image is a subtableau, so containment holds in both
+    /// directions. A projection never shares a hidden variable by name alone.
+    fn normalize(&mut self) {
+        let columns = self.heading.keys().cloned().collect();
+        loop {
+            let mut image = None;
+            let mut counts = BTreeMap::new();
+            for atom in self.atoms.iter() {
+                *counts
+                    .entry((&atom.relation, atom.arguments.len()))
+                    .or_insert(0) += 1;
+            }
+            for atom in self.atoms.iter() {
+                if counts[&(&atom.relation, atom.arguments.len())] < 2 {
+                    continue;
+                }
+                let mut smaller = self.clone();
+                Rc::make_mut(&mut smaller.atoms).remove(atom);
+                if let Some(mapping) = homomorphism(&smaller, self, &columns) {
+                    let atoms: BTreeSet<_> = self
+                        .atoms
+                        .iter()
+                        .map(|a| Atom {
+                            relation: a.relation.clone(),
+                            arguments: a
+                                .arguments
+                                .iter()
+                                .map(|t| match t {
+                                    Term::Variable(v) => mapping[v].clone(),
+                                    Term::Literal(_) => t.clone(),
+                                })
+                                .collect(),
+                        })
+                        .collect();
+                    debug_assert!(atoms.is_subset(&smaller.atoms));
+                    image = Some(atoms);
+                    break;
+                }
+            }
+            match image {
+                Some(atoms) => self.atoms = Rc::new(atoms),
+                None => break,
+            }
+        }
+        // Alpha-normalize local IDs so identical DAG results can be interned.
+        let mut renaming = BTreeMap::new();
+        let mut rename = |term: &Term| match term {
+            Term::Variable(v) => {
+                let next = renaming.len();
+                renaming.entry(*v).or_insert(Term::Variable(next)).clone()
+            }
+            Term::Literal(_) => term.clone(),
+        };
+        for term in self.heading.values_mut() {
+            *term = rename(term);
+        }
+        self.atoms = Rc::new(
+            self.atoms
+                .iter()
+                .map(|atom| Atom {
+                    relation: atom.relation.clone(),
+                    arguments: atom.arguments.iter().map(&mut rename).collect(),
+                })
+                .collect(),
+        );
     }
 
     fn project(&mut self, keep: &BTreeSet<String>) {
@@ -203,7 +323,7 @@ impl Tableau {
             self.heading.insert(symbol_name(name), term.clone());
             arguments.push(term);
         }
-        self.atoms.insert(Atom {
+        Rc::make_mut(&mut self.atoms).insert(Atom {
             relation: format!("#rust{ordinal}"),
             arguments,
         });
@@ -247,7 +367,7 @@ fn program_tableau(target: &ra::Program, context: &mut Context) -> (Tableau, Vec
                         table.column(symbol_name(&mapping.target), context)
                     })
                     .collect();
-                table.atoms.insert(Atom {
+                Rc::make_mut(&mut table.atoms).insert(Atom {
                     relation: symbol_name(&rename.relation),
                     arguments,
                 });
@@ -308,7 +428,7 @@ fn program_tableau(target: &ra::Program, context: &mut Context) -> (Tableau, Vec
                 table
             }
         };
-        results.insert(symbol_name(&definition.result), table);
+        results.insert(symbol_name(&definition.result), context.share(table));
     }
     (
         results
@@ -316,6 +436,216 @@ fn program_tableau(target: &ra::Program, context: &mut Context) -> (Tableau, Vec
             .unwrap(),
         chain,
     )
+}
+
+/// Indexed conjunctive-query homomorphism search. Only failed frontier states
+/// are memoized: assignments that no remaining atom mentions cannot affect the
+/// rest of the proof. Repeated variables and literals are checked exactly.
+fn homomorphism(
+    target: &Tableau,
+    source: &Tableau,
+    columns: &BTreeSet<String>,
+) -> Option<BTreeMap<usize, Term>> {
+    fn assign(from: &Term, to: &Term, mapping: &mut BTreeMap<usize, Term>) -> bool {
+        match from {
+            Term::Literal(_) => from == to,
+            Term::Variable(variable) => match mapping.get(variable) {
+                Some(old) => old == to,
+                None => {
+                    mapping.insert(*variable, to.clone());
+                    true
+                }
+            },
+        }
+    }
+    let mut mapping = BTreeMap::new();
+    for column in columns {
+        if !assign(
+            &source.heading[column],
+            &target.heading[column],
+            &mut mapping,
+        ) {
+            return None;
+        }
+    }
+    if source.atoms.is_subset(&target.atoms)
+        && mapping.iter().all(|(v, t)| t == &Term::Variable(*v))
+    {
+        for atom in source.atoms.iter() {
+            for term in &atom.arguments {
+                if let Term::Variable(v) = term {
+                    mapping.insert(*v, term.clone());
+                }
+            }
+        }
+        return Some(mapping);
+    }
+    let mut index = BTreeMap::<(&str, usize), Vec<&Atom>>::new();
+    let mut positions = BTreeMap::<(&str, usize, usize, &Term), Vec<&Atom>>::new();
+    for atom in target.atoms.iter() {
+        index
+            .entry((&atom.relation, atom.arguments.len()))
+            .or_default()
+            .push(atom);
+        for (position, term) in atom.arguments.iter().enumerate() {
+            positions
+                .entry((&atom.relation, atom.arguments.len(), position, term))
+                .or_default()
+                .push(atom);
+        }
+    }
+    let atoms: Vec<_> = source.atoms.iter().collect();
+    type State = (Vec<usize>, Vec<(usize, Term)>);
+    struct Search<'a> {
+        atoms: Vec<&'a Atom>,
+        candidates: Vec<Vec<&'a Atom>>,
+        failures: BTreeSet<State>,
+    }
+    impl Search<'_> {
+        fn compatible(atom: &Atom, candidate: &Atom, mapping: &BTreeMap<usize, Term>) -> bool {
+            let mut local = BTreeMap::new();
+            atom.arguments
+                .iter()
+                .zip(&candidate.arguments)
+                .all(|(from, to)| match from {
+                    Term::Literal(_) => from == to,
+                    Term::Variable(v) => match mapping.get(v).or_else(|| local.get(v)) {
+                        Some(old) => old == to,
+                        None => {
+                            local.insert(*v, to.clone());
+                            true
+                        }
+                    },
+                })
+        }
+
+        fn search(
+            &mut self,
+            remaining: Vec<usize>,
+            mapping: BTreeMap<usize, Term>,
+        ) -> Option<BTreeMap<usize, Term>> {
+            if remaining.is_empty() {
+                return Some(mapping);
+            }
+            let live: BTreeSet<_> = remaining
+                .iter()
+                .flat_map(|i| {
+                    self.atoms[*i].arguments.iter().filter_map(|t| match t {
+                        Term::Variable(v) => Some(*v),
+                        Term::Literal(_) => None,
+                    })
+                })
+                .collect();
+            let state = (
+                remaining.clone(),
+                mapping
+                    .iter()
+                    .filter(|(v, _)| live.contains(v))
+                    .map(|(v, t)| (*v, t.clone()))
+                    .collect(),
+            );
+            if self.failures.contains(&state) {
+                return None;
+            }
+            let mut choices = Vec::new();
+            let mut domains = BTreeMap::<usize, BTreeSet<Term>>::new();
+            for i in &remaining {
+                let candidates: Vec<_> = self.candidates[*i]
+                    .iter()
+                    .copied()
+                    .filter(|candidate| Self::compatible(self.atoms[*i], candidate, &mapping))
+                    .collect();
+                if candidates.is_empty() {
+                    self.failures.insert(state);
+                    return None;
+                }
+                // Arc consistency: a shared variable must have a candidate
+                // value in every atom where it appears. This only prunes
+                // impossible mappings; it never identifies witnesses.
+                for (position, term) in self.atoms[*i].arguments.iter().enumerate() {
+                    if let Term::Variable(v) = term {
+                        let values: BTreeSet<_> = candidates
+                            .iter()
+                            .map(|c| c.arguments[position].clone())
+                            .collect();
+                        domains
+                            .entry(*v)
+                            .and_modify(|old| old.retain(|t| values.contains(t)))
+                            .or_insert(values);
+                    }
+                }
+                choices.push((*i, candidates));
+            }
+            if domains.values().any(BTreeSet::is_empty) {
+                self.failures.insert(state);
+                return None;
+            }
+            for (i, candidates) in &mut choices {
+                candidates.retain(|c| {
+                    self.atoms[*i]
+                        .arguments
+                        .iter()
+                        .zip(&c.arguments)
+                        .all(|(from, to)| match from {
+                            Term::Variable(v) => domains[v].contains(to),
+                            Term::Literal(_) => from == to,
+                        })
+                });
+            }
+            let (i, candidates) = choices
+                .into_iter()
+                .min_by_key(|(_, candidates)| candidates.len())
+                .unwrap();
+            let rest: Vec<_> = remaining.into_iter().filter(|other| *other != i).collect();
+            for candidate in candidates {
+                let mut next = mapping.clone();
+                for (from, to) in self.atoms[i].arguments.iter().zip(&candidate.arguments) {
+                    if !assign(from, to, &mut next) {
+                        unreachable!("candidate compatibility was checked");
+                    }
+                }
+                if let Some(result) = self.search(rest.clone(), next) {
+                    return Some(result);
+                }
+            }
+            self.failures.insert(state);
+            None
+        }
+    }
+    let mut candidates = Vec::new();
+    for atom in &atoms {
+        let mut rows = index.get(&(atom.relation.as_str(), atom.arguments.len()))?;
+        for (position, term) in atom.arguments.iter().enumerate() {
+            let bound = match term {
+                Term::Literal(_) => Some(term),
+                Term::Variable(v) => mapping.get(v),
+            };
+            if let Some(bound) = bound {
+                let filtered = positions.get(&(
+                    atom.relation.as_str(),
+                    atom.arguments.len(),
+                    position,
+                    bound,
+                ))?;
+                if filtered.len() < rows.len() {
+                    rows = filtered;
+                }
+            }
+        }
+        candidates.push(
+            rows.iter()
+                .copied()
+                .filter(|candidate| Search::compatible(atom, candidate, &mapping))
+                .collect(),
+        );
+    }
+    let remaining = (0..atoms.len()).collect();
+    Search {
+        atoms,
+        candidates,
+        failures: BTreeSet::new(),
+    }
+    .search(remaining, mapping)
 }
 
 /// Is `target` contained in `source`, fixing the named output columns? A
@@ -327,64 +657,7 @@ fn contained(target: &Tableau, source: &Tableau, columns: &BTreeSet<String>) -> 
     if source.impossible {
         return false;
     }
-    let mut mapping = BTreeMap::<usize, Term>::new();
-    let assign = |from: &Term, to: &Term, mapping: &mut BTreeMap<usize, Term>| match from {
-        Term::Literal(_) => from == to,
-        Term::Variable(variable) => match mapping.get(variable) {
-            Some(old) => old == to,
-            None => {
-                mapping.insert(*variable, to.clone());
-                true
-            }
-        },
-    };
-    for column in columns {
-        if !assign(
-            &source.heading[column],
-            &target.heading[column],
-            &mut mapping,
-        ) {
-            return false;
-        }
-    }
-    // Fewest candidates first substantially reduces cyclic-query search.
-    let mut atoms: Vec<_> = source.atoms.iter().collect();
-    atoms.sort_by_key(|atom| {
-        target
-            .atoms
-            .iter()
-            .filter(|candidate| candidate.relation == atom.relation)
-            .count()
-    });
-    fn search(atoms: &[&Atom], target: &Tableau, mapping: BTreeMap<usize, Term>) -> bool {
-        let Some((atom, rest)) = atoms.split_first() else {
-            return true;
-        };
-        for candidate in target.atoms.iter().filter(|candidate| {
-            candidate.relation == atom.relation && candidate.arguments.len() == atom.arguments.len()
-        }) {
-            let mut next = mapping.clone();
-            let compatible = atom
-                .arguments
-                .iter()
-                .zip(&candidate.arguments)
-                .all(|(from, to)| match from {
-                    Term::Literal(_) => from == to,
-                    Term::Variable(variable) => match next.get(variable) {
-                        Some(old) => old == to,
-                        None => {
-                            next.insert(*variable, to.clone());
-                            true
-                        }
-                    },
-                });
-            if compatible && search(rest, target, next) {
-                return true;
-            }
-        }
-        false
-    }
-    search(&atoms, target, mapping)
+    homomorphism(target, source, columns).is_some()
 }
 
 /// Prove an RA′ rewrite from its relational tableaux and ordered Rust chain.
@@ -457,4 +730,75 @@ fn compare(
         return Err(error("output relational tableau differs from source"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph(vertices: usize, mask: usize) -> Tableau {
+        Tableau {
+            atoms: Rc::new(
+                (0..vertices * vertices)
+                    .filter(|i| mask & (1 << i) != 0)
+                    .map(|i| Atom {
+                        relation: "E".into(),
+                        arguments: vec![Term::Variable(i / vertices), Term::Variable(i % vertices)],
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn indexed_memoized_search_matches_exhaustive_small_graph_mappings() {
+        // Independently enumerate every function from three source vertices
+        // to two target vertices for every pair of directed edge subsets.
+        // Loops exercise repeated variables; disconnected graphs exercise
+        // forgetting assignments outside the remaining search frontier.
+        for source_mask in 0..512 {
+            let source = graph(3, source_mask);
+            for target_mask in 0..16 {
+                let target = graph(2, target_mask);
+                let expected = (0..8).any(|mapping| {
+                    source.atoms.iter().all(|atom| {
+                        let image = Atom {
+                            relation: atom.relation.clone(),
+                            arguments: atom
+                                .arguments
+                                .iter()
+                                .map(|t| {
+                                    let Term::Variable(v) = t else { unreachable!() };
+                                    Term::Variable((mapping >> v) & 1)
+                                })
+                                .collect(),
+                        };
+                        target.atoms.contains(&image)
+                    })
+                });
+                assert_eq!(
+                    homomorphism(&target, &source, &BTreeSet::new()).is_some(),
+                    expected,
+                    "source={source_mask} target={target_mask}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_dag_operands_share_their_tableau_instead_of_unfolding() {
+        let source = graph(3, 0b101010101);
+        let mut context = Context {
+            next_variable: 3,
+            ..Default::default()
+        };
+        let source = context.share(source);
+        let mut result = source.clone();
+        for _ in 0..64 {
+            result = result.join(&result, true, &mut context);
+            assert!(Rc::ptr_eq(&result.atoms, &source.atoms));
+        }
+        assert_eq!(context.joins.len(), 1);
+    }
 }

@@ -1,0 +1,9 @@
+[package]
+name = "external-sibling-leaf"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+cq-storage = { path = "../../../../../runtime/cq-storage" }

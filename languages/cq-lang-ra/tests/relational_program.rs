@@ -486,3 +486,21 @@ fn rewrite_checks_the_full_source_prefix_even_outside_rust_free_variables() {
     let error = ra::check_rewrite(&earlier, &later).unwrap_err();
     assert!(error.to_string().contains("source-before"), "{error}");
 }
+
+#[test]
+fn shared_projected_inputs_keep_independent_existential_witnesses() {
+    let independent: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32, b:i32);
+        r = rename R {a -> x, b -> y};
+        px = project r keep {x}; py = project r keep {y};
+        j = natural_join px with py; output j as answer(x, y);
+    }};
+    let correlated: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32, b:i32);
+        r = rename R {a -> x, b -> y}; output r as answer(x, y);
+    }};
+    for (source, target) in [(&independent, &correlated), (&correlated, &independent)] {
+        assert!(ra::check_rewrite(source, target).is_err());
+    }
+    ra::check_rewrite(&independent, &independent).unwrap();
+}
