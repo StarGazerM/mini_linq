@@ -120,8 +120,9 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     Ok(target)
 }
 
-/// Change only the enumerator choice of admissible adjacent binary
-/// intersections recognized by the language's public analysis helper.
+/// Expose binary intersections by hoisting independent relational definitions
+/// before their candidate probe, then record smallest. Rust nodes stay pinned.
+/// Admissibility and correspondence belong to the public language checks.
 pub fn smallest_intersections(
     source: &ir::Program,
     arguments: TokenStream,
@@ -130,19 +131,60 @@ pub fn smallest_intersections(
     let selected = Results::parse(arguments)?;
     let mut target = source.clone();
     let mut matched = BTreeSet::new();
-    for (position, pair) in source.program.definitions.windows(2).enumerate() {
-        if selected.includes(&pair[0].name)
-            && ir::binary_intersection(&pair[0], &pair[1], &facts).is_some()
+    // Visit source names, rather than positions that change during hoisting,
+    // so independent candidate pairs in a moved interval are still visited.
+    for definition in &source.program.definitions {
+        if !selected.includes(&definition.name)
+            || !matches!(definition.operator, Operator::Probe(..))
         {
-            if let Operator::Probe(_, key) = &mut target.program.definitions[position].operator {
-                key.choice = Some(Choice::Smallest(Default::default()));
-                matched.insert(symbol_name(&pair[0].name));
-            }
+            continue;
+        }
+        let name = symbol_name(&definition.name);
+        let definitions = &mut target.program.definitions;
+        let position = definitions
+            .iter()
+            .position(|d| symbol_name(&d.name) == name)
+            .expect("rewrite retains every result");
+        let Some(offset) = definitions[position + 1..].iter().position(|check| {
+            ir::binary_intersection(&definitions[position], check, &facts).is_some()
+        }) else {
+            continue;
+        };
+        let check_position = position + 1 + offset;
+        if !definitions[position + 1..check_position]
+            .iter()
+            .all(|d| independent_relational(&d.operator, &name))
+        {
+            continue;
+        }
+        // The source is topological. Preserving the interval's order and
+        // excluding references to the candidate also preserves its transitive
+        // dependencies. This interval contains no Rust node to move across.
+        definitions[position..check_position].rotate_left(1);
+        if let Operator::Probe(_, key) = &mut definitions[check_position - 1].operator {
+            key.choice = Some(Choice::Smallest(Default::default()));
+            matched.insert(name);
         }
     }
     selected.require_matches(&matched)?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
+}
+
+fn independent_relational(operator: &Operator, candidate: &str) -> bool {
+    if matches!(operator, Operator::Bind(_) | Operator::Guard(_))
+        || operator
+            .input()
+            .is_some_and(|input| symbol_name(input) == candidate)
+    {
+        return false;
+    }
+    match operator {
+        Operator::Probe(_, key) | Operator::Merge(_, key) | Operator::Semi(_, key) => {
+            symbol_name(&key.right) != candidate
+        }
+        _ => true,
+    }
 }
 
 /// Change selected semijoin membership reads to lazy only when every read

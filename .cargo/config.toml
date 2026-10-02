@@ -1,1 +1,2 @@
-# Optional workload tooling is pending migration in features/PENDING.
+[alias]
+xtask = "run --manifest-path features/workloads/Cargo.toml -p cq-xtask --features oracle --"

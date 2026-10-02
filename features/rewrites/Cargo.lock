@@ -52,7 +52,6 @@ dependencies = [
 name = "cq-lang-physical"
 version = "0.1.0"
 dependencies = [
- "cq-lang-ra",
  "cq-stage",
  "cq-syntax",
  "proc-macro2",
@@ -65,7 +64,6 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
- "cq-lang-vo",
  "cq-stage",
  "cq-syntax",
  "proc-macro2",
@@ -134,12 +132,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-planners"
+version = "0.1.0"
+dependencies = [
+ "cq-planners-macros",
+ "cq-planners-plan",
+]
+
+[[package]]
+name = "cq-planners-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-planners-plan",
+ "cq-stage",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-planners-plan"
+version = "0.1.0"
+dependencies = [
+ "cq-elaborate",
+ "cq-lang-cq",
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "cq-order",
+ "cq-reduce",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-print"
 version = "0.1.0"
 dependencies = [
  "cq-lang-structures",
  "proc-macro2",
  "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-reduce"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-vo",
+ "proc-macro2",
  "syn 2.0.119",
 ]
 
@@ -170,6 +209,8 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-physical",
  "cq-lang-structures",
+ "cq-physical-lowering",
+ "cq-planners",
  "cq-rewrite-passes",
  "cq-rewrite-test-driver",
  "cq-stage",

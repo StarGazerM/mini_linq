@@ -40,6 +40,7 @@ trace-to-physical.workspace = true
 trace-bridge.workspace = true
 
 [dev-dependencies]
+cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-lowering" }
 cq-stage.workspace = true
 cq-structure-selection.workspace = true
 cq-physical-realization.workspace = true

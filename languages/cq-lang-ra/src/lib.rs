@@ -6,7 +6,8 @@
 //! Relational laws apply only to relational operators. Moving a relational step
 //! earlier across Rust may shrink its evaluation domain; moving it later is not
 //! allowed. Preserving the Rust chain and every source-before relational step is
-//! a sufficient refinement condition, checked against the source by elaboration.
+//! a sufficient refinement condition, checked by [`check_rewrite`] for RA′
+//! rewrites and by cq-elaborate for VO elaboration.
 //!
 //! This language separates logical query planning from index selection and
 //! Rust execution. Declared relation names are atomic input expressions;

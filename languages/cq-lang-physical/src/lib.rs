@@ -782,71 +782,103 @@ fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn
         .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
 }
 
-/// Erase physical choices to the relational program they implement.
-pub fn erase(target: &Program) -> cq_lang_ra::Program {
-    use cq_lang_ra as ra;
-    use ra::Operator as Op;
-    ra::Program {
-        relational_token: Default::default(),
-        relational_brace: Default::default(),
-        plan: ra::Plan {
-            declarations: target.program.declarations.clone(),
-            definitions: target
-                .program
-                .definitions
-                .iter()
-                .map(|d| ra::Definition {
-                    result: d.name.clone(),
-                    eq_token: d.eq_token,
-                    semi_token: d.semi_token,
-                    operator: match &d.operator {
-                        Operator::Unit(u) => Op::Unit(u.clone()),
-                        Operator::Rename(r) => Op::Rename(r.clone()),
-                        Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
-                            Op::Select(s.clone())
-                        }
-                        Operator::Bind(b) => Op::Bind(b.clone()),
-                        Operator::Guard(g) => Op::Guard(g.clone()),
-                        Operator::Project(p) => Op::Project(p.clone()),
-                        Operator::Probe(_, k) | Operator::Merge(_, k) => {
-                            Op::NaturalJoin(Box::new(ra::NaturalJoin {
-                                natural_join_token: Default::default(),
-                                left: k.left.clone(),
-                                with_token: Default::default(),
-                                right: k.right.clone(),
-                            }))
-                        }
-                        Operator::Semi(_, k) => Op::Semijoin(Box::new(ra::Semijoin {
-                            semijoin_token: Default::default(),
-                            left: k.left.clone(),
-                            with_token: Default::default(),
-                            right: k.right.clone(),
-                        })),
-                    },
-                })
-                .collect(),
-            output: ra::Output {
-                output_token: Default::default(),
-                input: target.program.returned.clone(),
-                as_token: target.program.as_token,
-                head: target.program.head.clone(),
-                semi_token: target.program.return_semi,
-            },
-        },
-    }
-}
-
-/// Physical rewrites preserve RA′ erasure and every recorded read's supply.
+/// Physical rewrites preserve the named logical graph and satisfy their read contracts.
+/// Operator choices, retention modes and canonicalization may change while
+/// declarations, operands, relational predicates and Rust payloads remain fixed.
+/// Relational definitions may commute in dependency order and move earlier
+/// across Rust nodes. The Rust chain retains its written relative order, and
+/// every source Before obligation survives: no relational definition moves
+/// later across a Rust node.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    if erase(source) != erase(target) {
-        return Err(syn::Error::new_spanned(
+    let mut target_chain = Vec::new();
+    let target_definitions: BTreeMap<_, _> = target
+        .program
+        .definitions
+        .iter()
+        .map(|definition| {
+            let name = symbol_name(&definition.name);
+            let rust_before = target_chain.len();
+            if is_rust(&definition.operator) {
+                target_chain.push(name.clone());
+            }
+            (name, (definition, rust_before))
+        })
+        .collect();
+    if source.program.declarations != target.program.declarations
+        || source.program.head != target.program.head
+        || source.program.returned != target.program.returned
+        || source.program.definitions.len() != target.program.definitions.len()
+        || source.program.definitions.iter().any(|definition| {
+            target_definitions
+                .get(&symbol_name(&definition.name))
+                .is_none_or(|(target, _)| {
+                    !same_logical_operator(&definition.operator, &target.operator)
+                })
+        })
+    {
+        return error(
             &target.program.returned,
             "Physical rewrite changes RA erasure",
-        ));
+        );
+    }
+
+    // The contracts give unique names, topological operand edges and Rust
+    // ancestry. With the same graph and Rust chain, a relational node retains
+    // all source Before obligations exactly when its preceding Rust prefix
+    // does not grow. Reordering within a relational region is unrestricted.
+    let mut source_rust_before = 0;
+    for definition in &source.program.definitions {
+        let name = symbol_name(&definition.name);
+        let (target_definition, target_rust_before) = target_definitions[&name];
+        if is_rust(&definition.operator) {
+            if target_chain.get(source_rust_before) != Some(&name) {
+                return error(
+                    &target_definition.name,
+                    "Physical rewrite changes Rust bind/guard written order",
+                );
+            }
+            source_rust_before += 1;
+        } else if target_rust_before > source_rust_before {
+            return error(
+                &target_definition.name,
+                format!(
+                    "Physical rewrite moves relational result `{name}` later across Rust node `{}` and loses a source Before obligation",
+                    target_chain[source_rust_before]
+                ),
+            );
+        }
     }
     Ok(())
+}
+
+fn is_rust(operator: &Operator) -> bool {
+    matches!(operator, Operator::Bind(_) | Operator::Guard(_))
+}
+
+// Compare the logical content directly, without importing another language.
+// Probe/merge implement the same join; point/range retain the same selection.
+fn same_logical_operator(source: &Operator, target: &Operator) -> bool {
+    match (source, target) {
+        (Operator::Unit(s), Operator::Unit(t)) => s == t,
+        (Operator::Rename(s), Operator::Rename(t)) => s == t,
+        (
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s),
+            Operator::Select(t) | Operator::Point(_, t) | Operator::Range(_, t),
+        ) => s == t,
+        (Operator::Bind(s), Operator::Bind(t)) => s == t,
+        (Operator::Guard(s), Operator::Guard(t)) => s == t,
+        (Operator::Project(s), Operator::Project(t)) => s == t,
+        (
+            Operator::Probe(_, s) | Operator::Merge(_, s),
+            Operator::Probe(_, t) | Operator::Merge(_, t),
+        )
+        | (Operator::Semi(_, s), Operator::Semi(_, t)) => {
+            s.left == t.left && s.right == t.right && s.columns == t.columns
+        }
+        _ => false,
+    }
 }
 
 impl cq_stage::Language for Program {

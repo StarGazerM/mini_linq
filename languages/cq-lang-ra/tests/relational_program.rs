@@ -366,3 +366,141 @@ fn selection_scope_and_float_leibniz_are_checked_with_column_diagnostics() {
         );
     }
 }
+
+#[test]
+fn rewrite_accepts_join_reordering_and_reassociation_with_existential_columns() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
+        r = rename R {a -> x, b -> y};
+        s = rename S {b -> y, c -> z};
+        t = rename T {c -> z, d -> w};
+        j = natural_join r with s;
+        k = natural_join j with t;
+        p = project k keep {x,w}; output p as answer(x,w);
+    }};
+    let mut target = source.clone();
+    target.plan.definitions[3].operator = syn::parse_quote!(natural_join t with s);
+    target.plan.definitions[4].operator = syn::parse_quote!(natural_join j with r);
+    ra::contract::check(&target).unwrap();
+    ra::correspondence::check_rewrite(&source, &target).unwrap();
+    ra::check_rewrite(&target, &source).unwrap();
+}
+
+#[test]
+fn rewrite_rejects_dropped_relational_predicates_and_existential_witnesses() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation S(b:i32);
+        r = rename R {a -> x,b -> y}; s = rename S {b -> y};
+        j = semijoin r with s;
+        f = select j if (x > 0, x = y);
+        p = project f keep {x}; output p as answer(x);
+    }};
+    for operator in [
+        syn::parse_quote!(select j if (x = y)),
+        syn::parse_quote!(select j if (x > 0)),
+    ] {
+        let mut target = source.clone();
+        target.plan.definitions[3].operator = operator;
+        ra::contract::check(&target).unwrap();
+        let error = ra::check_rewrite(&source, &target).unwrap_err();
+        assert!(error.to_string().contains("tableau"), "{error}");
+    }
+    let mut target = source.clone();
+    target.plan.definitions.remove(1);
+    target.plan.definitions[1].operator = syn::parse_quote!(project r keep {x,y});
+    ra::contract::check(&target).unwrap();
+    let error = ra::check_rewrite(&source, &target).unwrap_err();
+    assert!(error.to_string().contains("tableau"), "{error}");
+}
+
+#[test]
+fn rewrite_rejects_reordered_or_changed_rust_payloads() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R {a -> x};
+        g = guard r if (first(x));
+        h = guard g if (second(x)); output h as answer(x);
+    }};
+    let mut reordered = source.clone();
+    reordered.plan.definitions[1].operator = syn::parse_quote!(guard r if (second(x)));
+    reordered.plan.definitions[2].operator = syn::parse_quote!(guard g if (first(x)));
+    let mut changed = source.clone();
+    changed.plan.definitions[2].operator = syn::parse_quote!(guard g if (third(x)));
+    for target in [reordered, changed] {
+        ra::contract::check(&target).unwrap();
+        let error = ra::check_rewrite(&source, &target).unwrap_err();
+        assert!(error.to_string().contains("Rust chain"), "{error}");
+    }
+}
+
+#[test]
+fn rewrite_rejects_changed_bindings_even_when_projected_away() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R {a -> x};
+        b = bind r with y:i32 = (10 / *x);
+        p = project b keep {x}; output p as answer(x);
+    }};
+    let mut target = source.clone();
+    target.plan.definitions[1].operator = syn::parse_quote!(bind r with z:i32 = (10 / *x));
+    ra::contract::check(&target).unwrap();
+    let error = ra::check_rewrite(&source, &target).unwrap_err();
+    assert!(error.to_string().contains("Rust chain"), "{error}");
+}
+
+#[test]
+fn rewrite_relational_movement_across_rust_is_directional() {
+    let earlier: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R {a -> x};
+        s = select r if (x > 0);
+        g = guard s if (10 / *x > 0); output g as answer(x);
+    }};
+    let later: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R {a -> x};
+        g = guard r if (10 / *x > 0);
+        s = select g if (x > 0); output s as answer(x);
+    }};
+    ra::contract::check(&earlier).unwrap();
+    ra::contract::check(&later).unwrap();
+    ra::check_rewrite(&later, &earlier).unwrap();
+    let error = ra::correspondence::check_rewrite(&earlier, &later).unwrap_err();
+    assert!(error.to_string().contains("source-before"), "{error}");
+}
+
+#[test]
+fn rewrite_checks_the_full_source_prefix_even_outside_rust_free_variables() {
+    let earlier: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(b:i32);
+        r = rename R {a -> x}; s = rename S {b -> y};
+        j = natural_join r with s;
+        g = guard j if (10 / *x > 0);
+        p = project g keep {x}; output p as answer(x);
+    }};
+    let later: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(b:i32);
+        r = rename R {a -> x}; s = rename S {b -> y};
+        g = guard r if (10 / *x > 0);
+        j = natural_join g with s;
+        p = project j keep {x}; output p as answer(x);
+    }};
+    ra::contract::check(&later).unwrap();
+    ra::check_rewrite(&later, &earlier).unwrap();
+    let error = ra::check_rewrite(&earlier, &later).unwrap_err();
+    assert!(error.to_string().contains("source-before"), "{error}");
+}
+
+#[test]
+fn shared_projected_inputs_keep_independent_existential_witnesses() {
+    let independent: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32, b:i32);
+        r = rename R {a -> x, b -> y};
+        px = project r keep {x}; py = project r keep {y};
+        j = natural_join px with py; output j as answer(x, y);
+    }};
+    let correlated: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32, b:i32);
+        r = rename R {a -> x, b -> y}; output r as answer(x, y);
+    }};
+    for (source, target) in [(&independent, &correlated), (&correlated, &independent)] {
+        assert!(ra::check_rewrite(source, target).is_err());
+    }
+    ra::check_rewrite(&independent, &independent).unwrap();
+}

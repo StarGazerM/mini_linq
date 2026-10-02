@@ -15,6 +15,7 @@ cq-storage	test	counters	runtime/cq-storage/tests/counters.rs
 cq-order	test	order	passes/cq-order/tests/order.rs
 cq-reduce	test	reduce	passes/cq-reduce/tests/reduce.rs
 cq-elaborate	test	elaborate	passes/cq-elaborate/tests/elaborate.rs
+correspondence-performance-fixture	manifest-test	hypergraph-proof	tools/fixtures/correspondence-performance/Cargo.toml
 cq-index-policy	test	index_demands	passes/cq-index-policy/tests/index_demands.rs
 cq-structure-selection	test	selection	passes/cq-structure-selection/tests/selection.rs
 cq-physical-lowering	test	lowering	passes/cq-physical-lowering/tests/lowering.rs
@@ -34,6 +35,7 @@ mini-linq	test	workload_callback	facade/mini-linq/tests/workload_callback.rs
 mini-linq	test	relation_loaders	facade/mini-linq/tests/relation_loaders.rs
 cq-load	test	loading	runtime/cq-load/tests/loading.rs
 architecture	scenario	closed-core-dependencies	tools/check_dependencies.py
+architecture	scenario	external-sibling-closure	tools/test_check_external.py
 mini-linq	test	denotation	facade/mini-linq/tests/denotation.rs
 mini-linq	test	provenance	facade/mini-linq/tests/provenance.rs
 cq-stage	test	protocol	facade/cq-stage/tests/protocol.rs
@@ -86,3 +88,5 @@ cq-workloads	manifest-target-test	extended_catalog	features/workloads/Cargo.toml
 cq-workload-e2e	manifest-target-test	extended	features/workloads/e2e/Cargo.toml
 cq-workload-e2e	manifest-target-test	extension_laws	features/workloads/e2e/Cargo.toml
 cq-workload-e2e	manifest-target-test	extension_compile_fail	features/workloads/e2e/Cargo.toml
+cq-rewrites	manifest-target-test	generated	features/rewrites/Cargo.toml
+cq-rewrites	manifest-target-test	growth	features/rewrites/Cargo.toml

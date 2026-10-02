@@ -197,7 +197,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
 
 mod kernel;
 pub use kernel::{erase, kernel};
-use ra::correspondence as tableau;
+mod correspondence;
 
 /// The RA definitions refine the supplied VO schedule, retaining its Rust
 /// chain and preceding relational constraints.
@@ -223,7 +223,7 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
             ),
         ));
     }
-    tableau::check(source, target)?;
+    correspondence::check(source, target)?;
     Ok(())
 }
 

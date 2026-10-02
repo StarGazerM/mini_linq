@@ -158,3 +158,46 @@ fn rust_chain_must_be_ancestral_and_known_float_keys_are_rejected() {
         .is_err()
     );
 }
+
+#[test]
+fn rewrite_accepts_physical_choices_and_rejects_changed_logical_operands() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32); relation S(a:i32);
+        r = let rename R {a -> x}; s = let rename S {a -> x};
+        j = pipe probe first [x] r,s; return j as answer(x);
+    }};
+    let mut merged = source.clone();
+    merged.program.definitions[2].operator = syn::parse_quote!(merge[x] r,s);
+    physical::check_rewrite(&source, &merged).unwrap();
+    physical::check_rewrite(&merged, &source).unwrap();
+    for operator in [
+        syn::parse_quote!(merge[x] s,r),
+        syn::parse_quote!(semi eager [x] r,s),
+    ] {
+        let mut target = source.clone();
+        target.program.definitions[2].operator = operator;
+        physical::contract::check(&target).unwrap();
+        assert!(physical::check_rewrite(&source, &target).is_err());
+    }
+}
+
+#[test]
+fn rewrite_preserves_selection_and_rust_payload_without_an_ra_dependency() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32); r = pipe rename R {a -> x};
+        s = pipe select r if (x = 2);
+        g = pipe guard s if (accept(x)); return g as answer(x);
+    }};
+    let mut point = source.clone();
+    point.program.definitions[1].operator = syn::parse_quote!(point select r if (x = 2));
+    physical::check_rewrite(&source, &point).unwrap();
+    let mut changed_predicate = point.clone();
+    changed_predicate.program.definitions[1].operator =
+        syn::parse_quote!(point select r if (x = 3));
+    let mut changed_payload = point;
+    changed_payload.program.definitions[2].operator = syn::parse_quote!(guard s if (other(x)));
+    for target in [changed_predicate, changed_payload] {
+        physical::contract::check(&target).unwrap();
+        assert!(physical::check_rewrite(&source, &target).is_err());
+    }
+}

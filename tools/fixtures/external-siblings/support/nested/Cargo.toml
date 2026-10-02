@@ -1,0 +1,8 @@
+[package]
+name = "external-sibling-nested"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cq-storage.workspace = true
+external-sibling-leaf.workspace = true
