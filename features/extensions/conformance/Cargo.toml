@@ -1,0 +1,18 @@
+[package]
+name = "cq-extensions-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dev-dependencies]
+cq-ext-union = { version = "0.1.0", path = "../cq-ext-union" }
+cq-ext-negation = { version = "0.1.0", path = "../cq-ext-negation" }
+cq-ext-aggregate = { version = "0.1.0", path = "../cq-ext-aggregate" }
+cq-ext-recursion = { version = "0.1.0", path = "../cq-ext-recursion" }
+cq-ext-correlated = { version = "0.1.0", path = "../cq-ext-correlated" }
+cq-ext-test-passes = { version = "0.1.0", path = "../test-passes" }
+cq-storage.workspace = true
+cq-testkit.workspace = true
+mini-linq.workspace = true

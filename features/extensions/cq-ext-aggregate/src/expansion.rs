@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use cq_ext_support::{Fresh, ensure, same_symbol};
+use cq_ext_support::{
+    Fresh, Leaf, check_fresh, check_leaves, distinct, ensure, hoist, same_symbol,
+};
 use cq_lang_cq::Program;
 use cq_syntax::{rust, symbol_name};
 use proc_macro2::TokenStream;
@@ -110,9 +112,10 @@ impl ToTokens for Source {
         tokens.extend(quote!(by (#(#keys),*); #(#measures)* #rows));
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Context {
     pub hole: Program,
+    pub leaves: Vec<Leaf>,
     pub keys: Vec<Ident>,
     pub measures: Vec<Measure>,
 }
@@ -161,19 +164,26 @@ fn domain(source: &Source) -> syn::Result<()> {
 }
 pub fn compile(source: &Source) -> syn::Result<Context> {
     domain(source)?;
+    let (declarations, leaves) = hoist(&source.rows, &mut Fresh::new(source));
+    let mut hole = source.rows.clone();
+    hole.declarations = declarations;
     Ok(Context {
-        hole: source.rows.clone(),
+        hole,
+        leaves,
         keys: source.keys.clone(),
         measures: source.measures.clone(),
     })
 }
-/// The row hole is unchanged; key layout, measure order, operands and operations
-/// exactly match the authored fold specification. Rust arithmetic is trusted.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Erasing shared leaf bindings restores the row query; key layout, measure
+/// order, operands and operations match the authored fold specification.
 pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
     domain(source)?;
+    check_fresh(source, target.leaves.iter().map(|leaf| &leaf.binding))?;
+    check_leaves(&source.rows, &target.hole.declarations, &target.leaves)?;
+    let mut erased = target.hole.clone();
+    erased.declarations = source.rows.declarations.clone();
     ensure(
-        target.hole == source.rows,
+        erased == source.rows,
         &target.hole,
         "aggregate row hole changed",
     )?;
@@ -184,9 +194,10 @@ pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
         "aggregate fold specification changed",
     )
 }
-pub fn render(context: &Context) -> TokenStream {
+pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<TokenStream> {
     let Context {
         hole,
+        leaves,
         keys,
         measures,
     } = context;
@@ -232,9 +243,12 @@ pub fn render(context: &Context) -> TokenStream {
             Operation::Max => quote!(if #column > &#values.#index { #values.#index = ::core::clone::Clone::clone(#column); }),
         }
     });
-    quote!({
+    let invocation = pipeline.clone().start(hole.to_token_stream())?;
+    let rows = distinct(invocation, &mut fresh, "aggregate_seen");
+    Ok(quote!({
+        #(#leaves)*
         let mut #groups = ::std::collections::HashMap::new();
-        for (#(#columns,)*) in mini_linq::aggregate_hole! { #hole } {
+        for (#(#columns,)*) in #rows {
             let #key = (#(::core::clone::Clone::clone(#keys),)*);
             match #groups.entry(#key) {
                 ::std::collections::hash_map::Entry::Vacant(#entry) => { #entry.insert((#(#initial,)*)); }
@@ -244,7 +258,7 @@ pub fn render(context: &Context) -> TokenStream {
             }
         }
         ::cq_storage::GroupedAnswers::collect_from(#groups)
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -255,6 +269,34 @@ mod tests {
             by (d); n = count(); s = sum(a); lo = min(a); hi = max(a);
             struct G; relation Sale(d:i32,id:i32,a:i32); rows(d,id,a) :- Sale(d,id,a);
         }
+    }
+    #[test]
+    fn testkit_checks_fold_correspondence() {
+        cq_testkit::PassCase {
+            source: source(),
+            expected_next: None,
+            compile: Box::new(compile),
+            check: Box::new(check),
+            mutations: vec![Box::new(|context: &Context| {
+                let mut changed = context.clone();
+                changed.measures[1].operation = Operation::Max;
+                changed
+            })],
+            answers: None,
+        }
+        .run(None)
+        .unwrap();
+    }
+    #[test]
+    fn aggregate_leaf_expressions_remain_pinned() {
+        let source: Source = syn::parse_quote! {
+            by(d); n=count(); struct G;
+            relation Sale(d:i32,id:i32) = (make()); rows(d,id) :- Sale(d,id);
+        };
+        let mut target = compile(&source).unwrap();
+        check(&source, &target).unwrap();
+        target.leaves[0].expression = syn::parse_quote!(changed());
+        assert!(check(&source, &target).is_err());
     }
     #[test]
     fn correspondence_rejects_row_layout_and_operation_mutations() {

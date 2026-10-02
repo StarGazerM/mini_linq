@@ -1,12 +1,5 @@
 # Wave 2 migration required; paths relative to features/.
 # Every optional workspace is excluded until it consumes the packaged public API.
-extensions
-extensions/cq-ext-support
-extensions/cq-ext-union
-extensions/cq-ext-negation
-extensions/cq-ext-aggregate
-extensions/cq-ext-recursion
-extensions/cq-ext-correlated
 own-dialect
 stacked-ir
 diverged-ra
