@@ -11,7 +11,7 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
                 pipeline {};
                 physical {
                     relation L(k:i32); relation R(a:i32,k:i32,value:i32);
-                    l = pipe rename L {k -> k}; r = pipe rename R {a -> a,k -> k,value -> value};
+                    l = pipe rename L@0 {k -> k}; r = pipe rename R@1 {a -> a,k -> k,value -> value};
                     filtered = let point select r if (a = 7);
                     joined = pipe probe first [k] l,filtered;
                     out = pipe canon project joined keep {a,k}; return out as answer(a,k);

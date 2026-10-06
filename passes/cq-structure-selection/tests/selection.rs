@@ -369,8 +369,8 @@ fn built_entries(target: &structures::Program) -> structures::Structures {
 fn filtered_source() -> physical::Program {
     syn::parse_quote!(physical {
         relation L(k:i32); relation R(tag:String,k:i32,value:i32,unused:i32);
-        l = pipe rename L {k -> k};
-        r = pipe rename R {tag -> tag,k -> k,value -> value,unused -> unused};
+        l = pipe rename L@0 {k -> k};
+        r = pipe rename R@1 {tag -> tag,k -> k,value -> value,unused -> unused};
         selected = let point select r if (tag = "a");
         joined = pipe probe first [k] l,selected;
         keys = pipe project joined keep {k};
@@ -418,6 +418,18 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         .entries
         .push(syn::parse_quote!(selected rows = ::std::vec::Vec<_>;));
     assert!(check(&source, &bad).is_err());
+    let mut changed_occurrence = target.clone();
+    let physical::Operator::Rename(rename) =
+        &mut changed_occurrence.physical.program.definitions[1].operator
+    else {
+        unreachable!()
+    };
+    rename.occurrence = syn::parse_quote!(2);
+    // The filtered layout still covers every read; correspondence must also
+    // preserve the identity of the source occurrence supplying those rows.
+    structures::contract::check(&changed_occurrence).unwrap();
+    assert!(check(&source, &changed_occurrence).is_err());
+    assert!(structures::check_rewrite(&target, &changed_occurrence).is_err());
     let mut reordered = target.clone();
     reordered.physical.program.definitions.swap(0, 1);
     check(&source, &reordered).unwrap();
@@ -488,7 +500,7 @@ fn filtered_payload_covers_rust_uses_and_keeps_opaque_environments() {
 fn a_later_merge_does_not_remove_an_earlier_scan_requirement() {
     let source: physical::Program = syn::parse_quote!(physical {
         relation R(a:i32);
-        r0 = pipe rename R {a -> a}; r = let point select r0 if (a = 1);
+        r0 = pipe rename R@0 {a -> a}; r = let point select r0 if (a = 1);
         rows = let canon project r keep {a};
         joined = pipe merge[a] r,rows;
         out = pipe canon project joined keep {a}; return out as answer(a);

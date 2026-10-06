@@ -188,14 +188,14 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         for stream in [false, true] {
             for sorted in [false, true] {
                 let rename = if stream {
-                    "r0 = pipe rename R {a -> a,k -> k,v -> v,dead -> dead}; r = pipe project r0 keep {a,k,v,dead};"
+                    "r0 = pipe rename R@1 {a -> a,k -> k,v -> v,dead -> dead}; r = pipe project r0 keep {a,k,v,dead};"
                 } else {
-                    "r = pipe rename R {a -> a,k -> k,v -> v,dead -> dead};"
+                    "r = pipe rename R@1 {a -> a,k -> k,v -> v,dead -> dead};"
                 };
                 let source: structures::physical::Program = syn::parse_str(&format!(
                     "physical {{
                     relation L(k:i32); relation R(a:i32,k:i32,v:i32,dead:i32);
-                    l = pipe rename L {{k -> k}}; {rename}
+                    l = pipe rename L@0 {{k -> k}}; {rename}
                     f = let {selection}; j = pipe probe first [k] l,f;
                     keys = pipe project j keep {{k}};
                     members = pipe semi eager [k] keys,f;
@@ -238,7 +238,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         let source: structures::physical::Program = syn::parse_str(&format!(
             "physical {{
             relation L(a:i32,k:i32); relation R(a:i32,k:i32);
-            l = pipe rename L {{a -> a,k -> k}}; r = pipe rename R {{a -> a,k -> k}};
+            l = pipe rename L@0 {{a -> a,k -> k}}; r = pipe rename R@1 {{a -> a,k -> k}};
             f = let point select r if (a = 7);
             j = pipe probe first [{key}] l,f;
             out = pipe canon semi eager [{key}] j,f; return out as answer(a,k);
@@ -249,7 +249,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         let source = if key == "a" {
             syn::parse_quote!(physical {
                 relation L(a:i32); relation R(a:i32,k:i32);
-                l = pipe rename L {a -> a}; r = pipe rename R {a -> a,k -> k};
+                l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a,k -> k};
                 f = let point select r if (a = 7);
                 j = pipe probe first [a] l,f;
                 out = pipe canon project j keep {a,k}; return out as answer(a,k);
@@ -273,7 +273,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
     }
     let source: structures::physical::Program = syn::parse_quote!(physical {
         relation L(k:i32); relation R(tag:String,k:i32);
-        l = pipe rename L {k -> k}; r = pipe rename R {tag -> tag,k -> k};
+        l = pipe rename L@0 {k -> k}; r = pipe rename R@1 {tag -> tag,k -> k};
         f = let point select r if (tag = "a");
         j = pipe canon probe first [k] l,f; return j as answer(k,tag);
     });
@@ -288,7 +288,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         let source: structures::physical::Program = syn::parse_str(&format!(
             "physical {{
             relation L(k:i32); relation R(tag:{ty},k:i32);
-            l = pipe rename L {{k -> k}}; r = pipe rename R {{tag -> tag,k -> k}};
+            l = pipe rename L@0 {{k -> k}}; r = pipe rename R@1 {{tag -> tag,k -> k}};
             f = let point select r if (tag = \"a\");
             j = pipe canon probe first [k] l,f; return j as answer(k,tag);
         }}"
