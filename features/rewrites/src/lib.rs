@@ -111,7 +111,7 @@
 //!     pipeline { mini_linq::passes::select, mini_linq::passes::print_pull };
 //!     physical {
 //!         relation R(a: i32, b: i32) = (input);
-//!         r = pipe rename R { a -> x, b -> y };
+//!         r = pipe rename R@0 { a -> x, b -> y };
 //!         projected = pipe project r keep { x };
 //!         return projected as answer(x);
 //!     }

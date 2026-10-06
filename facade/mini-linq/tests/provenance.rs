@@ -144,8 +144,8 @@ fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
     let vo = cq_order::compile(&normalized, &cq_order::Options::default()).unwrap();
     let ra = syn::parse_quote!(relational {
         relation R(k:i32,z:i32); relation S(k:i32,w:i32);
-        r = rename R {k -> x, z -> z}; rp = project r keep {x};
-        s = rename S {k -> x, w -> w}; sp = project s keep {x};
+        r = rename R@0 {k -> x, z -> z}; rp = project r keep {x};
+        s = rename S@1 {k -> x, w -> w}; sp = project s keep {x};
         j = natural_join rp with sp;
         g = guard j if (observe(x,visits)); b = bind g with y:i32 = (10 / *x);
         p = project b keep {y}; output p as answer(y);

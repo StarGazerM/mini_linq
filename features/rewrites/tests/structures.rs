@@ -141,14 +141,14 @@ fn incompatible_known_types_and_unmatched_or_malformed_selectors_are_errors() {
 #[test]
 fn computed_head_dedup_is_retyped_without_touching_physical() {
     let source: cq_testkit::physical::Program = syn::parse_quote!(physical {
-        relation R(a:i32); r = pipe canon rename R {a -> x};
+        relation R(a:i32); r = pipe canon rename R@0 {a -> x};
         return r as answer(*x % 2);
     });
     let source = cq_structure_selection::compile(&source).unwrap();
     let target = retype(&source, quote!(dedup => ::std::collections::BTreeSet<_>)).unwrap();
     let expected: ir::Program = syn::parse_quote! {
         physical {
-            relation R(a:i32); r = pipe canon rename R {a -> x};
+            relation R(a:i32); r = pipe canon rename R@0 {a -> x};
             return r as answer(*x % 2);
         }
         structures {
@@ -165,7 +165,7 @@ fn computed_head_dedup_is_retyped_without_touching_physical() {
 fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
     let source: cq_testkit::physical::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32);
-        l = pipe rename L {a -> x}; r = pipe rename R {a -> x};
+        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
         s = pipe semi eager [x] l,r;
         p = pipe canon probe first [x] s,r; return p as answer(x);
     });
@@ -176,7 +176,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
     let expected: ir::Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32);
-            l = pipe rename L {a -> x}; r = pipe rename R {a -> x};
+            l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
             s = pipe semi eager [x] l,r;
             p = pipe canon probe first [x] s,r; return p as answer(x);
         }

@@ -34,10 +34,12 @@ fn cases() -> Vec<(String, cq::Program)> {
         20,
         "the full authored workload corpus is mandatory"
     );
-    cases.push((
-        "fuzz31".into(),
-        syn::parse_str(&cq_testkit::fuzz::generate(31).cq()).unwrap(),
-    ));
+    for seed in [31, 997] {
+        cases.push((
+            format!("fuzz{seed}"),
+            syn::parse_str(&cq_testkit::fuzz::generate(seed).cq()).unwrap(),
+        ));
+    }
     cases
 }
 
@@ -47,7 +49,20 @@ fn check(name: &str, source: &cq::Program, bounded: bool) {
     let written = cq_planners_plan::compile(source, Planner::WrittenCoarse).unwrap();
     let target = cq_planners_plan::compile(source, Planner::Hypergraph).unwrap();
     cq_lang_ra::check_rewrite(&written, &target).unwrap();
+    let vo = cq_planners_plan::compile_valuation(source, Planner::Hypergraph).unwrap();
     let elapsed = started.elapsed();
+    let iterations = 100;
+    let elaborate_started = Instant::now();
+    for _ in 0..iterations {
+        cq_elaborate::check(&vo, &target).unwrap();
+    }
+    let elaborate = elaborate_started.elapsed().as_secs_f64() / f64::from(iterations);
+    let rewrite_started = Instant::now();
+    for _ in 0..iterations {
+        cq_lang_ra::check_rewrite(&written, &target).unwrap();
+    }
+    let rewrite = rewrite_started.elapsed().as_secs_f64() / f64::from(iterations);
+    eprintln!("TIMING\t{name}\t{iterations}\t{elaborate:.9}\t{rewrite:.9}");
     eprintln!("PASS {name}: {:.6}s", elapsed.as_secs_f64());
     if bounded {
         assert!(
@@ -60,14 +75,14 @@ fn check(name: &str, source: &cq::Program, bounded: bool) {
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     for (name, source) in cases() {
-        if args.is_empty() || args.iter().any(|arg| arg == &name) {
+        if args.iter().all(|arg| arg.starts_with("--")) || args.iter().any(|arg| arg == &name) {
             check(&name, &source, !args.iter().any(|arg| arg == "--unbounded"));
         }
     }
 }
 
 #[test]
-fn hypergraph_full_workload_corpus_and_seed_31() {
+fn hypergraph_full_workload_corpus_and_regression_seeds() {
     for (name, source) in cases() {
         check(&name, &source, true);
     }

@@ -43,9 +43,9 @@ configuration!(keep, {
             pipeline { mini_linq::passes::lower, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::print_pull };
             relational {
                 relation r(a:i32,dropped:i32); relation s(a:i32,b:i32);
-                r0 = rename r { a -> a, dropped -> dropped };
+                r0 = rename r@0 { a -> a, dropped -> dropped };
                 prefix = project r0 keep { a };
-                s0 = rename s { a -> a, b -> b };
+                s0 = rename s@1 { a -> a, b -> b };
                 joined = natural_join prefix with s0;
                 result = project joined keep { b };
                 output result as answer(b);
@@ -143,9 +143,9 @@ configuration!(canon, {
             pipeline { mini_linq::passes::lower, cq_rewrites::canon_prefixes, mini_linq::passes::select, cq_rewrites::retype(dedup => crate::measurement::Dedup<_>), mini_linq::passes::print_pull };
             relational {
                 relation r(a:i32,dropped:i32); relation s(a:i32,b:i32);
-                r0 = rename r { a -> a, dropped -> dropped };
+                r0 = rename r@0 { a -> a, dropped -> dropped };
                 prefix = project r0 keep { a };
-                s0 = rename s { a -> a, b -> b };
+                s0 = rename s@1 { a -> a, b -> b };
                 joined = natural_join prefix with s0;
                 result = project joined keep { b };
                 output result as answer(b);

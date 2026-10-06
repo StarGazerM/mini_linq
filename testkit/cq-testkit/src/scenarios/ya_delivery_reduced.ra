@@ -2,10 +2,10 @@ relational {
     relation D(driver_id: i32, depot_id: i32);
     relation S(depot_id: i32, item_id: i32);
     relation N(job_id: i32, item_id: i32);
-    r0 = rename S { depot_id -> depot, item_id -> item };
-    r1 = rename D { driver_id -> driver, depot_id -> depot };
+    r0 = rename S@1 { depot_id -> depot, item_id -> item };
+    r1 = rename D@0 { driver_id -> driver, depot_id -> depot };
     r2 = semijoin r0 with r1;
-    r3 = rename N { job_id -> job, item_id -> item };
+    r3 = rename N@2 { job_id -> job, item_id -> item };
     r4 = semijoin r3 with r2;
     r5 = semijoin r2 with r4;
     r6 = semijoin r1 with r5;

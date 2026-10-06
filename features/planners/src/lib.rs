@@ -79,7 +79,7 @@
 //! coverage, granularity, written-order obligations and complete tree reductions.
 //! It accepts admissible free rankings without rerunning the selector.
 //! `check(&cq, &ra)` checks refinement independently of planner selection, using
-//! the core's tableau and Rust-chain proof against a directly constructed exact
+//! the core's occurrence and Rust-chain contract against a directly constructed exact
 //! written normal-form schedule.
 //!
 //! The meaning is the Kleisli composition for `bottom + Set`: when the written

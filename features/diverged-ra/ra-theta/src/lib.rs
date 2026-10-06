@@ -59,8 +59,8 @@ impl Parse for Query {
         let ra: ra::Program = syn::parse2(quote! {
             relational {
                 #(#declarations)*
-                l = rename #lh { #lm };
-                r = rename #rh { #rm };
+                l = rename #lh@0 { #lm };
+                r = rename #rh@1 { #rm };
                 j = natural_join l with r;
                 s = guard j if (#condition);
                 p = project s keep { #(#kept),* };
@@ -138,8 +138,8 @@ mod tests {
             relational {
                 relation L(key: i32, value: i32);
                 relation R(key: i32, value: i32);
-                l = rename L {key -> k, value -> x};
-                r = rename R {key -> k, value -> y};
+                l = rename L@0 {key -> k, value -> x};
+                r = rename R@1 {key -> k, value -> y};
                 j = natural_join l with r;
                 s = guard j if (x < y);
                 p = project s keep {x, y};

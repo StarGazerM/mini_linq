@@ -71,7 +71,7 @@ fn lower(source: &str) -> (ix::Program, physical::Program) {
 #[test]
 fn const_demand_and_point_modifier_are_independent_obligations() {
     let (source, target) = lower(
-        "relational { relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
+        "relational { relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
         s = select r if (x = 2); output s as answer(x,y);
         } indexes {i = @r[0] const;}",
     );
@@ -98,7 +98,7 @@ fn const_demand_and_point_modifier_are_independent_obligations() {
 #[test]
 fn relational_column_equality_is_a_select_and_rust_is_a_guard() {
     let (_, target) = lower(
-        "relational {relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
+        "relational {relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
         s = select r if (x = y); g = guard s if (*x > 2); output g as answer(x,y);
         } indexes {}",
     );
@@ -115,7 +115,7 @@ fn relational_column_equality_is_a_select_and_rust_is_a_guard() {
 #[test]
 fn admissible_join_and_canonicalization_rewrites_are_accepted() {
     let source = "relational { relation L(a:i32); relation R(a:i32,b:i32);
-        l = rename L {a -> a}; r = rename R {a -> a,b -> b}; j = natural_join l with r;
+        l = rename L@0 {a -> a}; r = rename R@1 {a -> a,b -> b}; j = natural_join l with r;
         p = project j keep {a}; e = bind p with n:i32 = (1); output e as answer(a,n);
     } indexes { i = @r[0] stream; }";
     let (source, target) = lower(source);
@@ -135,7 +135,7 @@ fn admissible_join_and_canonicalization_rewrites_are_accepted() {
 #[test]
 fn chain_reordering_fails_erasure_even_if_local_program_is_scoped() {
     let (source, target) = lower(
-        "relational {relation R(a:i32); r = rename R {a -> x};
+        "relational {relation R(a:i32); r = rename R@0 {a -> x};
         g = guard r if (*x != 0); b = bind g with y:i32 = (10 / *x);
         output b as answer(x,y); } indexes {}",
     );

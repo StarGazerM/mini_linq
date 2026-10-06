@@ -196,7 +196,7 @@ pub fn check_valuation(
 
 /// Check CQ→RA′ refinement against the exact written normal-form schedule,
 /// independently of the planner and its chosen ranking. This uses the core's
-/// tableau/Rust-chain proof; it never compiles or reselects a target plan.
+/// occurrence/Rust-chain contract; it never compiles or reselects a target plan.
 pub fn check(source: &cq::Program, target: &ra::Program) -> syn::Result<()> {
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;

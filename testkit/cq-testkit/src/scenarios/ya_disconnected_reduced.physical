@@ -1,7 +1,7 @@
 physical { relation R (value : i32);
  relation S (first : i32 , second : i32);
- r0 = pipe rename S { first - > y , second - > z };
- r1 = pipe rename R { value - > x };
+ r0 = pipe rename S@1 { first - > y , second - > z };
+ r1 = pipe rename R@0 { value - > x };
  r2 = let semi eager [] r0 , r1;
  r3 = pipe semi eager [] r1 , r2;
  r4 = pipe probe first [] r3 , r2;

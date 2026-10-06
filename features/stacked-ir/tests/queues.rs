@@ -14,7 +14,7 @@ fn explicit_physical_and_trace_queues_execute_like_the_default() {
         pipeline { stacked_ir::leave, mini_linq::passes::select, mini_linq::passes::print_pull };
         physical {
             relation R(x: i32) = (rows);
-            r = pipe rename R {x -> x};
+            r = pipe rename R@0 {x -> x};
             out = pipe canon project r keep {x};
             return out as answer(x);
         }
@@ -24,7 +24,7 @@ fn explicit_physical_and_trace_queues_execute_like_the_default() {
         pipeline { mini_linq::passes::select, mini_linq::passes::print_pull };
         physical {
             relation R(x: i32) = (rows);
-            r = pipe rename R {x -> x};
+            r = pipe rename R@0 {x -> x};
             out = pipe canon project r keep {x};
             return out as answer(x);
         }

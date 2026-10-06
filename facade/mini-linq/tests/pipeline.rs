@@ -27,7 +27,7 @@ fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
     let answer: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::print_pull };
         physical { relation rows(x:i32);
-            r = pipe rename rows {x -> x}; p = exists project r keep {};
+            r = pipe rename rows@0 {x -> x}; p = exists project r keep {};
             out = pipe canon semi eager [] p,p; return out as answer();
         }
     }
@@ -38,7 +38,7 @@ fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
 #[test]
 fn physical_and_structures_correspondence_reject_changes_in_meaning() {
     let source: cq_lang_physical::Program = syn::parse_quote!(physical {
-        relation R(x:i32); r = pipe canon rename R {x -> x}; return r as answer(x);
+        relation R(x:i32); r = pipe canon rename R@0 {x -> x}; return r as answer(x);
     });
     let mut changed = source.clone();
     changed.program.head.relation = syn::parse_quote!(wrong);
@@ -60,13 +60,13 @@ fn physical_and_structures_correspondence_reject_changes_in_meaning() {
 fn ra_rewrites_use_the_existing_tableau_check() {
     let source: cq_lang_ra::Program = syn::parse_quote!(relational {
         relation R(x:i32); relation S(y:i32);
-        r = rename R {x -> x}; s = rename S {y -> y}; j = natural_join r with s;
+        r = rename R@0 {x -> x}; s = rename S@1 {y -> y}; j = natural_join r with s;
         output j as answer(x,y);
     });
     let mut target = source.clone();
     target.plan.definitions[2].operator = syn::parse_quote!(natural_join s with r);
     cq_lang_ra::check_rewrite(&source, &target).unwrap();
-    target.plan.definitions[1].operator = syn::parse_quote!(rename R {x -> y});
+    target.plan.definitions[1].operator = syn::parse_quote!(rename R@0 {x -> y});
     assert!(cq_lang_ra::check_rewrite(&source, &target).is_err());
 }
 
@@ -90,7 +90,7 @@ fn lazy_semijoin_state_stops_at_a_match_and_keeps_prior_keys() {
     let answer: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::print_pull };
         physical { relation left(x:i32); relation right(x:i32);
-            l = pipe rename left {x -> x}; r = pipe rename right {x -> x};
+            l = pipe rename left@0 {x -> x}; r = pipe rename right@1 {x -> x};
             out = pipe canon semi lazy [x] l,r; return out as answer(x);
         }
     }
@@ -122,7 +122,7 @@ fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
     let answer: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::print_pull };
         physical { relation rows(x:i32);
-            r = pipe rename rows {x -> x};
+            r = pipe rename rows@0 {x -> x};
             a_point = pipe point select r if (x = 1);
             z_probe = pipe canon probe first [x] a_point,r;
             return z_probe as answer(x);
@@ -136,7 +136,7 @@ fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
 fn ordered_host_fallback_records_must_be_ordered_admissible() {
     let source: cq_lang_physical::Program = syn::parse_quote!(physical {
         relation L(x:i32); relation R(x:i32);
-        l = pipe rename L {x -> x}; r = pipe rename R {x -> x};
+        l = pipe rename L@0 {x -> x}; r = pipe rename R@1 {x -> x};
         out = pipe canon merge[x] l,r; return out as answer(x);
     });
     let structured = cq_structure_selection::compile(&source).unwrap();

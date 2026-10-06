@@ -83,19 +83,19 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
     let mut programs = Vec::new();
     for (r_retained, s_retained) in [(false, true), (true, false), (true, true), (false, false)] {
         let r = if r_retained {
-            "r0 = pipe rename R {b -> b,c -> c}; r = let project r0 keep {b,c};"
+            "r0 = pipe rename R@0 {b -> b,c -> c}; r = let project r0 keep {b,c};"
         } else {
-            "r = pipe rename R {b -> b,c -> c};"
+            "r = pipe rename R@0 {b -> b,c -> c};"
         };
         let s = if s_retained {
-            "s0 = pipe rename S {a -> a,c -> c}; s = let project s0 keep {a,c};"
+            "s0 = pipe rename S@0 {a -> a,c -> c}; s = let project s0 keep {a,c};"
         } else {
-            "s = pipe rename S {a -> a,c -> c};"
+            "s = pipe rename S@0 {a -> a,c -> c};"
         };
         let physical: structures::physical::Program = syn::parse_str(&format!(
             "physical {{
                 relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-                l = pipe rename L {{a -> a,b -> b}}; {r} {s}
+                l = pipe rename L@0 {{a -> a,b -> b}}; {r} {s}
                 candidate = pipe probe smallest [b] l,r;
                 checked = pipe canon semi eager [a,c] candidate,s;
                 return checked as answer(a,b,c);
@@ -108,9 +108,9 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
         "shared payload, membership and ordered reads".into(),
         syn::parse_quote!(physical {
             relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-            l0 = pipe rename L {a -> a,b -> b};
-            r0 = pipe rename R {b -> b,c -> c}; r = let project r0 keep {b,c};
-            s = pipe rename S {a -> a,c -> c};
+            l0 = pipe rename L@0 {a -> a,b -> b};
+            r0 = pipe rename R@1 {b -> b,c -> c}; r = let project r0 keep {b,c};
+            s = pipe rename S@2 {a -> a,c -> c};
             payload = pipe probe first [b] l0,r;
             l1 = pipe project payload keep {a,b};
             members = let semi eager [c] s,r;
@@ -251,7 +251,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     // Direct merge premises are deliberately left to rustc, with the trait diagnostic.
     let unordered: structures::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32);
-        l = pipe rename L {a -> a}; r = pipe rename R {a -> a};
+        l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a};
         j = pipe canon merge[a] l,r; return j as answer(a);
     } structures {});
     let complete = cq_structure_selection::compile(&unordered.physical).unwrap();
@@ -288,7 +288,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
 fn dispatch_uses_layout_and_allocates_fallbacks_outside_probe_closures() {
     let p: structures::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L {a -> x}; r = pipe rename R {a -> x,b -> y};
+        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x,b -> y};
         j = pipe canon probe first [x] l,r; return j as answer(x,y);
     } structures {});
     let text = program(&p);
@@ -309,7 +309,7 @@ fn dispatch_uses_layout_and_allocates_fallbacks_outside_probe_closures() {
 #[test]
 fn point_prints_build_free_dispatch_and_canonical_lets_use_the_distinct_provider() {
     let p: structures::Program = syn::parse_quote!(physical {
-        relation R(a:i32,b:i32); r = pipe rename R {a -> x,b -> y};
+        relation R(a:i32,b:i32); r = pipe rename R@0 {a -> x,b -> y};
         w = let canon point select r if (x = 2);
         p = pipe project w keep {x,y}; return p as answer(y,x);
     } structures {});

@@ -5,7 +5,7 @@ use quote::ToTokens;
 fn program() -> structures::Program {
     syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L {a -> x}; r = let rename R {a -> x,b -> y};
+        l = pipe rename L@0 {a -> x}; r = let rename R@1 {a -> x,b -> y};
         j = pipe canon probe first [x] l,r; return j as answer(x,y);
     } structures { r = UserIndex [x]; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; l host scan = ::core::iter::Map<_, _> []; j canon = ::std::collections::HashSet<_>; } }
 }
@@ -52,7 +52,7 @@ fn only_built_lets_have_entries_and_host_reads_make_no_claims() {
 fn canonicality_comes_only_from_plan_boundaries_and_key_preservation() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation R(a:i32,b:i32);
-        r = let canon rename R {a -> a,b -> b};
+        r = let canon rename R@0 {a -> a,b -> b};
         e = pipe bind r with n: i32 = (1);
         p = pipe project e keep {a,b}; return p as answer(a,b);
     } structures { r canon = ::std::collections::HashSet<_>; r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; } };
@@ -71,7 +71,7 @@ fn canonicality_comes_only_from_plan_boundaries_and_key_preservation() {
 fn ordered_premises_require_storage_or_a_same_key_merge_stream() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32);
-        l = pipe rename L {a -> a}; r = pipe rename R {a -> a,b -> b}; s = pipe rename S {b -> b};
+        l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a,b -> b}; s = pipe rename S@2 {b -> b};
         j = let merge[a] l,r; k = pipe canon merge[b] j,s; return k as answer(a,b);
     } structures {
         j = Ordered [b]; j rows = ::std::vec::Vec<_>; k canon = ::std::collections::HashSet<_>;
@@ -104,7 +104,7 @@ fn leveled_entries_cover_prefixes_but_do_not_prove_uniqueness() {
 fn complete_read_structures_take_precedence_over_candidate_prefixes() {
     let source: structures::Program = syn::parse_quote!(physical {
         relation L(x:i32); relation R(x:i32,y:i32);
-        l = pipe rename L {x -> x}; r = let rename R {x -> x,y -> y};
+        l = pipe rename L@0 {x -> x}; r = let rename R@1 {x -> x,y -> y};
         j = pipe probe first [x] l,r;
         checked = pipe canon probe first [x,y] j,r;
         return checked as answer(x,y);
@@ -147,7 +147,7 @@ fn complete_read_structures_take_precedence_over_candidate_prefixes() {
 fn a_const_only_read_cannot_justify_a_built_entry() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation R(a: i32);
-        r = let rename R { a -> x };
+        r = let rename R@0 { a -> x };
         p = pipe canon point select r if (x = 5);
         return p as answer(x);
     } structures { r rows = ::std::vec::Vec<_>; r host scan = ::core::iter::Map<_, _> []; p canon = ::std::collections::HashSet<_>; } };
@@ -167,7 +167,7 @@ fn a_const_only_read_cannot_justify_a_built_entry() {
 fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation L(a: i32); relation R(a: i32);
-        l = pipe rename L { a -> x }; r = let rename R { a -> x };
+        l = pipe rename L@0 { a -> x }; r = let rename R@1 { a -> x };
         p = let point select r if (x = 5);
         j = pipe probe first [x] l,r;
         out = pipe canon semi eager [x] j,p;
@@ -180,8 +180,8 @@ fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
 fn every_built_key_level_requires_the_leibniz_premise() {
     let p: structures::Program = syn::parse_quote! { physical {
         relation L(a: i32); relation R(a: i32, payload: f64);
-        l = pipe rename L { a -> x };
-        r = let rename R { a -> x, payload -> y };
+        l = pipe rename L@0 { a -> x };
+        r = let rename R@1 { a -> x, payload -> y };
         j = pipe probe first [x] l,r;
         out = pipe canon project j keep {x};
         return out as answer(x);

@@ -5,10 +5,10 @@ const HOIST_SOURCE: &str = "physical {
     relation L(a:i32,b:i32);
     relation R(b:i32,c:i32);
     relation S(a:i32,c:i32);
-    l = pipe rename L {a -> a,b -> b};
-    r = pipe rename R {b -> b,c -> c};
+    l = pipe rename L@0 {a -> a,b -> b};
+    r = pipe rename R@1 {b -> b,c -> c};
     candidate = pipe probe first [b] l,r;
-    s = pipe rename S {a -> a,c -> c};
+    s = pipe rename S@2 {a -> a,c -> c};
     checked = pipe canon probe first [a,c] candidate,s;
     return checked as answer(a,b,c);
 }";
@@ -48,12 +48,12 @@ const RUST_SOURCE: &str = "physical {
     relation L(a:i32);
     relation R(a:i32,b:i32);
     relation S(a:i32);
-    r = pipe rename L {a -> a};
-    s = pipe rename R {a -> a,b -> b};
+    r = pipe rename L@0 {a -> a};
+    s = pipe rename R@1 {a -> a,b -> b};
     selected = pipe select s if (b = 0);
     projected = let project selected keep {a};
     g = pipe guard r if (accept(a));
-    t = pipe rename S {a -> a};
+    t = pipe rename S@2 {a -> a};
     b = pipe bind g with c:i32 = (compute(a));
     j = pipe probe first [a] b,projected;
     checked = pipe semi eager [a] j,t;
@@ -142,7 +142,7 @@ fn rewritten_rust_chain_order_and_operands_are_rejected() {
 fn named_graph_comparison_rejects_changed_relational_and_opaque_payloads() {
     let source: physical::Program = syn::parse_str(RUST_SOURCE).unwrap();
     for (position, operator) in [
-        (0, syn::parse_quote!(rename S {a -> a})),
+        (0, syn::parse_quote!(rename S@0 {a -> a})),
         (2, syn::parse_quote!(select s if (b = 1))),
         (4, syn::parse_quote!(guard r if (other_accept(a)))),
         (6, syn::parse_quote!(bind g with c:i32 = (other_compute(a)))),

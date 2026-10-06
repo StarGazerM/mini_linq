@@ -863,9 +863,11 @@ cq_syntax::algebra::RangeBound	{"struct":{"generics":{"params":[],"where_predica
 cq_syntax::algebra::RangeBound::inclusive	{"struct_field":{"primitive":"bool"}}
 cq_syntax::algebra::RangeBound::lower	{"struct_field":{"primitive":"bool"}}
 cq_syntax::algebra::RangeBound::value	{"struct_field":{"resolved_path":{"args":null,"id":"cq_syntax::constraint::Term","path":"crate::constraint::Term"}}}
-cq_syntax::algebra::Rename	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_syntax::algebra::Rename::rename_token","cq_syntax::algebra::Rename::relation","cq_syntax::algebra::Rename::mapping_brace","cq_syntax::algebra::Rename::mapping"],"has_stripped_fields":false}}}}
+cq_syntax::algebra::Rename	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_syntax::algebra::Rename::rename_token","cq_syntax::algebra::Rename::relation","cq_syntax::algebra::Rename::at","cq_syntax::algebra::Rename::occurrence","cq_syntax::algebra::Rename::mapping_brace","cq_syntax::algebra::Rename::mapping"],"has_stripped_fields":false}}}}
+cq_syntax::algebra::Rename::at	{"struct_field":{"resolved_path":{"args":null,"id":"syn::token::At","path":"$crate::token::At"}}}
 cq_syntax::algebra::Rename::mapping	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_syntax::algebra::AttributeRename","path":"AttributeRename"}}}],"constraints":[]}},"id":"cq_syntax::CommaList","path":"crate::CommaList"}}}
 cq_syntax::algebra::Rename::mapping_brace	{"struct_field":{"resolved_path":{"args":null,"id":"syn::token::Brace","path":"token::Brace"}}}
+cq_syntax::algebra::Rename::occurrence	{"struct_field":{"resolved_path":{"args":null,"id":"syn::lit::LitInt","path":"syn::LitInt"}}}
 cq_syntax::algebra::Rename::relation	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_syntax::algebra::Rename::rename_token	{"struct_field":{"resolved_path":{"args":null,"id":"cq_syntax::algebra::kw::rename","path":"kw::rename"}}}
 cq_syntax::algebra::Select	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_syntax::algebra::Select::select_token","cq_syntax::algebra::Select::input","cq_syntax::algebra::Select::if_token","cq_syntax::algebra::Select::condition_paren","cq_syntax::algebra::Select::condition"],"has_stripped_fields":false}}}}
@@ -938,9 +940,9 @@ cq_syntax::equality::Equality::eq_token	{"struct_field":{"resolved_path":{"args"
 cq_syntax::equality::Equality::left	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_syntax::equality::Equality::right	{"struct_field":{"resolved_path":{"args":null,"id":"cq_syntax::equality::EqualityValue","path":"EqualityValue"}}}
 cq_syntax::equality::EqualityValue	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_syntax::equality::EqualityValue::Variable","cq_syntax::equality::EqualityValue::Literal"]}}
-cq_syntax::equality::EqualityValue::Literal	{"variant":{"discriminant":null,"kind":{"tuple":[1165]}}}
+cq_syntax::equality::EqualityValue::Literal	{"variant":{"discriminant":null,"kind":{"tuple":[1169]}}}
 cq_syntax::equality::EqualityValue::Literal::0	{"struct_field":{"resolved_path":{"args":null,"id":"syn::expr::Expr","path":"syn::Expr"}}}
-cq_syntax::equality::EqualityValue::Variable	{"variant":{"discriminant":null,"kind":{"tuple":[1163]}}}
+cq_syntax::equality::EqualityValue::Variable	{"variant":{"discriminant":null,"kind":{"tuple":[1167]}}}
 cq_syntax::equality::EqualityValue::Variable::0	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_syntax::equality::literal	{"function":{"generics":{"params":[],"where_predicates":[]},"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["expression",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"resolved_path":{"args":null,"id":"syn::expr::Expr","path":"syn::Expr"}}}}]],"is_c_variadic":false,"output":{"primitive":"bool"}}}}
 cq_syntax::guard::Split	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_syntax::guard::Split::constraints","cq_syntax::guard::Split::residual"],"has_stripped_fields":false}}}}

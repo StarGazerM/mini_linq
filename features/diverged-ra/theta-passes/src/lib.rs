@@ -99,8 +99,8 @@ mod tests {
             physical {
                 relation L(key: i32, value: i32);
                 relation R(key: i32, value: i32);
-                l = pipe rename L { key -> k, value -> x };
-                r = pipe rename R { key -> k, value -> y };
+                l = pipe rename L@0 { key -> k, value -> x };
+                r = pipe rename R@1 { key -> k, value -> y };
                 j = pipe merge [k] l, r;
                 s = pipe guard j if (x < y);
                 p = pipe canon project s keep {x, y};
@@ -152,8 +152,8 @@ mod tests {
         let source: physical::Program = syn::parse_quote! {
             physical {
                 relation L(x: i32); relation R(y: i32);
-                l = pipe rename L {x -> x};
-                r = pipe rename R {y -> y};
+                l = pipe rename L@0 {x -> x};
+                r = pipe rename R@1 {y -> y};
                 j = pipe canon probe first [] l, r;
                 return j as answer(x, y);
             }

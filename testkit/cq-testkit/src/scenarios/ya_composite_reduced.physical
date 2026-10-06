@@ -1,10 +1,10 @@
 physical { relation R (first : i32 , second : i32 , value : i32);
  relation S (first : i32 , second : i32 , third : i32);
  relation T (first : i32 , second : i32 , value : i32);
- r0 = pipe rename S { first - > a , second - > b , third - > c };
- r1 = pipe rename R { first - > a , second - > b , value - > u };
+ r0 = pipe rename S@1 { first - > a , second - > b , third - > c };
+ r1 = pipe rename R@0 { first - > a , second - > b , value - > u };
  r2 = let semi eager [a , b] r0 , r1;
- r3 = pipe rename T { first - > b , second - > c , value - > v };
+ r3 = pipe rename T@2 { first - > b , second - > c , value - > v };
  r4 = let semi eager [b , c] r3 , r2;
  r5 = let semi eager [b , c] r2 , r4;
  r6 = pipe semi eager [a , b] r1 , r5;

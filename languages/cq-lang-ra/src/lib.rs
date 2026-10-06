@@ -8,6 +8,13 @@
 //! allowed. Preserving the Rust chain and every source-before relational step is
 //! a sufficient refinement condition, checked by [`check_rewrite`] for RA′
 //! rewrites and by cq-elaborate for VO elaboration.
+//! These are structural contracts for occurrence-preserving passes, not CQ
+//! equivalence deciders. Declared inputs carry a unique source occurrence:
+//! `rename R@2 { a -> x }`. Checks compare fixed column bindings, equality
+//! closure, relational constraints and their first observing Rust region.
+//! They visit the DAG and its derived headings without unfolding shared rows
+//! or searching for atom mappings. Structurally different existential splits
+//! can be rejected even when an answer oracle would find equivalent outputs.
 //!
 //! This language separates logical query planning from index selection and
 //! Rust execution. Declared relation names are atomic input expressions;
@@ -160,6 +167,22 @@ pub struct Output {
 /// Checked headings and column types of all named results.
 pub type Analysis = BTreeMap<String, RelationInfo>;
 pub mod contract {
+    /// Structural facts of a checked relational schedule. DAG nodes refer to
+    /// earlier nodes; VO states its obligations here without running elaboration.
+    #[derive(Default)]
+    pub struct Schedule {
+        pub(super) nodes: Vec<super::structural::Node>,
+        pub(super) atoms: std::collections::HashMap<usize, super::structural::Atom>,
+        pub(super) chain: Vec<super::structural::Rust>,
+        pub(super) reductions: Vec<super::structural::Reduction>,
+        pub(super) output: Option<usize>,
+        pub(super) head: String,
+        pub(super) split_nodes: Vec<(usize, usize)>,
+        pub(super) full_reads: Vec<(usize, usize)>,
+        pub(super) row_views: Vec<super::structural::RowView>,
+        pub(super) view_requests: Vec<(usize, usize, bool)>,
+    }
+
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
         super::check_in(&program.plan.declarations, &program.plan)
     }
@@ -216,6 +239,7 @@ fn check_in<'a>(
     };
 
     let mut chain = Vec::<String>::new();
+    let mut occurrences = BTreeSet::new();
     for definition in &plan.definitions {
         let result_name = symbol_name(&definition.result);
         if relations.contains_key(&result_name) {
@@ -231,6 +255,13 @@ fn check_in<'a>(
         let (heading, operands) = match &definition.operator {
             Operator::Unit(_) => (Heading::new(), Vec::new()),
             Operator::Rename(rename) => {
+                let occurrence = rename.occurrence.base10_parse::<usize>()?;
+                if !occurrences.insert(occurrence) {
+                    return Err(syn::Error::new_spanned(
+                        &rename.occurrence,
+                        format!("atom occurrence @{occurrence} is realized more than once"),
+                    ));
+                }
                 let Some(declaration) = declarations.get(&symbol_name(&rename.relation)) else {
                     return Err(syn::Error::new_spanned(
                         &rename.relation,
@@ -608,8 +639,27 @@ fn check_leibniz(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
     cq_syntax::algebra::check_leibniz_type(ty, column)
 }
 
-pub mod correspondence;
-pub use correspondence::check_rewrite;
+mod structural;
+
+/// Check local contracts and fixed structural obligations of an RA rewrite.
+pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
+    let source_schedule = contract::Schedule::from_program(source)?;
+    let target_schedule = contract::Schedule::from_program(target)?;
+    if source.plan.declarations != target.plan.declarations {
+        return Err(syn::Error::new_spanned(
+            &target.plan.output,
+            "RA rewrite changes declarations",
+        ));
+    }
+    source_schedule
+        .check(&target_schedule, &[])
+        .map_err(|message| {
+            syn::Error::new_spanned(
+                &target.plan.output,
+                format!("result `{}`: {message}", target.plan.output.input),
+            )
+        })
+}
 impl cq_stage::Language for Program {
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())

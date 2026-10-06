@@ -101,7 +101,7 @@ fn rust_payloads_are_opaque_and_pinned() {
     let source: physical::Program = syn::parse_quote! {
         physical {
             relation R(x: i32);
-            r = pipe rename R {x -> x};
+            r = pipe rename R@0 {x -> x};
             a = pipe guard r if (first(x));
             b = pipe bind a with y: i32 = (make(x));
             c = pipe guard b if (second(x, y));

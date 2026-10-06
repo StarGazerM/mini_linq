@@ -169,8 +169,8 @@ mod custom_indexes {
             ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::custom_indexes, ::mini_linq::passes::print_pull };
                 physical {
                     relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
-                    l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
-                    s = let rename S {b -> b, c -> c};
+                    l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a, b -> b};
+                    s = let rename S@2 {b -> b, c -> c};
                     j = pipe probe first [a] l, r; p = pipe probe first [b] j, s;
                     out = pipe canon project p keep {a, c}; return out as answer(a, c);
                 }

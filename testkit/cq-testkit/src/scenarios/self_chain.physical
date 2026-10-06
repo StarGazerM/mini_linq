@@ -1,6 +1,6 @@
 physical { relation Road (src : i32 , dst : i32);
- r0 = pipe rename Road { src - > a , dst - > b };
- r1 = pipe rename Road { src - > b , dst - > c };
+ r0 = pipe rename Road@0 { src - > a , dst - > b };
+ r1 = pipe rename Road@1 { src - > b , dst - > c };
  r2 = pipe probe first [b] r0 , r1;
  r3 = pipe canon project r2 keep { a , c };
  return r3 as answer (a , c);

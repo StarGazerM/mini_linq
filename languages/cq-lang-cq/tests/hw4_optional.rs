@@ -146,10 +146,10 @@ fn extended_ras_use_renames_inferred_correlation_and_one_global_unit() {
                     relation Blocked(c0: i32, c1: i32);
                     relation Purchase(c0: i32, c1: i32, c2: i32);
 
-                        r0 = rename Person {c0 -> person};
-                        r1 = rename Blocked {c0 -> person, c1 -> blocked_anon0};
+                        r0 = rename Person@0 {c0 -> person};
+                        r1 = rename Blocked@1 {c0 -> person, c1 -> blocked_anon0};
                         r2 = antisemijoin r0 with r1;
-                        r3 = rename Purchase {
+                        r3 = rename Purchase@2 {
                             c0 -> person,
                             c1 -> purchase_anon0,
                             c2 -> amount,
@@ -165,9 +165,9 @@ fn extended_ras_use_renames_inferred_correlation_and_one_global_unit() {
                     relation Purchase(c0: i32, c1: i32);
 
                         r0 = unit;
-                        r1 = rename Blocked {c0 -> blocked_anon0};
+                        r1 = rename Blocked@0 {c0 -> blocked_anon0};
                         r2 = antisemijoin r0 with r1;
-                        r3 = rename Purchase {c0 -> purchase_anon0, c1 -> amount};
+                        r3 = rename Purchase@1 {c0 -> purchase_anon0, c1 -> amount};
                         r4 = aggregate_apply r2 with r3 value amount using sum into total;
                         r5 = project r4 keep {total};
                         output r5 as summary(total);

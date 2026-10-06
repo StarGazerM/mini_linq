@@ -324,7 +324,7 @@ fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
     let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::ordered_dedup, ::mini_linq::passes::print_pull };
         physical {
             relation l(a:i32); relation r(a:i32);
-            left = pipe rename l {a -> a}; right = pipe rename r {a -> a};
+            left = pipe rename l@0 {a -> a}; right = pipe rename r@1 {a -> a};
             j = pipe canon merge[a] left,right; return j as answer(a);
         }
     }
@@ -344,7 +344,7 @@ fn retained_opaque_guards_preserve_unsigned_comparisons() {
     let r = [(1_u64, 0), (2, 5), (9, 1)];
     let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::ordered_dedup, ::mini_linq::passes::print_pull };
         physical {
-            relation r(a:u64,b:i32); rows = let rename r {a -> a,b -> b};
+            relation r(a:u64,b:i32); rows = let rename r@0 {a -> a,b -> b};
             w = pipe canon guard rows if (*a < 9); return w as answer(a,b);
         }
     }

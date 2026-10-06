@@ -55,11 +55,11 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
     // initialized by nonempty T, but the earlier empty S prevents the bind.
     let ra = syn::parse_quote!(relational {
         relation R(x:i32); relation S(w:i32); relation T(y:i32);
-        r = rename R {x -> x}; s = rename S {w -> w};
+        r = rename R@0 {x -> x}; s = rename S@1 {w -> w};
         j = natural_join r with s;
         g = guard j if (*x != 0 && *w > 1);
         b = bind g with y:i32 = (10 / *x);
-        t = rename T {y -> y}; indexed = natural_join t with b;
+        t = rename T@2 {y -> y}; indexed = natural_join t with b;
         p = project indexed keep {x,y}; output p as answer(x,y);
     });
     let ix = cq_index_policy::compile(&ra).unwrap();

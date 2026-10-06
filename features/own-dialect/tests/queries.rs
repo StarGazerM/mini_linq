@@ -72,7 +72,7 @@ fn authored_structures_control_build_retention_and_nested_canonical_states() {
                 pipeline {};
                 physical {
                     relation R(a: Value,b: Value);
-                    r = let canon rename R { a -> a, b -> b };
+                    r = let canon rename R@0 { a -> a, b -> b };
                     p = pipe project r keep { a };
                     j = pipe probe first[a] p,r;
                     o = pipe canon project j keep { a,b };
@@ -124,7 +124,7 @@ fn computed_head_deduplicates_its_image_with_the_recorded_type() {
                 pipeline {};
                 physical {
                     relation R(x: i32);
-                    r = pipe rename R { x -> x };
+                    r = pipe rename R@0 { x -> x };
                     o = pipe canon project r keep { x };
                     return o as answer(*x % 2);
                 }
@@ -163,7 +163,7 @@ fn exists_consumes_the_full_source_and_retains_only_nonemptiness() {
                 pipeline {};
                 physical {
                     relation R(x: i32);
-                    r = pipe rename R { x -> x };
+                    r = pipe rename R@0 { x -> x };
                     g = pipe guard r if (checked(x));
                     e = exists canon project g keep {};
                     return e as answer();
@@ -285,8 +285,8 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
                 physical {
                     relation R(a: i32,b: i32,c: i32);
                     relation L(a: i32,b: i32);
-                    r = let rename R { a -> a,b -> b,c -> c };
-                    l = pipe rename L { a -> a,b -> b };
+                    r = let rename R@0 { a -> a,b -> b,c -> c };
+                    l = pipe rename L@1 { a -> a,b -> b };
                     p = pipe project l keep { a };
                     m = pipe semi eager[a] p,r;
                     n = pipe probe first[a] m,l;
@@ -330,8 +330,8 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
                 physical {
                     relation R(x: i32);
                     relation S(x: i32);
-                    r = pipe rename R { x -> x };
-                    s = pipe rename S { x -> x };
+                    r = pipe rename R@0 { x -> x };
+                    s = pipe rename S@1 { x -> x };
                     m = pipe semi lazy[x] r,s;
                     o = pipe canon project m keep { x };
                     return o as answer(x);
@@ -359,7 +359,7 @@ fn nested_stream_canonical_boundaries_have_separate_state() {
         pipeline {};
         physical {
             relation R(a: i32,b: i32);
-            r = pipe canon rename R { a -> a,b -> b };
+            r = pipe canon rename R@0 { a -> a,b -> b };
             o = pipe canon project r keep { a };
             return o as answer(a);
         }

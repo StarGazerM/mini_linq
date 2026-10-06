@@ -37,7 +37,7 @@ pub struct AttributeRename {
 /// A complete one-to-one rename of one declared relation occurrence.
 ///
 /// ```text
-/// Rename ::= "rename" RelationName "{"
+/// Rename ::= "rename" RelationName "@" Int "{"
 ///              [AttributeRename ("," AttributeRename)* [","]]
 ///            "}"
 /// ```
@@ -45,6 +45,8 @@ pub struct AttributeRename {
 pub struct Rename {
     pub rename_token: kw::rename,
     pub relation: Ident,
+    pub at: Token![@],
+    pub occurrence: syn::LitInt,
     #[syn(braced)]
     pub mapping_brace: token::Brace,
     #[syn(in = mapping_brace)]

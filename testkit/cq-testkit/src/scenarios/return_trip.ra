@@ -1,7 +1,7 @@
 relational {
     relation Road(src: i32, dst: i32);
-    r0 = rename Road { src -> a, dst -> b };
-    r1 = rename Road { src -> b, dst -> a };
+    r0 = rename Road@0 { src -> a, dst -> b };
+    r1 = rename Road@1 { src -> b, dst -> a };
     r2 = natural_join r0 with r1;
     r3 = project r2 keep { a };
     output r3 as answer(a);

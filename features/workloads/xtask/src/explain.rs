@@ -466,7 +466,7 @@ fn format_relational_operator(operator: &ra::Operator) -> String {
                 .map(|mapping| format!("{} -> {}", mapping.source, mapping.target))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("rename {} {{{mapping}}}", operator.relation)
+            format!("rename {}@{} {{{mapping}}}", operator.relation, operator.occurrence)
         }
         ra::Operator::NaturalJoin(operator) => {
             format!("natural_join {} with {}", operator.left, operator.right)

@@ -11,7 +11,7 @@ fn main() {
  pipeline { cq_rewrites::retype(payload => crate::MissingRead<_,_>), mini_linq::passes::print_pull };
         physical {
             relation l(a: i32); relation r(a: i32, b: i32);
-            left = pipe rename l {a -> a}; right = let rename r {a -> a, b -> b};
+            left = pipe rename l@0 {a -> a}; right = let rename r@1 {a -> a, b -> b};
             j = pipe canon probe first[a] left, right; return j as answer(a, b);
         }
     }.count();

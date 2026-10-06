@@ -1,5 +1,5 @@
-//! RA prime correspondence: independent relational tableaux between opaque
-//! chain nodes, with source-prefix containment and equal final sets.
+//! RA prime correspondence: fixed occurrences and relational constraints,
+//! with exact opaque Rust chains and retained source-before obligations.
 use cq_testkit::{corpus as scenarios, cq_semantics as cq_oracle, databases, semantics as oracle};
 
 use cq_elaborate::check;
@@ -65,7 +65,7 @@ fn generated_results_do_not_shadow_declared_relations() {
     assert_plan(
         &target,
         quote! {
-            r3 = rename r0 { x -> x }; r4 = project r3 keep { x }; output r4 as r2(x);
+            r3 = rename r0@0 { x -> x }; r4 = project r3 keep { x }; output r4 as r2(x);
         },
     );
 }
@@ -76,8 +76,8 @@ fn coarse_plans_elaborate_relation_at_a_time() {
     assert_plan(
         &target,
         quote! {
-            r0 = rename L { a -> a }; r1 = rename R { a -> a, b -> b };
-            r2 = natural_join r0 with r1; r3 = rename S { b -> b, c -> c };
+            r0 = rename L@0 { a -> a }; r1 = rename R@1 { a -> a, b -> b };
+            r2 = natural_join r0 with r1; r3 = rename S@2 { b -> b, c -> c };
             r4 = natural_join r2 with r3; r5 = project r4 keep { a, c };
             output r5 as answer(a, c);
         },
@@ -298,7 +298,7 @@ fn relational_hoisting_is_accepted_but_moving_a_relation_later_is_rejected() {
     });
     let target: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
-        r = rename R {a -> x}; s = rename S {b -> w};
+        r = rename R@0 {a -> x}; s = rename S@2 {b -> w};
         j = natural_join r with s; g = guard j if (10 / *x > 0);
         output g as answer(x,w);
     }};
@@ -309,8 +309,8 @@ fn relational_hoisting_is_accepted_but_moving_a_relation_later_is_rejected() {
     });
     let late: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
-        r = rename R {a -> x}; g = guard r if (10 / *x > 0);
-        s = rename S {b -> w}; j = natural_join g with s;
+        r = rename R@0 {a -> x}; g = guard r if (10 / *x > 0);
+        s = rename S@1 {b -> w}; j = natural_join g with s;
         output j as answer(x,w);
     }};
     ra::contract::check(&late).unwrap();
@@ -328,7 +328,7 @@ fn opaque_chain_reorder_and_payload_mutations_are_rejected() {
         struct Q; relation R(a:i32); answer(x,y) :- R(x), if { *x != 0 }, let y:i32 = 10 / *x;
     });
     let target: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R {a -> x};
+        relation R(a:i32); r = rename R@0 {a -> x};
         b = bind r with y:i32 = (10 / *x); g = guard b if ({ *x != 0 });
         output g as answer(x,y);
     }};
@@ -339,9 +339,6 @@ fn opaque_chain_reorder_and_payload_mutations_are_rejected() {
             .to_string()
             .contains("Rust chain")
     );
-    let erased = cq_elaborate::erase(&target, &source);
-    assert!(matches!(erased.query.body[1], cq::BodyItem::Let(_)));
-    assert!(matches!(erased.query.body[2], cq::BodyItem::Filter(_)));
     let mut changed = compile(&coarse(&source)).unwrap();
     let node = changed
         .plan
@@ -384,8 +381,8 @@ fn projection_cannot_discard_a_join_correlation() {
     });
     let broken: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-        r = rename R {a -> x,b -> y}; p = project r keep {x};
-        s = rename S {b -> y,c -> z}; j = natural_join p with s;
+        r = rename R@0 {a -> x,b -> y}; p = project r keep {x};
+        s = rename S@1 {b -> y,c -> z}; j = natural_join p with s;
         o = project j keep {x,z}; output o as answer(x,z);
     }};
     ra::contract::check(&broken).unwrap();
@@ -393,7 +390,7 @@ fn projection_cannot_discard_a_join_correlation() {
         check(&coarse(&source), &broken)
             .unwrap_err()
             .to_string()
-            .contains("tableau")
+            .contains("equality closure")
     );
 }
 
@@ -403,7 +400,7 @@ fn source_before_equality_cannot_move_after_rust() {
         struct Q; relation R(a:i32); answer(x) :- R(x), if * x == 1, if 10 / *x > 0;
     });
     let broken: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R {a -> x};
+        relation R(a:i32); r = rename R@0 {a -> x};
         g = guard r if (10 / *x > 0); s = select g if (x = 1);
         output s as answer(x);
     }};
@@ -549,7 +546,7 @@ fn leibniz_equality_class_can_use_either_generator_binding() {
     assert!(!explicit, "the shared join heading decides identity");
     let replacement: ra::Program = syn::parse_quote! { relational {
         relation R(key:Key, marker:i32); relation S(key:Key);
-        s = rename S {key -> x}; r = rename R {key -> x, marker -> z};
+        s = rename S@1 {key -> x}; r = rename R@0 {key -> x, marker -> z};
         j = natural_join s with r; b = bind j with y:bool = (x.flag);
         p = project b keep {y}; output p as answer(y);
     }};
@@ -565,10 +562,87 @@ fn projection_before_rust_can_discard_variables_outside_its_free_variables() {
     });
     let target: ra::Program = syn::parse_quote! { relational {
         relation R(key:Key, marker:i32);
-        r = rename R {key -> x, marker -> z}; p = project r keep {x};
+        r = rename R@0 {key -> x, marker -> z}; p = project r keep {x};
         b = bind p with y:bool = (x.flag); out = project b keep {y};
         output out as answer(y);
     }};
     ra::contract::check(&target).unwrap();
     check(&coarse(&source), &target).unwrap();
+}
+
+#[test]
+fn named_vo_reductions_cannot_be_erased_by_the_final_join() {
+    let source = chain();
+    let reduced = vo(
+        &source,
+        quote! {
+            reduce R@1 with L@0(a); L@0(a); R@1(a,b); S@2(b,c);
+        },
+    );
+    let mut target = compile(&reduced).unwrap();
+    let analysis = ra::contract::check(&target).unwrap();
+    let definition = target
+        .plan
+        .definitions
+        .iter_mut()
+        .find(|d| matches!(d.operator, ra::Operator::Semijoin(_)))
+        .unwrap();
+    let ra::Operator::Semijoin(join) = &definition.operator else {
+        unreachable!()
+    };
+    let input = &join.left;
+    let attributes = analysis[&input.to_string()].bindings.values();
+    definition.operator = syn::parse_quote!(project #input keep { #(#attributes),* });
+    ra::contract::check(&target).unwrap();
+    // All atoms still reach the complete final join. That does not supply the
+    // named reducer requested by this VO schedule.
+    let error = check(&reduced, &target).unwrap_err();
+    assert!(error.to_string().contains("semijoin reduction"), "{error}");
+}
+
+#[test]
+fn vo_clause_identity_and_partial_subatom_columns_are_checked() {
+    let source = cq(quote! {
+        struct Q; relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+        answer(a,c) :- L(a), if opaque(a), R(a,b), S(b,c);
+    });
+    let valuation = vo(
+        &source,
+        quote! { R@2(a,_); L@0(a); if opaque(a); R@2(a,b); S@3(b,c); },
+    );
+    let target = compile(&valuation).unwrap();
+    for index in [0, 1] {
+        let mut changed = target.clone();
+        let rename = changed
+            .plan
+            .definitions
+            .iter_mut()
+            .filter_map(|d| match &mut d.operator {
+                ra::Operator::Rename(r) => Some(r),
+                _ => None,
+            })
+            .nth(index)
+            .unwrap();
+        rename.occurrence = syn::parse_quote!(50);
+        ra::contract::check(&changed).unwrap();
+        assert!(
+            check(&valuation, &changed)
+                .unwrap_err()
+                .to_string()
+                .contains("occurrence")
+        );
+    }
+    let mut changed = target;
+    let projection = changed
+        .plan
+        .definitions
+        .iter_mut()
+        .find_map(|d| match &mut d.operator {
+            ra::Operator::Project(p) => Some(p),
+            _ => None,
+        })
+        .unwrap();
+    projection.attributes[0] = syn::parse_quote!(b);
+    ra::contract::check(&changed).unwrap();
+    assert!(check(&valuation, &changed).is_err());
 }

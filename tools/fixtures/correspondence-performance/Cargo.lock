@@ -6,6 +6,7 @@ version = 4
 name = "correspondence-performance-fixture"
 version = "0.1.0"
 dependencies = [
+ "cq-elaborate",
  "cq-lang-ra",
  "cq-planners-plan",
  "cq-testkit",

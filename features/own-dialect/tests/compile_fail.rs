@@ -7,8 +7,8 @@ const MERGE: &str = r#"
 physical {
     relation R(a: i32, b: i32);
     relation S(a: i32, c: i32);
-    l = pipe rename R { a -> a, b -> b };
-    r = pipe rename S { a -> a, c -> c };
+    l = pipe rename R@0 { a -> a, b -> b };
+    r = pipe rename S@1 { a -> a, c -> c };
     j = pipe canon merge[a] l,r;
     return j as answer(a,b,c);
 }"#;
@@ -18,9 +18,9 @@ physical {
     relation R(a: i32, b: i32);
     relation S(a: i32, c: i32);
     relation T(b: i32, c: i32);
-    l = pipe rename R { a -> a, b -> b };
-    r = pipe rename S { a -> a, c -> c };
-    t = pipe rename T { b -> b, c -> c };
+    l = pipe rename R@0 { a -> a, b -> b };
+    r = pipe rename S@1 { a -> a, c -> c };
+    t = pipe rename T@2 { b -> b, c -> c };
     j = pipe probe smallest[a] l,r;
     k = pipe semi eager[b,c] j,t;
     out = pipe canon project k keep { a,b,c };

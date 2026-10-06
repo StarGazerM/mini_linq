@@ -33,7 +33,7 @@ RA-Def	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structur
 WF-CQ	implementation	languages/cq-lang-cq/src/lib.rs	/// Formal rule WF-CQ:	Check CQ declarations, positive scope, output arity and symbolic type availability.
 WF-NF	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule WF-NF:	Check CQ plus distinct bare arguments within each body atom.
 WF-VO	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO:	Check NF and the local valuation schedule with coverage and reduction premises.
-WF-RA	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule WF-RA:	Check declarations, local operators, output heading and definition reachability.
+WF-RA	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule WF-RA:	Check declarations, unique atom occurrences, local operators, output heading and reachability.
 WF-IX	implementation	languages/cq-lang-ix/src/lib.rs	/// Formal rule WF-IX:	Check valid unique used descriptors; complete coverage is a pass obligation.
 WF-Physical	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule WF-Physical:	Derive local headings and reads, then check output, reachability and modes.
 PH-Pipe	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-Pipe:	Require one stream read for a derived pipe; noncanonical host renames are reusable.
@@ -44,7 +44,7 @@ STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
 CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, unified Rust chain, source-before inclusion and exact Written order.
 CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check exact retained steps and complete dependency-ordered relational tree reductions; no guard pushdown.
-CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check supplied VO relational regions, exact Rust chain, original binding witnesses and projection safety.
+CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check supplied VO clause occurrences, named semijoins, equality closure, constraints, Rust chain and Before.
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
 CK-Physical	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Physical:	Check contracts, RA erasure, IX demands and admissibility of recorded choices.
@@ -109,7 +109,7 @@ ORD-Admissible	implementation	languages/cq-syntax/src/algebra.rs	/// Formal rule
 CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Bound query terms and captured constants are separate from Rust expressions.
 D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constraint:	A central step waits only for its query variables.
 E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Ordinary relational pushdown or prefix select.
-CT-Constraint	implementation	languages/cq-lang-ra/src/correspondence.rs	/// Formal rule CT-Constraint:	Tableau symbols preserve boolean shape and all column arguments.
+CT-Constraint	implementation	languages/cq-lang-ra/src/structural.rs	// Formal rule CT-Constraint:	Structural predicates preserve boolean shape and fixed column arguments.
 RA-Constraint	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-Constraint:	Relational theta checks scope and Eq/Ord premises without Rust.
 IX-Const	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Const:	Column constant equalities and literal membership produce const supply.
 IX-Range	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Range:	Constant order bounds on one column produce range supply.

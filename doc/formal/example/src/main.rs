@@ -61,10 +61,10 @@ fn main() {
     let declarations = &source.declarations;
     let expected_ra: ra::Plan = syn::parse_quote! {
         #(#declarations)*
-        r0 = rename S { a -> k, b -> tag, c -> z };
-        r1 = rename R { a -> x, b -> k, c -> tag, d -> unused };
+        r0 = rename S@0 { a -> k, b -> tag, c -> z };
+        r1 = rename R@1 { a -> x, b -> k, c -> tag, d -> unused };
         r2 = semijoin r0 with r1;
-        r3 = rename T { a -> z, b -> y };
+        r3 = rename T@2 { a -> z, b -> y };
         r4 = select r3 if (y > 0);
         r5 = semijoin r4 with r2;
         r6 = semijoin r2 with r5;
@@ -77,10 +77,10 @@ fn main() {
     assert_eq!(planned.relational.plan, expected_ra);
     let expected_written: ra::Plan = syn::parse_quote! {
         #(#declarations)*
-        r0 = rename R { a -> x, b -> k, c -> tag, d -> unused };
-        r1 = rename S { a -> k, b -> tag, c -> z };
+        r0 = rename R@0 { a -> x, b -> k, c -> tag, d -> unused };
+        r1 = rename S@1 { a -> k, b -> tag, c -> z };
         r2 = natural_join r0 with r1;
-        r3 = rename T { a -> z, b -> y };
+        r3 = rename T@2 { a -> z, b -> y };
         r4 = select r3 if (y > 0);
         r5 = natural_join r2 with r4;
         r6 = project r5 keep { x, y };

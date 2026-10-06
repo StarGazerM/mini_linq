@@ -3,12 +3,12 @@ relational {
     relation S(first: i32, second: i32);
     relation T(first: i32, second: i32);
     relation H(first: i32, second: i32);
-    r0 = rename R { first -> x, second -> y };
-    r1 = rename S { first -> y, second -> z };
+    r0 = rename R@0 { first -> x, second -> y };
+    r1 = rename S@1 { first -> y, second -> z };
     r2 = natural_join r0 with r1;
-    r3 = rename T { first -> x, second -> z };
+    r3 = rename T@2 { first -> x, second -> z };
     r4 = natural_join r2 with r3;
-    r5 = rename H { first -> x, second -> w };
+    r5 = rename H@3 { first -> x, second -> w };
     r6 = natural_join r4 with r5;
     r7 = project r6 keep { w, x, y, z };
     output r7 as answer(x, y, z, w);

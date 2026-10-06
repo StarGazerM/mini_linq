@@ -7,9 +7,14 @@
 //! Relational constraints may
 //! move earlier across a Rust node, shrinking its domain, while Rust nodes retain
 //! written order. Identical chain payloads and source-before constraints retained
-//! before each node are a sufficient refinement condition. [`check`] proves
-//! conjunctive-tableau containment at every supplied-VO chain input and
-//! equality of output sets. Leibniz admissibility makes relational equalities
+//! before each node are a sufficient refinement condition. [`check`] compares
+//! fixed VO clause occurrences with `rename R@clause`, their positional
+//! bindings, equality closure and constraints, named semijoin reductions,
+//! Rust payloads and output. Partial subatoms retain their projection and
+//! correlation obligations. A DAG traversal assigns facts to their first
+//! observing Rust region; moving a fact earlier is allowed, delaying it is
+//! rejected. This is an ordinary structural contract, with no containment
+//! search or equivalence decision. Leibniz admissibility makes equalities
 //! identities. Functional extensionality permits alias solving, deduplication
 //! and projection before Rust while retaining its free variables.
 //!
@@ -196,16 +201,14 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
     Ok(target)
 }
 
-mod kernel;
-pub use kernel::{erase, kernel};
-mod correspondence;
+mod structural;
 
 /// The RA definitions refine the supplied VO schedule, retaining its Rust
 /// chain and preceding relational constraints.
-/// Formal rule CK-Elaborate: Check local contracts, chain regions and relational tableaux.
+/// Formal rule CK-Elaborate: Check contracts, clause occurrences, named reductions, constraints, Rust chain and Before.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
-    valuation::contract::check(source)?;
-    ra::contract::check(target)?;
+    let analysis = valuation::contract::check(source)?;
+    let target_schedule = ra::contract::Schedule::from_program(target)?;
     if target.plan.declarations != source.cq.declarations {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
@@ -224,7 +227,12 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
             ),
         ));
     }
-    correspondence::check(source, target)?;
+    structural::check(source, &analysis, &target_schedule).map_err(|message| {
+        syn::Error::new_spanned(
+            &target.plan.output,
+            format!("result `{}`: {message}", target.plan.output.input),
+        )
+    })?;
     Ok(())
 }
 
@@ -274,6 +282,8 @@ impl State<'_> {
         let mut result = self.emit(ra::Operator::Rename(Box::new(ra::Rename {
             rename_token: Default::default(),
             relation: atom.relation.clone(),
+            at: Default::default(),
+            occurrence: syn::LitInt::new(&clause.to_string(), atom.relation.span()),
             mapping_brace: Default::default(),
             mapping,
         })));

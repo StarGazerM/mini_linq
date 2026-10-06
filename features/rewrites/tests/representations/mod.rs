@@ -71,8 +71,8 @@ fn merge_mixed_native_and_retained_keys_execute_corpus_answers() {
         pipeline { mini_linq::passes::select, mini_linq::passes::print_pull };
         physical {
             relation R(first:i32, second:i32); relation S(first:i32, second:i32);
-            r0 = pipe rename R {first -> x, second -> y};
-            r1 = let rename S {first -> x, second -> y};
+            r0 = pipe rename R@0 {first -> x, second -> y};
+            r1 = let rename S@1 {first -> x, second -> y};
             r2 = pipe probe first [x,y] r0,r1;
             r3 = pipe canon project r2 keep {x,y}; return r3 as answer(x,y);
         }
@@ -118,9 +118,9 @@ fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
         };
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32,b:i32);
-            l = pipe rename L {a -> x}; o = let rename L {a -> x};
-            r = let rename R {a -> x,b -> y}; s = let rename S {a -> x};
-            t = let rename T {a -> x,b -> y};
+            l = pipe rename L@0 {a -> x}; o = let rename L@1 {a -> x};
+            r = let rename R@2 {a -> x,b -> y}; s = let rename S@3 {a -> x};
+            t = let rename T@4 {a -> x,b -> y};
             j = pipe merge[x] l,o; n = pipe semi eager[x] j,t;
             p = let probe first[x] n,r; m = pipe semi eager[x] p,s;
             q = pipe probe first[x,y] m,t;

@@ -6,8 +6,8 @@ fn two_hop() -> proc_macro2::TokenStream {
             relational {
     relation road(src: i32, dst: i32);
 
-                r0 = rename road {src -> from, dst -> via};
-                r1 = rename road {src -> via, dst -> to};
+                r0 = rename road@0 {src -> from, dst -> via};
+                r1 = rename road@1 {src -> via, dst -> to};
                 r2 = natural_join r0 with r1;
                 r3 = project r2 keep {from, to};
                 output r3 as two_hop(from, to);
@@ -37,7 +37,7 @@ fn result_ids_are_dag_references_not_prescribed_r_numbers() {
             relational {
     relation R(value: i32);
 
-                source = rename R {value -> x};
+                source = rename R@0 {value -> x};
                 answer_rows = project source keep {x};
                 output answer_rows as answer(x);
             }
@@ -52,7 +52,7 @@ fn local_validity_does_not_enforce_cq_occurrences_or_source_order() {
     relation R(value: i32);
             relation S(value: i32);
 
-                from_other_declared_input = rename S {value -> x};
+                from_other_declared_input = rename S@0 {value -> x};
                 output from_other_declared_input as answer(x);
             }
         })
@@ -63,8 +63,8 @@ fn local_validity_does_not_enforce_cq_occurrences_or_source_order() {
     relation R(value: i32);
             relation S(value: i32);
 
-                second = rename S {value -> y};
-                first = rename R {value -> x};
+                second = rename S@0 {value -> y};
+                first = rename R@1 {value -> x};
                 both = natural_join second with first;
                 projected = project both keep {x, y};
                 output projected as answer(x, y);
@@ -79,7 +79,7 @@ fn rename_requires_a_declared_relation_and_exact_one_to_one_domain() {
             relational {
     relation R(value: i32);
 
-                r0 = rename Missing {value -> x};
+                r0 = rename Missing@0 {value -> x};
                 output r0 as answer(x);
             }
         })
@@ -95,7 +95,7 @@ fn rename_requires_a_declared_relation_and_exact_one_to_one_domain() {
                     relational {
         relation R(c0: i32, c1: i32);
 
-                        r0 = rename R {#invalid_mapping};
+                        r0 = rename R@0 {#invalid_mapping};
                         r1 = project r0 keep {x};
                         output r1 as answer(x);
                     }
@@ -116,8 +116,8 @@ fn natural_join_infers_union_heading_without_resolving_rust_types() {
     relation People(id: PersonId, manager: PersonId);
             relation Logins(person: u64, day: u32);
 
-                people = rename People {id -> x, manager -> manager};
-                logins = rename Logins {person -> x, day -> day};
+                people = rename People@0 {id -> x, manager -> manager};
+                logins = rename Logins@1 {person -> x, day -> day};
                 joined = natural_join people with logins;
                 result = project joined keep {x, day};
                 output result as answer(x, day);
@@ -133,8 +133,8 @@ fn natural_join_with_disjoint_headings_is_a_cartesian_product() {
     relation R(value: i32);
             relation S(value: i32);
 
-                r = rename R {value -> x};
-                s = rename S {value -> y};
+                r = rename R@0 {value -> x};
+                s = rename S@1 {value -> y};
                 product = natural_join r with s;
                 output product as answer(x, y);
             }
@@ -148,7 +148,7 @@ fn project_is_a_distinct_subset_and_output_owns_tuple_order() {
             relational {
     relation R(first: i32, second: i32);
 
-                rows = rename R {first -> x, second -> z};
+                rows = rename R@0 {first -> x, second -> z};
                 result = project rows keep {x, z};
                 output result as answer(z, x);
             }
@@ -160,7 +160,7 @@ fn project_is_a_distinct_subset_and_output_owns_tuple_order() {
                     relational {
         relation R(value: i32);
 
-                        rows = rename R {value -> x};
+                        rows = rename R@0 {value -> x};
                         result = project rows keep {#attributes};
                         output result as answer(x);
                     }
@@ -176,7 +176,7 @@ fn output_must_match_its_input_heading() {
             relational {
     relation R(first: i32, second: i32);
 
-                rows = rename R {first -> x, second -> y};
+                rows = rename R@0 {first -> x, second -> y};
                 output rows as answer(x);
             }
         })
@@ -190,7 +190,7 @@ fn definitions_are_unique_and_operands_must_be_earlier() {
             relational {
     relation R(value: i32);
 
-                r0 = rename R {value -> x};
+                r0 = rename R@0 {value -> x};
                 r0 = project r0 keep {x};
                 output r0 as answer(x);
             }
@@ -203,7 +203,7 @@ fn definitions_are_unique_and_operands_must_be_earlier() {
     relation R(value: i32);
 
                 result = project rows keep {x};
-                rows = rename R {value -> x};
+                rows = rename R@0 {value -> x};
                 output result as answer(x);
             }
         })
@@ -218,8 +218,8 @@ fn every_definition_must_contribute_to_output() {
     relation R(value: i32);
             relation S(value: i32);
 
-                used = rename R {value -> x};
-                unused = rename S {value -> y};
+                used = rename R@0 {value -> x};
+                unused = rename S@1 {value -> y};
                 output used as answer(x);
             }
         })
@@ -234,7 +234,7 @@ fn unit_is_the_zero_attribute_relation() {
     relation R(value: i32);
 
                 seed = unit;
-                rows = rename R {value -> x};
+                rows = rename R@0 {value -> x};
                 joined = natural_join seed with rows;
                 output joined as answer(x);
             }
@@ -247,7 +247,7 @@ fn relational_contract_rejects_pruned_expression_dependencies() {
     let source: ra::Program = syn::parse_quote! {
             relational {
     relation R(a:i32,b:i32);
-                r0 = rename R {a -> x, b -> y};
+                r0 = rename R@0 {a -> x, b -> y};
                 r1 = project r0 keep {x};
                 r2 = guard r1 if (accept(y));
                 output r2 as answer(x);
@@ -260,7 +260,7 @@ fn relational_contract_rejects_pruned_expression_dependencies() {
 fn bind_requires_available_inputs_and_fresh_columns() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32);
-        r = rename R {a -> x,b -> y}; p = project r keep {x};
+        r = rename R@0 {a -> x,b -> y}; p = project r keep {x};
         e = bind p with z:i32 = (x + 1);
         output e as answer(x,z);
     }};
@@ -278,9 +278,9 @@ fn bind_requires_available_inputs_and_fresh_columns() {
 #[test]
 fn parsing_requires_an_output_consumes_the_body_and_checks_mapping_syntax() {
     for text in [
-        "relational { relation R(a: i32); r = rename R {a -> x}; }",
-        "relational { relation R(a: i32); r = rename R {a -> x}; output r as answer(x); junk }",
-        "relational { relation R(a: i32); r = rename R {a x}; output r as answer(x); }",
+        "relational { relation R(a: i32); r = rename R@0 {a -> x}; }",
+        "relational { relation R(a: i32); r = rename R@0 {a -> x}; output r as answer(x); junk }",
+        "relational { relation R(a: i32); r = rename R@0 {a x}; output r as answer(x); }",
     ] {
         assert!(syn::parse_str::<ra::Program>(text).is_err(), "{text}");
     }
@@ -290,7 +290,7 @@ fn parsing_requires_an_output_consumes_the_body_and_checks_mapping_syntax() {
 fn relational_selection_has_only_column_equalities_and_literals() {
     check(quote! { relational {
         relation R(a: i32, b: i32);
-        r = rename R {a -> x, b -> y};
+        r = rename R@0 {a -> x, b -> y};
         s = select r if (x = -5, y = x);
         output s as answer(x, y);
     }})
@@ -303,7 +303,7 @@ fn relational_selection_has_only_column_equalities_and_literals() {
     ] {
         assert!(
             syn::parse2::<ra::Program>(quote! { relational {
-                relation R(a: i32); r = rename R {a -> x};
+                relation R(a: i32); r = rename R@0 {a -> x};
                 s = select r if (#condition); output s as answer(x);
             }})
             .is_err()
@@ -311,7 +311,7 @@ fn relational_selection_has_only_column_equalities_and_literals() {
     }
     assert!(
         syn::parse2::<ra::Program>(quote! { relational {
-            relation R(a: i32); r = rename R {a -> x};
+            relation R(a: i32); r = rename R@0 {a -> x};
             s = extend r with {y:i32} value (1); output s as answer(x, y);
         }})
         .is_err()
@@ -322,9 +322,9 @@ fn relational_selection_has_only_column_equalities_and_literals() {
 fn opaque_nodes_form_one_ancestry_chain() {
     check(quote! { relational {
         relation R(a: i32); relation S(b: i32);
-        r = rename R {a -> x};
+        r = rename R@0 {a -> x};
         g = guard r if (*x != 0);
-        s = rename S {b -> w};
+        s = rename S@1 {b -> w};
         j = natural_join g with s;
         b = bind j with y: i32 = (10 / *x);
         p = project b keep {x, y}; output p as answer(x, y);
@@ -332,7 +332,7 @@ fn opaque_nodes_form_one_ancestry_chain() {
     .unwrap();
     let error = check(quote! { relational {
         relation R(a: i32); relation S(b: i32);
-        r = rename R {a -> x}; s = rename S {b -> w};
+        r = rename R@0 {a -> x}; s = rename S@1 {b -> w};
         g = guard r if (*x != 0);
         b = bind s with y: i32 = (10 / *w);
         j = natural_join g with b;
@@ -346,16 +346,16 @@ fn opaque_nodes_form_one_ancestry_chain() {
 fn selection_scope_and_float_leibniz_are_checked_with_column_diagnostics() {
     for program in [
         quote! { relational {
-            relation R(a: i32); r = rename R {a -> x};
+            relation R(a: i32); r = rename R@0 {a -> x};
             s = select r if (y = 1); output s as answer(x);
         }},
         quote! { relational {
-            relation R(a: f64); r = rename R {a -> x};
+            relation R(a: f64); r = rename R@0 {a -> x};
             s = select r if (x = 1.0); output s as answer(x);
         }},
         quote! { relational {
             relation R(a: f64); relation S(a: f64);
-            r = rename R {a -> x}; s = rename S {a -> x};
+            r = rename R@0 {a -> x}; s = rename S@1 {a -> x};
             j = natural_join r with s; p = project j keep {}; output p as answer();
         }},
     ] {
@@ -371,9 +371,9 @@ fn selection_scope_and_float_leibniz_are_checked_with_column_diagnostics() {
 fn rewrite_accepts_join_reordering_and_reassociation_with_existential_columns() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
-        r = rename R {a -> x, b -> y};
-        s = rename S {b -> y, c -> z};
-        t = rename T {c -> z, d -> w};
+        r = rename R@0 {a -> x, b -> y};
+        s = rename S@1 {b -> y, c -> z};
+        t = rename T@2 {c -> z, d -> w};
         j = natural_join r with s;
         k = natural_join j with t;
         p = project k keep {x,w}; output p as answer(x,w);
@@ -382,7 +382,7 @@ fn rewrite_accepts_join_reordering_and_reassociation_with_existential_columns() 
     target.plan.definitions[3].operator = syn::parse_quote!(natural_join t with s);
     target.plan.definitions[4].operator = syn::parse_quote!(natural_join j with r);
     ra::contract::check(&target).unwrap();
-    ra::correspondence::check_rewrite(&source, &target).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
     ra::check_rewrite(&target, &source).unwrap();
 }
 
@@ -390,7 +390,7 @@ fn rewrite_accepts_join_reordering_and_reassociation_with_existential_columns() 
 fn rewrite_rejects_dropped_relational_predicates_and_existential_witnesses() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); relation S(b:i32);
-        r = rename R {a -> x,b -> y}; s = rename S {b -> y};
+        r = rename R@0 {a -> x,b -> y}; s = rename S@1 {b -> y};
         j = semijoin r with s;
         f = select j if (x > 0, x = y);
         p = project f keep {x}; output p as answer(x);
@@ -403,20 +403,20 @@ fn rewrite_rejects_dropped_relational_predicates_and_existential_witnesses() {
         target.plan.definitions[3].operator = operator;
         ra::contract::check(&target).unwrap();
         let error = ra::check_rewrite(&source, &target).unwrap_err();
-        assert!(error.to_string().contains("tableau"), "{error}");
+        assert!(error.to_string().contains("source"), "{error}");
     }
     let mut target = source.clone();
     target.plan.definitions.remove(1);
     target.plan.definitions[1].operator = syn::parse_quote!(project r keep {x,y});
     ra::contract::check(&target).unwrap();
     let error = ra::check_rewrite(&source, &target).unwrap_err();
-    assert!(error.to_string().contains("tableau"), "{error}");
+    assert!(error.to_string().contains("source"), "{error}");
 }
 
 #[test]
 fn rewrite_rejects_reordered_or_changed_rust_payloads() {
     let source: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R {a -> x};
+        relation R(a:i32); r = rename R@0 {a -> x};
         g = guard r if (first(x));
         h = guard g if (second(x)); output h as answer(x);
     }};
@@ -435,7 +435,7 @@ fn rewrite_rejects_reordered_or_changed_rust_payloads() {
 #[test]
 fn rewrite_rejects_changed_bindings_even_when_projected_away() {
     let source: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R {a -> x};
+        relation R(a:i32); r = rename R@0 {a -> x};
         b = bind r with y:i32 = (10 / *x);
         p = project b keep {x}; output p as answer(x);
     }};
@@ -449,19 +449,19 @@ fn rewrite_rejects_changed_bindings_even_when_projected_away() {
 #[test]
 fn rewrite_relational_movement_across_rust_is_directional() {
     let earlier: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R {a -> x};
+        relation R(a:i32); r = rename R@0 {a -> x};
         s = select r if (x > 0);
         g = guard s if (10 / *x > 0); output g as answer(x);
     }};
     let later: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R {a -> x};
+        relation R(a:i32); r = rename R@0 {a -> x};
         g = guard r if (10 / *x > 0);
         s = select g if (x > 0); output s as answer(x);
     }};
     ra::contract::check(&earlier).unwrap();
     ra::contract::check(&later).unwrap();
     ra::check_rewrite(&later, &earlier).unwrap();
-    let error = ra::correspondence::check_rewrite(&earlier, &later).unwrap_err();
+    let error = ra::check_rewrite(&earlier, &later).unwrap_err();
     assert!(error.to_string().contains("source-before"), "{error}");
 }
 
@@ -469,14 +469,14 @@ fn rewrite_relational_movement_across_rust_is_directional() {
 fn rewrite_checks_the_full_source_prefix_even_outside_rust_free_variables() {
     let earlier: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
-        r = rename R {a -> x}; s = rename S {b -> y};
+        r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
         j = natural_join r with s;
         g = guard j if (10 / *x > 0);
         p = project g keep {x}; output p as answer(x);
     }};
     let later: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
-        r = rename R {a -> x}; s = rename S {b -> y};
+        r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
         g = guard r if (10 / *x > 0);
         j = natural_join g with s;
         p = project j keep {x}; output p as answer(x);
@@ -491,16 +491,372 @@ fn rewrite_checks_the_full_source_prefix_even_outside_rust_free_variables() {
 fn shared_projected_inputs_keep_independent_existential_witnesses() {
     let independent: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32, b:i32);
-        r = rename R {a -> x, b -> y};
+        r = rename R@0 {a -> x, b -> y};
         px = project r keep {x}; py = project r keep {y};
         j = natural_join px with py; output j as answer(x, y);
     }};
     let correlated: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32, b:i32);
-        r = rename R {a -> x, b -> y}; output r as answer(x, y);
+        r = rename R@0 {a -> x, b -> y}; output r as answer(x, y);
     }};
     for (source, target) in [(&independent, &correlated), (&correlated, &independent)] {
         assert!(ra::check_rewrite(source, target).is_err());
     }
     ra::check_rewrite(&independent, &independent).unwrap();
+}
+
+#[test]
+fn occurrences_are_required_unique_numeric_identities_and_round_trip() {
+    let program: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32);
+        r = rename R@7 {a -> x}; s = rename S@12 {a -> x};
+        j = natural_join r with s; output j as answer(x);
+    }};
+    ra::contract::check(&program).unwrap();
+    assert_eq!(
+        program,
+        syn::parse2::<ra::Program>(quote!(#program)).unwrap()
+    );
+    for occurrence in [syn::parse_quote!(7), syn::parse_quote!(0x7)] {
+        let mut duplicate = program.clone();
+        let ra::Operator::Rename(rename) = &mut duplicate.plan.definitions[1].operator else {
+            unreachable!()
+        };
+        rename.occurrence = occurrence;
+        assert!(
+            ra::contract::check(&duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("occurrence")
+        );
+        assert!(ra::check_rewrite(&program, &duplicate).is_err());
+        assert!(ra::check_rewrite(&duplicate, &program).is_err());
+    }
+    assert!(
+        syn::parse2::<ra::Program>(quote! { relational {
+            relation R(a:i32); r = rename R {a -> x}; output r as answer(x);
+        }})
+        .is_err()
+    );
+    let overflow: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R@18446744073709551616 {a -> x}; output r as answer(x);
+    }};
+    assert!(ra::contract::check(&overflow).is_err());
+}
+
+#[test]
+fn occurrence_and_atom_bindings_cannot_change_even_for_existential_columns() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32);
+        r = rename R@4 {a -> x,b -> y}; p = project r keep {x}; output p as answer(x);
+    }};
+    for rename in [
+        syn::parse_quote!(rename R@5 {a -> x,b -> y}),
+        syn::parse_quote!(rename R@4 {a -> x,b -> z}),
+        syn::parse_quote!(rename R@4 {a -> y,b -> x}),
+    ] {
+        let mut target = source.clone();
+        target.plan.definitions[0].operator = rename;
+        ra::contract::check(&target).unwrap();
+        let error = ra::check_rewrite(&source, &target).unwrap_err();
+        assert!(error.to_string().contains("occurrence"), "{error}");
+    }
+}
+
+#[test]
+fn result_renames_and_earlier_selection_and_semijoin_are_accepted() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32);
+        r = rename R@4 {a -> x}; s = rename S@8 {a -> x};
+        g = guard r if (opaque(x)); j = semijoin g with s;
+        f = select j if (x = 1); output f as answer(x);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32);
+        support = rename S@8 {a -> x}; rows = rename R@4 {a -> x};
+        matched = semijoin rows with support;
+        filtered = select matched if (x = 1);
+        result = guard filtered if (opaque(x)); output result as answer(x);
+    }};
+    ra::check_rewrite(&source, &target).unwrap();
+    assert!(
+        ra::check_rewrite(&target, &source)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
+}
+
+#[test]
+fn equality_edges_are_compared_after_transitive_closure() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32,c:i32);
+        r = rename R@0 {a -> x,b -> y,c -> z};
+        f = select r if (x = y, y = z, x > 0);
+        p = project f keep {x}; output p as answer(x);
+    }};
+    let mut target = source.clone();
+    target.plan.definitions[1].operator = syn::parse_quote!(select r if (z = y, x = z, z > 0));
+    ra::check_rewrite(&source, &target).unwrap();
+    ra::check_rewrite(&target, &source).unwrap();
+    target.plan.definitions[1].operator = syn::parse_quote!(select r if (z = y, x > 0));
+    assert!(
+        ra::check_rewrite(&source, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("equality closure")
+    );
+}
+
+#[test]
+fn a_later_equality_cannot_repair_an_earlier_predicate_binding() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(b:i32);
+        r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
+        j = natural_join r with s; f = select j if (x = 1);
+        g = guard f if (opaque()); e = select g if (x = y);
+        p = project e keep {x}; output p as answer(x);
+    }};
+    let mut target = source.clone();
+    target.plan.definitions[3].operator = syn::parse_quote!(select j if (y = 1));
+    ra::contract::check(&target).unwrap();
+    assert!(
+        ra::check_rewrite(&source, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
+}
+
+#[test]
+fn before_is_dag_ancestry_even_when_a_selection_is_written_early() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R@0 {a -> x};
+        f = select r if (x = 1); g = guard f if (opaque(x)); output g as answer(x);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); r = rename R@0 {a -> x};
+        f = select r if (x = 1); g = guard r if (opaque(x));
+        j = natural_join g with f; output j as answer(x);
+    }};
+    ra::contract::check(&target).unwrap();
+    assert!(
+        ra::check_rewrite(&source, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
+}
+
+#[test]
+fn output_layout_declarations_and_chain_length_are_contracts() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        g = guard r if (opaque(x)); output g as answer(x,y);
+    }};
+    let mut head = source.clone();
+    head.plan.output.head = syn::parse_quote!(answer(y, x));
+    let mut declaration = source.clone();
+    declaration.plan.declarations[0].columns[0].ty = syn::parse_quote!(u32);
+    let mut chain = source.clone();
+    chain.plan.definitions[1].operator = syn::parse_quote!(project r keep {x,y});
+    for target in [head, declaration, chain] {
+        ra::contract::check(&target).unwrap();
+        assert!(ra::check_rewrite(&source, &target).is_err());
+    }
+    let mut malformed = source.clone();
+    malformed.plan.output.input = syn::parse_quote!(missing);
+    assert!(
+        ra::check_rewrite(&source, &malformed)
+            .unwrap_err()
+            .to_string()
+            .contains("not defined")
+    );
+    assert!(
+        ra::check_rewrite(&malformed, &source)
+            .unwrap_err()
+            .to_string()
+            .contains("not defined")
+    );
+}
+
+#[test]
+fn repeated_shared_dag_operands_do_not_create_new_occurrences() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y}; output r as answer(x,y);
+    }};
+    let mut target = source.clone();
+    let mut previous = target.plan.output.input.clone();
+    for index in 0..2048 {
+        let result = quote::format_ident!("shared{index}");
+        target
+            .plan
+            .definitions
+            .push(syn::parse_quote!(#result = semijoin #previous with #previous;));
+        previous = result;
+    }
+    target.plan.output.input = previous;
+    ra::check_rewrite(&source, &target).unwrap();
+    ra::check_rewrite(&target, &source).unwrap();
+}
+
+#[test]
+fn predicates_belong_to_their_independent_projected_witnesses() {
+    let independent: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        px = project r keep {x}; py = project r keep {y};
+        filtered = select py if (y = 1);
+        j = semijoin px with filtered; output j as answer(x);
+    }};
+    let correlated: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        filtered = select r if (y = 1); p = project filtered keep {x}; output p as answer(x);
+    }};
+    ra::check_rewrite(&independent, &independent).unwrap();
+    for (source, target) in [(&independent, &correlated), (&correlated, &independent)] {
+        ra::contract::check(target).unwrap();
+        assert!(
+            ra::check_rewrite(source, target)
+                .unwrap_err()
+                .to_string()
+                .contains("projection correlations")
+        );
+    }
+    let left: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        f = select r if (y = 1); px = project f keep {x}; py = project r keep {y};
+        j = natural_join px with py; output j as answer(x,y);
+    }};
+    let right: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        f = select r if (y = 1); px = project r keep {x}; py = project f keep {y};
+        j = natural_join px with py; output j as answer(x,y);
+    }};
+    assert!(ra::check_rewrite(&left, &right).is_err());
+    assert!(ra::check_rewrite(&right, &left).is_err());
+    let hidden: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        px = project r keep {x}; f = select r if (y = 1); existence = project f keep {};
+        j = semijoin px with existence; output j as answer(x);
+    }};
+    assert!(ra::check_rewrite(&hidden, &correlated).is_err());
+    let subset: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        f = select r if (y = 1); px = project f keep {x};
+        j = semijoin r with px; output j as answer(x,y);
+    }};
+    let filtered: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        f = select r if (y = 1); output f as answer(x,y);
+    }};
+    assert!(ra::check_rewrite(&subset, &filtered).is_err());
+}
+
+#[test]
+fn final_equality_does_not_deduplicate_distinct_before_constraints() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        f = select r if (x = 1, y = 1); g = guard f if (opaque());
+        e = select g if (x = y); p = project e keep {x}; output p as answer(x);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        f = select r if (x = 1); g = guard f if (opaque());
+        e = select g if (x = y, y = 1); p = project e keep {x}; output p as answer(x);
+    }};
+    assert!(
+        ra::check_rewrite(&source, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
+    ra::check_rewrite(&target, &source).unwrap();
+    let mut earlier = target.clone();
+    // The existing x constraint is retained even if an additional y predicate
+    // is serialized first and only joins x's equality class after Rust.
+    earlier.plan.definitions[1].operator = syn::parse_quote!(select r if (y = 1, x = 1));
+    ra::check_rewrite(&target, &earlier).unwrap();
+}
+
+#[test]
+fn a_projected_semijoin_cannot_rebind_the_supports_hidden_columns() {
+    let independent: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32);
+        r = rename R@0 {a -> x}; s = rename S@1 {a -> x,b -> y};
+        matched = semijoin r with s; py = project s keep {y};
+        j = natural_join matched with py; output j as answer(x,y);
+    }};
+    let correlated: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32);
+        r = rename R@0 {a -> x}; s = rename S@1 {a -> x,b -> y};
+        j = natural_join r with s; output j as answer(x,y);
+    }};
+    ra::check_rewrite(&independent, &independent).unwrap();
+    assert!(ra::check_rewrite(&independent, &correlated).is_err());
+    assert!(ra::check_rewrite(&correlated, &independent).is_err());
+}
+
+#[test]
+fn a_cut_of_a_joined_prefix_keeps_its_witness_scope() {
+    let independent: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation S(b:i32);
+        r = rename R@0 {a -> x,b -> y}; s = rename S@1 {b -> y};
+        j = natural_join r with s; exists = project j keep {}; px = project r keep {x};
+        out = natural_join px with exists; output out as answer(x);
+    }};
+    let correlated: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation S(b:i32);
+        r = rename R@0 {a -> x,b -> y}; s = rename S@1 {b -> y};
+        j = natural_join r with s; out = project j keep {x}; output out as answer(x);
+    }};
+    ra::check_rewrite(&independent, &independent).unwrap();
+    assert!(ra::check_rewrite(&independent, &correlated).is_err());
+    assert!(ra::check_rewrite(&correlated, &independent).is_err());
+}
+
+#[test]
+fn before_constraints_use_current_equality_classes_among_all_aliases() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32,c:i32); r = rename R@0 {a -> x,b -> y,c -> z};
+        f = select r if (x = z, z = 1); g = guard f if (opaque());
+        e = select g if (x = y, y = 1); p = project e keep {x}; output p as answer(x);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32,c:i32); r = rename R@0 {a -> x,b -> y,c -> z};
+        f = select r if (x = z, y = 1, x = 1); g = guard f if (opaque());
+        e = select g if (x = y); p = project e keep {x}; output p as answer(x);
+    }};
+    ra::check_rewrite(&source, &target).unwrap();
+    assert!(
+        ra::check_rewrite(&target, &source)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
+}
+
+#[test]
+fn reducer_column_matches_do_not_replace_a_before_generator_equality() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(b:i32);
+        r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
+        j = natural_join r with s; e = select j if (x = y);
+        g = guard e if (*x == *y || panic!()); output g as answer(x,y);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(b:i32);
+        r = rename R@0 {a -> x}; s = rename S@1 {b -> y};
+        rs = natural_join r with s; re = select rs if (x = y); rr = project re keep {x};
+        sr = natural_join s with r; se = select sr if (x = y); ss = project se keep {y};
+        j = natural_join rr with ss;
+        g = guard j if (*x == *y || panic!()); e = select g if (x = y);
+        output e as answer(x,y);
+    }};
+    ra::contract::check(&target).unwrap();
+    assert!(
+        ra::check_rewrite(&source, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("source-before")
+    );
 }

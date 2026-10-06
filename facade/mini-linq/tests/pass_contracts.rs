@@ -403,7 +403,7 @@ fn reduced_plans_compute_the_authored_answers() {
 fn lowering_preserves_authored_demands_but_index_policy_requires_first_use_names() {
     let source: ix::Program = syn::parse_quote! { relational {
         relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
-        l = rename L {a -> a}; r = rename R {a -> a, b -> b}; s = rename S {b -> b, c -> c};
+        l = rename L@0 {a -> a}; r = rename R@1 {a -> a, b -> b}; s = rename S@2 {b -> b, c -> c};
         j0 = natural_join l with r; j1 = natural_join j0 with s;
         x = semijoin j1 with l; p = project x keep {a, c}; output p as answer(a, c);
     } indexes { membership = @l[0] stream; second = @s[0] stream; first = @r[0] stream; }};
@@ -517,9 +517,9 @@ fn output_schemas_cannot_silently_discard_leaf_values() {
         let c: cq::Program =
             syn::parse_quote! { struct Q; relation R(a:i32); #output answer(x) :- R(x); };
         let r: ra::Program = syn::parse_quote! { relational { relation R(a:i32); #output
-        r = rename R {a -> x}; output r as answer(x); } };
+        r = rename R@0 {a -> x}; output r as answer(x); } };
         let p: physical::Program = syn::parse_quote! { physical { relation R(a:i32); #output
-        r = pipe canon rename R {a -> x}; return r as answer(x); } };
+        r = pipe canon rename R@0 {a -> x}; return r as answer(x); } };
         for result in [
             cq::contract::check(&c),
             ra::contract::check(&r).map(|_| ()),

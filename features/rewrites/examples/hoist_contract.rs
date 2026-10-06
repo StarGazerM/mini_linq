@@ -5,10 +5,10 @@ fn main() -> syn::Result<()> {
         relation L(a:i32,b:i32);
         relation R(b:i32,c:i32);
         relation S(a:i32,c:i32);
-        l = pipe rename L {a -> a,b -> b};
-        r = pipe rename R {b -> b,c -> c};
+        l = pipe rename L@0 {a -> a,b -> b};
+        r = pipe rename R@1 {b -> b,c -> c};
         candidate = pipe probe first [b] l,r;
-        s = pipe rename S {a -> a,c -> c};
+        s = pipe rename S@2 {a -> a,c -> c};
         checked = pipe canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
     });

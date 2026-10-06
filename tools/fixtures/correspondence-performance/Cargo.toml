@@ -9,5 +9,6 @@ publish = false
 [dependencies]
 cq-planners-plan = { path = "../../../features/planners/plan" }
 cq-lang-ra = { path = "../../../languages/cq-lang-ra" }
+cq-elaborate = { path = "../../../passes/cq-elaborate" }
 cq-testkit = { path = "../../../testkit/cq-testkit" }
 syn = { version = "2", features = ["full"] }

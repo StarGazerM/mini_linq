@@ -1,10 +1,10 @@
 physical { relation A (origin : i32 , endpoint : i32);
  relation B (origin : i32 , endpoint : i32);
  relation C (origin : i32 , endpoint : i32);
- r0 = pipe rename A { origin - > h , endpoint - > a };
- r1 = pipe rename B { origin - > h , endpoint - > b };
+ r0 = pipe rename A@0 { origin - > h , endpoint - > a };
+ r1 = pipe rename B@1 { origin - > h , endpoint - > b };
  r2 = pipe probe first [h] r0 , r1;
- r3 = pipe rename C { origin - > h , endpoint - > c };
+ r3 = pipe rename C@2 { origin - > h , endpoint - > c };
  r4 = pipe probe first [h] r2 , r3;
  r5 = pipe canon project r4 keep { a , b , c };
  return r5 as answer (a , b , c);
