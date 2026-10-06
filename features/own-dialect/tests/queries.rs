@@ -1,5 +1,39 @@
 use std::collections::BTreeSet;
 
+#[test]
+#[allow(non_snake_case)]
+fn filtered_storage_reconstructs_constants_in_both_printers() {
+    let L = [(1,), (2,), (3,)];
+    let R = [(7, 1, 10), (8, 2, 20), (7, 3, 30), (7, 1, 10)];
+    macro_rules! recorded {
+        ($($printer:ident)::+) => {
+            $($printer)::+! {
+                pipeline {};
+                physical {
+                    relation L(k:i32); relation R(a:i32,k:i32,value:i32);
+                    l = pipe rename L {k -> k}; r = pipe rename R {a -> a,k -> k,value -> value};
+                    filtered = let point select r if (a = 7);
+                    joined = pipe probe first [k] l,filtered;
+                    out = pipe canon project joined keep {a,k}; return out as answer(a,k);
+                }
+                structures {
+                    l host scan = ::core::iter::Map<_,_> [];
+                    r host scan = ::core::iter::Map<_,_> [];
+                    r host filtered = ::core::iter::Map<_,_> [a];
+                    filtered = ::cq_storage::HashIndex<'_,_,_> [k] payload [k] constants {a = 7};
+                    out canon = ::std::collections::HashSet<_>;
+                }
+            }
+        };
+    }
+    let push: BTreeSet<_> = recorded!(own_push::push).map(|(a, k)| (*a, *k)).collect();
+    let pull: BTreeSet<_> = recorded!(mini_linq::passes::print_pull)
+        .map(|(a, k)| (*a, *k))
+        .collect();
+    assert_eq!(push, [(7, 1), (7, 3)].into_iter().collect());
+    assert_eq!(push, pull);
+}
+
 macro_rules! partial {
     ($printer:path, $r:expr, $s:expr) => {{
         #[allow(non_snake_case)]

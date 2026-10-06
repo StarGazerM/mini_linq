@@ -13,11 +13,23 @@ fn fixture(suffix: &str) -> ir::Program {
 
 fn source() -> ir::Program {
     let source = fixture(include_str!("fixtures/representations.structures"));
-    assert_eq!(
-        source,
-        cq_structure_selection::compile(&source.physical).unwrap()
-    );
+    // This authored fixture explicitly retains buffers so the rows selector
+    // remains covered independently of the default retention policy.
+    ir::contract::check(&source).unwrap();
     source
+}
+
+#[test]
+fn default_selection_omits_the_authored_unneeded_buffers() {
+    let mut expected = source();
+    expected
+        .structures
+        .entries
+        .retain(|e| !matches!(e.structure, Structure::Rows { .. }));
+    assert_eq!(
+        cq_structure_selection::compile(&expected.physical).unwrap(),
+        expected
+    );
 }
 
 fn missing_storage(target: &ir::Program) -> ir::Program {

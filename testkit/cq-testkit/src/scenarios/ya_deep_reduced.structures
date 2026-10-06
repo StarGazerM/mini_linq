@@ -10,8 +10,5 @@ structures { r2 = :: std :: collections :: HashSet < _ > [c];
  r3 host scan = :: core :: iter :: Map < _ , _ > [];
  r4 rows = :: std :: vec :: Vec < _ >;
  r5 host scan = :: core :: iter :: Map < _ , _ > [];
- r6 rows = :: std :: vec :: Vec < _ >;
- r7 rows = :: std :: vec :: Vec < _ >;
- r8 rows = :: std :: vec :: Vec < _ >;
  r13 canon = :: std :: collections :: HashSet < _ >;
  }

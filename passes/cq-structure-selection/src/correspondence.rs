@@ -7,11 +7,6 @@ use cq_lang_structures as structures;
 pub fn check(source: &physical::Program, target: &structures::Program) -> syn::Result<()> {
     physical::contract::check(source)?;
     structures::contract::check(target)?;
-    if target.physical != *source {
-        return Err(syn::Error::new_spanned(
-            &target.physical.program.returned,
-            "Structures must preserve the source Physical program",
-        ));
-    }
+    physical::check_rewrite(source, &target.physical)?;
     Ok(())
 }

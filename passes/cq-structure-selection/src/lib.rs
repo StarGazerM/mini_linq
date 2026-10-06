@@ -357,9 +357,68 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         let returned = &program.returned;
         entries.extend(quote!(#returned head = ::std::collections::HashSet<_>;));
     }
+    // Record the storage decision, including its row projection, before any
+    // realization. Readers on one key share a single filtered build.
+    let mut selected: structures::Structures = syn::parse2(quote!(structures { #entries }))?;
+    let required = structures::required_columns(source, &analysis);
+    for definition in &program.definitions {
+        let name = symbol_name(&definition.name);
+        if analysis.modes[&name] != ModeKind::Let || analysis.scanned.contains(&name) {
+            continue;
+        }
+        let built: Vec<_> = selected
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, entry)| {
+                (entry.name == definition.name
+                    && matches!(entry.structure, structures::Structure::Built { .. }))
+                .then_some(i)
+            })
+            .collect();
+        if built.len() != 1 {
+            continue;
+        }
+        let structures::Structure::Built { keyed, .. } = &mut selected.entries[built[0]].structure
+        else {
+            unreachable!()
+        };
+        let selection = match &definition.operator {
+            Operator::Point(_, select) | Operator::Range(_, select) if keyed.levels.len() == 1 => {
+                Some(select)
+            }
+            _ => None,
+        };
+        if let Some(select) = selection {
+            let key = keyed.level_names()[0].clone();
+            let supported = analysis.keyed_reads.get(&name).into_iter().flatten().all(|(reader, columns, supply)| {
+                *supply == SupplyKind::Stream && *columns == key
+                    && (matches!(operators[reader], Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::First(_))))
+                        || matches!(operators[reader], Operator::Semi(..)))
+            });
+            if supported {
+                let constants = structures::selection_constants(select);
+                let payload = required[&name]
+                    .iter()
+                    .filter(|c| !constants.contains_key(*c))
+                    .map(|c| &analysis.rows[&name].bindings[c]);
+                let constants = constants.iter().map(|(column, value)| {
+                    let column = &analysis.rows[&name].bindings[column];
+                    quote!(#column = #value)
+                });
+                keyed.filtered = Some(syn::parse2(
+                    quote!(payload [#(#payload),*] constants { #(#constants),* }),
+                )?);
+            }
+        }
+        selected.entries.retain(|entry| {
+            entry.name != definition.name
+                || !matches!(entry.structure, structures::Structure::Rows { .. })
+        });
+    }
     let target = structures::Program {
         physical: source.clone(),
-        structures: syn::parse2(quote! { structures { #entries } })?,
+        structures: selected,
     };
     check(source, &target)?;
     Ok(target)

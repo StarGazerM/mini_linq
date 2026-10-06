@@ -155,6 +155,164 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
     checks
 }
 
+fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
+    let mut checks = Vec::new();
+    for (selection, kept, expected) in [
+        (
+            "point select r if (a = 7)",
+            "a,k,v",
+            quote!([(7, 1, 10), (7, 2, 30)]),
+        ),
+        (
+            "point select r if (a = @chosen)",
+            "a,k,v",
+            quote!([(7, 1, 10), (7, 2, 30)]),
+        ),
+        (
+            "point select r if (a in {7})",
+            "a,k,v",
+            quote!([(7, 1, 10), (7, 2, 30)]),
+        ),
+        (
+            "point select r if (a in {7,8})",
+            "a,k,v",
+            quote!([(7, 1, 10), (8, 1, 20), (7, 2, 30)]),
+        ),
+        ("point select r if (a = 7, a = 8)", "a,k,v", quote!([])),
+        (
+            "range select r if (v > 15)",
+            "a,k,v",
+            quote!([(8, 1, 20), (7, 2, 30)]),
+        ),
+    ] {
+        for stream in [false, true] {
+            for sorted in [false, true] {
+                let rename = if stream {
+                    "r0 = pipe rename R {a -> a,k -> k,v -> v,dead -> dead}; r = pipe project r0 keep {a,k,v,dead};"
+                } else {
+                    "r = pipe rename R {a -> a,k -> k,v -> v,dead -> dead};"
+                };
+                let source: structures::physical::Program = syn::parse_str(&format!(
+                    "physical {{
+                    relation L(k:i32); relation R(a:i32,k:i32,v:i32,dead:i32);
+                    l = pipe rename L {{k -> k}}; {rename}
+                    f = let {selection}; j = pipe probe first [k] l,f;
+                    keys = pipe project j keep {{k}};
+                    members = pipe semi eager [k] keys,f;
+                    shared = pipe probe first [k] members,f;
+                    out = pipe canon project shared keep {{{kept}}}; return out as answer(a,k,v);
+                }}"
+                ))
+                .unwrap();
+                let mut target = cq_structure_selection::compile(&source).unwrap();
+                assert!(
+                    structures::contract::check(&target)
+                        .unwrap()
+                        .filtered
+                        .contains_key("f")
+                );
+                if sorted {
+                    for entry in &mut target.structures.entries {
+                        if entry.name == "f" {
+                            if let structures::Structure::Built { keyed, .. } = &mut entry.structure
+                            {
+                                keyed.ty = syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>);
+                            }
+                        }
+                    }
+                }
+                let expression = compile(&target).unwrap();
+                assert!(!text(&expression).contains("__cq_f_rows"));
+                checks.push(quote!({
+                    let L: &[(i32,)] = &[(1,), (1,), (2,), (9,)];
+                    let R: &[(i32,i32,i32,i32)] = &[(7,1,10,999), (7,1,10,999), (8,1,20,888), (7,2,30,777)];
+                    let chosen = 7;
+                    let actual: ::std::collections::BTreeSet<(i32,i32,i32)> = (#expression).map(|(a,k,v)| (*a,*k,*v)).collect();
+                    let expected: ::std::collections::BTreeSet<(i32,i32,i32)> = #expected.into_iter().collect();
+                    assert_eq!(actual, expected, "{}", #selection);
+                }));
+            }
+        }
+    }
+    for key in ["a", "a,k"] {
+        let source: structures::physical::Program = syn::parse_str(&format!(
+            "physical {{
+            relation L(a:i32,k:i32); relation R(a:i32,k:i32);
+            l = pipe rename L {{a -> a,k -> k}}; r = pipe rename R {{a -> a,k -> k}};
+            f = let point select r if (a = 7);
+            j = pipe probe first [{key}] l,f;
+            out = pipe canon semi eager [{key}] j,f; return out as answer(a,k);
+        }}"
+        ))
+        .unwrap_or_else(|e| panic!("{e}"));
+        // For a unary key the two relations must share only that attribute.
+        let source = if key == "a" {
+            syn::parse_quote!(physical {
+                relation L(a:i32); relation R(a:i32,k:i32);
+                l = pipe rename L {a -> a}; r = pipe rename R {a -> a,k -> k};
+                f = let point select r if (a = 7);
+                j = pipe probe first [a] l,f;
+                out = pipe canon project j keep {a,k}; return out as answer(a,k);
+            })
+        } else {
+            source
+        };
+        let target = cq_structure_selection::compile(&source).unwrap();
+        let expression = compile(&target).unwrap();
+        let input = if key == "a" {
+            quote!(let L: &[(i32,)] = &[(7,), (8,)];)
+        } else {
+            quote!(let L: &[(i32,i32)] = &[(7,1), (8,1), (7,2)];)
+        };
+        checks.push(quote!({
+            #input
+            let R: &[(i32,i32)] = &[(7,1), (7,2), (8,1)];
+            let actual: ::std::collections::BTreeSet<_> = (#expression).map(|(a,k)| (*a,*k)).collect();
+            assert_eq!(actual, [(7,1), (7,2)].into_iter().collect());
+        }));
+    }
+    let source: structures::physical::Program = syn::parse_quote!(physical {
+        relation L(k:i32); relation R(tag:String,k:i32);
+        l = pipe rename L {k -> k}; r = pipe rename R {tag -> tag,k -> k};
+        f = let point select r if (tag = "a");
+        j = pipe canon probe first [k] l,f; return j as answer(k,tag);
+    });
+    let expression = compile(&cq_structure_selection::compile(&source).unwrap()).unwrap();
+    checks.push(quote!({
+        let L: &[(i32,)] = &[(1,), (2,)];
+        let R = vec![(String::from("a"),1), (String::from("b"),2)];
+        let actual: Vec<(&i32,&String)> = (#expression).collect();
+        assert_eq!(actual, vec![(&1, &String::from("a"))]);
+    }));
+    for ty in ["&'a str", "&'a String"] {
+        let source: structures::physical::Program = syn::parse_str(&format!(
+            "physical {{
+            relation L(k:i32); relation R(tag:{ty},k:i32);
+            l = pipe rename L {{k -> k}}; r = pipe rename R {{tag -> tag,k -> k}};
+            f = let point select r if (tag = \"a\");
+            j = pipe canon probe first [k] l,f; return j as answer(k,tag);
+        }}"
+        ))
+        .unwrap();
+        let expression = compile(&cq_structure_selection::compile(&source).unwrap()).unwrap();
+        let ty: syn::Type = syn::parse_str(ty).unwrap();
+        let input = if text(&ty).contains("String") {
+            quote!(let a = String::from("a"); let b = String::from("b"); let R = [(&a,1),(&b,2)];)
+        } else {
+            quote!(let R = [("a",1),("b",2)];)
+        };
+        checks.push(quote!({
+            fn run<'a>(L: &'a [(i32,)], R: &'a [(#ty,i32)]) -> Vec<(&'a i32,&'a #ty)> {
+                (#expression).collect()
+            }
+            let L = [(1,), (2,)];
+            #input
+            assert_eq!(run(&L,&R), vec![(&L[0].0,&R[0].0)]);
+        }));
+    }
+    checks
+}
+
 /// `answer(c, a) :- L(a), R(b, a), S(b, c)`: the head reverses the sorted
 /// heading `[a, c]`, and `R` declares `b` before `a`.
 #[test]
@@ -197,6 +355,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         }));
     }
     checks.extend(mixed_smallest_checks());
+    checks.extend(filtered_checks());
     let source = quote! {
         #![allow(non_snake_case, unused_variables)]
         fn main() { #(#checks)* }

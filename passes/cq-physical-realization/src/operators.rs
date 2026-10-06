@@ -146,7 +146,10 @@ impl<'a> Printer<'a> {
                         quote!(__cq_v.#i)
                     }
                 }
-                None => self.ident(&left, c).to_token_stream(),
+                None => self
+                    .constant_value(&right, c)
+                    .filter(|_| !columns.iter().any(|key| key == c))
+                    .unwrap_or_else(|| self.ident(&left, c).to_token_stream()),
             }
         });
         Ok(quote! {

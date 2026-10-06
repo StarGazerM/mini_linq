@@ -64,30 +64,9 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
         }
     }
     let mut push = Push {
-        context: Context::new(module, &analysis),
+        context: cq_physical_realization::sources(module, &analysis)?,
         consumed: BTreeSet::new(),
     };
-    for definition in &module.physical.program.definitions {
-        let name = symbol_name(&definition.name);
-        push.context.register(&name);
-        if matches!(
-            definition.mode,
-            physical::Mode::Let(_) | physical::Mode::Exists(_)
-        ) {
-            let row = push.pattern(&name);
-            let buffer = temporary("rows", &name);
-            let body = push.emit(&name, quote!(#buffer.push(#row);))?;
-            let source = quote!({
-                let mut #buffer = ::std::vec::Vec::new();
-                #body
-                ::core::iter::IntoIterator::into_iter(#buffer)
-            });
-            let repr = push
-                .context
-                .materialize(&name, definition.canon.is_some(), source);
-            push.context.reprs.insert(name, repr);
-        }
-    }
     let returned = &module.physical.program.returned;
     let name = symbol_name(returned);
     let out = temporary("out", &name);
@@ -98,13 +77,15 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
         quote!(let mut #seen = <#ty>::new();)
     });
     let statements = &push.statements;
-    syn::parse2(quote!({
+    let mut expression = syn::parse2(quote!({
         #(#statements)*
         let mut #out = ::std::vec::Vec::new();
         #head_state
         #body
         ::core::iter::IntoIterator::into_iter(#out)
-    }))
+    }))?;
+    cq_print::own_captures(&mut expression, &push.owned);
+    Ok(expression)
 }
 
 fn temporary(role: &str, result: &str) -> syn::Ident {
@@ -282,7 +263,10 @@ impl Push<'_> {
                             let i = index(i);
                             quote!(#value.#i)
                         }
-                        None => self.ident(&left, column).to_token_stream(),
+                        None => self
+                            .constant_value(&right, column)
+                            .filter(|_| !columns.iter().any(|key| key == column))
+                            .unwrap_or_else(|| self.ident(&left, column).to_token_stream()),
                     }
                 });
                 let pattern = self.pattern(result);
