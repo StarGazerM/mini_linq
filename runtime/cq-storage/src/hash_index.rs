@@ -117,14 +117,15 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
                 .borrow_mut()
                 .take()
                 .expect("the source is consumed only by this initialization");
-            let mut buckets = HashMap::<K, Vec<V>>::default();
+            let mut buckets = HashMap::<K, Rc<Vec<V>>>::default();
             for (key, value) in source {
-                buckets.entry(key).or_default().push(value);
+                let bucket = buckets.entry(key).or_default();
+                // No cursor can see these buckets until initialization finishes.
+                Rc::get_mut(bucket)
+                    .expect("unpublished bucket is uniquely owned")
+                    .push(value);
             }
             buckets
-                .into_iter()
-                .map(|(key, values)| (key, Rc::new(values)))
-                .collect()
         })
     }
 }

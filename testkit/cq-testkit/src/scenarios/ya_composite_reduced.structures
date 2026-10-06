@@ -6,7 +6,5 @@ structures { r2 = :: std :: collections :: HashSet < _ > [b , c];
  r1 host r2 = :: cq_storage :: dispatch :: KeySet < _ > [a , b];
  r2 rows = :: std :: vec :: Vec < _ >;
  r3 host scan = :: core :: iter :: Map < _ , _ > [];
- r4 rows = :: std :: vec :: Vec < _ >;
- r5 rows = :: std :: vec :: Vec < _ >;
  r9 canon = :: std :: collections :: HashSet < _ >;
  }

@@ -553,11 +553,11 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         for input in deps {
             readers.entry(input).or_default().push(name.clone());
         }
-        if let Some(input) = definition.operator.input() {
-            analysis.scanned.insert(symbol_name(input));
-        }
-        if let Operator::Merge(_, k) = &definition.operator {
-            analysis.scanned.remove(&symbol_name(&k.left));
+        // Ordered merge reads must not erase a scan required by another reader.
+        if !matches!(definition.operator, Operator::Merge(..)) {
+            if let Some(input) = definition.operator.input() {
+                analysis.scanned.insert(symbol_name(input));
+            }
         }
         let mode = ModeKind::from(&definition.mode);
         if mode == ModeKind::Exists && !analysis.headings[&name].is_empty() {

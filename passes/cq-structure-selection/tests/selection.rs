@@ -365,3 +365,141 @@ fn built_entries(target: &structures::Program) -> structures::Structures {
         .retain(|e| matches!(e.structure, structures::Structure::Built { .. }));
     entries
 }
+
+fn filtered_source() -> physical::Program {
+    syn::parse_quote!(physical {
+        relation L(k:i32); relation R(tag:String,k:i32,value:i32,unused:i32);
+        l = pipe rename L {k -> k};
+        r = pipe rename R {tag -> tag,k -> k,value -> value,unused -> unused};
+        selected = let point select r if (tag = "a");
+        joined = pipe probe first [k] l,selected;
+        keys = pipe project joined keep {k};
+        checked = pipe semi eager [k] keys,selected;
+        again = pipe probe first [k] checked,selected;
+        out = pipe canon project again keep {k,value};
+        return out as answer(k,value);
+    })
+}
+
+#[test]
+fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
+    let source = filtered_source();
+    let target = compile(&source).unwrap();
+    let analysis = structures::contract::check(&target).unwrap();
+    assert!(!analysis.retained.contains_key("selected"));
+    assert_eq!(analysis.built["selected"].len(), 1);
+    let entry = target
+        .structures
+        .entries
+        .iter()
+        .position(|e| e.name == "selected")
+        .unwrap();
+    assert_eq!(
+        target.structures.entries[entry],
+        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value] constants {tag = "a"};)
+    );
+    assert_eq!(
+        syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
+        target
+    );
+    for replacement in [
+        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k] constants {tag = "a"};),
+        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [value] payload [k,value] constants {tag = "a"};),
+        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value] constants {tag = "b"};),
+        syn::parse_quote!(selected = ::cq_storage::HashIndex<'_, _, _> [k] payload [k,value,tag] constants {tag = "a"};),
+    ] {
+        let mut bad = target.clone();
+        bad.structures.entries[entry] = replacement;
+        assert!(check(&source, &bad).is_err());
+        assert!(structures::check_rewrite(&target, &bad).is_err());
+    }
+    let mut bad = target.clone();
+    bad.structures
+        .entries
+        .push(syn::parse_quote!(selected rows = ::std::vec::Vec<_>;));
+    assert!(check(&source, &bad).is_err());
+    let mut reordered = target.clone();
+    reordered.physical.program.definitions.swap(0, 1);
+    check(&source, &reordered).unwrap();
+    structures::check_rewrite(&target, &reordered).unwrap();
+    let mut wrong_graph = target;
+    wrong_graph.physical.program.definitions[2].operator =
+        syn::parse_quote!(point select r if (tag = "b"));
+    assert!(structures::check_rewrite(&reordered, &wrong_graph).is_err());
+}
+
+#[test]
+fn scanned_selections_keep_rows_and_reject_a_missing_rows_decision() {
+    let mut source = filtered_source();
+    // The selection supplies outer rows too, so it needs a reusable row scan.
+    source.program.definitions[3].operator = syn::parse_quote!(probe first [k] selected,l);
+    let target = compile(&source).unwrap();
+    let analysis = structures::contract::check(&target).unwrap();
+    assert!(analysis.retained.contains_key("selected"));
+    assert!(!analysis.filtered.contains_key("selected"));
+    let mut bad = target;
+    bad.structures.entries.retain(|e| {
+        e.name != "selected" || !matches!(e.structure, structures::Structure::Rows { .. })
+    });
+    assert!(check(&source, &bad).is_err());
+}
+
+#[test]
+fn range_filters_project_only_columns_demanded_downstream() {
+    let mut source = filtered_source();
+    source.program.definitions[2].operator = syn::parse_quote!(range select r if (value > 0));
+    source.program.definitions[7].operator = syn::parse_quote!(project again keep {k});
+    source.program.head = syn::parse_quote!(answer(k));
+    let target = compile(&source).unwrap();
+    let analysis = structures::contract::check(&target).unwrap();
+    assert!(!analysis.retained.contains_key("selected"));
+    assert_eq!(
+        analysis.filtered["selected"],
+        syn::parse_quote!(payload [k] constants {})
+    );
+    assert_eq!(analysis.layouts["joined"], ["k"]);
+}
+
+#[test]
+fn filtered_payload_covers_rust_uses_and_keeps_opaque_environments() {
+    for (guard, expected) in [
+        ("(*unused > 0)", vec!["k", "unused", "value"]),
+        ("(accept!(value))", vec!["k", "unused", "value"]),
+    ] {
+        let mut source = filtered_source();
+        source.program.definitions.insert(
+            4,
+            syn::parse_str(&format!("guarded = pipe guard joined if {guard};")).unwrap(),
+        );
+        source.program.definitions[5].operator = syn::parse_quote!(project guarded keep {k});
+        let target = compile(&source).unwrap();
+        let analysis = structures::contract::check(&target).unwrap();
+        let payload: Vec<_> = analysis.filtered["selected"]
+            .payload
+            .columns
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(payload, expected);
+    }
+}
+
+#[test]
+fn a_later_merge_does_not_remove_an_earlier_scan_requirement() {
+    let source: physical::Program = syn::parse_quote!(physical {
+        relation R(a:i32);
+        r0 = pipe rename R {a -> a}; r = let point select r0 if (a = 1);
+        rows = let canon project r keep {a};
+        joined = pipe merge[a] r,rows;
+        out = pipe canon project joined keep {a}; return out as answer(a);
+    });
+    let target = compile(&source).unwrap();
+    let analysis = structures::contract::check(&target).unwrap();
+    assert!(analysis.physical.scanned.contains("r"));
+    assert!(analysis.retained.contains_key("r"));
+    let mut bad = target;
+    bad.structures
+        .entries
+        .retain(|e| e.name != "r" || !matches!(e.structure, structures::Structure::Rows { .. }));
+    assert!(check(&source, &bad).is_err());
+}

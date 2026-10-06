@@ -26,6 +26,7 @@ use syn::{Expr, Ident, Stmt};
 
 pub mod access;
 pub mod expressions;
+mod filtered;
 mod ownership;
 mod point;
 mod range;
@@ -217,9 +218,9 @@ impl<'a> Context<'a> {
         expressions::relational_condition_with(theta, &self.parameters)
     }
 
-    /// The sorted logical heading of a result.
+    /// The sorted emitted row layout established by Structures.
     pub fn heading(&self, result: &str) -> &'a [String] {
-        &self.physical_analysis.headings[result]
+        &self.analysis.layouts[result]
     }
 
     /// The Rust binding assigned to one logical column.
@@ -258,6 +259,7 @@ impl<'a> Context<'a> {
         self.infos[result]
             .computed
             .iter()
+            .filter(|c| self.heading(result).contains(c))
             .map(|c| {
                 let ident = self.ident(result, c);
                 quote!(#[allow(unused_variables)] let #ident = &#ident;)
@@ -305,8 +307,20 @@ impl<'a> Context<'a> {
     /// Keep original borrowed key columns alongside owned comparison keys,
     /// so result rows retain their original ownership and input identity.
     pub fn built_payload(&self, result: &str, levels: &[Vec<String>]) -> Vec<String> {
-        let columns = levels.concat();
-        self.heading(result)
+        let columns: Vec<_> = levels
+            .iter()
+            .flat_map(|level| self.stored_key(result, level))
+            .collect();
+        let payload = self.analysis.filtered.get(result).map(|f| {
+            f.payload
+                .columns
+                .iter()
+                .map(symbol_name)
+                .collect::<Vec<_>>()
+        });
+        payload
+            .as_deref()
+            .unwrap_or_else(|| self.heading(result))
             .iter()
             .filter(|c| {
                 !columns.contains(c)
@@ -328,12 +342,12 @@ impl<'a> Context<'a> {
 
     /// Build the selected structures over a result and append their statements.
     pub fn materialize(&mut self, name: &str, _canon: bool, source: TokenStream) -> Repr {
-        let scanned = self.physical_analysis.scanned.contains(name);
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
-        let rows = (scanned
-            || structures.len() > 1
-            || self.physical_analysis.modes[name] == physical::ModeKind::Exists)
+        let rows = self
+            .analysis
+            .retained
+            .contains_key(name)
             .then(|| format_ident!("__cq_{}_rows", name));
         let mut statements: Vec<Stmt> = Vec::new();
         let source = match &rows {
@@ -346,18 +360,33 @@ impl<'a> Context<'a> {
             }
             None => source,
         };
-        let pattern = self.pattern(name);
         let mut built = Vec::new();
         for (levels, ty) in &structures {
             let columns: Vec<String> = levels.concat();
             let payload_columns = self.built_payload(name, levels);
+            let stored_columns: Vec<_> = levels
+                .iter()
+                .flat_map(|level| self.stored_key(name, level))
+                .collect();
+            let binders = self.heading(name).iter().map(|column| {
+                if stored_columns.contains(column) || payload_columns.contains(column) {
+                    self.ident(name, column).to_token_stream()
+                } else {
+                    quote!(_)
+                }
+            });
+            let pattern = quote!((#(#binders,)*));
             let payload = payload_columns.iter().map(|c| self.ident(name, c));
             // A curried value is built from nested pairs, one per level:
             // `((k₁,), ((k₂,), (payload,)))`.
             let mut nested = quote!((#(#payload,)*));
             for level in levels.iter().rev() {
                 let owned = self.owned_key(name, level);
-                let key = level.iter().map(|c| self.key_field(name, c, owned));
+                let key = self
+                    .stored_key(name, level)
+                    .iter()
+                    .map(|c| self.key_field(name, c, owned))
+                    .collect::<Vec<_>>();
                 nested = quote!(::cq_storage::require::key(((#(#key,)*), #nested)));
             }
             let structure = format_ident!(
@@ -470,7 +499,11 @@ impl<'a> Context<'a> {
         );
         let key = |level: &Vec<String>| {
             let owned = self.owned_key(right, level);
-            let key = level.iter().map(|c| self.key_field(left, c, owned));
+            let key = self
+                .stored_key(right, level)
+                .iter()
+                .map(|c| self.key_field(left, c, owned))
+                .collect::<Vec<_>>();
             quote!(&(#(#key,)*))
         };
         let first = key(&levels[0]);
@@ -483,7 +516,11 @@ impl<'a> Context<'a> {
                 })
             };
         }
-        chain
+        if let Some(condition) = self.constant_key_condition(left, right, columns) {
+            quote!(::core::iter::Iterator::flatten(::core::iter::IntoIterator::into_iter((#condition).then(|| #chain))))
+        } else {
+            chain
+        }
     }
 
     /// Membership on a prefix of a curried structure: every level but the
@@ -497,12 +534,19 @@ impl<'a> Context<'a> {
     ) -> TokenStream {
         let key = |level: &Vec<String>| {
             let owned = self.owned_key(right, level);
-            let key = level.iter().map(|c| self.key_field(left, c, owned));
+            let key = self
+                .stored_key(right, level)
+                .iter()
+                .map(|c| self.key_field(left, c, owned))
+                .collect::<Vec<_>>();
             quote!(&(#(#key,)*))
         };
         let (last, init) = levels.split_last().expect("at least one level");
         let last = key(last);
         if init.is_empty() {
+            if let Some(condition) = self.constant_key_condition(left, right, &levels.concat()) {
+                return quote!((#condition) && ::cq_storage::ExactMembership::contains(&#structure, #last));
+            }
             return quote!(::cq_storage::ExactMembership::contains(&#structure, #last));
         }
         let first = key(&init[0]);

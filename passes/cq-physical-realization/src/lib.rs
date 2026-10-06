@@ -50,7 +50,35 @@ use cq_print::{Context, Repr, error, index, sorted};
 pub fn compile(module: &structures::Program) -> syn::Result<Expr> {
     let analysis = structures::contract::check(module)?;
     let mut printer = Printer {
-        context: Context::new(module, &analysis),
+        context: sources(module, &analysis)?,
+    };
+    let returned = &module.physical.program.returned;
+    let rows = printer.scan(returned)?;
+    let output = printer.head(&symbol_name(returned), &module.physical.program.head, rows);
+    let statements = &printer.statements;
+    let value = if !printer.bound {
+        output
+    } else {
+        quote! {
+            ::core::iter::IntoIterator::into_iter(
+                ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#output)
+            )
+        }
+    };
+    let mut expression = syn::parse2(quote! { { #(#statements)* #value } })?;
+    cq_print::own_captures(&mut expression, &printer.owned);
+    Ok(expression)
+}
+
+/// Prepare row sources and recorded storage for a checked Structures program.
+/// Alternative emitters can share index construction without staging rows in
+/// a second buffer. `analysis` must be the contract result for `module`.
+pub fn sources<'a>(
+    module: &'a structures::Program,
+    analysis: &'a structures::Analysis,
+) -> syn::Result<Context<'a>> {
+    let mut printer = Printer {
+        context: Context::new(module, analysis),
     };
     let definitions = &module.physical.program.definitions;
     let mut position = 0;
@@ -75,22 +103,7 @@ pub fn compile(module: &structures::Program) -> syn::Result<Expr> {
             position += 1;
         }
     }
-    let returned = &module.physical.program.returned;
-    let rows = printer.scan(returned)?;
-    let output = printer.head(&symbol_name(returned), &module.physical.program.head, rows);
-    let statements = &printer.statements;
-    let value = if !printer.bound {
-        output
-    } else {
-        quote! {
-            ::core::iter::IntoIterator::into_iter(
-                ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#output)
-            )
-        }
-    };
-    let mut expression = syn::parse2(quote! { { #(#statements)* #value } })?;
-    cq_print::own_captures(&mut expression, &printer.owned);
-    Ok(expression)
+    Ok(printer.context)
 }
 
 struct Printer<'a> {

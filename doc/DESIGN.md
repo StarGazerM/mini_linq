@@ -48,6 +48,16 @@ these choices, borrows host/built fields, and emits runtime trait obligations.
 A runtime representation has an abstraction function α; its reads and builds
 must commute with α. Storage-law tests exercise these premises.
 
+A point or range `let` used only by keyed probes and semijoins on one shared
+key records one index, for example `filtered = HashIndex [b] payload [b,c]
+constants {a = "a"};`. The payload annotation is the projected row schema:
+the index extracts its non-constant key and stores the remaining fields.
+The selection streams directly into that build. Constant fields come from
+program text when downstream expressions need them. Structures checks that
+the projection and constant bindings cover every downstream column use.
+A row-scan consumer or multiple independent indexes keeps a `rows` decision;
+realization follows that recorded decision without inferring retention.
+
 ## Checks and evidence
 
 A language contract checks one program and returns facts its consumers use.

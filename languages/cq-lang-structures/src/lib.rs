@@ -28,6 +28,8 @@ pub mod kw {
     syn::custom_keyword!(canon);
     syn::custom_keyword!(head);
     syn::custom_keyword!(rows);
+    syn::custom_keyword!(payload);
+    syn::custom_keyword!(constants);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -98,6 +100,38 @@ pub struct Keyed {
     #[parse(parse_levels)]
     #[to_tokens(|tokens, levels| quote::TokenStreamExt::append_all(tokens, levels))]
     pub levels: Vec<Level>,
+    #[parse(parse_filtered)]
+    pub filtered: Option<Filtered>,
+}
+
+/// A filtered index retains this projected row schema. Key columns are
+/// extracted from it; the remaining columns form each stored item. Constant
+/// columns are reconstructed from the selection's program text.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Filtered {
+    pub payload_token: kw::payload,
+    pub payload: Level,
+    pub constants_token: kw::constants,
+    #[syn(braced)]
+    pub brace: token::Brace,
+    #[syn(in = brace)]
+    #[parse(CommaList::parse_terminated)]
+    pub constants: CommaList<ConstantBinding>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct ConstantBinding {
+    pub column: Ident,
+    pub eq_token: Token![=],
+    pub value: syntax::constraint::Term,
+}
+
+fn parse_filtered(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Filtered>> {
+    if input.peek(kw::payload) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -166,6 +200,10 @@ pub struct Analysis {
     pub dedup: BTreeMap<String, syn::Type>,
     pub head_dedup: BTreeMap<String, syn::Type>,
     pub retained: BTreeMap<String, syn::Type>,
+    /// Explicit projections and constant bindings of index-only selections.
+    pub filtered: BTreeMap<String, Filtered>,
+    /// Emitted row layouts, derived from the recorded filtered projections.
+    pub layouts: BTreeMap<String, Vec<String>>,
     /// Results that are canonical (a set) by inference or flag, with the key
     /// that makes them so when inferred.
     pub unique: BTreeMap<String, Vec<String>>,
@@ -237,6 +275,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         dedup: BTreeMap::new(),
         head_dedup: BTreeMap::new(),
         retained: BTreeMap::new(),
+        filtered: BTreeMap::new(),
+        layouts: BTreeMap::new(),
         unique: BTreeMap::new(),
     };
     let mut seen = BTreeSet::new();
@@ -248,6 +288,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         let keyed = match &entry.structure {
             Structure::Built { keyed, .. } => keyed,
             Structure::Host { reader, keyed, .. } => {
+                if keyed.filtered.is_some() {
+                    return error(keyed, "a host fallback cannot retain a filtered projection");
+                }
                 if !(analysis.host_read(&name)
                     || reader == "scan" && analysis.physical.hosts.contains_key(&name))
                 {
@@ -401,11 +444,18 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
             analysis
                 .built
-                .entry(name)
+                .entry(name.clone())
                 .or_default()
                 .push((columns, keyed.ty.clone()));
+            if let Some(filtered) = &keyed.filtered {
+                if analysis.filtered.insert(name, filtered.clone()).is_some() {
+                    return error(entry, "duplicate filtered projection");
+                }
+            }
         }
     }
+    filtered::check(program, &analysis)?;
+    analysis.layouts = filtered::layouts(program, &analysis);
     let mut shared: BTreeMap<(String, Vec<String>, bool), &syn::Type> = BTreeMap::new();
     for ((name, reader, columns), ty) in &analysis.fallbacks {
         if reader == "scan"
@@ -555,7 +605,13 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         if definition.canon.is_some() && !analysis.dedup.contains_key(&name) {
             return error(&definition.name, "missing canon dedup type");
         }
-        if analysis.physical.modes[&name] != ModeKind::Pipe
+        if (analysis.physical.scanned.contains(&name)
+            || analysis
+                .built
+                .get(&name)
+                .is_some_and(|built| built.len() > 1)
+            || analysis.physical.modes[&name] == ModeKind::Exists)
+            && analysis.physical.modes[&name] != ModeKind::Pipe
             && !analysis.retained.contains_key(&name)
         {
             return error(&definition.name, "missing retained rows type");
@@ -694,11 +750,12 @@ pub fn concrete_type(ty: &syn::Type) -> syn::Result<()> {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    if source.physical != target.physical {
-        return error(target, "Structures rewrite must preserve Physical");
-    }
+    physical::check_rewrite(&source.physical, &target.physical)?;
     Ok(())
 }
+
+mod filtered;
+pub use filtered::{required_columns, selection_constants};
 
 impl cq_stage::Language for Program {
     fn check(&self) -> syn::Result<()> {

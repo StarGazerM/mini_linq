@@ -300,8 +300,8 @@ fn ordinary_hashmap_counters_separate_native_lookups_from_build_hashes() {
     let r = rows.as_slice();
     HASHES.with(|h| h.set((0, 0)));
     assert_eq!(run!(l, r).count(), 1);
-    // One source row is hashed once into each of HashIndex's two bucket maps.
-    assert_eq!(HASHES.with(Cell::get), (2, 3));
+    // The source row enters one bucket map; publishing it does not rehash keys.
+    assert_eq!(HASHES.with(Cell::get), (1, 3));
 }
 
 #[test]
