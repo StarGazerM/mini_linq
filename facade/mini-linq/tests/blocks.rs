@@ -269,3 +269,23 @@ fn union_matches_authored_sets_with_duplicates_and_empty_disjuncts() {
         );
     }
 }
+
+#[test]
+fn finite_branch_domains_keep_suffix_constraints() {
+    let R = [(-1_i32,), (0,), (1,), (2,), (3,)];
+    let S = [(2_i32,), (3,)];
+    macro_rules! answers {
+        ($choice:tt) => {
+            mini_linq::compile! {
+                pipeline {}
+                struct Q; relation R(x:i32); relation S(x:i32);
+                answer(x) :- R(x), if *x >= 0,
+                    {if *x == 1} $choice {S(x)}, if *x <= 2;
+            }
+            .map(|(x,)| *x)
+            .collect::<BTreeSet<_>>()
+        };
+    }
+    assert_eq!(answers!(|), BTreeSet::from([1, 2]));
+    assert_eq!(answers!(else), BTreeSet::from([1, 2]));
+}

@@ -121,33 +121,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
         .iter()
         .any(|item| matches!(item, valuation::cq::BodyItem::Block(_)));
     let block_hoisting = relational_hoisting;
-    let relational_hoisting = relational_hoisting && !has_blocks;
-    let let_bound: BTreeSet<_> = source
-        .cq
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            valuation::cq::BodyItem::Let(b) => Some(cq::rust::bindings(&b.pattern)),
-            _ => None,
-        })
-        .flatten()
-        .map(|v| symbol_name(&v))
-        .collect();
-    let targets = |variables: BTreeSet<String>, before: usize| -> BTreeSet<usize> {
-        if variables.is_empty() || !variables.is_disjoint(&let_bound) {
-            return BTreeSet::new();
-        }
-        analysis
-            .atoms
-            .iter()
-            .filter(|(clause, atom)| {
-                **clause < before
-                    && variables.is_subset(&atom.variables().map(symbol_name).collect())
-            })
-            .map(|(clause, _)| *clause)
-            .collect()
-    };
+
     let mut state = State {
         inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
         atoms: &analysis.atoms,
@@ -173,41 +147,16 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
         relations: BTreeMap::new(),
         prefix: None,
         heading: BTreeSet::new(),
-        aliases: if relational_hoisting {
+        aliases: if relational_hoisting && !has_blocks {
             aliases(&source.cq)
         } else {
             BTreeMap::new()
         },
         relational_hoisting,
-        constraints: source
-            .cq
-            .query
-            .body
-            .iter()
-            .enumerate()
-            .filter_map(|(clause, item)| match item {
-                valuation::cq::BodyItem::Constraint(c) => Some((
-                    c.clone(),
-                    targets(c.variables().map(symbol_name).collect(), clause),
-                )),
-                _ => None,
-            })
-            .collect(),
-        equalities: source
-            .cq
-            .query
-            .body
-            .iter()
-            .enumerate()
-            .filter_map(|(clause, item)| match item {
-                valuation::cq::BodyItem::Equality(e) => Some((
-                    e.clone(),
-                    targets(e.variables().map(symbol_name).collect(), clause),
-                )),
-                _ => None,
-            })
-            .collect(),
+        constraints: Vec::new(),
+        equalities: Vec::new(),
     };
+    state.scope_predicates();
     state.run_steps(&source.valuation.steps);
     let output = state.finish(&source.cq.query.head);
     let target = ra::Program {
@@ -288,6 +237,85 @@ struct State<'a> {
 }
 
 impl<'a> State<'a> {
+    // Predicate targets are local clause numbers: rebuild them on every scope
+    // entry so sibling branches and the outer body cannot share predicates.
+    fn scope_predicates(&mut self) {
+        let let_bound: BTreeSet<_> = self
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                valuation::cq::BodyItem::Let(binding) => Some(cq::rust::bindings(&binding.pattern)),
+                _ => None,
+            })
+            .flatten()
+            .map(|v| symbol_name(&v))
+            .collect();
+        // A finite branch domain is a separate proof of the written prefix.
+        // Later predicates cannot restrict the atoms used to supply that domain.
+        let mut domain_cuts = BTreeSet::new();
+        let mut prefix = self.context.clone();
+        for (clause, item) in self.body.iter().enumerate() {
+            match item {
+                valuation::cq::BodyItem::Positive { atom } => {
+                    prefix.extend(atom.variables().map(symbol_name));
+                }
+                valuation::cq::BodyItem::Let(binding) => {
+                    prefix.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
+                }
+                valuation::cq::BodyItem::Block(block) => {
+                    let facts = block.analyze(&prefix);
+                    if self.block_hoisting && !facts.rust && needs_domain(block, &facts) {
+                        domain_cuts.insert(clause);
+                    }
+                    prefix.extend(facts.interface.into_keys());
+                }
+                _ => (),
+            }
+        }
+        let targets = |variables: BTreeSet<String>, before: usize| -> BTreeSet<usize> {
+            if variables.is_empty() || !variables.is_disjoint(&let_bound) {
+                return BTreeSet::new();
+            }
+            self.atoms
+                .iter()
+                .filter(|(clause, atom)| {
+                    **clause < before
+                        && domain_cuts.range(**clause + 1..before).next().is_none()
+                        && matches!(
+                            self.body[**clause],
+                            valuation::cq::BodyItem::Positive { .. }
+                        )
+                        && variables.is_subset(&atom.variables().map(symbol_name).collect())
+                })
+                .map(|(clause, _)| *clause)
+                .collect()
+        };
+        self.constraints = self
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(clause, item)| match item {
+                valuation::cq::BodyItem::Constraint(c) => Some((
+                    c.clone(),
+                    targets(c.variables().map(symbol_name).collect(), clause),
+                )),
+                _ => None,
+            })
+            .collect();
+        self.equalities = self
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(clause, item)| match item {
+                valuation::cq::BodyItem::Equality(e) => Some((
+                    e.clone(),
+                    targets(e.variables().map(symbol_name).collect(), clause),
+                )),
+                _ => None,
+            })
+            .collect();
+    }
+
     fn run_steps(&mut self, steps: &[valuation::Step]) {
         for (step, introduces) in steps.iter().zip(&self.analysis.introduces) {
             match step {
@@ -372,16 +400,7 @@ impl<'a> State<'a> {
             .collect();
         // If an arm has no generator for an F column, its finite domain is
         // supplied by the written prefix's projected context relation.
-        let needs_domain = hoisted
-            && written.branches.iter().any(|branch| {
-                let generated: BTreeSet<_> = valuation::cq::blocks::walk(&branch.body)
-                    .into_iter()
-                    .filter_map(valuation::cq::BodyItem::atom)
-                    .flat_map(cq::Atom::variables)
-                    .map(symbol_name)
-                    .collect();
-                facts.free.keys().any(|name| !generated.contains(name))
-            });
+        let needs_domain = hoisted && needs_domain(written, &facts);
         let domain = needs_domain.then(|| {
             let saved_prefix = self.prefix.clone();
             let saved_heading = self.heading.clone();
@@ -420,6 +439,8 @@ impl<'a> State<'a> {
             self.heading = saved_heading;
             domain
         });
+        let parent_constraints = std::mem::take(&mut self.constraints);
+        let parent_equalities = std::mem::take(&mut self.equalities);
         let parent_atoms = self.atoms;
         let parent_analysis = self.analysis;
         let parent_body = self.body;
@@ -476,6 +497,7 @@ impl<'a> State<'a> {
                     ));
                 }
             }
+            self.scope_predicates();
             self.run_steps(&branch.steps);
             let keep: BTreeSet<_> = if hoisted {
                 common.clone()
@@ -501,6 +523,8 @@ impl<'a> State<'a> {
             }
             operands.push(positive);
         }
+        self.constraints = parent_constraints;
+        self.equalities = parent_equalities;
         self.atoms = parent_atoms;
         self.analysis = parent_analysis;
         self.body = parent_body;
@@ -1005,6 +1029,21 @@ impl<'a> State<'a> {
         });
         result
     }
+}
+
+fn needs_domain(
+    block: &valuation::cq::blocks::Block,
+    facts: &valuation::cq::blocks::Analysis,
+) -> bool {
+    block.branches.iter().any(|branch| {
+        let generated: BTreeSet<_> = valuation::cq::blocks::walk(&branch.body)
+            .into_iter()
+            .filter_map(valuation::cq::BodyItem::atom)
+            .flat_map(cq::Atom::variables)
+            .map(symbol_name)
+            .collect();
+        facts.free.keys().any(|name| !generated.contains(name))
+    })
 }
 
 /// Solve generator equalities through shared join headings when doing so keeps

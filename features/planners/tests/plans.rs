@@ -60,6 +60,73 @@ fn block_corpus_through_every_recursive_planner_and_oracle() {
 }
 
 #[test]
+fn retail_h07_selections_belong_to_atoms_with_and_without_blocks() {
+    for blocks in [false, true] {
+        let countries = if blocks {
+            quote! { {Nation(sn,1),Nation(cn,2)} | {Nation(sn,2),Nation(cn,1)} }
+        } else {
+            quote! { Nation(sn,sname),Nation(cn,cname),
+            if (*sname == 1 && *cname == 2) || (*sname == 2 && *cname == 1) }
+        };
+        let source: cq::Program = syn::parse2(quote! {
+            struct H07;
+            relation Supplier(s:i32,n:i32); relation Lineitem(o:i32,s:i32,date:i32);
+            relation Orders(o:i32,c:i32); relation Customer(c:i32,n:i32);
+            relation Nation(n:i32,name:i32);
+            answer(o,sn,cn) :- Supplier(s,sn),Lineitem(o,s,ship_date),
+                if *ship_date >= 10 && *ship_date <= 20,
+                Orders(o,c),Customer(c,cn), #countries;
+        })
+        .unwrap();
+        for planner in Planner::ALL {
+            let target = compile(&source, planner).unwrap();
+            check(&source, &target).unwrap();
+            let mut ranges = 0;
+            let mut constants = 0;
+            for definition in &target.plan.definitions {
+                let ra::Operator::Select(select) = &definition.operator else {
+                    continue;
+                };
+                let input = target
+                    .plan
+                    .definitions
+                    .iter()
+                    .find(|d| d.result == select.input)
+                    .unwrap();
+                if select
+                    .condition
+                    .constraints
+                    .iter()
+                    .any(|c| c.variables().any(|v| v == "ship_date"))
+                {
+                    assert!(
+                        matches!(&input.operator, ra::Operator::Rename(r) if r.relation == "Lineitem"),
+                        "blocks={blocks} {planner:?}: {}",
+                        target.to_token_stream()
+                    );
+                    ranges += select.condition.constraints.len();
+                }
+                if select
+                    .condition
+                    .equalities
+                    .iter()
+                    .any(|e| matches!(e.right, ra::EqualityValue::Literal(_)))
+                {
+                    assert!(
+                        matches!(&input.operator, ra::Operator::Rename(r) if r.relation == "Nation"),
+                        "blocks={blocks} {planner:?}: {}",
+                        target.to_token_stream()
+                    );
+                    constants += select.condition.equalities.len();
+                }
+            }
+            assert_eq!(ranges, 1, "blocks={blocks} {planner:?}");
+            assert_eq!(constants, if blocks { 4 } else { 0 }, "{planner:?}");
+        }
+    }
+}
+
+#[test]
 fn retail_h07_block_reduces_country_keys_before_lineitem() {
     let source: cq::Program = syn::parse_quote! {
         struct H07;

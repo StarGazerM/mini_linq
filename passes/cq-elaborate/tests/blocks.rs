@@ -285,3 +285,85 @@ fn positive_distribution_can_reference_prefix_rust_but_negative_cuts_cannot() {
         }
     }
 }
+
+#[test]
+fn nested_and_sibling_scopes_keep_their_own_relational_predicates() {
+    for choice in ["|", "else"] {
+        let text = format!(
+            "struct Q; relation R(x:i32); relation S(x:i32); answer(x) :- \
+             R(x), if *x >= 1, \
+             {{ S(x), if *x <= 2, {{ R(x), if *x != 0 }} | {{ S(x), if *x >= 2 }} }} \
+             {choice} {{ S(x), if *x <= 3 }}, if *x <= 4;"
+        );
+        let (vo, target) = plan(&text);
+        let selects: Vec<_> = target
+            .plan
+            .definitions
+            .iter()
+            .filter_map(|d| {
+                if let cq_lang_ra::Operator::Select(s) = &d.operator {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Both outer predicates belong to R, and each inner predicate belongs
+        // only to the atom in its own sibling/nested body.
+        assert_eq!(
+            selects
+                .iter()
+                .map(|s| s.condition.constraints.len())
+                .sum::<usize>(),
+            6
+        );
+        for select in selects {
+            let input = target
+                .plan
+                .definitions
+                .iter()
+                .find(|d| d.result == select.input)
+                .unwrap();
+            assert!(
+                matches!(input.operator, cq_lang_ra::Operator::Rename(_)),
+                "{}",
+                target.to_token_stream()
+            );
+        }
+        let reference = cq_elaborate::compile_written(&vo).unwrap();
+        check(&vo, &reference).unwrap();
+        for seed in 0..8 {
+            let database = cq_testkit::databases::binary_database(&vo.cq, seed);
+            assert_eq!(
+                cq_testkit::semantics::evaluate_ra(&target, &database).output,
+                cq_testkit::cq_semantics::evaluate_cq(&vo.cq, &database)
+            );
+        }
+    }
+}
+
+#[test]
+fn suffix_constraints_preserve_finite_branch_domains() {
+    for choice in ["|", "else"] {
+        for rust_prefix in [
+            "",
+            "if accept(x),",
+            "let k:i32 = std::convert::identity(*x),",
+        ] {
+            let (vo, target) = plan(&format!(
+                "struct Q; relation R(x:i32); relation S(x:i32); \
+                 answer(x) :- R(x), if *x >= 0, {rust_prefix} \
+                 {{ if *x == 1 }} {choice} {{ S(x) }}, if *x <= 2;"
+            ));
+            if rust_prefix.is_empty() {
+                for seed in 0..8 {
+                    let database = cq_testkit::databases::binary_database(&vo.cq, seed);
+                    assert_eq!(
+                        cq_testkit::semantics::evaluate_ra(&target, &database).output,
+                        cq_testkit::cq_semantics::evaluate_cq(&vo.cq, &database)
+                    );
+                }
+            }
+        }
+    }
+}
