@@ -17,7 +17,8 @@ IX & Named $D$, exact versions, canonical column ordinals, reused demands,
 complete demand coverage and first-use numbering
 (\path{passes/cq-index-policy/tests/index_demands.rs}).\\
 Physical & One operator per result, operand-derived probe/semi demand checks,
-modes checked by use, \code{canon} on the return when uniqueness is not inferred
+modes checked by use, definition canon or \code{return canon} when
+uniqueness is not inferred
 (\path{passes/cq-physical-lowering/tests/lowering.rs}).\\
 Structures & Every keyed read answered by recorded host access or a built type,
 merge sides ordered, canonical return
@@ -40,8 +41,14 @@ computed head column, each compared with an independent oracle
 
 Logical YA reduction tests are retained in \code{cq-reduce}, the
 relational oracle and case corpus in \path{testkit/cq-testkit/}.
-Negation and aggregation syntax parse but fail the CQ contract. Recursion,
-incremental evaluation and general physical cost search are unsupported.
+Residual negation and aggregation clauses fail the CQ contract. External
+negation, aggregate, correlated-subquery and recursion consumers expand to
+Rust contexts containing checked core invocations. Core union/fallback and
+multi-rule sugar need no extension crate. Incremental evaluation and general
+physical cost search are unimplemented. Compile/run panic-domain cases are in
+\path{facade/mini-linq/tests/denotation.rs}; block grammar, structural rejection
+and execution evidence also live in language/pass tests and
+\path{facade/mini-linq/tests/blocks.rs}.
 Generic/Fine planning and optional binary intersections exist; no WCOJ
 complexity guarantee is established.
 No performance or asymptotic claim follows from fixture agreement.

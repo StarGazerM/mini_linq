@@ -6,7 +6,7 @@ of the pass producing it. For a selected implementation $f$, require
  \mathsf{WF}_L(s)\land\mathsf{Domain}_f(s,\chi)
  \quad\Longrightarrow\quad
  f(s,\chi)=t\ \land\ \mathsf{WF}_M(t)
- \ \land\ \alpha(\sem t_M)=\sem s_L.
+ \ \land\ \sem s_L\sqsubseteq\alpha(\sem t_M).
 \]
 $\chi$ is explicit configuration and $\alpha$ relates the target observation
 to the source meaning. An unmet domain premise must be diagnosed. A pass must
@@ -21,7 +21,9 @@ boundaries; Structures records concrete built, host-fallback, retained-row and
 dedup types. Arguments are not carried into later programs as configuration.
 Declaration order fixes host layout. Stable autoref dispatch chooses native
 reads when supported, with recorded lazy per-query fallbacks. Host types never
-establish plan canonicality. No later pass reselects an earlier decision.
+establish plan canonicality. The default selection constructor preserves Physical decisions; its
+correspondence check also admits an explicit Physical rewrite. The printer
+consumes the checked recorded decisions.
 Rust checks the emitted operation-trait obligations; their semantic laws are
 stated in \path{runtime/cq-storage/src/lib.rs} and exercised by storage tests.
 
@@ -47,15 +49,15 @@ independent Rust semantic checker. The second compares
 each actual macro output with its authored boundary fixture, ignoring only
 whitespace and source spans. The third checks representation laws and answers
 with independent oracles. Equal answers cannot compensate for hardcoded dispatch,
-reselection in a later pass or an omitted boundary. Fixtures are revised
-through design review, never regenerated merely to bless changed output.
+reselection in a later pass or an omitted boundary. These test layers are independent: local/marker checking cannot substitute
+for authored expansion or generated-query execution.
 
 \paragraph{Observation and status.}
-RA denotes sets. Physical enumeration may contain multiple witnesses; its
+RA prime denotes bottom plus finite sets. Physical enumeration may contain multiple witnesses; its
 consumer must implement the requested observation. Pure completed answers do
 not establish equal partial-consumption, callback or destructor traces. Host
 quotation requires binding, typing and lifetime preservation and the assumptions
-of Section~\ref{sec:scope}. Current realization is pull-based; equality for
+of Section~\ref{sec:scope}. The core printer is pull-based; an external feature printer supports push; equality for
 arbitrary callback and destructor traces is not established.
 Section~\ref{sec:evaluation} lists the evidence for the implemented chain.
 Documentation checks alone do not establish the runtime trait laws.

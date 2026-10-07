@@ -27,6 +27,7 @@ dependencies = [
 name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -39,6 +40,7 @@ name = "cq-lang-ix"
 version = "0.1.0"
 dependencies = [
  "cq-lang-ra",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -50,6 +52,7 @@ dependencies = [
 name = "cq-lang-ra"
 version = "0.1.0"
 dependencies = [
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -62,6 +65,7 @@ name = "cq-lang-vo"
 version = "0.1.0"
 dependencies = [
  "cq-lang-cq",
+ "cq-stage",
  "cq-syntax",
  "proc-macro2",
  "quote",
@@ -86,6 +90,15 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-vo",
  "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-stage"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

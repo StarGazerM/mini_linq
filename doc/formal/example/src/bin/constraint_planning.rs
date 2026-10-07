@@ -59,8 +59,8 @@ fn main() {
                 r_p = bind r_b with p:i32 = (left_key(k,*y));
                 r_q = bind r_p with q:i32 = (right_key(*x,*z));
                 r_d = project r_q keep {a,p,q,k,z};
-                r_u = rename U@3 {a -> p, b -> q, c -> w};
-                r_v = rename V@4 {a -> w};
+                r_u = rename U@6 {a -> p, b -> q, c -> w};
+                r_v = rename V@9 {a -> w};
                 r_uv = semijoin r_u with r_v;
                 r_join = natural_join r_d with r_uv;
                 r_c = guard r_join if (permitted(k,*z));

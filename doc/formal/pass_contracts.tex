@@ -52,7 +52,9 @@ lets cannot shadow bound logical names; the body contains an atom; the head has
 positive arity. A declaration named by the head is treated as the result and
 must have its arity and cannot bind a leaf value. Without that declaration, every head argument must be a
 bound bare variable with a known, non-inference symbolic type. With a declared
-result, these bare-head binding/type-inference requirements are not imposed.
+result, CQ delegates head expression typing to Rust; NF still requires every
+head variable to be body-bound after normalization. Blocks check common
+interface types and reject escaped branch-local names.
 Negation and aggregation parse but are rejected by CQ checking. An opaque
 \code{name! \{tokens\}} clause also parses and round-trips, but CQ checking
 rejects it with the name of the unexpanded extension. Visible logical
@@ -64,7 +66,7 @@ trait laws and semantic admissibility remain trusted premises.
 
 \Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
 
-\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{each body atom has distinct bare arguments}}
+\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested atom has distinct bare arguments}\\ \text{head arguments are bound variables; known inadmissible types rejected}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 \end{mathpar}
 NF is a restriction of the same \code{cq::Program}, checked by
@@ -74,12 +76,14 @@ of variables and may repeat them; computed heads have already become binds.
 \paragraph{VO.}
 $\mathsf{Schedule}(t,A)$ checks each subatom's relation, clause, arity,
 original column names and complete correlated-row coverage. Dropped columns
-must be unbound. Each central constraint appears exactly once, uses only bound
-query variables and binds nothing. Rust lets and guards keep one identical
+must be unbound. Each relational identity and central constraint appears exactly once, uses
+only bound query variables and binds nothing. Block steps recursively check
+operator kind, paths, interface coverage and each arm's schedule. Rust lets and guards keep one identical
 written chain; every free-variable binder and every source Before relational
-clause must precede them. Relational clauses can move earlier. A semijoin
-reduction precedes its target's first subatom, names a different atom, and
-lists exactly the shared variables (modulo relational identity). No opaque
+clause must precede them. Relational clauses can move earlier. A semijoin reduction names a different atom or Rust-free derived block and
+lists the exact shared equality classes in its support's column positions.
+Ordinary targets are reduced before their first subatom; a target already read
+while supplying a finite block domain instead restricts the retained prefix. No opaque
 Rust guard is a reduction. VO does not require an acyclic reduction graph.
 \begin{mathpar}
 \Rule{D-Constraint}{\vars(C)\subseteq B}
@@ -97,8 +101,9 @@ operands, reachable definitions, visible expression-use checks, and a defined
 output. An all-bare output has exactly its input heading; a computed output may
 use a subset. Analysis carries bindings, symbolic types and computed-column
 provenance, without Rust type unification. For IX let $D(a)$ contain the exact stream descriptors of joins/semijoins,
-const descriptors of point/membership conjunctions, and range descriptors of
-constant order conjunctions on one column.
+anti stream descriptors on its explicit free key, const descriptors of
+point/membership conjunctions, and range descriptors of constant/parameter
+order conjunctions on one column.
 \begin{mathpar}
 
 \Rule{WF-RA}{\mathsf{RAHeading}(a,A)}{\mathsf{WF}_{RA}(a)\Downarrow A}
@@ -118,7 +123,10 @@ unique results, earlier operands, total one-to-one renames, fresh extension
 columns, subset projections, visible expression uses, defined output and
 reachability. Probe/merge/semi keys are duplicate-free lists whose set is exactly
 the operands' heading intersection; semi keeps the left heading, probe/merge
-take the union. Range checks a nonempty conjunction of constant/parameter order bounds on
+take the union. Anti keeps the left heading and checks its explicit key is
+a duplicate-free subset of the common heading. Union requires at least two
+operands with equal headings and consistent known interface types; its block
+origin checks free/interface, prefix/domain and witness metadata. Range checks a nonempty conjunction of constant/parameter order bounds on
 exactly one available Ord column. Host layout and type choose direct access
 or scan/filter later; no integer recognizer or Rust guard is involved. Shared algebra operators
 have their local heading effects. Analysis derives rows, source identifiers,
@@ -127,24 +135,31 @@ central boolean conditions, modes and canon flags. Output expressions
 reject visible unavailable attributes; an all-bare head's dependency set must
 exactly equal the returned heading, while a computed head may use a subset.
 Let $\mathsf{reads}(r)$ count operand occurrences and the return use.
+Here reusableHost means a noncanonical host rename; linearOrFused means
+exactly one read or only shared prefix reads within a checked fused group.
 \begin{mathpar}
 
 \Rule{WF-Physical}{\mathsf{PHeading}(t,A)\quad\mathsf{PMode}(t,A)}
  {\mathsf{WF}_{Physical}(t)\Downarrow A}
 
 \Rule{PH-Pipe}{\mathsf{mode}(r)=pipe\\
- (\mathsf{operator}(r)=rename(R,m)\land r\notin A.canon)\ \lor\
- (\mathsf{reads}(r)=1\land r\notin\dom A.key\_reads)}
+ \mathsf{reusableHost}(r)\ \lor\
+ (\mathsf{linearOrFused}(r)\land r\notin\dom A.key\_reads)}
  {\mathsf{PModeOK}(r)}
 
-\Rule{PH-Let}{\mathsf{mode}(r)=let\quad\mathsf{reads}(r)>0}
+\Rule{PH-Let}{\mathsf{mode}(r)\in\{let,exists\}\quad\mathsf{reads}(r)>0}
  {\mathsf{PModeOK}(r)}
 
 \end{mathpar}
-$\mathsf{PMode}$ requires the applicable rule for every result. A merge-side
-read can satisfy a pipe's single-use rule; its ordering premise is discharged
-by Structures. Physical checks neither IX demand membership nor canonical
-return evidence.
+$\mathsf{PMode}$ requires the applicable rule for every result. An exists mode requires an empty heading and at least one read; it consumes
+the full stream into retained existence state. A merge-side read can satisfy
+a pipe's single-use rule; Structures discharges its ordering premise.
+\code{probe smallest} requires an adjacent admissible intersection. Lazy
+semi/anti requires a reusable pipe host with exclusively lazy membership
+reads on that key. A witness union has an empty interface (or an unannotated
+empty heading); a fused union requires its recorded prefix and every arm to
+depend on it. Physical rejects cross-arm canon on statically disjoint unions.
+Physical checks neither IX demand membership nor canonical return evidence.
 
 \paragraph{Structures.}
 $\mathsf{Entries}(t,A)$ validates its embedded Physical and records built
@@ -167,16 +182,50 @@ $\mathsf{built}(r,C)$ for a matching level prefix. Host entries record fallback 
  {\mathsf{answers}(r,C,merge)}
 
 \Rule{WF-Structures}{\mathsf{Entries}(t,A)\quad\text{all Physical reads answered}\\
- \mathsf{unique}(t.returned)\text{ inferred}}
+ \mathsf{unique}(t.returned)\text{ inferred or explicit return canon}}
  {\mathsf{WF}_{Structures}(t)\Downarrow A}
 \end{mathpar}
 Uniqueness starts Unit at the empty key; host renames establish no key.
-Join requires both input keys and unions them; semi keeps the left key;
-select/range/extend preserve it; project preserves it only when no key column
+Join requires both input keys and unions them; semi/anti keeps the left key;
+union establishes no inferred key; select/point/range/guard/bind preserves it; project preserves it only when no key column
 is dropped. A canon flag establishes the full heading through its recorded
 dedup type. A built structure alone proves no uniqueness. The return must
-have a key. Rust checks the traits of built structures and direct host reads;
+have a key or \code{return canon}. Every definition canon needs a dedup
+entry; return canon needs a head dedup entry, which deduplicates answer values.
+Computed heads also need that entry when they can collapse distinct
+valuations. Retained scans, multiple unfiltered builds and exists state need
+recorded row storage; host renames need scan and keyed-reader fallbacks.
+Rust checks the traits of built structures and direct host reads;
 trait laws remain representation assumptions, not syntactic conclusions.
+
+Filtered entries record \code{payload[columns] constants{column = term}}.
+Only point/range selections or unions can use them. For a selection, a single
+shared one-level build has no row scan or retained-row entry. Noncorrelated
+unions may have multiple direct indices. Every build records the same
+projection; readers must be stream-supplied \code{probe first}, semi or anti
+on a recorded level prefix. Payload plus exactly the singleton constants proved
+by the selection must cover downstream keys, predicates, Rust free variables
+and answers. Constant columns are reconstructed, not stored. These checks
+derive emitted layouts; an opaque Rust payload conservatively retains its
+whole visible environment and a bind is evaluated even if its outputs are unused.
+
+\subsection{Same-language rewrite checks}
+CQ rewrites are AST identity. VO requires unchanged CQ and exact equality
+of non-reduction step erasures recursively, and preserves each existing
+reduction while allowing added reductions subject to the target coverage
+and Before contract. It does not permit rescheduling non-reduction steps. RA prime rewrites
+use the same fixed-occurrence structural checker as elaboration, with unchanged
+declarations and head. IX requires unchanged RA and locally valid demands;
+it does not itself require complete first-use demands. Physical rewrites
+preserve named logical operators, operands, declarations, head and returned
+result, admitting changes to execution choices and modes and earlier
+relational scheduling while retaining branch-scoped Before facts. This
+standalone check has no IX source and does not establish final canonicality.
+Structures rewrites check both local contracts and the Physical rewrite
+relation; concrete representations can change when read coverage still holds.
+Rust-expression rewrites in the generic protocol are AST identity; raw-token
+surface rewrites have no semantic contract. Language-changing correspondence
+checks below are separate from these rewrite contracts.
 
 \subsection{Pass correspondence checks}
 Each complete pass check requires successful local checks of its source
@@ -207,8 +256,9 @@ Constraints and opaque Rust steps remain present. The legacy guards option
 changes no Rust step. Under semijoins=None, reductions are forbidden; under
 Tree, the source is acyclic, every directed join-tree edge occurs once, all
 upward edges precede downward edges, and each edge respects parent/child
-dependencies. Sibling order is free. Local VO checks shared columns and
-placement before the target's first subatom.
+dependencies. Hypergraph additionally requires each nonempty atom-to-block
+cut and uses Tree obligations only when acyclic; branch checks recurse. Sibling order is free. Local VO checks shared columns and
+placement (including the finite-domain retained-prefix exception).
 \[
 \Rule{CK-Reduce}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{VO}(t)\\
  \mathsf{ReduceObligations}(s,t,\chi)}
@@ -216,22 +266,25 @@ placement before the target's first subatom.
 \]
 
 \paragraph{Elaboration.}
-An independent tableau represents each relational region by existential
-atom witnesses, relational identities, and predicate symbols for boolean
-constraints. A comparison symbol fixes its literal/parameter spelling and
-boolean shape and carries every query-column term as an argument. Unification,
-projection, joins and freshening transform those arguments with their witnesses.
-The checker proves target containment in the supplied VO at every corresponding
-Rust chain input, and mutual containment of the output tableaux; it requires
-identical opaque payloads in the same chain. It does not infer implications
-between distinct comparison spellings or arbitrary boolean formulas.
+The independent checker builds a schedule from the supplied VO, without
+running elaboration or discovering occurrence mappings. It compares fixed
+atom paths and positional column bindings, equality closure, predicate shape
+with fixed column arguments, named reduction support, Rust payloads/bindings,
+output heading and head. DAG traversal assigns facts to their first observing
+Rust region; each source Before fact must occur no later in the target.
+Independent projected views of one occurrence require exact interned structural
+wiring, retaining witness correlation. This intentionally rejects some
+semantically equal plans. Annotated blocks are checked through symbolic prefix
+views: union siblings match fixed occurrence/fact footprints, fallback siblings
+match in order, and negative references retain original branch results.
+Unannotated unions require exact structural wiring.
 \begin{mathpar}
-\Rule{E-Constraint}{\vars(C)\subseteq\vars(R)\text{ for a binder occurrence}}
+\Rule{E-Constraint}{\vars(C)\subseteq\vars(R)\text{ for a complete earlier binder}\\ \text{flat optimizing elaboration; no let-supplied column}}
  {C\text{ may select }R\text{ before joining};\quad
   \text{otherwise select the bound prefix}}
 
-\Rule{CT-Constraint}{\vars(C)=\bar x\quad T(\bar x)=\bar t}
- {T\longmapsto T\cup\{\mathsf{predicate}_{shape(C)}(\bar t)\}}
+\Rule{CT-Constraint}{\vars(C)=\bar x\quad\mathsf{columns}(\bar x)=\bar t}
+ {\mathsf{facts}\longmapsto\mathsf{facts}\cup\{\mathsf{predicate}_{shape(C)}(\bar t)\}}
 
 \Rule{RA-Constraint}{\vars(\theta)\subseteq V\quad
  \theta\text{ central and Eq/Ord-admissible}}
@@ -239,14 +292,15 @@ between distinct comparison spellings or arbitrary boolean formulas.
 
 \Rule{CK-Elaborate}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
  t.declarations=s.cq.declarations\quad t.head=s.cq.head\\
- \mathsf{Chain}(t)=\mathsf{Chain}(s)\quad
- T_{t,i}\subseteq T_{s,i}\text{ at every chain input }i\\
- T_{t,out}=T_{s,out}\text{ by mutual tableau containment}}
+ \mathsf{FixedFacts}(s,t)\quad\mathsf{RustTree}(s,t)\\
+ \forall i.\ \operatorname{Before}_s(i)\subseteq\operatorname{Before}_t(i)\\
+ \mathsf{OutputBindings}(s)=\mathsf{OutputBindings}(t)}
  {\mathsf{check}_{elaborate}(s,t,())\Downarrow\ok}
 \end{mathpar}
-This is a sufficient refinement criterion, not a complete comparison-implication
-solver or a proof of arbitrary Rust semantics. Structural erasure is available
-for diagnostics; correspondence does not repair chain order by sorting.
+These are sufficient structural refinement obligations under the semantic
+premises, not an equivalence decision or a proof of arbitrary Rust semantics.
+There is no search, homomorphism construction or implication solver.
+Correspondence does not repair chain order by sorting.
 
 \paragraph{Index demands.}
 The independent checker traverses RA definitions using IX-Join, IX-Const, IX-Range, IX-Other,
@@ -264,8 +318,10 @@ remove modes/canon flags, preserving definitions, names, declarations and
 output. The checker accepts admissible recorded decisions independently of the
 default constructor. Point and range reads carry their exact const/range
 supplies; central disjunctions remain filters. Let/pipe/exists choices are
-checked by local use and heading premises. Canon boundaries and inferred keys
-must establish a canonical return; host and built types establish no plan key.
+checked by local use and heading premises. Anti erases to its explicit-key
+logical anti and union keeps its branch origins and operands. Definition canon
+boundaries, inferred keys or \code{return canon} must establish canonical
+answers; host and built types establish no plan key.
 \begin{mathpar}
 \Rule{CK-Demands}{\mathsf{WF}_{Physical}(t)\quad
  \forall(r,C,supply)\in\mathsf{keyedReads}(t)\text{ (excluding merge-left)}.\\
@@ -277,16 +333,16 @@ must establish a canonical return; host and built types establish no plan key.
 
 \Rule{CK-Physical}{\mathsf{WF}_{IX}(s)\quad\mathsf{WF}_{Physical}(t)\\
  \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\quad
- \mathsf{unique}(t.returned)\text{ inferred}}
+ \mathsf{unique}(t.returned)\text{ inferred or explicit return canon}}
  {\mathsf{check}_{physical}(s,t)\Downarrow\ok}
 \end{mathpar}
-Demand membership includes exact stream probe/semi reads, const point reads,
+Demand membership includes exact stream probe/semi/anti reads, const point reads,
 and range reads. Merge has a separate ordering premise. No missing IX demand
 is synthesized. The checker does not choose join strategy, canonical-prefix
 placement, intersection, or eagerness by rerunning lowering.
 
 \paragraph{Structure selection.}
-Selection preserves Physical unchanged and records concrete types for built
+The default selection constructor copies Physical unchanged and records concrete types for built
 key levels, each host reader's fallback, retained collections, and canonical
 boundary/computed-head dedup state. The target language independently checks
 read coverage, key levels, entry identity, known representation compatibility,
@@ -296,11 +352,13 @@ Compatible membership prefixes may share a curried structure. A recorded
 smallest intersection requires two candidate levels on every retained side;
 reusable hosts instead record candidate and membership fallbacks. Const/range
 supplies never justify index construction. Native ordered host reads and
-same-key merge pipes discharge their written ordering obligations. Entry order
-is free; checking compares no constructor token stream.
+same-key merge pipes discharge their written ordering obligations. Entry order is free; checking compares no constructor token stream. The
+selection correspondence accepts any locally valid target whose embedded
+Physical satisfies \code{physical::check_rewrite} against the source, so it
+can also change admissible physical choices.
 \[
 \Rule{CK-Structures}{\mathsf{WF}_{Physical}(s)\quad\mathsf{WF}_{Structures}(t)\\
- t.physical=s}
+ \mathsf{checkRewrite}_{Physical}(s,t.physical)\Downarrow\ok}
  {\mathsf{check}_{structures}(s,t)\Downarrow\ok}.
 \]
 

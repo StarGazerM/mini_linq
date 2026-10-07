@@ -61,8 +61,8 @@ fn main() {
     let declarations = &source.declarations;
     let expected_ra: ra::Plan = syn::parse_quote! {
         #(#declarations)*
-        r0 = rename S@0 { a -> k, b -> tag, c -> z };
-        r1 = rename R@1 { a -> x, b -> k, c -> tag, d -> unused };
+        r0 = rename S@1 { a -> k, b -> tag, c -> z };
+        r1 = rename R@0 { a -> x, b -> k, c -> tag, d -> unused };
         r2 = semijoin r0 with r1;
         r3 = rename T@2 { a -> z, b -> y };
         r4 = select r3 if (y > 0);

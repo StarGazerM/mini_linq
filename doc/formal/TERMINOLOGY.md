@@ -59,13 +59,13 @@ printed pages.
   remaining original edges; its successful final root is the last isolated
   ear in the textbook presentation. Occurrence duplicates require the stated
   projection to the underlying textbook hypergraph.
-- Dependency facts, valuation schedules, immutable RA definitions,
-  host-expression extensions and staged contexts are compiler specification
+- Dependency facts, valuation schedules, immutable RA prime definitions,
+  bottom + finite Set denotation, Rust chain/Before constraints, core block
+  interfaces, union/anti origins, and staged contexts are compiler specification
   constructs. They are not attributed to AHV as textbook definitions.
 - A sort is a set of attribute names. Lexically sorting those names chooses
   a physical tuple layout; it does not sort the rows of a relation or index.
-  The manuscript's sorted-storage comparison specifies a separate enumeration
-  property. The implemented hash representations promise no such row order.
+  Ordered-read traits specify a separate enumeration property. The implemented hash representations promise no such row order.
 - The computed-attribute subset in RA typing records field origin for Rust
   representation; it is not an AHV definition.
 

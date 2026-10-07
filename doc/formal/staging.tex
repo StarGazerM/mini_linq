@@ -19,11 +19,16 @@ $\mathsf{quote}$ token serialization.
  e=\mathsf{print}(s,args)\quad\pi=[]}
  {\mathsf{pass}_{print}(args,\pi,T)\longrightarrow\mathsf{quote}_{Rust}(e)}
 \end{mathpar}
-ST-Entry resolves named phases, then starts surface expansion on raw tokens.
+ST-Entry resolves named phases and starts the first selected macro on raw
+tokens; when the surface list is empty, that macro is the planner.
 The default \code{mini_linq!} uses the same queue with default configuration.
 CQ parsing and its contract occur at the planner, after surface expansion.
 ST-Next is \code{cq_stage::pass}: it checks source and target contracts.
-A language-changing callback supplies its independent correspondence check;
+The generic \code{pass} wrapper does not call an independent correspondence
+check: that belongs to the callback/constructor. Default planning calls order
+and elaboration checks, default lowering and selection constructors call
+their checks, and the index constructor checks only local IX (its independent
+first-use check is separately callable);
 \code{cq_stage::rewrite} additionally invokes the language's
 \code{check_rewrite}. Parse, contract, transformation, and queue failures emit
 \code{compile_error!}. A nonterminal language requires a remaining pass;
@@ -35,14 +40,15 @@ The facade accepts the following grammar, where parentheses are optional:
 \begin{lstlisting}
 pipeline {
     surface = [Path(tokens), ...];
-    plan = Path(tokens); ix = Path; lower = Path;
-    physical = [Path(tokens), ...]; select = Path;
-    structures = [Path(tokens), ...]; print = Path;
+    plan = Path(tokens); ix = Path(tokens); lower = Path(tokens);
+    physical = [Path(tokens), ...]; select = Path(tokens);
+    structures = [Path(tokens), ...]; print = Path(tokens);
 }
 \end{lstlisting}
 The resolved order is surface, plan, ix, lower, Physical rewrites, select,
 Structures rewrites, print. Omitted single phases use
-\code{mini_linq::passes::{plan_written,index_demands,lower,select,print_pull}};
+\code{plan_written}, \code{index_demands}, \code{lower}, \code{select}, and
+\code{print_pull} under \code{mini_linq::passes};
 omitted lists are empty. The protocol does not register or choose external
 pass names. An authored IR can enter directly at a compatible macro:
 \begin{lstlisting}
@@ -71,7 +77,15 @@ environment interfaces are specified in Section~\ref{sec:pass-contracts}.
 The \path{features/composition/} consumer writes a complete named pipeline over
 heterogeneous borrowed hosts. Other standalone feature workspaces insert
 planners, rewrites, languages, surface expansions, and printers through the
-same public protocol. The out-of-tree gate packages the core and builds/tests
+same public protocol. Planners record VO/RA choices; rewrites use exported
+language checks; the own-dialect push printer consumes Structures and rejects
+merge and smallest-candidate choices it cannot realize. Surface consumers
+expand negation into completed membership inputs, aggregation into folds over
+distinct core answers, correlated exists/scalar into per-row core invocations
+(with a scalar cardinality panic), and recursion into an external set fixpoint.
+These are Rust contexts over public input/output/environment interfaces,
+not new core IR operators or privileged pipeline registrations.
+The out-of-tree gate packages the core and builds/tests
 every consumer without core source paths; an in-tree escape fails the gate.
 
 \begin{theorem}[Conditional composition]

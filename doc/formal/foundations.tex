@@ -64,7 +64,8 @@ constraints (normalization rules A-*). For head variables $\bar h$ (possibly rep
  \{\langle t(h_1),\ldots,t(h_m)\rangle\mid t\in L\}.
 \]
 Projection selects attributes; out fixes answer order and repeated positions.
-Computed head expressions instead act on each valuation.
+Computed head expressions are opaque partial computations on each valuation;
+normalization appends their bindings before the variable-only head.
 
 \subsection{Disjunctive blocks and ordered fallback}
 A block executes at a prefix row $\rho$. Let $F$ be prefix-bound names used
@@ -78,7 +79,7 @@ The result type remains $T X=\bot+\operatorname{Set}X$:
  {\sem{\{B_1\}\mid\cdots\mid\{B_n\}}(\rho)=\bigcup_j L_j(\rho)}
 
 \Rule{Block-Else}{\forall j<k,\ \sem{B_j}(\rho)=\emptyset\quad
- \sem{B_k}(\rho)\ne\emptyset}
+ \sem{B_k}(\rho)\notin\{\bot,\emptyset\}}
  {\sem{\{B_1\}\ \mathsf{else}\ \cdots\ \mathsf{else}\ \{B_n\}}(\rho)=L_k(\rho)}
 \end{mathpar}
 Union is bottom when any branch is bottom. For fallback, bottom in the next
@@ -95,8 +96,8 @@ The total relational laws are
  C\bowtie(L\cup M)=(C\bowtie L)\cup(C\bowtie M),\qquad
  B_1\ \mathsf{else}\ B_2=B_1\cup(B_2\mathbin{\triangleright_F}B_1).
 \]
-Both forms hoist to a derived relation $D$ over $F\cup I$ exactly when no
-branch contains Rust. A branch without generators for some free columns uses
+The default elaborator hoists either form to a derived relation $D$ over
+$F\cup I$ when no branch contains Rust. A branch without generators for some free columns uses
 a named finite projection of the prefix domain. Otherwise arms run per row,
 streaming the prefix once. A domain containing prefix let values depends on
 that Rust prefix; reducers wait for it and filter the retained valuation prefix
@@ -105,9 +106,11 @@ The Rust chain is a tree: union siblings are
 unordered; fallback siblings are ordered and carry their anti step in Before.
 All arms inherit prefix Before facts; suffix Rust observes the whole block.
 Fallback arms are disjoint by construction and need no cross-arm dedup.
-For union the sole static disjointness proof is differing literal assignments
-to the same interface variable in every pair of arms; no input key, constraint
-or data property is assumed. Internal duplicate witnesses can still require
+For union the sole static disjointness proof checks every pair of arms:
+some interface column must have different proved literal values in that pair.
+The column may differ between pairs. Literal normalization ignores integer
+spelling and suffixes, so those differences alone prove nothing. No input key,
+constraint or data property is assumed. Internal duplicate witnesses can still require
 final canonicalization.
 
 Positive semijoin reductions distribute over union. For fallback they can
@@ -132,8 +135,9 @@ $a\leq b\land b\leq a$ iff $a=b$. This is a trusted premise, like the
 admissibility of Eq; Rust checks the necessary trait bound, not its laws.
 \item Functional extensionality of embedded Rust: an embedded expression
 receives query variables as shared references (\code{\&T}, never \code{\&mut}),
-so its value is a function of the values of its free variables; equal (Leibniz)
-inputs give equal results. Interior mutability, globals and I/O are outside the
+its partial-function meaning is assumed to depend only on the values of its
+free variables and fixed host captures. Equal (Leibniz) inputs have equal
+outcomes. Shared borrowing alone does not prove this premise. Interior mutability, globals and I/O are outside the
 meaning, as already documented (evaluation count is not preserved).
 \end{enumerate}
 Any surviving representative of \code{==}-equal values is the value. Dedup,
@@ -173,57 +177,58 @@ elaboration, resolution, ownership and captures are separate obligations of the
 selected expansion; they are not folded into source-host admissibility.
 Totality merely on tuples reached by the original plan is insufficient: with
 $A=\{x=0\}$, $B=\emptyset$ and $e=1/x$, moving Extend from $A\bowtie B$
-onto $A$ introduces a failing evaluation. The definition excludes that $e$ on
-this typed domain. A narrower admissible domain needs a preservation proof for
-every applied rewrite.
+onto $A$ introduces a failing evaluation. This movement fails the compiler's Before obligation. The total specialization excludes that $e$ on this
+typed domain; the general language admits it and preserves its written
+relational predecessors.
 The host premises give $\sigma_eL=\{t\in L\mid\bar e(t)=\mathsf{true}\}$ and
 $\operatorname{ext}_{N,e}L=\{t\cup\bar e(t)\mid t\in L\}$, where
 $\bar e(t):N$ is the named tuple of fresh pattern bindings.
 
 \input{host_embedding}
 
-\subsection{What each preservation claim means}
-For a completed finite cursor $s$, $\operatorname{Rows}(s)=\set(s)$.
-Set preservation permits different enumeration. Local cursor preservation
-can additionally relate each poll and its callback events.
-For a finite client protocol $d$ (build, query, next, drop), let
-$\mathcal B_d(P,I,\sigma)$ contain the admitted behaviors of $P$:
-answers, host events and stores at each request. For exhaustive clients,
-$O_{\rm set}$ and $O_{\rm seq}$ retain the complete answer set and sequence;
-$O_{\rm client}$ also records per-request effects and permits partial demand.
-$\operatorname{Obs}_d$ denotes the chosen observation. On the edge's admitted
-inputs and stores, refinement for client class $\mathcal D$ means
+\subsection{Written-order denotation and refinement}
+Let $T X=\{\bot\}+\operatorname{Set}_{\rm fin}(X)$ and
+$\eta(x)=\{x\}$. For $f:X\to T Y$, Kleisli extension is
 \[
- T\preceq_{O,\mathcal D}S
- \quad\Longleftrightarrow\quad
- \forall I,\sigma,\ d\in\mathcal D.\quad
- O(\mathcal B_d(T,I,\sigma))\subseteq O(\mathcal B_d(S,I,\sigma)),
+ \bot\bind f=\bot,\qquad
+ A\bind f=\begin{cases}
+ \bot&\exists x\in A.\ f(x)=\bot,\\
+ \bigcup_{x\in A}f(x)&\text{otherwise}.
+ \end{cases}
 \]
-where $O$ acts pointwise through the representation relations.
-Finite refinement claims require response totality:
-both behavior sets are nonempty and every admitted execution responds
-successfully to each request. A failing target cannot refine a source merely
-by having no successful behavior. Clients stop polling at first exhaustion;
-arbitrary Rust iterators need not be fused.
+An atom, identity or central comparison returns its matching extensions;
+a Rust guard returns $\{\rho\}$ or $\emptyset$, and a Rust bind returns its
+extended valuation. Either Rust step can return $\bot$. Starting at
+$\{\langle\rangle\}$, compose the desugared body in written order and then
+the head. This is the reference meaning, including positioned computed
+arguments and heads. Empty prefixes perform no later Rust evaluations.
+The executable reference uses Written/Coarse VO and
+\code{cq_elaborate::compile_written}, which forbids reductions, splitting,
+reordering, relational hoisting and alias solving. The default
+\code{plan_written} instead calls optimizing \code{compile} after Written
+ordering; its name does not make its RA the exact reference.
 
-\begin{counterexample}[Equal clause order does not preserve effects]
-\label{cx:effects}
-Let $R=\{(10),(20)\}$, \code{tick(x)} increment and return a counter initially zero,
-and \code{latest(n)} test whether the counter still equals $n$:
-\begin{lstlisting}
-answer(x) :- R(x), let n:i32 = tick(x), if latest(n);
-\end{lstlisting}
-Lazy evaluation interleaves tick and guard, retaining both rows. Materialized
-evaluation completes both ticks first, retaining only the row assigned 2.
-Lazy build performs no ticks; materialized build performs two. This is an
-abstract counterexample about evaluation strategies.
-\end{counterexample}
+Put $\bot\sqsubseteq A$ for every $A$, with successful sets comparable only
+when equal. A target refines a source when
+\[
+ \sem S_I\sqsubseteq\sem T_I;
+ \quad\text{equivalently}\quad
+ \sem S_I=A\ne\bot\ \Longrightarrow\ \sem T_I=A.
+\]
+Thus a target may remove a panic, but cannot introduce one on a successful
+reference input or change its answer set. Rust payloads stay opaque and
+retain their relative chain (or block ancestry tree), free-variable bindings,
+and all source-before relational facts. Relational facts may move earlier.
+Leibniz identity and functional extensionality permit canonical projection
+before Rust whenever its free variables remain; callback counts are excluded.
 
-Theorems below concern the mathematical rules under their stated premises.
-Rust type/ownership adequacy (C-Rust), binding resolution (C-Resolution),
-simulation of concrete transitions including rejection (C-Conformance), and
-panic/divergence/destruction semantics (C-Effects) remain open obligations.
-The arbitrary-Rust source also lacks a cross-route operational contract.
+For a completed finite cursor $s$, $\operatorname{Rows}(s)=\set(s)$.
+Runtime streams may repeat witnesses; explicit canonical boundaries establish
+set answers. Partial polling, I/O, mutable state, addresses, destructor traces,
+divergence and resource exhaustion are outside this finite denotation.
+Rust resolution/ownership adequacy and conformance of emitted code to this
+meaning remain proof obligations; the structural checks and tested executions
+are evidence, not a general Rust simulation theorem.
 Negation and aggregation parse but the CQ contract rejects them. General
 subtree optimization and cardinality estimation are not implemented.
 Variable-at-a-time generic planning is implemented; no WCOJ complexity guarantee

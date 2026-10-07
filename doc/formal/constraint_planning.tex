@@ -1,98 +1,39 @@
 \section{Computed arguments constrain planning}
 \label{sec:constraint-planning}
-Assume the pure host domain $\mathcal H_{\rm rel}$ of
-Section~\ref{sec:scope}, adequate host elaboration, and fresh generated
-attributes. Consider this body, with \code{i32} columns:
+An undirected hyperedge cannot express the direction of Rust computation.
+In the paper's \code{constraint_planning} driver:
 \begin{lstlisting}
 answer(a,w) :- R(a,x), S(a,y), T(y,z),
   let k:i32 = combine(*x,*y),
-  U(left_key(k,*y), right_key(*x,*z), w),
-  if *x > 0, if permitted(k,*z), V(w);
+  let p:i32 = left_key(k,*y), let q:i32 = right_key(*x,*z),
+  U(p,q,w), if *x > 0, if permitted(k,*z), V(w);
 \end{lstlisting}
-The let requires $\{x,y\}$ and supplies $k$. The two computed arguments
-require $\{k,y\}$ and $\{x,z\}$; the guards require $\{x\}$ and $\{k,z\}$.
-Thus three-column $U$ connects five logical variables, but an undirected
-five-variable edge would omit the direction of computation. Readiness depends
-on available bindings: either $S$ or $T$ can supply $y$, and computing $k$
-does not provide an inverse operation recovering $x,y$.
+The bindings require $\{x,y\}$, $\{k,y\}$ and $\{x,z\}$ respectively;
+none supplies an inverse recovering its arguments. The opaque
+\code{permitted} guard requires $\{k,z\}$ and follows the three binds in
+one written Rust chain. The comparison $x>0$ is central and may move earlier,
+shrinking those bindings' evaluation domains.
 
-\paragraph{A legal plan beyond the current planner.}
-Rename $U$ to fresh key attributes $p,q$ and output $w$. One pure plan is
-\[
-\begin{aligned}
- A&=\sigma_{x>0}(R), &
- B&=\operatorname{ext}_{k=\mathrm{combine}(x,y)}(A\bowtie S),\\
- C&=\sigma_{\mathrm{permitted}(k,z)}(B\bowtie T), &
- U'&=U(p,q,w)\ltimes V(w),\\
- D&=\pi_{\{a,p,q\}}
-   \operatorname{ext}_{p=\mathrm{left\_key}(k,y),\,q=\mathrm{right\_key}(x,z)}(C), &
- Q&=\pi_{\{a,w\}}(D\bowtie U').
-\end{aligned}
-\]
-The first guard precedes joins; the let precedes multiplication by $T$
-witnesses; the second guard precedes key computation. Independently, $U'$
-removes unsupported candidates. Retention keeps $x,y,z,k$ until their last
-expression use, then only $a,p,q$. Legality follows from dependencies;
-whether these placements minimize work also depends on data and function
-costs~\cite{paper-udp}. Ordering by $x$ alone does not establish ordering
-of $p,q$ for a merge access.
+The independently authored RA retains the $R,S,T$ prefix before the binds,
+selects $x>0$ on $R$, computes $k,p,q$ in order, then keeps
+$\{a,p,q,k,z\}$. It joins with $U(p,q,w)\ltimes V(w)$ before applying
+\code{permitted}; moving $V$ earlier is permitted. This retains every source
+Before obligation and the guard's inputs. Its final projection keeps $a,w$.
+The example calls \code{cq_elaborate::check} against the supplied VO; it
+illustrates structural acceptance of an authored lower-language plan, not
+search for an optimal placement. The compiler cannot move \code{combine}
+before written $T$, even if its free variables are already bound, or swap
+\code{permitted} with an earlier opaque bind.
 
-\paragraph{Placement and matching laws.}
-Let $V=\sort(A)$, $W=\sort(B)$, and $\fv_Q$ denote logical free variables.
-These five laws state equalities of pure set denotations; they are not
-executable planner commands.
-\begin{mathpar}
-\Rule{X-FilterLeft}{\fv_Q(g)\subseteq V}
- {\sigma_g(A\bowtie B)\equiv(\sigma_g A)\bowtie B}
+For a computed atom argument, \code{S(f(k),z)} produces a bind before $S$
+when $k$ is prefix-bound. In \code{S(k,f(k))}, the argument depends on a
+name newly supplied by $S$, so normalization emits a bind after the atom and
+a relational identity with its fresh column. These positions define the
+written reference; availability alone is not a later movement license.
 
-\Rule{X-ExtendLeft}{\fv_Q(e)\subseteq V\quad k\notin V\cup W}
- {\operatorname{ext}_{k=e}(A\bowtie B)
-  \equiv(\operatorname{ext}_{k=e} A)\bowtie B}
-
-\Rule{X-FilterExtend}{\fv_Q(g)\cup\fv_Q(e)\subseteq V\quad k\notin V}
- {\sigma_g(\operatorname{ext}_{k=e} A)
-  \equiv\operatorname{ext}_{k=e}(\sigma_g A)}
-\end{mathpar}
-Write $\mathsf{Match}_{U(\bar e)}(A)$ for whole-atom matching extensions of
-$A$, and $U^{pqw}$ for complete positional renaming. For pairwise distinct
-$w,p,q$ fresh relative to $V$:
-\begin{gather*}
-\Rule{X-Keys}{\fv_Q(e_1)\cup\fv_Q(e_2)\subseteq V}
- {\mathsf{Match}_{U(e_1,e_2,w)}(A)
-  \equiv\pi_{V\cup\{w\}}
-   (\operatorname{ext}_{p=e_1,q=e_2}(A)\bowtie U^{pqw})}
-\\[1ex]
-\Rule{X-Local}{\fv_Q(e_1)\subseteq V\quad
-                   \fv_Q(e_2)\subseteq V\cup\{w\}}
- {\mathsf{Match}_{U(e_1,w,e_2)}(A)
-  \equiv\pi_{V\cup\{w\}}\sigma_{q=e_2}
-   (\operatorname{ext}_{p=e_1}(A)\bowtie U^{pwq})}
-\end{gather*}
-X-Local covers \code{U(left_key(k,*y), w, right_key(*w,*z))}:
-only the first key is available before candidate enumeration binds $w$.
-A two-key lookup cannot execute from that prefix. Likewise, a guard using
-$k$ cannot cross its let by X-FilterExtend.
-
-\begin{proposition}[Pure placement and matching]
-The X-* laws preserve denotation and justify the displayed plan.
-\end{proposition}
-\begin{proof}
-A free-variable premise makes each expression's value invariant under the
-unused compatible extension; freshness prevents new equality constraints.
-These facts prove the first three laws tuplewise. X-Keys computes exactly
-the two values tested against the corresponding $U$ positions. X-Local
-instead enumerates $w,q$ after testing $p$, then tests the remaining
-constraint. Projection removes only auxiliaries. Totality and silence
-permit changed evaluation populations. Apply these laws, join associativity,
-and $U\bowtie V=U\ltimes V$ when $V$ contributes only $w$; after key
-computation and filtering, $x,y,z,k$ have no remaining use.
-\end{proof}
-
-The \code{constraint_planning} executable checks automatic and independently
-authored RA/IX contracts, and separately checks an independent whole-tuple oracle
-on eight input presentations: base, duplicate, all-empty and five individually
-empty inputs. It does not compare generated query execution with that oracle.
-The oracle uses total wrapping arithmetic. Ordering checks bound inputs and
-same-kind guard/binding order; elaboration follows VO and does not search these
-subtree transformations. The authored RA is checked and analyzed into IX,
-demonstrating a lower-language entry independent of upper-planner coverage.
+The driver checks automatic and authored RA/IX contracts and elaboration
+correspondence. Separately, its whole-tuple oracle uses wrapping arithmetic
+on eight input presentations (base, duplicate, all-empty, and five individual
+empty inputs). It compares no generated-query execution with that oracle and
+measures no intermediate runtime work. The \code{argument_placement} driver
+checks the before/after placement of \code{g()} and \code{f(x)} structurally.

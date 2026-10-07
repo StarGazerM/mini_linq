@@ -1,7 +1,7 @@
 \input{common}
 \title{MiniLinq: Relational Planning and Index Requirements}
 \author{Syntax, semantics, compilation rules, and expansion expectations}
-\date{2 October 2026}
+\date{6 October 2026; implementation revision \texttt{241f37c}}
 \begin{document}
 \maketitle
 \begin{abstract}
@@ -11,7 +11,7 @@ Caller-selected passes and checked rewrites record one physical operator per
 result (Physical), then concrete built, fallback, retention and dedup types
 (Structures). Physical derives demand uses from its
 operands; a printer emits one pull program over the
-runtime operation traits. We specify CQ, CQ-NF, VO, RA and IX with syntax,
+runtime operation traits. We specify CQ, CQ-NF, VO, RA prime and IX with syntax,
 semantics and algorithmic rules, and give local contract rules for Physical and
 Structures. Separate pass correspondence judgments state the implemented checks;
 realization is supported by oracle tests, rustc trait guards and expansion fixtures.

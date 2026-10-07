@@ -1,6 +1,6 @@
 # MiniLinq specification
 
-The [paper source](compiler.tex) covers CQ/RA set semantics, implemented
+The [paper source](compiler.tex) covers CQ/RA prime bottom + finite Set semantics, implemented
 CQ → CQ-NF → VO → RA nanopasses, IX demand construction, and the Physical
 and Structures local contracts. Build `build/compiler.pdf` with the command below.
 
@@ -22,8 +22,8 @@ make -C doc/formal example
 
 `check.py` checks rule inventory and unique marker presence only. It does not
 check semantic correspondence between a rule and code, prove conformance, or
-run the examples. Implementation rules describe code that realizes their
-premises and conclusions; abstract rules state mathematical laws or
+run the examples. Implementation rules summarize structural code checks; trusted semantic
+premises such as Eq/Ord admissibility are not proved by them; abstract rules state mathematical laws or
 metalinguistic judgments. Marker presence alone is not evidence of that match.
 
 [TERMINOLOGY.md](TERMINOLOGY.md) maps the specification's terms to the
@@ -48,15 +48,21 @@ the directory); the default and `computed_key` programs also write
 - `computed_key` checks an exact VO schedule and IX for a computed join
   argument, plus a fixed oracle answer.
 - `argument_placement` checks that `g()` precedes matching and the `f(x)`
-  guard follows binding `x`; it executes no generated Rust.
+  bind and relational identity follow binding `x`; it executes no generated Rust.
 - `constraint_planning` checks automatic and independently authored RA/IX
-  contracts on eight input presentations; it does not claim that automatic
+  contracts and elaboration correspondence, plus an independent oracle on
+  eight input presentations; it does not claim that automatic
   planning discovers the authored plan.
 
 The shared driver checks local contracts and order, reduction (when used),
 elaboration, and index correspondence. The standalone argument-placement and
 constraint-planning drivers check their stated boundaries. None
-compares generated-query execution with its oracle. Runtime answers, Rust
+compares generated-query execution with its oracle. Runtime answers, partial-expression panic-domain cases, Rust
 trait guards and expansion fixtures are covered by the crate tests listed in
 [evaluation.tex](evaluation.tex); realization has no source/target
 correspondence `check`.
+
+The manuscript describes source revision `241f37c`. Its exact written reference
+is desugared CQ-NF with Written/Coarse and `cq_elaborate::compile_written`;
+the default `plan_written` uses optimizing elaboration. Core blocks and
+multi-rule union sugar require no surface union extension.

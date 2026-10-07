@@ -1,9 +1,4 @@
 rule	kind	path	marker	status
-X-FilterLeft	abstract	-	-	Historical rule; opaque Rust guards retain their chain and source-before relational steps.
-X-ExtendLeft	abstract	-	-	Historical rule; opaque Rust bindings retain their chain and source-before relational steps.
-X-FilterExtend	abstract	-	-	Retired interchange rule: guards and bindings preserve one written relative order.
-X-Keys	abstract	-	-	Historical matching presentation; current NF uses variables and explicit relational equalities.
-X-Local	abstract	-	-	Historical matching presentation; dependent expressions become positioned Rust bindings plus relational equality.
 H-Eval	abstract	-	-	Finite successful host boundary; host semantics and representation adequacy are premises.
 IX-Reuse	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Reuse:	Independent first-use demand derivation; authored fixtures separately check expansion.
 IX-New	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-New:	Independent first-use demand derivation; authored fixtures separately check expansion.
@@ -85,7 +80,6 @@ B-Root	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Root:	Ins
 B-Join	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Join:	Join a non-check subatom with the current prefix.
 C-Guard	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Guard:	Append an opaque guard to the prefix, seeding Unit if absent.
 C-Bind	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Bind:	Append an opaque pattern binding to the prefix without applying RA laws to it.
-E-ReduceGuard	abstract	-	-	Retired by bottom + Set denotation: Rust guards are opaque chain nodes and are never pushed into relational inputs.
 E-ReduceWith	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-ReduceWith:	Semijoin current clause relations and replace only the target entry.
 C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:	Project head dependencies or the full heading under a computed head.
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
@@ -120,7 +114,7 @@ CQ-GuardRecognize	implementation	languages/cq-syntax/src/guard.rs	/// Formal rul
 CQ-GuardSplit	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardSplit:	Extract total conjuncts; keep one written-order residual; selecting earlier only shrinks opaque evaluation domains.
 Block-Union	abstract	-	-	Bottom plus Set union; permutation and witness short circuit are refinements.
 Block-Else	abstract	-	-	Ordered first nonempty branch with lazy later Rust.
-CQ-Block	implementation	languages/cq-lang-cq/src/blocks.rs	pub fn analyze(&self	Interface/free/local structural scope and declared type agreement.
+CQ-Block	implementation	languages/cq-lang-cq/src/lib.rs	fn check_body(	Recursive written scope, interface/local checks and known declared type agreement; Rust checks inference.
 RA-Union	implementation	languages/cq-lang-ra/src/lib.rs	Operator::Union(union) =>	Equal common headings and recorded branch provenance.
 RA-Anti	implementation	languages/cq-lang-ra/src/structural.rs	pub fn anti(&mut self	Left-heading antijoin on explicit free columns.
 PH-Block	implementation	languages/cq-lang-physical/src/lib.rs	fn branch_scopes(program:	Branch tree and Before obligations; execution choices remain recorded.

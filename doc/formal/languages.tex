@@ -74,7 +74,7 @@ Rust expressions, guards, and bindings; these extend AHV Definition~4.2.1:
 \[
 \begin{aligned}
 q&=h(\bar e)\mathrel{:-}c_0,\ldots,c_{n-1};\\
-c&::=R(\bar a)\mid\mathsf{if}\ e\mid\mathsf{let}\ p[:\tau]=e,\\
+c&::=R(\bar a)\mid\mathsf{if}\ e\mid\mathsf{let}\ p[:\tau]=e\mid\mathsf{block},\\
 a&::=x\mid\_\mid e.
 \end{aligned}
 \]
@@ -101,21 +101,24 @@ folds these argument rules and requires $|\bar a|=|\Sigma(R)|$:
 \end{mathpar}
 CQ-Expr includes wildcard with no uses and excludes bare variables. Starting
 at $B=\emptyset$ gives a structural scope check, not Rust typing.
-Under $\mathcal H_{\rm rel}$, an atom admits rows agreeing with existing
-bindings, repeated positions, and computed arguments, then binds new names;
-a guard retains true environments and a let extends them by its pattern
-result. Compose from $\mathbf1$ and take the set of ordered head results to
-define $\sem q_I$. This agrees with classical $q(I)$ on its domain and gives
-no effectful evaluation-order semantics.
+An atom admits rows agreeing with existing bindings and normalized relational
+identities; a guard retains true environments and a let extends them by its
+pattern result. Compose these steps in the Kleisli meaning of
+Section~\ref{sec:scope}, propagating panic through the whole evaluation.
+The total relational specialization agrees with classical $q(I)$.
 \paragraph{Core block grammar and scope.}
 \begin{lstlisting}
-Clause ::= Atom | Constraint | if Expr | let Pat = Expr | Block
+Clause ::= Atom | if Expr | let Pat [: Type] = Expr | Block
 Block  ::= { Body } ( | { Body } )+
          | { Body } ( else { Body } )+
 \end{lstlisting}
 Branches are nonempty; a single branch and mixed operators fail parsing.
 Nesting admits either operator inside the other. Multiple rules for one head
-are core sugar for one top-level union whose interface is that head's variables.
+are core sugar for one top-level union with fresh positional head columns.
+Each rule has fresh local names. Variable heads with the same repetition
+pattern use relational renaming; other heads require declared output types
+and per-arm Rust bindings. Opaque syntax receives lexical aliases rather
+than identifier substitution inside its tokens.
 \begin{mathpar}
 \Rule{CQ-Block}{n\ge2\quad\forall j,\ \Sigma;B\vdash B_j\Rightarrow B_j'\\
  I=(\bigcap_j B_j')\setminus B\quad \forall x\in I,\ \tau_j(x)=\tau_k(x)}
@@ -202,19 +205,46 @@ Written route retains source order for the executable reference; optimizing
 routes place ready constraints before further generators. Elaboration pushes
 constraints onto an atom supplying all their columns, or selects the current
 prefix when no such atom exists.
-Order and granularity are the only choices: one full subatom per atom is
-relation-at-a-time, one new variable per subatom is generic join.
+Ordering and splitting are separate choices constrained by coverage and
+Before: Coarse uses one full subatom per atom; Fine introduces at most one
+new variable per subatom. Blocks carry recursively checked arm schedules.
 
-\subsection{Named relational algebra}
+The transported syntax is:
+\begin{lstlisting}
+VO ::= CQProgram valuation { Step* }
+Step ::= R@path(x, _, ...); | x = y; | Constraint;
+       | if Expr; | let Pat [: Type] = Expr;
+       | reduce R@path with S@path(...);
+       | block @path(columns) { Step* } (| { Step* })+;
+       | block @path(columns) { Step* } (else { Step* })+;
+\end{lstlisting}
+Equality and Constraint here are internal relational syntax. Numeric paths
+identify fixed NF occurrences; each nested level adds branch/clause pairs.
+
+\subsection{Named relational algebra (RA prime)}
 The complete program owns its relation declarations $\Sigma$, named SPJR
 using immutable definitions, and explicit
-Unit/Semijoin, central Select, and opaque Rust Guard/Bind. The following is its mathematical
-operator core, not the complete token grammar:
+Unit/Semijoin, central Select, and opaque Rust Guard/Bind. The token payload is a standalone named DAG:
+\begin{lstlisting}
+RA ::= relational { Decl* (r = Op;)* output r as Head; }
+Op ::= unit | rename R@path {source -> variable, ...}
+     | natural_join l with r | semijoin l with r
+     | project r keep {columns} | select r if (Theta)
+     | guard r if (Expr) [Environment]
+     | bind r with Pat [: Type] = (Expr) [Environment]
+     | union r1, r2, ... [BlockOrigin] | anti [F] l, r
+Environment ::= scope[names] [@path]
+BlockOrigin ::= block @path free[F] interface[I]
+                [fallback] [over prefix] [domain input]
+\end{lstlisting}
+
+The mathematical operator core is:
 \[
 \begin{aligned}
 d&::=r=o;& A&::=d_1;\ldots;d_m;\mathsf{output}\ r\ \mathsf{as}\ h(\bar e),\\
 o&::=\mathbf1\mid\delta_m(R)\mid r\bowtie s\mid r\ltimes s
- \mid\pi_Ur\mid\sigma_\theta r\mid\operatorname{guard}_e r\mid\operatorname{bind}_{N,e}r.
+ \mid\pi_Ur\mid\sigma_\theta r\\
+ &\quad\mid\operatorname{guard}_e r\mid\operatorname{bind}_{N,e}r\mid\bigcup_j r_j\mid r\triangleright_F s.
 \end{aligned}
 \]
 $\Delta(r)=(V,T,C)$ records sort, symbolic Rust types, and computed attributes.
@@ -248,17 +278,25 @@ Rename inherits positional column types with $C=\emptyset$; Unit has empty
 maps. Other operators restrict/merge maps to their output sort, preferring
 left type spelling on overlap. Extend adds written types (possibly inference placeholders)
 and marks $N$ computed; operand computed sets are unioned/restricted. Rust
-must establish concrete type compatibility.
+must establish concrete type compatibility. Ordinary Guard/Bind payloads
+check visible logical uses. An explicit Environment instead checks a
+valid numeric path and distinct listed names available in the input heading;
+Rust resolves the expression in that recorded lexical scope. Local RA checks
+compatible Rust ancestry (union combines branch chains); elaboration/rewrite
+correspondence checks source-tree paths, payloads and Before facts.
 
 Names/listed attributes are unique; operands precede uses and every definition
 is reachable from output. Output expressions pass visible-use checks; a bare
 head's attribute set equals its sort, while computed heads may use a subset.
 Declarations and output metadata are part of RA. Elaboration checks agreement
-with the source CQ head, Rust chain, and relational tableaux; the RA contract checks only this program.
-Evaluation folds definitions into $\mathcal E$, using the operators of
-Section~\ref{sec:scope} and positional Rename, then returns
-$\{\bar e(t)\mid t\in\mathcal E(r)\}$. References denote the same immutable
-result; this denotation imposes no physical materialization schedule.
+with the source CQ head, fixed occurrences, structural relational facts and
+Rust Before obligations; the RA contract checks only this program.
+Evaluation uses the partial operators of Section~\ref{sec:scope}, not an
+unconditional eager evaluation of every DAG definition: ordered fallback
+only evaluates selected arms. A computed output is also a partial map.
+References name immutable set-valued definitions, without promising a
+materialized collection or a reusable iterator; every traversal needs its
+own cursor state and must respect the Rust ancestry obligations.
 \subsection{Index demands}
 The normative syntax and construction rules are in
 Section~\ref{sec:ix}. IX is $(A,D)$: the unchanged RA
@@ -269,7 +307,9 @@ in the logical heading $H(r)=\ord(\Delta(r).V)$; physical row layout is supplied
 separately. An empty $C$ requests the unit-valued index for a Cartesian product.
 
 Local validity checks source versions, column ranges, unique descriptors,
-and that every demand matches a join's right operand and join columns.
+and that every demand matches a join/semijoin right operand, an anti right
+operand on its explicit free key, or a point/range select input with its
+matching supply.
 The analysis correspondence requires complete demand coverage in first-use
 order with \code{iN} names. Physical lowering
 checks that its probe/semi operands have matching IX demands.

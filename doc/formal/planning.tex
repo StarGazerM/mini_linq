@@ -19,9 +19,10 @@ a fresh variable and identity. The written bound environment remains global.
 \label{sec:prefix-planning}
 For an atom at written clause $i$, walk its arguments left to right against the
 declared column types $\tau_j$. Let $B$ contain bare variables and let-bound
-names from earlier source clauses, and $L$ the distinct bare names already seen
-in this atom. Maintain a global literal-binding list $K$, atom-local lists
-$\mathit{before},\mathit{after}$, and rewritten arguments $\bar a'$. Each rule
+names from earlier source clauses, $L$ the distinct names already seen in
+this atom, and $A$ all bare names supplied by this atom but absent from $B$.
+Maintain atom-local lists $\mathit{before},\mathit{after}$ and rewritten
+arguments $\bar a'$. Each rule
 appends its resulting argument to $\bar a'$. Generated $k$ starts at
 \code{__cq_i_j}, appending underscores until absent from all source identifiers
 and earlier generated names. The argument cases are tested in the order shown.
@@ -31,30 +32,32 @@ and earlier generated names. The argument cases are tested in the order shown.
  {a_j\leadsto_{NF}x\quad[L:=L\cup\{x\}]}
 
 \Rule{A-Repeat}{a_j=x\in L\quad k\text{ fresh}}
- {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{if}\ k=x]]}
+ {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[k=x]]}
 
 \Rule{A-Wildcard}{a_j=\_\quad k\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\text{unconstrained witness}]}
 
 \Rule{A-Constant}{a_j\text{ is a literal}\quad k\text{ fresh}}
- {a_j\leadsto_{NF}k\quad[K:=K\concat[\mathsf{let}\ k:\tau_j=a_j]]}
+ {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[k=a_j]]}
 
 \Rule{A-Prefix}{a_j=e\text{ is a remaining expression}\quad
- \uses(e,L\setminus B)=\emptyset\quad k\text{ fresh}}
+ \uses(e,A)=\emptyset\quad k\text{ fresh}}
  {a_j\leadsto_{NF}k\quad[\mathit{before}:=\mathit{before}\concat[\mathsf{let}\ k:\tau_j=e]]}
 
 \Rule{A-Local}{a_j=e\text{ is a remaining expression}\quad
- \uses(e,L\setminus B)\ne\emptyset\quad k\text{ fresh}}
- {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{if}\ k.\mathsf{eq}(\&(e))]]}
+ \uses(e,A)\ne\emptyset\quad k,v\text{ fresh}}
+ {a_j\leadsto_{NF}k\quad[\mathit{after}:=\mathit{after}\concat[\mathsf{let}\ v:\tau_j=e,\ k=v]]}
 \end{mathpar}
-Here literal recognition is \code{rust::literal}, including parenthesized and
-negated literals. A-Repeat uses Rust \code{==}; A-Local emits the displayed
-\code{eq} call. Only first bare variables enter $L$. Replace the atom by
-$\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$ and extend $B$ by $L$.
-Copy original guards and lets, extending $B$ by each original let's binders.
-Finally prepend $K$ to the rewritten body. The constructor clones the source,
-preserves declarations and head, and checks normal form. These transformations
-produce CQ lets and guards; RA operators are produced by elaboration later.
+Literal recognition is \code{syntax::equality::literal}, including
+parenthesized and negated literals. Identities are relational clauses, not
+Rust guards. Replace each atom by
+$\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
+Copy constraints, residual guards and lets; normalize branch bodies recursively
+with inherited prefix bindings and fresh names. Only common interface names
+escape a block. A computed head becomes a final typed Rust bind using its
+result declaration, and the head becomes variable-only. Declarations remain
+unchanged and the constructor checks NF; there is no separate normalization
+correspondence checker.
 
 \subsection{Dependency facts and ordering}
 \label{sec:planning-order}
@@ -73,59 +76,72 @@ prefix, and $\bar O_i,R_i$ the provided list and required set of clause $i$.
 \Rule{D-Bind}{\bar N=\binds(p)\quad R=\uses(e,B_w)}
  {B_w;T\vdash\mathsf{let}\ p[:\tau]=e\triangleright(\bar N,R)}
 \end{mathpar}
-Extend $B_w$ by each provided list. For pending indices $U$ in source order and
-currently bound names $B$, readiness is exactly:
+Extend $B_w$ by each provided list. Identities and central comparisons
+require their query variables and provide none. A Rust-free block provides
+its free/interface heading; a Rust block requires its free names and provides
+its interface. For pending indices $U$ and currently bound $B$, readiness is:
 \[
 \Rule{C-Ready}{i\in U\quad R_i\subseteq B\\
- c_i\text{ atom}\ \lor\ i=\min\{j\in U\mid c_j\text{ has the same guard/let kind as }c_i\}}
+ \neg\mathsf{Rust}(c_i)\ \lor\
+ (i=\min\{j\in U\mid\mathsf{Rust}(c_j)\}\land
+  \operatorname{Before}(i)\cap U=\emptyset)}
  {U;B\vdash i:\mathsf{ready}}.
 \]
-There is no purity test in this predicate. Prefix and Elimination repeatedly
+Here Before includes every earlier atom/block and relational identity or
+constraint, and Rust includes pinned blocks. Guards and lets share one chain.
+Prefix and Elimination repeatedly
 choose the least rank among ready clauses, remove that clause from $U$, and
 extend $B$ by its provided names; an empty ready set is an error. Written
-instead takes the body sequence directly. Write $O_i=\set(\bar O_i)$,
-$s_i=|O_i\cap B|$; Boolean ranks order false before true.
+instead takes the body sequence directly. Write $O_i=\set(\bar O_i)$ and
+let $\kappa$ map names to their relational equality-class representatives.
+For Prefix set $s_i=|\kappa(O_i)\cap\kappa(B)|$; Boolean ranks order false
+before true.
 \begin{mathpar}
 
 \Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=[0,\ldots,m-1]}
 
-\Rule{S-Connected}{c_i\text{ atom}\quad s_i=|O_i\cap B|}
+\Rule{S-Connected}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|}
  {\mathsf{rank}_{Connected}(i,B)=(1,[s_i=0],0,i)}
 
-\Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|O_i\cap B|\\
+\Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|\\
  r\in\{GreedyWidth,Auto\}}
- {\mathsf{rank}_{r}(i,B)=(1,[s_i=0],|B|+|O_i|-s_i,i)}
+ {\mathsf{rank}_{r}(i,B)=(1,[s_i=0],|\kappa(B)\cup\kappa(O_i)|,i)}
 
 \Rule{S-Elimination}{c_i\text{ atom}\quad E=\mathsf{analysis}(q).\mathit{elimination\_order}\\
  e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\}\cup\{|E|\})}
  {\mathsf{rank}_{Elimination}(i,B)=(1,0,e_i,i)}
 \end{mathpar}
-Every ready nonatom ranks $(0,0,0,i)$ under these ranked heuristics.
+Ready central constraints rank $(0,0,0,i)$; other nonatoms rank
+$(0,0,1,i)$. Prefix connectivity and width use relational equality classes,
+so aliases count as one available variable.
 Auto is exactly GreedyWidth. Elimination uses reverse maximum-cardinality
 search numbering of the atom primal graph; it need not require acyclicity.
 An atom variable absent from that numbering is diagnosed.
 
 \paragraph{Coarse and Fine.}
-The split is independent of the heuristic. Coarse copies each guard/let in the
-chosen sequence and emits one full subatom for each atom. For Written and
-Prefix, variable order is first provision along that sequence; Elimination/Fine
-uses $\operatorname{reverse}(E)$, which contains atom variables only. This binds
-connecting variables before independent leaf projections form Cartesian prefixes;
-the Coarse atom ranking still uses $E$.
+Coarse follows the chosen sequence and emits one full subatom per atom,
+copying identities, constraints and Rust steps. Written/Fine splits each atom
+in place in its declared argument order, preserving the complete NF clause
+sequence; an atom introducing nothing remains one full check. For optimized
+Fine, variable order follows first provision along the selected sequence,
+except Elimination reverses $E$; aliases are grouped by their earliest supplier.
+The rules below describe optimized Fine, subject to the unified Rust chain,
+Before and complete-row checks.
 \begin{mathpar}
 
 \Rule{O-Coarse}{\mathit{seq}\text{ chosen}}
- {\mathsf{coarse}(\mathit{seq})=[\mathsf{fullSubatom}(i)\text{ or the copied guard/let}\mid i\in\mathit{seq}]}
+ {\mathsf{coarse}(\mathit{seq})=[\mathsf{fullSubatom}(i)\text{ or the copied central/Rust step}\mid i\in\mathit{seq}]}
 
 \Rule{O-Fine}{(G_0,B_0)=\mathsf{flush}(B)\quad v\text{ first eligible remaining variable}\\
  (a,G_1,B_1,J)=\mathsf{introduce}(v,B_0)}
  {\mathsf{fineStep}(v,B)=G_0\concat a\concat G_1
    \concat[\mathsf{subatom}(j,B_1)]_{j\in J}}
 \end{mathpar}
-In O-Fine, $\mathsf{flush}$ repeatedly takes the first ready waiting guard/let
-in source order, emitting it and adding its provided names; it returns emitted
-steps and the resulting $B$. A variable is eligible if no let supplies it or it
-is already bound. Let $I_v$ be its holding atom indices in chosen clause order.
+In O-Fine, $\mathsf{flush}$ repeatedly chooses a ready waiting step,
+prioritizing central constraints and then source index. Pending incomplete
+atoms count toward Before until their full correlated rows have been checked.
+It emits each step and adds its provided names. A variable is eligible if no
+Rust step supplies it or it is already bound. Let $I_v$ be its holding atom indices in chosen clause order.
 If $v\notin B_0$, $\mathsf{introduce}$ adds $v$, emits subatom $a$ of the first
 holding atom over $B_0\cup\{v\}$, flushes again to obtain $(G_1,B_1)$, and leaves
 $J$ as the remaining holding atoms. Otherwise $a,G_1$ are empty, $B_1=B_0$, and
@@ -136,25 +152,29 @@ relations have positive arity.
 
 \subsection{Hypergraph facts and GYO}
 \label{sec:graph-extraction}\label{sec:gyo-construction}
-For normal-form CQ with at least one atom, let $O$ be its atom clause indices,
-$\bar X_i$ its variables in column order, and $X_i=\set(\bar X_i)$.
+For one NF body, let $O$ include its atom occurrences and Rust-free blocks.
+Store each ordered heading $\bar X_i$; a block uses its free/interface heading.
+Write $X_i=\set(\bar X_i)$ for the actual heading; graph edges
+$\widehat X_i$ expand it by the relational variable equality classes. These classes include variable identities/recognized
+equalities, not literals or opaque Rust. Branch bodies are analyzed separately.
 \begin{mathpar}
 
-\Rule{H-Occurrence}{q.body_i=R(\bar x)}
+\Rule{H-Occurrence}{q.body_i=R(\bar x)\text{ or a Rust-free block with heading }\bar x}
  {\mathsf{clauses}(q)[i]=\bar x}
 
-\Rule{H-Incidence}{i\in O\quad x\in X_i}
+\Rule{H-Incidence}{i\in O\quad x\in\widehat X_i}
  {i\in\mathsf{incidence}(q)[x]}
 
-\Rule{H-Adjacency}{i<j\quad S_{ij}=X_i\cap X_j\ne\emptyset}
+\Rule{H-Adjacency}{i<j\quad S_{ij}=\widehat X_i\cap\widehat X_j\ne\emptyset}
  {i\xleftrightarrow{S_{ij}}j}
 \end{mathpar}
 H-Adjacency is an abstract derived view, not another IR. The primal graph
-connects variables sharing an atom. Guards and lets add no hyperedges. Occurrence
+connects equality-related variables and variables sharing an expanded edge.
+Opaque guards, lets and Rust-containing blocks add no hyperedges. Occurrence
 identities preserve repeated and empty edges; identifying duplicate nonempty
 edges gives the usual unlabelled hypergraph.
 
-GYO starts with residual sets $Z(i)=X_i$ and parents $\pi(i)=\bot$.
+GYO starts with residual sets $Z(i)=\widehat X_i$ and parents $\pi(i)=\bot$.
 Original clause facts remain unchanged. It first chooses the lexicographically
 least private pair $(i,x)$, or, if none exists, the least absorb pair $(i,j)$:
 \begin{mathpar}
@@ -197,22 +217,23 @@ running intersection, including duplicate and empty edges.
 \subsection{Reduction as VO steps}
 \label{sec:yannakakis}
 The reducer checks source VO and rejects an already reduced source.
-With \code{Pushdown::Atoms}, inspect guard steps in order. A nonopaque guard
-is eligible when \emph{all} visible free names lie in one atom's variables;
-choose the least such clause index. This test includes visible host names,
-so it is stricter than intersection with logical names alone.
+\code{Pushdown::None} and the compatibility spelling \code{Pushdown::Atoms}
+both leave opaque Rust guards in their original chain:
 \[
-\Rule{R-Guard}{\neg\mathsf{opaque}(e)\quad
- i=\min\{j\in O\mid\fv(e)\subseteq X_j\}}
- {\mathsf{if}\ e\ \leadsto\ \mathsf{reduce}\ R_i@i\ \mathsf{if}\ e}.
+\Rule{R-Guard}{\mathsf{step}=\mathsf{Guard}(e)}
+ {\mathsf{reduce}(\mathsf{step})=\mathsf{step}}.
 \]
-Remove that guard step and insert its reduction before the host clause's first
-subatom, or before the first atom step of the entire plan when Tree is selected.
-Unselected steps keep their order. With \code{Reductions::Tree}, obtain the GYO
-join tree or diagnose cyclic input. Let $B=[o,b_1,\ldots,b_{n-1}]$ be its BFS
+Central comparisons are handled by ordering and elaboration, not guard
+reductions.
+
+With \code{Reductions::Tree}, obtain the GYO
+join tree or diagnose cyclic input.
+
+Let $B=[o,b_1,\ldots,b_{n-1}]$ be its BFS
 order, children appended in increasing clause-index order. Define
 $\mathsf{red}(i,j)$ as \code{reduce} of $i$ with a subatom of $j$ listing exactly
-$X_i\cap X_j$ in $j$'s column positions and underscores elsewhere.
+the names of $j$ whose equality class also occurs in $i$, in $j$'s column
+positions and underscores elsewhere.
 \begin{mathpar}
 
 \Rule{Y-Up}{B=\mathsf{BFS}(J)}
@@ -222,14 +243,22 @@ $X_i\cap X_j$ in $j$'s column positions and underscores elsewhere.
  {\mathsf{down}(J)=[\mathsf{red}(b,\pi(b))\mid b\in B[1..]]}
 
 \Rule{R-Tree}{J=\mathsf{analysis}(q).\mathsf{join\_tree}\ne\mathsf{None}}
- {\mathsf{Tree}(VO)=\mathsf{insertBeforeFirstAtom}(VO,\mathsf{up}(J)\concat\mathsf{down}(J))}
+ {\mathsf{Tree}(VO)=\mathsf{insertAtReadyPrefix}(VO,\mathsf{up}(J)\concat\mathsf{down}(J))}
 \end{mathpar}
-Pushed guards at that position precede the tree steps. None/None copies the
-source schedule. These are VO steps; elaboration subsequently emits semijoins
-against the latest clause relations.
+The insertion point is the first atom/block by default; when a finite domain
+requires written Rust bindings, it is the earliest prefix providing all of
+those bindings. None copies the source schedule. Hypergraph uses the tree reducer when
+acyclic and also cuts every surrounding atom sharing columns with a Rust-free
+block through that derived relation, even on cyclic inputs. Reductions recurse
+into branch schedules and retain fixed paths. If a block's finite domain
+requires prefix Rust values, reductions wait for those bindings. Elaboration
+filters an already-read target's retained prefix rather than replacing an
+independent earlier row. Positive cuts may distribute into arms; negative
+originals remain unchanged.
 
 \begin{theorem}[Abstract full-reducer law]
-For finite relations $L_i:X_i$ on a join tree, upward reverse-BFS and downward
+For finite relations $L_i:X_i$ on a join tree (headings interpreted modulo
+relational identity), upward reverse-BFS and downward
 BFS semijoins preserve $Q=\bowtie_i L_i$ and leave each relation equal to
 $\pi_{X_i}Q$. There are $2(n-1)$ semijoin steps.
 \end{theorem}
@@ -242,8 +271,8 @@ has complete support. In the downward sweep a surviving child tuple matches a
 globally supported parent tuple. Its subtree witness and the parent's outside
 witness agree on $S_c$, so they combine into a full witness. Every full witness
 survives every semijoin. Empty separators test nonemptiness; the one-node case
-needs no steps. Local guards may be included in $L_i$; guards spanning several
-atoms are still applied by the remaining VO schedule.
+needs no steps. Central relational selections may be included in $L_i$. Opaque Rust guards
+remain in the VO chain and are not covered by this total relational theorem.
 \end{proof}
 
 \subsection{Elaboration: VO to named RA}
@@ -251,15 +280,20 @@ The state $(D,M,p,B)$ contains emitted definitions, the latest relation name per
 atom clause, an optional prefix, and its bound heading. All start empty.
 \begin{mathpar}
 
-\Rule{E-Emit}{r=\code{r}_{|D|}}
+\Rule{E-Emit}{r=\text{next unused }\code{rN}\text{ in emission order}}
  {\emit(D,o)=(D\concat[r=o],r)}
 
 \Rule{E-Relation}{i\notin\dom M\quad m_i\text{ maps declared columns positionally to }\bar X_i\\
- (D',r)=\emit(D,\delta_{m_i}(R_i))}
+ (D',r)=\emit(D,\delta_{m_i}(R_i@i))}
  {\mathsf{relation}(i;D,M)=(D',M[i\mapsto r],r)}
 \end{mathpar}
-An existing $M(i)$ is returned unchanged. Thus relations are emitted lazily at
-first mention, whether by reduction or subatom. The following rules use
+An existing $M(i)$ is returned unchanged. Relations are emitted lazily at
+first mention, whether by reduction or subatom, but their occurrence paths
+remain their NF clause identities. Emitted result names skip reserved input
+relation names. In flat optimized elaboration, alias solving uses relational
+variable identities while protecting head names and let-supplied names;
+central constraints/identities may be attached to complete earlier binder
+occurrences. Block elaboration uses explicit scopes and branch paths. The following rules use
 $\mathsf{relation}$ implicitly to obtain $r=M(i)$, and $K$ for the subatom's
 listed variables. The source VO contract supplies positional correctness and
 \code{introduces}. Full means no dropped column.
@@ -285,32 +319,34 @@ A full subatom always joins even when it introduces no new variable. A partial
 check uses the full current clause relation: VO ensures its heading intersection
 with $B$ is exactly $K$.
 
-Let $\mathsf{unitize}$ return $p$ or emit Unit if absent. A VO guard selects that
-prefix. A let extends it with its pattern binders and symbolic types, using
+Let $\mathsf{unitize}$ return $p$ or emit Unit if absent. A VO guard
+appends an opaque Rust guard to that prefix. A let extends it with its pattern binders and symbolic types, using
 \code{binding_types()} (including Rust inference placeholders).
 \begin{mathpar}
 
 \Rule{C-Guard}{\mathsf{step}=\mathsf{Guard}(e)\quad p_0=\mathsf{unitize}(p)\\
- (D',s)=\emit(D,\sigma_e p_0)}
+ (D',s)=\emit(D,\operatorname{guard}_e p_0)}
  {(D,M,p,B)\longrightarrow(D',M,s,B)}
 
 \Rule{C-Bind}{\mathsf{step}=\mathsf{Let}(pat[:\tau]=e)\quad\bar N=\binds(pat)\\
- p_0=\mathsf{unitize}(p)\quad v=\{\mathsf{let}\ pat[:\tau]=e;\ (\bar N,)\}}
- {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))\quad[(D',s)=\emit(D,\operatorname{ext}_{\bar N,v}p_0)]}
-
-\Rule{E-ReduceGuard}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{if}\ e\\
- (D',s)=\emit(D,\sigma_e M(i))}
- {(D,M,p,B)\longrightarrow(D',M[i\mapsto s],p,B)}
+ p_0=\mathsf{unitize}(p)\quad(D',s)=\emit(D,\operatorname{bind}_{pat[:\tau],e}p_0)}
+ {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))}
 
 \Rule{E-ReduceWith}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{with}\ j\\
- (D',s)=\emit(D,M(i)\ltimes M(j))}
+ (D',s)=\emit(D,M(i)\ltimes_{\equiv}M(j))}
  {(D,M,p,B)\longrightarrow(D',M[i\mapsto s],p,B)}
 \end{mathpar}
 Relation lookup and unitization emissions precede the displayed emissions.
-The let block omits its tuple tail if the pattern binds no names. Reductions
-update only their target clause; VO has already checked the whole shared key.
-After all checked VO steps, retain bare head names intersected with $B$, or the entire current
-heading if any head argument is not a bare variable. Call that retained set $W$:
+Bind copies the original pattern, annotation and expression, including
+patterns with no binders; no tuple-returning wrapper is inserted. Scoped
+Rust also records its written lexical environment and path. In E-ReduceWith,
+$\ltimes_{\equiv}$ matches every listed support column with the target
+equality class. If protected Rust/head names prevent alias renaming,
+elaboration realizes this as join/select/project rather than natural
+semijoin alone. The target clause is updated; an already-read target also
+filters the retained prefix. VO checks the full support key.
+After all checked VO steps, project to the variable-only NF head names
+$W$. Computed heads have already become Rust bindings:
 \[
 \Rule{C-Finish}{\text{all VO steps consumed}\\
  p_0=\mathsf{unitize}(p)\quad(D',r)=\emit(D,\pi_Wp_0)}
@@ -337,8 +373,10 @@ All three rules here are abstract. Retention follows by restricting a left
 witness in one direction and choosing its original witness in the other; all
 shared or free-variable coordinates survive. In occurrence notation its required
 sort is $K(C,P)=X(C)\cap(H\cup X(O\setminus C)\cup\fv(P))$.
-This law justifies potential last-use pruning but the implemented elaborator
-only projects partial subatoms and the final head. Projection and joins here
+This law describes potential general last-use pruning. The elaborator
+projects partial subatoms, block interfaces/domains, reduction support and
+the final head; it does not search for arbitrary subtree pruning. Structures
+also records checked filtered payload projections. Projection and joins here
 have finite-set semantics; the law does not preserve arbitrary callback counts.
 
 Heading arity $|V|$, row cardinality $|\sem r_I|$, physical bytes and elimination
@@ -359,7 +397,7 @@ elaboration. Each expression below means fallible composition of constructors.
  {\code{cq_planners::order(written, fine)}(q)=a}
 
 \Rule{Plan-Graph}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
- r=\text{if }\mathsf{analysis}(n).acyclic\text{ then Tree else None}\\
+ r=\text{Hypergraph if blocks; otherwise Tree if acyclic, else None}\\
  w=R_{None,r}(v)\quad a=E(w)}
  {\code{cq_planners::order(hypergraph)}(q)=a}
 \end{mathpar}

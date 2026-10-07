@@ -18,8 +18,8 @@ The compiled chain is
 IX preserves the RA plan and adds named index demands.
 Physical derives demand uses from its operands and restates each result with one
 physical operator and the mode its reads allow. Lowering erases Physical choices
-to RA and separately checks IX demands; Structures extends Physical unchanged
-and supplies concrete representation types. Section~\ref{sec:planning} expands the logical
+to RA and separately checks IX demands; Default selection extends Physical unchanged with concrete types; its
+independent check accepts admissible Physical rewrites. Section~\ref{sec:planning} expands the logical
 arrow into normalization, ordering, optional reduction and elaboration.
 Section~\ref{sec:pass-contracts} specifies each language's local contract,
 including Physical and Structures, and the separate pass correspondence checks.
@@ -29,6 +29,6 @@ dependencies, GYO and Yannakakis planning. These logical results do not choose
 physical storage. Rust quotations preserve host syntax and their written chain;
 relational steps may move earlier while retaining Before constraints. Leibniz
 admissibility and functional extensionality are the semantic premises stated
-below. Recursive programs, aggregation, negation, general
-physical cost search remain outside the supported contracts. Pull realization
+below. Recursive programs, aggregation and negation are external surface consumers,
+not closed-core operators; general physical cost search is unimplemented. Pull realization
 and integrated generated-query execution are implemented.
