@@ -1,51 +1,30 @@
 \input{common}
-\title{MiniLinq: Relational Planning and Index Requirements}
-\author{Syntax, semantics, compilation rules, and expansion expectations}
-\date{6 October 2026; implementation revision \texttt{241f37c}}
+\title{MiniLinq: Languages, Denotation and Checked Compilation}
+\author{Syntax, invariants, compilation rules and refinement obligations}
+\date{Implementation revision \texttt{3b21e5d}}
 \begin{document}
 \maketitle
 \begin{abstract}
-MiniLinq compiles conjunctive queries through named relational algebra and IX,
-which records required index demands over exact RA results.
-Caller-selected passes and checked rewrites record one physical operator per
-result (Physical), then concrete built, fallback, retention and dedup types
-(Structures). Physical derives demand uses from its
-operands; a printer emits one pull program over the
-runtime operation traits. We specify CQ, CQ-NF, VO, RA prime and IX with syntax,
-semantics and algorithmic rules, and give local contract rules for Physical and
-Structures. Separate pass correspondence judgments state the implemented checks;
-realization is supported by oracle tests, rustc trait guards and expansion fixtures.
+MiniLinq compiles conjunctive queries with embedded Rust into Rust iterator
+programs through six complete intermediate languages: CQ, VO, RA prime, IX,
+Physical and Structures. All share one denotation, Kleisli composition over
+$\bot+\mathrm{Set}$ against the written order. For each language we give its
+grammar, the invariants its local contract checks, its meaning and the
+decisions it records. For each pass we give its compilation rules, the
+structural correspondence check that is run independently of the pass, and
+the refinement statement that check supports. Checks are ordinary structural
+contracts: no search and no equivalence decision.
 \end{abstract}
-\input{introduction}
-\input{research_contract}
-\input{foundations}
-\input{languages}
-\input{constraint_planning}
-\input{planning}
-\input{ix_physical_contract}
-\input{pass_contracts}
-\input{staging}
-\input{evaluation}
-\input{related_work}
-\begin{thebibliography}{99}
-\raggedright
-\bibitem{ahv} Serge Abiteboul, Richard Hull, and Victor Vianu.
-\emph{Foundations of Databases}. Addison--Wesley, 1995.
-Chapters 3, 4 and 6.\newline
-\url{https://webdam.di.ens.fr/Alice/pdfs/Chapter-3.pdf};\newline
-\url{https://webdam.di.ens.fr/Alice/pdfs/Chapter-4.pdf};\newline
-\url{https://webdam.di.ens.fr/Alice/pdfs/Chapter-6.pdf}.
-\bibitem{notes} Modern Query Processing course notes.
-Conversations 1.3 and 2.2--2.5, source revision
-\code{3f971516f8784ead40e8635a85dbe319ba5e4729}.\newline
-\url{https://pldi.me/modern-query-processing-notes/}.
-Exact source files and textbook page references are recorded in
-\code{TERMINOLOGY.md}.
-\bibitem{iterator} The Rust Project. \emph{Iterator API documentation}.
-\url{https://doc.rust-lang.org/std/iter/trait.Iterator.html}.
-\bibitem{macros} The Rust Project. \emph{The Rust Reference: Procedural macros}.
-\url{https://doc.rust-lang.org/reference/procedural-macros.html}.
-\input{host_references}
-\input{paper_references}
-\end{thebibliography}
+\input{intro}
+\input{denotation}
+\input{ir_cq}
+\input{ir_vo}
+\input{ir_ra}
+\input{ir_ix}
+\input{ir_physical}
+\input{ir_structures}
+\input{passes}
+\input{composition}
+\input{validation}
+\input{refs}
 \end{document}

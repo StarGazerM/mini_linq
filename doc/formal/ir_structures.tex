@@ -1,0 +1,58 @@
+\section{Structures: concrete representations}
+\label{sec:structures}
+
+\paragraph{Grammar.} Structures extends a complete Physical program.
+\begin{lstlisting}
+Structures ::= Physical structures { Entry* }
+Entry ::= r = Type [K]... [payload[P] constants{c = term, ...}];
+        | r host reader = Type [K]...;
+        | r rows = Type; | r canon = Type; | r head = Type;
+\end{lstlisting}
+
+\paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
+(1)~built columns belong to the heading and never repeat across levels; a built
+key answers a union of a prefix of its levels;
+(2)~host entries record fallback types per reader, not native trait claims;
+(3)~retained scans, multiple unfiltered builds and exists state record row
+storage; host renames record scan and keyed-reader fallbacks;
+(4)~every definition canon has a dedup entry; \code{return canon} has a head
+dedup entry; computed heads that may collapse valuations have one too;
+(5)~filtered entries (point/range selections or unions only) record one shared
+projection; their readers are stream \code{probe first}, semi or anti on a level
+prefix; payload plus the singleton constants proved by the selection cover all
+downstream keys, predicates, Rust free variables and answers. Constant columns
+are reconstructed, not stored.
+\begin{mathpar}
+\Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)}
+ {\mathsf{answers}(r,C,probe/semi)}
+
+\Rule{STR-Range}{\text{constant window on }r,c}
+ {\mathsf{answers}(r,\{c\},range)\text{ by direct range or scan/filter; no build}}
+
+\Rule{STR-Merge}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)\\
+ \text{or }(\mathsf{mode}(r)=pipe\land\mathsf{operator}(r)=merge[C](l,s))}
+ {\mathsf{answers}(r,C,merge)}
+
+\Rule{WF-Structures}{\mathsf{Entries}(t,A)\quad\text{all Physical reads answered}\\
+ \mathsf{unique}(t.returned)\text{ inferred or explicit return canon}}
+ {\mathsf{WF}_{Structures}(t)\Downarrow A}
+\end{mathpar}
+Uniqueness: Unit has the empty key; host renames have none; join needs both
+keys and unions them; semi/anti keep the left key; union infers none;
+selections, guards and binds preserve it; projection preserves it only if no key
+column is dropped; a canon flag gives the full heading through its dedup type.
+A built structure alone proves no uniqueness.
+
+\paragraph{Meaning.} That of the embedded Physical. Each Rust type is a
+representation whose abstraction function $\alpha$ satisfies the
+\code{cq-storage} laws: $\alpha(\mathsf{build}(I))=\mathrm{bag}(I)$, lookups
+enumerate exactly the matching items, membership is exact. Rust checks the trait
+bounds at generated uses; the laws are tested, not derived.
+
+\paragraph{Recorded decisions.} Every concrete type: built indexes and levels,
+per-reader host fallbacks, retained rows, dedup state, filtered payloads and
+constants. Nothing is substituted at print time.
+
+\paragraph{Rewrite check (\code{cq_lang_structures::check_rewrite}).} Both local
+contracts hold and the embedded Physical satisfies the Physical rewrite check;
+representations may change while read coverage holds.

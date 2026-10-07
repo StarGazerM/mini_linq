@@ -1,0 +1,35 @@
+\section{IX: required index demands}
+\label{sec:ix}
+
+\paragraph{Grammar.} IX is $(A,D)$: an unchanged RA prime program $A$ and named
+demands $D(i)=(r,C,supply)$ over exact results.
+\begin{lstlisting}
+IX  ::= RAProgram indexes { Def* }
+Def ::= i = @r[C] (stream | const | range);
+\end{lstlisting}
+$C$ is a strictly increasing list of column ordinals in the logical heading
+$H(r)=\ord(\Delta(r).V)$; $C=[\,]$ is the unit-keyed demand of a Cartesian product.
+A \code{stream} demand is the right operand of a join, semijoin or antijoin
+(on the antijoin's explicit key $F$); \code{const} is a point conjunction and
+\code{range} a constant/parameter order window on one column of a select input.
+
+\paragraph{Contract.}
+\[
+\Rule{WF-IX}{\mathsf{WF}_{RA}(t.ra)\quad\text{each index ends in a semicolon}\\
+ \text{unique index names and descriptors}\quad\operatorname{descs}(t)\subseteq D(t.ra)\\
+ \text{each descriptor names a result with strictly increasing in-range ordinals}}
+ {\mathsf{WF}_{IX}(t)\Downarrow\ok}
+\]
+where $D(a)$ is the set of stream, const and range descriptors the operators of
+$a$ admit. Local validity permits partial coverage and arbitrary names; complete
+first-use coverage with names \code{i0}, \code{i1}, \ldots{} is the index pass's
+correspondence obligation (Section~\ref{sec:pass-index}).
+
+\paragraph{Meaning.} $\sem{A,D}_{IX}=\sem A_{RA}$: demands add no meaning.
+A constant selection is a point read because
+$\sigma_{c=v}r=\{(c\mapsto v)\}\bowtie r$; no index is built for it.
+
+\paragraph{Recorded decisions.} Which keyed accesses the fixed plan requires and
+with which supply. IX chooses no data structure.
+
+\paragraph{Rewrite check.} Unchanged RA and locally valid demands.

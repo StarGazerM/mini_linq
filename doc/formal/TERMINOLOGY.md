@@ -71,7 +71,7 @@ printed pages.
 
 These correspondences establish which definitions and adaptations are being
 used. They do not discharge the implementation and host-language proof
-obligations listed in [foundations.tex](foundations.tex).
+obligations listed in [denotation.tex](denotation.tex).
 
 [note-1.3]: https://github.com/StarGazerM/modern-query-processing-notes/blob/3f971516f8784ead40e8635a85dbe319ba5e4729/03-the-plan-that-meant-the-same-thing.md
 [note-2.2]: https://github.com/StarGazerM/modern-query-processing-notes/blob/3f971516f8784ead40e8635a85dbe319ba5e4729/04-the-picture-that-did-not-choose.md

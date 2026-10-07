@@ -1,0 +1,71 @@
+\section{Physical: operators and read modes}
+\label{sec:physical}
+
+\paragraph{Grammar.} A complete standalone program.
+\begin{lstlisting}
+Physical ::= physical { Decl* Def* return [canon] r as Head; }
+Def ::= r = (pipe | let | exists) [canon] Op;
+Op  ::= unit | rename R@path {..} | select ... | point select ... | range select ...
+      | bind ... | guard ... | project r keep {..} | merge [K] l, r
+      | probe [first|smallest] [K] l, r
+      | semi [eager|lazy] [K] l, r | anti [eager|lazy] [F] l, r
+      | union [any|all] [fused] r1, r2, ... [BlockOrigin]
+\end{lstlisting}
+
+\paragraph{Contract.} $\mathsf{PHeading}(t,A)$ checks:
+(1)~declarations, unique results, earlier operands, total one-to-one renames,
+fresh bind columns, subset projections, visible expression uses, a defined and
+reachable output;
+(2)~probe/merge/semi keys are duplicate-free and equal the operands' common
+heading; semi and anti keep the left heading; anti's key is a subset of the
+common heading; probe and merge take the union;
+(3)~range is a nonempty conjunction of constant/parameter bounds on one Ord column;
+(4)~union has at least two operands with equal headings and consistent interface
+types; its origin checks free/interface, prefix/domain and witness metadata;
+(5)~an all-bare head's dependencies equal the returned heading.
+The analysis derives rows, source identifiers, types, computed columns, hosts,
+keyed/merge/range reads, scans, modes and canon flags. With
+$\mathsf{reads}(r)$ the operand and return uses of $r$:
+\begin{mathpar}
+\Rule{PH-Pipe}{\mathsf{mode}(r)=pipe\\
+ \mathsf{reusableHost}(r)\ \lor\
+ (\mathsf{linearOrFused}(r)\land r\notin\dom A.key\_reads)}
+ {\mathsf{PModeOK}(r)}
+
+\Rule{PH-Let}{\mathsf{mode}(r)\in\{let,exists\}\quad\mathsf{reads}(r)>0}
+ {\mathsf{PModeOK}(r)}
+
+\Rule{PH-Block}{\text{branch scopes derived from union origins and fixed operands}\\
+ \text{ancestor/local source-before definitions remain before each Rust node}}
+ {\mathsf{blockBeforeOK}(source,target)}
+
+\Rule{WF-Physical}{\mathsf{PHeading}(t,A)\quad\mathsf{PMode}(t,A)}
+ {\mathsf{WF}_{Physical}(t)\Downarrow A}
+\end{mathpar}
+A reusable host is a noncanonical host rename; linear-or-fused means one read,
+or only shared prefix reads inside a checked fused group. \code{exists} needs an
+empty heading. \code{probe smallest} needs an adjacent admissible intersection.
+Lazy semi/anti needs a reusable host read only lazily on that key. A witness
+union (\code{any}) has an empty interface; a fused union names its prefix and
+every arm depends on it; cross-arm canon on a statically disjoint union is
+rejected. Physical checks neither IX demands nor canonical return evidence.
+
+\paragraph{Meaning.} Erasure to RA prime: probe and merge are joins, semi is a
+semijoin, point/range are selections, modes and canon flags are dropped, union
+and anti keep their origins. Modes and choices change evaluation, not meaning.
+
+\paragraph{Recorded decisions.} \code{pipe} (one streamed read), \code{let}
+(retained, read more than once), \code{exists} (retained witness); \code{canon}
+boundaries; \code{probe first|smallest}; \code{merge}; \code{semi/anti
+eager|lazy}; \code{union any|all}, \code{fused} prefixes and dedup placement.
+Defaults: written branch order, test unions \code{any}, binding unions
+\code{canon} unless proved disjoint, fused prefixes for per-row arms. A fused
+group streams its prefix once; fallback uses if-empty control flow and never
+evaluates a later Rust arm after a witness.
+
+\paragraph{Rewrite check (\code{cq_lang_physical::check_rewrite}).} Both programs
+pass the contract; declarations, head, returned result and the definition graph
+of named logical operators and operands are preserved; execution choices and
+modes may change; relational definitions may move earlier; branch-scoped Before
+facts are kept (PH-Block). It has no IX source and does not establish final
+canonicality.

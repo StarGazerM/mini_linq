@@ -1,0 +1,53 @@
+\section{VO: valuation plans}
+\label{sec:vo}\label{sec:nf-vo}
+
+\paragraph{Grammar.} VO extends a complete CQ$_{\rm NF}$ program with a schedule.
+\begin{lstlisting}
+VO   ::= CQProgram valuation { Step* }
+Step ::= R@path(x, _, ...); | x = y; | Constraint;
+       | if Expr; | let Pat [: Type] = Expr;
+       | reduce R@path with S@path(...);
+       | block @path(columns) { Step* } (| { Step* })+;
+       | block @path(columns) { Step* } (else { Step* })+;
+\end{lstlisting}
+Number all NF body clauses $0,\ldots,m-1$; a path \code{R@c.j.k} names the fixed
+occurrence of clause $c$, extended by branch/clause pairs per nesting level.
+A subatom lists the occurrence's currently bound columns and \code{_} elsewhere.
+Equalities and constraints are internal relational syntax.
+
+\paragraph{Contract.} $\mathsf{Schedule}(t,A)$ checks:
+(1)~each subatom names its relation, clause, arity and original columns; dropped
+columns are unbound; every atom's full correlated row is eventually checked;
+(2)~each identity and constraint appears exactly once, after its variables bind,
+and binds nothing;
+(3)~Rust lets and guards form the written chain (a tree under blocks, union
+siblings unordered, fallback siblings ordered); each is preceded by its
+free-variable binders and every source Before fact;
+(4)~a reduction names a different atom or Rust-free derived block and lists
+exactly the shared equality classes at its support's column positions; it
+precedes the target's first subatom, except that a target already read to
+supply a finite block domain restricts the retained prefix instead;
+no Rust guard is a reduction; the reduction graph need not be acyclic;
+(5)~blocks recursively check kind, paths, interface coverage and arm schedules.
+\begin{mathpar}
+\Rule{D-Constraint}{\vars(C)\subseteq B}
+ {\mathsf{requires}(C)=\vars(C),\quad\mathsf{provides}(C)=\emptyset}
+
+\Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)}
+ {\mathsf{WF}_{VO}(t)\Downarrow A}
+\end{mathpar}
+
+\paragraph{Meaning.} Compose the steps in schedule order under
+Section~\ref{sec:denotation}: a subatom extends valuations with matching
+projected rows, a reduction is a relational semijoin on its target, and Rust
+steps are as in CQ. By invariants (1)--(4) a schedule refines its CQ: relational
+steps only moved earlier, Rust order and Before are kept, and every atom's full
+row is checked.
+
+\paragraph{Recorded decisions.} Clause order, split granularity (Coarse: one full
+subatom per atom; Fine: at most one new variable per subatom), semijoin
+reductions, and block placement (hoisted derived relation or per-row arms).
+
+\paragraph{Rewrite check.} Unchanged CQ; the non-reduction step erasures are equal
+recursively; existing reductions are kept and added reductions satisfy the
+target contract. Non-reduction steps are not rescheduled by a rewrite.

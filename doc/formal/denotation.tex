@@ -1,0 +1,119 @@
+\section{Denotation model}
+\label{sec:denotation}\label{sec:scope}
+
+\subsection{Valuations and named algebra}
+\label{sec:valuations}
+Following AHV~\cite[Sections 3.1--3.3, 4.2]{ahv}, fix disjoint sets of
+attributes $\att$, variables $\var$, relation names and values $\data$. A schema
+$R[U]$ has finite sort $U\subseteq\att$; a named tuple is $t:U\to\data$, and
+$t[V]$ restricts it. The compiler also records declared column order and Rust
+types $\Sigma(R)=\langle A_0:\tau_0,\ldots,A_{k-1}:\tau_{k-1}\rangle$; positional
+rows use this order. A valuation $\nu:X\to\data$ extends to constants by
+$\nu(a)=a$. With an injection $\iota:\var\to\att$, a conjunction $C$ of atoms
+has the valuation relation~\cite{notes}
+$\Val_I(C)=\{\widehat\nu\mid I\models C[\nu],\ \dom\nu=\vars(C)\}$.
+For $L:V$ and $M:W$:
+\[
+\begin{aligned}
+ L\bowtie M&=\{t:V\cup W\to\data\mid t[V]\in L,\ t[W]\in M\},&
+ \pi_UL&=\{t[U]\mid t\in L\},\\
+ L\ltimes M&=\pi_V(L\bowtie M),& \mathbf1&=\{\langle\rangle\},
+\end{aligned}
+\]
+renaming $\delta_m$ for injective $m$, and for $F\subseteq V\cap W$ the antijoin
+$L\triangleright_FM=\{l\in L\mid\nexists m\in M.\ l[F]=m[F]\}$.
+Then $\Val_I(C_1\land C_2)=\Val_I(C_1)\bowtie\Val_I(C_2)$, and for head variables
+$\bar h$ with $H=\set(\bar h)$,
+$\sem q_I=\operatorname{out}_{\bar h}(\pi_H\Val_I(C))$ where
+$\operatorname{out}_{\bar h}$ fixes answer order and repeated positions.
+
+\subsection{The written-order denotation}
+Let $T X=\{\bot\}+\operatorname{Set}_{\rm fin}(X)$, $\eta(x)=\{x\}$, and for
+$f:X\to TY$
+\[
+ \bot\bind f=\bot,\qquad
+ A\bind f=\begin{cases}\bot&\exists x\in A.\ f(x)=\bot,\\
+ \bigcup_{x\in A}f(x)&\text{otherwise}.\end{cases}
+\]
+$\bot$ is one undistinguished panic that aborts the whole evaluation. An atom,
+relational identity or recognized comparison returns its matching extensions
+of the incoming valuation. A Rust guard returns $\{\rho\}$, $\emptyset$ or
+$\bot$; a Rust bind returns the extended valuation or $\bot$. Starting at
+$\{\langle\rangle\}$, compose the desugared body in written order, then the
+head. This is the reference meaning. The executable reference is Written/Coarse
+VO elaborated by \code{cq_elaborate::compile_written}, which forbids
+reductions, splitting, reordering, relational hoisting and alias solving.
+
+\begin{definition}[Refinement]
+$\bot\sqsubseteq A$ for every $A$, and successful sets are related only when
+equal. A target refines a source when $\sem S_I\sqsubseteq\sem T_I$ for every
+input $I$: if the source returns $A$, the target returns $A$.
+\end{definition}
+A target may remove a panic but cannot introduce one or change a returned set.
+Partial polling, I/O, mutation, addresses, destructor traces, evaluation counts,
+divergence and resource exhaustion are outside the meaning. Runtime streams may
+repeat witnesses; explicit canonical boundaries establish sets.
+
+\subsection{Premises}
+\label{sec:premises}
+\begin{enumerate}
+\item \textbf{Leibniz admissibility.} A column type may be compared, joined,
+keyed, grouped or deduplicated relationally only if its \code{==} decides
+identity. Holds for integers, bool, char, \code{String}/\code{\&str},
+\code{cq_load::Date}/\code{Decimal}, tuples and derived-Eq structs of such
+types; fails for floats (\code{0.0 == -0.0}) and lenient hand-written Eq.
+\item \textbf{Order.} When comparisons use order, \code{Ord} terminates and
+decides a total order consistent with identity. Rust checks the bound, not the laws.
+\item \textbf{Functional extensionality.} Embedded Rust receives query values as
+\code{\&T}; its partial-function meaning depends only on the values of its free
+variables and fixed host captures. Shared borrowing does not prove this.
+\item \textbf{Pinned Rust.} Rust guards and binds are opaque. They keep their
+written relative order (a tree under blocks, Section~\ref{sec:blocks}), their
+free-variable binders and every relational fact written before them
+(their \emph{Before} set). Relational steps commute among themselves and may
+move earlier across Rust, never later.
+\end{enumerate}
+Consequently any surviving representative of \code{==}-equal values is the
+value, and dedup, canonical projection, and projection before opaque Rust that
+keeps its free variables are sound. Moving a relational step earlier only
+shrinks the domain on which later Rust runs, so it can remove but not add
+panics. The host boundary is
+\[
+\Rule{H-Eval}
+ {\Gamma_H;\Gamma_Q\vdash_H e:\tau\quad \rho\approx_{\Gamma_Q}\nu\quad
+  \langle e,\rho,\sigma\rangle\Downarrow_H(v,\sigma',\alpha)}
+ {\langle\mathsf{host}[e],\nu,\rho,\sigma\rangle\Downarrow(v,\sigma',\alpha)}
+\]
+where $\Gamma_Q$ gives logical types and representation modes, $\Gamma_H$ host
+bindings and $\rho\approx\nu$ that Rust bindings represent $\nu$; rustc checks
+the elaborated context. Totality only on tuples reached by the original plan is
+insufficient: with $A=\{x=0\}$, $B=\emptyset$ and $e=1/x$, moving a bind of $e$
+from $A\bowtie B$ onto $A$ adds a panic, and is rejected by the Before rule.
+
+\subsection{Disjunctive blocks}
+\label{sec:blocks}
+A block runs at a prefix row $\rho$. Let $F$ be the prefix names used inside it
+and $I$ the names bound in every branch; other branch bindings are local. Write
+$L_j(\rho)=\pi_{F\cup I}\sem{B_j}(\rho)$.
+\begin{mathpar}
+\Rule{Block-Union}{\forall j,\ \sem{B_j}(\rho)\ne\bot}
+ {\sem{\{B_1\}\mid\cdots\mid\{B_n\}}(\rho)=\bigcup_j L_j(\rho)}
+
+\Rule{Block-Else}{\forall j<k,\ \sem{B_j}(\rho)=\emptyset\quad
+ \sem{B_k}(\rho)\notin\{\bot,\emptyset\}}
+ {\sem{\{B_1\}\ \mathsf{else}\ \cdots\ \mathsf{else}\ \{B_n\}}(\rho)=L_k(\rho)}
+\end{mathpar}
+Union is $\bot$ if any branch is $\bot$; its branch order is not meaning, so
+any permutation or witness short circuit is a refinement. Fallback order is
+meaning: a later branch runs only where all earlier ones are empty; if all are
+empty the result is empty. Neither operator assumes disjoint branches or any
+key or data property. Rust \code{||} inside a guard keeps Rust's meaning. Laws:
+\[
+ C\bowtie(L\cup M)=(C\bowtie L)\cup(C\bowtie M),\qquad
+ B_1\ \mathsf{else}\ B_2=B_1\cup(B_2\triangleright_F B_1).
+\]
+Fallback arms are disjoint by construction. A union is statically disjoint only
+if every pair of arms has some interface column with different proved literal
+values. Positive semijoin reductions distribute into union arms and into the
+positive uses of fallback arms; the negated operand of an antijoin is always the
+unmodified named branch result.

@@ -1,0 +1,59 @@
+\section{Pass protocol and composition}
+\label{sec:composition}\label{sec:staging}
+A macro invocation carries a complete program and an explicit queue of remaining
+pass paths, each with argument tokens read only by that pass.
+\begin{mathpar}
+\Rule{ST-Entry}{\pi=\mathsf{resolve}(configuration,defaults)\quad\pi\ne[]}
+ {\code{mini_linq::compile!}\{configuration;\ T\}
+  \longrightarrow\mathsf{start}(\pi,T)}
+
+\Rule{ST-Next}{\operatorname{parse}_L(T)=s\quad\mathsf{WF}_L(s)\\
+ f(s,args)=t\quad\mathsf{WF}_M(t)\quad M\ne Rust\quad\pi=k(args')::\pi'}
+ {\mathsf{pass}_f(args,\pi,T)
+  \longrightarrow k!\{args';\ \pi';\ \mathsf{quote}(t)\}}
+
+\Rule{ST-Terminal}{\operatorname{parse}_{Structures}(T)=s\quad
+ \mathsf{WF}_{Structures}(s)\\
+ e=\mathsf{print}(s,args)\quad\pi=[]}
+ {\mathsf{pass}_{print}(args,\pi,T)\longrightarrow\mathsf{quote}_{Rust}(e)}
+
+\Rule{ST-Context}{\mathsf{pass}_f(args,\pi,\mathsf{quote}(s))\longrightarrow T'}
+ {C[\mathsf{pass}_f(args,\pi,\mathsf{quote}(s))]\longrightarrow C[T']}
+\end{mathpar}
+\code{cq_stage::pass} checks source and target contracts; \code{cq_stage::rewrite}
+also runs the language's \code{check_rewrite}. Correspondence checks belong to the
+pass. Failures emit \code{compile_error!}; rustc then checks types, ownership and
+trait obligations of the generated code.
+\begin{lstlisting}
+pipeline {
+    surface = [Path(tokens), ...];
+    plan = Path(tokens); ix = Path(tokens); lower = Path(tokens);
+    physical = [Path(tokens), ...]; select = Path(tokens);
+    structures = [Path(tokens), ...]; print = Path(tokens);
+}
+\end{lstlisting}
+The order is surface, plan, ix, lower, Physical rewrites, select, Structures
+rewrites, print; omitted phases default to the \code{mini_linq::passes} entries
+\code{plan_written}, \code{index_demands}, \code{lower}, \code{select} and
+\code{print_pull}. An authored program may enter at any compatible macro
+with \code{arguments \{..\}; pipeline \{..\}; <program>}. The protocol registers
+no pass names, and passes receive no configuration beyond their arguments: every
+choice is in the program text.
+
+Optional features are standalone workspaces under \code{features/} that depend
+on the packaged core only: planners, rewrites, surface extensions (negation,
+aggregation, correlated subqueries, recursion as Rust contexts around checked
+core invocations), a push printer, a stacked IR, a diverged RA surface,
+composition, inspection and workloads. \code{tools/check_external.py} packages
+the core and builds and tests each feature outside the repository, and rejects a
+fixture that only builds in-tree.
+
+\begin{theorem}[Conditional composition]
+\label{thm:composition}
+If $f:L\to M$ and $g:M\to N$ terminate on their domains, $f$ produces only inputs
+$g$ admits and establishes $g$'s representation preconditions, and both preserve
+a common observation under compatible closing contexts, then so does $g\circ f$.
+\end{theorem}
+\begin{proof}Compose the representation relations and observation equalities;
+domain inclusion makes $g$ defined; context adequacy lifts the argument to macro
+invocations.\end{proof}

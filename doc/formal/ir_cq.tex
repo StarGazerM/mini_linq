@@ -1,0 +1,163 @@
+\section{CQ and its normal form}
+\label{sec:cq}\label{sec:languages}
+
+\paragraph{Grammar.}
+CQ clauses use derived parsing; expressions, patterns and types are
+\code{syn::Expr}, \code{syn::Pat} and \code{syn::Type}. Macros stay opaque
+token trees~\cite{host-synmacro}.
+\begin{lstlisting}
+Program ::= struct Name; Decl* Rule+
+Decl    ::= relation R(c: Type, ...) [= (Expr)];
+Rule    ::= h(Expr, ...) :- Clause, ... ;
+Clause  ::= R(Arg, ...) | if Expr | let Pat [: Type] = Expr | Block
+Arg     ::= x | _ | Expr
+Block   ::= { Body } ( | { Body } )+  |  { Body } ( else { Body } )+
+\end{lstlisting}
+Bare single-segment paths bind logical variables; other arguments compute.
+Several rules for one head are sugar for one rule whose body is a top-level
+union over fresh positional head columns; each rule gets fresh local names,
+opaque syntax receives lexical aliases rather than token substitution.
+A trailing \code{= (Expr)} supplies the host value.
+
+\paragraph{Lexical dependencies.}
+$\fv_S(e)=(F,o)$ returns visible value names and an opacity bit; with logical
+environment $B$, $\uses(e,B)=B$ if $o$ else $F\cap B$, and the diagnostic
+$\operatorname{known}(e,Q)=\emptyset$ if $o$ else $F\cap Q$. Write $e\checkmark_B$
+for $\operatorname{known}(e,Q)\subseteq B$. Attributes, macros, local items and
+verbatim syntax are opaque; qualified path segments and field/method names are
+not value uses.
+\begin{mathpar}
+\Rule{FV-Name}{x\notin A}{A\vdash x\rightsquigarrow(\{x\},\mathsf{false})}
+
+\Rule{FV-Bound}{x\in A}{A\vdash x\rightsquigarrow(\emptyset,\mathsf{false})}
+
+\Rule{FV-Children}{A\vdash e_j\rightsquigarrow(F_j,o_j)\quad(1\le j\le n)}
+ {A\vdash c(e_1,\ldots,e_n)\rightsquigarrow(\bigcup_jF_j,\bigvee_jo_j)}
+
+\Rule{FV-Closure}{A\cup\binds(\bar p)\vdash e\rightsquigarrow(F,o)}
+ {A\vdash |\bar p|e\rightsquigarrow(F,o)}
+
+\Rule{FV-For}{A\vdash e\rightsquigarrow u\quad A\cup\binds(p)\vdash b\rightsquigarrow v}
+ {A\vdash\mathsf{for}\ p\ \mathsf{in}\ e\ b\rightsquigarrow u\cup v}
+
+\Rule{FV-CondLet}{A\vdash e\rightsquigarrow u}
+ {A\vdash\mathsf{let}\ p=e\rightsquigarrow_c(u,A\cup\binds(p))}
+
+\Rule{FV-And}{A\vdash e_1\rightsquigarrow_c(u,A_1)\quad A_1\vdash e_2\rightsquigarrow_c(v,A_2)}
+ {A\vdash e_1\mathbin{\&\&}e_2\rightsquigarrow_c(u\cup v,A_2)}
+
+\Rule{FV-Cond}{A\vdash e\rightsquigarrow u\quad e\text{ is neither case above}}
+ {A\vdash e\rightsquigarrow_c(u,A)}
+\end{mathpar}
+Blocks visit initializers and let-else branches in the old scope, then add
+pattern bindings; match arms add their pattern bindings; condition bindings
+reach only the then/loop body.
+\begin{lemma}[Lexical upper bound]
+For transparent syntax with the intended pattern resolution, every free simple
+value name outside $A$ is in $F$, so $\uses(e,B)$ contains the logical free names
+of $e$ in $B$; for opaque syntax this holds because all of $B$ is returned.
+\end{lemma}
+\begin{proof}Simultaneous induction on expressions, statements and conditions;
+each binder extends only its body scope. Macro expansion and pattern resolution
+remain hypotheses.\end{proof}
+
+\paragraph{Scope rules.}
+$\Sigma;B\vdash c\Rightarrow B'$ checks one clause in written scope; atom
+arguments fold left to right.
+\begin{mathpar}
+\Rule{CQ-Var}{}{\Sigma;B\vdash x\Rightarrow B\cup\{x\}}
+
+\Rule{CQ-Expr}{e\checkmark_B}{\Sigma;B\vdash e\Rightarrow B}
+
+\Rule{CQ-Atom}{R\in\dom\Sigma\quad |\bar a|=|\Sigma(R)|\quad
+ \Sigma;B\vdash\bar a\Rightarrow B'}{\Sigma;B\vdash R(\bar a)\Rightarrow B'}
+
+\Rule{CQ-Guard}{e\checkmark_B}{\Sigma;B\vdash\mathsf{if}\ e\Rightarrow B}
+
+\Rule{CQ-Bind}{e\checkmark_B\quad N=\set(\binds(p))\quad N\cap B=\emptyset}
+ {\Sigma;B\vdash\mathsf{let}\ p[:\tau]=e\Rightarrow B\cup N}
+
+\Rule{CQ-Block}{n\ge2\quad\forall j,\ \Sigma;B\vdash B_j\Rightarrow B_j'\\
+ I=(\bigcap_j B_j')\setminus B\quad \forall x\in I,\ \tau_j(x)=\tau_k(x)}
+ {\Sigma;B\vdash\mathsf{block}(B_1,\ldots,B_n)\Rightarrow B\cup I}
+\end{mathpar}
+
+\paragraph{Recognized comparisons.}
+Let $Q$ be the query binders, $B$ the written bound names and $P$ the closing
+host parameters. Over the Syn AST (no separate grammar):
+\begin{lstlisting}
+t ::= x | *x | &x | literal | -numeric-literal | bare-host-identifier
+C ::= t == t | t != t | t < t | t <= t | t > t | t >= t
+    | C && C | C || C | !C | (C)
+\end{lstlisting}
+Rust desugars these to \code{PartialEq}/\code{PartialOrd} calls; we recognize
+them only under the premises.
+\begin{mathpar}
+\Rule{ORD-Admissible}{\tau:\code{Ord}\quad
+ \leq_\tau\text{ total, terminating and consistent with identity}}
+ {\tau\text{ admits relational order}}
+
+\Rule{CQ-Comparison}{\vars(t_1,t_2)\subseteq B\quad
+ t_1,t_2\text{ admissible}\quad op\in\{==,\ne,<,\leq,>,\geq\}}
+ {\Sigma;B;P\vdash t_1\ op\ t_2\Rightarrow B}
+
+\Rule{CQ-GuardRecognize}{e\text{ has only recognized comparisons and boolean nodes}\\
+ \text{all comparisons satisfy the Eq/Ord premises}}
+ {\mathsf{recognize}_{Q,P}(e)=\theta\quad\sem e=\sem\theta}
+
+\Rule{CQ-GuardSplit}{e=e_1\mathbin{\&\&}\cdots\mathbin{\&\&}e_n\\
+ A=\text{recognized leaves}\quad F=\text{remaining leaves in written order}}
+ {\mathsf{if}\ e\rightsquigarrow \mathsf{select}_{\bigwedge A};
+   \mathsf{guard}_{\bigwedge F}\quad
+   \sem{\mathsf{select}_{\bigwedge A};\mathsf{guard}_{\bigwedge F}}
+   \sqsupseteq\sem{\mathsf{if}\ e}}
+\end{mathpar}
+Recognized comparisons are total, so short-circuit \code{\&\&}, \code{||} and
+\code{!} mean classical connectives on them. Arithmetic, calls, methods, casts,
+indexing, blocks, macros, qualified paths and field access are opaque; a mixed
+\code{||} or \code{!} is one opaque leaf; only the top-level conjunction splits.
+Parameters print as \code{@name} in later languages and are borrowed once outside
+query loops.
+\begin{proof}[Proof of CQ-GuardSplit]
+In \code{a \&\& f(x)} Rust evaluates $f$ exactly where $a$ holds, so selecting
+the total $a$ earlier gives that domain; in \code{f(x) \&\& a} it evaluates $f$
+on a superset, so selecting $a$ earlier only shrinks it. Iterating over the
+conjunction keeps the opaque leaves in written order: on a returning input,
+either a relational leaf rejects first or all hold and the residual evaluates
+the same opaque leaves in the same order. A disjunction or negation lacks this
+argument and is never split.
+\end{proof}
+
+\paragraph{Normal form.}
+CQ$_{\rm NF}$ restricts the same \code{cq::Program}: every atom argument is a
+distinct bare variable, every head argument a variable. Shared names across
+atoms are natural-join variables. Repeats within an occurrence and literals
+become relational identities at the atom's position; computed arguments become
+positioned binds plus identities; computed heads become final binds.
+
+\paragraph{Contract.}
+$\mathsf{CQScope}(s)$ is the scope rules plus:
+(1)~relation and column names unique, declared arity positive, no attributes;
+(2)~body atoms name declared inputs at their arity;
+(3)~lets do not shadow bound names; the body has an atom; the head has positive arity;
+(4)~a declaration named by the head is the result: matching arity, no host value;
+without it, head arguments are bound bare variables of known type;
+(5)~blocks have equal interface types and no escaped local names;
+(6)~negation, aggregation and unexpanded \code{name!\{..\}} clauses are rejected;
+(7)~comparison terms are bound names, literals or captured identifiers; known
+Eq/Ord failures are rejected; a recognizable unsplit guard is rejected.
+\begin{mathpar}
+\Rule{WF-CQ}{\mathsf{CQScope}(s)}{\mathsf{WF}_{CQ}(s)\Downarrow\ok}
+
+\Rule{WF-NF}{\mathsf{WF}_{CQ}(s)\quad\text{every nested atom has distinct bare arguments}\\
+ \text{head arguments are bound variables; known inadmissible types rejected}}
+ {\mathsf{WF}_{NF}(s)\Downarrow\ok}
+\end{mathpar}
+These checks do not establish admissibility, which remains a premise.
+
+\paragraph{Meaning and rewrite check.}
+The meaning is Section~\ref{sec:denotation}: compose the desugared body in
+written order. Its total relational specialization agrees with classical
+$\sem q_I$. CQ records no decisions. A same-language CQ rewrite must be AST
+identity; raw-token surface expansions run before the CQ contract and have no
+semantic contract of their own.

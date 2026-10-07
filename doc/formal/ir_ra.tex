@@ -1,0 +1,92 @@
+\section{RA prime: named relational algebra with a Rust chain}
+\label{sec:ra}
+
+\paragraph{Grammar.} A standalone named DAG; declarations and output are part of it.
+\begin{lstlisting}
+RA ::= relational { Decl* (r = Op;)* output r as Head; }
+Op ::= unit | rename R@path {source -> variable, ...}
+     | natural_join l with r | semijoin l with r
+     | project r keep {columns} | select r if (Theta)
+     | guard r if (Expr) [Environment]
+     | bind r with Pat [: Type] = (Expr) [Environment]
+     | union r1, r2, ... [BlockOrigin] | anti [F] l, r
+Environment ::= scope[names] [@path]
+BlockOrigin ::= block @path free[F] interface[I]
+                [fallback] [over prefix] [domain input]
+\end{lstlisting}
+Every \code{rename} carries the fixed source occurrence it realizes. Mathematically
+$o::=\mathbf1\mid\delta_m(R)\mid r\bowtie s\mid r\ltimes s\mid\pi_Ur\mid\sigma_\theta r
+\mid\operatorname{guard}_er\mid\operatorname{bind}_{N,e}r\mid\bigcup_jr_j\mid r\triangleright_Fs$,
+and $\Delta(r)=(V,T,C)$ records sort, symbolic Rust types and computed columns.
+
+\paragraph{Contract.}
+\begin{mathpar}
+\Rule{RA-Unit}{}{\Sigma;\Delta\vdash\mathbf1:\emptyset}
+
+\Rule{RA-Rename}{R\in\dom\Sigma\quad m:\operatorname{cols}(\Sigma(R))\cong V}
+ {\Sigma;\Delta\vdash\delta_m(R):V}
+
+\Rule{RA-Join}{\Delta(r).V=V\quad\Delta(s).V=W}
+ {\Sigma;\Delta\vdash r\bowtie s:V\cup W}
+
+\Rule{RA-Semi}{\Delta(r).V=V\quad s\in\dom\Delta}
+ {\Sigma;\Delta\vdash r\ltimes s:V}
+
+\Rule{RA-Project}{\Delta(r).V=V\quad U\subseteq V}
+ {\Sigma;\Delta\vdash\pi_Ur:U}
+
+\Rule{RA-Select}{\Delta(r).V=V\quad \theta\checkmark_{V,P}}
+ {\Sigma;\Delta\vdash\sigma_\theta r:V}
+
+\Rule{RA-Extend}{\Delta(r).V=V\quad e\checkmark_V\quad N\cap V=\emptyset}
+ {\Sigma;\Delta\vdash\operatorname{bind}_{N,e}r:V\cup N}
+
+\Rule{RA-Union}{\forall j,\ H(r_j)=H}
+ {H(\mathsf{union}(r_1,\ldots,r_n))=H\quad
+ \sem{\mathsf{union}(r_1,\ldots,r_n)}=\bigcup_j\sem{r_j}}
+
+\Rule{RA-Anti}{F\subseteq H(r)\cap H(s)}
+ {H(\mathsf{anti}_F(r,s))=H(r)\quad
+ \sem{\mathsf{anti}_F(r,s)}=\sem r\triangleright_F\sem s}
+
+\Rule{RA-Def}{\Sigma;\Delta\vdash o:\delta\quad r\notin\dom\Delta}
+ {\Sigma\vdash(\Delta,r=o)\Rightarrow\Delta[r\mapsto\delta]}
+
+\Rule{WF-RA}{\mathsf{RAHeading}(a,A)}{\mathsf{WF}_{RA}(a)\Downarrow A}
+\end{mathpar}
+$\mathsf{RAHeading}$ is these rules plus: (1)~valid declarations, unique result
+names, operands defined earlier, every definition reachable from the output;
+(2)~each rename names a unique occurrence; (3)~guard/bind payloads use only
+visible names, or an explicit Environment lists names available in the input
+heading at a valid path; (4)~union operands have equal headings and a valid
+block origin; (5)~an all-bare output has exactly its input heading, a computed
+output may use a subset; (6)~the Rust ancestry is a compatible chain, combined
+as a tree at unions. Types merge by restriction, preferring the left spelling;
+Rust establishes concrete type compatibility.
+
+\paragraph{Meaning.} Section~\ref{sec:denotation}'s partial operators over the
+DAG; a name denotes an immutable set and promises neither materialization nor
+a reusable iterator. Ordered fallback evaluates only selected arms. Guards and
+binds are Kleisli steps that may return $\bot$.
+
+\paragraph{Recorded decisions.} Join shape and association, where each relational
+selection and semijoin sits, projections, and the block form (hoisted derived
+relation or correlated arms over a prefix).
+
+\paragraph{Rewrite check (\code{cq_lang_ra::check_rewrite}).} A structural contract
+over fixed occurrences, never an equivalence decision:
+(1)~both programs pass the contract; declarations, output heading and head are
+unchanged;
+(2)~the multiset of occurrences is equal and each keeps its column bindings;
+(3)~relational constraints and projection correlations are equal after
+union-find closure of equalities, and every source semijoin reduction survives
+with its column matches;
+(4)~the Rust chain has equal nodes, payloads, input bindings and order
+(unordered only among union siblings), and every relational fact, reduction and
+occurrence before a node in the source is before it in the target;
+(5)~union operand $j$ contains exactly branch $j$'s occurrences; a fallback
+operand antijoins the earlier original operands by reference; a negated operand
+contains exactly its branch, with no semijoin pushed into it.
+Admitted rewrites: join reordering and reassociation, selections and semijoins
+moved earlier, renamed results. The check is linear plus union-find and rejects
+any rewrite that adds or removes occurrences (no query minimization).

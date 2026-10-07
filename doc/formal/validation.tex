@@ -1,0 +1,45 @@
+\section{Validation}
+\label{sec:validation}\label{sec:evaluation}
+Acceptance needs three independent kinds of evidence:
+$\mathsf{RuleDerivation}\land\mathsf{ExpectedExpansion}\land\mathsf{SemanticAgreement}$.
+Passing one never substitutes for another.
+
+\begin{center}\small
+\begin{tabular}{p{.27\linewidth}p{.65\linewidth}}
+\toprule
+Kind & What is run, and what it establishes\\
+\midrule
+Structural checks & Every contract and correspondence rule above, with mutation
+tests per obligation (\code{languages/*/tests}, \code{passes/*/tests}). Establishes
+the structural premises, not Rust semantics.\\
+Expansion fixtures & Authored macro outputs compared up to whitespace and spans.
+Establishes that decisions are recorded where claimed.\\
+Storage laws & Abstraction functions of indexes, membership and ordered cursors
+against an independent bag oracle (\code{runtime/cq-storage/tests}).\\
+Answer oracles & \code{testkit/cq-testkit}: an independent relational semantics
+and a written-order Rust reference; the corpus runs every planner, rewrite, host
+type and printer configuration.\\
+Differential fuzzing & Seeded random queries (constants, guards, lets, partial
+arithmetic, blocks of both kinds, duplicates, empty relations) compiled under
+random pipelines; total cases compared with DuckDB, partial cases checked for
+refinement against the written reference.\\
+TPC-derived kernels & Exact answer comparison with DuckDB at scale factors 0.1
+and 1; timing and counters are reported, never asserted.\\
+\bottomrule
+\end{tabular}
+\end{center}
+None of this proves the runtime trait laws for arbitrary user types, adequacy of
+Rust resolution and ownership, or any complexity bound.
+
+\paragraph{Related work.}
+AHV gives valuations, named algebra, join trees and acyclicity~\cite{ahv}; the
+course notes connect them to executable planning~\cite{notes}.
+Language-integrated query calculi justify normalization to a target
+fragment~\cite{host-linq,host-effective}; residual Rust needs binding and context
+adequacy as in multi-language semantics~\cite{host-multilanguage}, which Syn
+parsing does not supply~\cite{host-hygiene}. The pass structure follows
+nanopass~\cite{paper-nanopass} and compositional compiler
+correctness~\cite{paper-ccc}. Ascent BYODS formalizes custom
+representations~\cite{paper-byods}; predicate placement relates to
+dependencies and cost~\cite{paper-udp}. Push/pull fusion and LFTJ complexity
+results~\cite{paper-pushpull,paper-lftj} are not established here.

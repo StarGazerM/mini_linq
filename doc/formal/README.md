@@ -1,17 +1,18 @@
 # MiniLinq specification
 
-The [paper source](compiler.tex) covers CQ/RA prime bottom + finite Set semantics, implemented
-CQ → CQ-NF → VO → RA nanopasses, IX demand construction, and the Physical
-and Structures local contracts. Build `build/compiler.pdf` with the command below.
+The [paper source](compiler.tex) states the denotation, one section per
+language (grammar, contract invariants, meaning, recorded decisions, rewrite
+check) and one subsection per pass (compilation rules, independent check,
+refinement statement). Build `build/compiler.pdf` with the command below.
 
 | Subject | Source |
 | --- | --- |
-| Scope and acceptance | [research_contract.tex](research_contract.tex), [evaluation.tex](evaluation.tex) |
-| CQ/RA meaning and host assumptions | [foundations.tex](foundations.tex), [languages.tex](languages.tex) |
-| Planning and host dependencies | [planning.tex](planning.tex), [constraint_planning.tex](constraint_planning.tex) |
-| IX rules | [ix_physical_contract.tex](ix_physical_contract.tex) |
-| Local contracts and pass correspondence | [pass_contracts.tex](pass_contracts.tex) |
-| Macro composition | [staging.tex](staging.tex) |
+| Scope and pass obligation | [intro.tex](intro.tex) |
+| Denotation, premises, blocks | [denotation.tex](denotation.tex) |
+| Languages | [ir_cq.tex](ir_cq.tex), [ir_vo.tex](ir_vo.tex), [ir_ra.tex](ir_ra.tex), [ir_ix.tex](ir_ix.tex), [ir_physical.tex](ir_physical.tex), [ir_structures.tex](ir_structures.tex) |
+| Passes and their checks | [passes.tex](passes.tex) |
+| Pass protocol and features | [composition.tex](composition.tex) |
+| Validation | [validation.tex](validation.tex) |
 | Rule classification and implementing source markers | [rules.tsv](rules.tsv) |
 
 ```sh
@@ -59,7 +60,7 @@ elaboration, and index correspondence. The standalone argument-placement and
 constraint-planning drivers check their stated boundaries. None
 compares generated-query execution with its oracle. Runtime answers, partial-expression panic-domain cases, Rust
 trait guards and expansion fixtures are covered by the crate tests listed in
-[evaluation.tex](evaluation.tex); realization has no source/target
+[validation.tex](validation.tex); realization has no source/target
 correspondence `check`.
 
 The manuscript describes source revision `241f37c`. Its exact written reference

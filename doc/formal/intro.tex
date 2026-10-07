@@ -1,0 +1,44 @@
+\section{Scope and structure}
+\label{sec:introduction}
+A conjunctive query specifies satisfying valuations, not containers, indexes
+or access algorithms. MiniLinq plans it, records required index demands, and
+lets caller-selected passes choose physical operators and concrete Rust
+representations. The compiled chain is
+\[
+\begin{aligned}
+ &\mathsf{CQ}\xrightarrow{\text{normalize}}\mathsf{CQ_{NF}}
+ \xrightarrow{\text{order}}\mathsf{VO}\xrightarrow{\text{reduce}}\mathsf{VO}
+ \xrightarrow{\text{elaborate}}\mathsf{RA'}\\
+ &\quad\xrightarrow{\text{index}}\mathsf{IX}
+ \xrightarrow{\text{lower}}\mathsf{Physical}
+ \xrightarrow{\text{select}}\mathsf{Structures}
+ \xrightarrow{\text{print}}\mathsf{Rust}.
+\end{aligned}
+\]
+Every intermediate program is complete: it owns its declarations and output
+and can be parsed, checked and continued without its producer. VO extends CQ,
+IX extends RA prime and Structures extends Physical; RA prime and Physical
+stand alone. Section~\ref{sec:denotation} fixes the denotation;
+Sections~\ref{sec:cq}--\ref{sec:structures} give one section per language;
+Section~\ref{sec:passes} gives one subsection per pass;
+Section~\ref{sec:composition} gives the pass protocol and
+Section~\ref{sec:validation} the evidence.
+
+\paragraph{Pass obligation.} For a pass $f:L\to M$ with explicit arguments
+$\chi$ and observation relation $\alpha$,
+\[
+ \mathsf{WF}_L(s)\land\mathsf{Domain}_f(s,\chi)
+ \ \Longrightarrow\
+ f(s,\chi)=t\land\mathsf{WF}_M(t)\land\sem s_L\sqsubseteq\alpha(\sem t_M).
+\]
+An unmet domain premise is diagnosed. A pass may not invent a missing demand
+or substitute another source version. Each pass has a separately callable
+$\mathsf{check}_f(s,t,\chi)$ that never reruns $f$.
+
+\paragraph{Out of scope.} Negation, aggregation, correlated subqueries and
+recursion are external surface consumers composed from checked core
+invocations, not core operators. General cost-based physical search,
+cardinality estimation and a worst-case-optimal-join complexity guarantee are
+not implemented. Rust resolution, ownership and the runtime trait laws for
+arbitrary user types are proof obligations supported by tests, not theorems
+of this paper.
