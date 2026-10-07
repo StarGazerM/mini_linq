@@ -899,6 +899,7 @@ mod tests {
                 bindings: Vec::new(),
                 guards: Vec::new(),
                 constraints: Vec::new(),
+                blocks: Vec::new(),
                 head: vec![model::Expr::Var(0)],
                 order: Vec::new(),
             },

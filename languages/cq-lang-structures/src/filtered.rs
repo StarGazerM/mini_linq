@@ -36,6 +36,11 @@ pub fn required_columns(
             );
         };
         match &definition.operator {
+            Operator::Union(union) => {
+                for operand in &union.operands {
+                    require(operand, columns.clone());
+                }
+            }
             Operator::Unit(_) | Operator::Rename(_) => {}
             Operator::Probe(_, keyed) | Operator::Merge(_, keyed) => {
                 let mut columns = columns;
@@ -43,7 +48,7 @@ pub fn required_columns(
                 require(&keyed.left, columns.clone());
                 require(&keyed.right, columns);
             }
-            Operator::Semi(_, keyed) => {
+            Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => {
                 let keys: BTreeSet<_> = keyed.columns.iter().map(symbol_name).collect();
                 require(&keyed.left, columns.union(&keys).cloned().collect());
                 require(&keyed.right, keys);
@@ -129,7 +134,8 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             .find(|d| symbol_name(&d.name) == *name)
             .unwrap();
         let select = match &definition.operator {
-            Operator::Point(_, s) | Operator::Range(_, s) => s,
+            Operator::Point(_, s) | Operator::Range(_, s) => Some(s),
+            Operator::Union(_) => None,
             _ => {
                 return error(
                     &definition.name,
@@ -137,18 +143,33 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 );
             }
         };
+        let multiple = matches!(&definition.operator,Operator::Union(union) if union.origin.as_ref().is_none_or(|origin|origin.over.is_none()));
+        let built = &analysis.built[name];
         if analysis.physical.modes[name] != ModeKind::Let
-            || analysis.physical.scanned.contains(name)
-            || analysis.retained.contains_key(name)
-            || analysis.built[name].len() != 1
-            || analysis.built[name][0].0.len() != 1
+            || (analysis.physical.scanned.contains(name) || analysis.retained.contains_key(name))
+                && !multiple
+            || built.len() != 1 && !multiple
+            || built
+                .iter()
+                .any(|(levels, _)| levels.len() != 1 && !multiple)
         {
             return error(
                 &definition.name,
-                "filtered storage requires one shared index and no row-scan consumer or retained rows",
+                "filtered storage requires a shared index or non-correlated union indices, without row scans or retained rows",
             );
         }
-        let levels = &analysis.built[name][0].0;
+        for entry in &program.structures.entries {
+            if symbol_name(&entry.name) == *name {
+                if let Structure::Built { keyed, .. } = &entry.structure {
+                    if keyed.filtered.as_ref() != Some(filtered) {
+                        return error(
+                            entry,
+                            "every direct union index must record the same filtered projection",
+                        );
+                    }
+                }
+            }
+        }
         for (reader, columns, supply) in analysis
             .physical
             .keyed_reads
@@ -164,17 +185,19 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 .find(|d| symbol_name(&d.name) == *reader)
                 .unwrap();
             if *supply != SupplyKind::Stream
-                || columns != &levels[0]
-                || !matches!(&reader.operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::First(_))))
-                    && !matches!(&reader.operator, Operator::Semi(..))
+                || !built
+                    .iter()
+                    .any(|(levels, _)| prefix_depth(levels, columns).is_some())
+                || !matches!(&reader.operator,Operator::Probe(_,key) if matches!(key.choice,Some(physical::Choice::First(_))))
+                    && !matches!(&reader.operator, Operator::Semi(..) | Operator::Anti(..))
             {
                 return error(
                     &reader.name,
-                    "filtered index readers must be probes or semijoins sharing the recorded key",
+                    "filtered index readers must use one of their recorded probe or membership keys",
                 );
             }
         }
-        let expected = selection_constants(select);
+        let expected = select.map(|s| selection_constants(s)).unwrap_or_default();
         let mut constants = BTreeMap::new();
         for binding in &filtered.constants {
             let column = symbol_name(&binding.column);
@@ -245,7 +268,7 @@ pub(super) fn layouts(program: &Program, analysis: &Analysis) -> BTreeMap<String
                 }
                 columns
             }
-            Operator::Semi(_, k) => input_layout(&k.left),
+            Operator::Semi(_, k) | Operator::Anti(_, k) => input_layout(&k.left),
             Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
                 input_layout(&s.input)
             }

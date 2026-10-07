@@ -1,0 +1,4 @@
+physical {relation R(x:i32,a:i32); relation S(x:i32,b:i32);
+r0=pipe rename R@0.0.0{x->x,a->a}; r1=pipe project r0 keep{x};
+r2=pipe rename S@0.1.0{x->x,b->b}; r3=pipe project r2 keep{x};
+u=pipe canon union r1,r3 block @0 free[] interface[x]; out=pipe project u keep{x}; return out as answer(x);}

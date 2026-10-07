@@ -15,6 +15,15 @@ validated by compiling and executing their output against independent oracles.
 Queries denote `bottom + Set`: a panic aborts evaluation, opaque Rust steps
 retain their written ancestry, and relational equality assumes Leibniz identity.
 
+Core body blocks `{ A } | { B }` combine answers; `{ A } else { B }` use B only
+where A is empty. Both need two nonempty branches, allow nesting, and export
+only names bound in every branch. Multiple rules for one head are union sugar.
+Join distributes over union, while fallback is `B1 ∪ (B2 ▷_F B1)`, with an
+antijoin on the block's free variables F. Rust-free blocks become derived
+relations; other blocks run per row and stream their prefix once. The IR records
+branch paths, common headings, negative references, canonicalization, witness
+stopping, retention, and the Rust ancestry tree. Rust `||` keeps its guard rules.
+
 ## Layout
 
 | Folder | Contents |
@@ -58,7 +67,7 @@ the repository against Cargo-packaged core crates.
 
 - `composition`: explicit pass composition over heterogeneous borrowed hosts.
 - `diverged-ra`: an external theta language enters at IX and uses probe/merge routes.
-- `extensions`: surface passes for union, negation, aggregation, recursion, and correlation.
+- `extensions`: surface passes for negation, aggregation, recursion, and correlation.
 - `inspection`: public CQ parsing and Rust free-variable inspection.
 - `own-dialect`: a push printer that preserves recorded Structures decisions.
 - `planners`: nine checked CQ-to-RA′ planning choices.
@@ -81,12 +90,14 @@ cargo test --workspace --locked
 bash tools/test_regressions.sh
 python3 tools/check_dependencies.py --isolate --frontends --consumers
 python3 tools/check_external.py
-python3 tools/check_external.py --feature /data/mini_linq-feature-template --out /tmp/template-gate
 python3 tools/check_public_api.py
 python3 doc/formal/check.py
 make -C doc/formal pdf
 cargo xtask golden
 cargo xtask fuzz --cases 200
+cargo xtask fuzz --cases 2000
+cargo xtask bench --tpch --sf 0.1
+cargo xtask bench --tpch --sf 1
 ```
 
 Regression logs live in `target/regression-logs/`; isolation, external, and API

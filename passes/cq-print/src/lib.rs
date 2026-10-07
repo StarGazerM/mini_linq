@@ -16,6 +16,18 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! Public printer helpers preserve recorded union/anti representations, scoped Rust bindings and dedup state.
+//! Shared source preparation exposes a fused stream for terminal pull and push consumers.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use cq_lang_structures as structures;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
@@ -254,6 +266,56 @@ impl<'a> Context<'a> {
         quote!(&(#(#binders,)*))
     }
 
+    /// Bind only names in the step's written lexical environment. Other fields
+    /// pass through the row without shadowing Rust captures.
+    pub fn scoped_borrowed_pattern(
+        &self,
+        result: &str,
+        environment: Option<&structures::syntax::algebra::Environment>,
+    ) -> TokenStream {
+        let Some(environment) = environment else {
+            return self.borrowed_pattern(result);
+        };
+        let names: std::collections::BTreeSet<_> =
+            environment.variables.iter().map(symbol_name).collect();
+        let binders = self.heading(result).iter().map(|column| {
+            if !names.contains(column) {
+                return quote!(_);
+            }
+            let id = &self.infos[result].bindings[column];
+            if self.infos[result].computed.contains(column) {
+                quote!(ref #id)
+            } else {
+                id.to_token_stream()
+            }
+        });
+        quote!(&(#(#binders,)*))
+    }
+
+    /// Lexical aliases for a Rust expression over hidden physical row names.
+    pub fn environment_aliases(
+        &self,
+        result: &str,
+        environment: Option<&structures::syntax::algebra::Environment>,
+    ) -> Vec<TokenStream> {
+        let names: std::collections::BTreeSet<_> = environment
+            .map(|e| e.variables.iter().map(symbol_name).collect())
+            .unwrap_or_else(|| self.heading(result).iter().cloned().collect());
+        self.heading(result)
+            .iter()
+            .filter(|name| names.contains(*name))
+            .map(|name| {
+                let logical = &self.infos[result].bindings[name];
+                let physical = self.ident(result, name);
+                if self.infos[result].computed.contains(name) {
+                    quote!(#[allow(unused_variables)] let #logical = &#physical;)
+                } else {
+                    quote!(#[allow(unused_variables)] let #logical = #physical;)
+                }
+            })
+            .collect()
+    }
+
     /// Borrow computed bindings before evaluating embedded Rust expressions.
     pub fn shadows(&self, result: &str) -> Vec<TokenStream> {
         self.infos[result]
@@ -285,9 +347,9 @@ impl<'a> Context<'a> {
                 .into_iter()
                 .flatten()
                 .any(|(reader, _)| match &self.physical[reader].operator {
-                    Operator::Probe(_, keyed) | Operator::Semi(_, keyed) => {
-                        computed(&symbol_name(&keyed.left))
-                    }
+                    Operator::Probe(_, keyed)
+                    | Operator::Semi(_, keyed)
+                    | Operator::Anti(_, keyed) => computed(&symbol_name(&keyed.left)),
                     _ => false,
                 })
     }
@@ -350,16 +412,24 @@ impl<'a> Context<'a> {
             .contains_key(name)
             .then(|| format_ident!("__cq_{}_rows", name));
         let mut statements: Vec<Stmt> = Vec::new();
+        let replay = self.analysis.filtered.contains_key(name)
+            && matches!(&self.physical[name].operator,Operator::Union(union) if union.origin.as_ref().is_none_or(|origin|origin.over.is_none()));
+        let direct_source = source.clone();
         let source = match &rows {
             Some(rows) => {
                 let ty = &self.analysis.retained[name];
                 statements.push(syn::parse_quote! {
                     let #rows: &#ty = &::core::iter::Iterator::collect(#source);
                 });
-                quote!(::core::iter::Iterator::copied(#rows.iter()))
+                if self.infos[name].computed.is_empty() {
+                    quote!(::core::iter::Iterator::copied(#rows.iter()))
+                } else {
+                    quote!(::core::iter::Iterator::cloned(#rows.iter()))
+                }
             }
             None => source,
         };
+        let source = if replay { direct_source } else { source };
         let mut built = Vec::new();
         for (levels, ty) in &structures {
             let columns: Vec<String> = levels.concat();
@@ -448,7 +518,7 @@ impl<'a> Context<'a> {
             if read == columns {
                 match &self.physical[reader].operator {
                     Operator::Probe(..) => require("seek"),
-                    Operator::Semi(..) => require("contains"),
+                    Operator::Semi(..) | Operator::Anti(..) => require("contains"),
                     _ => unreachable!("key reads come from probes and semijoins"),
                 }
             }

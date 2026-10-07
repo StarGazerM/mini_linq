@@ -29,87 +29,98 @@ pub fn validate_database(program: &cq::Program, database: &Database) {
 /// ordered atom tuple directly in its original input relation.
 pub fn valuations(program: &cq::Program, database: &Database) -> Relation {
     validate_database(program, database);
-    let relations = database;
-    let atoms = program
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            cq::BodyItem::Positive { atom } => Some((
-                symbol_name(&atom.relation),
-                atom.variables().map(symbol_name).collect::<Vec<_>>(),
-            )),
-            cq::BodyItem::Filter(_) | cq::BodyItem::Equality(_) | cq::BodyItem::Constraint(_) => {
-                None
-            }
-            cq::BodyItem::Let(_)
-            | cq::BodyItem::Negation(_)
-            | cq::BodyItem::Aggregate(_)
-            | cq::BodyItem::Extension { .. } => {
-                panic!("integer valuation oracle domain excludes let, negation, and aggregation")
-            }
-        })
-        .collect::<Vec<_>>();
-    let predicates = program
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            cq::BodyItem::Filter(f) => Some(&f.condition),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let heading = atoms
-        .iter()
-        .flat_map(|(_, xs)| xs.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    let variables = heading.iter().cloned().collect::<Vec<_>>();
-    let domain = atoms
-        .iter()
-        .flat_map(|(r, _)| relations[r].iter().flatten().copied())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let mut result = Relation {
-        heading,
-        rows: BTreeSet::new(),
-    };
-    enumerate(
-        &variables,
-        &domain,
-        &mut Binding::new(),
-        &mut |assignment| {
-            if atoms.iter().all(|(r, xs)| {
-                relations[r].contains(&xs.iter().map(|x| assignment[x]).collect::<Vec<_>>())
-            }) && predicates.iter().all(|p| evaluate_predicate(p, assignment))
-                && program.query.body.iter().all(|item| match item {
-                    cq::BodyItem::Equality(e) => evaluate_equality(e, assignment),
-                    cq::BodyItem::Constraint(c) => evaluate_constraint(c, assignment),
-                    _ => true,
-                })
-            {
-                result.rows.insert(assignment.clone());
-            }
+    body(
+        &program.query.body,
+        database,
+        Relation {
+            heading: BTreeSet::new(),
+            rows: BTreeSet::from([Binding::new()]),
         },
-    );
-    result
+    )
 }
 
-fn enumerate(
-    remaining: &[String],
-    domain: &[i32],
-    assignment: &mut Binding,
-    visit: &mut impl FnMut(&Binding),
-) {
-    let Some((x, tail)) = remaining.split_first() else {
-        visit(assignment);
-        return;
-    };
-    for value in domain {
-        assignment.insert(x.clone(), *value);
-        enumerate(tail, domain, assignment, visit);
+/// Written nested-loop reference over the original clauses, without compiler
+/// normalization, planning, or heading analysis.
+pub fn body(
+    items: &cq_syntax::CommaList<cq::BodyItem>,
+    database: &Database,
+    mut prefix: Relation,
+) -> Relation {
+    for item in items {
+        match item {
+            cq::BodyItem::Positive { atom } => {
+                let heading: BTreeSet<_> = atom.variables().map(symbol_name).collect();
+                let table = Relation {
+                    heading,
+                    rows: database[&symbol_name(&atom.relation)]
+                        .iter()
+                        .filter_map(|row| {
+                            let mut binding = Binding::new();
+                            for (argument, value) in atom.args.iter().zip(row) {
+                                let variable = cq::rust::variable(argument)
+                                    .expect("integer oracle requires variable-only atoms");
+                                let name = symbol_name(variable);
+                                if binding
+                                    .insert(name.clone(), *value)
+                                    .is_some_and(|previous| previous != *value)
+                                {
+                                    return None;
+                                }
+                            }
+                            Some(binding)
+                        })
+                        .collect(),
+                };
+                prefix = prefix.join(&table);
+            }
+            cq::BodyItem::Equality(e) => prefix.rows.retain(|row| evaluate_equality(e, row)),
+            cq::BodyItem::Constraint(c) => prefix.rows.retain(|row| evaluate_constraint(c, row)),
+            cq::BodyItem::Filter(f) => prefix
+                .rows
+                .retain(|row| evaluate_predicate(&f.condition, row)),
+            cq::BodyItem::Block(block) => {
+                let mut result = Relation {
+                    heading: prefix.heading.clone(),
+                    rows: BTreeSet::new(),
+                };
+                let mut common: Option<BTreeSet<String>> = None;
+                // Headings are obtained even on an empty context.
+                for branch in &block.branches {
+                    let relation = body(
+                        &branch.body,
+                        database,
+                        Relation {
+                            heading: prefix.heading.clone(),
+                            rows: BTreeSet::new(),
+                        },
+                    );
+                    common = Some(match common {
+                        None => relation.heading,
+                        Some(names) => names.intersection(&relation.heading).cloned().collect(),
+                    });
+                }
+                result.heading.extend(common.unwrap_or_default());
+                for row in &prefix.rows {
+                    let context = Relation {
+                        heading: prefix.heading.clone(),
+                        rows: BTreeSet::from([row.clone()]),
+                    };
+                    for branch in &block.branches {
+                        let branch_result = body(&branch.body, database, context.clone())
+                            .project(result.heading.clone());
+                        let nonempty = !branch_result.rows.is_empty();
+                        result.rows.extend(branch_result.rows);
+                        if block.kind == cq::blocks::Kind::Fallback && nonempty {
+                            break;
+                        }
+                    }
+                }
+                prefix = result;
+            }
+            _ => panic!("integer oracle excludes computed bindings and extensions"),
+        }
     }
-    assignment.remove(x);
+    prefix
 }
 
 /// Enumerate satisfying valuations and project in authored output order.

@@ -3,11 +3,24 @@
 use cq_testkit::Rows;
 
 #[test]
+fn all_other_surfaces_forward_nested_core_blocks() {
+    let A = [(1_i32,), (2,)];
+    let B = [(2_i32,), (3,)];
+    let C = [(4_i32,)];
+    let rows: Rows = mini_linq::compile! {
+        pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_negation::negation, cq_ext_correlated::correlated]; }
+        struct Q; relation A(x:i32); relation B(x:i32); relation C(x:i32);
+        answer(x) :- {{A(x)} | {B(x)}} else {C(x)};
+    }.map(|(x,)|vec![*x]).collect();
+    assert_eq!(rows, Rows::from([vec![1], vec![2], vec![3]]));
+}
+
+#[test]
 fn every_surface_forwards_plain_cq_and_parameters() {
     let A = [(1,), (2,), (3,)];
     let limit = 1;
     let rows: Rows = mini_linq::compile! {
-        pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_union::union, cq_ext_recursion::recursion, cq_ext_negation::negation, cq_ext_correlated::correlated]; }
+        pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_negation::negation, cq_ext_correlated::correlated]; }
         struct Plain; relation A(x:i32); answer(x) :- A(x), if *x > limit;
     }.map(|(x,)| vec![*x]).collect();
     assert_eq!(rows, [vec![2], vec![3]].into());
@@ -18,18 +31,16 @@ fn direct_surface_packet_carries_arguments_through_stacked_union_negation() {
     let A = [(1,), (2,)];
     let B = [(2,), (3,)];
     let S = [(2,)];
-    let rows: Vec<_> = cq_ext_union::union! {
+    let rows: Vec<_> = cq_ext_negation::negation! {
         pipeline {
-            cq_ext_negation::negation,
             mini_linq::passes::plan_written,
             mini_linq::passes::index_demands,
             mini_linq::passes::lower,
             mini_linq::passes::select,
             cq_ext_test_passes::repeated(twice)
         };
-        union! { struct Direct; relation A(x:i32); relation B(x:i32); relation S(x:i32);
-            answer(x) :- A(x), neg!{S(x)}; answer(x) :- B(x), neg!{S(x)};
-        }
+        struct Direct; relation A(x:i32); relation B(x:i32); relation S(x:i32);
+            answer(x) :- { A(x) } | { B(x) }, neg!{S(x)};
     }
     .map(|(x,)| *x)
     .collect();
@@ -65,7 +76,7 @@ fn recursive_seed_and_step_queries_use_the_callers_printer() {
     let Edge = [(1, 2), (2, 3), (3, 1)];
     let rows: Vec<_> = mini_linq::compile! {
         pipeline {
-            surface = [cq_ext_union::union, cq_ext_recursion::recursion];
+            surface = [cq_ext_recursion::recursion];
             print = cq_ext_test_passes::repeated(twice);
         }
         recursion! { struct R; relation Seed(x:i32); relation Edge(x:i32,y:i32); relation reach(x:i32);
@@ -85,7 +96,7 @@ fn correlated_inner_and_outer_queries_use_the_callers_printer() {
     let S = [(1, 7), (1, 7)];
     let rows: Vec<_> = mini_linq::compile! {
         pipeline {
-            surface = [cq_ext_union::union, cq_ext_correlated::correlated];
+            surface = [cq_ext_correlated::correlated];
             print = cq_ext_test_passes::repeated(twice);
         }
         struct C; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32,v:i32);

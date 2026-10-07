@@ -95,20 +95,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-ext-union"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
- "cq-syntax",
- "cq-testkit",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-extensions-conformance"
 version = "0.1.0"
 dependencies = [
@@ -117,7 +103,6 @@ dependencies = [
  "cq-ext-negation",
  "cq-ext-recursion",
  "cq-ext-test-passes",
- "cq-ext-union",
  "cq-storage",
  "cq-testkit",
  "mini-linq",

@@ -425,19 +425,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-ext-union"
-version = "0.1.0"
-dependencies = [
- "cq-ext-support",
- "cq-lang-cq",
- "cq-stage",
- "cq-syntax",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -709,7 +696,6 @@ dependencies = [
  "cq-ext-correlated",
  "cq-ext-negation",
  "cq-ext-recursion",
- "cq-ext-union",
  "cq-lang-cq",
  "cq-load",
  "cq-planners",

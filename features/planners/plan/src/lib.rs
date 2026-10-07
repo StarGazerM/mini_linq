@@ -4,6 +4,18 @@
 //! Relational steps may move earlier across opaque Rust, which keeps its
 //! payload, relative order, free-variable binders and written Before sets.
 //! Column equality assumes Leibniz identity. No execution counts are preserved.
+//! All heuristics plan blocks recursively: Written retains position, Prefix ranks a block by connectivity and heading width, Elimination/GYO use its hyperedge, and Fine plans reuse derived prefix indices.
+//! Hypergraph semijoins retain negative originals.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 #![forbid(unsafe_code)]
 
 pub use cq_lang_cq as cq;
@@ -78,7 +90,15 @@ impl Planner {
         // Formal rule Plan-Graph: Hypergraph records a complete tree reducer exactly when acyclic.
         cq_reduce::Options {
             guards: cq_reduce::Pushdown::None,
-            semijoins: if self == Self::Hypergraph && cq::hypergraph::Analysis::of(source).acyclic {
+            semijoins: if self == Self::Hypergraph
+                && source
+                    .query
+                    .body
+                    .iter()
+                    .any(|item| matches!(item, cq::BodyItem::Block(_)))
+            {
+                cq_reduce::Reductions::Hypergraph
+            } else if self == Self::Hypergraph && cq::hypergraph::Analysis::of(source).acyclic {
                 cq_reduce::Reductions::Tree
             } else {
                 cq_reduce::Reductions::None
@@ -207,30 +227,7 @@ pub fn check(source: &cq::Program, target: &ra::Program) -> syn::Result<()> {
 /// clause and no optimization. This is deliberately independent of cq-order.
 fn written_valuation(normal: &cq::Program) -> syn::Result<vo::Program> {
     cq::normal::check(normal)?;
-    let mut steps = Vec::with_capacity(normal.query.body.len());
-    for (clause, item) in normal.query.body.iter().enumerate() {
-        steps.push(match item {
-            cq::BodyItem::Positive { atom } => vo::Step::Atom(
-                vo::Subatom {
-                    relation: atom.relation.clone(),
-                    at: Default::default(),
-                    clause: syn::LitInt::new(&clause.to_string(), proc_macro2::Span::call_site()),
-                    paren: Default::default(),
-                    columns: atom
-                        .variables()
-                        .cloned()
-                        .map(vo::Column::Variable)
-                        .collect(),
-                },
-                Default::default(),
-            ),
-            cq::BodyItem::Equality(e) => vo::Step::Equality(e.clone(), Default::default()),
-            cq::BodyItem::Constraint(c) => vo::Step::Constraint(c.clone(), Default::default()),
-            cq::BodyItem::Filter(g) => vo::Step::Guard(g.clone(), Default::default()),
-            cq::BodyItem::Let(b) => vo::Step::Let(b.clone(), Default::default()),
-            _ => unreachable!("checked CQ normal form"),
-        });
-    }
+    let steps = written_steps(&normal.query.body, &std::collections::BTreeSet::new(), None);
     let reference = vo::Program {
         cq: normal.clone(),
         valuation: vo::Valuation {
@@ -241,4 +238,85 @@ fn written_valuation(normal: &cq::Program) -> syn::Result<vo::Program> {
     };
     vo::contract::check(&reference)?;
     Ok(reference)
+}
+
+fn written_steps(
+    body: &cq::CommaList<cq::BodyItem>,
+    context: &std::collections::BTreeSet<String>,
+    parent: Option<(vo::Occurrence, usize)>,
+) -> Vec<vo::Step> {
+    let mut bound = context.clone();
+    let mut steps = Vec::new();
+    for (clause, item) in body.iter().enumerate() {
+        let path = parent.as_ref().map_or_else(
+            || vo::Occurrence::new(clause),
+            |(path, j)| path.child(*j, clause),
+        );
+        steps.push(match item {
+            cq::BodyItem::Positive { atom } => {
+                bound.extend(atom.variables().map(cq::symbol_name));
+                vo::Step::Atom(
+                    vo::Subatom {
+                        relation: atom.relation.clone(),
+                        at: Default::default(),
+                        clause: path,
+                        paren: Default::default(),
+                        columns: atom
+                            .variables()
+                            .cloned()
+                            .map(vo::Column::Variable)
+                            .collect(),
+                    },
+                    Default::default(),
+                )
+            }
+            cq::BodyItem::Block(block) => {
+                let facts = block.analyze(&bound);
+                let context = if facts.rust {
+                    bound.clone()
+                } else {
+                    facts.free.keys().cloned().collect()
+                };
+                let branches = block
+                    .branches
+                    .iter()
+                    .enumerate()
+                    .map(|(j, branch)| vo::blocks::Branch {
+                        brace: branch.brace,
+                        steps: written_steps(&branch.body, &context, Some((path.clone(), j))),
+                    })
+                    .collect();
+                bound.extend(facts.interface.keys().cloned());
+                vo::Step::Block(
+                    vo::blocks::Block {
+                        source: vo::Subatom {
+                            relation: syn::Ident::new("block", proc_macro2::Span::call_site()),
+                            at: Default::default(),
+                            clause: path,
+                            paren: Default::default(),
+                            columns: facts
+                                .free
+                                .values()
+                                .chain(facts.interface.values())
+                                .cloned()
+                                .map(vo::Column::Variable)
+                                .collect(),
+                        },
+                        kind: block.kind,
+                        branches,
+                    },
+                    Default::default(),
+                )
+            }
+            cq::BodyItem::Equality(e) => vo::Step::Equality(e.clone(), Default::default()),
+            cq::BodyItem::Constraint(c) => vo::Step::Constraint(c.clone(), Default::default()),
+            cq::BodyItem::Filter(g) => vo::Step::Guard(g.clone(), Default::default()),
+            cq::BodyItem::Let(b) => {
+                bound.extend(cq::rust::bindings(&b.pattern).iter().map(cq::symbol_name));
+                vo::Step::Let(b.clone(), Default::default())
+            }
+            _ => unreachable!("checked CQ normal form"),
+        });
+    }
+    steps
 }

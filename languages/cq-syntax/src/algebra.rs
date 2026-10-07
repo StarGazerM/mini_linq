@@ -10,6 +10,97 @@ pub mod kw {
     syn::custom_keyword!(with);
     syn::custom_keyword!(bind);
     syn::custom_keyword!(guard);
+    syn::custom_keyword!(union);
+    syn::custom_keyword!(anti);
+    syn::custom_keyword!(block);
+    syn::custom_keyword!(free);
+    syn::custom_keyword!(interface);
+    syn::custom_keyword!(fallback);
+    syn::custom_keyword!(over);
+    syn::custom_keyword!(domain);
+    syn::custom_keyword!(scope);
+}
+
+/// Set union of earlier named results with identical headings.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Union {
+    pub union_token: kw::union,
+    #[parse(CommaList::parse_separated_nonempty)]
+    pub operands: CommaList<Ident>,
+    #[parse(parse_origin)]
+    pub origin: Option<BlockOrigin>,
+}
+
+/// Branch provenance, common heading and optional shared prefix correlation.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct BlockOrigin {
+    pub block_token: kw::block,
+    pub at: Token![@],
+    pub occurrence: crate::Occurrence,
+    pub free_token: kw::free,
+    #[syn(bracketed)]
+    pub free_bracket: token::Bracket,
+    #[syn(in = free_bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub free: CommaList<Ident>,
+    pub interface_token: kw::interface,
+    #[syn(bracketed)]
+    pub interface_bracket: token::Bracket,
+    #[syn(in = interface_bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub interface: CommaList<Ident>,
+    pub fallback: Option<kw::fallback>,
+    #[parse(parse_correlation)]
+    pub over: Option<Correlation>,
+    #[parse(parse_domain)]
+    pub domain: Option<Domain>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Correlation {
+    pub over_token: kw::over,
+    pub prefix: Ident,
+}
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Domain {
+    pub domain_token: kw::domain,
+    pub input: Ident,
+}
+fn parse_domain(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Domain>> {
+    if input.peek(kw::domain) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+fn parse_origin(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<BlockOrigin>> {
+    if input.peek(kw::block) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+fn parse_correlation(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Correlation>> {
+    if input.peek(kw::over) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Anti matches exactly the listed F columns; its negative operand is a named
+/// original branch result, rather than an operand eligible for reduction.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Anti {
+    pub anti_token: kw::anti,
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub columns: CommaList<Ident>,
+    pub left: Ident,
+    pub comma: Token![,],
+    pub right: Ident,
 }
 /// The singleton zero-column relation used to seed a global logical clause.
 ///
@@ -46,7 +137,7 @@ pub struct Rename {
     pub rename_token: kw::rename,
     pub relation: Ident,
     pub at: Token![@],
-    pub occurrence: syn::LitInt,
+    pub occurrence: crate::Occurrence,
     #[syn(braced)]
     pub mapping_brace: token::Brace,
     #[syn(in = mapping_brace)]
@@ -111,6 +202,44 @@ impl quote::ToTokens for Theta {
 }
 
 impl Theta {
+    /// Exact literal assignments written in conjuncts. No data keys or input
+    /// constraints are inferred. Disjunctions and captured constants prove none.
+    pub fn literal_bindings(&self) -> std::collections::BTreeMap<String, String> {
+        use crate::constraint::{Comparison, Constraint, Term};
+        let mut result = std::collections::BTreeMap::new();
+        for equality in &self.equalities {
+            if let crate::EqualityValue::Literal(value) = &equality.right {
+                if let Some(value) = literal_value(value) {
+                    result.insert(crate::symbol_name(&equality.left), value);
+                }
+            }
+        }
+        for constraint in &self.constraints {
+            let binding = match constraint {
+                Constraint::Compare {
+                    left: Term::Variable(id),
+                    comparison: Comparison::Eq(_),
+                    right: Term::Literal(value),
+                }
+                | Constraint::Compare {
+                    right: Term::Variable(id),
+                    comparison: Comparison::Eq(_),
+                    left: Term::Literal(value),
+                } => Some((id, &**value)),
+                Constraint::In {
+                    term: Term::Variable(id),
+                    literals,
+                } if literals.len() == 1 => Some((id, literals.first().unwrap())),
+                _ => None,
+            };
+            if let Some((id, value)) = binding {
+                if let Some(value) = literal_value(value) {
+                    result.insert(crate::symbol_name(id), value);
+                }
+            }
+        }
+        result
+    }
     /// All columns read by this relational predicate.
     pub fn columns(&self) -> std::collections::BTreeSet<String> {
         self.equalities
@@ -271,6 +400,59 @@ impl Theta {
     }
 }
 
+/// Literal identities ignore spelling and integer suffixes, so `1`, `01`, and
+/// `1_i32` never constitute a disjointness proof. Floats and computations prove
+/// nothing. Column typing is checked separately.
+pub fn literal_value(expression: &syn::Expr) -> Option<String> {
+    let expression = crate::rust::unparen(expression);
+    if let syn::Expr::Unary(unary) = expression {
+        if matches!(unary.op, syn::UnOp::Neg(_)) {
+            let syn::Expr::Lit(value) = crate::rust::unparen(&unary.expr) else {
+                return None;
+            };
+            let syn::Lit::Int(value) = &value.lit else {
+                return None;
+            };
+            let value = value.base10_parse::<u128>().ok()?;
+            return Some(if value == 0 {
+                "int:0".into()
+            } else {
+                format!("int:-{value}")
+            });
+        }
+        return None;
+    }
+    let syn::Expr::Lit(value) = expression else {
+        return None;
+    };
+    Some(match &value.lit {
+        syn::Lit::Int(value) => format!("int:{}", value.base10_parse::<u128>().ok()?),
+        syn::Lit::Bool(value) => format!("bool:{}", value.value),
+        syn::Lit::Char(value) => format!("char:{}", value.value()),
+        syn::Lit::Str(value) => format!("str:{:?}", value.value()),
+        syn::Lit::Byte(value) => format!("int:{}", value.value()),
+        syn::Lit::ByteStr(value) => format!("bytes:{:?}", value.value()),
+        _ => return None,
+    })
+}
+
+pub type LiteralBindings = std::collections::BTreeMap<String, String>;
+pub fn constant_disjoint<'a>(
+    branches: impl IntoIterator<Item = &'a LiteralBindings>,
+    interface: &std::collections::BTreeSet<String>,
+) -> bool {
+    let branches: Vec<_> = branches.into_iter().collect();
+    branches.iter().enumerate().all(|(i, left)| {
+        branches.iter().skip(i + 1).all(|right| {
+            interface.iter().any(|column| {
+                left.get(column)
+                    .zip(right.get(column))
+                    .is_some_and(|(a, b)| a != b)
+            })
+        })
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RangeBound {
     pub value: crate::constraint::Term,
@@ -306,6 +488,8 @@ pub struct Bind {
     pub expression_paren: token::Paren,
     #[syn(in = expression_paren)]
     pub expression: syn::Expr,
+    #[parse(parse_environment)]
+    pub environment: Option<Environment>,
 }
 
 impl Bind {
@@ -334,6 +518,61 @@ pub struct Guard {
     pub condition_paren: token::Paren,
     #[syn(in = condition_paren)]
     pub condition: syn::Expr,
+    #[parse(parse_environment)]
+    pub environment: Option<Environment>,
+}
+
+/// Written lexical query environment of an opaque step. Planned binders added
+/// earlier are passed through its row but do not shadow enclosing Rust values.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Environment {
+    pub scope_token: kw::scope,
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub variables: CommaList<Ident>,
+    /// Written clause path, including branch ancestry for block programs.
+    #[parse(parse_environment_path)]
+    #[to_tokens(|tokens: &mut proc_macro2::TokenStream, path: &Option<crate::Occurrence>| if let Some(path) = path { tokens.extend(quote::quote!(@ #path)); })]
+    pub path: Option<crate::Occurrence>,
+}
+fn parse_environment_path(
+    input: syn::parse::ParseStream<'_>,
+) -> syn::Result<Option<crate::Occurrence>> {
+    if input.peek(Token![@]) {
+        input.parse::<Token![@]>()?;
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+impl Environment {
+    pub fn check(
+        &self,
+        heading: &std::collections::BTreeSet<String>,
+        _expression: &syn::Expr,
+    ) -> syn::Result<()> {
+        if let Some(path) = &self.path {
+            path.check()?;
+        }
+        let names: std::collections::BTreeSet<_> =
+            self.variables.iter().map(crate::symbol_name).collect();
+        if names.len() != self.variables.len() || !names.is_subset(heading) {
+            return Err(syn::Error::new_spanned(
+                self,
+                "Rust scope must list distinct available query names",
+            ));
+        }
+        Ok(())
+    }
+}
+fn parse_environment(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Environment>> {
+    if input.peek(kw::scope) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Set projection of an earlier result to a distinct subset of attributes.

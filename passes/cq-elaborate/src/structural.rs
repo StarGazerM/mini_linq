@@ -11,6 +11,14 @@ pub(super) fn check(
     analysis: &vo::Analysis,
     target: &Schedule,
 ) -> Result<(), String> {
+    if source
+        .valuation
+        .steps
+        .iter()
+        .any(|step| matches!(step, vo::Step::Block(..)))
+    {
+        return super::block_contract::check(source, target);
+    }
     let declarations: HashMap<_, _> = source
         .cq
         .inputs()
@@ -34,6 +42,7 @@ pub(super) fn check(
     let mut reductions = Vec::new();
     for (step, introduces) in source.valuation.steps.iter().zip(&analysis.introduces) {
         match step {
+            vo::Step::Block(..) => unreachable!("block schedule checked separately"),
             vo::Step::Atom(atom, _) => {
                 let mut right = relations[&atom.clause()];
                 let partial = atom.variables().count() != atom.columns.len();

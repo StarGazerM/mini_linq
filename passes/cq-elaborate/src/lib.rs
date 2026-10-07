@@ -23,6 +23,19 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! Elaboration projects arms to their common heading, emits explicit union/anti equations and names negative originals.
+//! Rust-free blocks hoist over free/interface columns; a named finite prefix domain supplies missing branch generators.
+//! Rust arms retain the prefix and anti Before dependencies.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_ra as ra;
@@ -45,30 +58,54 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
 pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> {
     valuation::contract::check(source)?;
     use valuation::cq::BodyItem;
-    let exact = source.valuation.steps.len() == source.cq.query.body.len()
-        && source
-            .cq
-            .query
-            .body
-            .iter()
-            .zip(&source.valuation.steps)
-            .enumerate()
-            .all(|(clause, (item, step))| match (item, step) {
-                (BodyItem::Positive { atom }, valuation::Step::Atom(subatom, _)) => {
-                    subatom.clause() == clause
-                        && subatom.relation == atom.relation
-                        && subatom.variables().count() == atom.args.len()
-                        && subatom
-                            .variables()
-                            .map(|(_, variable)| symbol_name(variable))
-                            .eq(atom.variables().map(symbol_name))
-                }
-                (BodyItem::Equality(a), valuation::Step::Equality(b, _)) => a == b,
-                (BodyItem::Constraint(a), valuation::Step::Constraint(b, _)) => a == b,
-                (BodyItem::Filter(a), valuation::Step::Guard(b, _)) => a == b,
-                (BodyItem::Let(a), valuation::Step::Let(b, _)) => a == b,
-                _ => false,
-            });
+    fn exact(
+        body: &cq::CommaList<BodyItem>,
+        steps: &[valuation::Step],
+        parent: Option<(&cq::Occurrence, usize)>,
+    ) -> bool {
+        body.len() == steps.len()
+            && body
+                .iter()
+                .zip(steps)
+                .enumerate()
+                .all(|(clause, (item, step))| {
+                    let path = parent.map_or_else(
+                        || cq::Occurrence::new(clause),
+                        |(path, j)| path.child(j, clause),
+                    );
+                    match (item, step) {
+                        (BodyItem::Block(block), valuation::Step::Block(planned, _)) => {
+                            block.kind == planned.kind
+                                && planned.source.clause == path
+                                && planned.source.variables().count()
+                                    == planned.source.columns.len()
+                                && block
+                                    .branches
+                                    .iter()
+                                    .zip(&planned.branches)
+                                    .enumerate()
+                                    .all(|(j, (written, arm))| {
+                                        exact(&written.body, &arm.steps, Some((&path, j)))
+                                    })
+                        }
+                        (BodyItem::Positive { atom }, valuation::Step::Atom(subatom, _)) => {
+                            subatom.clause == path
+                                && subatom.relation == atom.relation
+                                && subatom.variables().count() == atom.args.len()
+                                && subatom
+                                    .variables()
+                                    .map(|(_, v)| symbol_name(v))
+                                    .eq(atom.variables().map(symbol_name))
+                        }
+                        (BodyItem::Equality(a), valuation::Step::Equality(b, _)) => a == b,
+                        (BodyItem::Constraint(a), valuation::Step::Constraint(b, _)) => a == b,
+                        (BodyItem::Filter(a), valuation::Step::Guard(b, _)) => a == b,
+                        (BodyItem::Let(a), valuation::Step::Let(b, _)) => a == b,
+                        _ => false,
+                    }
+                })
+    }
+    let exact = exact(&source.cq.query.body, &source.valuation.steps, None);
     if !exact {
         return Err(syn::Error::new_spanned(
             &source.valuation,
@@ -80,6 +117,11 @@ pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> 
 
 fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Result<ra::Program> {
     let analysis = valuation::contract::check(source)?;
+    let has_blocks = valuation::cq::blocks::walk(&source.cq.query.body)
+        .iter()
+        .any(|item| matches!(item, valuation::cq::BodyItem::Block(_)));
+    let block_hoisting = relational_hoisting;
+    let relational_hoisting = relational_hoisting && !has_blocks;
     let let_bound: BTreeSet<_> = source
         .cq
         .query
@@ -109,6 +151,16 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
     let mut state = State {
         inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
         atoms: &analysis.atoms,
+        analysis: &analysis,
+        body: &source.cq.query.body,
+        steps: &source.valuation.steps,
+        context: BTreeSet::new(),
+        path: None,
+        block_hoisting,
+        fused: BTreeSet::new(),
+        scoped: has_blocks,
+        placed_rust: BTreeSet::new(),
+        read_clauses: BTreeSet::new(),
         hypergraph: valuation::cq::hypergraph::Analysis::of(&source.cq),
         definitions: Vec::new(),
         reserved: source
@@ -156,37 +208,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
             })
             .collect(),
     };
-    for (step, introduces) in source.valuation.steps.iter().zip(&analysis.introduces) {
-        match step {
-            valuation::Step::Atom(subatom, _) => {
-                let check = subatom.variables().all(|(_, variable)| {
-                    state
-                        .heading
-                        .contains(&symbol_name(&state.canonical(variable)))
-                });
-                state.subatom(subatom, check);
-            }
-            valuation::Step::Reduce(reduce, _) => state.reduce(reduce),
-            valuation::Step::Guard(filter, _) => {
-                let input = state.prefix_or_unit();
-                state.prefix = Some(state.guard(input, filter));
-            }
-            valuation::Step::Let(binding, _) => state.bind(binding),
-            valuation::Step::Equality(equality, _) => state.equality(equality),
-            valuation::Step::Constraint(c, _) => state.constraint(c),
-        }
-        let introduced: Vec<_> = introduces
-            .iter()
-            .map(|name| {
-                state
-                    .aliases
-                    .get(name)
-                    .map(symbol_name)
-                    .unwrap_or_else(|| name.clone())
-            })
-            .collect();
-        state.heading.extend(introduced);
-    }
+    state.run_steps(&source.valuation.steps);
     let output = state.finish(&source.cq.query.head);
     let target = ra::Program {
         relational_token: Default::default(),
@@ -201,6 +223,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
     Ok(target)
 }
 
+mod block_contract;
 mod structural;
 
 /// The RA definitions refine the supplied VO schedule, retaining its Rust
@@ -241,6 +264,16 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
 struct State<'a> {
     inputs: &'a [cq::RelationDecl],
     atoms: &'a BTreeMap<usize, cq::Atom>,
+    analysis: &'a valuation::Analysis,
+    body: &'a cq::CommaList<valuation::cq::BodyItem>,
+    steps: &'a [valuation::Step],
+    context: BTreeSet<String>,
+    path: Option<(cq::Occurrence, usize)>,
+    block_hoisting: bool,
+    fused: BTreeSet<usize>,
+    scoped: bool,
+    placed_rust: BTreeSet<usize>,
+    read_clauses: BTreeSet<usize>,
     hypergraph: valuation::cq::hypergraph::Analysis,
     definitions: Vec<ra::Definition>,
     reserved: BTreeSet<String>,
@@ -254,13 +287,284 @@ struct State<'a> {
     constraints: Vec<(cq::Constraint, BTreeSet<usize>)>,
 }
 
-impl State<'_> {
+impl<'a> State<'a> {
+    fn run_steps(&mut self, steps: &[valuation::Step]) {
+        for (step, introduces) in steps.iter().zip(&self.analysis.introduces) {
+            match step {
+                valuation::Step::Block(block, _) => {
+                    let clause = block.source.clause();
+                    let right = self.relation(clause);
+                    if self.fused.contains(&clause) {
+                        self.prefix = Some(right);
+                    } else {
+                        let check = block
+                            .source
+                            .variables()
+                            .all(|(_, variable)| self.heading.contains(&symbol_name(variable)));
+                        self.subatom(&block.source, check);
+                    }
+                    self.read_clauses.insert(clause);
+                }
+                valuation::Step::Atom(subatom, _) => {
+                    let check = subatom.variables().all(|(_, variable)| {
+                        self.heading
+                            .contains(&symbol_name(&self.canonical(variable)))
+                    });
+                    self.subatom(subatom, check);
+                    self.read_clauses.insert(subatom.clause());
+                }
+                valuation::Step::Reduce(reduce, _) => self.reduce(reduce),
+                valuation::Step::Guard(filter, _) => {
+                    let input = self.prefix_or_unit();
+                    self.prefix = Some(self.guard(input, filter));
+                }
+                valuation::Step::Let(binding, _) => self.bind(binding),
+                valuation::Step::Equality(equality, _) => self.equality(equality),
+                valuation::Step::Constraint(c, _) => self.constraint(c),
+            }
+            let introduced: Vec<_> = introduces
+                .iter()
+                .map(|name| {
+                    self.aliases
+                        .get(name)
+                        .map(symbol_name)
+                        .unwrap_or_else(|| name.clone())
+                })
+                .collect();
+            self.heading.extend(introduced);
+        }
+    }
+
+    fn block_relation(&mut self, clause: usize) -> Ident {
+        let valuation::cq::BodyItem::Block(written) = &self.body[clause] else {
+            unreachable!("block clause")
+        };
+        let planned = self
+            .steps
+            .iter()
+            .find_map(|step| match step {
+                valuation::Step::Block(block, _) if block.source.clause() == clause => Some(block),
+                _ => None,
+            })
+            .expect("VO places every block");
+        let mut written_prefix = self.context.clone();
+        for item in self.body.iter().take(clause) {
+            match item {
+                valuation::cq::BodyItem::Positive { atom } => {
+                    written_prefix.extend(atom.variables().map(symbol_name))
+                }
+                valuation::cq::BodyItem::Let(binding) => written_prefix
+                    .extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name)),
+                valuation::cq::BodyItem::Block(block) => {
+                    written_prefix.extend(block.analyze(&written_prefix).interface.into_keys())
+                }
+                _ => (),
+            }
+        }
+        let facts = written.analyze(&written_prefix);
+        let hoisted = self.block_hoisting && !facts.rust;
+        let correlated_prefix = (!hoisted).then(|| self.prefix_or_unit());
+        let common: BTreeSet<_> = facts
+            .free
+            .keys()
+            .chain(facts.interface.keys())
+            .cloned()
+            .collect();
+        // If an arm has no generator for an F column, its finite domain is
+        // supplied by the written prefix's projected context relation.
+        let needs_domain = hoisted
+            && written.branches.iter().any(|branch| {
+                let generated: BTreeSet<_> = valuation::cq::blocks::walk(&branch.body)
+                    .into_iter()
+                    .filter_map(valuation::cq::BodyItem::atom)
+                    .flat_map(cq::Atom::variables)
+                    .map(symbol_name)
+                    .collect();
+                facts.free.keys().any(|name| !generated.contains(name))
+            });
+        let domain = needs_domain.then(|| {
+            let saved_prefix = self.prefix.clone();
+            let saved_heading = self.heading.clone();
+            if !facts.free.keys().all(|name| self.heading.contains(name)) {
+                // A reducer may request D before the valuation prefix. Build
+                // its finite domain from the original named prefix relations;
+                // their renames are reused by subsequent reductions/reads.
+                self.prefix = None;
+                self.heading = self.context.clone();
+                for (c, item) in self.body.iter().take(clause).enumerate() {
+                    match item {
+                        valuation::cq::BodyItem::Positive { atom } => {
+                            let right = self.relation(c);
+                            self.prefix = Some(match self.prefix.take() {
+                                None => right,
+                                Some(left) => self.emit(ra::Operator::NaturalJoin(Box::new(
+                                    ra::NaturalJoin {
+                                        natural_join_token: Default::default(),
+                                        left,
+                                        with_token: Default::default(),
+                                        right,
+                                    },
+                                ))),
+                            });
+                            self.heading.extend(atom.variables().map(symbol_name));
+                        }
+                        valuation::cq::BodyItem::Equality(eq) => self.equality(eq),
+                        valuation::cq::BodyItem::Constraint(c) => self.constraint(c),
+                        _ => (),
+                    }
+                }
+            }
+            let prefix = self.prefix_or_unit();
+            let domain = self.project(prefix, facts.free.values().cloned().collect());
+            self.prefix = saved_prefix;
+            self.heading = saved_heading;
+            domain
+        });
+        let parent_atoms = self.atoms;
+        let parent_analysis = self.analysis;
+        let parent_body = self.body;
+        let parent_hypergraph = self.hypergraph.clone();
+        let parent_steps = self.steps;
+        let parent_context = self.context.clone();
+        let parent_path = self.path.clone();
+        let parent_prefix = self.prefix.clone();
+        let parent_heading = self.heading.clone();
+        let parent_relations = std::mem::take(&mut self.relations);
+        let parent_fused = std::mem::take(&mut self.fused);
+        let parent_placed_rust = std::mem::take(&mut self.placed_rust);
+        let parent_reads = std::mem::take(&mut self.read_clauses);
+        let mut originals: Vec<Ident> = Vec::new();
+        let mut operands = Vec::new();
+        for (j, (branch, source_branch)) in
+            planned.branches.iter().zip(&written.branches).enumerate()
+        {
+            self.atoms = &parent_analysis.branches[&clause][j].atoms;
+            self.analysis = &parent_analysis.branches[&clause][j];
+            self.body = &source_branch.body;
+            self.hypergraph = valuation::cq::hypergraph::Analysis::of_body(
+                self.body,
+                &facts.free.keys().cloned().collect(),
+            );
+            self.steps = &branch.steps;
+            self.path = Some((planned.source.clause.clone(), j));
+            self.context = if hoisted {
+                facts.free.keys().cloned().collect()
+            } else {
+                written_prefix.clone()
+            };
+            self.heading = if hoisted {
+                if domain.is_some() {
+                    facts.free.keys().cloned().collect()
+                } else {
+                    BTreeSet::new()
+                }
+            } else {
+                parent_heading.clone()
+            };
+            self.prefix = correlated_prefix.clone().or_else(|| domain.clone());
+            self.relations.clear();
+            self.fused.clear();
+            self.placed_rust.clear();
+            self.read_clauses.clear();
+            if !hoisted && written.kind == valuation::cq::blocks::Kind::Fallback {
+                for previous in &originals {
+                    let left = self.prefix_or_unit();
+                    self.prefix = Some(self.anti(
+                        left,
+                        previous.clone(),
+                        facts.free.values().cloned().collect(),
+                    ));
+                }
+            }
+            self.run_steps(&branch.steps);
+            let keep: BTreeSet<_> = if hoisted {
+                common.clone()
+            } else {
+                parent_heading.union(&common).cloned().collect()
+            };
+            let input = self.prefix_or_unit();
+            let attributes = keep
+                .iter()
+                .map(|name| syn::Ident::new(name, proc_macro2::Span::call_site()))
+                .collect();
+            let original = self.project(input, attributes);
+            originals.push(original.clone());
+            let mut positive = original;
+            if hoisted && written.kind == valuation::cq::blocks::Kind::Fallback {
+                for previous in originals.iter().take(j) {
+                    positive = self.anti(
+                        positive,
+                        previous.clone(),
+                        facts.free.values().cloned().collect(),
+                    );
+                }
+            }
+            operands.push(positive);
+        }
+        self.atoms = parent_atoms;
+        self.analysis = parent_analysis;
+        self.body = parent_body;
+        self.hypergraph = parent_hypergraph;
+        self.steps = parent_steps;
+        self.context = parent_context;
+        self.path = parent_path;
+        self.prefix = parent_prefix;
+        self.heading = parent_heading;
+        self.relations = parent_relations;
+        self.fused = parent_fused;
+        self.placed_rust = parent_placed_rust;
+        self.read_clauses = parent_reads;
+        let result = self.emit(ra::Operator::Union(Box::new(ra::Union {
+            union_token: Default::default(),
+            operands: operands.into_iter().collect(),
+            origin: Some(ra::BlockOrigin {
+                block_token: Default::default(),
+                at: Default::default(),
+                occurrence: planned.source.clause.clone(),
+                free_token: Default::default(),
+                free_bracket: Default::default(),
+                free: facts.free.values().cloned().collect(),
+                interface_token: Default::default(),
+                interface_bracket: Default::default(),
+                interface: facts.interface.values().cloned().collect(),
+                fallback: (written.kind == valuation::cq::blocks::Kind::Fallback)
+                    .then(Default::default),
+                over: correlated_prefix.map(|prefix| ra::Correlation {
+                    over_token: Default::default(),
+                    prefix,
+                }),
+                domain: domain.map(|input| ra::Domain {
+                    domain_token: Default::default(),
+                    input,
+                }),
+            }),
+        })));
+        if !hoisted {
+            self.fused.insert(clause);
+        }
+        self.relations.insert(clause, result.clone());
+        result
+    }
+    fn anti(&mut self, left: Ident, right: Ident, columns: cq::CommaList<Ident>) -> Ident {
+        self.emit(ra::Operator::Anti(Box::new(ra::Anti {
+            anti_token: Default::default(),
+            bracket: Default::default(),
+            columns,
+            left,
+            comma: Default::default(),
+            right,
+        })))
+    }
+
     /// The clause's relation: its rename, emitted at first mention, as
     /// reduced so far.
     /// Formal rule E-Relation: Reuse a clause result or emit its complete positional rename at first use.
     fn relation(&mut self, clause: usize) -> Ident {
         if let Some(result) = self.relations.get(&clause) {
             return result.clone();
+        }
+        if matches!(&self.body[clause], valuation::cq::BodyItem::Block(_)) {
+            return self.block_relation(clause);
         }
         let atom = &self.atoms[&clause];
         let declaration = self
@@ -283,7 +587,10 @@ impl State<'_> {
             rename_token: Default::default(),
             relation: atom.relation.clone(),
             at: Default::default(),
-            occurrence: syn::LitInt::new(&clause.to_string(), atom.relation.span()),
+            occurrence: match &self.path {
+                Some((path, branch)) => path.child(*branch, clause),
+                None => cq::Occurrence::new(clause),
+            },
             mapping_brace: Default::default(),
             mapping,
         })));
@@ -421,6 +728,11 @@ impl State<'_> {
                 }
             }
         };
+        if self.read_clauses.contains(&clause) {
+            if let Some(prefix) = self.prefix.take() {
+                self.prefix = Some(self.semijoin(prefix, result.clone()));
+            }
+        }
         self.relations.insert(clause, result);
     }
 
@@ -520,18 +832,93 @@ impl State<'_> {
         ));
     }
 
+    fn environment(
+        &mut self,
+        filter: Option<&cq::Filter>,
+        binding: Option<&cq::Let>,
+    ) -> Option<ra::Environment> {
+        if !self.scoped {
+            return None;
+        }
+        let clause = self
+            .body
+            .iter()
+            .enumerate()
+            .find(|(c, item)| {
+                !self.placed_rust.contains(c)
+                    && match item {
+                        valuation::cq::BodyItem::Filter(value) => filter == Some(value),
+                        valuation::cq::BodyItem::Let(value) => binding == Some(&**value),
+                        _ => false,
+                    }
+            })
+            .map(|(c, _)| c)
+            .expect("VO Rust step source slot");
+        self.placed_rust.insert(clause);
+        let mut names = self.context.clone();
+        for item in self.body.iter().take(clause) {
+            match item {
+                valuation::cq::BodyItem::Positive { atom } => {
+                    names.extend(atom.variables().map(symbol_name))
+                }
+                valuation::cq::BodyItem::Let(binding) => {
+                    names.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name))
+                }
+                valuation::cq::BodyItem::Block(block) => {
+                    names.extend(block.analyze(&names).interface.into_keys())
+                }
+                _ => (),
+            }
+        }
+        let mut ids = BTreeMap::new();
+        for definition in &self.definitions {
+            match &definition.operator {
+                ra::Operator::Rename(rename) => {
+                    for mapping in &rename.mapping {
+                        ids.insert(symbol_name(&mapping.target), mapping.target.clone());
+                    }
+                }
+                ra::Operator::Bind(binding) => {
+                    for id in cq::rust::bindings(&binding.pattern) {
+                        ids.insert(symbol_name(&id), id);
+                    }
+                }
+                _ => (),
+            }
+        }
+        Some(ra::Environment {
+            path: Some(self.path.as_ref().map_or_else(
+                || cq::Occurrence::new(clause),
+                |(path, j)| path.child(*j, clause),
+            )),
+            scope_token: Default::default(),
+            bracket: Default::default(),
+            variables: names
+                .iter()
+                .map(|name| {
+                    ids.get(name)
+                        .cloned()
+                        .unwrap_or_else(|| Ident::new(name, proc_macro2::Span::call_site()))
+                })
+                .collect(),
+        })
+    }
+
     fn guard(&mut self, input: Ident, filter: &cq::Filter) -> Ident {
+        let environment = self.environment(Some(filter), None);
         self.emit(ra::Operator::Guard(Box::new(ra::Guard {
             guard_token: Default::default(),
             input,
             if_token: filter.if_token,
             condition_paren: Default::default(),
             condition: filter.condition.clone(),
+            environment,
         })))
     }
 
     /// Formal rule C-Bind: Append an opaque pattern binding to the prefix.
     fn bind(&mut self, binding: &cq::Let) {
+        let environment = self.environment(None, Some(binding));
         let input = self.prefix_or_unit();
         self.prefix = Some(self.emit(ra::Operator::Bind(Box::new(ra::Bind {
             bind_token: Default::default(),
@@ -542,6 +929,7 @@ impl State<'_> {
             eq_token: binding.eq_token,
             expression_paren: Default::default(),
             expression: binding.expression.clone(),
+            environment,
         }))));
     }
 

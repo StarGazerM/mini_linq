@@ -386,6 +386,7 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-ra",
  "cq-lang-vo",
+ "cq-order",
  "cq-syntax",
  "cq-testkit",
  "proc-macro2",

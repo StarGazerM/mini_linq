@@ -176,6 +176,8 @@ pub fn canonical_projects(input: TokenStream) -> TokenStream {
             let name = d.name.to_string();
             let heading = facts.headings[&name].iter().cloned().collect();
             let inherited = match &d.operator {
+                Operator::Union(_) => None,
+                Operator::Anti(_, k) => keys.get(&k.left.to_string()).cloned(),
                 Operator::Unit(_) => Some(BTreeSet::new()),
                 Operator::Rename(_) => None,
                 Operator::Probe(_, k) | Operator::Merge(_, k) => keys

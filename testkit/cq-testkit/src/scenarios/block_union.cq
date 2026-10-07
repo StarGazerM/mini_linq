@@ -1,0 +1,1 @@
+struct Q; relation R(x:i32,a:i32); relation S(x:i32,b:i32); answer(x) :- {R(x,a)} | {S(x,b)};

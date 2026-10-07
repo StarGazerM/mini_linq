@@ -3,6 +3,146 @@ use cq_testkit::{PassCase, SCENARIOS, cq_semantics, databases, semantics, valuat
 use quote::{ToTokens, quote};
 
 #[test]
+fn prefix_let_domain_keeps_hoisting_and_waits_before_full_reduction() {
+    let source: cq::Program = syn::parse_quote! { struct Q; relation R(x:i32);
+        answer(x) :- R(x), let k:i32 = std::convert::identity(*x), {if *k == 1} | {if *k == 2};
+    };
+    for planner in Planner::ALL {
+        let target = compile(&source, planner).unwrap_or_else(|e| panic!("{planner:?}: {e}"));
+        let union = target
+            .plan
+            .definitions
+            .iter()
+            .find_map(|d| match &d.operator {
+                ra::Operator::Union(u) => Some(u),
+                _ => None,
+            })
+            .unwrap();
+        assert!(union.origin.as_ref().unwrap().domain.is_some());
+        assert!(union.origin.as_ref().unwrap().over.is_none());
+    }
+}
+
+#[test]
+fn block_corpus_through_every_recursive_planner_and_oracle() {
+    for case in cq_testkit::blocks::CASES {
+        let source = case.parse_cq().unwrap();
+        for planner in Planner::ALL {
+            let vo = compile_valuation(&source, planner)
+                .unwrap_or_else(|e| panic!("{} {planner:?}: {e}", case.name));
+            let target = compile(&source, planner)
+                .unwrap_or_else(|e| panic!("{} {planner:?}: {e}", case.name));
+            for seed in 0..8 {
+                let database = if seed == 0 {
+                    case.database()
+                } else {
+                    databases::binary_database(&vo.cq, seed)
+                };
+                let expected = cq_semantics::evaluate_cq(&vo.cq, &database);
+                if seed == 0 {
+                    assert_eq!(expected, case.expected_rows(), "{}", case.name);
+                }
+                assert_eq!(
+                    valuation_semantics::evaluate(&vo, &database),
+                    expected,
+                    "VO {} {planner:?} seed {seed}",
+                    case.name
+                );
+                assert_eq!(
+                    semantics::evaluate_ra(&target, &database).output,
+                    expected,
+                    "RA {} {planner:?} seed {seed}",
+                    case.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn retail_h07_block_reduces_country_keys_before_lineitem() {
+    let source: cq::Program = syn::parse_quote! {
+        struct H07;
+        relation Supplier(s:i32,n:i32); relation Lineitem(o:i32,s:i32);
+        relation Orders(o:i32,c:i32); relation Customer(c:i32,n:i32);
+        relation Nation(n:i32,name:i32);
+        answer(o,sn,cn) :- Supplier(s,sn),Lineitem(o,s),Orders(o,c),Customer(c,cn),
+            {Nation(sn,1),Nation(cn,2)} | {Nation(sn,2),Nation(cn,1)};
+    };
+    let target = compile(&source, Planner::Hypergraph).unwrap();
+    let union = target
+        .plan
+        .definitions
+        .iter()
+        .find(|d| matches!(d.operator, ra::Operator::Union(_)))
+        .unwrap();
+    let mut memo = std::collections::BTreeMap::<String, bool>::new();
+    let mut reduced = std::collections::BTreeSet::new();
+    for d in &target.plan.definitions {
+        let name = d.result.to_string();
+        match &d.operator {
+            ra::Operator::Rename(r) => {
+                memo.insert(
+                    name,
+                    matches!(r.relation.to_string().as_str(), "Supplier" | "Customer"),
+                );
+            }
+            ra::Operator::Semijoin(semi)
+                if semi.right == union.result
+                    && memo.get(&semi.left.to_string()) == Some(&true) =>
+            {
+                reduced.insert(semi.left.to_string());
+            }
+            _ => (),
+        }
+    }
+    assert_eq!(reduced.len(), 2, "{}", target.to_token_stream());
+    let stream = target.plan.definitions.iter().position(|d|matches!(&d.operator,ra::Operator::NaturalJoin(j) if target.plan.definitions.iter().any(|r|r.result==j.right && matches!(&r.operator,ra::Operator::Rename(a) if a.relation=="Lineitem")))).unwrap();
+    for d in target
+        .plan
+        .definitions
+        .iter()
+        .filter(|d| matches!(&d.operator,ra::Operator::Semijoin(s) if s.right == union.result))
+    {
+        assert!(
+            target
+                .plan
+                .definitions
+                .iter()
+                .position(|x| x.result == d.result)
+                .unwrap()
+                < stream
+        );
+    }
+    let database = std::collections::BTreeMap::from([
+        (
+            "Supplier".into(),
+            std::collections::BTreeSet::from([vec![1, 1], vec![2, 3]]),
+        ),
+        (
+            "Lineitem".into(),
+            std::collections::BTreeSet::from([vec![10, 1], vec![11, 2]]),
+        ),
+        (
+            "Orders".into(),
+            std::collections::BTreeSet::from([vec![10, 5], vec![11, 6]]),
+        ),
+        (
+            "Customer".into(),
+            std::collections::BTreeSet::from([vec![5, 2], vec![6, 3]]),
+        ),
+        (
+            "Nation".into(),
+            std::collections::BTreeSet::from([vec![1, 1], vec![2, 2], vec![3, 3]]),
+        ),
+    ]);
+    assert_eq!(
+        semantics::evaluate_ra(&target, &database).output,
+        std::collections::BTreeSet::from([vec![10, 1, 2]])
+    );
+}
+
+#[test]
 fn every_scenario_through_every_planner() {
     let mut combinations = 0;
     for scenario in SCENARIOS {

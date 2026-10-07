@@ -1,6 +1,6 @@
 //! Reduction erasure and obligations, without the reducer's schedule builder.
 
-use super::{Options, Reductions, erase};
+use super::{Options, Reductions};
 use cq_lang_vo::{self as vo, Reduction, Step};
 use std::collections::BTreeMap;
 
@@ -9,7 +9,37 @@ use std::collections::BTreeMap;
 /// Formal rule CK-Reduce: Check reduction erasure, allowed guards and complete dependency-ordered tree edges.
 pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> syn::Result<()> {
     let source_info = vo::contract::check(source)?;
-    for step in &source.valuation.steps {
+    vo::contract::check(target)?;
+    if target.cq != source.cq {
+        return Err(syn::Error::new_spanned(
+            &target.cq.name,
+            format!(
+                "query `{}`: reductions must preserve source CQ `{}`",
+                target.cq.name, source.cq.name
+            ),
+        ));
+    }
+    check_steps(
+        &source.cq.query.body,
+        &source.valuation.steps,
+        &target.valuation.steps,
+        &source_info,
+        &vo::cq::hypergraph::Analysis::of(&source.cq),
+        options,
+        &source.cq.name,
+    )
+}
+
+fn check_steps(
+    body: &vo::syntax::CommaList<vo::cq::BodyItem>,
+    source_steps: &[Step],
+    target_steps: &[Step],
+    source_info: &vo::Analysis,
+    graph: &vo::cq::hypergraph::Analysis,
+    options: &Options,
+    name: &syn::Ident,
+) -> syn::Result<()> {
+    for step in source_steps {
         if let Step::Reduce(r, _) = step {
             return Err(syn::Error::new_spanned(
                 r,
@@ -21,36 +51,22 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
             ));
         }
     }
-    let tree = if options.semijoins == Reductions::Tree {
-        Some(
-            vo::cq::hypergraph::Analysis::of(&source.cq)
-                .join_tree
-                .ok_or_else(|| {
-                    syn::Error::new_spanned(
-                        &source.cq.name,
-                        format!(
-                            "query `{}`: Tree reduction requires an acyclic query",
-                            source.cq.name
-                        ),
-                    )
-                })?,
-        )
+    let graph = graph.clone();
+    let tree = if options.semijoins == Reductions::Tree
+        || options.semijoins == Reductions::Hypergraph && graph.acyclic
+    {
+        Some(graph.clone().join_tree.ok_or_else(|| {
+            syn::Error::new_spanned(
+                body,
+                format!("query `{}`: Tree reduction requires an acyclic query", name),
+            )
+        })?)
     } else {
         None
     };
-    vo::contract::check(target)?;
-    if target.cq != source.cq {
-        return Err(syn::Error::new_spanned(
-            &target.cq.name,
-            format!(
-                "query `{}`: reductions must preserve source CQ `{}`",
-                target.cq.name, source.cq.name
-            ),
-        ));
-    }
-    let steps = erase(target);
-    let retained = &source.valuation.steps;
-    if steps != *retained {
+    let steps = super::erase_steps(target_steps);
+    let retained = source_steps;
+    if steps.as_slice() != retained {
         let position = steps
             .iter()
             .zip(retained)
@@ -58,12 +74,13 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
             .unwrap_or(steps.len().min(retained.len()));
         let construct = steps.get(position).or_else(|| retained.get(position));
         return Err(syn::Error::new_spanned(
-            &target.cq.name,
+            body,
             format!(
                 "query `{}`: reduction erasure changes source step {position}: {}",
-                source.cq.name,
+                name,
                 construct
                     .map(|s| match s {
+                        Step::Block(b, _) => format!("block #{}", b.source.clause()),
                         Step::Atom(a, _) => format!("clause #{} (`{}`)", a.clause(), a.relation),
                         Step::Equality(_, _) => "relational equality".into(),
                         Step::Constraint(_, _) => "relational constraint".into(),
@@ -82,7 +99,7 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
         .filter_map(|(child, parent)| parent.map(|p| (child, p)))
         .collect();
     let mut downward = false;
-    for (position, step) in target.valuation.steps.iter().enumerate() {
+    for (position, step) in target_steps.iter().enumerate() {
         let Step::Reduce(r, _) = step else { continue };
         let clause = r.clause();
         let fail = |message: &str| {
@@ -96,7 +113,12 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
                 let other = support.clause();
                 let up = parents.get(&other) == Some(&clause);
                 let down = parents.get(&clause) == Some(&other);
-                if !up && !down {
+                let block_cut = options.semijoins == Reductions::Hypergraph
+                    && body[clause].atom().is_some()
+                    && matches!(&body[other], vo::cq::BodyItem::Block(_))
+                    && graph.clauses.contains_key(&other)
+                    && !graph.shared(clause, other).is_empty();
+                if !up && !down && !block_cut {
                     return Err(fail(&format!(
                         "semijoin with clause #{other} is not a join-tree edge"
                     )));
@@ -106,12 +128,33 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
                         "duplicate join-tree reduction with clause #{other}"
                     )));
                 }
-                if up && downward {
+                if up && downward && !block_cut {
                     return Err(fail(
                         "upward child-to-parent reductions must precede every downward reduction",
                     ));
                 }
-                downward |= down;
+                downward |= down && !block_cut;
+            }
+        }
+    }
+    if options.semijoins == Reductions::Hypergraph {
+        for (&block, _) in graph
+            .clauses
+            .iter()
+            .filter(|(c, _)| matches!(&body[**c], vo::cq::BodyItem::Block(_)))
+        {
+            for (&clause, _) in graph
+                .clauses
+                .iter()
+                .filter(|(c, _)| body[**c].atom().is_some())
+            {
+                if !graph.shared(clause, block).is_empty() && !edges.contains_key(&(clause, block))
+                {
+                    return Err(syn::Error::new_spanned(
+                        body,
+                        format!("atom #{clause} lacks its block #{block} reduction"),
+                    ));
+                }
             }
         }
     }
@@ -144,6 +187,57 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
                     ),
                 ));
             }
+        }
+    }
+    for source_step in source_steps {
+        let Step::Block(source_block, _) = source_step else {
+            continue;
+        };
+        let target_block = target_steps
+            .iter()
+            .find_map(|step| match step {
+                Step::Block(block, _) if block.source.clause == source_block.source.clause => {
+                    Some(block)
+                }
+                _ => None,
+            })
+            .expect("erasure preserves blocks");
+        let clause = source_block.source.clause();
+        let vo::cq::BodyItem::Block(written) = &body[clause] else {
+            unreachable!("checked block")
+        };
+        for (j, (source_branch, target_branch)) in source_block
+            .branches
+            .iter()
+            .zip(&target_block.branches)
+            .enumerate()
+        {
+            let info = &source_info.branches[&clause][j];
+            let context = info
+                .bound_before
+                .first()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let inner = vo::cq::hypergraph::Analysis::of_body(&written.branches[j].body, &context);
+            let options = Options {
+                guards: options.guards,
+                semijoins: if options.semijoins == Reductions::Tree && !inner.acyclic {
+                    Reductions::None
+                } else {
+                    options.semijoins
+                },
+            };
+            check_steps(
+                &written.branches[j].body,
+                &source_branch.steps,
+                &target_branch.steps,
+                info,
+                &inner,
+                &options,
+                name,
+            )?;
         }
     }
     Ok(())

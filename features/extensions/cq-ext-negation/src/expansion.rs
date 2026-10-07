@@ -156,16 +156,25 @@ fn guard(anti: &Anti) -> BodyItem {
 }
 
 pub fn compile(source: &Program) -> syn::Result<Context> {
-    let clauses = clauses(source)?;
     let mut fresh = Fresh::new(source);
     let (declarations, leaves) = hoist(source, &mut fresh);
+    compile_shared(source, &declarations, &leaves, &mut fresh)
+}
+
+fn compile_shared(
+    source: &Program,
+    declarations: &[RelationDecl],
+    leaves: &[Leaf],
+    fresh: &mut Fresh,
+) -> syn::Result<Context> {
+    let clauses = clauses(source)?;
     let mut main = source.clone();
-    main.declarations = declarations.clone();
+    main.declarations = declarations.to_vec();
     let mut negatives = Vec::new();
     for (position, negative, keys) in clauses {
         let binding = fresh.id("negative");
         let name = fresh.id("negative_rows");
-        let hole = inner(source, &declarations, &negative, &keys, &name, &mut fresh);
+        let hole = inner(source, declarations, &negative, &keys, &name, fresh);
         let anti = Anti {
             position,
             binding,
@@ -177,8 +186,35 @@ pub fn compile(source: &Program) -> syn::Result<Context> {
     }
     Ok(Context {
         main,
-        leaves,
+        leaves: leaves.to_vec(),
         negatives,
+    })
+}
+
+/// Expand owned clauses before core multi-rule sugar can rename opaque
+/// extension tokens. Each checked rule shares the original leaf environment;
+/// the final main program uses the core parser's union desugaring.
+pub fn compile_rules(source: &cq_ext_support::Rules) -> syn::Result<Context> {
+    let mut fresh = Fresh::new(source);
+    let (declarations, leaves) = hoist(&source.first, &mut fresh);
+    let mut contexts = Vec::new();
+    for query in source.queries() {
+        let mut rule = source.first.clone();
+        rule.query = query.clone();
+        let context = compile_shared(&rule, &declarations, &leaves, &mut fresh)?;
+        check(&rule, &context)?;
+        contexts.push(context);
+    }
+    let first = &contexts[0].main;
+    let remaining = contexts.iter().skip(1).map(|context| &context.main.query);
+    let main = syn::parse2(quote!(#first #(#remaining)*))?;
+    Ok(Context {
+        main,
+        leaves,
+        negatives: contexts
+            .into_iter()
+            .flat_map(|context| context.negatives)
+            .collect(),
     })
 }
 
@@ -307,8 +343,8 @@ pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<T
     let initializations = context.negatives.iter().map(|anti| {
         let Anti { binding, hole, keys, .. } = anti;
         let invocation = pipeline.clone().start(hole.to_token_stream())?;
-        Ok(if keys.is_empty() { quote!(let #binding = ::cq_storage::GroupedAnswers::collect_from(#invocation.map(|(_unit,)| ((), ())));) }
-        else { quote!(let #binding = ::cq_storage::GroupedAnswers::collect_from(#invocation.map(|row| (row, ())));) })
+        Ok(if keys.is_empty() { quote!(let #binding = ::cq_storage::GroupedAnswers::collect_from(#invocation.map(|(_unit,)| ((), ()))); let #binding = &#binding;) }
+        else { quote!(let #binding = ::cq_storage::GroupedAnswers::collect_from(#invocation.map(|row| (row, ()))); let #binding = &#binding;) })
     }).collect::<syn::Result<Vec<_>>>()?;
     let main = &context.main;
     let answers = distinct(

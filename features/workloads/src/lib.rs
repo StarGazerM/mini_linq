@@ -22,7 +22,8 @@
 //! storage instrumentation. Counters come from separate instrumented executions.
 //! TPC workers require exact DuckDB agreement for every warm/timed run and both
 //! independent counted runs; no time threshold is a correctness gate. The TPC
-//! inventory has 12 kernels and two pipelines at SF 0.1 and 1 (48 timing rows).
+//! inventory retains its 12 kernels and 48 timing rows across both scales.
+//! retail_h07_block adds two pipelines at each scale, for 52 timing rows total.
 //! Q6/Q19 retain full-query identities; other kernels remain explicitly derived.
 //! Fresh acceptance evidence and final tables belong in the task ledger/stdout.
 
@@ -48,6 +49,17 @@
 //!
 //! The repository root provides `cargo xtask` for the same tool.
 
+//! TPC coverage adds retail_h07_block with H07's unchanged SQL, default/hypergraph candidates and country-block semijoins before Lineitem; the existing catalog remains unchanged.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 pub mod adversarial;
 pub mod pipelines;
 mod sorted_index;

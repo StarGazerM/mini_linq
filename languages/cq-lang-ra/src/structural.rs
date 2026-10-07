@@ -9,6 +9,8 @@ use crate::{EqualityValue, Operator, Program, Theta, contract::Schedule, symbol_
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Column {
     Atom(usize, String),
+    Context(String, String),
+    Negative(String, String),
     Bind(usize, String),
 }
 
@@ -30,9 +32,12 @@ enum Kind {
     Join(bool),
     Select,
     Rust(String),
+    Union(bool, String),
+    Anti(Vec<String>),
+    Negative(String),
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(super) struct Node {
     kind: Kind,
     heading: Heading,
@@ -45,6 +50,10 @@ pub(super) struct Node {
     views: HashMap<usize, usize>,
     pruned: HashSet<usize>,
     range_base: Option<usize>,
+    correlation: Option<usize>,
+    domain: Option<usize>,
+    origin: Option<crate::BlockOrigin>,
+    rust_index: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -76,18 +85,24 @@ impl Reduction {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Atom {
     relation: String,
     bindings: HashMap<String, String>,
     node: usize,
 }
 
+#[derive(Clone)]
 pub(super) struct Rust {
     payload: String,
     input: usize,
     arguments: Heading,
+    expression: syn::Expr,
+    bindings: Vec<Ident>,
+    environment: Option<crate::Environment>,
 }
 
+#[derive(Clone)]
 pub(super) struct RowView {
     parent: Option<usize>,
     restricted: bool,
@@ -100,6 +115,114 @@ fn row_view(views: &mut Vec<RowView>, parent: Option<usize>, restricted: bool) -
 }
 
 impl Schedule {
+    /// Fix a positional path table before visiting a schedule. Flat clause IDs
+    /// remain their source indices; nested paths receive sorted distinct IDs.
+    pub fn occurrence_paths(&mut self, paths: impl IntoIterator<Item = cq_syntax::Occurrence>) {
+        let paths: std::collections::BTreeSet<_> = paths.into_iter().collect();
+        let mut next = paths
+            .iter()
+            .map(|p| p.0[0].parse::<usize>().expect("checked path"))
+            .max()
+            .unwrap_or(0)
+            + 1;
+        for path in paths {
+            let id = if path.0.len() == 1 {
+                path.0[0].parse::<usize>().expect("checked path")
+            } else {
+                let id = next;
+                next += 1;
+                id
+            };
+            self.paths.insert(path, id);
+        }
+    }
+    pub fn atom_path(
+        &mut self,
+        path: &cq_syntax::Occurrence,
+        relation: &Ident,
+        mapping: &[(Ident, Ident)],
+    ) -> usize {
+        self.atom(self.paths[path], relation, mapping)
+    }
+    pub fn union(&mut self, operands: &[usize], union: &crate::Union) -> usize {
+        self.union_over(operands, union, None)
+    }
+    pub fn union_over(
+        &mut self,
+        operands: &[usize],
+        union: &crate::Union,
+        prefix: Option<usize>,
+    ) -> usize {
+        self.union_frame(operands, union, prefix, None)
+    }
+    pub fn union_frame(
+        &mut self,
+        operands: &[usize],
+        union: &crate::Union,
+        prefix: Option<usize>,
+        domain: Option<usize>,
+    ) -> usize {
+        let heading = self.nodes[operands[0]]
+            .heading
+            .keys()
+            .map(|name| {
+                (
+                    name.clone(),
+                    operands
+                        .iter()
+                        .map(|operand| &self.nodes[*operand].heading[name])
+                        .min()
+                        .expect("union operands")
+                        .clone(),
+                )
+            })
+            .collect();
+        let mut origins = Origins::new();
+        for operand in operands {
+            for (name, values) in &self.nodes[*operand].origins {
+                origins
+                    .entry(name.clone())
+                    .or_default()
+                    .extend(values.iter().cloned());
+            }
+        }
+        let metadata = union
+            .origin
+            .as_ref()
+            .map(|origin| {
+                let path = &origin.occurrence;
+                let free = &origin.free;
+                let interface = &origin.interface;
+                format!(
+                    "{path} {} {}",
+                    free.to_token_stream(),
+                    interface.to_token_stream()
+                )
+            })
+            .unwrap_or_default();
+        self.push(Node {
+            kind: Kind::Union(
+                union.origin.as_ref().is_some_and(|o| o.fallback.is_some()),
+                metadata,
+            ),
+            heading,
+            origins,
+            operands: operands.to_vec(),
+            correlation: prefix,
+            domain,
+            origin: union.origin.clone(),
+            ..Node::default()
+        })
+    }
+    pub fn anti(&mut self, left: usize, right: usize, columns: &[Ident]) -> usize {
+        self.push(Node {
+            kind: Kind::Anti(columns.iter().map(symbol_name).collect()),
+            heading: self.nodes[left].heading.clone(),
+            origins: self.nodes[left].origins.clone(),
+            operands: vec![left, right],
+            ..Node::default()
+        })
+    }
     fn push(&mut self, node: Node) -> usize {
         let index = self.nodes.len();
         self.nodes.push(node);
@@ -428,6 +551,10 @@ impl Schedule {
             views,
             pruned,
             range_base: None,
+            correlation: None,
+            domain: None,
+            origin: None,
+            rust_index: None,
         })
     }
 
@@ -500,10 +627,17 @@ impl Schedule {
         payload: String,
         expression: &syn::Expr,
         bindings: &[Ident],
+        environment: Option<&crate::Environment>,
     ) -> usize {
         let source = &self.nodes[input];
-        let logical = source.heading.keys().cloned().collect();
-        let arguments = crate::syntax::rust::known_uses(expression, &logical)
+        let payload = environment
+            .and_then(|env| env.path.as_ref())
+            .map_or_else(|| payload.clone(), |path| format!("{payload} @{path}"));
+        let logical = environment
+            .map(|env| env.variables.iter().map(symbol_name).collect())
+            .unwrap_or_else(|| source.heading.keys().cloned().collect());
+        let arguments = crate::syntax::rust::free_variables(expression)
+            .dependencies(&logical)
             .iter()
             .map(|name| (name.clone(), source.heading[name].clone()))
             .collect();
@@ -522,9 +656,13 @@ impl Schedule {
             payload: payload.clone(),
             input,
             arguments,
+            expression: expression.clone(),
+            bindings: bindings.to_vec(),
+            environment: environment.cloned(),
         });
         self.push(Node {
             kind: Kind::Rust(payload),
+            rust_index: Some(self.chain.len() - 1),
             heading,
             origins,
             operands: vec![input],
@@ -535,20 +673,38 @@ impl Schedule {
     }
 
     pub fn guard(&mut self, input: usize, filter: &crate::syntax::Filter) -> usize {
+        self.guard_in(input, filter, None)
+    }
+    pub fn guard_in(
+        &mut self,
+        input: usize,
+        filter: &crate::syntax::Filter,
+        environment: Option<&crate::Environment>,
+    ) -> usize {
         self.rust(
             input,
             filter.to_token_stream().to_string(),
             &filter.condition,
             &[],
+            environment,
         )
     }
 
     pub fn bind(&mut self, input: usize, binding: &crate::syntax::Let) -> usize {
+        self.bind_in(input, binding, None)
+    }
+    pub fn bind_in(
+        &mut self,
+        input: usize,
+        binding: &crate::syntax::Let,
+        environment: Option<&crate::Environment>,
+    ) -> usize {
         self.rust(
             input,
             binding.to_token_stream().to_string(),
             &binding.expression,
             &crate::syntax::rust::bindings(&binding.pattern),
+            environment,
         )
     }
 
@@ -560,12 +716,42 @@ impl Schedule {
     pub fn from_program(program: &Program) -> syn::Result<Self> {
         crate::contract::check(program)?;
         let mut schedule = Self::default();
+        schedule.occurrence_paths(program.plan.definitions.iter().filter_map(
+            |d| match &d.operator {
+                Operator::Rename(r) => Some(r.occurrence.clone()),
+                Operator::Union(u) => u.origin.as_ref().map(|o| o.occurrence.clone()),
+                _ => None,
+            },
+        ));
         let mut results = HashMap::new();
         for definition in &program.plan.definitions {
             let node = match &definition.operator {
+                Operator::Union(union) => schedule.union_frame(
+                    &union
+                        .operands
+                        .iter()
+                        .map(|id| results[&symbol_name(id)])
+                        .collect::<Vec<_>>(),
+                    union,
+                    union
+                        .origin
+                        .as_ref()
+                        .and_then(|o| o.over.as_ref())
+                        .map(|over| results[&symbol_name(&over.prefix)]),
+                    union
+                        .origin
+                        .as_ref()
+                        .and_then(|o| o.domain.as_ref())
+                        .map(|domain| results[&symbol_name(&domain.input)]),
+                ),
+                Operator::Anti(anti) => schedule.anti(
+                    results[&symbol_name(&anti.left)],
+                    results[&symbol_name(&anti.right)],
+                    &anti.columns.iter().cloned().collect::<Vec<_>>(),
+                ),
                 Operator::Unit(_) => schedule.unit(),
-                Operator::Rename(r) => schedule.atom(
-                    r.occurrence.base10_parse().unwrap(),
+                Operator::Rename(r) => schedule.atom_path(
+                    &r.occurrence,
                     &r.relation,
                     &r.mapping
                         .iter()
@@ -589,14 +775,19 @@ impl Schedule {
                 Operator::Select(s) => {
                     schedule.select(results[&symbol_name(&s.input)], &s.condition)
                 }
-                Operator::Guard(g) => schedule.guard(
+                Operator::Guard(g) => schedule.guard_in(
                     results[&symbol_name(&g.input)],
                     &crate::syntax::Filter {
                         if_token: g.if_token,
                         condition: g.condition.clone(),
                     },
+                    g.environment.as_ref(),
                 ),
-                Operator::Bind(b) => schedule.bind(results[&symbol_name(&b.input)], &b.binding()),
+                Operator::Bind(b) => schedule.bind_in(
+                    results[&symbol_name(&b.input)],
+                    &b.binding(),
+                    b.environment.as_ref(),
+                ),
             };
             results.insert(symbol_name(&definition.result), node);
         }
@@ -910,16 +1101,18 @@ struct Wiring {
     heading: Facts<(String, Column)>,
     equalities: Facts<(Column, Column)>,
     predicates: Facts<Predicate>,
+    correlation: Option<usize>,
 }
 
 fn wiring(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Result<usize, String> {
     let mut nodes = Vec::with_capacity(schedule.nodes.len());
     for node in &schedule.nodes {
         let mut operands: Vec<usize> = node.operands.iter().map(|i| nodes[*i]).collect();
-        if matches!(node.kind, Kind::Join(false)) {
+        if matches!(node.kind, Kind::Join(false) | Kind::Union(false, _)) {
             operands.sort_unstable();
         }
         let key = Wiring {
+            correlation: node.correlation.map(|prefix| nodes[prefix]),
             kind: node.kind.clone(),
             operands,
             heading: Facts(
@@ -951,6 +1144,14 @@ fn wiring(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Result<us
 fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     if source.head != target.head {
         return Err("output head differs from source".into());
+    }
+    if source
+        .nodes
+        .iter()
+        .chain(&target.nodes)
+        .any(|node| matches!(node.kind, Kind::Union(..)))
+    {
+        return blocks::check(source, target);
     }
     if source.chain.len() != target.chain.len()
         || source
@@ -1170,3 +1371,5 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     }
     Ok(())
 }
+
+mod blocks;

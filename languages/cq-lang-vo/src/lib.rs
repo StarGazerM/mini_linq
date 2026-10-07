@@ -18,18 +18,32 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! VO records block @path(columns) { steps } | { steps }; or else arms, retaining recursive branch steps and reduction occurrence paths R@c.j.k.
+//! Its contract checks coverage, interface scope and Before sets recursively.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 pub use cq_lang_cq as cq;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use syn::{Ident, LitInt, Token, token};
+use syn::{Ident, Token, token};
 
-pub use cq_syntax::{CommaList, symbol_name};
+pub use cq_syntax::{CommaList, Occurrence, symbol_name};
+pub mod blocks;
 
 pub mod kw {
     syn::custom_keyword!(reduce);
     syn::custom_keyword!(valuation);
     syn::custom_keyword!(with);
+    syn::custom_keyword!(block);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -53,6 +67,7 @@ fn parse_steps(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Step>> {
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub enum Step {
+    Block(blocks::Block, Token![;]),
     Equality(cq::Equality, Token![;]),
     Constraint(cq::Constraint, Token![;]),
     Guard(cq_syntax::Filter, Token![;]),
@@ -63,7 +78,9 @@ pub enum Step {
 
 impl syn::parse::Parse for Step {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        Ok(if input.peek(Token![if]) {
+        Ok(if input.peek(kw::block) {
+            Self::Block(input.parse()?, input.parse()?)
+        } else if input.peek(Token![if]) {
             Self::Guard(input.parse()?, input.parse()?)
         } else if input.peek(Token![let]) {
             Self::Let(input.parse()?, input.parse()?)
@@ -81,13 +98,15 @@ impl syn::parse::Parse for Step {
     }
 }
 
-/// A restriction of one clause's relation, applied before its first subatom.
+/// A restriction of one clause's relation, normally before its first subatom.
+/// A finite block domain that requires prefix Rust delays reductions until
+/// that context exists; a late reduction also filters the current prefix.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Reduce {
     pub reduce_token: kw::reduce,
     pub relation: Ident,
     pub at: Token![@],
-    pub clause: LitInt,
+    pub clause: Occurrence,
     pub reduction: Reduction,
 }
 
@@ -100,7 +119,7 @@ pub enum Reduction {
 
 impl Reduce {
     pub fn clause(&self) -> usize {
-        self.clause.base10_parse().expect("clause index")
+        self.clause.clause()
     }
 }
 
@@ -108,7 +127,7 @@ impl Reduce {
 pub struct Subatom {
     pub relation: Ident,
     pub at: Token![@],
-    pub clause: LitInt,
+    pub clause: Occurrence,
     #[syn(parenthesized)]
     pub paren: token::Paren,
     #[syn(in = paren)]
@@ -125,7 +144,7 @@ pub enum Column {
 
 impl Subatom {
     pub fn clause(&self) -> usize {
-        self.clause.base10_parse().expect("clause index")
+        self.clause.clause()
     }
 
     /// Bound variables by column position.
@@ -143,6 +162,9 @@ impl Subatom {
 /// What the contract establishes for later passes.
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
+    pub branches: BTreeMap<usize, Vec<Analysis>>,
+    /// Rust-produced free columns required before a finite block domain exists.
+    pub domain_requires: BTreeMap<usize, BTreeSet<String>>,
     /// Variables bound before each step, in binding order.
     pub bound_before: Vec<Vec<String>>,
     /// For atom steps: the variables the step newly binds.
@@ -170,10 +192,35 @@ fn error<T>(
 }
 
 fn analyze(program: &Program) -> syn::Result<Analysis> {
-    let body = &program.cq.query.body;
-    let hypergraph = cq::hypergraph::Analysis::of(&program.cq);
+    analyze_steps(
+        &program.cq.query.body,
+        &program.valuation.steps,
+        Vec::new(),
+        None,
+    )
+}
+
+fn analyze_steps(
+    body: &cq_syntax::CommaList<cq::BodyItem>,
+    steps: &[Step],
+    context: Vec<String>,
+    parent: Option<(Occurrence, usize)>,
+) -> syn::Result<Analysis> {
+    for step in steps {
+        match step {
+            Step::Atom(a, _) => a.clause.check()?,
+            Step::Block(b, _) => b.source.clause.check()?,
+            Step::Reduce(r, _) => {
+                r.clause.check()?;
+                let Reduction::With(_, s) = &r.reduction;
+                s.clause.check()?;
+            }
+            _ => (),
+        }
+    }
+    let hypergraph = cq::hypergraph::Analysis::of_body(body, &context.iter().cloned().collect());
     let mut analysis = Analysis::default();
-    let mut written_bound = BTreeSet::new();
+    let mut written_bound: BTreeSet<_> = context.iter().cloned().collect();
     let mut rust_chain = Vec::new();
     let mut dependencies = BTreeMap::new();
     let mut equalities = BTreeMap::new();
@@ -181,6 +228,49 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     let mut let_bound = BTreeSet::new();
     for (clause, item) in body.iter().enumerate() {
         match item {
+            cq::BodyItem::Block(block) => {
+                let facts = block.analyze(&written_bound);
+                let atom = cq_syntax::Atom {
+                    relation: syn::Ident::new("block", proc_macro2::Span::call_site()),
+                    paren_token: Default::default(),
+                    args: facts
+                        .free
+                        .values()
+                        .chain(facts.interface.values())
+                        .map(|v| -> syn::Expr { syn::parse_quote!(#v) })
+                        .collect(),
+                };
+                analysis.atoms.insert(clause, atom);
+                if !facts.rust {
+                    let missing: BTreeSet<_> = block
+                        .branches
+                        .iter()
+                        .flat_map(|arm| {
+                            let generated: BTreeSet<_> = cq::blocks::walk(&arm.body)
+                                .into_iter()
+                                .filter_map(cq::BodyItem::atom)
+                                .flat_map(cq_syntax::Atom::variables)
+                                .map(symbol_name)
+                                .collect();
+                            facts
+                                .free
+                                .keys()
+                                .filter(|name| !generated.contains(*name))
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        })
+                        .collect();
+                    let required: BTreeSet<_> = missing.intersection(&let_bound).cloned().collect();
+                    if !required.is_empty() {
+                        analysis.domain_requires.insert(clause, required);
+                    }
+                }
+                if facts.rust {
+                    let_bound.extend(facts.interface.keys().cloned());
+                    rust_chain.push(clause);
+                }
+                written_bound.extend(facts.interface.into_keys());
+            }
             cq::BodyItem::Positive { atom } => {
                 analysis.atoms.insert(clause, atom.clone());
                 written_bound.extend(atom.variables().map(symbol_name));
@@ -224,17 +314,152 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         }
         Ok(variables)
     };
-    let mut bound = Vec::new();
+    let initial_context: BTreeSet<_> = context.iter().cloned().collect();
+    let mut bound = context;
     let mut seen_atoms = BTreeSet::new();
     let mut complete = BTreeSet::new();
     let mut placed_equalities = BTreeSet::new();
     let mut placed_constraints = BTreeSet::new();
     let mut next_rust = 0;
-    for step in &program.valuation.steps {
+    for step in steps {
         analysis.bound_before.push(bound.clone());
         match step {
+            Step::Block(block, _) => {
+                let clause = block.source.clause();
+                let Some(cq::BodyItem::Block(written)) = body.iter().nth(clause) else {
+                    return error(block, "block occurrence does not name a CQ block");
+                };
+                let expected_path = match &parent {
+                    Some((path, branch)) => path.child(*branch, clause),
+                    None => Occurrence::new(clause),
+                };
+                if block.source.clause != expected_path
+                    || block.source.relation != "block"
+                    || block.kind != written.kind
+                    || block.branches.len() != written.branches.len()
+                {
+                    return error(
+                        block,
+                        "block must preserve its source path, operator and every branch",
+                    );
+                }
+                let prefix: BTreeSet<_> =
+                    body.iter()
+                        .take(clause)
+                        .fold(initial_context.clone(), |mut names, item| {
+                            match item {
+                                cq::BodyItem::Positive { atom } => {
+                                    names.extend(atom.variables().map(symbol_name))
+                                }
+                                cq::BodyItem::Let(binding) => names.extend(
+                                    cq::rust::bindings(&binding.pattern).iter().map(symbol_name),
+                                ),
+                                cq::BodyItem::Block(b) => {
+                                    names.extend(b.analyze(&names).interface.into_keys())
+                                }
+                                _ => (),
+                            }
+                            names
+                        });
+                let facts = written.analyze(&prefix);
+                if facts.rust {
+                    if rust_chain.get(next_rust) != Some(&clause) {
+                        return error(
+                            block,
+                            "Rust blocks must retain their written position in the parent chain tree",
+                        );
+                    }
+                    next_rust += 1;
+                }
+                if facts.rust
+                    && (0..clause).any(|earlier| {
+                        !complete.contains(&earlier)
+                            && matches!(
+                                &body[earlier],
+                                cq::BodyItem::Positive { .. }
+                                    | cq::BodyItem::Equality(_)
+                                    | cq::BodyItem::Constraint(_)
+                                    | cq::BodyItem::Block(_)
+                            )
+                    })
+                {
+                    return error(
+                        block,
+                        "Before condition: a Rust branch must follow every written prefix clause",
+                    );
+                }
+                if facts.rust && !facts.free.keys().all(|name| bound.contains(name)) {
+                    return error(block, "Rust block requires every free prefix variable");
+                }
+                let branch_context: Vec<_> = if facts.rust {
+                    bound.clone()
+                } else {
+                    facts.free.keys().cloned().collect()
+                };
+                let mut branches = Vec::new();
+                for (j, (branch, source_branch)) in
+                    block.branches.iter().zip(&written.branches).enumerate()
+                {
+                    branches.push(analyze_steps(
+                        &source_branch.body,
+                        &branch.steps,
+                        branch_context.clone(),
+                        Some((expected_path.clone(), j)),
+                    )?);
+                }
+                if let Some(existing) = analysis.branches.get(&clause) {
+                    if !same_branch_steps(block, steps, clause) || existing.len() != branches.len()
+                    {
+                        return error(
+                            block,
+                            "repeated block reads must retain the same branch plans",
+                        );
+                    }
+                }
+                analysis.branches.insert(clause, branches);
+                let variables = columns(&block.source)?;
+                let mut introduced = Vec::new();
+                for (position, column) in block.source.columns.iter().enumerate() {
+                    match column {
+                        Column::Variable(v) if symbol_name(v) != variables[position] => {
+                            return error(v, "block column differs from its common heading");
+                        }
+                        Column::Variable(v) if !bound.contains(&symbol_name(v)) => {
+                            if facts.free.contains_key(&symbol_name(v))
+                                && let_bound.contains(&symbol_name(v))
+                            {
+                                return error(
+                                    block,
+                                    "block free column must retain its earlier Rust binder",
+                                );
+                            }
+                            introduced.push(symbol_name(v))
+                        }
+                        Column::Dropped(_) if bound.contains(&variables[position]) => {
+                            return error(block, "a block read cannot drop a bound column");
+                        }
+                        _ => (),
+                    }
+                }
+                if facts.rust && block.source.variables().count() != variables.len() {
+                    return error(block, "a Rust block cannot split its row across reads");
+                }
+                seen_atoms.insert(clause);
+                if block.source.variables().count() == variables.len() {
+                    complete.insert(clause);
+                }
+                bound.extend(introduced.iter().cloned());
+                analysis.introduces.push(introduced);
+            }
             Step::Atom(subatom, _) => {
                 let clause = subatom.clause();
+                let expected_path = match &parent {
+                    Some((path, branch)) => path.child(*branch, clause),
+                    None => Occurrence::new(clause),
+                };
+                if subatom.clause != expected_path {
+                    return error(subatom, "atom occurrence escaped its source branch path");
+                }
                 let variables = columns(subatom)?;
                 let mut introduced = Vec::new();
                 for (position, column) in subatom.columns.iter().enumerate() {
@@ -348,6 +573,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         cq::BodyItem::Positive { .. }
                             | cq::BodyItem::Equality(_)
                             | cq::BodyItem::Constraint(_)
+                            | cq::BodyItem::Block(_)
                     ) && !complete.contains(&earlier)
                     {
                         return error(
@@ -372,7 +598,13 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             Step::Reduce(reduce, _) => {
                 let clause = reduce.clause();
                 let variables = atom_clause(reduce, &reduce.relation, clause)?;
-                if seen_atoms.contains(&clause) {
+                let domain_ready = !analysis.domain_requires.is_empty()
+                    && analysis
+                        .domain_requires
+                        .values()
+                        .flatten()
+                        .all(|name| bound.contains(name));
+                if seen_atoms.contains(&clause) && !domain_ready {
                     return error(
                         reduce,
                         format!("clause #{clause} is reduced after its first subatom"),
@@ -380,6 +612,15 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 }
                 let Reduction::With(_, subatom) = &reduce.reduction;
                 let support = subatom.clause();
+                for dependent in [clause, support] {
+                    if analysis
+                        .domain_requires
+                        .get(&dependent)
+                        .is_some_and(|names| names.iter().any(|name| !bound.contains(name)))
+                    {
+                        return error(reduce, "reduction precedes its block context domain");
+                    }
+                }
                 let support_variables = columns(subatom)?;
                 if support == clause {
                     return error(subatom, "a clause cannot reduce itself");
@@ -448,6 +689,15 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     Ok(analysis)
 }
 
+fn same_branch_steps(block: &blocks::Block, steps: &[Step], clause: usize) -> bool {
+    steps.iter().all(|step| match step {
+        Step::Block(other, _) if other.source.clause() == clause => {
+            block.kind == other.kind && block.branches == other.branches
+        }
+        _ => true,
+    })
+}
+
 /// A query and the complete schedule of its valuations.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Program {
@@ -460,23 +710,41 @@ pub use cq_syntax as syntax;
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    let erase = |program: &Program| {
-        program
-            .valuation
-            .steps
+    fn erase(steps: &[Step]) -> Vec<Step> {
+        steps
             .iter()
-            .filter(|s| !matches!(s, Step::Reduce(..)))
-            .cloned()
-            .collect::<Vec<_>>()
-    };
+            .filter_map(|step| match step {
+                Step::Reduce(..) => None,
+                Step::Block(block, semi) => {
+                    let mut block = block.clone();
+                    for arm in &mut block.branches {
+                        arm.steps = erase(&arm.steps);
+                    }
+                    Some(Step::Block(block, *semi))
+                }
+                _ => Some(step.clone()),
+            })
+            .collect()
+    }
+    fn reductions(steps: &[Step]) -> Vec<&Step> {
+        steps
+            .iter()
+            .flat_map(|step| match step {
+                Step::Reduce(..) => vec![step],
+                Step::Block(block, _) => block
+                    .branches
+                    .iter()
+                    .flat_map(|arm| reductions(&arm.steps))
+                    .collect(),
+                _ => vec![],
+            })
+            .collect()
+    }
     if source.cq != target.cq
-        || erase(source) != erase(target)
-        || source
-            .valuation
-            .steps
+        || erase(&source.valuation.steps) != erase(&target.valuation.steps)
+        || reductions(&source.valuation.steps)
             .iter()
-            .filter(|s| matches!(s, Step::Reduce(..)))
-            .any(|s| !target.valuation.steps.contains(s))
+            .any(|s| !reductions(&target.valuation.steps).contains(s))
     {
         return Err(syn::Error::new_spanned(
             &target.valuation,

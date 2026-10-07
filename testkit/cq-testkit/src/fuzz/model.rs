@@ -74,6 +74,20 @@ pub enum Step {
     Binding(usize),
     Guard(usize),
     Constraint(usize),
+    Block(usize),
+}
+
+/// Ordered fallback or unordered union of authored branch step sequences.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockKind {
+    Union,
+    Fallback,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Block {
+    pub kind: BlockKind,
+    pub branches: Vec<Vec<Step>>,
+    pub interface: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +197,7 @@ pub struct Query {
     pub bindings: Vec<Binding>,
     pub guards: Vec<Guard>,
     pub constraints: Vec<Relational>,
+    pub blocks: Vec<Block>,
     pub head: Vec<Expr>,
     /// Empty uses the total lane's atoms/bindings/guards order.
     pub order: Vec<Step>,
@@ -246,13 +261,6 @@ impl Case {
     }
 
     fn print_cq(&self, opaque_guards: bool) -> String {
-        let guard_clause = |expression: String| {
-            if opaque_guards {
-                format!("if {{ {expression} }}")
-            } else {
-                format!("if {expression}")
-            }
-        };
         let mut source = String::from("struct Fuzz;\n");
         for relation in &self.query.schema {
             writeln!(
@@ -275,44 +283,7 @@ impl Case {
                 .join(", ")
         )
         .unwrap();
-        let mut clauses = Vec::new();
-        for step in self.query.body_order() {
-            match step {
-                Step::Atom(index) => {
-                    let atom = &self.query.atoms[index];
-                    let terms = atom
-                        .terms
-                        .iter()
-                        .map(|term| match term {
-                            Term::Var(variable) => format!("v{variable}"),
-                            Term::Constant(value) => value.to_string(),
-                            Term::Wildcard => "_".to_owned(),
-                            Term::Expression(expression) => rust_expression(expression),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    clauses.push(format!(
-                        "{}({terms})",
-                        self.query.schema[atom.relation].name
-                    ));
-                }
-                Step::Binding(index) => {
-                    let binding = &self.query.bindings[index];
-                    clauses.push(format!(
-                        "let v{}: i32 = {}",
-                        binding.variable,
-                        rust_expression(&binding.expression)
-                    ));
-                }
-                Step::Constraint(index) => clauses.push(guard_clause(rust_constraint(
-                    &self.query.constraints[index],
-                ))),
-                Step::Guard(index) => {
-                    let guard = &self.query.guards[index];
-                    clauses.push(guard_clause(rust_guard(guard)));
-                }
-            }
-        }
+        let clauses = self.query.cq_steps(&self.query.body_order(), opaque_guards);
         writeln!(
             source,
             "answer({}) :- {};",
@@ -325,7 +296,7 @@ impl Case {
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
-            clauses.join(", ")
+            clauses
         )
         .unwrap();
         source
@@ -338,6 +309,9 @@ impl Case {
         if self.has_partial_terms() {
             return "-- Opaque partial terms: oracle is the compiled written-order Rust program.\n"
                 .into();
+        }
+        if !self.query.blocks.is_empty() {
+            return self.block_sql();
         }
         let mut environment = BTreeMap::new();
         let mut conditions = Vec::new();
@@ -412,7 +386,10 @@ impl Case {
     /// The runner accepts the candidate only after recompiling and reproducing
     /// the same failure against DuckDB. Rows are shrunk separately by the runner.
     pub fn without_atom(&self, index: usize) -> Option<Self> {
-        if self.query.atoms.len() <= 1 || index >= self.query.atoms.len() {
+        if !self.query.blocks.is_empty()
+            || self.query.atoms.len() <= 1
+            || index >= self.query.atoms.len()
+        {
             return None;
         }
         let mut candidate = self.clone();
@@ -540,7 +517,7 @@ fn rust_constraint(c: &Relational) -> String {
 }
 
 /// The SQL printer independently interprets abstract relational nodes.
-fn sql_constraint(c: &Relational, environment: &BTreeMap<usize, String>) -> String {
+pub(super) fn sql_constraint(c: &Relational, environment: &BTreeMap<usize, String>) -> String {
     let term = |t: &RelTerm| match t {
         RelTerm::Var(v) => environment[v].clone(),
         RelTerm::Literal(v) | RelTerm::Parameter(v) => v.to_string(),
@@ -586,7 +563,7 @@ fn sql_constraint(c: &Relational, environment: &BTreeMap<usize, String>) -> Stri
     }
 }
 
-fn sql_expression(expression: &Expr, environment: &BTreeMap<usize, String>) -> String {
+pub(super) fn sql_expression(expression: &Expr, environment: &BTreeMap<usize, String>) -> String {
     match expression {
         Expr::Partial(..) => unreachable!("partial terms use the compiled Rust reference"),
         Expr::Var(variable) => environment[variable].clone(),
@@ -611,7 +588,7 @@ fn sql_expression(expression: &Expr, environment: &BTreeMap<usize, String>) -> S
     }
 }
 
-fn sql_guard(guard: &Guard, environment: &BTreeMap<usize, String>) -> String {
+pub(super) fn sql_guard(guard: &Guard, environment: &BTreeMap<usize, String>) -> String {
     match guard {
         Guard::Compare(comparison, left, right) => {
             let token = match comparison {
@@ -823,7 +800,68 @@ impl Guard {
 }
 
 impl Query {
-    fn body_order(&self) -> Vec<Step> {
+    fn cq_steps(&self, steps: &[Step], opaque_guards: bool) -> String {
+        let guard_clause = |expression: String| {
+            if opaque_guards {
+                format!("if {{ {expression} }}")
+            } else {
+                format!("if {expression}")
+            }
+        };
+        let mut clauses = Vec::new();
+        for step in steps.iter().copied() {
+            match step {
+                Step::Block(index) => {
+                    let block = &self.blocks[index];
+                    let operator = if block.kind == BlockKind::Union {
+                        " | "
+                    } else {
+                        " else "
+                    };
+                    clauses.push(
+                        block
+                            .branches
+                            .iter()
+                            .map(|arm| format!("{{ {} }}", self.cq_steps(arm, opaque_guards)))
+                            .collect::<Vec<_>>()
+                            .join(operator),
+                    );
+                }
+                Step::Atom(index) => {
+                    let atom = &self.atoms[index];
+                    let terms = atom
+                        .terms
+                        .iter()
+                        .map(|term| match term {
+                            Term::Var(variable) => format!("v{variable}"),
+                            Term::Constant(value) => value.to_string(),
+                            Term::Wildcard => "_".to_owned(),
+                            Term::Expression(expression) => rust_expression(expression),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    clauses.push(format!("{}({terms})", self.schema[atom.relation].name));
+                }
+                Step::Binding(index) => {
+                    let binding = &self.bindings[index];
+                    clauses.push(format!(
+                        "let v{}: i32 = {}",
+                        binding.variable,
+                        rust_expression(&binding.expression)
+                    ));
+                }
+                Step::Constraint(index) => {
+                    clauses.push(guard_clause(rust_constraint(&self.constraints[index])))
+                }
+                Step::Guard(index) => {
+                    let guard = &self.guards[index];
+                    clauses.push(guard_clause(rust_guard(guard)));
+                }
+            }
+        }
+        clauses.join(", ")
+    }
+    pub(super) fn body_order(&self) -> Vec<Step> {
         if !self.order.is_empty() {
             return self.order.clone();
         }
@@ -837,8 +875,39 @@ impl Query {
 
     fn well_bound(&self) -> bool {
         let mut bound = BTreeSet::new();
-        for step in self.body_order() {
+        if !self.steps_bound(&self.body_order(), &mut bound) {
+            return false;
+        }
+        let mut used = BTreeSet::new();
+        for expression in &self.head {
+            expression.variables(&mut used);
+        }
+        used.is_subset(&bound)
+    }
+
+    fn steps_bound(&self, steps: &[Step], bound: &mut BTreeSet<usize>) -> bool {
+        for step in steps.iter().copied() {
             match step {
+                Step::Block(index) => {
+                    let block = &self.blocks[index];
+                    let mut common: Option<BTreeSet<usize>> = None;
+                    for branch in &block.branches {
+                        let mut names = bound.clone();
+                        if !self.steps_bound(branch, &mut names) {
+                            return false;
+                        }
+                        common = Some(match common {
+                            None => names,
+                            Some(old) => old.intersection(&names).copied().collect::<BTreeSet<_>>(),
+                        });
+                    }
+                    let mut expected = bound.clone();
+                    expected.extend(&block.interface);
+                    if common != Some(expected.clone()) {
+                        return false;
+                    }
+                    *bound = expected;
+                }
                 Step::Atom(index) => {
                     let atom = &self.atoms[index];
                     bound.extend(atom_variables(atom));
@@ -846,7 +915,7 @@ impl Query {
                         if let Term::Expression(expression) = term {
                             let mut used = BTreeSet::new();
                             expression.variables(&mut used);
-                            if !used.is_subset(&bound) {
+                            if !used.is_subset(bound) {
                                 return false;
                             }
                         }
@@ -856,37 +925,27 @@ impl Query {
                     let binding = &self.bindings[index];
                     let mut used = BTreeSet::new();
                     binding.expression.variables(&mut used);
-                    if !used.is_subset(&bound) || !bound.insert(binding.variable) {
+                    if !used.is_subset(bound) || !bound.insert(binding.variable) {
                         return false;
                     }
                 }
                 Step::Constraint(index) => {
                     let mut used = BTreeSet::new();
                     self.constraints[index].variables(&mut used);
-                    if !used.is_subset(&bound) {
+                    if !used.is_subset(bound) {
                         return false;
                     }
                 }
                 Step::Guard(index) => {
                     let mut used = BTreeSet::new();
                     self.guards[index].variables(&mut used);
-                    if !used.is_subset(&bound) {
+                    if !used.is_subset(bound) {
                         return false;
                     }
                 }
             }
         }
-        let mut used = BTreeSet::new();
-        for guard in &self.guards {
-            guard.variables(&mut used);
-        }
-        for c in &self.constraints {
-            c.variables(&mut used);
-        }
-        for expression in &self.head {
-            expression.variables(&mut used);
-        }
-        used.is_subset(&bound)
+        true
     }
 
     fn disconnected(&self) -> bool {
@@ -1074,6 +1133,9 @@ impl Random {
 /// with independent SQL. Schemas have 1..=4 tables of arity 1..=3, bodies have
 /// 1..=5 atoms, and heads have 1..=3 columns. Raw duplicate rows are retained.
 pub fn generate(seed: u64) -> Case {
+    if matches!(seed % 10, 3 | 8) {
+        return generate_block(seed);
+    }
     if seed & 1 == 0 {
         return generate_partial(seed);
     }
@@ -1199,11 +1261,140 @@ pub fn generate(seed: u64) -> Case {
             bindings,
             guards,
             constraints,
+            blocks: Vec::new(),
             head,
             order: Vec::new(),
         },
         data,
     }
+}
+
+fn generate_block(seed: u64) -> Case {
+    let mut random = Random(seed);
+    let partial = seed & 1 == 0;
+    let test = (seed / 10) % 3 == 0;
+    let kind = if (seed / 10) % 2 == 0 {
+        BlockKind::Union
+    } else {
+        BlockKind::Fallback
+    };
+    let mut query = Query {
+        schema: vec![
+            Relation {
+                name: "r0".into(),
+                arity: 1,
+            },
+            Relation {
+                name: "r1".into(),
+                arity: 3,
+            },
+            Relation {
+                name: "r2".into(),
+                arity: 3,
+            },
+        ],
+        atoms: vec![
+            Atom {
+                relation: 0,
+                terms: vec![Term::Var(0)],
+            },
+            Atom {
+                relation: 1,
+                terms: vec![Term::Var(0), Term::Var(1), Term::Var(3)],
+            },
+            Atom {
+                relation: 2,
+                terms: vec![
+                    Term::Var(0),
+                    Term::Var(if test { 2 } else { 1 }),
+                    Term::Var(4),
+                ],
+            },
+        ],
+        bindings: Vec::new(),
+        guards: Vec::new(),
+        constraints: Vec::new(),
+        blocks: Vec::new(),
+        head: if test {
+            vec![Expr::Var(0)]
+        } else {
+            vec![Expr::Var(0), Expr::Var(1)]
+        },
+        order: vec![Step::Atom(0), Step::Block(0)],
+    };
+    let mut second = vec![Step::Atom(2)];
+    if partial {
+        query.guards.push(Guard::Compare(
+            Comparison::GreaterEqual,
+            Expr::Partial(PartialOp::Divide, Box::new(Expr::Var(0))),
+            Expr::Constant(0),
+        ));
+        second.push(Step::Guard(0));
+    } else if random.pick(2) == 0 {
+        query.guards.push(Guard::Compare(
+            Comparison::GreaterEqual,
+            Expr::OpaqueCall(Box::new(Expr::Var(0))),
+            Expr::Constant(random.small()),
+        ));
+        second.push(Step::Guard(0));
+    }
+    query.blocks.push(Block {
+        kind,
+        branches: vec![vec![Step::Atom(1)], second],
+        interface: if test { vec![] } else { vec![1] },
+    });
+    if (seed / 10) % 3 == 1 {
+        query.atoms.push(query.atoms[1].clone());
+        query.blocks.push(Block {
+            kind: BlockKind::Union,
+            branches: vec![vec![Step::Atom(1)], vec![Step::Atom(3)]],
+            interface: vec![1, 3],
+        });
+        query.blocks[0].branches[0] = vec![Step::Block(1)];
+    }
+    if (seed / 10) % 5 == 4 {
+        query.atoms.truncate(1);
+        query.guards.clear();
+        query.blocks.clear();
+        query.bindings.push(Binding {
+            variable: 1,
+            expression: if partial {
+                Expr::Partial(PartialOp::Divide, Box::new(Expr::Var(0)))
+            } else {
+                Expr::OpaqueCall(Box::new(Expr::Var(0)))
+            },
+        });
+        query.constraints = vec![
+            Relational::Compare(Comparison::Equal, RelTerm::Var(1), RelTerm::Literal(1)),
+            Relational::Compare(Comparison::Equal, RelTerm::Var(1), RelTerm::Literal(2)),
+        ];
+        query.blocks.push(Block {
+            kind,
+            branches: vec![vec![Step::Constraint(0)], vec![Step::Constraint(1)]],
+            interface: vec![],
+        });
+        query.head = vec![Expr::Var(0)];
+        query.order = vec![Step::Atom(0), Step::Binding(0), Step::Block(0)];
+    }
+    let data = query
+        .schema
+        .iter()
+        .map(|schema| {
+            let mut rows = (0..random.pick(8))
+                .map(|_| {
+                    (0..schema.arity)
+                        .map(|_| random.small())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            if !rows.is_empty() {
+                rows.push(rows[0].clone());
+            }
+            rows
+        })
+        .collect();
+    assert!(query.well_bound());
+    Case { seed, query, data }
 }
 
 fn generate_partial(seed: u64) -> Case {
@@ -1265,6 +1456,7 @@ fn generate_partial(seed: u64) -> Case {
         bindings: Vec::new(),
         guards: vec![safe],
         constraints: Vec::new(),
+        blocks: Vec::new(),
         head: vec![Expr::Var(0), Expr::Var(2)],
         order: vec![Step::Atom(0)],
     };
@@ -1416,6 +1608,47 @@ impl Coverage {
             format!("relations={}", query.schema.len()),
             format!("head-arity={}", query.head.len()),
         ]);
+        for block in &query.blocks {
+            features.insert(
+                if block.kind == BlockKind::Union {
+                    "union-block"
+                } else {
+                    "fallback-block"
+                }
+                .into(),
+            );
+            features.insert(
+                if block.interface.is_empty() {
+                    "test-block"
+                } else {
+                    "binding-block"
+                }
+                .into(),
+            );
+            if query.atoms.len() > 1 {
+                features.insert("block-locals".into());
+            }
+            if block
+                .branches
+                .iter()
+                .flatten()
+                .any(|step| matches!(step, Step::Block(_)))
+            {
+                features.insert("nested-block".into());
+            }
+        }
+        if !query.blocks.is_empty()
+            && query
+                .order
+                .iter()
+                .take_while(|step| !matches!(step, Step::Block(_)))
+                .any(|step| matches!(step, Step::Binding(_)))
+        {
+            features.insert("prefix-let-block".into());
+        }
+        if !query.blocks.is_empty() && !query.guards.is_empty() {
+            features.insert("rust-in-block".into());
+        }
         for relation in &query.schema {
             features.insert(format!("relation-arity={}", relation.arity));
         }
@@ -1622,6 +1855,7 @@ mod tests {
                     ),
                 }],
                 constraints: Vec::new(),
+                blocks: Vec::new(),
                 guards: vec![Guard::Not(Box::new(Guard::Compare(
                     Comparison::Equal,
                     Expr::Var(2),
@@ -1672,6 +1906,7 @@ mod tests {
                     ),
                 }],
                 constraints: Vec::new(),
+                blocks: Vec::new(),
                 guards: vec![
                     Guard::Or(
                         Box::new(Guard::Compare(

@@ -1,0 +1,5 @@
+physical {relation P(x:i32); relation R(x:i32,y:i32); relation S(x:i32,y:i32);
+p=pipe rename P@0{x->x}; r0=pipe rename R@1.0.0{x->x,y->y}; r1=let project r0 keep{x,y};
+s0=pipe rename S@1.1.0{x->x,y->y}; s1=pipe project s0 keep{x,y}; a=pipe anti eager[x]s1,r1;
+u=let union r1,a block @1 free[x] interface[y] fallback;
+j=pipe probe first[x]p,u; out=pipe canon project j keep{x,y}; return out as answer(x,y);}

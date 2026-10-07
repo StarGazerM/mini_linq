@@ -11,6 +11,19 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! Ordering plans each block recursively.
+//! A Rust-free block is one hyperedge over its free/interface heading at its CQ clause index.
+//! A Rust block is pinned by its branch Before requirements and provides its interface only after all arms.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_cq as cq;
@@ -59,6 +72,8 @@ pub enum Split {
 /// One normal-form body clause as the scheduler sees it.
 struct Clause<'a> {
     item: &'a BodyItem,
+    atom: Option<cq::Atom>,
+    rust: bool,
     /// The variables the clause binds: atom columns in order, or the
     /// pattern's bindings.
     provides: Vec<String>,
@@ -70,30 +85,63 @@ struct Clause<'a> {
 
 impl Clause<'_> {
     fn is_atom(&self) -> bool {
-        matches!(self.item, BodyItem::Positive { .. })
+        self.atom.is_some() && !self.rust
     }
 }
 
 /// Formal rule D-Atom: Atom provides its columns and requires let-supplied columns.
 /// Formal rule D-Guard: Guard requires dependencies on the written prefix.
 /// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
-fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
-    let let_bound: BTreeSet<String> = query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            BodyItem::Let(binding) => Some(rust::bindings(&binding.pattern)),
-            _ => None,
-        })
-        .flatten()
-        .map(|v| symbol_name(&v))
-        .collect();
-    let mut prefix = BTreeSet::new();
+fn clauses<'a>(query: &'a cq::Query, context: &BTreeSet<String>) -> Vec<Clause<'a>> {
+    let mut let_bound = BTreeSet::new();
+    let mut written = context.clone();
+    for item in &query.body {
+        match item {
+            BodyItem::Let(binding) => {
+                let names = rust::bindings(&binding.pattern)
+                    .iter()
+                    .map(symbol_name)
+                    .collect::<Vec<_>>();
+                let_bound.extend(names.iter().cloned());
+                written.extend(names);
+            }
+            BodyItem::Positive { atom } => written.extend(atom.variables().map(symbol_name)),
+            BodyItem::Block(block) => {
+                let facts = block.analyze(&written);
+                if facts.rust {
+                    let_bound.extend(facts.interface.keys().cloned());
+                }
+                written.extend(facts.interface.into_keys());
+            }
+            _ => (),
+        }
+    }
+    let mut prefix = context.clone();
     query
         .body
         .iter()
         .map(|item| {
             let (provides, requires) = match item {
+                BodyItem::Block(block) => {
+                    let facts = block.analyze(&prefix);
+                    let provides: Vec<_> = if facts.rust {
+                        facts.interface.keys().cloned().collect()
+                    } else {
+                        facts
+                            .free
+                            .keys()
+                            .chain(facts.interface.keys())
+                            .cloned()
+                            .collect()
+                    };
+                    let requires = facts
+                        .free
+                        .keys()
+                        .filter(|name| facts.rust || let_bound.contains(*name))
+                        .cloned()
+                        .collect();
+                    (provides, requires)
+                }
                 BodyItem::Positive { atom } => {
                     let provides: Vec<String> = atom.variables().map(symbol_name).collect();
                     let requires = provides
@@ -123,8 +171,29 @@ fn clauses(query: &cq::Query) -> Vec<Clause<'_>> {
                     unreachable!("normal form")
                 }
             };
+            let rust = item.rust_step().is_some()
+                || matches!(item, BodyItem::Block(block) if block.analyze(&prefix).rust);
+            let atom = match item {
+                BodyItem::Positive { atom } => Some(atom.clone()),
+                BodyItem::Block(block) => {
+                    let facts = block.analyze(&prefix);
+                    Some(cq::Atom {
+                        relation: syn::Ident::new("block", Span::call_site()),
+                        paren_token: Default::default(),
+                        args: facts
+                            .free
+                            .values()
+                            .chain(facts.interface.values())
+                            .map(|v| -> syn::Expr { syn::parse_quote!(#v) })
+                            .collect(),
+                    })
+                }
+                _ => None,
+            };
             prefix.extend(provides.iter().cloned());
             Clause {
+                atom,
+                rust,
                 item,
                 provides,
                 requires,
@@ -141,27 +210,16 @@ fn ready(
     clause: usize,
 ) -> bool {
     clauses[clause].requires.is_subset(bound)
-        && match clauses[clause].item {
-            BodyItem::Positive { .. } | BodyItem::Equality(_) | BodyItem::Constraint(_) => true,
-            BodyItem::Filter(_) | BodyItem::Let(_) => {
-                pending
-                    .iter()
-                    .copied()
-                    .filter(|&c| matches!(clauses[c].item, BodyItem::Filter(_) | BodyItem::Let(_)))
-                    .min()
-                    == Some(clause)
-                    && !pending.iter().any(|&c| {
-                        c < clause
-                            && matches!(
+        && (!clauses[clause].rust
+            || (pending.iter().copied().filter(|&c| clauses[c].rust).min() == Some(clause)
+                && !pending.iter().any(|&c| {
+                    c < clause
+                        && (clauses[c].atom.is_some()
+                            || matches!(
                                 clauses[c].item,
-                                BodyItem::Positive { .. }
-                                    | BodyItem::Equality(_)
-                                    | BodyItem::Constraint(_)
-                            )
-                    })
-            }
-            _ => unreachable!("normal form"),
-        }
+                                BodyItem::Equality(_) | BodyItem::Constraint(_)
+                            ))
+                })))
 }
 
 /// A rank orders the ready clauses; the least is placed next. Guards and
@@ -172,9 +230,10 @@ type Rank = (bool, bool, usize, usize);
 fn schedule(
     query: &cq::Query,
     clauses: &[Clause<'_>],
+    context: &BTreeSet<String>,
     rank: impl Fn(usize, &BTreeSet<String>) -> Rank,
 ) -> syn::Result<Vec<usize>> {
-    let mut bound = BTreeSet::new();
+    let mut bound = context.clone();
     let mut pending: Vec<usize> = (0..clauses.len()).collect();
     let mut sequence = Vec::with_capacity(clauses.len());
     while !pending.is_empty() {
@@ -225,6 +284,7 @@ fn prefix_rank<'a>(
 fn elimination(
     source: &cq::Program,
     clauses: &[Clause<'_>],
+    context: &BTreeSet<String>,
 ) -> syn::Result<(Vec<usize>, Vec<String>)> {
     let order = cq::hypergraph::Analysis::of(source).elimination_order;
     let mut earliest = vec![order.len(); clauses.len()];
@@ -239,7 +299,7 @@ fn elimination(
             earliest[clause] = earliest[clause].min(position);
         }
     }
-    let sequence = schedule(&source.query, clauses, |clause, _| {
+    let sequence = schedule(&source.query, clauses, context, |clause, _| {
         if clauses[clause].is_atom() {
             (true, false, earliest[clause], clause)
         } else {
@@ -282,7 +342,7 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> valua
         valuation::Subatom {
             relation: atom.relation.clone(),
             at: Default::default(),
-            clause: LitInt::new(&clause.to_string(), Span::call_site()),
+            clause: LitInt::new(&clause.to_string(), Span::call_site()).into(),
             paren: Default::default(),
             columns,
         },
@@ -295,7 +355,11 @@ fn coarse(clauses: &[Clause<'_>], sequence: &[usize]) -> Vec<valuation::Step> {
     sequence
         .iter()
         .map(|&clause| match clauses[clause].item {
-            BodyItem::Positive { atom } => subatom(clause, atom, |_| true),
+            BodyItem::Positive { .. } | BodyItem::Block(_) => subatom(
+                clause,
+                clauses[clause].atom.as_ref().expect("atom or block"),
+                |_| true,
+            ),
             BodyItem::Equality(equality) => {
                 valuation::Step::Equality(equality.clone(), Default::default())
             }
@@ -357,6 +421,11 @@ impl Fine<'_> {
                     valuation::Step::Guard(filter.clone(), Default::default())
                 }
                 BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
+                BodyItem::Block(_) => subatom(
+                    clause,
+                    self.clauses[clause].atom.as_ref().expect("block heading"),
+                    |_| true,
+                ),
                 _ => unreachable!("equalities and Rust steps wait"),
             });
         }
@@ -384,6 +453,7 @@ fn fine(
     clauses: &[Clause<'_>],
     sequence: &[usize],
     variables: &[String],
+    context: &BTreeSet<String>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let atoms: Vec<usize> = sequence
         .iter()
@@ -392,12 +462,12 @@ fn fine(
         .collect();
     let let_bound: BTreeSet<&String> = clauses
         .iter()
-        .filter(|c| matches!(c.item, BodyItem::Let(_)))
+        .filter(|c| c.rust)
         .flat_map(|c| &c.provides)
         .collect();
     let mut plan = Fine {
         clauses,
-        bound: BTreeSet::new(),
+        bound: context.clone(),
         waiting: (0..clauses.len())
             .filter(|&c| !clauses[c].is_atom())
             .collect(),
@@ -405,8 +475,14 @@ fn fine(
         steps: Vec::new(),
     };
     for &clause in &atoms {
-        if atom(clauses[clause].item).args.is_empty() {
-            plan.subatom(clause, atom(clauses[clause].item));
+        if clauses[clause]
+            .atom
+            .as_ref()
+            .expect("atom heading")
+            .args
+            .is_empty()
+        {
+            plan.subatom(clause, clauses[clause].atom.as_ref().expect("atom heading"));
         }
     }
     let mut remaining: Vec<&String> = variables.iter().collect();
@@ -436,27 +512,23 @@ fn fine(
                 ));
             };
             plan.bound.insert(variable.clone());
-            plan.subatom(binder, atom(clauses[binder].item));
+            plan.subatom(binder, clauses[binder].atom.as_ref().expect("atom heading"));
             plan.place_ready();
         }
         for check in holding {
-            plan.subatom(check, atom(clauses[check].item));
+            plan.subatom(check, clauses[check].atom.as_ref().expect("atom heading"));
         }
     }
     plan.place_ready();
     Ok(plan.steps)
 }
 
-fn atom(item: &BodyItem) -> &cq::Atom {
-    item.atom().expect("an atom clause")
-}
-
 /// Written splits each atom in place; it performs no cross-clause reordering.
-fn written_fine(clauses: &[Clause<'_>]) -> Vec<valuation::Step> {
+fn written_fine(clauses: &[Clause<'_>], context: &BTreeSet<String>) -> Vec<valuation::Step> {
     let mut steps = Vec::new();
-    let mut bound = BTreeSet::new();
+    let mut bound = context.clone();
     for (clause, facts) in clauses.iter().enumerate() {
-        if let BodyItem::Positive { atom } = facts.item {
+        if let Some(atom) = facts.atom.as_ref().filter(|_| !facts.rust) {
             let new: Vec<_> = facts
                 .provides
                 .iter()
@@ -483,9 +555,28 @@ fn written_fine(clauses: &[Clause<'_>]) -> Vec<valuation::Step> {
 /// Formal rule S-Written: Written uses the complete normal-form body sequence.
 pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
+    let steps = compile_body(source, options, &BTreeSet::new(), None)?;
+    let program = valuation::Program {
+        cq: source.clone(),
+        valuation: valuation::Valuation {
+            valuation_token: Default::default(),
+            brace: Default::default(),
+            steps,
+        },
+    };
+    valuation::contract::check(&program)?;
+    Ok(program)
+}
+
+fn compile_body(
+    source: &cq::Program,
+    options: &Options,
+    context: &BTreeSet<String>,
+    parent: Option<(valuation::Occurrence, usize)>,
+) -> syn::Result<Vec<valuation::Step>> {
     let query = &source.query;
-    let clauses = clauses(query);
-    let hypergraph = cq::hypergraph::Analysis::of(source);
+    let clauses = clauses(query, context);
+    let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Written => {
             let sequence: Vec<usize> = (0..clauses.len()).collect();
@@ -496,12 +587,13 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
             let sequence = schedule(
                 query,
                 &clauses,
+                context,
                 prefix_rank(&clauses, ranking, &hypergraph.canonical_names),
             )?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
-        Heuristic::Elimination => elimination(source, &clauses)?,
+        Heuristic::Elimination => elimination(source, &clauses, context)?,
     };
     // Elimination removes leaves first. Enumerating in that direction joins
     // their independent projections before any connecting variable is bound.
@@ -537,19 +629,60 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     }
     let steps = match options.split {
         Split::Coarse => coarse(&clauses, &sequence),
-        Split::Fine if options.heuristic == Heuristic::Written => written_fine(&clauses),
-        Split::Fine => fine(query, &clauses, &sequence, &variables)?,
+        Split::Fine if options.heuristic == Heuristic::Written => written_fine(&clauses, context),
+        Split::Fine => fine(query, &clauses, &sequence, &variables, context)?,
     };
-    let program = valuation::Program {
-        cq: source.clone(),
-        valuation: valuation::Valuation {
-            valuation_token: Default::default(),
-            brace: Default::default(),
-            steps,
-        },
-    };
-    valuation::contract::check(&program)?;
-    Ok(program)
+    let mut prefix = context.clone();
+    let mut written_contexts = Vec::new();
+    for facts in &clauses {
+        written_contexts.push(prefix.clone());
+        prefix.extend(facts.provides.iter().cloned());
+    }
+    let mut result = Vec::new();
+    for step in steps {
+        let valuation::Step::Atom(mut atom, semi) = step else {
+            result.push(step);
+            continue;
+        };
+        let clause = atom.clause();
+        atom.clause = match &parent {
+            Some((path, branch)) => path.child(*branch, clause),
+            None => valuation::Occurrence::new(clause),
+        };
+        if let BodyItem::Block(block) = clauses[clause].item {
+            let facts = block.analyze(&written_contexts[clause]);
+            let context = if facts.rust {
+                written_contexts[clause].clone()
+            } else {
+                facts.free.keys().cloned().collect()
+            };
+            let mut branches = Vec::new();
+            for (j, branch) in block.branches.iter().enumerate() {
+                let mut branch_source = source.clone();
+                branch_source.query.body = branch.body.clone();
+                branches.push(valuation::blocks::Branch {
+                    brace: branch.brace,
+                    steps: compile_body(
+                        &branch_source,
+                        options,
+                        &context,
+                        Some((atom.clause.clone(), j)),
+                    )?,
+                });
+            }
+            result.push(valuation::Step::Block(
+                valuation::blocks::Block {
+                    source: atom,
+                    kind: block.kind,
+                    branches,
+                },
+                semi,
+            ));
+        } else {
+            result.push(valuation::Step::Atom(atom, semi));
+        }
+    }
+    Ok(result)
 }
 
 /// Check normal form, unchanged CQ, split granularity and explicit order.
@@ -571,33 +704,46 @@ pub fn check(
             ),
         ));
     }
+    check_steps(
+        &source.query.body,
+        &target.valuation.steps,
+        &analysis,
+        options,
+    )
+}
+
+fn check_steps(
+    body: &cq::CommaList<BodyItem>,
+    steps: &[valuation::Step],
+    analysis: &valuation::Analysis,
+    options: &Options,
+) -> syn::Result<()> {
     if options.heuristic == Heuristic::Written {
         let mut written = Vec::new();
         let mut previous_atom = None;
-        for step in &target.valuation.steps {
+        for step in steps {
             match step {
-                valuation::Step::Atom(atom, _) => {
+                valuation::Step::Atom(atom, _)
+                | valuation::Step::Block(valuation::blocks::Block { source: atom, .. }, _) => {
                     if previous_atom != Some(atom.clause()) {
                         written.push(atom.clause());
                     }
                     previous_atom = Some(atom.clause());
                 }
                 valuation::Step::Equality(equality, _) => {
-                    let position = source.query.body.iter().enumerate().find(|(i,item)| !written.contains(i) && matches!(item, BodyItem::Equality(expected) if expected == equality)).map(|(i,_)| i).expect("VO equality correspondence");
+                    let position = body.iter().enumerate().find(|(i,item)| !written.contains(i) && matches!(item, BodyItem::Equality(expected) if expected == equality)).map(|(i,_)| i).expect("VO equality correspondence");
                     written.push(position);
                     previous_atom = None;
                 }
                 valuation::Step::Constraint(constraint, _) => {
-                    let position = source.query.body.iter().enumerate().find(|(i, item)|
+                    let position = body.iter().enumerate().find(|(i, item)|
                         !written.contains(i) && matches!(item, BodyItem::Constraint(expected) if expected == constraint)
                     ).map(|(i, _)| i).expect("VO constraint correspondence");
                     written.push(position);
                     previous_atom = None;
                 }
                 valuation::Step::Guard(filter, _) => {
-                    let position = source
-                        .query
-                        .body
+                    let position = body
                         .iter()
                         .enumerate()
                         .find(|(i, item)| {
@@ -610,9 +756,7 @@ pub fn check(
                     previous_atom = None;
                 }
                 valuation::Step::Let(binding, _) => {
-                    let position = source
-                        .query
-                        .body
+                    let position = body
                         .iter()
                         .enumerate()
                         .find(|(i, item)| {
@@ -627,22 +771,22 @@ pub fn check(
                 valuation::Step::Reduce(..) => {}
             }
         }
-        if written != (0..source.query.body.len()).collect::<Vec<_>>() {
+        if written != (0..body.len()).collect::<Vec<_>>() {
             let position = written
                 .iter()
                 .enumerate()
                 .find(|(i, clause)| **clause != *i)
                 .map(|(_, clause)| *clause)
-                .unwrap_or(source.query.body.len());
+                .unwrap_or(body.len());
             return Err(syn::Error::new_spanned(
-                &target.valuation,
+                &quote::quote!(#(#steps)*),
                 format!("clause #{position}: Written requires every clause in normal-body order"),
             ));
         }
     }
     let mut seen = BTreeSet::new();
     let mut previous = None;
-    for (step, introduced) in target.valuation.steps.iter().zip(&analysis.introduces) {
+    for (step, introduced) in steps.iter().zip(&analysis.introduces) {
         match step {
             valuation::Step::Reduce(r, _) => {
                 return Err(syn::Error::new_spanned(
@@ -654,7 +798,21 @@ pub fn check(
                     ),
                 ));
             }
-            valuation::Step::Atom(a, _) => {
+            valuation::Step::Atom(a, _)
+            | valuation::Step::Block(valuation::blocks::Block { source: a, .. }, _) => {
+                if let valuation::Step::Block(block, _) = step {
+                    let BodyItem::Block(written) = &body[a.clause()] else {
+                        unreachable!("VO source block");
+                    };
+                    for (j, arm) in block.branches.iter().enumerate() {
+                        check_steps(
+                            &written.branches[j].body,
+                            &arm.steps,
+                            &analysis.branches[&a.clause()][j],
+                            options,
+                        )?;
+                    }
+                }
                 let clause = a.clause();
                 let first = seen.insert(clause);
                 let fail = |message: &str| {

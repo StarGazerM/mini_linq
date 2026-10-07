@@ -11,6 +11,18 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! Lowering records union canonicalization/witness/fusion and eager anti membership.
+//! Proven disjoint arms omit cross-arm canon; a separate final canon boundary can still remove duplicate witnesses within an arm.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_ix as ix;
@@ -43,8 +55,10 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
         .collect();
     let returned = source.ra.plan.output.input.clone();
     let (operators, reads) = operators(source, &info, &operations)?;
-    let modes = modes(&operations, &operators, &reads);
-    let unique = canonical(&info, &operations, &returned);
+    let mut modes = modes(&operations, &operators, &reads);
+    fuse_modes(&operations, &operators, &reads, &mut modes);
+    let disjoint = ix::ra::disjoint_unions(&source.ra)?;
+    let unique = canonical(&info, &operations, &returned, &disjoint);
     let definitions = operations
         .iter()
         .zip(modes)
@@ -59,7 +73,8 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
             } else {
                 mode
             },
-            canon: (!unique.contains(&symbol_name(name)) && name == &returned)
+            canon: ((!unique.contains(&symbol_name(name)) && name == &returned && !disjoint.contains(&symbol_name(name)))
+                || matches!(_op, Op::Union(union) if !disjoint.contains(&symbol_name(name)) && union.origin.as_ref().is_none_or(|o| !o.interface.is_empty())))
                 .then(Default::default),
             operator,
             semi_token: Default::default(),
@@ -72,6 +87,9 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
             declarations: source.ra.plan.declarations.clone(),
             definitions,
             return_token: Default::default(),
+            return_canon: (!unique.contains(&symbol_name(&returned))
+                && disjoint.contains(&symbol_name(&returned)))
+            .then(Default::default),
             returned,
             as_token: Default::default(),
             head: source.ra.plan.output.head.clone(),
@@ -95,6 +113,43 @@ fn operators(
     let mut operators = Vec::new();
     for (_, op) in operations {
         let operator = match op {
+            Op::Union(union) => {
+                for operand in &union.operands {
+                    scan(&mut reads, operand);
+                }
+                physical::Operator::Union(Box::new(physical::Union {
+                    union_token: union.union_token,
+                    witness: union
+                        .origin
+                        .as_ref()
+                        .filter(|o| o.interface.is_empty())
+                        .map(|_| physical::Witness::Any(Default::default())),
+                    fused: union
+                        .origin
+                        .as_ref()
+                        .and_then(|o| o.over.as_ref())
+                        .map(|_| Default::default()),
+                    operands: union.operands.clone(),
+                    origin: union.origin.clone(),
+                }))
+            }
+            Op::Anti(anti) => {
+                scan(&mut reads, &anti.left);
+                let columns = anti.columns.iter().map(symbol_name).collect();
+                probe(&mut reads, &anti.right, columns);
+                physical::Operator::Anti(
+                    Default::default(),
+                    physical::Keyed {
+                        choice: Some(physical::Choice::Eager(Default::default())),
+                        bracket: anti.bracket,
+                        columns: anti.columns.clone(),
+                        left: anti.left.clone(),
+                        comma: anti.comma,
+                        right: anti.right.clone(),
+                    },
+                )
+            }
+
             Op::Unit(u) => physical::Operator::Unit(u.clone()),
             Op::Rename(r) => physical::Operator::Rename(r.clone()),
             Op::NaturalJoin(_) | Op::Semijoin(_) => {
@@ -194,10 +249,71 @@ fn modes(
         .collect()
 }
 
+fn operands(operator: &physical::Operator) -> Vec<String> {
+    let mut result = Vec::new();
+    if let Some(input) = operator.input() {
+        result.push(symbol_name(input));
+    }
+    if let physical::Operator::Probe(_, k)
+    | physical::Operator::Merge(_, k)
+    | physical::Operator::Semi(_, k)
+    | physical::Operator::Anti(_, k) = operator
+    {
+        result.push(symbol_name(&k.right));
+    }
+    if let physical::Operator::Union(union) = operator {
+        result.extend(union.operands.iter().map(symbol_name));
+    }
+    result
+}
+fn fuse_modes(
+    operations: &[(Ident, Op)],
+    operators: &[physical::Operator],
+    reads: &BTreeMap<String, Reads>,
+    modes: &mut [physical::Mode],
+) {
+    for (position, operator) in operators.iter().enumerate() {
+        let physical::Operator::Union(union) = operator else {
+            continue;
+        };
+        if union.fused.is_none() {
+            continue;
+        }
+        let prefix = symbol_name(
+            &union
+                .origin
+                .as_ref()
+                .expect("fused origin")
+                .over
+                .as_ref()
+                .expect("fused prefix")
+                .prefix,
+        );
+        let mut members = BTreeSet::from([prefix.clone()]);
+        for (i, op) in operators.iter().take(position).enumerate() {
+            if operands(op).iter().any(|operand| members.contains(operand)) {
+                members.insert(symbol_name(&operations[i].0));
+            }
+        }
+        let all_local = operators.iter().enumerate().all(|(i, op)| {
+            !operands(op).contains(&prefix) || members.contains(&symbol_name(&operations[i].0))
+        });
+        if all_local && reads[&prefix].keyed.is_empty() && reads[&prefix].merged.is_empty() {
+            if let Some(i) = operations
+                .iter()
+                .position(|(id, _)| symbol_name(id) == prefix)
+            {
+                modes[i] = physical::Mode::Pipe(Default::default());
+            }
+        }
+    }
+}
+
 fn canonical(
     info: &ix::ra::Analysis,
     operations: &[(Ident, Op)],
     returned: &Ident,
+    disjoint: &BTreeSet<String>,
 ) -> BTreeSet<String> {
     let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut inherited = BTreeSet::new();
@@ -205,6 +321,19 @@ fn canonical(
         let name = symbol_name(name);
         let heading: Vec<_> = info[&name].heading.iter().cloned().collect();
         let key = match op {
+            Op::Union(union) => {
+                if !disjoint.contains(&name)
+                    && union
+                        .origin
+                        .as_ref()
+                        .is_none_or(|o| !o.interface.is_empty())
+                {
+                    Some(heading.clone())
+                } else {
+                    None
+                }
+            }
+            Op::Anti(anti) => unique.get(&symbol_name(&anti.left)).cloned(),
             Op::Unit(_) => Some(Vec::new()),
             Op::Rename(_) => None,
             Op::NaturalJoin(j) => match (
@@ -273,6 +402,15 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
                     eq_token: d.eq_token,
                     semi_token: d.semi_token,
                     operator: match &d.operator {
+                        physical::Operator::Union(union) => Op::Union(Box::new(union.logical())),
+                        physical::Operator::Anti(_, k) => Op::Anti(Box::new(ra::Anti {
+                            anti_token: Default::default(),
+                            bracket: k.bracket,
+                            columns: k.columns.clone(),
+                            left: k.left.clone(),
+                            comma: k.comma,
+                            right: k.right.clone(),
+                        })),
                         physical::Operator::Unit(u) => Op::Unit(u.clone()),
                         physical::Operator::Rename(r) => Op::Rename(r.clone()),
                         physical::Operator::Select(s)

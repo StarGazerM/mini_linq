@@ -5,39 +5,6 @@ use std::collections::BTreeSet;
 use cq_testkit::{Rows, harness::check_refinement};
 
 #[test]
-fn union_matches_authored_sets_with_duplicates_and_empty_disjuncts() {
-    for (A, B, expected) in [
-        (
-            vec![(1,), (1,), (2,)],
-            vec![(2,), (3,)],
-            vec![vec![1], vec![2], vec![3]],
-        ),
-        (vec![], vec![(4,), (4,)], vec![vec![4]]),
-        (vec![], vec![], vec![]),
-    ] {
-        let expected: Rows = expected.into_iter().collect();
-        let result = check_refinement(
-            || A.iter().chain(&B).map(|&(x,)| vec![x]).collect::<Rows>(),
-            || {
-                mini_linq::compile! {
-                    pipeline { surface = [cq_ext_union::union]; }
-                    union! { struct U; relation A(x:i32); relation B(x:i32);
-                        answer(x) :- A(x); answer(x) :- B(x);
-                    }
-                }
-                .map(|(x,)| vec![*x])
-                .collect::<Rows>()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            result.target,
-            cq_testkit::harness::Outcome::Returned(expected)
-        );
-    }
-}
-
-#[test]
 fn anti_membership_matches_an_independent_projection_oracle() {
     let A = [(1,), (2,), (2,), (3,)];
     let S = [(2, 20), (2, 21), (9, 90)];
@@ -251,10 +218,9 @@ fn stacked_union_then_negation_from_separate_crates_matches_authored_answers() {
     let result = check_refinement(
         || A.iter().chain(&B).filter(|(x,)| !S.contains(&(*x,))).map(|&(x,)| vec![x]).collect::<Rows>(),
         || mini_linq::compile! {
-            pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_union::union, cq_ext_recursion::recursion, cq_ext_negation::negation, cq_ext_correlated::correlated]; }
-            union! { struct Stack; relation A(x:i32); relation B(x:i32); relation S(x:i32);
-                answer(x) :- A(x), neg!{S(x)}; answer(x) :- B(x), neg!{S(x)};
-            }
+            pipeline { surface = [cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_negation::negation, cq_ext_correlated::correlated]; }
+            struct Stack; relation A(x:i32); relation B(x:i32); relation S(x:i32);
+                answer(x) :- { A(x) } | { B(x) }, neg!{S(x)};
         }.map(|(x,)| vec![*x]).collect::<Rows>(),
     ).unwrap();
     assert_eq!(
@@ -277,10 +243,9 @@ fn partial_rust_preserves_written_order_refinement_in_surface_queries() {
         },
         || {
             mini_linq::compile! {
-                pipeline { surface = [cq_ext_union::union]; }
-                union! { struct Partial; relation A(x:i32);
+                pipeline {}
+                struct Partial; relation A(x:i32);
                     answer(x) :- A(x), if *x > 0, if positive(x);
-                }
             }
             .map(|(x,)| vec![*x])
             .collect::<Rows>()

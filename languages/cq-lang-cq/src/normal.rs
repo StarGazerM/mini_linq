@@ -18,7 +18,7 @@ use syn::Ident;
 /// Formal rule WF-NF: Check CQ, distinct bare atom arguments and variable-only output.
 pub fn check(module: &Program) -> syn::Result<()> {
     super::contract::check(module)?;
-    for item in &module.query.body {
+    for item in super::blocks::walk(&module.query.body) {
         match item {
             BodyItem::Positive { atom } if atom.is_normalized() => {}
             BodyItem::Positive { atom } => {
@@ -32,7 +32,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
             }
             BodyItem::Equality(equality) => equality.check()?,
             BodyItem::Constraint(constraint) => constraint.check()?,
-            BodyItem::Filter(_) | BodyItem::Let(_) => {}
+            BodyItem::Filter(_) | BodyItem::Let(_) | BodyItem::Block(_) => {}
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
@@ -53,18 +53,8 @@ pub fn check(module: &Program) -> syn::Result<()> {
             "normal form: output arguments are variables",
         ));
     }
-    let bound: BTreeSet<_> = module
-        .query
-        .body
-        .iter()
-        .flat_map(|item| match item {
-            BodyItem::Positive { atom } => atom.variables().map(symbol_name).collect::<Vec<_>>(),
-            BodyItem::Let(binding) => rust::bindings(&binding.pattern)
-                .iter()
-                .map(symbol_name)
-                .collect(),
-            _ => Vec::new(),
-        })
+    let bound: BTreeSet<_> = super::blocks::bound(&module.query.body)
+        .into_keys()
         .collect();
     if let Some(variable) = module
         .query
@@ -91,10 +81,47 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
     let declarations: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
     let mut names = reserved(module);
-    let mut body = Vec::new();
     let mut bound = BTreeSet::new();
-    for (clause, item) in module.query.body.iter().enumerate() {
+    let mut body = normalize_body(&module.query.body, &declarations, &mut names, &mut bound)?;
+    let mut normal = module.clone();
+    for (position, argument) in normal.query.head.args.iter_mut().enumerate() {
+        if rust::variable(argument).is_some_and(|variable| bound.contains(&symbol_name(variable))) {
+            continue;
+        }
+        let key = fresh(&mut names, module.query.body.len(), position);
+        let column = &module
+            .output()
+            .expect("computed output types checked")
+            .columns[position];
+        body.push(binding(&key, &column.ty, argument.clone()));
+        *argument = path(&key);
+    }
+    normal.query.body = body.into_iter().collect();
+    check(&normal)?;
+    Ok(normal)
+}
+
+fn normalize_body(
+    source: &super::CommaList<BodyItem>,
+    declarations: &BTreeMap<String, &super::RelationDecl>,
+    names: &mut BTreeSet<String>,
+    bound: &mut BTreeSet<String>,
+) -> syn::Result<Vec<BodyItem>> {
+    let mut body = Vec::new();
+    for (clause, item) in source.iter().enumerate() {
         match item {
+            BodyItem::Block(block) => {
+                let mut block = block.clone();
+                for branch in &mut block.branches {
+                    let mut local = bound.clone();
+                    branch.body = normalize_body(&branch.body, declarations, names, &mut local)?
+                        .into_iter()
+                        .collect();
+                }
+                bound.extend(block.analyze(bound).interface.into_keys());
+                body.push(BodyItem::Block(block));
+            }
+
             BodyItem::Positive { atom } => {
                 let mut atom_seen = BTreeSet::new();
                 let declaration = declarations[&symbol_name(&atom.relation)];
@@ -112,7 +139,7 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
                         if atom_seen.insert(symbol_name(variable)) {
                             args.push(argument.clone());
                         } else {
-                            let key = fresh(&mut names, clause, position);
+                            let key = fresh(names, clause, position);
                             after.push(equality(
                                 variable.clone(),
                                 EqualityValue::Variable(key.clone()),
@@ -121,7 +148,7 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
                         }
                         continue;
                     }
-                    let key = fresh(&mut names, clause, position);
+                    let key = fresh(names, clause, position);
                     if matches!(argument, syn::Expr::Infer(_)) {
                         // A wildcard binds an unconstrained, unused witness.
                     } else if super::syntax::equality::literal(argument) {
@@ -135,7 +162,7 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
                     {
                         body.push(binding(&key, &column.ty, argument.clone()));
                     } else {
-                        let value = fresh(&mut names, clause, position);
+                        let value = fresh(names, clause, position);
                         after.push(binding(&value, &column.ty, argument.clone()));
                         after.push(equality(key.clone(), EqualityValue::Variable(value)));
                     }
@@ -167,22 +194,7 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
             }
         }
     }
-    let mut normal = module.clone();
-    for (position, argument) in normal.query.head.args.iter_mut().enumerate() {
-        if rust::variable(argument).is_some_and(|variable| bound.contains(&symbol_name(variable))) {
-            continue;
-        }
-        let key = fresh(&mut names, module.query.body.len(), position);
-        let column = &module
-            .output()
-            .expect("computed output types checked")
-            .columns[position];
-        body.push(binding(&key, &column.ty, argument.clone()));
-        *argument = path(&key);
-    }
-    normal.query.body = body.into_iter().collect();
-    check(&normal)?;
-    Ok(normal)
+    Ok(body)
 }
 
 fn equality(left: Ident, right: EqualityValue) -> BodyItem {
@@ -221,7 +233,7 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
     let mut columns: BTreeMap<String, Vec<(&syn::Type, String)>> = BTreeMap::new();
     let mut required = BTreeSet::new();
     let mut let_bound = BTreeSet::new();
-    for item in &module.query.body {
+    for item in super::blocks::walk(&module.query.body) {
         match item {
             BodyItem::Positive { atom } => {
                 for (variable, column) in atom
@@ -257,7 +269,7 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
         .flatten()
         .map(symbol_name)
         .collect();
-    for item in &module.query.body {
+    for item in super::blocks::walk(&module.query.body) {
         if let BodyItem::Let(binding) = item {
             for (name, ty) in binding.binding_types() {
                 if ordered.contains(&symbol_name(&name)) {
@@ -271,7 +283,7 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
             super::syntax::algebra::check_leibniz_type(&column.ty, &column.name)?;
         }
     }
-    for item in &module.query.body {
+    for item in super::blocks::walk(&module.query.body) {
         if let BodyItem::Let(binding) = item {
             for (name, ty) in binding.binding_types() {
                 if module
@@ -300,7 +312,7 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
             }
         }
     }
-    for item in &module.query.body {
+    for item in super::blocks::walk(&module.query.body) {
         if let BodyItem::Constraint(c) = item {
             for variable in c.ordered_variables() {
                 if let Some(entries) = columns.get(&symbol_name(variable)) {
@@ -338,7 +350,7 @@ fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident 
     while !names.insert(name.clone()) {
         name.push('_');
     }
-    format_ident!("{name}", span = Span::call_site())
+    format_ident!("{name}", span = Span::mixed_site())
 }
 
 /// Structural query content compared by elaboration after RA erasure.
@@ -349,6 +361,7 @@ fn fresh(names: &mut BTreeSet<String>, clause: usize, argument: usize) -> Ident 
 /// capture host names or change fields and local binders.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Kernel {
+    pub blocks: Vec<(super::blocks::Kind, Vec<Kernel>)>,
     /// `(relation, variables)` per positive atom, in body order.
     pub atoms: Vec<(String, Vec<String>)>,
     /// Guard conditions, in body order.
@@ -381,7 +394,8 @@ impl Kernel {
         let mut source_equalities = source.equalities.clone();
         equalities.sort();
         source_equalities.sort();
-        atoms == source_atoms
+        self.blocks == source.blocks
+            && atoms == source_atoms
             && equalities == source_equalities
             && self.head == source.head
             && self.chain == source.chain
@@ -405,6 +419,7 @@ impl Kernel {
             }
         }
         let mut kernel = Kernel {
+            blocks: Vec::new(),
             atoms: Vec::new(),
             guards: Vec::new(),
             lets: Vec::new(),
@@ -416,6 +431,40 @@ impl Kernel {
         let mut relational = BTreeSet::new();
         for item in &query.body {
             match item {
+                BodyItem::Block(block) => {
+                    let branches = block
+                        .branches
+                        .iter()
+                        .map(|branch| {
+                            let mut subquery = query.clone();
+                            subquery.body = branch.body.clone();
+                            Kernel::of_query(&subquery)
+                        })
+                        .collect();
+                    let mut branches: Vec<Kernel> = branches;
+                    fn inherit(kernel: &mut Kernel, prefix: &BTreeSet<String>) {
+                        for before in &mut kernel.before {
+                            before.extend(prefix.iter().cloned());
+                        }
+                        for (_, branches) in &mut kernel.blocks {
+                            for arm in branches {
+                                inherit(arm, prefix);
+                            }
+                        }
+                    }
+                    for arm in &mut branches {
+                        inherit(arm, &relational);
+                    }
+                    let rust = block.analyze(&BTreeSet::new()).rust;
+                    if rust {
+                        kernel
+                            .chain
+                            .push(format!("rust block {}", block.to_token_stream()));
+                        kernel.before.push(relational.clone());
+                    }
+                    kernel.blocks.push((block.kind, branches));
+                    relational.insert(format!("block {}", block.to_token_stream()));
+                }
                 BodyItem::Positive { atom } => {
                     kernel.atoms.push((
                         symbol_name(&atom.relation),

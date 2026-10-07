@@ -34,7 +34,6 @@ cq-planners.workspace = true
 cq-rewrites.workspace = true
 cq-workload-passes.workspace = true
 own-push.workspace = true
-cq-ext-union.workspace = true
 cq-ext-negation.workspace = true
 cq-ext-aggregate.workspace = true
 cq-ext-recursion.workspace = true

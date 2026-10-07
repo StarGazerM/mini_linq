@@ -1,5 +1,8 @@
 //! Inspect parsed Rust syntax, including clauses requiring external expansion.
 //! Parsing alone does not make negation or aggregation executable core CQ.
+//! Nested union/fallback blocks preserve interfaces, locals and occurrence paths.
+//! Inspection walks all arms; execution chooses Set union or ordered first
+//! nonempty fallback, with prefix Before facts inherited by each Rust arm.
 #![recursion_limit = "512"]
 
 use cq_lang_cq as cq;
@@ -29,14 +32,22 @@ fn source() -> cq::Program {
     }
 }
 
-fn main() {
-    let source = source();
-    for clause in &source.query.body {
+fn inspect(body: &cq::CommaList<BodyItem>, mut bound: std::collections::BTreeSet<String>) {
+    for clause in body {
         match clause {
+            BodyItem::Block(block) => {
+                let facts = block.analyze(&bound);
+                println!("block {:?}: {:?}", block.kind, facts);
+                for branch in &block.branches {
+                    inspect(&branch.body, bound.clone());
+                }
+                bound.extend(facts.interface.into_keys());
+            }
             BodyItem::Positive { atom } => {
                 for expression in &atom.args {
                     report("atom", expression);
                 }
+                bound.extend(atom.variables().map(cq::symbol_name));
             }
             BodyItem::Constraint(c) => {
                 println!(
@@ -53,6 +64,11 @@ fn main() {
             BodyItem::Let(binding) => {
                 report("let initializer", &binding.expression);
                 println!("let outputs: {:?}", cq::rust::bindings(&binding.pattern));
+                bound.extend(
+                    cq::rust::bindings(&binding.pattern)
+                        .iter()
+                        .map(cq::symbol_name),
+                );
             }
             BodyItem::Negation(negation) => {
                 for expression in &negation.atom.args {
@@ -74,6 +90,10 @@ fn main() {
             }
         }
     }
+}
+
+fn main() {
+    inspect(&source().query.body, Default::default());
 }
 
 #[cfg(test)]

@@ -46,7 +46,6 @@ cq-planners	manifest-target-test	elimination_cost	features/planners/Cargo.toml
 cq-planners-test-driver	manifest-target-test	refinement	features/planners/Cargo.toml
 cq-rewrites	manifest-test	rewrites	features/rewrites/Cargo.toml
 cq-ext-support	manifest-test	interfaces	features/extensions/cq-ext-support/Cargo.toml
-cq-ext-union	manifest-test	correspondence	features/extensions/cq-ext-union/Cargo.toml
 cq-ext-negation	manifest-test	correspondence	features/extensions/cq-ext-negation/Cargo.toml
 cq-ext-aggregate	manifest-test	correspondence	features/extensions/cq-ext-aggregate/Cargo.toml
 cq-ext-recursion	manifest-test	correspondence	features/extensions/cq-ext-recursion/Cargo.toml

@@ -448,6 +448,8 @@ fn format_relational_block(plan: &ra::Plan) -> String {
 
 fn format_relational_operator(operator: &ra::Operator) -> String {
     match operator {
+        ra::Operator::Union(operator) => compact_tokens(operator),
+        ra::Operator::Anti(operator) => compact_tokens(operator),
         ra::Operator::Unit(_) => "unit".to_owned(),
         ra::Operator::Semijoin(operator) => {
             format!("semijoin {} with {}", operator.left, operator.right)
@@ -466,7 +468,10 @@ fn format_relational_operator(operator: &ra::Operator) -> String {
                 .map(|mapping| format!("{} -> {}", mapping.source, mapping.target))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("rename {}@{} {{{mapping}}}", operator.relation, operator.occurrence)
+            format!(
+                "rename {}@{} {{{mapping}}}",
+                operator.relation, operator.occurrence
+            )
         }
         ra::Operator::NaturalJoin(operator) => {
             format!("natural_join {} with {}", operator.left, operator.right)

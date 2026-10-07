@@ -138,6 +138,12 @@
 //! substitutes packaged public crates and builds/tests a copy outside the checkout.
 //! Its package inventory must include `cq-testkit`, including the embedded corpus.
 
+//! Core blocks preserve union and ordered fallback through this consumer.
+//! Their laws are join distribution over union and `B1 else B2 = B1 union
+//! (B2 anti_F B1)`. Common interface bindings escape; locals do not. The complete
+//! IR retains union/anti, nested occurrence paths and branch Before ancestry.
+//! Rust-free blocks hoist; Rust arms run from one prefix row with ordered else.
+//!
 pub use cq_lang_trace as trace;
 pub use physical_to_trace;
 pub use trace_bridge::{enter, leave, round_trip};

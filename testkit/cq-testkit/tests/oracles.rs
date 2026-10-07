@@ -55,3 +55,35 @@ fn binary_database_has_deterministic_empty_full_and_sampled_seeds() {
         );
     }
 }
+
+#[test]
+fn authored_block_programs_check_at_every_stage_and_match_all_oracles() {
+    for scenario in cq_testkit::blocks::SCENARIOS {
+        let cq = scenario.parse_cq().unwrap();
+        cq_testkit::cq::contract::check(&cq).unwrap();
+        let vo = scenario.parse_vo().unwrap();
+        cq_testkit::vo::contract::check(&vo).unwrap();
+        let ra = scenario.parse_ra().unwrap();
+        cq_testkit::ra::contract::check(&ra).unwrap();
+        let ix = scenario.parse_ix().unwrap();
+        cq_testkit::ix::contract::check(&ix).unwrap();
+        let physical = scenario.parse_physical().unwrap();
+        cq_testkit::physical::contract::check(&physical).unwrap();
+        let structures = scenario.parse_structures().unwrap();
+        cq_testkit::structures::contract::check(&structures).unwrap();
+        let case = scenario.case().unwrap();
+        let database = case.database();
+        assert_eq!(
+            cq_testkit::cq_semantics::evaluate_cq(&cq, &database),
+            case.expected_rows()
+        );
+        assert_eq!(
+            cq_testkit::valuation_semantics::evaluate(&vo, &database),
+            case.expected_rows()
+        );
+        assert_eq!(
+            cq_testkit::semantics::evaluate_ra(&ra, &database).output,
+            case.expected_rows()
+        );
+    }
+}

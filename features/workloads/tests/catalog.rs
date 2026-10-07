@@ -381,13 +381,15 @@ fn authored_sql_files_are_exactly_the_catalog() {
 fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
     use cq_workloads::tpch;
 
-    assert_eq!(tpch::CASES.len(), 12);
+    assert_eq!(tpch::CASES.len(), 13);
     let retail = tpch::CASES
         .iter()
         .filter(|case| case.tpch_query.is_none())
         .map(|case| case.name)
         .collect::<BTreeSet<_>>();
-    assert_eq!(retail, RETAIL.iter().map(|case| case.name).collect());
+    let mut expected_retail = RETAIL.iter().map(|case| case.name).collect::<BTreeSet<_>>();
+    expected_retail.insert("retail_h07_block");
+    assert_eq!(retail, expected_retail);
     let mut names = BTreeSet::new();
     for case in tpch::CASES {
         assert!(names.insert(case.name), "duplicate benchmark {}", case.name);

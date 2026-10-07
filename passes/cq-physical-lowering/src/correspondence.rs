@@ -32,6 +32,8 @@ pub fn check(source: &ix::Program, target: &physical::Program) -> syn::Result<()
         let name = symbol_name(&definition.name);
         let heading: BTreeSet<String> = facts.headings[&name].iter().cloned().collect();
         let inherited = match &definition.operator {
+            Operator::Union(_) => None,
+            Operator::Anti(_, k) => keys.get(&symbol_name(&k.left)).cloned(),
             Operator::Unit(_) => Some(BTreeSet::new()),
             Operator::Rename(_) => None,
             Operator::Probe(_, k) | Operator::Merge(_, k) => keys
@@ -55,7 +57,7 @@ pub fn check(source: &ix::Program, target: &physical::Program) -> syn::Result<()
         }
     }
     let returned = symbol_name(&target.program.returned);
-    if !keys.contains_key(&returned) {
+    if !keys.contains_key(&returned) && target.program.return_canon.is_none() {
         return Err(syn::Error::new_spanned(
             &target.program.returned,
             format!("return `{returned}`: not canonical by flag or plan key inference"),

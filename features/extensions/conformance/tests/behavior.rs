@@ -3,47 +3,6 @@
 use std::{cell::Cell, collections::BTreeSet};
 
 #[test]
-fn union_is_lazy_across_disjuncts_and_retains_borrowed_non_copy_columns() {
-    let A = [(String::from("a"),)];
-    let B = [(String::from("b"),)];
-    let first = Cell::new(0);
-    let second = Cell::new(0);
-    let visit_first = |_: &String| {
-        first.set(first.get() + 1);
-        true
-    };
-    let visit_second = |_: &String| {
-        second.set(second.get() + 1);
-        true
-    };
-    let mut result = mini_linq::compile! { pipeline { surface = [cq_ext_union::union]; } union! {
-       struct Lazy; relation A(x:String); relation B(x:String);
-       answer(x) :- A(x), if visit_first(x); answer(x) :- B(x), if visit_second(x);
-    } };
-    assert_eq!((first.get(), second.get()), (0, 0));
-    let (value,) = result.next().unwrap();
-    assert!(std::ptr::eq(value, &A[0].0));
-    assert_eq!((first.get(), second.get()), (1, 0));
-    assert_eq!(result.count(), 1);
-    assert_eq!(second.get(), 1);
-}
-
-#[test]
-fn union_leaf_expressions_run_once_for_all_disjuncts() {
-    let calls = Cell::new(0);
-    let result: BTreeSet<_> =
-        mini_linq::compile! { pipeline { surface = [cq_ext_union::union]; } union! {
-           struct Leaves;
-           relation A(x:i32) = ({calls.set(calls.get()+1); [(1,),(2,),(2,)]});
-           relation answer(x:i32);
-           answer(*x) :- A(x); answer(*x) :- A(x), if *x > 1;
-        } }
-        .collect();
-    assert_eq!(result, [(1,), (2,)].into());
-    assert_eq!(calls.get(), 1);
-}
-
-#[test]
 fn negative_projection_handles_global_absence_repeated_keys_and_empty_inner() {
     let A = [(1,), (2,)];
     let S = [(1, 1), (2, 3)];

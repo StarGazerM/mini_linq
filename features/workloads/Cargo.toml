@@ -43,7 +43,6 @@ cq-workload-passes = { path = "pipeline-passes" }
 cq-rewrite-passes = { path = "../rewrites/passes" }
 own-push = { path = "../own-dialect/printer" }
 cq-ext-support = { path = "../extensions/cq-ext-support" }
-cq-ext-union = { path = "../extensions/cq-ext-union" }
 cq-ext-negation = { path = "../extensions/cq-ext-negation" }
 cq-ext-aggregate = { path = "../extensions/cq-ext-aggregate" }
 cq-ext-recursion = { path = "../extensions/cq-ext-recursion" }

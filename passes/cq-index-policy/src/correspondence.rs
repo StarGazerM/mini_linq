@@ -58,6 +58,16 @@ pub fn check(source: &ra::Program, target: &ix::Program) -> syn::Result<()> {
                 (&j.right, columns, ix::SupplyKind::Stream)
             }
             // IX-Const: column equalities and membership supply constant keys.
+            ra::Operator::Anti(anti) => {
+                let key: BTreeSet<_> = anti.columns.iter().map(symbol_name).collect();
+                let columns = info[&symbol_name(&anti.right)]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| key.contains(c).then_some(i))
+                    .collect::<Vec<_>>();
+                (&anti.right, columns, ix::SupplyKind::Stream)
+            }
             ra::Operator::Select(selection) => {
                 let (keys, supply) = if let Some(keys) = selection.condition.point_columns() {
                     (keys, ix::SupplyKind::Const)

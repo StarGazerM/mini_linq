@@ -25,9 +25,26 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! CQ grammar: Block ::= { Body } ( | { Body } )+ | { Body } ( else { Body } )+.
+//! Branches are nonempty; mixed operators require nesting.
+//! Interface declared types agree; inferred let types are checked by rustc.
+//! Multi-rule heads desugar to a union with a head-only interface.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 pub use cq_syntax::predicate::{Comparison, Predicate, Term};
+pub mod blocks;
 pub mod hypergraph;
 pub mod normal;
+pub use blocks::{Block, Branch};
+mod sugar;
 pub use cq_syntax::Constraint;
 pub use cq_syntax::rust;
 pub use cq_syntax::{Equality, EqualityValue};
@@ -45,16 +62,29 @@ pub use cq_syntax::{CommaList, kw, symbol_name};
 ///             RelationDecl*
 ///             Query
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Program {
     pub visibility: Visibility,
     pub struct_token: Token![struct],
     pub name: Ident,
     pub declaration_semi: Token![;],
-    #[parse(parse_declarations)]
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<RelationDecl>,
     pub query: Query,
+}
+
+impl syn::parse::Parse for Program {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let mut program = Self::parse_single(input)?;
+        let mut queries = vec![program.query.clone()];
+        while input.peek(Ident) && input.peek2(token::Paren) {
+            queries.push(input.parse()?);
+        }
+        if queries.len() > 1 {
+            sugar::combine(&mut program, queries)?;
+        }
+        Ok(program)
+    }
 }
 
 fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<RelationDecl>> {
@@ -66,6 +96,18 @@ fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Rel
 }
 
 impl Program {
+    /// Surface extensions owning recursive rule syntax parse one rule before
+    /// their own expansion; contracted core parsing combines multiple heads.
+    pub fn parse_single(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        Ok(Self {
+            visibility: input.parse()?,
+            struct_token: input.parse()?,
+            name: input.parse()?,
+            declaration_semi: input.parse()?,
+            declarations: parse_declarations(input)?,
+            query: input.parse()?,
+        })
+    }
     /// Input schemas in declaration order. Classifying the head is analysis,
     /// so parsing and token emission preserve every declaration where written.
     pub fn inputs(&self) -> impl Iterator<Item = &RelationDecl> + Clone {
@@ -111,41 +153,8 @@ impl syn::parse::Parse for Query {
         // Scope is determined by binders, never by identifiers in predicates.
         // A later query binder is still a query variable and must pass the
         // written-scope check; an enclosing value is a captured parameter.
-        let logical = query
-            .body
-            .iter()
-            .flat_map(|item| match item {
-                BodyItem::Positive { atom } => atom.variables().cloned().collect(),
-                BodyItem::Let(binding) => rust::bindings(&binding.pattern),
-                _ => Vec::new(),
-            })
-            .map(|v| symbol_name(&v))
-            .collect();
-        query.body = query
-            .body
-            .into_iter()
-            .flat_map(|item| {
-                let BodyItem::Filter(filter) = item else {
-                    return vec![item];
-                };
-                let split = cq_syntax::guard::split(&filter.condition, &logical);
-                let mut items: Vec<_> = split
-                    .constraints
-                    .into_iter()
-                    .map(|c| match c.equality() {
-                        Some(e) => BodyItem::Equality(e),
-                        None => BodyItem::Constraint(c),
-                    })
-                    .collect();
-                if let Some(condition) = split.residual {
-                    items.push(BodyItem::Filter(Filter {
-                        condition,
-                        ..filter
-                    }));
-                }
-                items
-            })
-            .collect();
+        let logical = blocks::bound(&query.body).into_keys().collect();
+        blocks::split_guards(&mut query.body, &logical);
         Ok(query)
     }
 }
@@ -186,6 +195,7 @@ impl Query {
 /// ```
 #[derive(Clone, Debug)]
 pub enum BodyItem {
+    Block(Block),
     /// Internal relational identity extracted from a Rust guard or atom.
     Equality(Equality),
     /// Internal total predicate extracted from a Rust guard.
@@ -206,7 +216,9 @@ pub enum BodyItem {
 
 impl syn::parse::Parse for BodyItem {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let item = if input.peek(Token![if]) {
+        let item = if input.peek(token::Brace) {
+            Self::Block(input.parse()?)
+        } else if input.peek(Token![if]) {
             Self::Filter(input.parse()?)
         } else if input.peek(Token![let]) {
             Self::Let(input.parse()?)
@@ -246,6 +258,7 @@ impl syn::parse::Parse for BodyItem {
 impl quote::ToTokens for BodyItem {
     fn to_tokens(&self, output: &mut proc_macro2::TokenStream) {
         match self {
+            Self::Block(x) => x.to_tokens(output),
             Self::Equality(x) => {
                 let expr = Constraint::from_equality(x).cq_tokens();
                 output.extend(quote::quote!(if #expr));
@@ -267,6 +280,7 @@ impl quote::ToTokens for BodyItem {
 impl PartialEq for BodyItem {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Block(a), Self::Block(b)) => a == b,
             (Self::Equality(a), Self::Equality(b)) => a == b,
             (Self::Constraint(a), Self::Constraint(b)) => a == b,
             (Self::Filter(a), Self::Filter(b)) => a == b,
@@ -377,33 +391,7 @@ fn check_program(program: &Program) -> syn::Result<()> {
     }
     check_query(&schema, &program.query, program.output().is_some())?;
     if program.output().is_none() {
-        let mut types = BTreeMap::new();
-        for item in &program.query.body {
-            match item {
-                BodyItem::Positive { atom } => {
-                    let declaration = schema[&symbol_name(&atom.relation)];
-                    for (arg, col) in atom.args.iter().zip(&declaration.columns) {
-                        if let Some(id) = rust::variable(arg) {
-                            types
-                                .entry(symbol_name(id))
-                                .or_insert_with(|| col.ty.clone());
-                        }
-                    }
-                }
-                BodyItem::Let(binding) => types.extend(
-                    binding
-                        .binding_types()
-                        .into_iter()
-                        .map(|(id, ty)| (symbol_name(&id), ty)),
-                ),
-                BodyItem::Equality(_)
-                | BodyItem::Constraint(_)
-                | BodyItem::Filter(_)
-                | BodyItem::Negation(_)
-                | BodyItem::Aggregate(_)
-                | BodyItem::Extension { .. } => (),
-            }
-        }
+        let types = blocks::types(&schema, &program.query.body, &BTreeMap::new())?;
         for arg in &program.query.head.args {
             if !rust::variable(arg)
                 .and_then(|id| types.get(&symbol_name(id)))
@@ -427,23 +415,75 @@ fn check_query(
     declared_output: bool,
 ) -> syn::Result<()> {
     check_result_atom(schema, &query.head)?;
-    let logical: BTreeSet<_> = query
-        .body
-        .iter()
-        .flat_map(|item| match item {
-            BodyItem::Positive { atom } => atom.variables().cloned().collect(),
-            BodyItem::Let(binding) => rust::bindings(&binding.pattern),
-            BodyItem::Equality(_)
-            | BodyItem::Constraint(_)
-            | BodyItem::Filter(_)
-            | BodyItem::Negation(_)
-            | BodyItem::Aggregate(_)
-            | BodyItem::Extension { .. } => Vec::new(),
-        })
-        .map(|id| symbol_name(&id))
-        .collect();
+    let logical: BTreeSet<_> = blocks::bound(&query.body).into_keys().collect();
+    blocks::types(schema, &query.body, &BTreeMap::new())?;
+    let body_variables = check_body(schema, &query.body, &logical, BTreeSet::new())?;
     let check_uses = |expr: &syn::Expr, bound: &BTreeSet<String>| -> syn::Result<()> {
         if let Some(name) = rust::known_uses(expr, &logical).difference(bound).next() {
+            return Err(syn::Error::new_spanned(
+                expr,
+                format!(
+                    "logical variable `{name}` is used before it is bound (branch-local names cannot escape a block)"
+                ),
+            ));
+        }
+        Ok(())
+    };
+    let all_names: BTreeSet<_> = blocks::walk(&query.body)
+        .into_iter()
+        .flat_map(|item| match item {
+            BodyItem::Positive { atom } => atom.variables().map(symbol_name).collect::<Vec<_>>(),
+            BodyItem::Let(binding) => rust::bindings(&binding.pattern)
+                .iter()
+                .map(symbol_name)
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    for expression in &query.head.args {
+        if let Some(name) = rust::known_uses(expression, &all_names)
+            .difference(&body_variables)
+            .next()
+        {
+            return Err(syn::Error::new_spanned(
+                expression,
+                format!("branch-local variable `{name}` cannot escape its block"),
+            ));
+        }
+        check_uses(expression, &body_variables)?;
+    }
+    for variable in query.head.variables() {
+        if !declared_output && !body_variables.contains(&symbol_name(variable)) {
+            return Err(syn::Error::new_spanned(
+                variable,
+                format!("result variable `{variable}` is not bound by the CQ body"),
+            ));
+        }
+    }
+    if !blocks::walk(&query.body)
+        .into_iter()
+        .any(|item| item.atom().is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            query,
+            "CQ requires a relational occurrence",
+        ));
+    }
+    Ok(())
+}
+
+fn check_body(
+    schema: &BTreeMap<String, &RelationDecl>,
+    body: &CommaList<BodyItem>,
+    logical: &BTreeSet<String>,
+    mut body_variables: BTreeSet<String>,
+) -> syn::Result<BTreeSet<String>> {
+    let check_uses = |expr: &syn::Expr,
+                      bound: &BTreeSet<String>,
+                      forbidden: &BTreeSet<String>|
+     -> syn::Result<()> {
+        let names = logical.union(forbidden).cloned().collect();
+        if let Some(name) = rust::known_uses(expr, &names).difference(bound).next() {
             return Err(syn::Error::new_spanned(
                 expr,
                 format!("logical variable `{name}` is used before it is bound"),
@@ -451,14 +491,54 @@ fn check_query(
         }
         Ok(())
     };
-    let mut body_variables = BTreeSet::new();
-    for item in &query.body {
+    let mut forbidden = BTreeSet::new();
+    for item in body {
         // OPTIONAL HW4 — STUDENT 2/6 (WF): add Negation and Aggregate cases.
         // Negation requires named terms already bound and binds nothing. Sum
         // keeps its value local, requires correlated terms already bound, and
         // then binds one fresh result.
         match item {
+            BodyItem::Block(block) => {
+                if block.branches.len() < 2
+                    || block.branches.iter().any(|branch| branch.body.is_empty())
+                {
+                    return Err(syn::Error::new_spanned(
+                        block,
+                        "a block requires at least two nonempty branches",
+                    ));
+                }
+                let mut common = None::<BTreeSet<String>>;
+                for branch in &block.branches {
+                    let branch_logical: BTreeSet<_> = logical
+                        .iter()
+                        .cloned()
+                        .chain(blocks::bound(&branch.body).into_keys())
+                        .collect();
+                    let bound = check_body(
+                        schema,
+                        &branch.body,
+                        &branch_logical,
+                        body_variables.clone(),
+                    )?;
+                    common = Some(match common {
+                        None => bound,
+                        Some(names) => names.intersection(&bound).cloned().collect(),
+                    });
+                }
+                let common = common.expect("nonempty branches checked");
+                forbidden.extend(block.analyze(&body_variables).locals.into_iter().flatten());
+                body_variables = common;
+            }
             BodyItem::Positive { atom } => {
+                if let Some(variable) = atom
+                    .variables()
+                    .find(|id| forbidden.contains(&symbol_name(id)))
+                {
+                    return Err(syn::Error::new_spanned(
+                        variable,
+                        "branch-local variable cannot be used after its block",
+                    ));
+                }
                 check_input_atom(schema, atom)?;
                 // Every bare argument of this atom is available to a same-atom
                 // computed argument, regardless of its column position.
@@ -466,7 +546,7 @@ fn check_query(
                 local.extend(atom.variables().map(symbol_name));
                 for arg in &atom.args {
                     if rust::variable(arg).is_none() {
-                        check_uses(arg, &local)?;
+                        check_uses(arg, &local, &forbidden)?;
                     }
                 }
                 body_variables = local;
@@ -520,7 +600,7 @@ fn check_query(
             }
             // Formal rule IF-Environment: Check logical scope; Rust resolves enclosing values.
             BodyItem::Filter(filter) => {
-                if !cq_syntax::guard::split(&filter.condition, &logical)
+                if !cq_syntax::guard::split(&filter.condition, logical)
                     .constraints
                     .is_empty()
                 {
@@ -529,11 +609,17 @@ fn check_query(
                         "recognizable Rust guard must be split into relational constraints and its opaque residual",
                     ));
                 }
-                check_uses(&filter.condition, &body_variables)?;
+                check_uses(&filter.condition, &body_variables, &forbidden)?;
             }
             BodyItem::Let(binding) => {
-                check_uses(&binding.expression, &body_variables)?;
+                check_uses(&binding.expression, &body_variables, &forbidden)?;
                 for variable in rust::bindings(&binding.pattern) {
+                    if forbidden.contains(&symbol_name(&variable)) {
+                        return Err(syn::Error::new_spanned(
+                            variable,
+                            "branch-local variable cannot be rebound after its block",
+                        ));
+                    }
                     if !body_variables.insert(symbol_name(&variable)) {
                         return Err(syn::Error::new_spanned(
                             variable,
@@ -545,24 +631,7 @@ fn check_query(
         }
     }
 
-    for expression in &query.head.args {
-        check_uses(expression, &body_variables)?;
-    }
-    for variable in query.head.variables() {
-        if !declared_output && !body_variables.contains(&symbol_name(variable)) {
-            return Err(syn::Error::new_spanned(
-                variable,
-                format!("result variable `{variable}` is not bound by the CQ body"),
-            ));
-        }
-    }
-    if !query.body.iter().any(|item| item.atom().is_some()) {
-        return Err(syn::Error::new_spanned(
-            query,
-            "CQ requires a relational occurrence",
-        ));
-    }
-    Ok(())
+    Ok(body_variables)
 }
 
 fn check_result_atom(schema: &BTreeMap<String, &RelationDecl>, head: &Atom) -> syn::Result<()> {

@@ -6,6 +6,17 @@
 //! const supply is one fixed key, answered directly or by scan and filter;
 //! only stream supplies can justify building reusable keyed storage.
 
+//! Selection preserves Physical union/anti choices and chooses dedup types, anti indices and direct chained-scan union index builds.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_physical as physical;
@@ -76,6 +87,24 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
     Some(levels)
 }
 
+fn payload_provider(ty: &mut syn::Type) {
+    if *ty == syn::parse_quote!(::std::collections::HashSet<_>) {
+        *ty = Need::Seek.default_type();
+        return;
+    }
+    if let syn::Type::Path(path) = ty {
+        if let Some(segment) = path.path.segments.last_mut() {
+            if segment.ident == "Trie" {
+                if let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.last_mut() {
+                        payload_provider(inner);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     let analysis = physical::contract::check(source)?;
     let program = &source.program;
@@ -116,7 +145,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 continue;
             }
             let need = match operators[reader] {
-                Operator::Semi(..) => Need::Contains,
+                Operator::Semi(..) | Operator::Anti(..) => Need::Contains,
                 _ => Need::Seek,
             };
             require(result, columns, need);
@@ -282,7 +311,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                             });
                         if payload {
                             Need::Seek.default_type()
-                        } else if matches!(operators[reader], Operator::Semi(_, k) if matches!(k.choice, Some(physical::Choice::Lazy(_))))
+                        } else if matches!(operators[reader], Operator::Semi(_, k) | Operator::Anti(_, k) if matches!(k.choice, Some(physical::Choice::Lazy(_))))
                         {
                             syn::parse_quote!(::cq_storage::dispatch::KeySet<_, false>)
                         } else {
@@ -363,7 +392,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     let required = structures::required_columns(source, &analysis);
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
-        if analysis.modes[&name] != ModeKind::Let || analysis.scanned.contains(&name) {
+        let direct_union = matches!(&definition.operator,Operator::Union(union) if union.origin.as_ref().is_none_or(|origin|origin.over.is_none()));
+        if analysis.modes[&name] != ModeKind::Let
+            || analysis.scanned.contains(&name) && !direct_union
+        {
             continue;
         }
         let built: Vec<_> = selected
@@ -376,40 +408,69 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                 .then_some(i)
             })
             .collect();
-        if built.len() != 1 {
+        let multi_union = matches!(&definition.operator,Operator::Union(union) if union.origin.as_ref().is_none_or(|origin|origin.over.is_none()));
+        if built.is_empty() || built.len() != 1 && !multi_union {
             continue;
         }
-        let structures::Structure::Built { keyed, .. } = &mut selected.entries[built[0]].structure
-        else {
-            unreachable!()
-        };
-        let selection = match &definition.operator {
-            Operator::Point(_, select) | Operator::Range(_, select) if keyed.levels.len() == 1 => {
-                Some(select)
+        let select = match &definition.operator {
+            Operator::Point(_, select) | Operator::Range(_, select)
+                if built.len() == 1
+                    && matches!(&selected.entries[built[0]].structure,structures::Structure::Built {keyed,..} if keyed.levels.len()==1) =>
+            {
+                Some(Some(select))
             }
+            Operator::Union(_) => Some(None),
             _ => None,
         };
-        if let Some(select) = selection {
-            let key = keyed.level_names()[0].clone();
-            let supported = analysis.keyed_reads.get(&name).into_iter().flatten().all(|(reader, columns, supply)| {
-                *supply == SupplyKind::Stream && *columns == key
-                    && (matches!(operators[reader], Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::First(_))))
-                        || matches!(operators[reader], Operator::Semi(..)))
+        if let Some(select) = select {
+            let keys = built
+                .iter()
+                .map(|i| match &selected.entries[*i].structure {
+                    structures::Structure::Built { keyed, .. } => keyed.level_names(),
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>();
+            let supported = analysis.keyed_reads.get(&name).into_iter().flatten().all(|(reader,columns,supply)| {
+                *supply==SupplyKind::Stream && keys.iter().any(|levels|structures::prefix_depth(levels,columns).is_some()) && (matches!(operators[reader],Operator::Probe(_,key) if matches!(key.choice,Some(physical::Choice::First(_)))) || matches!(operators[reader],Operator::Semi(..)|Operator::Anti(..)))
             });
             if supported {
-                let constants = structures::selection_constants(select);
+                let constants = select
+                    .map(|select| structures::selection_constants(select))
+                    .unwrap_or_default();
                 let payload = required[&name]
                     .iter()
                     .filter(|c| !constants.contains_key(*c))
-                    .map(|c| &analysis.rows[&name].bindings[c]);
-                let constants = constants.iter().map(|(column, value)| {
-                    let column = &analysis.rows[&name].bindings[column];
-                    quote!(#column = #value)
-                });
-                keyed.filtered = Some(syn::parse2(
-                    quote!(payload [#(#payload),*] constants { #(#constants),* }),
-                )?);
+                    .map(|c| &analysis.rows[&name].bindings[c])
+                    .collect::<Vec<_>>();
+                let bindings = constants
+                    .iter()
+                    .map(|(column, value)| {
+                        let column = &analysis.rows[&name].bindings[column];
+                        quote!(#column = #value)
+                    })
+                    .collect::<Vec<_>>();
+                let projection: structures::Filtered =
+                    syn::parse2(quote!(payload [#(#payload),*] constants {#(#bindings),*}))?;
+                for (i, key) in built.iter().zip(&keys) {
+                    let structures::Structure::Built { keyed, .. } =
+                        &mut selected.entries[*i].structure
+                    else {
+                        unreachable!()
+                    };
+                    if multi_union
+                        && required[&name]
+                            .iter()
+                            .any(|column| !key.iter().flatten().any(|key| key == column))
+                    {
+                        payload_provider(&mut keyed.ty);
+                    }
+                    keyed.filtered = Some(projection.clone());
+                }
             }
+        }
+        if built.len()>1 && !built.iter().all(|i|matches!(&selected.entries[*i].structure,structures::Structure::Built {keyed,..} if keyed.filtered.is_some())) { continue; }
+        if analysis.scanned.contains(&name) {
+            continue;
         }
         selected.entries.retain(|entry| {
             entry.name != definition.name

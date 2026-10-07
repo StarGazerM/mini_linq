@@ -74,6 +74,8 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         let name = symbol_name(&definition.name);
         let heading: BTreeSet<_> = facts.headings[&name].iter().cloned().collect();
         let inherited = match &definition.operator {
+            Operator::Union(_) => None,
+            Operator::Anti(_, k) => unique.get(&symbol_name(&k.left)).cloned(),
             Operator::Unit(_) => Some(BTreeSet::new()),
             Operator::Rename(_) => None,
             Operator::Probe(_, k) | Operator::Merge(_, k) => unique
@@ -199,7 +201,7 @@ pub fn lazy_semijoins(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         if !selected.includes(&definition.name) {
             continue;
         }
-        let Operator::Semi(_, key) = &mut definition.operator else {
+        let (Operator::Semi(_, key) | Operator::Anti(_, key)) = &mut definition.operator else {
             continue;
         };
         let right = symbol_name(&key.right);
@@ -214,7 +216,7 @@ pub fn lazy_semijoins(source: &ir::Program, arguments: TokenStream) -> syn::Resu
                     Operator::Probe(_, other) => {
                         symbol_name(&other.right) != right || sorted(&other.columns) != columns
                     }
-                    Operator::Semi(_, other) => {
+                    Operator::Semi(_, other) | Operator::Anti(_, other) => {
                         symbol_name(&other.right) != right
                             || sorted(&other.columns) != columns
                             || matches!(other.choice, Some(Choice::Lazy(_)))

@@ -30,6 +30,19 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! Pull realization executes fused block arms from one prefix row.
+//! Union chains arms lazily; fallback evaluates the next arm only when the earlier result is empty.
+//! Anti uses the recorded eager/lazy membership route and canon uses the recorded set provider.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use cq_lang_structures as structures;
 use cq_lang_structures::physical;
 use cq_lang_structures::physical::Operator;
@@ -51,6 +64,7 @@ pub fn compile(module: &structures::Program) -> syn::Result<Expr> {
     let analysis = structures::contract::check(module)?;
     let mut printer = Printer {
         context: sources(module, &analysis)?,
+        active_prefixes: BTreeMap::new(),
     };
     let returned = &module.physical.program.returned;
     let rows = printer.scan(returned)?;
@@ -79,10 +93,21 @@ pub fn sources<'a>(
 ) -> syn::Result<Context<'a>> {
     let mut printer = Printer {
         context: Context::new(module, analysis),
+        active_prefixes: BTreeMap::new(),
     };
     let definitions = &module.physical.program.definitions;
     let mut position = 0;
+    let deferred: std::collections::BTreeSet<_> = analysis
+        .physical
+        .fused
+        .values()
+        .flat_map(|group| group.members.iter().cloned())
+        .collect();
     while position < definitions.len() {
+        if deferred.contains(&symbol_name(&definitions[position].name)) {
+            position += 1;
+            continue;
+        }
         if matches!(&definitions[position].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
         {
             let Some(second) = definitions.get(position + 1) else {
@@ -108,6 +133,7 @@ pub fn sources<'a>(
 
 struct Printer<'a> {
     context: Context<'a>,
+    active_prefixes: BTreeMap<String, TokenStream>,
 }
 impl<'a> std::ops::Deref for Printer<'a> {
     type Target = Context<'a>;
@@ -123,7 +149,9 @@ impl std::ops::DerefMut for Printer<'_> {
 impl Printer<'_> {
     pub(crate) fn define(&mut self, definition: &physical::Definition) -> syn::Result<()> {
         let name = symbol_name(&definition.name);
-        self.register(&name);
+        if !self.idents.contains_key(&name) {
+            self.register(&name);
+        }
         let repr = match physical::ModeKind::from(&definition.mode) {
             physical::ModeKind::Pipe if matches!(definition.operator, Operator::Rename(_)) => {
                 Repr::Host
@@ -149,6 +177,9 @@ impl Printer<'_> {
 
     pub(crate) fn scan(&mut self, result: &Ident) -> syn::Result<TokenStream> {
         let name = symbol_name(result);
+        if let Some(row) = self.active_prefixes.get(&name) {
+            return Ok(quote!(::core::iter::once(#row)));
+        }
         match self.reprs.get(&name) {
             Some(Repr::Host) => {
                 let rows = self.host_scan(&name);
@@ -167,7 +198,11 @@ impl Printer<'_> {
                 let Some(source) = rows else {
                     return error(result, format!("`{name}` is scanned but not materialized"));
                 };
-                Ok(quote!(::core::iter::Iterator::copied(#source.iter())))
+                Ok(if self.infos[&name].computed.is_empty() {
+                    quote!(::core::iter::Iterator::copied(#source.iter()))
+                } else {
+                    quote!(::core::iter::Iterator::cloned(#source.iter()))
+                })
             }
             None => error(result, format!("`{name}` is read before its definition")),
         }
@@ -220,7 +255,11 @@ impl Printer<'_> {
                 .zip(heading)
                 .all(|(v, h)| v.is_some_and(|v| symbol_name(v) == *h));
         if identity {
-            return rows;
+            return if let Some(ty) = self.analysis.head_dedup.get(result) {
+                self.distinct_width(ty, rows, head.args.len())
+            } else {
+                rows
+            };
         }
         let computed = variables.iter().any(Option::is_none);
         // A column the head names as a variable binds under the head's own
@@ -235,8 +274,13 @@ impl Printer<'_> {
         let pattern = quote!((#(#binders,)*));
         if !computed {
             let output = variables.iter().flatten();
-            return quote! {
+            let rows = quote! {
                 ::core::iter::Iterator::map(#rows, move |#pattern| (#(#output,)*))
+            };
+            return if let Some(ty) = self.analysis.head_dedup.get(result) {
+                self.distinct_width(ty, rows, head.args.len())
+            } else {
+                rows
             };
         }
         let shadows = self.shadows(result);

@@ -19,6 +19,27 @@ and source-before relational requirements. Relational equality assumes Leibniz
 identity; ordered comparisons assume a total, consistent order. Rust trait
 bounds cannot prove these semantic premises for arbitrary implementations.
 
+`{ B1 } | { B2 }` is union; `{ B1 } else { B2 }` is ordered fallback. Union
+combines both sets and permits sibling reordering as refinement. Fallback uses
+the first nonempty branch, so later branch Rust runs only after earlier branches
+are empty. Mixed operators require nesting. Empty and single-branch blocks fail
+compilation. Common new bindings form the interface I; other new bindings stay
+local and cannot occur in a suffix or head. Declared interface types agree.
+Multiple rules for one head are a union with that head's variables as interface.
+
+The laws are `ctx ⋈ (B1 ∪ B2) = (ctx ⋈ B1) ∪ (ctx ⋈ B2)` and
+`B1 else B2 = B1 ∪ (B2 ▷_F B1)`, where F is the block's free heading. Blocks
+hoist to a derived relation over F ∪ I when no branch contains Rust; a finite
+prefix domain supplies free columns without branch generators. If those columns
+come from prefix lets, reductions wait for that context and filter its retained
+prefix; the positions are recorded in VO. Other blocks use
+per-row arms with one prefix stream. Rust Before sets extend into arms and include
+fallback anti steps. Union siblings are unordered; fallback siblings are ordered.
+Rust environment packets record lexical names and written source paths, so
+a positive context semijoin can reference prefix Rust without making it arm Rust.
+Positive semijoins distribute into arms while negative operands remain the
+original named branch results. No input keys or constraints are assumed.
+
 Normalization makes body atoms variable-only, inserts positioned equalities
 and Rust binds, and turns computed heads into final binds. Ordering records
 valuation order and coarse/fine granularity in VO; reduction records relational
@@ -40,7 +61,8 @@ recorded fallback is built lazily once. Const/range reads use direct access or
 scan/filter without building an index. Built structures answer reads at their
 recorded key levels. Host types establish no plan canonicality.
 
-A derived `pipe` has one stream consumer; a `let` retains rows or indexes.
+A derived `pipe` has one stream consumer; fused block arms may share their
+recorded prefix pipe, which is consumed once. A `let` retains rows or indexes.
 Reusable host renames remain `pipe`. An `exists` consumes its entire source
 and retains nonemptiness. A `canon` boundary and noninjective computed head use
 the recorded dedup type. Merge requires ordered inputs. The printer preserves
@@ -52,10 +74,13 @@ A point or range `let` used only by keyed probes and semijoins on one shared
 key records one index, for example `filtered = HashIndex [b] payload [b,c]
 constants {a = "a"};`. The payload annotation is the projected row schema:
 the index extracts its non-constant key and stores the remaining fields.
-The selection streams directly into that build. Constant fields come from
+The selection or derived union's chained scan streams directly into that build. Constant fields come from
 program text when downstream expressions need them. Structures checks that
 the projection and constant bindings cover every downstream column use.
-A row-scan consumer or multiple independent indexes keeps a `rows` decision;
+Derived unions record the same projected schema on every direct or curried
+index. Index construction replays their chained scan; a row-scan consumer
+keeps an explicit `rows` decision. Correlated unions retain one prefix stream;
+other results with multiple independent indexes keep a `rows` decision.
 realization follows that recorded decision without inferring retention.
 
 ## Checks and evidence
@@ -109,9 +134,6 @@ the checkout, substitutes packaged core sources, and builds all targets and
 runs workspace tests. Escaping to in-tree source is a gate failure. Positive,
 sibling-closure, and in-tree-only negative fixtures always run.
 
-The standalone template at `/data/mini_linq-feature-template` demonstrates a
-checked Physical rewrite, terminal printer, and custom runtime. Validate it with
-`python3 tools/check_external.py --feature /data/mini_linq-feature-template --out /tmp/template-gate`.
 The public API gate compares reviewed rustdoc-derived signatures.
 
 External printers preserve recorded operators and representations or reject

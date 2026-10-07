@@ -18,7 +18,7 @@ macro_rules! configuration {
                         $($stages)*
                         structures = [::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
                         surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
-                            ::cq_ext_negation::negation, ::cq_ext_union::union];
+                            ::cq_ext_negation::negation];
                     }
                     $d($d tokens)*
                 } };

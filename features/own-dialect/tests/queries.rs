@@ -2,6 +2,43 @@ use std::collections::BTreeSet;
 
 #[test]
 #[allow(non_snake_case)]
+fn both_printers_preserve_fused_union_fallback_and_suffix_rust() {
+    let P = [(1_i32,), (2,), (3,)];
+    let R = [(1_i32, 10_i32), (1, 11)];
+    let S = [(1_i32, 99_i32), (2, 20)];
+    macro_rules! run {
+        ($printer:path) => { mini_linq::compile! {
+            pipeline {print = $printer;}
+            struct Q; relation P(x:i32); relation R(x:i32,y:i32); relation S(x:i32,y:i32);
+            answer(x,y) :- P(x), {{R(x,y), if std::convert::identity(*y)>0} | {R(x,y)}} else {S(x,y), if std::convert::identity(*y)>0},
+                if std::convert::identity(*x)>0;
+        }.map(|(x,y)|(*x,*y)).collect::<BTreeSet<_>>() };
+    }
+    let push = run!(own_push::push);
+    let pull = run!(mini_linq::passes::print_pull);
+    assert_eq!(push, pull);
+    assert_eq!(pull, BTreeSet::from([(1, 10), (1, 11), (2, 20)]));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn both_printers_keep_owned_non_copy_fallback_interfaces() {
+    let R = [(1_i32,), (2,)];
+    macro_rules! run { ($printer:path) => { mini_linq::compile! {
+        pipeline {print = $printer;}
+        struct Q; relation R(x:i32);
+        answer(y) :- R(x), {if std::convert::identity(*x)==1, let y:String=String::from("first")}
+            else {let y:String=String::from("second")};
+    }.map(|(y,)|y).collect::<BTreeSet<_>>() }; }
+    assert_eq!(run!(own_push::push), run!(mini_linq::passes::print_pull));
+    assert_eq!(
+        run!(own_push::push),
+        BTreeSet::from(["first".to_owned(), "second".to_owned()])
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn filtered_storage_reconstructs_constants_in_both_printers() {
     let L = [(1,), (2,), (3,)];
     let R = [(7, 1, 10), (8, 2, 20), (7, 3, 30), (7, 1, 10)];

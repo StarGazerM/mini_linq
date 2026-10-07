@@ -5,11 +5,20 @@
 //! written-order refinement. Coverage counts properties once per case.
 
 mod model;
+mod sql;
 pub use model::*;
 
 /// Every feature tag emitted by the built-in generator, including size bins.
 /// Custom abstract models may emit additional size bins.
 pub const FEATURE_TAGS: &[&str] = &[
+    "prefix-let-block",
+    "union-block",
+    "fallback-block",
+    "test-block",
+    "binding-block",
+    "block-locals",
+    "nested-block",
+    "rust-in-block",
     "self-join",
     "constant",
     "negative-constant",

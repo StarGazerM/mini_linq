@@ -24,6 +24,17 @@
 //! selected representation's `Hash`/`Ord` bounds are necessary mechanical checks;
 //! rustc cannot prove Leibniz admissibility of a hand-written implementation.
 
+//! Shared syntax records union/anti operands, block origins, numeric occurrence paths and written Rust scopes.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use syn::ext::IdentExt;
 use syn::{Ident, Index, Token, Type, token};
 
@@ -309,6 +320,8 @@ pub fn check_input_declarations<'a>(
 }
 
 pub mod algebra;
+pub mod occurrence;
+pub use occurrence::Occurrence;
 
 /// Parse declarations while the next token starts a relation declaration.
 pub fn parse_declarations(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<RelationDecl>> {

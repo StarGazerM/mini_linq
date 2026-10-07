@@ -3,6 +3,85 @@ use cq_lang_structures as structures;
 use cq_structure_selection::{check, compile};
 use cq_testkit::corpus as scenarios;
 use quote::ToTokens;
+
+#[test]
+fn overlapping_union_cannot_drop_its_final_dedup_provider() {
+    let source: physical::Program = syn::parse_quote! {physical {
+        relation R(a:i32); relation S(a:i32);
+        r = pipe rename R@0.0.0 {a -> x}; s = pipe rename S@0.1.0 {a -> x};
+        u = pipe union r,s block @0 free[] interface[x]; return canon u as answer(x);
+    }};
+    let target = compile(&source).unwrap();
+    assert!(
+        target
+            .structures
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.structure, structures::Structure::HeadDedup { .. }))
+    );
+    let mut dropped = target.clone();
+    dropped
+        .structures
+        .entries
+        .retain(|entry| !matches!(entry.structure, structures::Structure::HeadDedup { .. }));
+    assert!(check(&source, &dropped).is_err());
+}
+
+#[test]
+fn independent_union_indices_stream_the_chain_without_retained_rows() {
+    let source: physical::Program = syn::parse_quote! {physical {
+        relation L(a:i32); relation A(a:i32,b:i32); relation B(a:i32,b:i32);
+        l = pipe rename L@0 {a -> x}; a = pipe rename A@1.0.0 {a -> x,b -> y}; b = pipe rename B@1.1.0 {a -> x,b -> y};
+        d = let canon union a,b block @1 free[x] interface[y];
+        j = pipe probe first [x] l,d; q = pipe project j keep {y}; out = pipe canon semi eager [y] q,d; return out as answer(y);
+    }};
+    let target = compile(&source).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert_eq!(facts.built["d"].len(), 2);
+    assert!(!facts.retained.contains_key("d"));
+    assert!(facts.filtered.contains_key("d"));
+    let mut missing = target.clone();
+    let position = missing.structures.entries.iter().position(|entry|entry.name=="d" && matches!(&entry.structure,structures::Structure::Built {keyed,..} if keyed.level_names()==vec![vec!["y".to_owned()]])).unwrap();
+    missing.structures.entries.remove(position);
+    assert!(check(&source, &missing).is_err());
+}
+
+#[test]
+fn union_curried_indices_and_an_explicit_scan_keep_both_decisions() {
+    let source: physical::Program = syn::parse_quote! {physical {
+        relation L(a:i32,b:i32); relation A(a:i32,b:i32,c:i32); relation B(a:i32,b:i32,c:i32);
+        l = pipe rename L@0 {a -> x,b -> y}; a = pipe rename A@1.0.0 {a -> x,b -> y,c -> z}; b = pipe rename B@1.1.0 {a -> x,b -> y,c -> z};
+        d = let canon union a,b block @1 free[x,y] interface[z];
+        p = pipe project l keep {x}; checked = pipe semi eager [x] p,d;
+        c = pipe probe first [x] checked,l; j = pipe probe first [x,y] c,d;
+        aux = let project d keep {x,y}; out = pipe canon semi eager [x,y] j,aux; result = pipe canon project out keep {x,z}; return result as answer(x,z);
+    }};
+    let target = compile(&source).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert!(facts.retained.contains_key("d"));
+    assert!(facts.filtered.contains_key("d"));
+    assert_eq!(facts.built["d"][0].0.len(), 2);
+}
+
+#[test]
+fn proven_disjoint_union_rejects_cross_arm_canon_but_retains_final_canon() {
+    let source: physical::Program = syn::parse_quote! {physical {
+        relation R(a:i32); relation S(a:i32);
+        rr = pipe rename R@0.0.0 {a -> x}; ss = pipe rename S@0.1.0 {a -> x};
+        r = pipe point select rr if (x = 1); s = pipe point select ss if (x = 2);
+        u = pipe union r,s block @0 free[] interface[x]; return canon u as answer(x);
+    }};
+    let target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+    let mut kept = source.clone();
+    kept.program
+        .definitions
+        .iter_mut()
+        .find(|d| d.name == "u")
+        .unwrap()
+        .canon = Some(Default::default());
+    assert!(physical::contract::check(&kept).is_err());
+}
 #[test]
 fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
     for case in scenarios::SCENARIOS {

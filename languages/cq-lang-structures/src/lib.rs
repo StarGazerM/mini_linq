@@ -14,6 +14,18 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! Structures records union dedup providers and anti membership representations.
+//! A derived union used only by a shared-key index streams its chained scan directly into the filtered build path, without a retained row buffer.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 pub use cq_lang_physical as physical;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -448,9 +460,17 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 .or_default()
                 .push((columns, keyed.ty.clone()));
             if let Some(filtered) = &keyed.filtered {
-                if analysis.filtered.insert(name, filtered.clone()).is_some() {
-                    return error(entry, "duplicate filtered projection");
+                if analysis
+                    .filtered
+                    .get(&name)
+                    .is_some_and(|previous| previous != filtered)
+                {
+                    return error(
+                        entry,
+                        "filtered indices must record an identical projection",
+                    );
                 }
+                analysis.filtered.insert(name, filtered.clone());
             }
         }
     }
@@ -609,7 +629,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             || analysis
                 .built
                 .get(&name)
-                .is_some_and(|built| built.len() > 1)
+                .is_some_and(|built| built.len() > 1 && !analysis.filtered.contains_key(&name))
             || analysis.physical.modes[&name] == ModeKind::Exists)
             && analysis.physical.modes[&name] != ModeKind::Pipe
             && !analysis.retained.contains_key(&name)
@@ -653,6 +673,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             );
         };
         let key = match op {
+            Operator::Union(_) => None,
             Operator::Unit(_) => Some(Vec::new()),
             Operator::Rename(_) => None,
             Operator::Probe(_, k) | Operator::Merge(_, k) => {
@@ -669,7 +690,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     _ => None,
                 }
             }
-            Operator::Semi(_, k) => analysis.unique.get(&symbol_name(&k.left)).cloned(),
+            Operator::Semi(_, k) | Operator::Anti(_, k) => {
+                analysis.unique.get(&symbol_name(&k.left)).cloned()
+            }
             Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
                 analysis.unique.get(&symbol_name(&s.input)).cloned()
             }
@@ -691,7 +714,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         }
     }
     let returned = symbol_name(&program.physical.program.returned);
-    if !analysis.unique.contains_key(&returned) {
+    if !analysis.unique.contains_key(&returned) && program.physical.program.return_canon.is_none() {
         return error(
             &module.structures_token,
             format!(
@@ -715,6 +738,9 @@ pub use cq_syntax as syntax;
 
 /// Whether computed answers can collapse distinct canonical valuations.
 pub fn head_needs_dedup(program: &physical::Program, facts: &physical::Analysis) -> bool {
+    if program.program.return_canon.is_some() {
+        return true;
+    }
     let head = &program.program.head;
     head.args
         .iter()

@@ -1,0 +1,4 @@
+structures {p host scan=::core::iter::Map<_,_>[]; r0 host scan=::core::iter::Map<_,_>[]; s0 host scan=::core::iter::Map<_,_>[];
+r1=::std::collections::HashSet<_>[x]; r1 rows=::std::vec::Vec<_>;
+u=::cq_storage::HashIndex<'_,_,_>[x]payload[x,y]constants{};
+out canon=::std::collections::HashSet<_>;}

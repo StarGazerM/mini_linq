@@ -1,0 +1,1 @@
+struct Q; relation P(x:i32); relation R(x:i32,y:i32); relation S(x:i32,y:i32); answer(x,y) :- P(x), {R(x,y)} else {S(x,y)};

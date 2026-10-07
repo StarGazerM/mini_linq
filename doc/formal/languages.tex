@@ -107,6 +107,26 @@ a guard retains true environments and a let extends them by its pattern
 result. Compose from $\mathbf1$ and take the set of ordered head results to
 define $\sem q_I$. This agrees with classical $q(I)$ on its domain and gives
 no effectful evaluation-order semantics.
+\paragraph{Core block grammar and scope.}
+\begin{lstlisting}
+Clause ::= Atom | Constraint | if Expr | let Pat = Expr | Block
+Block  ::= { Body } ( | { Body } )+
+         | { Body } ( else { Body } )+
+\end{lstlisting}
+Branches are nonempty; a single branch and mixed operators fail parsing.
+Nesting admits either operator inside the other. Multiple rules for one head
+are core sugar for one top-level union whose interface is that head's variables.
+\begin{mathpar}
+\Rule{CQ-Block}{n\ge2\quad\forall j,\ \Sigma;B\vdash B_j\Rightarrow B_j'\\
+ I=(\bigcap_j B_j')\setminus B\quad \forall x\in I,\ \tau_j(x)=\tau_k(x)}
+ {\Sigma;B\vdash\mathsf{block}(B_1,\ldots,B_n)\Rightarrow B\cup I}
+\end{mathpar}
+Names in only some branch bindings are local and cannot reappear in a suffix
+or head. VO carries recursive step sequences and fixed occurrence paths
+\code{R@c.j.k}, extended by branch/clause pairs at each nesting level. A
+Rust-free block is one planning hyperedge over $F\cup I$ at its clause index;
+a Rust block is pinned by the union of branch Before requirements.
+
 \subsection{Rust comparison guards}
 Let $Q$ contain every query binder, $B\subseteq Q$ the written bound names,
 and $P$ the closing host parameters. CQ parses Rust expressions with Syn;
@@ -268,3 +288,27 @@ reads dispatch by type. Their local
 contract rules and immediate-source correspondence checks are stated separately
 in Section~\ref{sec:pass-contracts}. Complete token grammars are also given in
 the documentation of the language crates under \path{languages/}.
+
+\subsection{Union and antijoin in RA prime}
+\begin{lstlisting}
+r = union r1, r2, ... block @path free[F] interface[I];
+r = anti [F] left, original;
+\end{lstlisting}
+A block origin additionally records ordered fallback, a correlated prefix
+\code{over p}, or a finite free-column \code{domain p}, when applicable.
+Elaboration projects every operand to the identical common heading. Opaque
+Rust environments record \code{scope[names] @c.j.k}, fixing their written
+lexical inputs and source tree paths. A context semijoin may refer to prefix
+Rust without moving that Rust into the arm; the given path distinguishes them.
+\begin{mathpar}
+\Rule{RA-Union}{\forall j,\ H(r_j)=H}
+ {H(\mathsf{union}(r_1,\ldots,r_n))=H\quad
+ \sem{\mathsf{union}(r_1,\ldots,r_n)}=\bigcup_j\sem{r_j}}
+
+\Rule{RA-Anti}{F\subseteq H(r)\cap H(s)}
+ {H(\mathsf{anti}_F(r,s))=H(r)\quad
+ \sem{\mathsf{anti}_F(r,s)}=\sem r\mathbin{\triangleright_F}\sem s}
+\end{mathpar}
+Checks compare supplied structural branch identities, exact occurrences,
+headings, constraints, negative references, tree paths and Before facts.
+They perform no search, equivalence decision or homomorphism construction.

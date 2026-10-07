@@ -3,6 +3,203 @@
 use super::*;
 
 impl<'a> Printer<'a> {
+    fn arm_row(&self, name: &str, operand: &str) -> TokenStream {
+        self.row(name, |column| {
+            let value = self.ident(operand, column);
+            if self.infos[name].computed.contains(column)
+                && !self.infos[operand].computed.contains(column)
+            {
+                quote!(::core::clone::Clone::clone(#value))
+            } else {
+                value.to_token_stream()
+            }
+        })
+    }
+    fn union(&mut self, name: &str, union: &physical::Union) -> syn::Result<TokenStream> {
+        if union.fused.is_some() {
+            return self.fused_union(name, union);
+        }
+        let mut chain = None;
+        for operand in &union.operands {
+            let rows = self.scan(operand)?;
+            let operand = symbol_name(operand);
+            let pattern = self.pattern(&operand);
+            let row = self.arm_row(name, &operand);
+            let rows = quote!(::core::iter::Iterator::map(#rows, move |#pattern| #row));
+            chain = Some(match chain {
+                None => rows,
+                Some(previous) => quote!(::core::iter::Iterator::chain(#previous,#rows)),
+            });
+        }
+        let rows = chain.expect("contracted union");
+        // A hoisted relation over F must retain all distinct F tuples. The
+        // witness stop applies to a unit heading, or inside a correlated arm.
+        Ok(
+            if matches!(union.witness, Some(physical::Witness::Any(_)))
+                && self.heading(name).is_empty()
+            {
+                quote!(::core::iter::Iterator::take(#rows,1))
+            } else {
+                rows
+            },
+        )
+    }
+    fn define_arm(
+        &mut self,
+        result: &str,
+        group: &physical::Fused,
+        defined: &mut std::collections::BTreeSet<String>,
+    ) -> syn::Result<()> {
+        if !group.members.contains(result) || !defined.insert(result.to_owned()) {
+            return Ok(());
+        }
+        let definition = self.physical[result];
+        if !matches!(&definition.operator,Operator::Union(u) if u.fused.is_some()) {
+            for operand in definition.operator.operands() {
+                self.define_arm(&symbol_name(operand), group, defined)?;
+            }
+        } else {
+            let Operator::Union(union) = &definition.operator else {
+                unreachable!()
+            };
+            let prefix = &union
+                .origin
+                .as_ref()
+                .expect("fused origin")
+                .over
+                .as_ref()
+                .expect("fused prefix")
+                .prefix;
+            self.define_arm(&symbol_name(prefix), group, defined)?;
+        }
+        let ids = self.idents.get(result).cloned();
+        self.define(definition)?;
+        if let Some(ids) = ids {
+            self.idents.insert(result.to_owned(), ids);
+        }
+        Ok(())
+    }
+    fn fused_union(&mut self, name: &str, union: &physical::Union) -> syn::Result<TokenStream> {
+        let group = self.physical_analysis.fused[name].clone();
+        let prefix_id = union
+            .origin
+            .as_ref()
+            .expect("fused origin")
+            .over
+            .as_ref()
+            .expect("fused prefix")
+            .prefix
+            .clone();
+        let outer = self.scan(&prefix_id)?;
+        let prefix_ids = self.idents[&group.prefix].clone();
+        let free: std::collections::BTreeSet<_> = union
+            .origin
+            .as_ref()
+            .expect("fused origin")
+            .free
+            .iter()
+            .map(symbol_name)
+            .collect();
+        let prefix_columns = self.heading(&group.prefix).to_vec();
+        for column in &prefix_columns {
+            if !free.contains(column) {
+                self.idents.get_mut(&group.prefix).unwrap().insert(
+                    column.clone(),
+                    format_ident!(
+                        "__cq_prefix_{}_{}",
+                        name,
+                        column,
+                        span = proc_macro2::Span::mixed_site()
+                    ),
+                );
+            }
+        }
+        let pattern = self.pattern(&group.prefix);
+        // Arm rows carry the hidden prefix names; only their source Rust scopes
+        // introduce lexical aliases when those names are actually in scope.
+        let hidden = self.idents[&group.prefix].clone();
+        let mut saved = BTreeMap::new();
+        for member in &group.members {
+            self.register(member);
+            saved.insert(member.clone(), self.idents[member].clone());
+            for column in &prefix_columns {
+                if self.idents[member].contains_key(column) && !free.contains(column) {
+                    self.idents
+                        .get_mut(member)
+                        .unwrap()
+                        .insert(column.clone(), hidden[column].clone());
+                }
+            }
+        }
+        let previous = self
+            .active_prefixes
+            .insert(group.prefix.clone(), pattern.clone());
+        let mut defined = std::collections::BTreeSet::new();
+        let mut arms = Vec::new();
+        let bound = self.bound;
+        for operand in &union.operands {
+            let start = self.statements.len();
+            let operand_name = symbol_name(operand);
+            self.define_arm(&operand_name, &group, &mut defined)?;
+            let rows = self.scan(operand)?;
+            let operand_pattern = self.pattern(&operand_name);
+            let row = self.arm_row(name, &operand_name);
+            let rows = quote!(::core::iter::Iterator::map(#rows,move |#operand_pattern| #row));
+            let rows = if matches!(union.witness, Some(physical::Witness::Any(_))) {
+                quote!(::core::iter::Iterator::take(#rows,1))
+            } else {
+                rows
+            };
+            let statements = self.statements.split_off(start);
+            arms.push((statements, rows));
+        }
+        self.bound = bound;
+        self.idents.insert(group.prefix.clone(), prefix_ids);
+        for (member, ids) in saved {
+            self.idents.insert(member, ids);
+        }
+        if let Some(previous) = previous {
+            self.active_prefixes.insert(group.prefix.clone(), previous);
+        } else {
+            self.active_prefixes.remove(&group.prefix);
+        }
+        let fallback = union.origin.as_ref().is_some_and(|o| o.fallback.is_some());
+        let rows = if fallback {
+            let mut next = quote!(::std::vec::Vec::new());
+            for (statements, rows) in arms.into_iter().rev() {
+                next = quote!({
+                    #(#statements)*
+                    let __cq_arm = ::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows);
+                    if __cq_arm.is_empty() { #next } else { __cq_arm }
+                });
+            }
+            quote!(::core::iter::IntoIterator::into_iter(#next))
+        } else {
+            let mut chain = None;
+            for (statements, rows) in arms {
+                let value = if statements.is_empty() {
+                    rows
+                } else {
+                    quote!(::core::iter::IntoIterator::into_iter(::core::iter::Iterator::collect::<::std::vec::Vec<_>>(#rows)))
+                };
+                let arm = quote!(::core::iter::Iterator::flatten(::core::iter::once_with(move || {
+                    #(#statements)*
+                    #value
+                })));
+                chain = Some(match chain {
+                    None => arm,
+                    Some(previous) => quote!(::core::iter::Iterator::chain(#previous,#arm)),
+                });
+            }
+            let chain = chain.expect("union arms");
+            if matches!(union.witness, Some(physical::Witness::Any(_))) {
+                quote!(::core::iter::Iterator::take(#chain,1))
+            } else {
+                chain
+            }
+        };
+        Ok(quote!(::core::iter::Iterator::flat_map(#outer,move |#pattern| { #rows })))
+    }
     /// The rows of one physical operator, in the result's heading order.
     pub(super) fn produce(
         &mut self,
@@ -10,6 +207,8 @@ impl<'a> Printer<'a> {
         definition: &physical::Definition,
     ) -> syn::Result<TokenStream> {
         match &definition.operator {
+            Operator::Union(union) => self.union(name, union),
+            Operator::Anti(_, keyed) => self.membership(keyed, true),
             Operator::Unit(_) => Ok(quote!(::core::iter::once(()))),
             Operator::Rename(_) => Ok(self.host_scan(name)),
             Operator::Select(select) => {
@@ -37,7 +236,10 @@ impl<'a> Printer<'a> {
             }
             Operator::Guard(guard) => {
                 let input = self.scan(&guard.input)?;
-                let pattern = self.borrowed_pattern(&symbol_name(&guard.input));
+                let pattern = self.scoped_borrowed_pattern(
+                    &symbol_name(&guard.input),
+                    guard.environment.as_ref(),
+                );
                 let condition = &guard.condition;
                 Ok(quote! {
                     ::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| #condition)
@@ -46,18 +248,48 @@ impl<'a> Printer<'a> {
             Operator::Bind(bind) => {
                 let input = self.scan(&bind.input)?;
                 let input_name = symbol_name(&bind.input);
+                let previous = self.idents[&input_name].clone();
+                if let Some(environment) = &bind.environment {
+                    let names: std::collections::BTreeSet<_> =
+                        environment.variables.iter().map(symbol_name).collect();
+                    for column in self.heading(&input_name) {
+                        if !names.contains(column) {
+                            self.idents.get_mut(&input_name).unwrap().insert(
+                                column.clone(),
+                                format_ident!(
+                                    "__cq_bind_{}_{}",
+                                    name,
+                                    column,
+                                    span = proc_macro2::Span::mixed_site()
+                                ),
+                            );
+                        }
+                    }
+                }
                 let pattern = self.pattern(&input_name);
-                let shadows = self.shadows(&input_name);
+                let shadows = if bind.environment.is_some() {
+                    self.environment_aliases(&input_name, bind.environment.as_ref())
+                } else {
+                    self.shadows(&input_name)
+                };
                 let binding = &bind.pattern;
                 let annotation = &bind.annotation;
                 let value = &bind.expression;
-                let row = self.pattern(name);
-                Ok(quote! {
+                let row = self.row(name, |column| {
+                    if self.heading(&input_name).contains(&column.to_owned()) {
+                        self.ident(&input_name, column).to_token_stream()
+                    } else {
+                        self.ident(name, column).to_token_stream()
+                    }
+                });
+                let result = quote! {
                     ::core::iter::Iterator::map(#input, move |#pattern| {
                         let #binding #annotation = { #(#shadows)* #value };
                         #row
                     })
-                })
+                };
+                self.idents.insert(input_name, previous);
+                Ok(result)
             }
             Operator::Project(p) => {
                 let project = &p.input;
@@ -161,6 +393,9 @@ impl<'a> Printer<'a> {
 
     /// Keep the rows whose key the right side contains.
     pub(super) fn semi(&mut self, keyed: &physical::Keyed) -> syn::Result<TokenStream> {
+        self.membership(keyed, false)
+    }
+    fn membership(&mut self, keyed: &physical::Keyed, negative: bool) -> syn::Result<TokenStream> {
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
@@ -181,6 +416,7 @@ impl<'a> Printer<'a> {
                 self.chained_contains(&left, &structure, &symbol_name(&keyed.right), &levels)
             }
         };
+        let test = if negative { quote!(!(#test)) } else { test };
         Ok(quote! {
             ::core::iter::Iterator::filter(#input, move |&(#(#binders,)*)| #test)
         })
@@ -194,8 +430,19 @@ impl<'a> Printer<'a> {
         keyed: &physical::Keyed,
     ) -> syn::Result<TokenStream> {
         let columns = sorted(&keyed.columns);
-        let left = self.ordered(reader, &keyed.left, &columns)?;
-        let right = self.ordered(reader, &keyed.right, &columns)?;
+        let left = if self.active_prefixes.contains_key(&symbol_name(&keyed.left)) {
+            Side::Pipe(self.scan(&keyed.left)?)
+        } else {
+            self.ordered(reader, &keyed.left, &columns)?
+        };
+        let right = if self
+            .active_prefixes
+            .contains_key(&symbol_name(&keyed.right))
+        {
+            Side::Pipe(self.scan(&keyed.right)?)
+        } else {
+            self.ordered(reader, &keyed.right, &columns)?
+        };
         if [&keyed.left, &keyed.right].iter().any(|result| {
             let result = symbol_name(result);
             !self.analysis.host_read(&result) && self.owned_key(&result, &columns)

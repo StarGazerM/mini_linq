@@ -8,7 +8,16 @@
 //!
 //! The public surface accepts declarations, `theta_join L { ... } with
 //! R { ... } if expression;`, and `output answer(...);`. [`Query::indexes`]
-//! authors exact stream demands in IX without invoking a core planner.
+//! authors exact demands in IX without invoking a core planner. A complete
+//! `relational { ... }` input also forwards union/anti, block paths and origin
+//! metadata. Anti requests its exact F key; union adds no demand. Meaning and
+//! branch Before/order contracts remain the core language's.
+//! Core blocks preserve union and ordered fallback through this consumer.
+//! Their laws are join distribution over union and `B1 else B2 = B1 union
+//! (B2 anti_F B1)`. Common interface bindings escape; locals do not. The complete
+//! IR retains union/anti, nested occurrence paths and branch Before ancestry.
+//! Rust-free blocks hoist; Rust arms run from one prefix row with ordered else.
+//!
 use cq_lang_ix::{
     self as ix, ra,
     syntax::{self, symbol_name},
@@ -43,6 +52,11 @@ pub struct Query {
 
 impl Parse for Query {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(ra::kw::relational) {
+            let ra = input.parse()?;
+            ra::contract::check(&ra)?;
+            return Ok(Self { ra });
+        }
         let declarations = syntax::parse_declarations(input)?;
         input.parse::<kw::theta_join>()?;
         let left: Binding = input.parse()?;
@@ -86,28 +100,61 @@ impl Query {
         let mut indexes = syntax::SemicolonList::new();
         let mut seen = BTreeSet::new();
         for d in &self.ra.plan.definitions {
-            let ra::Operator::NaturalJoin(join) = &d.operator else {
-                continue;
+            let (right, keys, supply) = match &d.operator {
+                ra::Operator::NaturalJoin(join) => (
+                    &join.right,
+                    info[&symbol_name(&join.left)]
+                        .heading
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>(),
+                    ix::SupplyKind::Stream,
+                ),
+                ra::Operator::Semijoin(join) => (
+                    &join.right,
+                    info[&symbol_name(&join.left)]
+                        .heading
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>(),
+                    ix::SupplyKind::Stream,
+                ),
+                ra::Operator::Anti(anti) => (
+                    &anti.right,
+                    anti.columns.iter().map(symbol_name).collect(),
+                    ix::SupplyKind::Stream,
+                ),
+                ra::Operator::Select(select) => {
+                    let (keys, supply) = if let Some(keys) = select.condition.point_columns() {
+                        (keys, ix::SupplyKind::Const)
+                    } else if let Some((column, _)) = select.condition.range_bounds() {
+                        (BTreeSet::from([column]), ix::SupplyKind::Range)
+                    } else {
+                        continue;
+                    };
+                    (&select.input, keys, supply)
+                }
+                ra::Operator::Union(_)
+                | ra::Operator::Unit(_)
+                | ra::Operator::Rename(_)
+                | ra::Operator::Project(_)
+                | ra::Operator::Bind(_)
+                | ra::Operator::Guard(_) => continue,
             };
-            let columns: Vec<_> = info[&symbol_name(&join.right)]
+            let columns: Vec<_> = info[&symbol_name(right)]
                 .heading
                 .iter()
                 .enumerate()
-                .filter_map(|(i, c)| {
-                    info[&symbol_name(&join.left)]
-                        .heading
-                        .contains(c)
-                        .then_some(i)
-                })
+                .filter_map(|(i, c)| keys.contains(c).then_some(i))
                 .collect();
-            if seen.insert((symbol_name(&join.right), columns.clone())) {
+            if seen.insert((symbol_name(right), columns.clone(), supply)) {
                 indexes.push(ix::IndexDefinition {
-                    name: Ident::new(&format!("theta_key_{}", indexes.len()), join.right.span()),
+                    name: Ident::new(&format!("theta_key_{}", indexes.len()), right.span()),
                     eq_token: Default::default(),
                     requirement: ix::IndexRequirement {
-                        supply: ix::Supply::Stream(Default::default()),
+                        supply: supply.into(),
                         at_token: Default::default(),
-                        relation: join.right.clone(),
+                        relation: right.clone(),
                         bracket_token: Default::default(),
                         columns: columns.into_iter().map(syn::Index::from).collect(),
                     },
@@ -130,6 +177,27 @@ impl Query {
 mod tests {
     use super::*;
     use cq_testkit::{Database, PassCase, Rows, semantics};
+
+    #[test]
+    fn complete_union_and_anti_program_keeps_nested_occurrences() {
+        let source: Query = syn::parse_quote! {relational {
+            relation R(a:i32); relation S(a:i32);
+            r = rename R@0.0.0 {a -> x}; s = rename S@0.1.0 {a -> x};
+            a = anti [] s,r;
+            u = union r,a block @0 free[] interface[x] fallback;
+            output u as answer(x);
+        }};
+        let target = source.indexes().unwrap();
+        assert_eq!(target.ra, source.ra);
+        assert_eq!(
+            ix::signature(&target.indexes[0].requirement),
+            ("r".into(), vec![], syntax::SupplyKind::Stream)
+        );
+        assert!(matches!(
+            target.ra.plan.definitions[3].operator,
+            ra::Operator::Union(_)
+        ));
+    }
 
     #[test]
     fn complete_ix_fixture_and_invalid_descriptor_mutations() {

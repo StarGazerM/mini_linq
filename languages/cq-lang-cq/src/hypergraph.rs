@@ -101,20 +101,48 @@ impl Analysis {
     /// Formal rule H-Occurrence: Construct atom facts indexed by the complete normal-form body.
     /// Formal rule H-Incidence: Insert every atom clause into each variable incidence set.
     pub fn of(module: &Program) -> Analysis {
+        Self::of_body(&module.query.body, &BTreeSet::new())
+    }
+    pub fn of_body(body: &super::CommaList<BodyItem>, context: &BTreeSet<String>) -> Analysis {
         let mut analysis = Analysis::default();
-        let names: BTreeSet<_> = module
-            .query
-            .body
-            .iter()
-            .filter_map(BodyItem::atom)
-            .flat_map(super::Atom::variables)
-            .map(symbol_name)
-            .collect();
+        let mut prefix = context.clone();
+        let mut clauses = BTreeMap::new();
+        for (clause, item) in body.iter().enumerate() {
+            match item {
+                BodyItem::Positive { atom } => {
+                    let columns: Vec<_> = atom.variables().map(symbol_name).collect();
+                    prefix.extend(columns.iter().cloned());
+                    clauses.insert(clause, columns);
+                }
+                BodyItem::Block(block) => {
+                    let facts = block.analyze(&prefix);
+                    if !facts.rust {
+                        clauses.insert(
+                            clause,
+                            facts
+                                .free
+                                .keys()
+                                .chain(facts.interface.keys())
+                                .cloned()
+                                .collect(),
+                        );
+                    }
+                    prefix.extend(facts.interface.into_keys());
+                }
+                BodyItem::Let(binding) => prefix.extend(
+                    super::rust::bindings(&binding.pattern)
+                        .iter()
+                        .map(symbol_name),
+                ),
+                _ => (),
+            }
+        }
+        let names: BTreeSet<_> = clauses.values().flatten().cloned().collect();
         analysis.canonical_names = names
             .iter()
             .map(|name| (name.clone(), name.clone()))
             .collect();
-        for item in &module.query.body {
+        for item in body {
             if let BodyItem::Equality(super::Equality {
                 left,
                 right: super::EqualityValue::Variable(right),
@@ -142,11 +170,7 @@ impl Analysis {
             }
         }
         let mut edges = BTreeMap::new();
-        for (clause, item) in module.query.body.iter().enumerate() {
-            let BodyItem::Positive { atom } = item else {
-                continue;
-            };
-            let columns: Vec<String> = atom.variables().map(symbol_name).collect();
+        for (clause, columns) in clauses {
             // Expanding an equality class in each incident edge preserves the
             // relational join graph while retaining actual alias names for VO.
             let edge: BTreeSet<_> = names

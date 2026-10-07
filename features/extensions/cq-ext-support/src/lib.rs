@@ -8,6 +8,18 @@
 //! Structural checks preserve leaves, declaration order, and fresh binders.
 //! Runtime evidence assumes finite immutable hosts, Leibniz equality and pure
 //! opaque Rust expressions, with the core's written-order refinement meaning.
+//! Unowned core blocks are preserved through surface queues.
+//! Rules are parsed separately before extension-owned syntax is expanded; the core performs multi-rule union sugar afterward.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use std::collections::BTreeSet;
 
 use cq_lang_cq::{BodyItem, Program, Query};
@@ -118,7 +130,7 @@ pub struct Rules {
 }
 impl Parse for Rules {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let first = input.parse()?;
+        let first = Program::parse_single(input)?;
         let mut rest = Vec::new();
         while !input.is_empty() {
             rest.push(input.parse()?);
@@ -295,6 +307,11 @@ pub fn distinct(stream: TokenStream, fresh: &mut Fresh, role: &str) -> TokenStre
 
 pub fn bound(item: &BodyItem) -> Vec<Ident> {
     match item {
+        BodyItem::Block(block) => block
+            .analyze(&BTreeSet::new())
+            .interface
+            .into_values()
+            .collect(),
         BodyItem::Positive { atom } => atom.variables().cloned().collect(),
         BodyItem::Let(binding) => rust::bindings(&binding.pattern),
         _ => Vec::new(),
@@ -345,7 +362,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(quotation(&quote!(union!{opaque} extra), "union").is_err());
+        assert!(quotation(&quote!(owned!{opaque} extra), "owned").is_err());
         let result = surface(quote!(pipeline {}; struct Q;), |_, _| Ok(None));
         assert!(result.to_string().contains("requires a remaining pipeline"));
     }

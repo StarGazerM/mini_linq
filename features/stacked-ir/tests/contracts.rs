@@ -139,3 +139,17 @@ fn trace_parsing_and_contract_reject_invalid_programs() {
     assert!(leave::compile(&invalid).is_err());
     assert!(!trace::Program::terminal());
 }
+
+#[test]
+fn round_trip_preserves_union_anti_and_branch_paths() {
+    let a = [(1_i32,), (2,)];
+    let b = [(2_i32,), (3,)];
+    let rows: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline {physical = [stacked_ir::round_trip];}
+        struct Q; relation A(x:i32)=(a); relation B(x:i32)=(b);
+        answer(x) :- {{A(x)} | {A(x)}} else {B(x)};
+    }
+    .map(|(x,)| *x)
+    .collect();
+    assert_eq!(rows, std::collections::BTreeSet::from([1, 2]));
+}

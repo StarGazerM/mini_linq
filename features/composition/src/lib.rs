@@ -31,6 +31,12 @@
 //! assert_eq!(answers.into_iter().map(|(a, b, c)| (*a, *b, *c)).collect::<Vec<_>>(),
 //!            vec![(1, 10, 100)]);
 //! ```
+//! Core blocks preserve union and ordered fallback through this consumer.
+//! Their laws are join distribution over union and `B1 else B2 = B1 union
+//! (B2 anti_F B1)`. Common interface bindings escape; locals do not. The complete
+//! IR retains union/anti, nested occurrence paths and branch Before ancestry.
+//! Rust-free blocks hoist; Rust arms run from one prefix row with ordered else.
+//!
 #![recursion_limit = "512"]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -66,6 +72,27 @@ pub fn query<'a>(
 mod tests {
     use super::*;
     use cq_testkit::{Database, Rows, cq_semantics, harness};
+
+    #[test]
+    fn composed_pipeline_preserves_nested_union_and_fallback() {
+        let L = [(1_i32,), (2,), (3,)];
+        let R = HashMap::from([((1_i32,), vec![(10_i32,)])]);
+        let S = BTreeMap::from([((1_i32,), vec![(99_i32,)]), ((2,), vec![(20,)])]);
+        let answer: Rows = mini_linq::compile! {
+            pipeline {
+                plan = mini_linq::passes::plan_written;
+                ix = mini_linq::passes::index_demands;
+                lower = mini_linq::passes::lower;
+                select = mini_linq::passes::select;
+                print = mini_linq::passes::print_pull;
+            }
+            struct Q; relation L(a:i32); relation R(a:i32,b:i32); relation S(a:i32,b:i32);
+            answer(a,b) :- L(a), {{R(a,b)} | {R(a,b)}} else {S(a,b)};
+        }
+        .map(|(a, b)| vec![*a, *b])
+        .collect();
+        assert_eq!(answer, Rows::from([vec![1, 10], vec![2, 20]]));
+    }
 
     fn source() -> cq_testkit::cq::Program {
         syn::parse_quote! {

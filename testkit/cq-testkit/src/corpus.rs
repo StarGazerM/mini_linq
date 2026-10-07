@@ -50,6 +50,8 @@ impl Scenario {
     /// Every built-in scenario has a case. User-created scenarios may not.
     pub fn case(&self) -> Option<&'static Case> {
         let name = match self.name {
+            "block_union" => "union_overlap",
+            "block_fallback" => "fallback_per_free_row",
             "fine_triangle" => "triangle",
             "ya_composite_reduced" => "ya_composite",
             "ya_deep_reduced" => "ya_deep",
@@ -57,7 +59,10 @@ impl Scenario {
             "ya_disconnected_reduced" => "ya_disconnected",
             name => name,
         };
-        CASES.iter().find(|case| case.name == name)
+        CASES
+            .iter()
+            .chain(crate::blocks::CASES)
+            .find(|case| case.name == name)
     }
 }
 

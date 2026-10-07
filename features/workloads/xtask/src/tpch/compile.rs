@@ -27,7 +27,6 @@ pub(super) fn build(root: &Path, source: &Path, name: &str) -> Result<Built> {
         "cq-ext-aggregate",
         "cq-ext-correlated",
         "cq-ext-negation",
-        "cq-ext-union",
     ])?);
     manifest.push_str("cq-load = { version = \"0.1.0\" }\n");
     // Add Parquet to the resolved public cq-load dependency, retaining its source.

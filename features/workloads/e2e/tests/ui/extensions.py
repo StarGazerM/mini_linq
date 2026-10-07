@@ -14,8 +14,8 @@ LOGS.mkdir(parents=True, exist_ok=True)
 DIRECTORY = Path(tempfile.mkdtemp(prefix="consumer-", dir=LOGS))
 env = dict(os.environ, CARGO_TARGET_DIR=str(LOGS / "target"), CARGO_TERM_COLOR="never")
 cases = [
-    ("union_head", "cq_ext_union::union", "struct U; answer(x) :- A(x); other(x) :- B(x);", "same head relation"),
-    ("union_arity", "cq_ext_union::union", "struct U; answer(x) :- A(x); answer(x,y) :- B(x,y);", "same arity"),
+    ("union_head", "mini_linq::mini_linq", "struct U; answer(x) :- A(x); other(x) :- B(x);", "same head relation"),
+    ("union_arity", "mini_linq::mini_linq", "struct U; answer(x) :- A(x); answer(x,y) :- B(x,y);", "same head relation and arity"),
     ("negative_self", "cq_ext_negation::negation", "struct N; relation A(x:i32); relation answer(x:i32); answer(*x) :- A(x), neg!{answer(x)};", "not the query result"),
     ("negative_dependency", "cq_ext_negation::negation", "struct N; relation A(x:i32); relation S(x:i32,y:i32); answer(x) :- A(x), neg!{S(x,_); depends {S -> T; T -> answer;}};", "unstratified negation"),
     ("negative_scope", "cq_ext_negation::negation", "struct N; relation A(x:i32); relation S(x:i32,y:i32); answer(x) :- A(x), neg!{S(y,_)};", "not bound before"),
@@ -28,7 +28,7 @@ cases = [
     ("unexpanded", "mini_linq::mini_linq", "struct C; relation A(x:i32); answer(x) :- A(x),name!{opaque tokens};", "name!"),
 ]
 manifest = '[package]\nname = "extension-ui"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
-manifest += dependencies(CARGO, ["mini-linq", "cq-storage", *["cq-ext-" + name for name in ["union", "negation", "aggregate", "recursion", "correlated"]]], env)
+manifest += dependencies(CARGO, ["mini-linq", "cq-storage", *["cq-ext-" + name for name in ["negation", "aggregate", "recursion", "correlated"]]], env)
 for name, macro, source, _ in cases:
     path = DIRECTORY / f"{name}.rs"
     if macro.startswith("cq_ext_"):

@@ -89,6 +89,7 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
                 lets += 1;
                 nth(lets - 1, |item| matches!(item, BodyItem::Let(_)))
             }
+            valuation::Step::Block(b, _) => b.source.clause(),
             valuation::Step::Reduce(..) => unreachable!("order emits no reductions"),
         })
         .collect()

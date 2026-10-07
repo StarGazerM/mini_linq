@@ -29,6 +29,18 @@
 //! Rust realization, validated by differential execution and ownership/laziness
 //! tests, without a claim of deciding arbitrary Rust semantic equality.
 //!
+//! Core blocks forward through this surface.
+//! For multiple rules, owned negatives expand per rule with shared leaves and fresh hosts before core union sugar, so opaque extension tokens never undergo another language's renaming.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 mod expansion;
 
 #[proc_macro]
@@ -39,14 +51,23 @@ pub fn negation(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         if !owned && !cq_ext_support::is_cq(tokens) {
             return Ok(None);
         }
-        let source: cq_lang_cq::Program = syn::parse2(quoted.unwrap_or_else(|| tokens.clone()))?;
-        if !owned && !source.query.body.iter().any(|item| {
+        let source: cq_ext_support::Rules = syn::parse2(quoted.unwrap_or_else(|| tokens.clone()))?;
+        if !owned
+            && !source.queries().any(|query| {
+                query.body.iter().any(|item| {
             matches!(item, cq_lang_cq::BodyItem::Extension { name, .. } if name == "neg")
-        }) {
+        })
+            })
+        {
             return Ok(None);
         }
-        let plan = expansion::compile(&source)?;
-        expansion::check(&source, &plan)?;
+        let plan = if source.rest.is_empty() {
+            let plan = expansion::compile(&source.first)?;
+            expansion::check(&source.first, &plan)?;
+            plan
+        } else {
+            expansion::compile_rules(&source)?
+        };
         expansion::render(&plan, pipeline).map(Some)
     })
     .into()

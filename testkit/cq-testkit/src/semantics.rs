@@ -32,6 +32,29 @@ pub fn evaluate_plan<'a>(
     let mut definitions = BTreeMap::<String, Relation>::new();
     for definition in &plan.definitions {
         let relation = match &definition.operator {
+            ra::Operator::Union(union) => {
+                let first = &definitions[&symbol_name(&union.operands[0])];
+                Relation {
+                    heading: first.heading.clone(),
+                    rows: union
+                        .operands
+                        .iter()
+                        .flat_map(|id| definitions[&symbol_name(id)].rows.iter().cloned())
+                        .collect(),
+                }
+            }
+            ra::Operator::Anti(anti) => {
+                let mut left = definitions[&symbol_name(&anti.left)].clone();
+                let right = &definitions[&symbol_name(&anti.right)];
+                left.rows.retain(|row| {
+                    !right.rows.iter().any(|witness| {
+                        anti.columns
+                            .iter()
+                            .all(|c| row[&symbol_name(c)] == witness[&symbol_name(c)])
+                    })
+                });
+                left
+            }
             ra::Operator::Unit(_) => Relation {
                 heading: BTreeSet::new(),
                 rows: BTreeSet::from([Binding::new()]),

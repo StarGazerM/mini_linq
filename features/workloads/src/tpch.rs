@@ -37,6 +37,12 @@ pub const CASES: &[Case] = &[
         tpch_query: None,
     },
     Case {
+        name: "retail_h07_block",
+        rust_path: "workloads/src/queries/retail/tpch/retail_h07_block.rs",
+        sql_path: None,
+        tpch_query: None,
+    },
+    Case {
         name: "retail_h08",
         rust_path: "workloads/src/queries/retail/tpch/retail_h08.rs",
         sql_path: None,

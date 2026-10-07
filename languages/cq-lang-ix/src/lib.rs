@@ -11,6 +11,18 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
+//! IX preserves union/anti and block paths.
+//! Anti requests membership on its exact F heading, while union streams each operand without adding an index demand.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 pub use cq_lang_ra as ra;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -186,6 +198,18 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
         let (left, right) = match &definition.operator {
             ra::Operator::NaturalJoin(j) => (&j.left, &j.right),
             ra::Operator::Semijoin(j) => (&j.left, &j.right),
+            ra::Operator::Anti(anti) => {
+                let input = symbol_name(&anti.right);
+                let key: BTreeSet<_> = anti.columns.iter().map(symbol_name).collect();
+                let columns = info[&input]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| key.contains(c).then_some(i))
+                    .collect();
+                expected.insert((input, columns, SupplyKind::Stream));
+                continue;
+            }
             ra::Operator::Select(selection) => {
                 if let Some(keys) = selection.condition.point_columns() {
                     let input = symbol_name(&selection.input);

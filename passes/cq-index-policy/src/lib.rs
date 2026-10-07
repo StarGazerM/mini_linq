@@ -8,6 +8,17 @@
 //! exactly and create no demands. A literal selection supplies one fixed key,
 //! equivalent to a natural join with a one-tuple relation.
 
+//! Demand derivation preserves union and occurrence paths and derives exact anti membership keys independently of the constructor.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 use std::collections::BTreeSet;
 
 use cq_lang_ix as ix;
@@ -50,6 +61,16 @@ pub fn compile(source: &ra::Program) -> syn::Result<ix::Program> {
                     .collect();
                 (&join.right, columns, ix::SupplyKind::Stream)
             }
+            ra::Operator::Anti(anti) => {
+                let key: BTreeSet<_> = anti.columns.iter().map(symbol_name).collect();
+                let columns = info[&symbol_name(&anti.right)]
+                    .heading
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| key.contains(c).then_some(i))
+                    .collect::<Vec<_>>();
+                (&anti.right, columns, ix::SupplyKind::Stream)
+            }
             ra::Operator::Select(selection) => {
                 let (keys, supply) = if let Some(keys) = selection.condition.point_columns() {
                     (keys, ix::SupplyKind::Const)
@@ -66,7 +87,8 @@ pub fn compile(source: &ra::Program) -> syn::Result<ix::Program> {
                     .collect();
                 (&selection.input, columns, supply)
             }
-            ra::Operator::Unit(_)
+            ra::Operator::Union(_)
+            | ra::Operator::Unit(_)
             | ra::Operator::Rename(_)
             | ra::Operator::Project(_)
             | ra::Operator::Bind(_)

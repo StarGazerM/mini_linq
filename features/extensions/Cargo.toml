@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "cq-ext-support",
-    "cq-ext-union",
     "cq-ext-negation",
     "cq-ext-aggregate",
     "cq-ext-recursion",

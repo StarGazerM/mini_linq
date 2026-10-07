@@ -1,3 +1,10 @@
+//! Core body blocks `{ B1 } | { B2 }` union answers and `{ B1 } else { B2 }`
+//! select the first nonempty arm. Two nonempty branches are required; nesting
+//! handles mixed operators. Common interface names escape; other binders stay
+//! local. Join distributes over union, and fallback is `B1 union (B2 anti_F B1)`.
+//! The complete IR records hoisting or per-row fusion, canon/witness decisions,
+//! negative references and Rust source paths with inherited Before facts.
+//!
 mod bench;
 mod cargo;
 mod explain;

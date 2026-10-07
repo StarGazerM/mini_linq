@@ -6,7 +6,21 @@
 //! Erasure must preserve every non-reduction step exactly. Rust guards are
 //! never pushed onto atom inputs, including under the legacy `Atoms` option.
 
-use std::collections::BTreeMap;
+//! Reduction recursively retains block paths.
+//! Positive semijoins may distribute into union arms and fallback positive arms.
+//! Negative operands stay original named branch results.
+//! Hypergraph reduction also cuts surrounding relations through the derived block heading.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
+use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_vo as valuation;
 use cq_lang_vo::syntax as cq;
@@ -37,6 +51,9 @@ pub enum Reductions {
     None,
     /// The Yannakakis full reducer over the join tree.
     Tree,
+    /// A full reducer when acyclic, plus direct cuts of surrounding atoms by
+    /// Rust-free block relations. Cyclic joins still benefit from those cuts.
+    Hypergraph,
 }
 
 /// Insert the reductions `options` ask for, then check the VO contract.
@@ -44,38 +61,15 @@ pub enum Reductions {
 /// Formal rule R-Tree: Insert the relational tree schedule before the first atom.
 pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
     let analysis = valuation::contract::check(source)?;
-    if let Some(step) = source
-        .valuation
-        .steps
-        .iter()
-        .find(|step| matches!(step, Step::Reduce(..)))
-    {
-        return Err(syn::Error::new_spanned(
-            step,
-            "the plan already carries reductions",
-        ));
-    }
-    let first_atom = source
-        .valuation
-        .steps
-        .iter()
-        .position(|step| matches!(step, Step::Atom(..)));
-    let mut before: BTreeMap<usize, Vec<Step>> = BTreeMap::new();
-    if options.semijoins == Reductions::Tree {
-        let reducer = tree(source, &analysis)?;
-        if let Some(first) = first_atom {
-            before.entry(first).or_default().extend(reducer);
-        }
-    }
-    let mut steps = Vec::with_capacity(
-        source.valuation.steps.len() + before.values().map(Vec::len).sum::<usize>(),
-    );
-    for (position, step) in source.valuation.steps.iter().enumerate() {
-        if let Some(reductions) = before.remove(&position) {
-            steps.extend(reductions);
-        }
-        steps.push(step.clone());
-    }
+    let graph = valuation::cq::hypergraph::Analysis::of(&source.cq);
+    let steps = compile_steps(
+        &source.cq.query.body,
+        &source.valuation.steps,
+        &analysis,
+        &graph,
+        None,
+        options,
+    )?;
     let program = valuation::Program {
         cq: source.cq.clone(),
         valuation: valuation::Valuation {
@@ -88,17 +82,162 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
     Ok(program)
 }
 
+fn compile_steps(
+    body: &cq::CommaList<valuation::cq::BodyItem>,
+    source_steps: &[Step],
+    analysis: &valuation::Analysis,
+    graph: &valuation::cq::hypergraph::Analysis,
+    parent: Option<(valuation::Occurrence, usize)>,
+    options: &Options,
+) -> syn::Result<Vec<Step>> {
+    if let Some(step) = source_steps
+        .iter()
+        .find(|step| matches!(step, Step::Reduce(..)))
+    {
+        return Err(syn::Error::new_spanned(
+            step,
+            "the plan already carries reductions",
+        ));
+    }
+    let first_atom = source_steps
+        .iter()
+        .position(|step| matches!(step, Step::Atom(..) | Step::Block(..)));
+    let mut before: BTreeMap<usize, Vec<Step>> = BTreeMap::new();
+    if options.semijoins == Reductions::Tree
+        || options.semijoins == Reductions::Hypergraph && graph.acyclic
+    {
+        let reducer = tree(graph, analysis, body)?;
+        if let Some(first) = first_atom {
+            before.entry(first).or_default().extend(reducer);
+        }
+    }
+    if options.semijoins == Reductions::Hypergraph {
+        let mut cuts = Vec::new();
+        for (&block, _) in graph
+            .clauses
+            .iter()
+            .filter(|(c, _)| matches!(&body[**c], valuation::cq::BodyItem::Block(_)))
+        {
+            for (&clause, _) in graph
+                .clauses
+                .iter()
+                .filter(|(c, _)| body[**c].atom().is_some())
+            {
+                if !graph.shared(clause, block).is_empty() {
+                    cuts.push(semijoin(analysis, graph, clause, block));
+                }
+            }
+        }
+        if let Some(first) = first_atom {
+            let existing = before.entry(first).or_default();
+            cuts.retain(|cut| !existing.contains(cut));
+            cuts.extend(std::mem::take(existing));
+            *existing = cuts;
+        }
+    }
+    let required: BTreeSet<_> = analysis
+        .domain_requires
+        .values()
+        .flatten()
+        .cloned()
+        .collect();
+    if !required.is_empty() {
+        let position = analysis
+            .bound_before
+            .iter()
+            .position(|names| required.iter().all(|name| names.contains(name)))
+            .ok_or_else(|| {
+                syn::Error::new_spanned(
+                    body,
+                    "block finite domain requires its written Rust context",
+                )
+            })?;
+        let reductions = std::mem::take(&mut before)
+            .into_values()
+            .flatten()
+            .collect();
+        before.insert(position, reductions);
+    }
+    let mut steps =
+        Vec::with_capacity(source_steps.len() + before.values().map(Vec::len).sum::<usize>());
+    for (position, step) in source_steps.iter().enumerate() {
+        if let Some(reductions) = before.remove(&position) {
+            steps.extend(reductions.into_iter().map(|mut step| {
+                if let Step::Reduce(reduce, _) = &mut step {
+                    let target = reduce.clause();
+                    let Reduction::With(_, support) = &mut reduce.reduction;
+                    let clause = support.clause();
+                    reduce.clause = parent.as_ref().map_or_else(
+                        || valuation::Occurrence::new(target),
+                        |(path, j)| path.child(*j, target),
+                    );
+                    support.clause = parent.as_ref().map_or_else(
+                        || valuation::Occurrence::new(clause),
+                        |(path, j)| path.child(*j, clause),
+                    );
+                }
+                step
+            }));
+        }
+        let mut step = step.clone();
+        if let Step::Block(block, _) = &mut step {
+            let clause = block.source.clause();
+            let valuation::cq::BodyItem::Block(written) = &body[clause] else {
+                unreachable!("checked block")
+            };
+            for (j, branch) in block.branches.iter_mut().enumerate() {
+                let info = &analysis.branches[&clause][j];
+                let context = info
+                    .bound_before
+                    .first()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+                let inner = valuation::cq::hypergraph::Analysis::of_body(
+                    &written.branches[j].body,
+                    &context,
+                );
+                let options = Options {
+                    guards: options.guards,
+                    semijoins: if options.semijoins == Reductions::Tree && !inner.acyclic {
+                        Reductions::None
+                    } else {
+                        options.semijoins
+                    },
+                };
+                branch.steps = compile_steps(
+                    &written.branches[j].body,
+                    &branch.steps,
+                    info,
+                    &inner,
+                    Some((block.source.clause.clone(), j)),
+                    &options,
+                )?;
+            }
+        }
+        steps.push(step);
+    }
+    Ok(steps)
+}
+
 mod correspondence;
 pub use correspondence::check;
 
 /// Erase only semijoin reductions, preserving all opaque Rust positions.
-fn erase(module: &valuation::Program) -> Vec<Step> {
-    module
-        .valuation
-        .steps
+fn erase_steps(steps: &[Step]) -> Vec<Step> {
+    steps
         .iter()
         .filter(|step| !matches!(step, Step::Reduce(..)))
         .cloned()
+        .map(|mut step| {
+            if let Step::Block(block, _) = &mut step {
+                for branch in &mut block.branches {
+                    branch.steps = erase_steps(&branch.steps);
+                }
+            }
+            step
+        })
         .collect()
 }
 
@@ -106,10 +245,14 @@ fn erase(module: &valuation::Program) -> Vec<Step> {
 /// then Y-DOWN, root first: reverse BFS upward, BFS downward.
 /// Formal rule Y-Up: Produce upward parent-with-child VO steps in reverse BFS order.
 /// Formal rule Y-Down: Produce downward child-with-parent VO steps in BFS order.
-fn tree(source: &valuation::Program, analysis: &valuation::Analysis) -> syn::Result<Vec<Step>> {
-    let Some(join_tree) = valuation::cq::hypergraph::Analysis::of(&source.cq).join_tree else {
+fn tree(
+    graph: &valuation::cq::hypergraph::Analysis,
+    analysis: &valuation::Analysis,
+    body: &cq::CommaList<valuation::cq::BodyItem>,
+) -> syn::Result<Vec<Step>> {
+    let Some(join_tree) = &graph.join_tree else {
         return Err(syn::Error::new_spanned(
-            source.valuation.valuation_token,
+            body,
             "Yannakakis reduction requires an acyclic query",
         ));
     };
@@ -136,14 +279,7 @@ fn tree(source: &valuation::Program, analysis: &valuation::Analysis) -> syn::Res
     let down = order.iter().skip(1).map(edge).map(|(p, c)| (c, p));
     Ok(up
         .chain(down)
-        .map(|(target, support)| {
-            semijoin(
-                analysis,
-                &valuation::cq::hypergraph::Analysis::of(&source.cq),
-                target,
-                support,
-            )
-        })
+        .map(|(target, support)| semijoin(analysis, graph, target, support))
         .collect())
 }
 
@@ -177,7 +313,7 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> Subat
     Subatom {
         relation: atom.relation.clone(),
         at: Default::default(),
-        clause: index(clause),
+        clause: index(clause).into(),
         paren: Default::default(),
         columns,
     }
@@ -189,7 +325,7 @@ fn reduce(clause: usize, atom: &cq::Atom, reduction: Reduction) -> Step {
             reduce_token: Default::default(),
             relation: atom.relation.clone(),
             at: Default::default(),
-            clause: index(clause),
+            clause: index(clause).into(),
             reduction,
         },
         Default::default(),

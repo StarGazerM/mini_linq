@@ -35,7 +35,28 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
-pub use cq_syntax::algebra::{AttributeRename, Bind, Guard, Project, Rename, Select, Theta, Unit};
+//! RA grammar adds union r1, r2, ...
+//! with identical headings and anti [F] r, s.
+//! Block origin records free/interface headings, ordered fallback, prefix correlation and optional finite context domain.
+//! Projections remove local witnesses; negative operands name unmodified original results.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
+//! `scope[names] @c.j.k` records a Rust step's lexical inputs and source path.
+//! Prefix Rust reached through a positive semijoin remains outside the arm;
+//! no such context reduction may modify a negated original branch.
+//!
+pub use cq_syntax::algebra::{
+    Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain, Environment, Guard, Project,
+    Rename, Select, Theta, Union, Unit,
+};
 pub use cq_syntax::{Equality, EqualityValue};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -104,6 +125,10 @@ pub struct Definition {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Operator {
+    #[parse(peek = kw::union)]
+    Union(Box<Union>),
+    #[parse(peek = kw::anti)]
+    Anti(Box<Anti>),
     // Unit is supplied for global optional-HW4 clauses. OPTIONAL HW4 —
     // STUDENT 3/6 (LOGICAL): add AntiSemijoin and AggregateApply as
     // languages/cq-lang-cq/tests/hw4_optional.rs requires.
@@ -169,7 +194,7 @@ pub type Analysis = BTreeMap<String, RelationInfo>;
 pub mod contract {
     /// Structural facts of a checked relational schedule. DAG nodes refer to
     /// earlier nodes; VO states its obligations here without running elaboration.
-    #[derive(Default)]
+    #[derive(Default, Clone)]
     pub struct Schedule {
         pub(super) nodes: Vec<super::structural::Node>,
         pub(super) atoms: std::collections::HashMap<usize, super::structural::Atom>,
@@ -181,6 +206,7 @@ pub mod contract {
         pub(super) full_reads: Vec<(usize, usize)>,
         pub(super) row_views: Vec<super::structural::RowView>,
         pub(super) view_requests: Vec<(usize, usize, bool)>,
+        pub(super) paths: std::collections::BTreeMap<cq_syntax::Occurrence, usize>,
     }
 
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
@@ -253,10 +279,116 @@ fn check_in<'a>(
         // rules for AntiSemijoin and AggregateApply as
         // languages/cq-lang-cq/tests/hw4_optional.rs requires.
         let (heading, operands) = match &definition.operator {
+            Operator::Union(union) => {
+                if union.operands.len() < 2 {
+                    return Err(syn::Error::new_spanned(
+                        union,
+                        "union requires at least two operands",
+                    ));
+                }
+                let mut operands = Vec::new();
+                let mut heading = None;
+                let mut declared_types = BTreeMap::new();
+                for operand in &union.operands {
+                    let (name, info) = earlier_relation(operand, &relations)?;
+                    if heading.as_ref().is_some_and(|h| h != &info.heading) {
+                        return Err(syn::Error::new_spanned(
+                            operand,
+                            "union operand headings must be identical",
+                        ));
+                    }
+                    for (column, ty) in &info.types {
+                        if !info.computed.contains(column) {
+                            if declared_types
+                                .get(column)
+                                .is_some_and(|previous| previous != ty)
+                            {
+                                return Err(syn::Error::new_spanned(
+                                    operand,
+                                    format!(
+                                        "union interface `{column}` has different declared types"
+                                    ),
+                                ));
+                            }
+                            declared_types.insert(column.clone(), ty.clone());
+                        }
+                    }
+                    heading = Some(info.heading.clone());
+                    operands.push(name);
+                }
+                if let Some(origin) = &union.origin {
+                    origin.occurrence.check()?;
+                    let free: BTreeSet<_> = origin.free.iter().map(symbol_name).collect();
+                    let interface: BTreeSet<_> = origin.interface.iter().map(symbol_name).collect();
+                    if free.len() != origin.free.len()
+                        || interface.len() != origin.interface.len()
+                        || !free.is_disjoint(&interface)
+                    {
+                        return Err(syn::Error::new_spanned(
+                            origin,
+                            "block free and interface columns must be distinct",
+                        ));
+                    }
+                    if let Some(domain) = &origin.domain {
+                        if origin.over.is_some()
+                            || earlier_relation(&domain.input, &relations)?.1.heading != free
+                        {
+                            return Err(syn::Error::new_spanned(
+                                domain,
+                                "a hoisted block domain must have exactly its free heading",
+                            ));
+                        }
+                    }
+                    let mut expected: BTreeSet<_> = origin
+                        .free
+                        .iter()
+                        .chain(&origin.interface)
+                        .map(symbol_name)
+                        .collect();
+                    if let Some(over) = &origin.over {
+                        let prefix = &earlier_relation(&over.prefix, &relations)?.1.heading;
+                        if !free.is_subset(prefix) || !interface.is_disjoint(prefix) {
+                            return Err(syn::Error::new_spanned(
+                                origin,
+                                "a correlated block requires its free columns and supplies fresh interface columns",
+                            ));
+                        }
+                        expected.extend(prefix.iter().cloned());
+                    }
+                    if heading.as_ref() != Some(&expected) {
+                        return Err(syn::Error::new_spanned(
+                            origin,
+                            "block union must project exactly its context and interface",
+                        ));
+                    }
+                }
+                (heading.expect("nonempty union"), operands)
+            }
+            Operator::Anti(anti) => {
+                let (left_name, left) = earlier_relation(&anti.left, &relations)?;
+                let (right_name, right) = earlier_relation(&anti.right, &relations)?;
+                let mut columns = BTreeSet::new();
+                for column in &anti.columns {
+                    let name = symbol_name(column);
+                    if !columns.insert(name.clone())
+                        || !left.heading.contains(&name)
+                        || !right.heading.contains(&name)
+                    {
+                        return Err(syn::Error::new_spanned(
+                            column,
+                            "anti key must list distinct columns available in both operands",
+                        ));
+                    }
+                    check_leibniz(&left.types[&name], column)?;
+                    check_leibniz(&right.types[&name], column)?;
+                }
+                (left.heading.clone(), vec![left_name, right_name])
+            }
             Operator::Unit(_) => (Heading::new(), Vec::new()),
             Operator::Rename(rename) => {
-                let occurrence = rename.occurrence.base10_parse::<usize>()?;
-                if !occurrences.insert(occurrence) {
+                rename.occurrence.check()?;
+                let occurrence = &rename.occurrence;
+                if !occurrences.insert(occurrence.clone()) {
                     return Err(syn::Error::new_spanned(
                         &rename.occurrence,
                         format!("atom occurrence @{occurrence} is realized more than once"),
@@ -358,12 +490,22 @@ fn check_in<'a>(
             }
             Operator::Guard(guard) => {
                 let (name, input) = earlier_relation(&guard.input, &relations)?;
-                check_uses(&guard.condition, &input.heading)?;
+                if guard.environment.is_none() {
+                    check_uses(&guard.condition, &input.heading)?;
+                }
+                if let Some(environment) = &guard.environment {
+                    environment.check(&input.heading, &guard.condition)?;
+                }
                 (input.heading.clone(), vec![name])
             }
             Operator::Bind(bind) => {
                 let (name, input) = earlier_relation(&bind.input, &relations)?;
-                check_uses(&bind.expression, &input.heading)?;
+                if bind.environment.is_none() {
+                    check_uses(&bind.expression, &input.heading)?;
+                }
+                if let Some(environment) = &bind.environment {
+                    environment.check(&input.heading, &bind.expression)?;
+                }
                 let mut heading = input.heading.clone();
                 for column in cq_syntax::rust::bindings(&bind.pattern) {
                     if !heading.insert(symbol_name(&column)) {
@@ -444,20 +586,33 @@ fn check_in<'a>(
                 ancestry = branch.clone();
                 continue;
             }
-            return Err(syn::Error::new_spanned(
-                &definition.operator,
-                "Rust chain nodes must form one ancestry chain",
-            ));
+            if matches!(definition.operator, Operator::Union(_)) {
+                for name in branch {
+                    if !ancestry.contains(name) {
+                        ancestry.push(name.clone());
+                    }
+                }
+            } else {
+                return Err(syn::Error::new_spanned(
+                    &definition.operator,
+                    "Rust chain nodes must form one ancestry chain",
+                ));
+            }
         }
         if matches!(definition.operator, Operator::Bind(_) | Operator::Guard(_)) {
-            if ancestry != chain {
+            if ancestry != chain
+                && !plan
+                    .definitions
+                    .iter()
+                    .any(|d| matches!(d.operator, Operator::Union(_)))
+            {
                 return Err(syn::Error::new_spanned(
                     &definition.operator,
                     "Rust chain nodes must form one ancestry chain in written order",
                 ));
             }
             chain.push(result_name.clone());
-            ancestry = chain.clone();
+            ancestry.push(result_name.clone());
         }
         match &definition.operator {
             Operator::NaturalJoin(_) | Operator::Semijoin(_) => {
@@ -639,7 +794,9 @@ fn check_leibniz(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
     cq_syntax::algebra::check_leibniz_type(ty, column)
 }
 
+mod constants;
 mod structural;
+pub use constants::disjoint_unions;
 
 /// Check local contracts and fixed structural obligations of an RA rewrite.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {

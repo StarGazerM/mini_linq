@@ -118,3 +118,9 @@ IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Paramet
 IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.
 CQ-GuardRecognize	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardRecognize:	Rust comparison trait operations and pure boolean structure under Eq/Ord premises.
 CQ-GuardSplit	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardSplit:	Extract total conjuncts; keep one written-order residual; selecting earlier only shrinks opaque evaluation domains.
+Block-Union	abstract	-	-	Bottom plus Set union; permutation and witness short circuit are refinements.
+Block-Else	abstract	-	-	Ordered first nonempty branch with lazy later Rust.
+CQ-Block	implementation	languages/cq-lang-cq/src/blocks.rs	pub fn analyze(&self	Interface/free/local structural scope and declared type agreement.
+RA-Union	implementation	languages/cq-lang-ra/src/lib.rs	Operator::Union(union) =>	Equal common headings and recorded branch provenance.
+RA-Anti	implementation	languages/cq-lang-ra/src/structural.rs	pub fn anti(&mut self	Left-heading antijoin on explicit free columns.
+PH-Block	implementation	languages/cq-lang-physical/src/lib.rs	fn branch_scopes(program:	Branch tree and Before obligations; execution choices remain recorded.

@@ -67,8 +67,8 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
     let family_name = family.to_string();
     let surfaces = match family_name.as_str() {
         "surface" => quote!(),
-        "union" => quote!(::cq_ext_union::union),
-        "stacked" => quote!(::cq_ext_union::union, ::cq_ext_negation::negation),
+        "union" => quote!(),
+        "stacked" => quote!(::cq_ext_negation::negation),
         "negation" => quote!(::cq_ext_negation::negation),
         "aggregate" => quote!(::cq_ext_aggregate::aggregate),
         "recursion" => quote!(::cq_ext_recursion::recursion),
@@ -76,7 +76,6 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
         _ => return Err(syn::Error::new_spanned(family, "unknown extension family")),
     };
     let authored = match family_name.as_str() {
-        "union" | "stacked" => quote!(union! { #source }),
         "aggregate" => quote!(aggregate! { #source }),
         "recursion" => quote!(recursion! { #source }),
         _ => source.clone(),

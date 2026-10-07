@@ -1,0 +1,1 @@
+struct Q; relation P(x:i32); relation R(x:i32,y:i32); relation S(x:i32,y:i32); answer(x,y) :- P(x), {R(x,y)} else {S(x,y)}; valuation {P@0(x); block @1 (x,y) {R@1.0.0(x,y);} else {S@1.1.0(x,y);};}

@@ -96,8 +96,22 @@
 //! `answers` closure is supplied. Supplying an answer closure without a case is an
 //! error. `harness::check_refinement` and `check_refinement_on` accept executable
 //! reference/target closures, so the compile-and-run driver stays in the caller.
+//! The authored blocks corpus and recursive CQ/VO/RA interpreters cover union, fallback, locals, nesting and sugar.
+//! Fuzz prints SQL UNION and fallback UNION ALL with NOT EXISTS against original branches.
+//! Partial branch Rust uses an independent compiled written-order chain/if-empty reference.
+//!
+//! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
+//! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
+//! heading and I the common new interface; other binders remain branch-local.
+//! Join distributes over union; fallback is `B1 union (B2 anti_F B1)`.
+//! Rust keeps a branch ancestry tree: union siblings unordered, fallback ordered;
+//! each arm retains prefix Before facts and fallback anti steps. Rust `||` keeps
+//! its existing recognition. Only differing literals on one interface column
+//! prove union arms disjoint; no data keys or constraints are assumed.
+//!
 #![forbid(unsafe_code)]
 
+pub mod blocks;
 pub mod cases;
 pub mod corpus;
 pub mod cq_semantics;

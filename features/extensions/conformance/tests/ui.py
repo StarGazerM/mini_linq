@@ -16,14 +16,16 @@ env = dict(os.environ, CARGO_TARGET_DIR=str(LOGS / "build"), CARGO_TERM_COLOR="n
 
 
 def compile_expression(extension, source):
-    if extension in {"union", "aggregate", "recursion"}:
+    if extension == "union":
+        return f"mini_linq::mini_linq! {{ {source} }}"
+    if extension in {"aggregate", "recursion"}:
         source = f"{extension}! {{ {source} }}"
     return f"mini_linq::compile! {{ pipeline {{ surface = [cq_ext_{extension}::{extension}]; }} {source} }}"
 
 
 cases = [
     ("union_head", "union", "struct U; answer(x) :- A(x); other(x) :- B(x);", "same head relation"),
-    ("union_arity", "union", "struct U; answer(x) :- A(x); answer(x,y) :- B(x,y);", "same arity"),
+    ("union_arity", "union", "struct U; answer(x) :- A(x); answer(x,y) :- B(x,y);", "head relation and arity"),
     ("negative_self", "negation", "struct N; relation A(x:i32); relation answer(x:i32); answer(*x) :- A(x), neg!{answer(x)};", "not the query result"),
     ("negative_dependency", "negation", "struct N; relation A(x:i32); relation S(x:i32,y:i32); answer(x) :- A(x), neg!{S(x,_); depends {S -> T; T -> answer;}};", "unstratified negation"),
     ("negative_scope", "negation", "struct N; relation A(x:i32); relation S(x:i32,y:i32); answer(x) :- A(x), neg!{S(y,_)};", "not bound before"),
@@ -36,9 +38,9 @@ cases = [
 ]
 expressions = [(name, compile_expression(extension, source), needle) for name, extension, source, needle in cases]
 expressions += [
-    ("unexpanded", "mini_linq::compile! { pipeline { surface = [cq_ext_union::union, cq_ext_negation::negation, cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_correlated::correlated]; } struct C; relation A(x:i32); answer(x) :- A(x), name!{opaque tokens}; }", "name!"),
-    ("empty_queue", "cq_ext_union::union! { pipeline {}; union!{struct U; answer(x) :- A(x);} }", "requires a remaining pipeline"),
-    ("surface_arguments", "cq_ext_union::union! { arguments { unexpected }; pipeline {mini_linq::passes::plan_written}; union!{struct U; answer(x) :- A(x);} }", "accepts no arguments"),
+    ("unexpanded", "mini_linq::compile! { pipeline { surface = [cq_ext_negation::negation, cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_correlated::correlated]; } struct C; relation A(x:i32); answer(x) :- A(x), name!{opaque tokens}; }", "name!"),
+    ("empty_queue", "cq_ext_negation::negation! { pipeline {}; struct U; answer(x) :- A(x); }", "requires a remaining pipeline"),
+    ("surface_arguments", "cq_ext_negation::negation! { arguments { unexpected }; pipeline {mini_linq::passes::plan_written}; struct U; answer(x) :- A(x); }", "accepts no arguments"),
 ]
 
 # Resolve public package identities from the running workspace. A packaged core
@@ -49,7 +51,7 @@ metadata = json.loads(subprocess.check_output(
 ))
 packages = {package["name"]: package for package in metadata["packages"]}
 manifest = '[package]\nname = "extension-ui"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
-for name in ["cq-ext-union", "cq-ext-negation", "cq-ext-aggregate", "cq-ext-recursion", "cq-ext-correlated", "mini-linq", "cq-storage"]:
+for name in ["cq-ext-negation", "cq-ext-aggregate", "cq-ext-recursion", "cq-ext-correlated", "mini-linq", "cq-storage"]:
     package = packages[name]
     fields = f'version = {json.dumps("=" + package["version"])}'
     if package["source"] is None:

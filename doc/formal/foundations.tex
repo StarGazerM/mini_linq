@@ -66,6 +66,55 @@ constraints (normalization rules A-*). For head variables $\bar h$ (possibly rep
 Projection selects attributes; out fixes answer order and repeated positions.
 Computed head expressions instead act on each valuation.
 
+\subsection{Disjunctive blocks and ordered fallback}
+A block executes at a prefix row $\rho$. Let $F$ be prefix-bound names used
+inside its branches and $I$ the new names bound in every branch. Each branch
+projects away its other, local bindings. All interface declarations have the
+same types; inferred let types are obligations of Rust typing. Write
+$L_j(\rho)=\pi_{F\cup I}\sem{B_j}(\rho)$ on successful branch evaluation.
+The result type remains $T X=\bot+\operatorname{Set}X$:
+\begin{mathpar}
+\Rule{Block-Union}{\forall j,\ \sem{B_j}(\rho)\ne\bot}
+ {\sem{\{B_1\}\mid\cdots\mid\{B_n\}}(\rho)=\bigcup_j L_j(\rho)}
+
+\Rule{Block-Else}{\forall j<k,\ \sem{B_j}(\rho)=\emptyset\quad
+ \sem{B_k}(\rho)\ne\emptyset}
+ {\sem{\{B_1\}\ \mathsf{else}\ \cdots\ \mathsf{else}\ \{B_n\}}(\rho)=L_k(\rho)}
+\end{mathpar}
+Union is bottom when any branch is bottom. For fallback, bottom in the next
+selected branch is bottom; later branches are never evaluated after a nonempty
+result. If all branches are empty, fallback is empty. Union branch order is
+not meaning: permutation and witness short circuit may remove panics and are
+refinements. Fallback order is meaning. These operators do not alter Rust's
+existing short-circuit guard recognition for \code{||}.
+
+For named relations, define the antijoin on $F\subseteq H(L)\cap H(M)$ by
+$L\mathbin{\triangleright_F}M=\{l\in L\mid\nexists m\in M:\ l[F]=m[F]\}$.
+The total relational laws are
+\[
+ C\bowtie(L\cup M)=(C\bowtie L)\cup(C\bowtie M),\qquad
+ B_1\ \mathsf{else}\ B_2=B_1\cup(B_2\mathbin{\triangleright_F}B_1).
+\]
+Both forms hoist to a derived relation $D$ over $F\cup I$ exactly when no
+branch contains Rust. A branch without generators for some free columns uses
+a named finite projection of the prefix domain. Otherwise arms run per row,
+streaming the prefix once. A domain containing prefix let values depends on
+that Rust prefix; reducers wait for it and filter the retained valuation prefix
+when their target has already been read. The positions are explicit VO decisions.
+The Rust chain is a tree: union siblings are
+unordered; fallback siblings are ordered and carry their anti step in Before.
+All arms inherit prefix Before facts; suffix Rust observes the whole block.
+Fallback arms are disjoint by construction and need no cross-arm dedup.
+For union the sole static disjointness proof is differing literal assignments
+to the same interface variable in every pair of arms; no input key, constraint
+or data property is assumed. Internal duplicate witnesses can still require
+final canonicalization.
+
+Positive semijoin reductions distribute over union. For fallback they can
+restrict the positive use of $B_1$ and $B_2$, while the negated $B_1$ remains
+its unmodified named result. Chained fallback arm $j$ antijoins against the
+original named operands $1,\ldots,j-1$, on precisely $F$.
+
 \subsection{Assumptions for relational compilation}
 The compiler denotation is classical Set composed with one undistinguished
 panic: $T X=\bot+\operatorname{Set}X$. Equality is Leibniz identity, not an

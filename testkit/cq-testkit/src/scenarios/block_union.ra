@@ -1,0 +1,4 @@
+relational {relation R(x:i32,a:i32); relation S(x:i32,b:i32);
+r0=rename R@0.0.0 {x->x,a->a}; r1=project r0 keep{x};
+r2=rename S@0.1.0 {x->x,b->b}; r3=project r2 keep{x};
+u=union r1,r3 block @0 free[] interface[x]; out=project u keep{x}; output out as answer(x);}
