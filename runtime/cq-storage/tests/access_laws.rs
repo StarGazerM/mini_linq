@@ -28,3 +28,159 @@ fn exact_collections_and_borrowed_resources_preserve_membership() {
     assert!(has(&hash, "present"));
     assert!(!has(&sorted, "absent"));
 }
+
+#[test]
+fn adaptive_membership_and_intervals_match_independent_ordered_sets() {
+    use cq_storage::{AdaptiveKeySet, ExactIntervalMembership, I64Codec, NoDense};
+    let universe = [-65i64, -64, -1, 0, 1, 63, 64, 65, 127];
+    for mask in 0..1usize << universe.len() {
+        let input: Vec<_> = universe
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| mask & (1 << i) != 0)
+            .flat_map(|(_, &k)| [k, k])
+            .collect();
+        let oracle: std::collections::BTreeSet<_> = input.iter().copied().collect();
+        let dense = AdaptiveKeySet::<_, _, 193>::from_keys(input.iter().copied(), I64Codec);
+        let hash = AdaptiveKeySet::<_, _, 193>::from_keys(input.iter().copied(), NoDense);
+        for lo in -67..=129 {
+            assert_eq!(dense.contains(&lo), oracle.contains(&lo));
+            assert_eq!(hash.contains(&lo), oracle.contains(&lo));
+            for hi in [lo - 1, lo, lo + 1, 64, 130] {
+                let expected = lo <= hi && oracle.iter().any(|&k| lo <= k && k <= hi);
+                assert_eq!(dense.any_in(&lo, &hi), expected, "{input:?} [{lo},{hi}]");
+                assert_eq!(hash.any_in(&lo, &hi), expected);
+                assert_eq!(hash.any_in(&lo, &hi), expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn adaptive_extremes_budget_edges_and_borrowed_tpc_keys() {
+    use cq_storage::*;
+    for input in [
+        vec![],
+        vec![i64::MIN],
+        vec![i64::MAX],
+        vec![i64::MIN, i64::MAX],
+        vec![-1, -1, 0],
+    ] {
+        let set = AdaptiveKeySet::<_, _, 64>::from_keys(input.clone(), I64Codec);
+        for lo in [i64::MIN, -1, 0, 1, i64::MAX] {
+            for hi in [i64::MIN, -1, 0, 1, i64::MAX] {
+                assert_eq!(
+                    set.any_in(&lo, &hi),
+                    input.iter().any(|&k| lo <= k && k <= hi)
+                );
+            }
+        }
+    }
+    let at = AdaptiveKeySet::<_, _, 65>::from_keys([0i64, 64], I64Codec);
+    assert_eq!(at.retained_bytes(), 16);
+    let below = AdaptiveKeySet::<_, _, 64>::from_keys([0i64, 64], I64Codec);
+    assert!(below.retained_bytes() > 16);
+    let zero = AdaptiveKeySet::<_, _, 0>::from_keys([0i64], I64Codec);
+    assert!(zero.contains(&0));
+    let keys = [i64::MIN, -1, 0, i64::MAX];
+    let borrowed =
+        AdaptiveKeySet::<_, _, 128>::from_keys(keys.iter().map(|k| (k,)), BorrowedI64TupleCodec);
+    assert!(borrowed.contains(&(&keys[1],)));
+    assert!(!borrowed.any_in(&(&1,), &(&2,)));
+    let i32s = AdaptiveKeySet::<i32, _, 65>::from_keys([-32, 32], I64Codec);
+    assert_eq!(i32s.retained_bytes(), 16);
+    let borrowed32 =
+        AdaptiveKeySet::<_, _, 65>::from_keys([(&-32i32,), (&32i32,)], BorrowedI64TupleCodec);
+    assert!(borrowed32.any_in(&(&32,), &(&32,)));
+    #[derive(Clone, Copy)]
+    struct Partial;
+    impl KeyCodec<i64> for Partial {
+        fn ordinal(self, key: &i64) -> Option<u128> {
+            (*key >= 0).then_some(*key as u128)
+        }
+    }
+    let partial = AdaptiveKeySet::<_, _, 128>::from_keys([1, 3], Partial);
+    assert!(partial.any_in(&-1, &2));
+}
+
+#[test]
+fn predicates_obey_inverted_and_exclusive_interval_laws() {
+    use cq_storage::{Point, ReadPredicate, RowPredicate, Window};
+    use std::ops::Bound::*;
+    let bounds = [
+        Unbounded,
+        Included(-1),
+        Excluded(-1),
+        Included(0),
+        Excluded(0),
+        Included(1),
+        Excluded(1),
+    ];
+    for low in bounds {
+        for high in bounds {
+            let window = Window { low, high };
+            for lo in -2..=2 {
+                for hi in -2..=2 {
+                    // Doubled integer universe independently models open order intervals.
+                    let expected = (2 * lo..=2 * hi).any(|x| {
+                        let l = match low {
+                            Unbounded => true,
+                            Included(a) => x >= 2 * a,
+                            Excluded(a) => x > 2 * a,
+                        };
+                        let h = match high {
+                            Unbounded => true,
+                            Included(a) => x <= 2 * a,
+                            Excluded(a) => x < 2 * a,
+                        };
+                        l && h
+                    });
+                    assert_eq!(window.any_in(&lo, &hi), expected);
+                    assert_eq!(Point(0).any_in(&lo, &hi), lo <= 0 && 0 <= hi);
+                }
+                assert_eq!(
+                    window.test(&lo),
+                    match low {
+                        Unbounded => true,
+                        Included(a) => lo >= a,
+                        Excluded(a) => lo > a,
+                    } && match high {
+                        Unbounded => true,
+                        Included(a) => lo <= a,
+                        Excluded(a) => lo < a,
+                    }
+                );
+            }
+        }
+    }
+    assert!(RowPredicate(|_: &i32| false).any_in(&0, &1));
+}
+
+#[test]
+fn codec_full_width_overflow_and_nonclone_keys_are_exact() {
+    use cq_storage::*;
+    #[derive(Eq, PartialEq, Ord, PartialOrd, Hash)]
+    struct NonClone(String);
+    let set = AdaptiveKeySet::<_, _, 64>::from_keys(
+        [NonClone("a".into()), NonClone("c".into())],
+        NoDense,
+    );
+    assert!(!set.any_in(&NonClone("b".into()), &NonClone("b".into())));
+    #[derive(Clone, Copy)]
+    struct Full;
+    impl KeyCodec<u128> for Full {
+        fn ordinal(self, key: &u128) -> Option<u128> {
+            Some(*key)
+        }
+        fn total(self) -> bool {
+            true
+        }
+    }
+    let full = AdaptiveKeySet::<_, _, 64>::from_keys([0, u128::MAX], Full);
+    assert!(!full.any_in(&1, &(u128::MAX - 1)));
+    assert!(full.any_in(&u128::MAX, &u128::MAX));
+    assert_eq!(I64Codec.ordinal(&i64::MIN), Some(0));
+    assert_eq!(I64Codec.ordinal(&i64::MAX), Some(u64::MAX as u128));
+    let empty = AdaptiveKeySet::<i64, _, 64>::from_keys([], I64Codec);
+    assert_eq!(empty.retained_bytes(), 0);
+}

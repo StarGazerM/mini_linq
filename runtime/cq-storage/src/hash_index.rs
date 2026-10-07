@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::ExactMembership;
-use crate::instrument::HashMap;
+use crate::instrument::{HashMap, RetainedVec};
 
 /// Exact lookup preserves stored occurrences. A cursor is independent of the
 /// temporary lookup handle: HashIndex cursors retain an owned bucket reference,
@@ -60,6 +60,7 @@ impl<K: Ord, V, I: Iterator<Item = (K, V)>> Build<I> for BTreeMap<K, Vec<V>> {
         crate::count!(index_builds);
         let mut map = BTreeMap::new();
         for (key, value) in source {
+            crate::count!(rows_copied);
             map.entry(key).or_insert_with(Vec::new).push(value);
         }
         map
@@ -73,8 +74,10 @@ type Source<'a, K, V> = Box<dyn Iterator<Item = (K, V)> + 'a>;
 
 struct State<'a, K, V> {
     /// Taken exactly once, by the initialization of `buckets`.
+    #[cfg(feature = "counters")]
+    allocation: RefCell<crate::counters_memory::Allocation>,
     source: RefCell<Option<Source<'a, K, V>>>,
-    buckets: OnceCell<HashMap<K, Rc<Vec<V>>>>,
+    buckets: OnceCell<HashMap<K, Rc<RetainedVec<V>>>>,
 }
 impl<K, V> Clone for HashIndex<'_, K, V> {
     fn clone(&self) -> Self {
@@ -87,6 +90,8 @@ impl<'a, K: 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build<I> for Hash
     fn build(source: I) -> Self {
         Self {
             state: Rc::new(State {
+                #[cfg(feature = "counters")]
+                allocation: RefCell::new(crate::counters_memory::Allocation::default()),
                 source: RefCell::new(Some(Box::new(source))),
                 buckets: OnceCell::new(),
             }),
@@ -108,7 +113,7 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
 }
 
 impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
-    fn buckets(&self) -> &HashMap<K, Rc<Vec<V>>> {
+    fn buckets(&self) -> &HashMap<K, Rc<RetainedVec<V>>> {
         self.state.buckets.get_or_init(|| {
             crate::count!(index_builds);
             let source = self
@@ -117,13 +122,26 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
                 .borrow_mut()
                 .take()
                 .expect("the source is consumed only by this initialization");
-            let mut buckets = HashMap::<K, Rc<Vec<V>>>::default();
+            let mut buckets = HashMap::<K, Rc<RetainedVec<V>>>::default();
             for (key, value) in source {
+                crate::count!(rows_copied);
                 let bucket = buckets.entry(key).or_default();
                 // No cursor can see these buckets until initialization finishes.
                 Rc::get_mut(bucket)
                     .expect("unpublished bucket is uniquely owned")
                     .push(value);
+            }
+            #[cfg(feature = "counters")]
+            {
+                for bucket in buckets.values_mut() {
+                    Rc::get_mut(bucket).expect("unpublished bucket").account();
+                }
+                *self.state.allocation.borrow_mut() = crate::counters_memory::Allocation::new(
+                    buckets.capacity()
+                        * (std::mem::size_of::<K>()
+                            + std::mem::size_of::<Rc<RetainedVec<V>>>()
+                            + 1),
+                );
             }
             buckets
         })
@@ -133,7 +151,7 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
 impl<K: Eq + Hash, V> crate::Keys for HashIndex<'_, K, V> {
     type Key = K;
     type Iter<'a>
-        = crate::instrument::Cursor<std::collections::hash_map::Keys<'a, K, Rc<Vec<V>>>>
+        = crate::instrument::Cursor<std::collections::hash_map::Keys<'a, K, Rc<RetainedVec<V>>>>
     where
         Self: 'a;
     fn key_count(&self) -> usize {
@@ -158,7 +176,7 @@ impl<K: Eq + Hash, V: Copy + Eq + Hash> crate::Candidates for HashIndex<'_, K, V
 }
 
 pub struct BucketCursor<V> {
-    bucket: Option<Rc<Vec<V>>>,
+    bucket: Option<Rc<RetainedVec<V>>>,
     position: usize,
 }
 impl<V: Copy> Iterator for BucketCursor<V> {

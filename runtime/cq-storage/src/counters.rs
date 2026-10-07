@@ -11,12 +11,26 @@
 //! exhaustion; rows count successful scan/cursor items at those boundaries.
 //! Distinct insertions count attempts, including duplicates. Use `DistinctSet`
 //! in the caller's distinct provider to include compiler canonicalization.
+//! Retained bytes count runtime-owned capacities (excluding allocator overhead
+//! and heap allocations inside user keys/payloads). Reset starts a new ownership
+//! epoch; older allocations and allocations moved to another thread are excluded.
+//! Keyset staging peak is the largest distinct staging-set ownership estimate.
 //! Fixture construction and independent BTreeSet oracles are not query costs.
 use std::cell::Cell;
 use std::hash::{BuildHasherDefault, Hasher};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
+    pub blocks_considered: u64,
+    pub blocks_visited: u64,
+    pub blocks_skipped: u64,
+    pub blocks_skipped_metadata: u64,
+    pub blocks_skipped_empty_selection: u64,
+    pub rows_tested: u64,
+    pub rows_copied: u64,
+    pub bytes_retained_current: u64,
+    pub bytes_retained_peak: u64,
+    pub keyset_staging_bytes_peak: u64,
     pub hash_computations: u64,
     pub index_builds: u64,
     pub lookups: u64,
@@ -25,12 +39,27 @@ pub struct Snapshot {
     pub distinct_insertions: u64,
 }
 thread_local! {
+    static EPOCH: Cell<u64> = const { Cell::new(0) };
     static COUNTS: Cell<Snapshot> = const { Cell::new(Snapshot {
+        blocks_considered: 0,
+        blocks_visited: 0,
+        blocks_skipped: 0,
+        blocks_skipped_metadata: 0,
+        blocks_skipped_empty_selection: 0,
+        rows_tested: 0,
+        rows_copied: 0,
+        bytes_retained_current: 0,
+        bytes_retained_peak: 0,
+        keyset_staging_bytes_peak: 0,
         hash_computations: 0, index_builds: 0, lookups: 0,
         cursor_steps: 0, rows_enumerated: 0, distinct_insertions: 0,
     }) };
 }
+pub(crate) fn epoch() -> u64 {
+    EPOCH.with(Cell::get)
+}
 pub fn reset() {
+    EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
     COUNTS.with(|counts| counts.set(Snapshot::default()));
 }
 pub fn snapshot() -> Snapshot {

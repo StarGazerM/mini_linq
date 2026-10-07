@@ -46,3 +46,27 @@ fn distinct_insertions_include_rejected_duplicates() {
     assert!(seen.insert(2));
     assert_eq!(counters::snapshot().distinct_insertions, 3);
 }
+
+#[test]
+fn retained_payload_cursors_and_reset_epochs_have_correct_ownership() {
+    use cq_storage::{AdaptiveKeySet, I64Codec};
+    counters::reset();
+    let old = AdaptiveKeySet::<_, _, 64>::from_keys([1i64], I64Codec);
+    counters::reset();
+    let fresh = AdaptiveKeySet::<_, _, 64>::from_keys([2i64], I64Codec);
+    drop(old);
+    assert_eq!(counters::snapshot().bytes_retained_current, 8);
+    drop(fresh);
+    assert_eq!(counters::snapshot().bytes_retained_current, 0);
+    let index = HashIndex::build([(1i64, 10i64), (1, 11), (2, 20)].into_iter());
+    assert_eq!(counters::snapshot().rows_copied, 0);
+    let cursor = index.lookup(&1);
+    assert_eq!(counters::snapshot().rows_copied, 3);
+    let allocated = counters::snapshot().bytes_retained_current;
+    assert!(allocated > 0);
+    drop(index);
+    let remaining = counters::snapshot().bytes_retained_current;
+    assert!(remaining > 0 && remaining < allocated);
+    drop(cursor);
+    assert_eq!(counters::snapshot().bytes_retained_current, 0);
+}

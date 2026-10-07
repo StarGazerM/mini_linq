@@ -42,3 +42,41 @@ impl<I: Iterator> Iterator for Cursor<I> {
 }
 #[cfg(feature = "counters")]
 impl<I: std::iter::FusedIterator> std::iter::FusedIterator for Cursor<I> {}
+
+#[cfg(not(feature = "counters"))]
+pub(crate) type RetainedVec<V> = Vec<V>;
+#[cfg(feature = "counters")]
+pub struct RetainedVec<V> {
+    values: Vec<V>,
+    allocation: crate::counters_memory::Allocation,
+}
+#[cfg(feature = "counters")]
+impl<V> Default for RetainedVec<V> {
+    fn default() -> Self {
+        Self {
+            values: Vec::new(),
+            allocation: crate::counters_memory::Allocation::default(),
+        }
+    }
+}
+#[cfg(feature = "counters")]
+impl<V> RetainedVec<V> {
+    pub(crate) fn account(&mut self) {
+        self.allocation = crate::counters_memory::Allocation::new(
+            self.values.capacity() * std::mem::size_of::<V>(),
+        );
+    }
+}
+#[cfg(feature = "counters")]
+impl<V> std::ops::Deref for RetainedVec<V> {
+    type Target = Vec<V>;
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+#[cfg(feature = "counters")]
+impl<V> std::ops::DerefMut for RetainedVec<V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.values
+    }
+}

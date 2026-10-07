@@ -29,7 +29,14 @@
 //! - `α(index) = bag of (key, item)`; `build(I)` has `α = bag(I)` and
 //!   `lookup(k)` enumerates exactly the items paired with `k`, with
 //!   multiplicity and in source order.
-//! - `α(membership) = key set`; `contains(k) ⇔ k ∈ α`.
+//! - `α(membership) = key set`; `contains(k) ⇔ k ∈ α`. Exact interval
+//!   membership requires an actual represented key in the closed interval.
+//! - `α(positional host)` is its ordered occurrence bag; stable base offsets
+//!   distinguish duplicates. Block bounds enclose all keys, and absent bounds
+//!   retain the block. Reads preserve base order and exact predicate results.
+//! - `α(selection)` is the selected occurrence bag. Narrowing is intersection;
+//!   immutable snapshots and their projected builds preserve source order and
+//!   multiplicity. Selection confers neither Canonical nor OrderedRead.
 //! - `α(ordered) = bag of (key, item)`, enumerated in key order from any
 //!   bound; [`merge`] is the one co-iteration primitive; [`sorted_by`]
 //!   presents an already key-ordered stream as such a cursor.
@@ -117,6 +124,9 @@ pub mod require {
     pub trait OrderedKey<K> {}
     impl<K> OrderedKey<K> for &K {}
     pub fn canonical<T: super::Canonical>(_: T) {}
+    pub fn positional<T: super::PositionalRows>(_: T) {}
+    pub fn block_read<H: super::BlockRead<C>, C: super::Column<H>>(_: H, _: C) {}
+    pub fn interval<K: Ord, T: super::ExactIntervalMembership<K>>(_: &T) {}
 }
 /// Decide Leibniz identity using the admissible column type's `==`.
 /// The `Eq` bound rejects floats and PartialEq-only types; it cannot establish
@@ -204,3 +214,17 @@ pub fn intersect_upper<Q: Ord>(a: std::ops::Bound<Q>, b: std::ops::Bound<Q>) -> 
 
 mod exists;
 pub use exists::Exists;
+
+pub mod adaptive;
+mod counters_memory;
+pub mod positional;
+pub mod selection;
+pub use adaptive::{AdaptiveKeySet, BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense};
+pub use positional::{
+    BlockId, BlockRead, Column, ExactIntervalMembership, Membership, Point, PositionalRows,
+    ReadPredicate, RowId, RowPredicate, Window,
+};
+pub use selection::{Selection, SelectionRows, SelectionSummary};
+
+#[cfg(doctest)]
+mod misuse;
