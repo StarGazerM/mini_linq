@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from fnmatch import fnmatch
 import json
 import os
 from pathlib import Path
@@ -41,11 +42,21 @@ EDGES = {}
 for name, path in FAMILIES.items():
     spec = tomllib.loads((ROOT / path / "Cargo.toml").read_text())["package"]["metadata"]["cq"]
     EDGES[name] = spec
+
+
+def feature_files(pattern, excluded):
+    # Prune ignored build trees before walking them, preserving the same file set.
+    for directory, children, files in os.walk(ROOT / "features"):
+        children[:] = [name for name in children if name not in excluded]
+        for name in files:
+            if fnmatch(name, pattern):
+                yield Path(directory) / name
+
+
 # External consumer crates are identified from their standalone manifests.
 FEATURE_NAMES = {tomllib.loads(p.read_text())["package"]["name"]
-    for p in (ROOT / "features").rglob("Cargo.toml")
-    if not any(part in {"target", ".git", "vendor"} for part in p.relative_to(ROOT / "features").parts)
-    and "package" in tomllib.loads(p.read_text())}
+    for p in feature_files("Cargo.toml", {"target", ".git", "vendor"})
+    if "package" in tomllib.loads(p.read_text())}
 
 def toml(value):
     if isinstance(value, bool): return str(value).lower()
@@ -116,8 +127,7 @@ def check_feature_sources():
             qualified = name.replace("-", "_") + "::" + "::".join(x for x in module if x not in {"lib", "mod"})
             private += [(qualified.rstrip(":"), symbol) for symbol in re.findall(
                 r"(?m)^pub\(crate\)\s+(?:fn|struct|enum|trait|type|const|mod)\s+(\w+)", mask_rust(source.read_text()))]
-    for source in (ROOT / "features").rglob("*.rs"):
-        if any(part in {"target", ".git"} for part in source.relative_to(ROOT / "features").parts): continue
+    for source in feature_files("*.rs", {"target", ".git"}):
         text = mask_rust(source.read_text())
         for crate, symbol in private:
             if re.search(rf"\b{re.escape(crate)}\s*::\s*{symbol}\b", text):
@@ -144,7 +154,7 @@ def check(data, announce=True):
             if package["features"]:
                 raise ValueError(f"pass features are forbidden: {name}")
         elif name in RUNTIME:
-            allowed = {"cq-syntax"} - {name}
+            allowed = ({"cq-syntax"} - {name}) | ({"cq-storage"} if name == "cq-load" else set())
         elif name in TESTKIT:
             allowed = set(LANGUAGES) | set(RUNTIME)
         else:
@@ -256,6 +266,8 @@ def copy_component(destination, name, selected, tested):
         if (base / filename).exists(): shutil.copy2(base / filename, output / filename)
     manifest = tomllib.loads((base / "Cargo.toml").read_text())
     tests = manifest.pop("test", [])
+    # Only src/tests are copied into an isolated component, not examples.
+    manifest.pop("example", None)
     manifest["package"].pop("metadata", None)
     # Match closure(): dependency crates do not activate their own test deps.
     if name != tested: manifest.pop("dev-dependencies", None)

@@ -10,7 +10,15 @@ default = []
 parquet = ["dep:arrow-array", "dep:arrow-schema", "dep:parquet"]
 
 [dependencies]
+cq-storage = { path = "../cq-storage" }
 csv = "1.4"
 arrow-array = { version = "58.4", default-features = false, optional = true }
 arrow-schema = { version = "58.4", default-features = false, optional = true }
 parquet = { version = "58.4", default-features = false, features = ["arrow", "snap"], optional = true }
+
+[dev-dependencies]
+cq-storage = { path = "../cq-storage", features = ["counters"] }
+
+[[example]]
+name = "zone_tpch"
+required-features = ["parquet"]

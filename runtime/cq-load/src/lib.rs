@@ -38,10 +38,18 @@
 //! declarations using it may load tuples, but cannot use that field directly as
 //! a hash/ordered grouping key or in query plans requiring total ordering. No
 //! implicit wrapper changes the query language's comparison semantics.
+//!
+//! [`ZoneRows`] stores immutable decoded tuples with per-column block bounds.
+//! A tuple [`ZoneSchema`] selects [`MinMax`] for exact supported types and
+//! [`NoBounds`] for other fields. [`column()`] creates declaration-order markers
+//! for cq-storage's positional reads and selections. Summaries always come
+//! from decoded rows; block skipping saves in-memory row tests, not Parquet I/O.
 
 mod csv_source;
 mod loader;
 mod scalar;
+pub mod zone;
+mod zone_docs;
 
 #[cfg(feature = "parquet")]
 mod parquet_source;
@@ -49,6 +57,7 @@ mod parquet_source;
 pub use csv_source::{Csv, CsvOptions, read_csv};
 pub use loader::{Group, Loader};
 pub use scalar::{Date, Decimal};
+pub use zone::{ColumnAt, MinMax, NoBounds, ZoneField, ZoneMetadata, ZoneRows, ZoneSchema, column};
 
 #[cfg(feature = "parquet")]
 pub use parquet_source::{ColumnError, Parquet, ParquetOptions, read_parquet};
