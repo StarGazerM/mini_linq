@@ -3,8 +3,8 @@
 //! The complete checked Structures program is the only compiler input. Its
 //! Physical operators and concrete read, build, retention and canonical state
 //! types are preserved. Nested loops push rows into a Vec endpoint; retained
-//! construction uses a traversal buffer followed by the recorded Build and
-//! FromIterator implementations through the public `cq-print` helpers.
+//! construction shares the recorded Build, FromIterator and Selection providers
+//! with pull. Positional pipes fetch survivors directly into their push sink.
 //!
 //! Queries denote `bottom + Set`, refining desugared written order. Opaque Rust
 //! binds and guards keep their chain and receive shared references. Host columns
@@ -12,8 +12,7 @@
 //! requires Clone for retained scans and Copy for payload fan-out, as checked by the emitted Rust. Equality is Leibniz identity.
 //! Mutation, I/O and evaluation counts are outside this meaning.
 //!
-//! Positional selection, keyset and read entries are explicitly refused pending
-//! the separate push implementation. Merge and smallest-candidate traversal are unsupported and refused. This
+//! Merge and smallest-candidate traversal are unsupported and refused. This
 //! printer does not replace a written execution choice with a different one.
 
 //! Push realizes standalone union/anti loops and consumes the prepared fused-dependent pipe once before pushing tuples to its sink.
@@ -33,7 +32,7 @@ use cq_print::{Context, Repr, access::Access, error, index, sorted};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as Tokens};
 use quote::{ToTokens, format_ident, quote};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use structures::physical::{self, Operator};
 use structures::syntax::symbol_name;
 
@@ -52,6 +51,7 @@ pub fn push(input: TokenStream) -> TokenStream {
 struct Push<'a> {
     context: Context<'a>,
     consumed: BTreeSet<String>,
+    positions: BTreeMap<String, Tokens>,
 }
 impl<'a> std::ops::Deref for Push<'a> {
     type Target = Context<'a>;
@@ -62,20 +62,6 @@ impl<'a> std::ops::Deref for Push<'a> {
 
 fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
     let analysis = structures::contract::check(module)?;
-    for entry in &module.structures.entries {
-        if matches!(
-            entry.structure,
-            structures::Structure::Selection { .. }
-                | structures::Structure::KeySet { .. }
-                | structures::Structure::Read { .. }
-        ) {
-            return error(
-                &entry.name,
-                "own_push: positional selection, keyset and read entries are unsupported (phase 4)",
-            );
-        }
-    }
-
     // Refuse unsupported written choices even in an otherwise unused result.
     for definition in &module.physical.program.definitions {
         match &definition.operator {
@@ -90,9 +76,16 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
             _ => {}
         }
     }
+    let mut positions = BTreeMap::new();
+    let context = cq_physical_realization::sources_with(module, &analysis, |name, repr| {
+        if let Repr::Positions(Some(ids)) = repr {
+            positions.insert(name.to_owned(), ids.clone());
+        }
+    })?;
     let mut push = Push {
-        context: cq_physical_realization::sources(module, &analysis)?,
+        context,
         consumed: BTreeSet::new(),
+        positions,
     };
     // Hidden row names preserve Rust captures in push loops, where later
     // planned binders would otherwise surround an earlier opaque expression.
@@ -209,6 +202,34 @@ impl Push<'_> {
             })?;
             let pattern = self.pattern(result);
             return Ok(quote!(for #pattern in #rows { #sink }));
+        }
+        // Formal rule IF-PushPositional: Push accepted positions straight to the sink.
+        // Preparation already fused the checked read spine and all residuals.
+        if let Some(ids) = self.positions.remove(result) {
+            if !self.consumed.insert(result.to_owned()) {
+                return error(&definition.name, "own_push: positional pipe is read twice");
+            }
+            let host = format_ident!(
+                "__cq_positional_{}",
+                self.analysis.lineage[result].base,
+                span = Span::mixed_site()
+            );
+            let pattern = self.positional_pattern(result);
+            let id = temporary("position", result);
+            return Ok(quote! {
+                for #id in #ids {
+                    #[allow(unused_variables)]
+                    let #pattern = ::cq_storage::PositionalRows::row_at(#host, #id)
+                        .expect("host-issued live ID");
+                    #sink
+                }
+            });
+        }
+        if let Some(Repr::Selection { selection, .. }) = self.reprs.get(result) {
+            let pattern = self.positional_pattern(result);
+            return Ok(
+                quote!(#[allow(unused_variables)] for #pattern in #selection.rows() { #sink }),
+            );
         }
         if let Some(Repr::Let { rows, .. }) = self.reprs.get(result) {
             let Some(storage) = rows else {
@@ -391,16 +412,21 @@ impl Push<'_> {
     ) -> syn::Result<Tokens> {
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
-        let test = match self.keyed(&keyed.right, &sorted(&keyed.columns))? {
-            Access::Host(access) => self.host_lookup(&left, &access, true),
-            Access::Built(structure) => self.chained_contains(
-                &left,
-                &structure,
-                &right,
-                &self.levels_of(&right, &structure),
-            ),
-            Access::Prefix(structure, levels) => {
-                self.chained_contains(&left, &structure, &right, &levels)
+        let columns = sorted(&keyed.columns);
+        let test = if let Some(test) = self.keyset_contains(&left, &right, &columns) {
+            test
+        } else {
+            match self.keyed(&keyed.right, &columns)? {
+                Access::Host(access) => self.host_lookup(&left, &access, true),
+                Access::Built(structure) => self.chained_contains(
+                    &left,
+                    &structure,
+                    &right,
+                    &self.levels_of(&right, &structure),
+                ),
+                Access::Prefix(structure, levels) => {
+                    self.chained_contains(&left, &structure, &right, &levels)
+                }
             }
         };
         let test = if negative { quote!(!(#test)) } else { test };

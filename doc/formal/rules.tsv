@@ -124,3 +124,4 @@ SEL-Positional	implementation	passes/cq-structure-selection/src/positional.rs	Fo
 IF-Positional	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Positional:	Recorded exact predicates and survivor row fetch.
 IF-Selection	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Selection:	Immutable mask construction and reusable row projection.
 STR-Keyset	implementation	languages/cq-lang-structures/src/positional.rs	Formal rule STR-Keyset:	Keysets serve exact membership without imposing membership on supplemental payload indices.
+IF-PushPositional	implementation	features/own-dialect/printer/src/lib.rs	Formal rule IF-PushPositional:	Push the prepared exact ID stream to its sink; share recorded snapshot and Build construction.

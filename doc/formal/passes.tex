@@ -445,8 +445,32 @@ named selection's summary policy. Scalar hosts visit their rows; ZoneRows may
 reject blocks using enclosing bounds. Skipping is in memory after decoding.
 Lazy semi keeps the incremental KeySet route and is not drained for summaries;
 opaque, branch and unsupported inputs retain their previous demand behavior.
-No nonlocal probe-filter motion is implemented. The push printer explicitly
-rejects all three new entry kinds pending its separate implementation.
+No nonlocal probe-filter motion is implemented.
+
+\paragraph{Push realization.}
+The push printer consumes the same checked Structures decisions and shared
+source preparation. Preparation exposes the fused positional pipe before any
+later iterator adapter consumes its compiler tokens. Push loops over those
+accepted IDs, fetches each surviving host row, and invokes its sink directly.
+All residual predicates remain inside the prepared ID stream. A retained let
+constructs its named Selection once; repeated scans use that snapshot's rows,
+and payload indices and AdaptiveKeySets use the recorded Build projections.
+There is no intermediate traversal Vec beside a Selection. Key-only membership
+(including anti and computed-left reads) uses the recorded ownership layout;
+negative membership does not use positive interval rejection. Standalone union
+arms keep their scopes, and fused dependent branches consume their prepared
+stream once. Lazy membership retains its existing empty-left nonforcing rule.
+\begin{mathpar}
+\Rule{IF-PushPositional}{r\text{ has checked ID stream }I\text{ over base }H}
+ {\mathsf{push}(r,k)\longmapsto
+  \code{for id in I \{ k(row\_at(H,id)); \}}}
+\end{mathpar}
+The user advises \code{select(positional(H,...))}; the selection pass decides
+and records the representation. Without advice the existing representation is
+retained. Both printers enforce the Structures contract and emitted
+\code{PositionalRows}/\code{BlockRead} guards. Neither infers positional
+capabilities from a Rust host type. Push continues to reject written merge and
+smallest choices, including unused results.
 
 Native keyed reads are chosen by stable autoref dispatch at the exact
 leading-prefix key type, with the recorded fallback otherwise; const/range reads

@@ -103,6 +103,7 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
             .collect();
         quote!(result.map(|(#(#columns,)*)| ::std::vec![#(#columns,)*]).collect())
     };
+    let hosts = schema.iter().map(|input| &input.name);
     Ok(quote! {
         #[allow(non_snake_case)]
         mod #module {
@@ -116,7 +117,7 @@ pub fn expand(tokens: TokenStream) -> syn::Result<TokenStream> {
                 dataset.validate_provenance(::cq_workloads::Suite::Extended, case.name, case.config(scenario)).unwrap();
                 assert_eq!(dataset, case.generate(scenario).unwrap(), "stale extension fixture: {}", case.name);
                 #parameters
-                let result = ::mini_linq::compile! { pipeline { surface = [#surfaces]; } #authored }; #output
+                let result = ::mini_linq::compile! { pipeline { surface = [#surfaces]; select = ::mini_linq::passes::select(positional(#(#hosts),*)); } #authored }; #output
             }
             #[test]
             fn duckdb_scenarios() {

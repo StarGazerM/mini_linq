@@ -19,4 +19,6 @@ cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 quote = "1"
 
 [dev-dependencies]
+cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
+cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage", features = ["counters"] }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }

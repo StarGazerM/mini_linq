@@ -35,6 +35,7 @@ struct Request {
     indexes: Ident,
     lazy: Ident,
     printer: Ident,
+    positional: Option<Ident>,
     case: LitStr,
     tokens: Tokens,
 }
@@ -53,6 +54,11 @@ impl Parse for Request {
             indexes: header.parse()?,
             lazy: header.parse()?,
             printer: header.parse()?,
+            positional: if header.peek(Token![;]) {
+                None
+            } else {
+                Some(header.parse()?)
+            },
             case: {
                 header.parse::<Token![;]>()?;
                 header.parse()?
@@ -106,6 +112,7 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
         indexes,
         lazy,
         printer,
+        positional,
         case,
         tokens,
     } = request;
@@ -156,6 +163,7 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
         sorted_payload: indexes == "sorted",
         lazy: lazy == "lazy",
         push: printer == "push",
+        positional: host == "slice" && positional.as_ref().is_none_or(|p| p == "positional"),
     };
     let configuration = selected.configuration(&query)?;
     let fields: Vec<_> = (0..query.query.head.args.len())

@@ -13,6 +13,16 @@ macro_rules! configuration {
             use super::*;
             #[allow(unused_macros)]
             macro_rules! query {
+                (positional($d($d host:ident),*); $d($d tokens:tt)*) => { ::mini_linq::compile! {
+                    pipeline {
+                        $($stages)*
+                        select = ::mini_linq::passes::select(positional($d($d host),*));
+                        structures = [::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
+                            ::cq_ext_negation::negation];
+                    }
+                    $d($d tokens)*
+                } };
                 ($d($d tokens:tt)*) => { ::mini_linq::compile! {
                     pipeline {
                         $($stages)*

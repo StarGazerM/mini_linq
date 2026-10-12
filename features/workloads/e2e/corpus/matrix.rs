@@ -1,8 +1,8 @@
 // Axes select pass pipelines, printer and native host representations.
-// Nine planner/split choices x three hosts requires at least 27 pairwise rows.
+// Positional advice is a separate axis, valid only for the slice host.
 // Every pair is checked against the full product, including rejected merges.
-pub type Config = [usize; 9];
-pub const AXES: [&[&str]; 9] = [
+pub type Config = [usize; 10];
+pub const AXES: [&[&str]; 10] = [
     &[
         "written_coarse",
         "written_fine",
@@ -22,6 +22,7 @@ pub const AXES: [&[&str]; 9] = [
     &["default", "sorted"],
     &["eager", "lazy"],
     &["pull", "push"],
+    &["unadvised", "positional"],
 ];
 pub const FULL: [&str; 4] = ["triangle", "oriented-chain", "claw", "retail_h03"];
 const PREVIOUS_COVERING: [[usize; 7]; 27] = [
@@ -55,7 +56,7 @@ const PREVIOUS_COVERING: [[usize; 7]; 27] = [
 ];
 
 pub fn product() -> Vec<Config> {
-    let mut rows = vec![[0; 9]];
+    let mut rows = vec![[0; 10]];
     for (axis, choices) in AXES.iter().enumerate() {
         rows = rows
             .into_iter()
@@ -68,7 +69,9 @@ pub fn product() -> Vec<Config> {
             })
             .collect();
     }
-    rows
+    rows.into_iter()
+        .filter(|row| row[4] == 0 || row[9] == 0)
+        .collect()
 }
 
 pub fn configs(name: &str) -> Vec<Config> {
@@ -84,7 +87,7 @@ pub fn values(c: Config) -> Vec<&'static str> {
 }
 
 pub fn verify_cover() {
-    assert_eq!(product().len(), 3456);
+    assert_eq!(product().len(), 4608);
     for c in product() {
         for a in 0..AXES.len() {
             for b in a + 1..AXES.len() {
@@ -112,7 +115,7 @@ pub fn covering() -> &'static [Config] {
         let mut missing: BTreeSet<_> = all.iter().flat_map(|&r| pairs(r)).collect();
         let mut rows = Vec::new();
         for (i, old) in PREVIOUS_COVERING.iter().enumerate() {
-            let mut row = [0; 9];
+            let mut row = [0; 10];
             row[..7].copy_from_slice(old);
             row[7] = i % 2;
             row[8] = (i / 2) % 2;
@@ -145,5 +148,6 @@ pub fn pipeline(c: Config) -> cq_workloads::pipelines::Pipeline {
         sorted_payload: c[6] == 1,
         lazy: c[7] == 1,
         push: c[8] == 1,
+        positional: c[9] == 1,
     }
 }

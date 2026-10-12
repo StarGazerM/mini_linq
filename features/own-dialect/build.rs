@@ -33,6 +33,17 @@ fn main() {
         cq_testkit::cq::contract::check(&cq).unwrap();
         for host in ["slice", "hash", "ordered"] {
             emit(&mut code, "cq", case.name, host, &cq, case.cq, None);
+            if host == "slice" {
+                emit(
+                    &mut code,
+                    "cq",
+                    case.name,
+                    "slice_positional",
+                    &cq,
+                    case.cq,
+                    None,
+                );
+            }
         }
     }
     for scenario in SCENARIOS {
@@ -71,7 +82,7 @@ fn emit(
         let fields = (0..width).map(|i| format!("row[{i}],")).collect::<String>();
         let types = "i32,".repeat(width);
         declarations.push_str(&format!("let raw_{relation}: Vec<({types})> = raw[{relation:?}].iter().map(|row| ({fields})).collect();\n"));
-        if host == "slice" {
+        if host.starts_with("slice") {
             declarations.push_str(&format!("let {relation} = raw_{relation}.as_slice();\n"));
         } else {
             let map = if host == "hash" {
@@ -88,6 +99,16 @@ fn emit(
     let answer = (0..width)
         .map(|i| format!(" *row.{i},"))
         .collect::<String>();
+    let advice = if host == "slice_positional" {
+        let hosts = cq
+            .inputs()
+            .map(|input| input.name.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("select = mini_linq::passes::select(positional({hosts}));")
+    } else {
+        String::new()
+    };
     let (push, pull) = if let Some(source) = structures {
         (
             format!("own_push::push! {{ pipeline {{}}; {source} }}"),
@@ -95,8 +116,10 @@ fn emit(
         )
     } else {
         (
-            format!("mini_linq::compile! {{ pipeline {{ print = own_push::push; }} {cq_text} }}"),
-            format!("mini_linq::compile! {{ pipeline {{}} {cq_text} }}"),
+            format!(
+                "mini_linq::compile! {{ pipeline {{ {advice} print = own_push::push; }} {cq_text} }}"
+            ),
+            format!("mini_linq::compile! {{ pipeline {{ {advice} }} {cq_text} }}"),
         )
     };
     let lookup = if stage == "cq" {

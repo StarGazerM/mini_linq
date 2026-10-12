@@ -42,6 +42,7 @@ macro_rules! query_body {
             let discount_high = Decimal::from_scaled(7).unwrap();
             let quantity_limit = Decimal::from_scaled(2400).unwrap();
             let computed: Vec<(i32, i64, i64, i128)> = query! {
+                positional(lineitem);
                 struct Query06;
                 relation lineitem(
                     orderkey: i64, linenumber: i64, quantity: Decimal,
@@ -59,7 +60,7 @@ macro_rules! query_body {
             // the authored CQ's computed rows, then compose the aggregate hole.
             // This allocation and both CQ executions remain inside query time.
             let computed = computed.as_slice();
-            let aggregates = query! {aggregate! {
+            let aggregates = query! {positional(computed); aggregate! {
                 by (group); revenue = sum(amount);
                 struct Revenue;
                 relation computed(group: i32, orderkey: i64, linenumber: i64, amount: i128);

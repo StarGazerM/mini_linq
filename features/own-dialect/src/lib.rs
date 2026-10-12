@@ -20,11 +20,12 @@
 //! `own_push::push! { pipeline {}; physical { ... } structures { ... } }`.
 //! The pass accepts no arguments and ends the queue.
 //!
-//! Nested loops push answers into a Vec endpoint. At retained constructions a
-//! temporary traversal buffer feeds the recorded collection's `FromIterator`
-//! and the recorded indexes' `Build` implementations. These buffers do not
-//! introduce canonical boundaries or replace a recorded representation. The
-//! endpoint is eager; the returned iterator traverses the completed answer.
+//! Nested loops push answers into a Vec endpoint. Shared source preparation
+//! constructs the recorded FromIterator, Selection and Build providers. A
+//! selection is constructed once per retained let and reused by its scans and
+//! indices without a traversal Vec. Recorded positional pipes push survivor
+//! rows directly to their sink. The endpoint is eager; the returned iterator
+//! traverses the completed answer.
 //!
 //! The denotation is Kleisli composition over bottom + Set. A panic aborts the
 //! whole evaluation. Rust steps remain opaque, pinned in their chain, and observe

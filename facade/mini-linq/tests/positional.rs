@@ -259,3 +259,27 @@ fn raw_identifiers_survive_recorded_base_and_column_lineage() {
     .collect();
     assert_eq!(values, vec![2]);
 }
+
+#[test]
+fn borrowed_scalar_parameters_match_the_recorded_column_key_type() {
+    let rows = [(1_i64,), (2,), (3,)];
+    let cutoff = &&2_i64;
+    let point: Vec<_> = mini_linq::compile! {
+        pipeline { select = mini_linq::passes::select(positional(R)); }
+        struct PointParameter;
+        relation R(x:i64) = (rows);
+        answer(x) :- R(x), if *x == cutoff;
+    }
+    .map(|(x,)| *x)
+    .collect();
+    let range: Vec<_> = mini_linq::compile! {
+        pipeline { select = mini_linq::passes::select(positional(R)); }
+        struct RangeParameter;
+        relation R(x:i64) = (rows);
+        answer(x) :- R(x), if *x >= cutoff;
+    }
+    .map(|(x,)| *x)
+    .collect();
+    assert_eq!(point, [2]);
+    assert_eq!(range, [2, 3]);
+}

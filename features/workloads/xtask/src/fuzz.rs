@@ -124,6 +124,7 @@ impl Config {
             sorted_payload: self.custom_index,
             lazy: self.lazy,
             push: self.push,
+            positional: self.host == 0,
         }
     }
 }
@@ -550,6 +551,7 @@ impl Runner {
         manifest.push_str(&crate::cargo::dependencies(&[
             "mini-linq",
             "cq-storage",
+            "cq-load",
             "cq-workloads",
             "cq-planners",
             "cq-rewrites",

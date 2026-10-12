@@ -104,7 +104,11 @@ impl Context<'_> {
                     if string {
                         quote!(::cq_storage::StringValue::string_value(#reference))
                     } else {
-                        quote!(*#reference)
+                        // A correlated parameter may itself be borrowed. Coerce
+                        // to the declared key reference before copying the scalar;
+                        // one syntactic dereference would leave Point<&K>.
+                        let ty = &self.infos[name].types[&column];
+                        quote!({ let __cq_value: &#ty = #reference; *__cq_value })
                     }
                 };
                 if let Some((_, bounds)) = s.condition.range_bounds() {

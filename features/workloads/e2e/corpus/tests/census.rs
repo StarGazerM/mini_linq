@@ -13,6 +13,10 @@ fn every_generated_case_is_accounted_for() {
             names.insert((fields[0], fields[1])),
             "duplicate case: {line}"
         );
+        let axes: Vec<_> = fields[1].split('_').collect();
+        if axes.contains(&"hashmap") || axes.contains(&"btreemap") {
+            assert!(fields[1].ends_with("unadvised"), "map host advised: {line}");
+        }
         configurations += 1;
         match fields[2] {
             "run" => cases += fields[3].parse::<usize>().unwrap(),
@@ -25,7 +29,7 @@ fn every_generated_case_is_accounted_for() {
     }
     assert_eq!(
         configurations,
-        4 * 3456 + 16 * env!("E2E_PAIRWISE_ROWS").parse::<usize>().unwrap()
+        4 * 4608 + 16 * env!("E2E_PAIRWISE_ROWS").parse::<usize>().unwrap()
     );
     assert_eq!(cases.to_string(), env!("E2E_DIFFERENTIAL_CASES"));
     assert_eq!(rejected.to_string(), env!("E2E_COMPILE_FAIL_CASES"));

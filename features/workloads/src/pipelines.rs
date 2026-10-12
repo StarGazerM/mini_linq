@@ -31,6 +31,7 @@ pub struct Pipeline {
     pub ordered_dedup: bool,
     pub sorted_payload: bool,
     pub push: bool,
+    pub positional: bool,
 }
 
 impl Pipeline {
@@ -102,7 +103,12 @@ impl Pipeline {
         } else {
             quote!(::mini_linq::passes::print_pull)
         };
+        let selection = self.positional.then(|| {
+            let hosts = source.inputs().map(|input| &input.name);
+            quote!(select = ::mini_linq::passes::select(positional(#(#hosts),*));)
+        });
         Ok(quote!(pipeline {
+            #selection
             plan = ::cq_planners::order(#arguments);
             physical = [#(#physical),*];
             structures = [#(#structures),*];
@@ -125,7 +131,13 @@ impl Pipeline {
         target: &cq_lang_physical::Program,
         host: usize,
     ) -> syn::Result<Option<&'static str>> {
-        let structures = match cq_structure_selection::compile(target) {
+        let advice = if self.positional {
+            let hosts = target.inputs().map(|input| &input.name);
+            quote!(positional(#(#hosts),*))
+        } else {
+            TokenStream::new()
+        };
+        let structures = match cq_structure_selection::compile_with(target, advice) {
             Ok(structures) => structures,
             Err(error) if error.to_string().ends_with(SMALLEST_LAYOUT_REJECTION) => {
                 return Ok(Some(SMALLEST_LAYOUT_REJECTION));

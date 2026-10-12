@@ -184,6 +184,7 @@ impl<'a> Context<'a> {
                 span = proc_macro2::Span::mixed_site()
             );
             statements.push(syn::parse_quote!(let #id = { use ::cq_storage::PositionalRows as _; #host.positional_handle() };));
+            statements.push(syn::parse_quote!(::cq_storage::require::positional(#id);));
         }
         // Formal rule IF-Parameter: Bind each captured relational value once outside all query loops.
         let mut parameters = BTreeMap::new();

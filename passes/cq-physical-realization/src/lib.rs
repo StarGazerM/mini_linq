@@ -91,6 +91,18 @@ pub fn sources<'a>(
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
 ) -> syn::Result<Context<'a>> {
+    sources_with(module, analysis, |_, _| {})
+}
+
+/// Prepare sources while exposing each representation before its pipe is consumed.
+/// Alternative printers can retain the emitted positional stream for fusion into
+/// their own sinks. This observes compiler tokens, never traverses runtime rows.
+/// `analysis` must be the contract result for `module`.
+pub fn sources_with<'a>(
+    module: &'a structures::Program,
+    analysis: &'a structures::Analysis,
+    mut prepared: impl FnMut(&str, &Repr),
+) -> syn::Result<Context<'a>> {
     let mut printer = Printer {
         context: Context::new(module, analysis),
         active_prefixes: BTreeMap::new(),
@@ -122,9 +134,15 @@ pub fn sources<'a>(
                     "Structures does not discharge smallest candidate reads",
                 );
             }
+            for definition in &definitions[position..position + 2] {
+                let name = symbol_name(&definition.name);
+                prepared(&name, &printer.reprs[&name]);
+            }
             position += 2;
         } else {
             printer.define(&definitions[position])?;
+            let name = symbol_name(&definitions[position].name);
+            prepared(&name, &printer.reprs[&name]);
             position += 1;
         }
     }

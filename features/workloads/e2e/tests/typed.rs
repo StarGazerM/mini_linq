@@ -29,7 +29,10 @@ macro_rules! execute_typed {
                 };
                 let $relation = $relation.as_slice();
             )*
-            let rows = ::mini_linq::mini_linq! { $($cq)* }
+            let rows = ::mini_linq::compile! {
+                pipeline { select = mini_linq::passes::select(positional($($relation),*)); }
+                $($cq)*
+            }
                 .map(|(a, b, c, d)| vec![a.to_string(), b.to_string(), c.to_string(), d.to_string()])
                 .collect();
             cq_workloads::typed::check(stringify!($case), rows);

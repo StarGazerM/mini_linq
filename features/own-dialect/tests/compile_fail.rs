@@ -82,6 +82,7 @@ fn main() {{
             ("own_push", std::env::consts::DLL_EXTENSION),
             ("mini_linq", "rlib"),
             ("cq_storage", "rlib"),
+            ("cq_load", "rlib"),
         ] {
             let artifact = artifact(&self.dependencies, crate_name, extension);
             rustc
@@ -193,22 +194,29 @@ fn printer_rejects_arguments_and_a_remaining_queue() {
 }
 
 #[test]
-fn positional_entries_are_explicitly_refused_until_push_phase_four() {
+fn positional_advice_requires_a_positional_host() {
     let compiler = Compiler::new();
-    failure(
-        compiler.compile(
-            "positional",
-            r#"mini_linq::passes::select! {
-        arguments { positional(R) };
-        pipeline { own_push::push };
-        physical {
-            relation R(a:i32,b:i32);
-            r = pipe rename R@0 {a -> x,b -> y};
-            s = pipe point select r if (y = 2);
-            out = pipe canon project s keep {x}; return out as answer(x);
-        }
-    }"#,
-        ),
-        "own_push: positional selection, keyset and read entries are unsupported (phase 4)",
-    );
+    for (name, printer) in [
+        ("pull_positions", "mini_linq::passes::print_pull"),
+        ("push_positions", "own_push::push"),
+    ] {
+        failure(
+            compiler.compile(
+                name,
+                &format!(
+                    r#"mini_linq::passes::select! {{
+            arguments {{ positional(R) }};
+            pipeline {{ {printer} }};
+            physical {{
+                relation R(a:i32,b:i32);
+                r = pipe rename R@0 {{a -> x,b -> y}};
+                s = pipe point select r if (y = 2);
+                out = pipe canon project s keep {{x}}; return out as answer(x);
+            }}
+        }}"#
+                ),
+            ),
+            "positional_handle",
+        );
+    }
 }
