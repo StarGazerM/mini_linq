@@ -20,6 +20,7 @@ JOIN nation ns ON ns.n_nationkey = s.s_nationkey
 WHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'
 AND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0"#;
     candidate generic_smallest;
+    extra hypergraph;
     setup { let start = date("1995-01-01"); let end = date("1995-04-01"); }
     relations {
         relation Lineitem => lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);

@@ -35,3 +35,6 @@ pub use mini_linq_macros::{compile, mini_linq, relation_loaders, workload_query}
 pub mod passes {
     pub use mini_linq_macros::{index_demands, lower, plan_written, print_pull, select};
 }
+
+#[cfg(doctest)]
+mod positional_misuse;

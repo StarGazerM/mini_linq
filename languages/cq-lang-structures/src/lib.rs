@@ -1,12 +1,18 @@
-//! Structures records only built let structures, their provider types and trie levels.
-//! Host renames need no entry: type dispatch selects their direct or lazy built reads.
-//! Contracts discharge plan premises, never host capability claims.
+//! Structures records providers, retained rows or positions, and read adapters.
+//! Ordinary host reads keep their recorded native/lazy fallback path. Explicit
+//! positional decisions name a base, total column lineage, marker and summary;
+//! generated Rust checks the asserted host and provider capabilities.
 //! Smallest intersections require two candidate levels on every retained side,
 //! alongside any structures needed by other reads of the same result.
 //! The denotation is `bottom + Set`; opaque Rust binds and guards stay in their
 //! written chain. Const supplies use one point read and never justify a build.
 //! ```text
-//! Entry ::= Ident "=" RustType ("[" Ident,* "]")+ ";"
+//! Entry ::= Ident ("=" RustType ("[" Ident,* "]")+
+//!                | "selection" "=" RustType Origin "summary" Summary
+//!                | "keyset" "=" RustType "[" Ident,* "]" Ownership Origin
+//!                | "read" "=" "positional" Origin "column" Ident
+//!                    "marker" RustType "predicate" ReadPredicate) ";"
+//! Origin ::= "base" Ident "lineage" "{" (Ident "->" Ident),* "}"
 //! ```
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
@@ -42,6 +48,24 @@ pub mod kw {
     syn::custom_keyword!(rows);
     syn::custom_keyword!(payload);
     syn::custom_keyword!(constants);
+    syn::custom_keyword!(selection);
+    syn::custom_keyword!(keyset);
+    syn::custom_keyword!(read);
+    syn::custom_keyword!(positional);
+    syn::custom_keyword!(base);
+    syn::custom_keyword!(lineage);
+    syn::custom_keyword!(summary);
+    syn::custom_keyword!(none);
+    syn::custom_keyword!(per_block);
+    syn::custom_keyword!(column);
+    syn::custom_keyword!(marker);
+    syn::custom_keyword!(predicate);
+    syn::custom_keyword!(physical);
+    syn::custom_keyword!(membership);
+    syn::custom_keyword!(exact);
+    syn::custom_keyword!(row);
+    syn::custom_keyword!(owned);
+    syn::custom_keyword!(borrowed);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -72,6 +96,37 @@ pub struct Entry {
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Structure {
+    #[parse(peek = kw::selection)]
+    Selection {
+        selection_token: kw::selection,
+        eq_token: Token![=],
+        ty: syn::Type,
+        origin: Origin,
+        summary_token: kw::summary,
+        summary: Summary,
+    },
+    #[parse(peek = kw::keyset)]
+    KeySet {
+        keyset_token: kw::keyset,
+        eq_token: Token![=],
+        ty: syn::Type,
+        key: Level,
+        ownership: KeyOwnership,
+        origin: Origin,
+    },
+    #[parse(peek = kw::read)]
+    Read {
+        read_token: kw::read,
+        eq_token: Token![=],
+        positional_token: kw::positional,
+        origin: Origin,
+        column_token: kw::column,
+        column: Ident,
+        marker_token: kw::marker,
+        marker: syn::Type,
+        predicate_token: kw::predicate,
+        predicate: ReadPredicate,
+    },
     #[parse(peek = kw::host)]
     Host {
         host_token: kw::host,
@@ -202,6 +257,14 @@ pub type Built = (Vec<Vec<String>>, syn::Type);
 /// What the contract establishes for later stages.
 #[derive(Clone, Debug)]
 pub struct Analysis {
+    /// Independently derived single-base occurrence lineage.
+    pub lineage: BTreeMap<String, Lineage>,
+    /// Checked base occurrence and complete logical-to-host column mappings.
+    pub selections: BTreeMap<String, Selection>,
+    /// Explicit key-only builds; they confer neither payload nor ordered reads.
+    pub keysets: BTreeMap<(String, Vec<String>), KeySet>,
+    /// Positional access decisions attached to existing Physical readers.
+    pub reads: BTreeMap<String, Read>,
     pub physical: physical::Analysis,
     /// Declared column order of every host relation.
     pub host_layouts: BTreeMap<String, Vec<String>>,
@@ -282,6 +345,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 )
             })
             .collect(),
+        lineage: BTreeMap::new(),
+        selections: BTreeMap::new(),
+        keysets: BTreeMap::new(),
+        reads: BTreeMap::new(),
         built: BTreeMap::new(),
         fallbacks: BTreeMap::new(),
         dedup: BTreeMap::new(),
@@ -291,13 +358,20 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         layouts: BTreeMap::new(),
         unique: BTreeMap::new(),
     };
+    analysis.lineage = lineages(&program.physical, &analysis.physical);
     let mut seen = BTreeSet::new();
     for entry in &module.entries {
         let name = symbol_name(&entry.name);
-        let Some(heading) = analysis.physical.headings.get(&name) else {
+        let Some(heading) = analysis.physical.headings.get(&name).cloned() else {
             return error(&entry.name, "structure must name a Physical result");
         };
+        if positional::entry(program, entry, &mut analysis)? {
+            continue;
+        }
         let keyed = match &entry.structure {
+            Structure::Selection { .. } | Structure::KeySet { .. } | Structure::Read { .. } => {
+                unreachable!()
+            }
             Structure::Built { keyed, .. } => keyed,
             Structure::Host { reader, keyed, .. } => {
                 if keyed.filtered.is_some() {
@@ -474,6 +548,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
         }
     }
+    positional::check(program, &analysis)?;
     filtered::check(program, &analysis)?;
     analysis.layouts = filtered::layouts(program, &analysis);
     let mut shared: BTreeMap<(String, Vec<String>, bool), &syn::Type> = BTreeMap::new();
@@ -562,7 +637,16 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             {
                 continue;
             }
-            if !answered(result, columns) {
+            let membership = program.physical.program.definitions.iter().any(|d| {
+                symbol_name(&d.name) == *reader
+                    && matches!(d.operator, Operator::Semi(..) | Operator::Anti(..))
+            });
+            if !(answered(result, columns)
+                || membership
+                    && analysis
+                        .keysets
+                        .contains_key(&(result.clone(), columns.clone())))
+            {
                 return error(
                     &module.structures_token,
                     format!(
@@ -571,6 +655,13 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 );
             }
             if let Some((ty, depth)) = analysis.built_on(result, columns) {
+                if membership
+                    && !analysis
+                        .keysets
+                        .contains_key(&(result.clone(), columns.clone()))
+                {
+                    admissible(ty, "membership")?;
+                }
                 let payload = program.physical.program.definitions.iter().any(|d| {
                     symbol_name(&d.name) == *reader && matches!(d.operator, Operator::Probe(..))
                 });
@@ -633,6 +724,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             || analysis.physical.modes[&name] == ModeKind::Exists)
             && analysis.physical.modes[&name] != ModeKind::Pipe
             && !analysis.retained.contains_key(&name)
+            && !analysis.selections.contains_key(&name)
         {
             return error(&definition.name, "missing retained rows type");
         }
@@ -650,7 +742,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 .into_iter()
                 .flatten()
             {
-                if !analysis.host_read(&name) {
+                if !analysis.host_read(&name) || analysis.reads.contains_key(reader) {
                     continue;
                 }
                 if !analysis.fallbacks.contains_key(&(
@@ -776,9 +868,20 @@ pub fn concrete_type(ty: &syn::Type) -> syn::Result<()> {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    physical::check_rewrite(&source.physical, &target.physical)?;
+    if source.physical != target.physical
+        || quote::ToTokens::to_token_stream(&source.physical).to_string()
+            != quote::ToTokens::to_token_stream(&target.physical).to_string()
+    {
+        return error(
+            &target.physical,
+            "Structures rewrite must preserve Physical AST and tokens exactly",
+        );
+    }
     Ok(())
 }
+
+pub mod positional;
+pub use positional::*;
 
 mod filtered;
 pub use filtered::{required_columns, selection_constants};
@@ -813,6 +916,8 @@ fn admissible(ty: &syn::Type, need: &str) -> syn::Result<()> {
             | "cq_storage::HashIndex"
             | "cq_storage::dispatch::KeySet"
             | "cq_storage::Trie"
+            | "cq_storage::Selection"
+            | "cq_storage::AdaptiveKeySet"
     ) {
         return Ok(());
     }
@@ -823,12 +928,30 @@ fn admissible(ty: &syn::Type, need: &str) -> syn::Result<()> {
         .map(|s| s.ident.to_string())
         .unwrap_or_default();
     let incompatible = match need {
-        "payload" => matches!(name.as_str(), "HashSet" | "BTreeSet" | "KeySet"),
+        "membership" => name == "Selection",
+        "interval" => matches!(
+            name.as_str(),
+            "HashIndex" | "HashMap" | "HashSet" | "BTreeSet" | "KeySet" | "Trie" | "Selection"
+        ),
+        "payload" => matches!(
+            name.as_str(),
+            "HashSet" | "BTreeSet" | "KeySet" | "Selection" | "AdaptiveKeySet"
+        ),
         "ordered" => matches!(
             name.as_str(),
-            "HashIndex" | "HashMap" | "HashSet" | "BTreeSet" | "KeySet" | "Trie"
+            "HashIndex"
+                | "HashMap"
+                | "HashSet"
+                | "BTreeSet"
+                | "KeySet"
+                | "Trie"
+                | "Selection"
+                | "AdaptiveKeySet"
         ),
-        "candidates" => matches!(name.as_str(), "HashSet" | "BTreeSet" | "KeySet"),
+        "candidates" => matches!(
+            name.as_str(),
+            "HashSet" | "BTreeSet" | "KeySet" | "Selection" | "AdaptiveKeySet"
+        ),
         _ => false,
     };
     if incompatible {

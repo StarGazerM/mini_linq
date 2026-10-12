@@ -66,7 +66,7 @@
 //!
 //! `retype(selector => RustType)` replaces only recorded types. It preserves
 //! Physical, entry order, reader identities, and index levels. A bare result name
-//! selects that result's built indexes and keyed host fallbacks, including
+//! selects that result's built indexes, keysets and keyed host fallbacks, including
 //! supplemental candidate/membership reads. Scan, point, and range adapters keep
 //! their recorded types. `result(name)` disambiguates a result named like a kind.
 //!
@@ -78,6 +78,15 @@
 //! | `trie` | Built entries with multiple written key levels |
 //! | `dedup` | Canonical-boundary and computed-head dedup state |
 //! | `rows` | Recorded retained row collections |
+//! | `selection` | Immutable positional selections, preserving base, lineage and summary policy |
+//! | `keyset` | Exact key-only builds, also matched by `membership` |
+//!
+//! Keyset budget changes are explicit type rewrites. A read with an exact
+//! interval summary cannot silently lose that trait: rewrite its summary to
+//! `row` explicitly or retain a compatible provider. Aliases satisfy the emitted
+//! runtime trait guards; no printer substitutes another provider. When a
+//! supplementary keyset serves membership, the payload index keeps its separate
+//! classification and needs only the traits used by its remaining readers.
 //!
 //! `kind(name)` explicitly selects a kind. Classification follows recorded reads
 //! and levels, so aliases do not change which entries match. An entry serving

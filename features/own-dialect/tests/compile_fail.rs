@@ -191,3 +191,24 @@ fn printer_rejects_arguments_and_a_remaining_queue() {
         "Rust printer must be the final pass",
     );
 }
+
+#[test]
+fn positional_entries_are_explicitly_refused_until_push_phase_four() {
+    let compiler = Compiler::new();
+    failure(
+        compiler.compile(
+            "positional",
+            r#"mini_linq::passes::select! {
+        arguments { positional(R) };
+        pipeline { own_push::push };
+        physical {
+            relation R(a:i32,b:i32);
+            r = pipe rename R@0 {a -> x,b -> y};
+            s = pipe point select r if (y = 2);
+            out = pipe canon project s keep {x}; return out as answer(x);
+        }
+    }"#,
+        ),
+        "own_push: positional selection, keyset and read entries are unsupported (phase 4)",
+    );
+}

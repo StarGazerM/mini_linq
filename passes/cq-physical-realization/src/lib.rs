@@ -156,12 +156,40 @@ impl Printer<'_> {
             physical::ModeKind::Pipe if matches!(definition.operator, Operator::Rename(_)) => {
                 Repr::Host
             }
+            physical::ModeKind::Pipe if matches!(&definition.operator, Operator::Project(p) if definition.canon.is_none() && self.analysis.lineage.contains_key(&name) && matches!(self.reprs.get(&symbol_name(&p.input)), Some(Repr::Positions(_) | Repr::Selection { .. } | Repr::Host)) && self.analysis.reads.values().any(|r| symbol_name(&r.origin.base) == self.analysis.lineage[&name].base)) =>
+            {
+                let Operator::Project(p) = &definition.operator else {
+                    unreachable!()
+                };
+                let input = symbol_name(&p.input);
+                let ids = match self.reprs.get_mut(&input) {
+                    Some(Repr::Positions(ids)) => ids.take().expect("single pipe consumer"),
+                    Some(Repr::Selection { selection, .. }) => quote!(#selection.positions()),
+                    Some(Repr::Host) => {
+                        let host = format_ident!(
+                            "__cq_positional_{}",
+                            self.analysis.lineage[&name].base,
+                            span = proc_macro2::Span::mixed_site()
+                        );
+                        quote!(::cq_storage::PositionalRows::positions(#host))
+                    }
+                    _ => unreachable!(),
+                };
+                Repr::Positions(Some(ids))
+            }
+            physical::ModeKind::Pipe if self.analysis.reads.contains_key(&name) => {
+                Repr::Positions(Some(self.read_ids(&name)?))
+            }
             physical::ModeKind::Pipe => {
                 let mut rows = self.produce(&name, definition)?;
                 if definition.canon.is_some() {
                     rows = self.distinct(&definition.name, rows);
                 }
                 Repr::Pipe(Some(rows))
+            }
+            physical::ModeKind::Let if self.analysis.selections.contains_key(&name) => {
+                let selection = self.selection_source(&name)?;
+                self.materialize(&name, false, selection)
             }
             physical::ModeKind::Let | physical::ModeKind::Exists => {
                 let mut rows = self.produce(&name, definition)?;
@@ -193,6 +221,13 @@ impl Printer<'_> {
                 Some(rows) => Ok(rows),
                 None => error(result, format!("pipe `{name}` is read twice")),
             },
+            Some(Repr::Selection { selection, .. }) => Ok(self.selection_rows(&name, selection)),
+            Some(Repr::Positions(_)) => {
+                let ids = self
+                    .take_positions(&name)
+                    .ok_or_else(|| syn::Error::new_spanned(result, "positional pipe read twice"))?;
+                Ok(self.positional_rows(&name, ids))
+            }
             Some(Repr::Let { rows, structures }) => {
                 let _ = structures;
                 let Some(source) = rows else {

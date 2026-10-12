@@ -192,7 +192,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let path = bench.join(format!("tpch-{}{suffix}.tsv", options.sf));
     let pending = path.with_extension("tsv.partial");
     let mut table = String::from(
-        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\n",
+        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\n",
     );
     println!(
         "TPC-H-derived; SF {}; release; one warm run + median of {}; DuckDB {} default threads={}",
@@ -262,6 +262,16 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 return Err("TPC timing/counting build separation failed".into());
             }
             for name in [
+                "blocks_considered",
+                "blocks_visited",
+                "blocks_skipped",
+                "blocks_skipped_metadata",
+                "blocks_skipped_empty_selection",
+                "rows_tested",
+                "rows_copied",
+                "bytes_retained_current",
+                "bytes_retained_peak",
+                "keyset_staging_bytes_peak",
                 "hash_computations",
                 "index_builds",
                 "lookups",
@@ -285,6 +295,16 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             );
             let counters = [
                 "peak_rss_kib",
+                "blocks_considered",
+                "blocks_visited",
+                "blocks_skipped",
+                "blocks_skipped_metadata",
+                "blocks_skipped_empty_selection",
+                "rows_tested",
+                "rows_copied",
+                "bytes_retained_current",
+                "bytes_retained_peak",
+                "keyset_staging_bytes_peak",
                 "hash_computations",
                 "index_builds",
                 "lookups",
@@ -325,7 +345,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         "label":"TPC-H-derived", "selection":options.query, "sf":options.sf,"runs":options.runs,"warm_runs":1,
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
-        "compile_method":"Cargo --release --timings per-query binary unit (both configurations); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time",
+        "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time",
         "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop; DuckDB includes prepare/optimization and Arrow result materialization",
         "sf_0_1_gate":"all freshly compiled query/configuration workers checked before timing either scale",
         "memory_method":"Linux /proc/self/status VmHWM per configuration worker process, includes load, warmup, answers and correctness; not incremental query-only memory; NA elsewhere",

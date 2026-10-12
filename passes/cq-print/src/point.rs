@@ -18,7 +18,7 @@ impl Context<'_> {
         let condition = self.relational_condition(&select.condition);
         let pattern = self.borrowed_pattern(&input_name);
         let rows = self.host_scan(&input_name);
-        let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| #condition));
+        let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition)));
         let Some(keys) = keys else {
             return Some(filtered);
         };
@@ -53,7 +53,7 @@ impl Context<'_> {
         });
         // Retain every conjunct even when repeated columns give conflicting keys.
         Some(
-            quote!(::core::iter::Iterator::filter(#looked_up, move |#[allow(unused_variables)] #pattern| #condition)),
+            quote!(::core::iter::Iterator::filter(#looked_up, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))),
         )
     }
 }

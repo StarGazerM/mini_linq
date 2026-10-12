@@ -11,6 +11,8 @@ enum Kind {
     Trie,
     Dedup,
     Rows,
+    Selection,
+    KeySet,
 }
 
 impl Kind {
@@ -22,6 +24,8 @@ impl Kind {
             "trie" => Some(Self::Trie),
             "dedup" => Some(Self::Dedup),
             "rows" => Some(Self::Rows),
+            "selection" => Some(Self::Selection),
+            "keyset" => Some(Self::KeySet),
             _ => None,
         }
     }
@@ -95,6 +99,9 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                     matches!(kind, Kind::Dedup)
                 }
                 Structure::Rows { .. } => matches!(kind, Kind::Rows),
+                Structure::Selection { .. } => matches!(kind, Kind::Selection),
+                Structure::KeySet { .. } => matches!(kind, Kind::KeySet | Kind::Membership),
+                Structure::Read { .. } => false,
                 Structure::Host { reader, .. } => {
                     matches!(kind, Kind::Membership) && reader == "membership"
                         || source.physical.program.definitions.iter().any(|d| {
@@ -110,6 +117,13 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                             .into_iter()
                             .flatten()
                             .any(|(reader, columns, _)| {
+                                if matches!(kind, Kind::Membership)
+                                    && analysis
+                                        .keysets
+                                        .contains_key(&(name.clone(), columns.clone()))
+                                {
+                                    return false;
+                                }
                                 ir::prefix_depth(&keyed.level_names(), columns).is_some()
                                     && source.physical.program.definitions.iter().any(|d| {
                                         symbol_name(&d.name) == *reader && kind.reads(&d.operator)
@@ -125,7 +139,10 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 }
                 Structure::Dedup { ty, .. }
                 | Structure::HeadDedup { ty, .. }
-                | Structure::Rows { ty, .. } => *ty = request.ty.clone(),
+                | Structure::Rows { ty, .. }
+                | Structure::Selection { ty, .. }
+                | Structure::KeySet { ty, .. } => *ty = request.ty.clone(),
+                Structure::Read { .. } => unreachable!("read is not a provider type"),
             }
             changed = true;
         }
@@ -142,7 +159,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
 
 fn keyed_read(structure: &Structure, source: &ir::Program) -> bool {
     match structure {
-        Structure::Built { .. } => true,
+        Structure::Built { .. } | Structure::KeySet { .. } => true,
         Structure::Host { reader, .. } => {
             reader == "membership"
                 || reader == "candidates"

@@ -104,14 +104,13 @@ pub fn lower(input: TokenStream) -> TokenStream {
 }
 
 /// Physical → Structures with concrete default Rust types.
+/// Optional `positional(H, ...)` arguments assert the default typed-column
+/// capability for those hosts; unspecified hosts retain their original path.
 #[proc_macro]
 pub fn select(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_physical::Program, cq_lang_structures::Program>(
         input.into(),
-        |source, args| {
-            no_arguments(args)?;
-            cq_structure_selection::compile(source)
-        },
+        cq_structure_selection::compile_with,
     )
     .into()
 }

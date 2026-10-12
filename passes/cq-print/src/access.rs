@@ -217,7 +217,9 @@ impl<'a> Context<'a> {
         name: &str,
         columns: &[String],
     ) -> Option<(&Vec<Vec<String>>, usize)> {
-        let Some(Repr::Let { structures, .. }) = self.reprs.get(name) else {
+        let Some(Repr::Let { structures, .. } | Repr::Selection { structures, .. }) =
+            self.reprs.get(name)
+        else {
             return None;
         };
         structures
@@ -229,7 +231,9 @@ impl<'a> Context<'a> {
     }
 
     pub fn built_ident(&self, name: &str, levels: &[Vec<String>]) -> Ident {
-        let Some(Repr::Let { structures, .. }) = self.reprs.get(name) else {
+        let Some(Repr::Let { structures, .. } | Repr::Selection { structures, .. }) =
+            self.reprs.get(name)
+        else {
             unreachable!("built_levels found it");
         };
         structures

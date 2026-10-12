@@ -206,6 +206,10 @@ impl<'a> Printer<'a> {
         name: &str,
         definition: &physical::Definition,
     ) -> syn::Result<TokenStream> {
+        if self.analysis.reads.contains_key(name) {
+            let ids = self.read_ids(name)?;
+            return Ok(self.positional_rows(name, ids));
+        }
         match &definition.operator {
             Operator::Union(union) => self.union(name, union),
             Operator::Anti(_, keyed) => self.membership(keyed, true),
@@ -218,7 +222,7 @@ impl<'a> Printer<'a> {
                 Ok(quote! {
                     ::core::iter::Iterator::filter(
                         #input,
-                        move |#[allow(unused_variables)] #pattern| #condition
+                        move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition)
                     )
                 })
             }
@@ -231,7 +235,7 @@ impl<'a> Printer<'a> {
                 let pattern = self.borrowed_pattern(&symbol_name(&select.input));
                 let condition = self.relational_condition(&select.condition);
                 Ok(
-                    quote!(::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| #condition)),
+                    quote!(::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))),
                 )
             }
             Operator::Guard(guard) => {
@@ -242,7 +246,7 @@ impl<'a> Printer<'a> {
                 );
                 let condition = &guard.condition;
                 Ok(quote! {
-                    ::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| #condition)
+                    ::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))
                 })
             }
             Operator::Bind(bind) => {
@@ -406,19 +410,25 @@ impl<'a> Printer<'a> {
                 quote!(_)
             }
         });
-        let test = match self.keyed(&keyed.right, &columns)? {
-            Access::Host(access) => self.host_lookup(&left, &access, true),
-            Access::Built(structure) => {
-                let levels = self.levels_of(&symbol_name(&keyed.right), &structure);
-                self.chained_contains(&left, &structure, &symbol_name(&keyed.right), &levels)
-            }
-            Access::Prefix(structure, levels) => {
-                self.chained_contains(&left, &structure, &symbol_name(&keyed.right), &levels)
+        let test = if let Some(test) =
+            self.keyset_contains(&left, &symbol_name(&keyed.right), &columns)
+        {
+            test
+        } else {
+            match self.keyed(&keyed.right, &columns)? {
+                Access::Host(access) => self.host_lookup(&left, &access, true),
+                Access::Built(structure) => {
+                    let levels = self.levels_of(&symbol_name(&keyed.right), &structure);
+                    self.chained_contains(&left, &structure, &symbol_name(&keyed.right), &levels)
+                }
+                Access::Prefix(structure, levels) => {
+                    self.chained_contains(&left, &structure, &symbol_name(&keyed.right), &levels)
+                }
             }
         };
         let test = if negative { quote!(!(#test)) } else { test };
         Ok(quote! {
-            ::core::iter::Iterator::filter(#input, move |&(#(#binders,)*)| #test)
+            ::core::iter::Iterator::filter(#input, move |&(#(#binders,)*)| ::cq_storage::residual(#test))
         })
     }
 
@@ -628,7 +638,7 @@ impl<'a> Printer<'a> {
         if !self.analysis.host_read(&input_name) {
             let rows = self.scan(&select.input)?;
             return Ok(
-                quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| #condition)),
+                quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))),
             );
         }
         Ok(self

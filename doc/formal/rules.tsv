@@ -118,3 +118,9 @@ CQ-Block	implementation	languages/cq-lang-cq/src/lib.rs	fn check_body(	Recursive
 RA-Union	implementation	languages/cq-lang-ra/src/lib.rs	Operator::Union(union) =>	Equal common headings and recorded branch provenance.
 RA-Anti	implementation	languages/cq-lang-ra/src/structural.rs	pub fn anti(&mut self	Left-heading antijoin on explicit free columns.
 PH-Block	implementation	languages/cq-lang-physical/src/lib.rs	fn branch_scopes(program:	Branch tree and Before obligations; execution choices remain recorded.
+STR-Lineage	implementation	languages/cq-lang-structures/src/positional.rs	Formal rule STR-Lineage:	Independent occurrence and column lineage check.
+STR-Read	implementation	languages/cq-lang-structures/src/positional.rs	Formal rule STR-Read:	Only the existing eager semi RHS may supply its summary.
+SEL-Positional	implementation	passes/cq-structure-selection/src/positional.rs	Formal rule SEL-Positional:	Explicit host capabilities; unknown hosts keep old entries.
+IF-Positional	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Positional:	Recorded exact predicates and survivor row fetch.
+IF-Selection	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Selection:	Immutable mask construction and reusable row projection.
+STR-Keyset	implementation	languages/cq-lang-structures/src/positional.rs	Formal rule STR-Keyset:	Keysets serve exact membership without imposing membership on supplemental payload indices.

@@ -511,8 +511,9 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
     assert!(structures::check_rewrite(&target, &changed_occurrence).is_err());
     let mut reordered = target.clone();
     reordered.physical.program.definitions.swap(0, 1);
-    check(&source, &reordered).unwrap();
-    structures::check_rewrite(&target, &reordered).unwrap();
+    // Structures is representation-only, including definition order.
+    assert!(check(&source, &reordered).is_err());
+    assert!(structures::check_rewrite(&target, &reordered).is_err());
     let mut wrong_graph = target;
     wrong_graph.physical.program.definitions[2].operator =
         syn::parse_quote!(point select r if (tag = "b"));

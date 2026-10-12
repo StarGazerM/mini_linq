@@ -40,6 +40,18 @@ where
     P: ReadPredicate<C::Key>,
 {
     let scalar: Vec<_> = Scalar(host).read(ScalarColumn(column), predicate).collect();
+    struct Borrowed<'a, P>(&'a P);
+    impl<K, P: ReadPredicate<K>> ReadPredicate<K> for Borrowed<'_, P> {
+        fn test(&self, key: &K) -> bool {
+            self.0.test(key)
+        }
+        fn any_in(&self, lo: &K, hi: &K) -> bool {
+            self.0.any_in(lo, hi)
+        }
+    }
+    let owned: Vec<_> = host.read_owned(column, Borrowed(predicate)).collect();
+    assert_eq!(owned, scalar);
+
     let mut expected_visited = 0;
     let mut expected_tested = 0;
     for block in host.blocks() {
@@ -76,6 +88,17 @@ where
     assert_eq!(costs.blocks_skipped_empty_selection, 0);
     assert_eq!(costs.rows_tested, expected_tested);
     assert_eq!(host.read(column, predicate).collect::<Vec<_>>(), actual);
+    counters::reset();
+    assert_eq!(
+        host.read_owned(column, Borrowed(predicate))
+            .collect::<Vec<_>>(),
+        actual
+    );
+    assert_eq!(
+        counters::snapshot(),
+        costs,
+        "owned and borrowed reads count the same work"
+    );
 }
 
 #[test]

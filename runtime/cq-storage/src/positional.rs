@@ -21,6 +21,11 @@ impl BlockId {
 /// duplicates. Positions and blocks enumerate that range in base order; block
 /// partitioning uses block_size and remains stable for the immutable host.
 pub trait PositionalRows: Rows {
+    /// Normalize a caller's possibly nested shared reference by method lookup.
+    /// This selects no provider: the receiver must already implement positions.
+    fn positional_handle(self) -> Self {
+        self
+    }
     fn len(self) -> usize;
     fn row_at(self, id: RowId) -> Option<Self::Row>;
     fn positions(self) -> impl Iterator<Item = RowId> {
@@ -119,6 +124,39 @@ where
                     crate::count!(rows_tested);
                     predicate.test(&column.key(self, id))
                 })
+        })
+    }
+    /// The same exact read, owning its predicate so a pipe can escape its
+    /// construction scope without collecting rows or borrowing a local value.
+    /// Host overrides of `bounds` apply to both read forms.
+    fn read_owned<P: ReadPredicate<C::Key>>(
+        self,
+        column: C,
+        predicate: P,
+    ) -> impl Iterator<Item = RowId> {
+        let mut blocks = self.blocks().fuse();
+        let mut positions = None;
+        std::iter::from_fn(move || {
+            loop {
+                while let Some(id) = positions.as_mut().and_then(Iterator::next) {
+                    crate::count!(rows_tested);
+                    if predicate.test(&column.key(self, id)) {
+                        return Some(id);
+                    }
+                }
+                let block = blocks.next()?;
+                crate::count!(blocks_considered);
+                if self
+                    .bounds(column, block)
+                    .is_some_and(|(lo, hi)| !predicate.any_in(&lo, &hi))
+                {
+                    crate::count!(blocks_skipped);
+                    crate::count!(blocks_skipped_metadata);
+                    continue;
+                }
+                crate::count!(blocks_visited);
+                positions = Some(self.block_positions(block));
+            }
         })
     }
 }

@@ -122,3 +122,34 @@ fn skip_partition_and_memory_lifetimes_are_observable() {
     drop(dense);
     assert_eq!(counters::snapshot().bytes_retained_current, 0);
 }
+
+#[test]
+fn owned_predicates_escape_their_scope_without_reads_or_buffers() {
+    struct Threshold(i64);
+    impl ReadPredicate<i64> for Threshold {
+        fn test(&self, key: &i64) -> bool {
+            *key >= self.0
+        }
+        fn any_in(&self, _lo: &i64, hi: &i64) -> bool {
+            *hi >= self.0
+        }
+    }
+    let data = [(-3,), (-2,), (0,), (1,), (4,), (5,), (9,)];
+    for unknown in [false, true] {
+        let reads = Cell::new(0);
+        let host = Host {
+            rows: &data,
+            reads: &reads,
+            unknown,
+        };
+        let mut ids = {
+            let predicate = Threshold(4);
+            host.read_owned(Col, predicate)
+        };
+        assert_eq!(reads.get(), 0);
+        assert_eq!(ids.next().unwrap().offset(), 4);
+        assert_eq!(reads.get(), if unknown { 5 } else { 1 });
+        assert_eq!(ids.map(RowId::offset).collect::<Vec<_>>(), vec![5, 6]);
+        assert_eq!(reads.get(), if unknown { 7 } else { 3 });
+    }
+}

@@ -34,7 +34,7 @@ pub struct Data {
 /// Coefficient at scale four; None is the SQL SUM result for empty input.
 pub type Answer = Option<i128>;
 
-pub fn load(root: &Path) -> Result<Data, Box<dyn Error>> {
+pub fn load(root: &Path, _config: &str) -> Result<Data, Box<dyn Error>> {
     Ok(Data {
         lineitem: LineitemLoader::parquet(root.join("lineitem.parquet"), Default::default())?,
         part: PartLoader::parquet(root.join("part.parquet"), Default::default())?,

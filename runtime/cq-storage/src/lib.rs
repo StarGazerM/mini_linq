@@ -228,3 +228,6 @@ pub use selection::{Selection, SelectionRows, SelectionSummary};
 
 #[cfg(doctest)]
 mod misuse;
+
+pub mod retention;
+pub use retention::{Retention, residual, retain_keys, retain_rows};

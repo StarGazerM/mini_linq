@@ -361,12 +361,26 @@ built level, host reader fallback, retained collection and dedup boundary;
 compatible membership prefixes may share a curried structure; a smallest
 intersection records two candidate levels per retained side; const/range
 supplies never justify a build.
+The optional \code{positional(H,...)} arguments assert host capabilities at this
+boundary; Physical contains only relational schemas, so unspecified hosts keep
+the previous representation. The initial selector handles recorded point/range
+reads and single-column \code{i64} eager membership. It chooses retained masks
+for eligible rescans or shared reads and leaves single filtered index-only
+builds streaming. Supplemental exact keysets beside payload indexes are explicit
+entries. Multi-key reductions, lazy semi and unsupported spines keep their old
+representation. Selection point constructors currently require a single exact
+point conjunct; positional pipe reads retain all residual conjuncts.
+\begin{mathpar}
+\Rule{SEL-Positional}{H\in\mathsf{positionalArguments}\quad
+ \mathsf{lineage}(r)=(H,\lambda)\quad\mathsf{eligibleReads}(r)}
+ {\mathsf{select}(r)\text{ records base, lineage, marker, provider and summary}}
+\end{mathpar}
 \[
 \Rule{CK-Structures}{\mathsf{WF}_{Physical}(s)\quad\mathsf{WF}_{Structures}(t)\\
- \mathsf{checkRewrite}_{Physical}(s,t.physical)\Downarrow\ok}
+ s=t.physical\text{ as AST and serialized tokens}}
  {\mathsf{check}_{structures}(s,t)\Downarrow\ok}
 \]
-\emph{Refinement:} the embedded Physical refines the source; each type
+\emph{Refinement:} the embedded Physical is unchanged; each type
 represents its relation under the storage laws (a premise checked by tests).
 
 \subsection{Realization: Structures $\to$ Rust}
@@ -407,6 +421,33 @@ and expansion fixtures. Interfaces at the Rust boundary:
 \Rule{IF-Fallback}{C\text{ is nonleading}\ \lor\ H\not:\mathsf{ReadAt}(C)}
  {\mathsf{read}(H,C)\longmapsto\mathsf{lazyOnce}(\mathsf{build}(\alpha(H),C))}
 \end{mathpar}
+\begin{mathpar}
+\Rule{IF-Positional}{r\text{ has a checked positional read }(H,C,P)}
+ {r\longmapsto\code{BlockRead::read}(H,C,P)\text{ then survivor row fetch}}
+
+\Rule{IF-Selection}{r\text{ records an immutable selection and its read spine}}
+ {r\longmapsto\code{Selection::select/narrow};\quad
+  \mathsf{scan}(r)\longmapsto\code{rows};\quad
+  \mathsf{index}(r)\longmapsto\code{build}}
+\end{mathpar}
+The recorded predicates emit \code{Point}, \code{Window} or
+\code{Membership}; residual conditions precede further reducers. The additive
+\code{BlockRead::read_owned} form owns a pipe predicate and cursor state, so
+no local predicate reference forces output collection. It shares the same
+bounds and exact read law as borrowed \code{read}; neither form requires cloning
+keys or predicates. A pipe keeps a
+lazy ID iterator, while a let builds one immutable mask. Keysets consume only
+recorded keys through Build; their provider performs exact dense/hash adaptation
+within its recorded budget. Each named payload index uses the snapshot's Build
+projection, preserving constants, multiplicity and original host references.
+No tuple buffer is inserted beside a selection. Intermediate narrowing uses the
+named selection's summary policy. Scalar hosts visit their rows; ZoneRows may
+reject blocks using enclosing bounds. Skipping is in memory after decoding.
+Lazy semi keeps the incremental KeySet route and is not drained for summaries;
+opaque, branch and unsupported inputs retain their previous demand behavior.
+No nonlocal probe-filter motion is implemented. The push printer explicitly
+rejects all three new entry kinds pending its separate implementation.
+
 Native keyed reads are chosen by stable autoref dispatch at the exact
 leading-prefix key type, with the recorded fallback otherwise; const/range reads
 scan and filter without building; merge requires \code{OrderedRead}. Rows borrow

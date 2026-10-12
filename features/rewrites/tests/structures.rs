@@ -206,3 +206,58 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         Structure::Host { .. }
     ));
 }
+
+#[test]
+fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
+    let physical = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(b:i64,c:i64);
+        l = pipe rename L@0 {a -> x,b -> y}; r = pipe rename R@1 {b -> x,c -> z};
+        s = let point select r if (z = 1);
+        t = let semi eager [x] l,s;
+        u = pipe semi eager [x] s,t; j = pipe probe first [x] u,t;
+        out = pipe canon project j keep {x,y}; return out as answer(x,y);
+    }};
+    let source = cq_structure_selection::compile_with(&physical, quote!(positional(L, R))).unwrap();
+    let membership = retype(
+        &source,
+        quote!(kind(membership) => ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>),
+    )
+    .unwrap();
+    assert_eq!(
+        ir::contract::check(&source).unwrap().built,
+        ir::contract::check(&membership).unwrap().built,
+        "supplementary keysets serve membership without retyping payload indices"
+    );
+    let target = retype(&source, quote!(kind(selection) => Mask<_>)).unwrap();
+    assert_eq!(source.physical, target.physical);
+    let target = retype(
+        &source,
+        quote!(kind(keyset) => ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>),
+    )
+    .unwrap();
+    assert_eq!(source.physical, target.physical);
+    assert!(
+        retype(
+            &source,
+            quote!(kind(membership) => ::std::collections::HashSet<_>)
+        )
+        .is_err()
+    );
+    assert!(retype(&source, quote!(kind(rows) => ::std::vec::Vec<_>)).is_err());
+    let mut row_only = source.clone();
+    for e in &mut row_only.structures.entries {
+        if let Structure::Read {
+            predicate: ir::ReadPredicate::Membership { summary, .. },
+            ..
+        } = &mut e.structure
+        {
+            *summary = syn::parse_quote!(row);
+        }
+    }
+    let row_only = retype(
+        &row_only,
+        quote!(kind(keyset) => ::std::collections::HashSet<_>),
+    )
+    .unwrap();
+    ir::check_rewrite(&source, &row_only).unwrap();
+}

@@ -260,7 +260,8 @@ where
 }
 
 /// Zero-based declaration-order column. Invalid indices or unordered key types
-/// do not implement `cq_storage::Column`.
+/// do not implement `cq_storage::Column`. Slice, Vec and array hosts use the
+/// same MinMax key conversion with scalar BlockRead; they acquire no metadata.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ColumnAt<const N: usize>;
 pub fn column<const N: usize>() -> ColumnAt<N> {
@@ -295,6 +296,23 @@ macro_rules! columns {
             )> {
                 self.metadata.get(block.offset())?.$n.bounds()
             }
+        }
+        impl<'a, $($t: 'a),+> Column<&'a [($($t,)+)]> for ColumnAt<$n>
+        where MinMax<$selected>: ZoneField<$selected>, <MinMax<$selected> as ZoneField<$selected>>::Key<'a>: Ord {
+            type Key = <MinMax<$selected> as ZoneField<$selected>>::Key<'a>;
+            fn key(self, host: &'a [($($t,)+)], id: RowId) -> Self::Key {
+                <MinMax<$selected> as ZoneField<$selected>>::key(&host[id.offset()].$n)
+            }
+        }
+        impl<'a, $($t: 'a),+> Column<&'a Vec<($($t,)+)>> for ColumnAt<$n>
+        where Self: Column<&'a [($($t,)+)]> {
+            type Key = <Self as Column<&'a [($($t,)+)]>>::Key;
+            fn key(self, host: &'a Vec<($($t,)+)>, id: RowId) -> Self::Key { self.key(host.as_slice(), id) }
+        }
+        impl<'a, $($t: 'a),+, const SIZE: usize> Column<&'a [($($t,)+); SIZE]> for ColumnAt<$n>
+        where Self: Column<&'a [($($t,)+)]> {
+            type Key = <Self as Column<&'a [($($t,)+)]>>::Key;
+            fn key(self, host: &'a [($($t,)+); SIZE], id: RowId) -> Self::Key { self.key(host.as_slice(), id) }
         }
         columns!([$($t:$m:$i),+]; $($rest_t:$rest_m:$rest_i),*);
     };

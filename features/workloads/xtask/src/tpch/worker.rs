@@ -1,5 +1,5 @@
 // This source is included by one generated release crate per authored query.
-// The crate contains both configurations; dependency compilation is excluded
+// The crate contains all authored configurations; dependency compilation is excluded
 // from its Cargo unit timing. Query output serialization is never timed.
 use std::error::Error;
 use std::path::Path;
@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let decimals: std::collections::BTreeSet<usize> =
         serde_json::from_value(witness["decimal_columns"].clone())?;
     let start = Instant::now();
-    let data = query::load(Path::new(&args[0]))?;
+    let data = query::load(Path::new(&args[0]), &args[1])?;
     let load_ms = start.elapsed().as_secs_f64() * 1000.0;
     // One warm execution; its result is the correctness witness. Keep the
     // canonical witness outside measurement; do not retain warm query state.
@@ -70,9 +70,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             &args[4],
             serde_json::to_vec(&{
                 #[allow(unused_mut)]
-                let mut metrics = serde_json::json!({"verified":true,"answer_rows":answer_rows,"instrumented":cfg!(feature="counters")});
+                let mut metrics = serde_json::json!({"verified":true,"answer_rows":answer_rows,"instrumented":cfg!(feature="counters"), "zone_metadata_bytes": crate::tpch_runtime::zone_metrics().1});
                 #[cfg(feature = "counters")]
                 for (name, value) in [
+                    ("blocks_considered", counts.blocks_considered),
+("blocks_visited", counts.blocks_visited),
+("blocks_skipped", counts.blocks_skipped),
+("blocks_skipped_metadata", counts.blocks_skipped_metadata),
+("blocks_skipped_empty_selection", counts.blocks_skipped_empty_selection),
+("rows_tested", counts.rows_tested),
+("rows_copied", counts.rows_copied),
+("bytes_retained_current", counts.bytes_retained_current),
+("bytes_retained_peak", counts.bytes_retained_peak),
+("keyset_staging_bytes_peak", counts.keyset_staging_bytes_peak),
                     ("hash_computations", counts.hash_computations), ("index_builds", counts.index_builds),
                     ("lookups", counts.lookups), ("cursor_steps", counts.cursor_steps),
                     ("rows_enumerated", counts.rows_enumerated), ("distinct_insertions", counts.distinct_insertions),
@@ -103,6 +113,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "load_ms": load_ms, "median_ms": times[runs / 2], "samples_ms": times,
             "answer_rows": answer_rows, "peak_rss_kib": peak_rss_kib(),
             "instrumented": false,
+            "zone_build_ms": crate::tpch_runtime::zone_metrics().0,
+            "zone_metadata_bytes": crate::tpch_runtime::zone_metrics().1,
 
         }))?,
     )?;

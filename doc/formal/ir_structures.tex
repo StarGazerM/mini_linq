@@ -7,6 +7,13 @@ Structures ::= Physical structures { Entry* }
 Entry ::= r = Type [K]... [payload[P] constants{c = term, ...}];
         | r host reader = Type [K]...;
         | r rows = Type; | r canon = Type; | r head = Type;
+        | r selection = Type base H lineage{a -> c, ...}
+              summary (none | per_block);
+        | r keyset = Type [K] (owned | borrowed)
+              base H lineage{a -> c, ...};
+        | r read = positional base H lineage{a -> c, ...}
+              column c marker Type predicate Predicate;
+Predicate ::= physical | membership s [K] summary (exact | row)
 \end{lstlisting}
 
 \paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
@@ -21,10 +28,40 @@ dedup entry; computed heads that may collapse valuations have one too;
 projection; their readers are stream \code{probe first}, semi or anti on a level
 prefix; payload plus the singleton constants proved by the selection cover all
 downstream keys, predicates, Rust free variables and answers. Constant columns
-are reconstructed, not stored.
+are reconstructed, not stored;
+(6)~selection, keyset and read entries independently rederive a single declared
+host occurrence and a total, injective logical-to-host mapping over the reader's
+heading. Rename, declarative selection, occurrence-preserving projection and
+the left of eager semi propagate lineage. Computed columns, bind, opaque guard,
+join expansion, canon, union/fallback/anti and fused branch scopes do not;
+(7)~a selection replaces a retained tuple collection, never a key-only,
+ordered or candidate provider. Every filtering step down to a prior immutable
+snapshot has an explicit read; an unrecorded retained result cannot be bypassed;
+(8)~a positional read refers only to its existing point/range predicate or its
+own eager semi's strictly earlier RHS build. There are no summary cycles or
+nonlocal probe filters. Exact summary requires an owned scalar keyset and
+\code{ExactIntervalMembership}; row summary uses exact membership alone;
+(9)~keysets record their concrete provider, ownership, codec and const bitmap
+budget. The initial owned layout is one \code{i64}; borrowed layouts are tuples.
+Known codecs must match that layout. Payload indexes may coexist with keysets.
+The default \code{ColumnAt<N>} marker must match declaration-order column $N$.
+Rust additionally checks positional host, marker, key, lifetime and provider
+obligations; a trait implementation must obey the storage abstraction laws.
 \begin{mathpar}
+\Rule{STR-Lineage}{\mathsf{singleOccurrenceSpine}(r,H)\quad
+ \lambda:\mathsf{heading}(r)\hookrightarrow\mathsf{columns}(H)}
+ {\mathsf{lineage}(r)=(H,\lambda)}
+
+\Rule{STR-Read}{r=\mathsf{semi}_{eager}[K](l,s)\quad s<r\quad
+ \mathsf{keyset}(s,K)\quad\mathsf{lineage}(r)=(H,\lambda)}
+ {r\;\mathsf{read}(H,\lambda(K),\mathsf{membership}(s,K))\text{ is admissible}}
+
 \Rule{STR-Key}{\mathsf{hostRead}(r)\lor\mathsf{built}(r,C)}
  {\mathsf{answers}(r,C,probe/semi)}
+
+\Rule{STR-Keyset}{\mathsf{keyset}(r,K)\quad
+ \mathsf{reusableRows}(r)\quad T:\code{ExactMembership}(K)}
+ {\mathsf{answers}(r,K,semi/anti)\text{ independently of payload indexes}}
 
 \Rule{STR-Range}{\text{constant window on }r,c}
  {\mathsf{answers}(r,\{c\},range)\text{ by direct range or scan/filter; no build}}
@@ -51,8 +88,15 @@ bounds at generated uses; the laws are tested, not derived.
 
 \paragraph{Recorded decisions.} Every concrete type: built indexes and levels,
 per-reader host fallbacks, retained rows, dedup state, filtered payloads and
-constants. Nothing is substituted at print time.
+constants, positional bases and column lineage, mask-summary policy, column
+markers, keyset ownership/codec/budget and exact versus row-only read summaries.
+Positions identify base occurrences without becoming logical columns. A selection
+is not Canonical or OrderedRead. Nothing is substituted at print time.
 
 \paragraph{Rewrite check (\code{cq_lang_structures::check_rewrite}).} Both local
-contracts hold and the embedded Physical satisfies the Physical rewrite check;
-representations may change while read coverage holds.
+contracts hold and the embedded Physical AST and token serialization are exactly
+equal. Lineage, read coverage and summary obligations are rederived independently.
+Retype selectors \code{kind(selection)} and \code{kind(keyset)} preserve origin,
+levels and policy; \code{rows} still selects FromIterator buffers. Membership
+includes keysets. Losing interval membership requires an explicit row-summary
+rewrite or rejection, never a printer fallback.

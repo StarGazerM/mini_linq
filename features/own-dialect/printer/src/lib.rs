@@ -12,7 +12,8 @@
 //! requires Clone for retained scans and Copy for payload fan-out, as checked by the emitted Rust. Equality is Leibniz identity.
 //! Mutation, I/O and evaluation counts are outside this meaning.
 //!
-//! Merge and smallest-candidate traversal are unsupported and refused. This
+//! Positional selection, keyset and read entries are explicitly refused pending
+//! the separate push implementation. Merge and smallest-candidate traversal are unsupported and refused. This
 //! printer does not replace a written execution choice with a different one.
 
 //! Push realizes standalone union/anti loops and consumes the prepared fused-dependent pipe once before pushing tuples to its sink.
@@ -61,6 +62,20 @@ impl<'a> std::ops::Deref for Push<'a> {
 
 fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
     let analysis = structures::contract::check(module)?;
+    for entry in &module.structures.entries {
+        if matches!(
+            entry.structure,
+            structures::Structure::Selection { .. }
+                | structures::Structure::KeySet { .. }
+                | structures::Structure::Read { .. }
+        ) {
+            return error(
+                &entry.name,
+                "own_push: positional selection, keyset and read entries are unsupported (phase 4)",
+            );
+        }
+    }
+
     // Refuse unsupported written choices even in an otherwise unused result.
     for definition in &module.physical.program.definitions {
         match &definition.operator {

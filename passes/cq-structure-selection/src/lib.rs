@@ -489,3 +489,39 @@ mod correspondence;
 pub use correspondence::check;
 
 pub use structures::check_rewrite;
+
+mod positional;
+
+/// Default selection with explicit positional host capabilities. Arguments are
+/// `positional(R, S)`; omitted hosts retain their original representations. The
+/// generated marker/PositionalRows/BlockRead obligations check each assertion.
+pub fn compile_with(
+    source: &physical::Program,
+    arguments: TokenStream,
+) -> syn::Result<structures::Program> {
+    use syn::parse::Parser;
+    if arguments.is_empty() {
+        return compile(source);
+    }
+    let parser = |input: syn::parse::ParseStream<'_>| {
+        let keyword: syn::Ident = input.parse()?;
+        if keyword != "positional" {
+            return Err(syn::Error::new_spanned(
+                keyword,
+                "expected positional(host, ...)",
+            ));
+        }
+        let body;
+        syn::parenthesized!(body in input);
+        let names = structures::CommaList::<syn::Ident>::parse_terminated(&body)?;
+        if !input.is_empty() {
+            return Err(input.error("unexpected selection arguments"));
+        }
+        Ok(names.iter().map(symbol_name).collect::<BTreeSet<_>>())
+    };
+    let hosts = parser.parse2(arguments)?;
+    let mut target = compile(source)?;
+    positional::choose(&mut target, &hosts)?;
+    check(source, &target)?;
+    Ok(target)
+}

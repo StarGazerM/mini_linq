@@ -89,18 +89,28 @@ impl Hasher for CountingHasher {
 pub type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<CountingHasher>>;
 pub type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<CountingHasher>>;
 
-pub struct DistinctSet<K>(HashSet<K>);
+pub struct DistinctSet<K>(HashSet<K>, crate::counters_memory::Allocation);
 impl<K> Default for DistinctSet<K> {
     fn default() -> Self {
-        Self(HashSet::default())
+        Self(
+            HashSet::default(),
+            crate::counters_memory::Allocation::new(0),
+        )
     }
 }
 impl<K: Eq + std::hash::Hash> DistinctSet<K> {
     pub fn new() -> Self {
-        Self(HashSet::default())
+        Self(
+            HashSet::default(),
+            crate::counters_memory::Allocation::new(0),
+        )
     }
     pub fn insert(&mut self, row: K) -> bool {
         record(|counts| counts.distinct_insertions += 1);
-        self.0.insert(row)
+        let before = self.0.capacity();
+        let inserted = self.0.insert(row);
+        self.1
+            .grow((self.0.capacity() - before) * (std::mem::size_of::<K>() + 1));
+        inserted
     }
 }

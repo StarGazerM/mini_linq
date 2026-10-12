@@ -41,6 +41,7 @@ pub mod expressions;
 mod filtered;
 mod ownership;
 mod point;
+mod positional;
 mod range;
 pub use ownership::own_captures;
 
@@ -55,6 +56,13 @@ pub struct Host {
 pub enum Repr {
     /// A rename read in place through its host.
     Host,
+    /// Base-relative IDs of a recorded positional pipe, consumed once.
+    Positions(Option<TokenStream>),
+    /// An immutable named position snapshot and its payload indices.
+    Selection {
+        selection: Ident,
+        structures: Vec<(Vec<Vec<String>>, Ident)>,
+    },
     /// A stream, inlined into its single reader.
     Pipe(Option<TokenStream>),
     /// Materialized: collected rows and the structures over them, each
@@ -150,6 +158,32 @@ impl<'a> Context<'a> {
                     layout: analysis.host_layouts[&name].clone(),
                 },
             );
+        }
+        let positional_bases: std::collections::BTreeSet<_> = analysis
+            .reads
+            .values()
+            .map(|r| symbol_name(&r.origin.base))
+            .chain(
+                analysis
+                    .selections
+                    .values()
+                    .map(|s| symbol_name(&s.origin.base)),
+            )
+            .chain(
+                analysis
+                    .keysets
+                    .values()
+                    .map(|s| symbol_name(&s.origin.base)),
+            )
+            .collect();
+        for base in positional_bases {
+            let host = &hosts[&base].value;
+            let id = format_ident!(
+                "__cq_positional_{}",
+                base,
+                span = proc_macro2::Span::mixed_site()
+            );
+            statements.push(syn::parse_quote!(let #id = { use ::cq_storage::PositionalRows as _; #host.positional_handle() };));
         }
         // Formal rule IF-Parameter: Bind each captured relational value once outside all query loops.
         let mut parameters = BTreeMap::new();
@@ -412,6 +446,20 @@ impl<'a> Context<'a> {
             .contains_key(name)
             .then(|| format_ident!("__cq_{}_rows", name));
         let mut statements: Vec<Stmt> = Vec::new();
+        let selection = self.analysis.selections.contains_key(name).then(|| {
+            format_ident!(
+                "__cq_{}_selection",
+                name,
+                span = proc_macro2::Span::mixed_site()
+            )
+        });
+        let source = if let Some(id) = &selection {
+            let ty = &self.analysis.selections[name].ty;
+            statements.push(syn::parse_quote!(let #id: &#ty = &#source;));
+            self.selection_rows(name, id)
+        } else {
+            source
+        };
         let replay = self.analysis.filtered.contains_key(name)
             && matches!(&self.physical[name].operator,Operator::Union(union) if union.origin.as_ref().is_none_or(|origin|origin.over.is_none()));
         let direct_source = source.clone();
@@ -421,6 +469,16 @@ impl<'a> Context<'a> {
                 statements.push(syn::parse_quote! {
                     let #rows: &#ty = &::core::iter::Iterator::collect(#source);
                 });
+                if *ty == syn::parse_quote!(::std::vec::Vec<_>) {
+                    let allocation = format_ident!(
+                        "__cq_{}_rows_allocation",
+                        name,
+                        span = proc_macro2::Span::mixed_site()
+                    );
+                    statements.push(
+                        syn::parse_quote!(let #allocation = ::cq_storage::retain_rows(#rows);),
+                    );
+                }
                 if self.infos[name].computed.is_empty() {
                     quote!(::core::iter::Iterator::copied(#rows.iter()))
                 } else {
@@ -475,12 +533,25 @@ impl<'a> Context<'a> {
             // written arguments (or holes) select the qualified form.
             let bare = matches!(ty, syn::Type::Path(path)
                 if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
-            let build = if bare {
+            let build = if let Some(selection) = selection.as_ref().filter(|_| !bare) {
+                let host_pattern = self.positional_pattern(name);
+                quote!(#selection.build::<_, _, _, #ty>(|#host_pattern| #nested))
+            } else if bare {
                 quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
             } else {
                 quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
             };
             statements.push(syn::parse_quote! { let #structure = &#build; });
+            if *ty == syn::parse_quote!(::std::collections::HashSet<_>) {
+                let allocation = format_ident!(
+                    "__cq_{}_keys_allocation",
+                    structure,
+                    span = proc_macro2::Span::mixed_site()
+                );
+                statements.push(
+                    syn::parse_quote!(let #allocation = ::cq_storage::retain_keys(#structure);),
+                );
+            }
             // A type lacking a trait a read uses on it fails at a one-line
             // call naming the trait, rather than inside a closure.
             // Guard the selected read structure: a candidate trie can share
@@ -497,11 +568,49 @@ impl<'a> Context<'a> {
             }
             built.push((levels.clone(), structure));
         }
+        for ((result, key), set) in &self.analysis.keysets {
+            if result != name {
+                continue;
+            }
+            let id = self.keyset_ident(name, key);
+            let ty = &set.ty;
+            let values = key.iter().map(|c| self.ident(name, c)).collect::<Vec<_>>();
+            let key_value = if matches!(set.ownership, structures::KeyOwnership::Owned(_)) {
+                let value = values[0];
+                quote!(*#value)
+            } else {
+                quote!((#(#values,)*))
+            };
+            let pattern = self.pattern(name);
+            statements.push(syn::parse_quote!(let #id = &<#ty as ::cq_storage::Build<_>>::build(::core::iter::Iterator::map(#source, |#[allow(unused_variables)] #pattern| ::cq_storage::require::key((#key_value, ()))));));
+            let types = key
+                .iter()
+                .map(|column| &self.infos[name].types[column])
+                .collect::<Vec<_>>();
+            let key_type = if matches!(set.ownership, structures::KeyOwnership::Owned(_)) {
+                let ty = types[0];
+                quote!(#ty)
+            } else {
+                quote!((#(&#types,)*))
+            };
+            statements
+                .push(syn::parse_quote!(::cq_storage::require::contains::<#key_type, _>(#id);));
+            if self.analysis.reads.values().any(|r| matches!(&r.predicate, structures::ReadPredicate::Membership {build, key: columns, summary: structures::MembershipSummary::Exact(_), ..} if symbol_name(build) == name && sorted(&columns.columns) == *key)) {
+                statements.push(syn::parse_quote!(::cq_storage::require::interval::<#key_type, _>(#id);));
+            }
+        }
         self.bound |= !statements.is_empty();
         self.statements.extend(statements);
-        Repr::Let {
-            rows,
-            structures: built,
+        if let Some(selection) = selection {
+            Repr::Selection {
+                selection,
+                structures: built,
+            }
+        } else {
+            Repr::Let {
+                rows,
+                structures: built,
+            }
         }
     }
 
@@ -518,7 +627,15 @@ impl<'a> Context<'a> {
             if read == columns {
                 match &self.physical[reader].operator {
                     Operator::Probe(..) => require("seek"),
-                    Operator::Semi(..) | Operator::Anti(..) => require("contains"),
+                    Operator::Semi(..) | Operator::Anti(..) => {
+                        if !self
+                            .analysis
+                            .keysets
+                            .contains_key(&(result.to_owned(), columns.to_vec()))
+                        {
+                            require("contains");
+                        }
+                    }
                     _ => unreachable!("key reads come from probes and semijoins"),
                 }
             }
@@ -543,7 +660,9 @@ impl<'a> Context<'a> {
     }
     /// The levels a built structure of `result` was declared with.
     pub fn levels_of(&self, result: &str, structure: &Ident) -> Vec<Vec<String>> {
-        let Some(Repr::Let { structures, .. }) = self.reprs.get(result) else {
+        let Some(Repr::Let { structures, .. } | Repr::Selection { structures, .. }) =
+            self.reprs.get(result)
+        else {
             unreachable!("a built structure belongs to a let");
         };
         structures

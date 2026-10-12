@@ -18,7 +18,7 @@ impl Context<'_> {
         let condition = self.relational_condition(&select.condition);
         let pattern = self.borrowed_pattern(&input);
         let rows = self.host_scan(&input);
-        let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| #condition));
+        let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition)));
         let access = self.host_access(&input, std::slice::from_ref(&column));
         if !access.prefix {
             return Some(filtered);
@@ -64,7 +64,7 @@ impl Context<'_> {
             )
         });
         Some(
-            quote!(::core::iter::Iterator::filter(#read, move |#[allow(unused_variables)] #pattern| #condition)),
+            quote!(::core::iter::Iterator::filter(#read, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))),
         )
     }
 }
