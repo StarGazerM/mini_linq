@@ -101,7 +101,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 Structure::Rows { .. } => matches!(kind, Kind::Rows),
                 Structure::Selection { .. } => matches!(kind, Kind::Selection),
                 Structure::KeySet { .. } => matches!(kind, Kind::KeySet | Kind::Membership),
-                Structure::Read { .. } => false,
+                Structure::Read { .. } | Structure::JoinFilter { .. } => false,
                 Structure::Host { reader, .. } => {
                     matches!(kind, Kind::Membership) && reader == "membership"
                         || source.physical.program.definitions.iter().any(|d| {
@@ -142,7 +142,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 | Structure::Rows { ty, .. }
                 | Structure::Selection { ty, .. }
                 | Structure::KeySet { ty, .. } => *ty = request.ty.clone(),
-                Structure::Read { .. } => unreachable!("read is not a provider type"),
+                Structure::Read { .. } | Structure::JoinFilter { .. } => unreachable!("read is not a provider type"),
             }
             changed = true;
         }

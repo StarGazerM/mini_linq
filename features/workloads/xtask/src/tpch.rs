@@ -207,7 +207,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let path = bench.join(format!("tpch-{}{suffix}.tsv", options.sf));
     let pending = path.with_extension("tsv.partial");
     let mut table = String::from(
-        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\n",
+        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\tjoin_filter_tested\tjoin_filter_passed\n",
     );
     println!(
         "TPC-H-derived; SF {}; release; one warm run + median of {}; DuckDB {} default threads={}",
@@ -293,6 +293,8 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
                 "cursor_steps",
                 "rows_enumerated",
                 "distinct_insertions",
+                "join_filter_tested",
+                "join_filter_passed",
             ] {
                 measured[name] = counted[name].clone();
             }
@@ -335,7 +337,9 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             })
             .collect::<Vec<_>>()
             .join("\t");
-            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{:.6}\t{counters}\tpass\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, query.built.unit_ms));
+            let tested = measured["join_filter_tested"].as_u64().ok_or("missing join_filter_tested counter")?;
+            let passed = measured["join_filter_passed"].as_u64().ok_or("missing join_filter_passed counter")?;
+            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{:.6}\t{counters}\tpass\t{tested}\t{passed}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, query.built.unit_ms));
             std::fs::write(&pending, &table)?;
             configs.push(serde_json::json!({"configuration":config,"metrics":measured}));
         }

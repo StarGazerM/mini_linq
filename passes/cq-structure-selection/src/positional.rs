@@ -311,6 +311,7 @@ pub(super) fn choose(
             _ => true,
         });
     target.structures.entries.extend(extra);
+    choose_join_filters(target, bases)?;
     structures::contract::check(target)?;
     Ok(())
 }
@@ -347,4 +348,25 @@ fn positional_source(
             _ => return reads.contains(&name),
         }
     }
+}
+
+/// Formal rule SEL-JoinFilter: Choose exact sets for selection-bounded builds and fixed Bloom filters for total filtered branches.
+fn choose_join_filters(target: &mut structures::Program, bases: &BTreeSet<String>) -> syn::Result<()> {
+    let facts = structures::contract::check(target)?;
+    let mut entries = Vec::new();
+    for d in &target.physical.program.definitions {
+        let Some((scan, build, key, exact)) = structures::join_filter_candidate(target, &facts, &symbol_name(&d.name)) else { continue };
+        let origin = &facts.lineage[&scan];
+        if !bases.contains(&origin.base) { continue; }
+        let scan = &target.physical.program.definitions.iter().find(|d| symbol_name(&d.name) == scan).unwrap().name;
+        let build = &target.physical.program.definitions.iter().find(|d| symbol_name(&d.name) == build).unwrap().name;
+        let index = syn::Index::from(facts.host_layouts[&origin.base].iter().position(|c| c == &origin.columns[&key]).unwrap());
+        let key = &facts.physical.rows[&symbol_name(build)].bindings[&key];
+        let covering = &d.name;
+        let kind = if exact { quote!(exact) } else { quote!(bloom) };
+        let ty = if exact { quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>) } else { quote!(::cq_storage::BloomFilter<16384>) };
+        entries.push(syn::parse2(quote!(#scan join_filter = #kind #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
+    }
+    target.structures.entries.extend(entries);
+    Ok(())
 }

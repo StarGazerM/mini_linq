@@ -63,6 +63,15 @@ pub enum Reductions {
 pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<valuation::Program> {
     let analysis = valuation::contract::check(source)?;
     let graph = valuation::cq::hypergraph::Analysis::of(&source.cq);
+    // Independent branches are exact build-side joins, not fact-dependent
+    // semijoin supports. The optional Hypergraph policy does not interpose a
+    // reducer across this recorded physical decomposition.
+    let branch_options = Options { guards: options.guards, semijoins: Reductions::None };
+    let options = if source.valuation.join_branches.is_some() && options.semijoins == Reductions::Hypergraph {
+        &branch_options
+    } else {
+        options
+    };
     let steps = compile_steps(
         &source.cq.query.body,
         &source.valuation.steps,
@@ -75,6 +84,7 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
         cq: source.cq.clone(),
         valuation: valuation::Valuation {
             valuation_token: source.valuation.valuation_token,
+            join_branches: source.valuation.join_branches.clone(),
             brace: Default::default(),
             steps,
         },

@@ -235,3 +235,47 @@ impl<K: Ord> ReadPredicate<K> for Window<K> {
         }
     }
 }
+
+/// Scan a static predicate and a conservative join filter together. Both
+/// independent block bounds must admit a block; static row tests precede key
+/// filtering, so rejected rows incur no Bloom hashing or exact-set lookup.
+pub fn read_with_filter<H, C, D, P, Q>(
+    host: H,
+    column: C,
+    predicate: P,
+    filter_column: D,
+    filter: &Q,
+) -> impl Iterator<Item = RowId>
+where
+    H: BlockRead<C> + BlockRead<D>,
+    C: Column<H>,
+    D: Column<H>,
+    P: ReadPredicate<C::Key>,
+    Q: ReadPredicate<D::Key>,
+{
+    let mut blocks = host.blocks().fuse();
+    let mut positions = None;
+    std::iter::from_fn(move || loop {
+        while let Some(id) = positions.as_mut().and_then(Iterator::next) {
+            crate::count!(rows_tested);
+            if predicate.test(&column.key(host, id))
+                && filter.test(&filter_column.key(host, id))
+            {
+                return Some(id);
+            }
+        }
+        let block = blocks.next()?;
+        crate::count!(blocks_considered);
+        if <H as BlockRead<C>>::bounds(host, column, block)
+            .is_some_and(|(lo, hi)| !predicate.any_in(&lo, &hi))
+            || <H as BlockRead<D>>::bounds(host, filter_column, block)
+                .is_some_and(|(lo, hi)| !filter.any_in(&lo, &hi))
+        {
+            crate::count!(blocks_skipped);
+            crate::count!(blocks_skipped_metadata);
+            continue;
+        }
+        crate::count!(blocks_visited);
+        positions = Some(host.block_positions(block));
+    })
+}

@@ -51,7 +51,7 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                     | Structure::HeadDedup { ty, .. }
                     | Structure::Selection { ty, .. }
                     | Structure::KeySet { ty, .. } => ty,
-                    Structure::Read { .. } => continue,
+                    Structure::Read { .. } | Structure::JoinFilter { .. } => continue,
                 };
                 replace.visit_type_mut(provider);
             }

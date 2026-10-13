@@ -560,3 +560,27 @@ fn range_side_streams_against_point_driving_component_without_reverse_index() {
         );
     }
 }
+
+#[test]
+fn reductions_preserve_and_check_independent_branch_metadata() {
+    let source: valuation::Program = syn::parse_quote! {
+        struct Q; relation L(o:i32,p:i32,s:i32); relation S(s:i32,n:i32); relation N(n:i32);
+        answer(o,p,s) :- L(o,p,s), S(s,n), N(n);
+        valuation branches { branch [1,2] (s); } {
+            L@0(o,p,s); S@1(s,n); N@2(n);
+        }
+    };
+    for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
+        let options = Options { guards: Pushdown::None, semijoins };
+        if semijoins == Reductions::Tree {
+            assert!(compile(&source, &options).is_err());
+            continue;
+        }
+        let target = compile(&source, &options).unwrap();
+        check(&source, &target, &options).unwrap();
+        assert_eq!(source.valuation.join_branches, target.valuation.join_branches);
+        let mut wrong = target;
+        wrong.valuation.join_branches = None;
+        assert!(check(&source, &wrong, &options).is_err());
+    }
+}

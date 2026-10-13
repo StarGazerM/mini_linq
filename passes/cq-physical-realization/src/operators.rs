@@ -318,6 +318,18 @@ impl<'a> Printer<'a> {
         }
     }
 
+    /// Fixed lookahead only on a total scan spine, before any reduction or join.
+    /// Narrowed/joined streams use scalar demand, avoiding needless buffering.
+    /// Opaque guards also stay scalar: exists must not force an unvisited panic.
+    fn batch_scan(&self, name: &str) -> bool {
+        match &self.physical[name].operator {
+            Operator::Rename(_) => true,
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) =>
+                self.batch_scan(&symbol_name(&s.input)),
+            Operator::Project(p) => self.batch_scan(&symbol_name(&p.input)),
+            _ => false,
+        }
+    }
     /// For every outer row, enter the right side at the join key and append
     /// the payload of every match.
     pub(super) fn probe(
@@ -388,6 +400,45 @@ impl<'a> Printer<'a> {
                     .unwrap_or_else(|| self.ident(&left, c).to_token_stream()),
             }
         });
+        // The checked probe is unchanged: batch only borrowed outer columns,
+        // preserve outer/bucket order, and leave curried/custom scalar access
+        // to the IndexRead default. No predicate moves across a Rust boundary.
+        if let Access::Built(structure) = &access {
+            let levels = self.levels_of(&right, structure);
+            if levels.len() == 1
+                && self.infos[&left].computed.is_empty()
+                && !self.analysis.membership.contains(&(right.clone(), columns.clone()))
+                && self.constant_key_condition(&left, &right, &columns).is_none()
+            {
+                let batch = if self.batch_scan(&left) { 128usize } else { 1usize };
+                let owned = self.owned_key(&right, &levels[0]);
+                let stored_key = self.stored_key(&right, &levels[0]);
+                let key = stored_key.iter().map(|c| self.key_field(&left, c, owned));
+                let key_binders = self.heading(&left).iter().map(|c| {
+                    if stored_key.contains(c) {
+                        self.ident(&left, c).to_token_stream()
+                    } else {
+                        quote!(_)
+                    }
+                });
+                let row_binders = self.heading(&left).iter().map(|c| {
+                    if self.heading(name).contains(c)
+                        && (columns.contains(c)
+                            || (!payload.contains(c) && self.constant_value(&right, c).is_none()))
+                    {
+                        self.ident(&left, c).to_token_stream()
+                    } else {
+                        quote!(_)
+                    }
+                });
+                return Ok(quote! {
+                    ::core::iter::Iterator::map(
+                        ::cq_storage::IndexRead::probe::<#batch, _, _>(#structure, #outer, move |&(#(#key_binders,)*)| (#(#key,)*)),
+                        move |((#(#row_binders,)*), __cq_v)| #row
+                    )
+                });
+            }
+        }
         Ok(quote! {
             ::core::iter::Iterator::flat_map(#outer, move |#outer_pattern| {
                 ::core::iter::Iterator::map(#lookup, move |__cq_v| #row)

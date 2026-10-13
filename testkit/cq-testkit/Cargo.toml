@@ -14,8 +14,9 @@ default = []
 duckdb = ["dep:duckdb"]
 
 [dependencies]
-# Links raw-rustc generated-program fixtures against the runtime hasher.
+# Links raw-rustc generated-program fixtures against the runtime hash backends.
 ahash = "=0.8.12"
+hashbrown = { version = "=0.15.5", default-features = false, features = ["inline-more"] }
 cq-lang-cq = { path = "../../languages/cq-lang-cq", version = "0.1.0" }
 cq-lang-vo = { path = "../../languages/cq-lang-vo", version = "0.1.0" }
 cq-lang-ra = { path = "../../languages/cq-lang-ra", version = "0.1.0" }

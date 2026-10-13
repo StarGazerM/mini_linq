@@ -165,6 +165,11 @@ fn check_origin(
 pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> syn::Result<bool> {
     let name = symbol_name(&entry.name);
     match &entry.structure {
+        Structure::JoinFilter { filter, .. } => {
+            if facts.join_filters.insert(name, filter.clone()).is_some() {
+                return error(entry, "duplicate join filter decision");
+            }
+        }
         Structure::Selection {
             ty,
             origin,
@@ -524,6 +529,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             }
         }
     }
+    check_join_filters(program, facts)?;
     Ok(())
 }
 

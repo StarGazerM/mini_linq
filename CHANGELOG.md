@@ -23,8 +23,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 - Fixes: reduced prefix-guard RA correspondence, positional predicate reuse in
   replayed unions, correlated-block provenance after reordering, partial
   absorption of shared supports, planner-checker branch erasure.
-- SF 1 vs DuckDB 1 thread: 1.5–3.8× (Q19 0.21×), from 2.5–48×; H07
-  880 → 44 ms, H09 2,170 → 181 ms, H05 269 → 68 ms. Details in `doc/STATUS.md`.
+- Join filters: Structures `join_filter` entries (exact key set or Bloom, with
+  the exact probe recorded as covering check) filter streamed scans.
+- Bushy plans: checked independent dimension branches in VO, built once.
+- `HashIndex` uses hashbrown's Swiss table; `IndexRead::probe` batches 128
+  prefetched probes on scan spines; no per-row `Rc`; `HashIndex::keys()`.
+- Plan for staged quotation (plan control without touching upper stages) in
+  `doc/QUOTATION.md`.
+- SF 1 vs DuckDB 1 thread: 0.96–3.8× (Q19 0.20×), from 2.5–48×; D19 at parity;
+  H07 880 → 44 ms, H09 2,170 → 107 ms, H05 269 → 41 ms. D85 regressed to
+  61 ms in the integrated tree (open item). Details in `doc/STATUS.md`.
 
 ## Execution model (exact semijoin pushdown, hashing)
 

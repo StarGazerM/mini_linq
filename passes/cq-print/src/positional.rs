@@ -3,6 +3,42 @@ use super::*;
 use structures::{KeyOwnership, MembershipSummary, ReadPredicate, Summary};
 
 impl Context<'_> {
+    pub fn join_filter_ident(&self, scan: &str) -> Ident {
+        format_ident!("__cq_{}_join_filter", scan, span = proc_macro2::Span::mixed_site())
+    }
+    /// Formal rule IF-JoinFilter: Filter scan positions conservatively and retain the covering exact probe unchanged.
+    pub fn join_filter_ids(&self, name: &str) -> Option<TokenStream> {
+        let origin = self.analysis.lineage.get(name)?;
+        let filter = self.analysis.join_filters.get(&origin.occurrence)?;
+        let id = self.join_filter_ident(&origin.occurrence);
+        let host = format_ident!("__cq_positional_{}", origin.base, span = proc_macro2::Span::mixed_site());
+        let marker = &filter.marker;
+        Some(quote!(::cq_storage::BlockRead::read(#host, <#marker>::default(), #id)))
+    }
+    fn combined_join_filter_ids(
+        &self,
+        name: &str,
+        input: &str,
+        predicate: &Ident,
+    ) -> Option<TokenStream> {
+        let origin = self.analysis.lineage.get(name)?;
+        let filter = self.analysis.join_filters.get(&origin.occurrence)?;
+        // Replace only an unevaluated rename/project position stream. A prior
+        // predicate remains authoritative and must not be scanned a second time.
+        let mut current = input.to_owned();
+        loop {
+            match &self.physical[&current].operator {
+                Operator::Rename(_) => break,
+                Operator::Project(p) => current = symbol_name(&p.input),
+                _ => return None,
+            }
+        }
+        let id = self.join_filter_ident(&origin.occurrence);
+        let host = format_ident!("__cq_positional_{}", origin.base, span = proc_macro2::Span::mixed_site());
+        let marker = &self.analysis.reads[name].marker;
+        let key_marker = &filter.marker;
+        Some(quote!(::cq_storage::read_with_filter(#host, <#marker>::default(), #predicate, <#key_marker>::default(), #id)))
+    }
     pub fn keyset_ident(&self, name: &str, key: &[String]) -> Ident {
         format_ident!(
             "__cq_{}_keys_{}",
@@ -183,12 +219,13 @@ impl Context<'_> {
             _ => unreachable!(),
         };
         let predicate = self.prepare_read(name);
+        let combined = self.combined_join_filter_ids(name, &input, &predicate);
         let existing = match self.reprs.get_mut(&input) {
             Some(Repr::Positions(ids)) => Some(ids.take().ok_or_else(|| {
                 syn::Error::new_spanned(&self.physical[name].name, "positional pipe read twice")
             })?),
             Some(Repr::Selection { selection, .. }) => Some(quote!(#selection.positions())),
-            Some(Repr::Host) => None,
+            Some(Repr::Host) => self.join_filter_ids(name),
             _ => {
                 return error(
                     &self.physical[name].name,
@@ -196,7 +233,9 @@ impl Context<'_> {
                 );
             }
         };
-        let mut ids = if let Some(ids) = existing {
+        let mut ids = if let Some(ids) = combined {
+            ids
+        } else if let Some(ids) = existing {
             quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| ::cq_storage::residual(::cq_storage::ReadPredicate::test(&#predicate, &::cq_storage::Column::key(#marker, #host, __cq_id)))))
         } else if self.physical_analysis.modes[name] == physical::ModeKind::Pipe {
             quote!(::cq_storage::BlockRead::read_owned(#host, #marker, #predicate))

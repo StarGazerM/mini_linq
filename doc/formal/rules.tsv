@@ -37,8 +37,8 @@ STR-Key	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule S
 STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-Range:	Const/range reads have direct or scan/filter implementations and never justify a build.
 STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Merge:	Require a direct ordered host read, built entry, or same-key merge pipe.
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
-CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, Rust Before, Written order and Filtered coarse greedy choices.
-CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check erasure, filtered support versions and ordered acyclic tree obligations, plus exact block cuts on any scope.
+CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, Rust Before, Written order, Filtered coarse greedy choices and static branch groups.
+CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check branch-preserving erasure, no optional reducer for independent branches, otherwise filtered support versions, tree obligations and exact block cuts.
 CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check supplied VO clause occurrences, named semijoins, equality closure, constraints, Rust chain and Before.
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
@@ -133,5 +133,12 @@ EXT-ConstantGroup	implementation	features/extensions/cq-ext-aggregate/src/expans
 H-FilterRank	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-FilterRank:	Rank local total predicates through equality classes, without data statistics.
 S-Filtered	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Filtered:	Rank ready occurrences by connectivity, local filter strength, then written position.
 R-Filtered	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Filtered:	Propagate independently filtered components, omitting range-only support against a point-filtered component; order strongest siblings first.
-L-Orient	implementation	passes/cq-physical-lowering/src/orientation.rs	/// Formal rule L-Orient:	Build the stronger statically filtered natural-join operand, preserving directional operators and Rust ancestry.
-CK-Orient	implementation	passes/cq-physical-lowering/src/orientation.rs	/// Formal rule CK-Orient:	Require only rank-justified natural-join commutations and independently validate relational refinement.
+L-Orient	implementation	passes/cq-physical-lowering/src/orientation.rs	/// Formal rule L-Orient:	Build compound dimensions against the fact spine, narrower fact-key children within dimensions, otherwise the stronger static filter side; preserve directional operators and Rust ancestry.
+CK-Orient	implementation	passes/cq-physical-lowering/src/orientation.rs	/// Formal rule CK-Orient:	Require branch-or-rank-justified natural-join commutations and independently validate relational refinement.
+STR-JoinFilter	implementation	languages/cq-lang-structures/src/join_filter.rs	/// Formal rule STR-JoinFilter:	Conservative scalar scan filters require the same-key covering exact probe, exclusive total stream spine and total filtered build.
+SEL-JoinFilter	implementation	passes/cq-structure-selection/src/positional.rs	/// Formal rule SEL-JoinFilter:	Static selection-bounded builds choose exact sets; total filtered joined branches choose fixed-budget Bloom filters.
+IF-JoinFilter	implementation	passes/cq-print/src/positional.rs	/// Formal rule IF-JoinFilter:	Apply checked filters to host positions with conservative block pruning, preserving the exact covering probe.
+WF-JoinBranch	implementation	languages/cq-lang-vo/src/join_branches.rs	/// Formal rule WF-JoinBranch:	Require disjoint connected full relational atom groups, exact interfaces, and branch-local reductions before reads; opaque Rust remains ungrouped.
+S-JoinBranch	implementation	passes/cq-order/src/branches.rs	/// Formal rule S-JoinBranch:	Pick the widest shared-key occurrence as the fact spine and absorb connected dimension ears through one external key set.
+E-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule E-JoinBranch:	Materialize each independent exact atom join once, project its interface, and join the prefix against that result.
+CK-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule CK-JoinBranch:	Require an exact projected branch DAG for every VO atom group in addition to global occurrence, predicate, and Before correspondence.

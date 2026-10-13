@@ -71,7 +71,7 @@ cq_order::<impl {"resolved_path":{"args":null,"id":"cq_order::Split","path":"Spl
 cq_order::Heuristic	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_order::Heuristic::Filtered","cq_order::Heuristic::Written","cq_order::Heuristic::Prefix","cq_order::Heuristic::Elimination"]}}
 cq_order::Heuristic::Elimination	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_order::Heuristic::Filtered	{"variant":{"discriminant":null,"kind":"plain"}}
-cq_order::Heuristic::Prefix	{"variant":{"discriminant":null,"kind":{"tuple":[76]}}}
+cq_order::Heuristic::Prefix	{"variant":{"discriminant":null,"kind":{"tuple":[77]}}}
 cq_order::Heuristic::Prefix::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_order::Ranking","path":"Ranking"}}}
 cq_order::Heuristic::Written	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_order::Options	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_order::Options::heuristic","cq_order::Options::split"],"has_stripped_fields":false}}}}

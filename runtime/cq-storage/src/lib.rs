@@ -82,6 +82,8 @@ pub mod counters;
 pub mod dispatch;
 mod hash_index;
 mod hash_state;
+mod join_filter;
+pub use join_filter::{BloomFilter, JoinFilterPredicate};
 mod host;
 mod instrument;
 mod membership;
@@ -225,7 +227,7 @@ pub mod selection;
 pub use adaptive::{AdaptiveKeySet, BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense};
 pub use positional::{
     BlockId, BlockRead, Column, ExactIntervalMembership, Membership, Point, PositionalRows,
-    ReadPredicate, RowId, RowPredicate, Window,
+    ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
 };
 pub use selection::{Selection, SelectionRows, SelectionSummary};
 

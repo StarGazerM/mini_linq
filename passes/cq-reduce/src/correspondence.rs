@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 /// Check the source domain, unchanged query/steps, and reduction obligations.
 /// A full tree reducer obeys dependencies, but need not use breadth-first order.
-/// Formal rule CK-Reduce: Check erasure, filtered support versions and ordered acyclic tree obligations, plus exact block cuts on any scope.
+/// Formal rule CK-Reduce: Check branch-preserving erasure, no optional reducer for independent branches, otherwise filtered support versions, tree obligations and exact block cuts.
 pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> syn::Result<()> {
     let source_info = vo::contract::check(source)?;
     vo::contract::check(target)?;
@@ -19,6 +19,15 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
             ),
         ));
     }
+    if target.valuation.join_branches != source.valuation.join_branches {
+        return Err(syn::Error::new_spanned(&target.valuation, "reductions must preserve independent join branches"));
+    }
+    let branch_options = Options { guards: options.guards, semijoins: Reductions::None };
+    let options = if source.valuation.join_branches.is_some() && options.semijoins == Reductions::Hypergraph {
+        &branch_options
+    } else {
+        options
+    };
     check_steps(
         &source.cq.query.body,
         &source.valuation.steps,

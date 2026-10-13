@@ -2,7 +2,7 @@
 //! The RA operand order records the choice: left streams, right is indexed.
 use cq_lang_ix::ra::{self, Operator};
 use cq_lang_ix::syntax::symbol_name;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Predicate strength propagated through the relational DAG. This is not a
 /// cardinality estimate: no host size, key constraint, or data value is read.
@@ -45,17 +45,68 @@ fn strengths(program: &ra::Program) -> BTreeMap<String, u8> {
     ranks
 }
 
-/// Record hash-build orientation before index demands are fixed. A strictly
-/// stronger filtered left branch builds; ties retain the original orientation.
-/// Semijoins and antijoins are directional and are never commuted.
-/// Formal rule L-Orient: Build the stronger statically filtered natural-join operand, preserving directional operators and Rust ancestry.
+/// Identify compound dimension branches structurally. The widest shared-key
+/// occurrence is the static fact spine; no relation name or key constraint is
+/// consulted. A materialized multi-atom branch builds against that spine even
+/// when the fact itself has a local range predicate.
+fn branch_sides(program: &ra::Program) -> BTreeMap<String, (bool, usize, usize)> {
+    let mut incidence: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+    let mut atoms = Vec::new();
+    for definition in &program.plan.definitions {
+        if let Operator::Rename(r) = &definition.operator {
+            let columns: BTreeSet<_> = r.mapping.iter().map(|m| symbol_name(&m.target)).collect();
+            for column in &columns { incidence.entry(column.clone()).or_default().insert(r.occurrence.clause()); }
+            atoms.push((r.occurrence.clause(), columns));
+        }
+    }
+    let fact = atoms.iter().max_by_key(|(c, columns)| (columns.iter().filter(|v| incidence[*v].len() > 1).count(), std::cmp::Reverse(*c)))
+        .filter(|(_, columns)| columns.iter().filter(|v| incidence[*v].len() > 1).count() >= 3)
+        .map(|(c, _)| *c);
+    let fact_columns = atoms.iter().find(|(c, _)| Some(*c) == fact).map(|(_, columns)| columns);
+    let mut lineage: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+    for definition in &program.plan.definitions {
+        let members = match &definition.operator {
+            Operator::Rename(r) => BTreeSet::from([r.occurrence.clause()]),
+            Operator::NaturalJoin(j) => lineage[&symbol_name(&j.left)].union(&lineage[&symbol_name(&j.right)]).copied().collect(),
+            Operator::Semijoin(j) => lineage[&symbol_name(&j.left)].clone(),
+            Operator::Select(s) => lineage[&symbol_name(&s.input)].clone(),
+            Operator::Project(p) => lineage[&symbol_name(&p.input)].clone(),
+            _ => BTreeSet::new(),
+        };
+        lineage.insert(symbol_name(&definition.result), members);
+    }
+    lineage.into_iter().map(|(name, members)| {
+        let keys: BTreeSet<_> = atoms.iter().filter(|(c, _)| members.contains(c)).flat_map(|(_, columns)| columns.iter())
+            .filter(|v| fact_columns.is_some_and(|fact| fact.contains(*v))).collect();
+        (name, (fact.is_some_and(|f| members.contains(&f)), members.len(), keys.len()))
+    }).collect()
+}
+
+fn build_left(left: &str, right: &str, ranks: &BTreeMap<String, u8>, sides: &BTreeMap<String, (bool, usize, usize)>) -> bool {
+    let (left_fact, left_atoms, left_keys) = sides[left];
+    let (right_fact, right_atoms, right_keys) = sides[right];
+    if left_fact && !right_fact && right_atoms > 1 { return false; }
+    if right_fact && !left_fact && left_atoms > 1 { return true; }
+    // Inside the dimension forest, a one-key child builds against a
+    // composite-key parent (e.g. Part or Supplier/Nation against PartSupp).
+    if !left_fact && !right_fact && left_keys != right_keys {
+        return left_keys < right_keys;
+    }
+    ranks[left] < ranks[right]
+}
+
+/// Record hash-build orientation before index demands are fixed. Compound
+/// dimension branches build against the fact spine, narrower fact-key children
+/// build within dimensions, and filter strength breaks remaining choices.
+/// Formal rule L-Orient: Build compound dimensions against the fact spine, narrower fact-key children within dimensions, otherwise the stronger static filter side; preserve directional operators and Rust ancestry.
 pub fn orient(source: &ra::Program) -> syn::Result<ra::Program> {
     ra::contract::check(source)?;
     let ranks = strengths(source);
+    let sides = branch_sides(source);
     let mut target = source.clone();
     for definition in &mut target.plan.definitions {
         if let Operator::NaturalJoin(join) = &mut definition.operator {
-            if ranks[&symbol_name(&join.left)] < ranks[&symbol_name(&join.right)] {
+            if build_left(&symbol_name(&join.left), &symbol_name(&join.right), &ranks, &sides) {
                 std::mem::swap(&mut join.left, &mut join.right);
             }
         }
@@ -65,7 +116,7 @@ pub fn orient(source: &ra::Program) -> syn::Result<ra::Program> {
 }
 
 /// Independently check the recorded choice and the bottom+Set rewrite proof.
-/// Formal rule CK-Orient: Require only rank-justified natural-join commutations and independently validate relational refinement.
+/// Formal rule CK-Orient: Require branch-or-rank-justified natural-join commutations and independently validate relational refinement.
 pub fn check_orientation(source: &ra::Program, target: &ra::Program) -> syn::Result<()> {
     ra::check_rewrite(source, target)?;
     if source.plan.declarations != target.plan.declarations
@@ -78,13 +129,13 @@ pub fn check_orientation(source: &ra::Program, target: &ra::Program) -> syn::Res
         ));
     }
     let ranks = strengths(source);
+    let sides = branch_sides(source);
     for (before, after) in source.plan.definitions.iter().zip(&target.plan.definitions) {
         let mut restored = after.clone();
         if let (Operator::NaturalJoin(original), Operator::NaturalJoin(chosen)) =
             (&before.operator, &mut restored.operator)
         {
-            let build_left =
-                ranks[&symbol_name(&original.left)] < ranks[&symbol_name(&original.right)];
+            let build_left = build_left(&symbol_name(&original.left), &symbol_name(&original.right), &ranks, &sides);
             let (stream, build) = if build_left {
                 (&original.right, &original.left)
             } else {
@@ -93,7 +144,7 @@ pub fn check_orientation(source: &ra::Program, target: &ra::Program) -> syn::Res
             if &chosen.left != stream || &chosen.right != build {
                 return Err(syn::Error::new_spanned(
                     &after.result,
-                    "natural join must build its stronger static filter side (written right on ties)",
+                    "natural join must build its independent dimension branch or stronger static filter side (written right on ties)",
                 ));
             }
             chosen.left = original.left.clone();

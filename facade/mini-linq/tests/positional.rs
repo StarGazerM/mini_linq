@@ -307,3 +307,47 @@ fn borrowed_scalar_parameters_match_the_recorded_column_key_type() {
     assert_eq!(point, [2]);
     assert_eq!(range, [2, 3]);
 }
+
+macro_rules! filtered_join {
+    ($left:expr, $right:expr, {$($build:tt)*}) => {
+        mini_linq::passes::select! {
+            arguments { positional(L,R,H) };
+            pipeline { mini_linq::passes::print_pull };
+            physical {
+                relation L(a:i64,b:i64) = ($left);
+                relation R(c:i64,d:i64) = ($right);
+                relation H(e:i64,f:i64) = ([(2_i64,7_i64),(2,8),(4,9)]);
+                l = pipe rename L@0 {a -> x,b -> y};
+                projected = pipe project l keep {x,y};
+                window = pipe range select projected if (y >= 10);
+                r = pipe rename R@1 {c -> x,d -> z};
+                s = pipe range select r if (z > 1);
+                $($build)*
+                j = pipe probe first [x] window,b;
+                out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+            }
+        }.map(|(x,y,z)| (*x,*y,*z)).collect::<BTreeSet<_>>()
+    };
+}
+
+#[test]
+fn covered_exact_and_bloom_scan_filters_preserve_answers_and_skip_blocks() {
+    let left = vec![(i64::MIN,10_i64),(1,9),(1,20),(1,20),(2,30),(3,40),(i64::MAX,50)];
+    let right = vec![(1_i64,2_i64),(1,4),(1,4),(2,0),(i64::MAX,4)];
+    let expected = BTreeSet::from([(1,20,2),(1,20,4),(i64::MAX,50,4)]);
+    assert_eq!(filtered_join!(left,right,{b = let project s keep {x,z};}), expected);
+    let left = ZoneRows::from_rows::<(MinMax<i64>,MinMax<i64>)>(left, NonZeroUsize::new(1).unwrap());
+    cq_storage::counters::reset();
+    assert_eq!(filtered_join!(left,right,{b = let project s keep {x,z};}), expected);
+    let costs = cq_storage::counters::snapshot();
+    assert_eq!(costs.join_filter_passed, 3);
+    assert!(costs.blocks_skipped_metadata > 0);
+    cq_storage::counters::reset();
+    assert_eq!(filtered_join!(left,right,{
+        h = pipe rename H@2 {e -> z,f -> w};
+        b = let probe first [z] s,h;
+    }), expected);
+    assert_eq!(cq_storage::counters::snapshot().join_filter_passed, 3);
+    let empty: Vec<(i64,i64)> = Vec::new();
+    assert!(filtered_join!(left,empty,{b = let project s keep {x,z};}).is_empty());
+}

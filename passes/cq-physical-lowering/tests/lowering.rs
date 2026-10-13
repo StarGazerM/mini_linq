@@ -190,3 +190,27 @@ fn static_orientation_never_commutes_directional_membership() {
     };
     assert_eq!(cq_physical_lowering::orient(&source).unwrap(), source);
 }
+
+#[test]
+fn compound_dimension_build_survives_a_filtered_fact_spine() {
+    let source: ix::ra::Program = syn::parse_quote! {
+        relational {
+            relation L(o:i32,p:i32,s:i32); relation P(p:i32); relation O(o:i32);
+            relation S(s:i32,n:i32); relation N(n:i32);
+            l = rename L@0 {o -> o,p -> p,s -> s};
+            f = select l if (o = 7);
+            p = rename P@1 {p -> p}; o = rename O@2 {o -> o};
+            s = rename S@3 {s -> s,n -> n}; n = rename N@4 {n -> n};
+            b = natural_join s with n; bp = project b keep {s};
+            lp = natural_join f with p; lo = natural_join lp with o;
+            j = natural_join lo with bp;
+            output j as answer(o,p,s);
+        }
+    };
+    let target = cq_physical_lowering::orient(&source).unwrap();
+    cq_physical_lowering::check_orientation(&source, &target).unwrap();
+    assert_eq!(target.plan.definitions[10], syn::parse_quote!(j = natural_join lo with bp;));
+    let mut wrong = target.clone();
+    wrong.plan.definitions[10] = syn::parse_quote!(j = natural_join bp with lo;);
+    assert!(cq_physical_lowering::check_orientation(&source, &wrong).is_err());
+}

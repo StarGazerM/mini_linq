@@ -57,6 +57,9 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
 /// This is the executable reference used for partial-expression refinement tests.
 pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> {
     valuation::contract::check(source)?;
+    if source.valuation.join_branches.is_some() {
+        return Err(syn::Error::new_spanned(&source.valuation, "written reference cannot contain independent join branches"));
+    }
     use valuation::cq::BodyItem;
     fn exact(
         body: &cq::CommaList<BodyItem>,
@@ -128,6 +131,8 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
         analysis: &analysis,
         body: &source.cq.query.body,
         steps: &source.valuation.steps,
+        join_branches: source.valuation.join_branches.as_ref(),
+        joined_branch_atoms: BTreeSet::new(),
         context: BTreeSet::new(),
         path: None,
         block_hoisting,
@@ -175,6 +180,7 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
 mod block_contract;
 mod reductions;
 mod structural;
+mod join_branches;
 
 /// Simplify already elaborated reductions using exact named-result lineage.
 ///
@@ -228,6 +234,7 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
             format!("result `{}`: {message}", target.plan.output.input),
         )
     })?;
+    join_branches::check(source, target)?;
     Ok(())
 }
 
@@ -239,6 +246,8 @@ struct State<'a> {
     analysis: &'a valuation::Analysis,
     body: &'a cq::CommaList<valuation::cq::BodyItem>,
     steps: &'a [valuation::Step],
+    join_branches: Option<&'a valuation::JoinBranches>,
+    joined_branch_atoms: BTreeSet<usize>,
     context: BTreeSet<String>,
     path: Option<(cq::Occurrence, usize)>,
     block_hoisting: bool,
@@ -342,6 +351,8 @@ impl<'a> State<'a> {
     }
 
     fn run_steps(&mut self, steps: &[valuation::Step]) {
+        // Grouped atoms introduce their entire branch interface at first read.
+        // Their local predicates already live on the branch's named relations.
         for (step, introduces) in steps.iter().zip(&self.analysis.introduces) {
             match step {
                 valuation::Step::Block(block, _) => {
@@ -359,6 +370,13 @@ impl<'a> State<'a> {
                     self.read_clauses.insert(clause);
                 }
                 valuation::Step::Atom(subatom, _) => {
+                    if self.joined_branch_atoms.contains(&subatom.clause()) {
+                        continue;
+                    }
+                    if let Some(branch) = self.join_branches.and_then(|groups| groups.branches.iter().find(|b| b.clauses().contains(&subatom.clause()))) {
+                        self.join_branch(branch);
+                        continue;
+                    }
                     let check = subatom.variables().all(|(_, variable)| {
                         self.heading
                             .contains(&symbol_name(&self.canonical(variable)))
@@ -372,8 +390,14 @@ impl<'a> State<'a> {
                     self.prefix = Some(self.guard(input, filter));
                 }
                 valuation::Step::Let(binding, _) => self.bind(binding),
-                valuation::Step::Equality(equality, _) => self.equality(equality),
-                valuation::Step::Constraint(c, _) => self.constraint(c),
+                valuation::Step::Equality(equality, _) => {
+                    let local = self.branch_local(equality.variables().map(symbol_name).collect());
+                    if !local { self.equality(equality); }
+                }
+                valuation::Step::Constraint(c, _) => {
+                    let local = self.branch_local(c.variables().map(symbol_name).collect());
+                    if !local { self.constraint(c); }
+                }
             }
             let introduced: Vec<_> = introduces
                 .iter()

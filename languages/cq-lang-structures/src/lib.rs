@@ -66,6 +66,10 @@ pub mod kw {
     syn::custom_keyword!(row);
     syn::custom_keyword!(owned);
     syn::custom_keyword!(borrowed);
+    syn::custom_keyword!(join_filter);
+    syn::custom_keyword!(build);
+    syn::custom_keyword!(covering);
+    syn::custom_keyword!(bloom);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -96,6 +100,12 @@ pub struct Entry {
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Structure {
+    #[parse(peek = kw::join_filter)]
+    JoinFilter {
+        join_filter_token: kw::join_filter,
+        eq_token: Token![=],
+        filter: JoinFilter,
+    },
     #[parse(peek = kw::selection)]
     Selection {
         selection_token: kw::selection,
@@ -266,6 +276,8 @@ pub struct Analysis {
     pub keysets: BTreeMap<(String, Vec<String>), KeySet>,
     /// Positional access decisions attached to existing Physical readers.
     pub reads: BTreeMap<String, Read>,
+    /// Conservative scan filters with a verified exact covering probe.
+    pub join_filters: BTreeMap<String, JoinFilter>,
     pub physical: physical::Analysis,
     /// Declared column order of every host relation.
     pub host_layouts: BTreeMap<String, Vec<String>>,
@@ -352,6 +364,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         selections: BTreeMap::new(),
         keysets: BTreeMap::new(),
         reads: BTreeMap::new(),
+        join_filters: BTreeMap::new(),
         built: BTreeMap::new(),
         fallbacks: BTreeMap::new(),
         dedup: BTreeMap::new(),
@@ -373,7 +386,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             continue;
         }
         let keyed = match &entry.structure {
-            Structure::Selection { .. } | Structure::KeySet { .. } | Structure::Read { .. } => {
+            Structure::JoinFilter { .. } | Structure::Selection { .. } | Structure::KeySet { .. } | Structure::Read { .. } => {
                 unreachable!()
             }
             Structure::Built { keyed, .. } => keyed,
@@ -895,6 +908,8 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
 
 pub mod positional;
 pub use positional::*;
+mod join_filter;
+pub use join_filter::*;
 
 mod filtered;
 pub use filtered::{required_columns, selection_constants};

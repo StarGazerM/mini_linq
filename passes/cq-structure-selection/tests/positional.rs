@@ -134,3 +134,63 @@ fn index_only_rhs_prunes_dependent_candidates_without_changing_the_old_represent
         cq_structure_selection::compile_with(&physical, quote!(positional(L, H, R))).unwrap();
     assert_eq!(original, selected);
 }
+
+fn join_filter_plan(branch: bool) -> ir::Program {
+    let build = if branch {
+        quote! {
+            h = pipe rename H@2 {e -> z,f -> w};
+            b = let probe first [z] s,h;
+        }
+    } else {
+        quote!(b = let project s keep {x,z};)
+    };
+    let source: physical::Program = syn::parse2(quote! { physical {
+        relation L(a:i64,b:i64); relation R(c:i64,d:i64); relation H(e:i64,f:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> z};
+        s = pipe range select r if (z > 1);
+        #build
+        j = pipe probe first [x] l,b;
+        out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+    }}).unwrap();
+    cq_structure_selection::compile_with(&source, quote!(positional(L,R,H))).unwrap()
+}
+
+#[test]
+fn join_filters_record_static_kind_and_exact_covering_probe() {
+    for branch in [false, true] {
+        let selected = join_filter_plan(branch);
+        let facts = ir::contract::check(&selected).unwrap();
+        assert_eq!(facts.join_filters.len(), 1);
+        let filter = &facts.join_filters["l"];
+        assert_eq!(matches!(filter.kind, ir::FilterKind::Bloom(_)), branch);
+        assert_eq!(filter.covering, "j");
+        assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
+        for forgery in 0..5 {
+            let mut bad = selected.clone();
+            for entry in &mut bad.structures.entries {
+                if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
+                    match forgery {
+                        0 => filter.covering = syn::parse_quote!(out),
+                        1 => filter.build = syn::parse_quote!(s),
+                        2 => filter.key = syn::parse_quote!([z]),
+                        3 => filter.marker = syn::parse_quote!(::cq_load::ColumnAt<1>),
+                        _ => filter.ty = syn::parse_quote!(::cq_storage::BloomFilter<1>),
+                    }
+                }
+            }
+            assert!(ir::contract::check(&bad).is_err(), "forgery {forgery}");
+        }
+    }
+}
+
+#[test]
+fn join_filter_cannot_cross_an_opaque_guard() {
+    let mut selected = join_filter_plan(true);
+    let index = selected.physical.program.definitions.iter().position(|d| d.name == "j").unwrap();
+    selected.physical.program.definitions.insert(index, syn::parse_quote!(g = pipe guard l if (panic!("must not disappear"));));
+    if let physical::Operator::Probe(_, k) = &mut selected.physical.program.definitions[index + 1].operator {
+        k.left = syn::parse_quote!(g);
+    }
+    assert!(ir::contract::check(&selected).is_err());
+}

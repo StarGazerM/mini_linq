@@ -72,6 +72,9 @@ impl<'a> Context<'a> {
 
     /// Enumerate borrowed columns in declaration order, then apply the rename.
     pub fn host_scan(&self, result: &str) -> TokenStream {
+        if let Some(ids) = self.join_filter_ids(result) {
+            return self.positional_rows(result, ids);
+        }
         let access = self.host_access(result, &[]);
         let value = &access.value;
         let row = self.pattern(result);

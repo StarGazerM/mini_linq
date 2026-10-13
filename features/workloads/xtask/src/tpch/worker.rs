@@ -86,6 +86,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     ("hash_computations", counts.hash_computations), ("index_builds", counts.index_builds),
                     ("lookups", counts.lookups), ("cursor_steps", counts.cursor_steps),
                     ("rows_enumerated", counts.rows_enumerated), ("distinct_insertions", counts.distinct_insertions),
+                    ("join_filter_tested", counts.join_filter_tested), ("join_filter_passed", counts.join_filter_passed),
                 ] { metrics[name] = serde_json::json!(value); }
                 metrics
             })?,

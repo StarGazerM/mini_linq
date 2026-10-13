@@ -224,16 +224,21 @@ Static build orientation (L-Orient) is recorded in RA before IX derivation:
 the left natural-join operand streams and the right builds. Unary selections
 contribute point/range/other strength; joins and semijoins inherit the stronger
 operand; projects and opaque steps inherit their input; unions use their
-weakest arm (at least block strength). A strictly stronger left operand swaps
-with the right; ties retain the written orientation. Semijoins and antijoins
-never swap. CK-Orient checks only these rank-justified commutations, unchanged
+weakest arm (at least block strength). An independent compound dimension
+branch builds against the widest shared-key occurrence (the static fact
+spine), even if that spine has a local filter. Inside the dimension forest,
+the operand with fewer fact-key columns builds (for example, Part or
+Supplier/Nation against composite-key PartSupp). Otherwise a strictly
+stronger left operand swaps with the right; ties retain the written orientation.
+Semijoins and antijoins never swap. CK-Orient checks these structural/rank
+choices, unchanged
 definitions/interfaces, and the independent RA refinement contract, including
 Rust ancestry. IX and Physical retain exact demand and erasure checking.
 \begin{mathpar}
-\Rule{L-Orient}{a=\mathsf{naturalJoin}(l,r)\quad f(l)<f(r)}
+\Rule{L-Orient}{a=\mathsf{naturalJoin}(l,r)\quad \mathsf{buildLeft}(l,r)}
  {\mathsf{orient}(a)=\mathsf{naturalJoin}(r,l)}
 
-\Rule{CK-Orient}{\mathsf{OnlyRankJustifiedSwaps}(s,t)\quad
+\Rule{CK-Orient}{\mathsf{OnlyBranchOrRankJustifiedSwaps}(s,t)\quad
  \mathsf{checkRewrite}_{RA}(s,t)\Downarrow\ok}
  {\mathsf{checkOrientation}(s,t)\Downarrow\ok}
 \end{mathpar}
@@ -345,6 +350,51 @@ match by occurrence footprint, fallback siblings in order, negated references by
 original branch. \emph{Refinement:} occurrences, constraints and Rust chain are
 those of the source with relational facts no later, so by the premises the
 target refines the source.
+
+\paragraph{Independent dimension branches.}
+\textsc{S-JoinBranch} chooses the atom with the most shared equality-class
+columns (at least three; written position breaks ties) as a static fact spine.
+A locally filtered one-key dimension remains an early independent probe.
+The remaining dimension components absorb connected ears only when all
+non-spine connections leave through one neighbor heading and the ear's fact-key
+set is contained in its parent's. This groups Supplier/Nation and Part/PartSupp without
+collapsing a Customer/Supplier cycle. Every member receives the branch's
+strongest local filter priority, so a point-filtered Supplier/Nation branch
+is scheduled before a merely range-filtered Orders neighbor. These are
+compile-time structural heuristics, not estimates of relation cardinalities.
+\textsc{WF-JoinBranch} checks the recorded disjoint full-atom groups, their
+connectivity and exact external/head interfaces. Opaque Rust, lets and union
+blocks conservatively retain the ordinary checked schedule.
+\textsc{E-JoinBranch} elaborates each group to a separate exact natural-join
+DAG rooted at its first scheduled atom, with connected child subtrees built
+before their parent probes them. It applies local relational predicates,
+projects the interface, and joins that named result to the spine. This avoids
+a Cartesian product between independent children such as Part and Nation.
+No uniqueness or foreign-key premise
+is used. \textsc{CK-JoinBranch} independently requires the projected DAG for
+each VO group in addition to the unchanged global occurrence, predicate,
+reduction and Before proof. Reduction erasure preserves branch metadata.
+For recorded independent branches, the optional Hypergraph policy emits no
+semijoin reducer: a branch must not depend on scanning the fact side merely
+to build its support. The checker forbids those optional reductions rather
+than accepting a missing tree obligation. Explicit Tree on an incompatible
+grouped VO is rejected; ungrouped Tree retains the full reducer.
+The subsequent RA simplifier retains its existing relational rewrite proof.
+\begin{mathpar}
+\Rule{S-JoinBranch}{f=\mathsf{WidestSharedKeyAtom}(q)\quad
+ B=\mathsf{ConnectedDimensionEars}(q,f)}
+ {\mathsf{branches}_{Filtered,Coarse}(q)=B}
+
+\Rule{E-JoinBranch}{b=\{a_1,\ldots,a_k\}\quad I=\mathsf{Interface}(q,b)}
+ {\mathsf{elaborateBranch}(b)=
+  \pi_I\sigma_{P_b}(R_{a_1}\bowtie\cdots\bowtie R_{a_k})}
+
+\Rule{CK-JoinBranch}{\mathsf{WF}_{VO}(s)\quad
+ \mathsf{FixedFacts}(s,t)\quad\mathsf{RustTree}(s,t)\\
+ \forall b\in s.branches.\ \mathsf{LiveExactProjectedDAG}(t,b,I_b)}
+ {\mathsf{checkBranches}(s,t)\Downarrow\ok}
+\end{mathpar}
+
 
 \paragraph{Example: computed arguments pin placement.}
 In \code{answer(a,w) :- R(a,x), S(a,y), T(y,z), let k = combine(*x,*y), let
@@ -566,9 +616,10 @@ and $S$ checked redundant-support absorption:
  w=R_{None,r}(v)\quad a=S(E(w))}
  {\code{cq_planners::order(hypergraph)}(q)=a}
 \end{mathpar}
-\code{plan} defaults to checked Hypergraph reduction: acyclic bodies receive
-filter-supported upward/downward tree reductions. Both acyclic and cyclic scopes may
-receive exact atom-to-block cuts; cyclic block-free scopes receive no reductions.
+\code{plan} defaults to checked Hypergraph reduction: acyclic bodies without
+recorded independent join branches receive filter-supported upward/downward
+tree reductions. Both acyclic and cyclic scopes may receive exact atom-to-block
+cuts; cyclic block-free scopes receive no reductions.
 Every branch is its own scope. Reduction compilation is independently checked before
 elaboration. After checking elaboration against the reduced VO schedule, the
 default and external Hypergraph planner apply the same checked RA realization
@@ -589,3 +640,43 @@ the exact reference. Generic and the external Graph spelling belong to the
 external \code{cq-planners} consumer. The facade additionally records its
 filtered-connected order and build orientation; the external planner preserves
 its explicitly requested ordering policy.
+
+\paragraph{Join-filter selection and realization.}
+\textsc{SEL-JoinFilter} records a scalar filter only for a statically filtered,
+total hash-build branch and an exclusive declarative scan spine leading to its
+exact probe. Occurrence-preserving bounded builds select an exact
+\code{AdaptiveKeySet}; joined branches select a fixed-budget \code{BloomFilter}.
+Neither choice samples cardinalities or assumes keys or foreign keys.
+\textsc{IF-JoinFilter} constructs the recorded provider from the existing
+index's distinct keys, then filters positions before fetching payloads.
+Host block bounds use the provider's conservative \code{any_in}; an absent bound
+never skips a block. The covering exact probe is unchanged, so Bloom false
+positives only perform extra probes. No opaque guard or bind is crossed.
+\begin{mathpar}
+\Rule{SEL-JoinFilter}{
+ \mathsf{eligibleCoveredScan}(s,b,k,j)\quad
+ \mathsf{positionalHost}(s)\\
+ T=\begin{cases}
+ \code{AdaptiveKeySet<i64,I64Codec,67108864>} &
+   \mathsf{singleBaseBounded}(b)\\
+ \code{BloomFilter<16384>} & \text{otherwise}
+ \end{cases}
+}{
+ \mathsf{select}(s,b,k,j)=
+ \mathsf{joinFilter}(T,b,k,j,\mathsf{marker}(s,k))
+}
+
+\Rule{IF-JoinFilter}{
+ F=\mathsf{buildFilter}_T(\mathsf{keys}(\mathsf{index}_b))\quad
+ \mathsf{STR\text{-}JoinFilter}(s,F,b,k,j)\\
+ \mathsf{keepBlock}(B)=
+ \mathsf{staticMayMatch}(B)\land F.\mathsf{anyIn}(\mathsf{bounds}_k(B))
+}{
+ \mathsf{emit}(j)=
+ \mathsf{exactProbe}_b\bigl(
+ \mathsf{filter}_{F.\mathsf{test}(k)}
+ (\mathsf{staticRead}_{\mathsf{keepBlock}}(s))\bigr)
+}
+\end{mathpar}
+Absent bounds make the corresponding block test true. The emitted filter and
+exact probe preserve surviving occurrence order and multiplicity.

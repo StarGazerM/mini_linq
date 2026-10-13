@@ -38,6 +38,8 @@ use syn::{Ident, Token, token};
 
 pub use cq_syntax::{CommaList, Occurrence, symbol_name};
 pub mod blocks;
+pub mod join_branches;
+pub use join_branches::{JoinBranch, JoinBranches};
 
 pub mod kw {
     syn::custom_keyword!(reduce);
@@ -49,6 +51,8 @@ pub mod kw {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Valuation {
     pub valuation_token: kw::valuation,
+    #[parse(join_branches::parse_optional)]
+    pub join_branches: Option<JoinBranches>,
     #[syn(braced)]
     pub brace: token::Brace,
     #[syn(in = brace)]
@@ -192,6 +196,7 @@ fn error<T>(
 }
 
 fn analyze(program: &Program) -> syn::Result<Analysis> {
+    join_branches::check(program)?;
     analyze_steps(
         &program.cq.query.body,
         &program.valuation.steps,
@@ -741,6 +746,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             .collect()
     }
     if source.cq != target.cq
+        || source.valuation.join_branches != target.valuation.join_branches
         || erase(&source.valuation.steps) != erase(&target.valuation.steps)
         || reductions(&source.valuation.steps)
             .iter()

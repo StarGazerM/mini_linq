@@ -33,6 +33,8 @@ use cq_lang_vo as valuation;
 use proc_macro2::Span;
 use syn::LitInt;
 
+mod branches;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Options {
     pub heuristic: Heuristic,
@@ -589,6 +591,11 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
         cq: source.clone(),
         valuation: valuation::Valuation {
             valuation_token: Default::default(),
+            join_branches: if options.heuristic == Heuristic::Filtered && options.split == Split::Coarse {
+                branches::choose(source)
+            } else {
+                None
+            },
             brace: Default::default(),
             steps,
         },
@@ -608,7 +615,16 @@ fn compile_body(
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Filtered => {
-            let filters = cq::hypergraph::filter_ranks(&query.body, &hypergraph);
+            let mut filters = cq::hypergraph::filter_ranks(&query.body, &hypergraph);
+            if parent.is_none() && options.split == Split::Coarse {
+                if let Some(groups) = branches::choose(source) {
+                    for branch in groups.branches {
+                        let members = branch.clauses();
+                        let rank = members.iter().map(|c| filters[c]).min().unwrap();
+                        for clause in members { filters.insert(clause, rank); }
+                    }
+                }
+            }
             let sequence = schedule(
                 query,
                 &clauses,
@@ -727,7 +743,7 @@ fn compile_body(
 
 /// Check normal form, unchanged CQ, split granularity and explicit order.
 /// Prefix and elimination rankings are expansion choices, not obligations.
-/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, Rust Before, Written order and Filtered coarse greedy choices.
+/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, Rust Before, Written order, Filtered coarse greedy choices and static branch groups.
 pub fn check(
     source: &cq::Program,
     target: &valuation::Program,
@@ -744,11 +760,20 @@ pub fn check(
             ),
         ));
     }
+    let expected_branches = if options.heuristic == Heuristic::Filtered && options.split == Split::Coarse {
+        branches::choose(source)
+    } else {
+        None
+    };
+    if target.valuation.join_branches != expected_branches {
+        return Err(syn::Error::new_spanned(&target.valuation, "join branches must match the static dimension-ear policy"));
+    }
     check_steps(
         &source.query.body,
         &target.valuation.steps,
         &analysis,
         options,
+        target.valuation.join_branches.as_ref(),
     )
 }
 
@@ -757,6 +782,7 @@ fn check_steps(
     steps: &[valuation::Step],
     analysis: &valuation::Analysis,
     options: &Options,
+    join_branches: Option<&valuation::JoinBranches>,
 ) -> syn::Result<()> {
     if options.heuristic == Heuristic::Written
         || options.heuristic == Heuristic::Filtered && options.split == Split::Coarse
@@ -836,7 +862,16 @@ fn check_steps(
                 .collect();
             let facts = clauses(body, &context);
             let graph = cq::hypergraph::Analysis::of_body(body, &context);
-            let filters = cq::hypergraph::filter_ranks(body, &graph);
+            let mut filters = cq::hypergraph::filter_ranks(body, &graph);
+            if let Some(groups) = join_branches {
+                // The independent branch is one filtered build. Check each
+                // member's priority against every predicate in that branch.
+                for branch in &groups.branches {
+                    let members = branch.clauses();
+                    let strongest = members.iter().map(|c| filters[c]).min().unwrap();
+                    for clause in members { filters.insert(clause, strongest); }
+                }
+            }
             let mut bound = context;
             let mut pending: Vec<_> = (0..body.len()).collect();
             for clause in written {
@@ -899,6 +934,7 @@ fn check_steps(
                             &arm.steps,
                             &analysis.branches[&a.clause()][j],
                             options,
+                            None,
                         )?;
                     }
                 }

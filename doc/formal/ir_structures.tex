@@ -13,6 +13,8 @@ Entry ::= r = Type [K]... [membership] [payload[P] constants{c = term, ...}];
               base H lineage{a -> c, ...};
         | r read = positional base H lineage{a -> c, ...}
               column c marker Type predicate Predicate;
+        | r join_filter = (exact | bloom) Type build s [k]
+              covering j marker Type;
 Predicate ::= physical | membership s [K] summary (exact | row)
 \end{lstlisting}
 
@@ -38,9 +40,9 @@ join expansion, canon, union/fallback/anti and fused branch scopes do not;
 ordered or candidate provider. Every filtering step down to a prior immutable
 snapshot has an explicit read; an unrecorded retained result cannot be bypassed;
 (8)~a positional read refers only to its existing point/range predicate or its
-own eager semi's strictly earlier RHS build. There are no summary cycles or
-nonlocal probe filters. Exact summary requires an owned scalar keyset and
-\code{ExactIntervalMembership}; row summary uses exact membership alone;
+own eager semi's strictly earlier RHS build. These exact read entries cannot
+form summary cycles or name nonlocal probe filters. Exact summary requires
+an owned scalar keyset and \code{ExactIntervalMembership}; row summary uses exact membership alone;
 (9)~keysets record their concrete provider, ownership, codec and const bitmap
 budget. The initial owned layout is one \code{i64}; borrowed layouts are tuples.
 Known codecs must match that layout. Payload indexes may coexist with keysets.
@@ -123,15 +125,31 @@ Counter builds retain their deterministic measurement collections and fixed
 seeds; their hash-finish counts cover runtime internal collections, not every
 canonicalization or host hash operation.
 
-\code{HashIndex} stores table keys with arena slots and a contiguous arena of
-first payloads. Only keys with additional occurrences allocate a shared tail.
+\code{HashIndex} stores exact keys and arena slots in a hashbrown Swiss table
+using the recorded keyed hash state, plus a contiguous arena of first payloads.
+Hash collisions always require full key equality.
+Only keys with additional occurrences allocate a shared tail.
 Initialization consumes the source once, on first access, and is shared by
-cloned handles. A lookup cursor copies the first payload and owns its tail;
-it survives dropping the index and advances independently of other cursors.
-Lookup preserves source order and bag multiplicity. Candidate counts are exact
-occurrence counts (upper bounds for distinct candidate enumeration), without
-enumerating a bucket. Retained-capacity counters account for the table, arena
-and live tail buffers separately.
+cloned handles. A standalone lookup cursor copies the first payload and owns
+its tail; it survives dropping the index and advances independently.
+Membership tests the directory directly, without constructing a cursor.
+The \code{IndexRead::probe<N>} protocol has a scalar default and preserves outer
+order, within-bucket source order and bag multiplicity. \code{HashIndex} realizes
+\code{N=128} by hashing all keys, prefetching candidate buckets, then resolving
+exact matches; \code{N=1} retains scalar demand with no lookahead or prefetch.
+Both retain one index handle per stream and enumerate payloads without per-row
+reference-count operations. An empty outer stream does not initialize the index.
+For single-level probes over borrowed rows, the printer chooses fixed 128-row
+batches only on a total host scan spine (rename, relational selection and
+projection). Already-reduced/joined streams, opaque guards and branches use
+scalar demand; computed rows and curried access retain their existing lookup
+protocol. No runtime statistics or adaptive choice is used, and bounded
+lookahead cannot force an unvisited partial Rust expression.
+This is a runtime realization of the same checked Physical probe, not a new
+Structures decision or approximation; no checker premise is removed.
+Candidate counts remain exact occurrence counts (upper bounds for distinct
+candidate enumeration), without enumerating a bucket. Retained-capacity
+counters account for the directory, arena and live tail buffers separately.
 
 \paragraph{Rewrite check (\code{cq_lang_structures::check_rewrite}).} Both local
 contracts hold and the embedded Physical AST and token serialization are exactly
@@ -140,3 +158,43 @@ Retype selectors \code{kind(selection)} and \code{kind(keyset)} preserve origin,
 levels and policy; \code{rows} still selects FromIterator buffers. Membership
 includes keysets. Losing interval membership requires an explicit row-summary
 rewrite or rejection, never a printer fallback.
+
+\paragraph{Covered join filters.}
+An entry \code{s join_filter = bloom ::cq_storage::BloomFilter<16384>
+build b [k] covering j marker ::cq_load::ColumnAt<n>;} records the scan
+occurrence, build keys, fixed provider budget, host key column and exact
+covering probe. The alternative \code{exact} entry records
+\code{AdaptiveKeySet<i64,I64Codec,67108864>}.
+\textsc{STR-JoinFilter} independently checks that \code{j} is a probe of
+\code{b} on the same scalar key, that the build is total and statically
+filtered, and that the scan reaches this probe through an exclusive,
+occurrence-preserving declarative pipe spine. Retained, scoped, opaque and
+occurrence-expanding stream boundaries are rejected. The exact representation
+requires a single-base selection-bounded build; joined builds use Bloom.
+The filter admits a superset of the build keys and is never a membership
+answer or uniqueness proof. Bloom false positives are eliminated by the
+unchanged exact probe; no false negatives are permitted. Exact sets answer
+block interval existence exactly; Bloom interval bounds conservatively retain
+every overlapping block. Missing block metadata retains all candidate blocks.
+For a positional static read directly over the rename/project spine, realization
+intersects both block summaries and tests the static row predicate before the
+join key. The optional counters \code{join_filter_tested} and
+\code{join_filter_passed} measure that key-filter boundary; subsequent residual
+conditions and relational readers can reduce the surviving count further.
+\begin{mathpar}
+\Rule{STR-JoinFilter}{
+ j=\mathsf{probe}[k](l,b)\quad k:\code{i64}\quad
+ \mathsf{exactHashIndex}(b,k)\\
+ \mathsf{exclusiveTotalSpine}(s,l)\quad
+ \mathsf{totalFilteredBuild}(b)\quad
+ \mathsf{marker}(s,k)=C\\
+ \mathsf{recordedProvider}(F,b)\quad
+ \pi_k(b)\subseteq\{x\mid F.\mathsf{test}(x)\}
+}{
+ s\;\mathsf{joinFilter}(F,b,k,j,C)\text{ is admissible}
+}
+\end{mathpar}
+Here $\mathsf{exclusiveTotalSpine}$ contains only one-use pipe renames,
+projections and declarative selections, without canon or fused scopes.
+$\mathsf{recordedProvider}$ checks the static kind, scalar layout, codec and
+budget above; it does not accept an arbitrary provider claiming coverage.

@@ -175,6 +175,7 @@ impl<'a> Context<'a> {
                     .values()
                     .map(|s| symbol_name(&s.origin.base)),
             )
+            .chain(analysis.join_filters.keys().map(|scan| analysis.lineage[scan].base.clone()))
             .collect();
         for base in positional_bases {
             let host = &hosts[&base].value;
@@ -546,6 +547,19 @@ impl<'a> Context<'a> {
                 quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
             };
             statements.push(syn::parse_quote! { let #structure = &#build; });
+            for (scan, filter) in &self.analysis.join_filters {
+                if symbol_name(&filter.build) != name || sorted(&filter.key.columns) != columns {
+                    continue;
+                }
+                let id = self.join_filter_ident(scan);
+                let keys = quote!(::core::iter::Iterator::map(#structure.keys(), |__cq_key| *__cq_key.0));
+                let ty = &filter.ty;
+                let value = match filter.kind {
+                    structures::FilterKind::Exact(_) => quote!(::cq_storage::Membership(&<#ty>::from_keys(#keys, ::cq_storage::I64Codec))),
+                    structures::FilterKind::Bloom(_) => quote!(<#ty>::from_keys(#keys)),
+                };
+                statements.push(syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#value);));
+            }
             if *ty == syn::parse_quote!(::std::collections::HashSet<_>)
                 || *ty == syn::parse_quote!(::cq_storage::HashSet<_>)
             {

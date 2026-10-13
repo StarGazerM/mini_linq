@@ -3,7 +3,8 @@
 
 \paragraph{Grammar.} VO extends a complete CQ$_{\rm NF}$ program with a schedule.
 \begin{lstlisting}
-VO   ::= CQProgram valuation { Step* }
+VO   ::= CQProgram valuation [branches { JoinBranch* }] { Step* }
+JoinBranch ::= branch [clause, ...] (interface, ...);
 Step ::= R@path(x, _, ...); | x = y; | Constraint;
        | if Expr; | let Pat [: Type] = Expr;
        | reduce R@path with S@path(...);
@@ -28,12 +29,24 @@ exactly the shared equality classes at its support's column positions; it
 precedes the target's first subatom, except that a target already read to
 supply a finite block domain restricts the retained prefix instead;
 no Rust guard is a reduction; the reduction graph need not be acyclic;
-(5)~blocks recursively check kind, paths, interface coverage and arm schedules.
+(5)~blocks recursively check kind, paths, interface coverage and arm schedules;
+(6)~independent join branches are disjoint connected groups of at least two
+full atom occurrences in a flat, Rust-free scope. Each records exactly its
+external interface and head columns; local predicates execute inside the
+branch. Reductions of a member precede the first grouped read and may use
+only other members, so a branch cannot depend on its future fact-side probe.
 \begin{mathpar}
 \Rule{D-Constraint}{\vars(C)\subseteq B}
  {\mathsf{requires}(C)=\vars(C),\quad\mathsf{provides}(C)=\emptyset}
 
-\Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)}
+\Rule{WF-JoinBranch}{B=\emptyset\ \lor\ \mathsf{FlatRelational}(q)\quad
+ \mathsf{DisjointConnectedFullGroups}(B)\\
+ \forall b\in B.\ I_b=\mathsf{Interface}(q,b)\quad
+ \mathsf{EarlierBranchLocalReductions}(b)}
+ {\mathsf{JoinBranches}(q,B)\Downarrow\ok}
+
+\Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)\quad
+ \mathsf{JoinBranches}(t.cq,t.branches)\Downarrow\ok}
  {\mathsf{WF}_{VO}(t)\Downarrow A}
 \end{mathpar}
 
@@ -46,8 +59,12 @@ row is checked.
 
 \paragraph{Recorded decisions.} Clause order, split granularity (Coarse: one full
 subatom per atom; Fine: at most one new variable per subatom), semijoin
-reductions, and block placement (hoisted derived relation or per-row arms).
+reductions, independent exact-join branches, and block placement (hoisted
+derived relation or per-row arms). An independent branch is materialized once
+as the exact join of its member occurrences, projected to the recorded heading.
+It assumes neither uniqueness nor foreign-key coverage.
 
 \paragraph{Rewrite check.} Unchanged CQ; the non-reduction step erasures are equal
 recursively; existing reductions are kept and added reductions satisfy the
-target contract. Non-reduction steps are not rescheduled by a rewrite.
+target contract. Non-reduction steps and independent branch metadata are not
+changed by a rewrite.

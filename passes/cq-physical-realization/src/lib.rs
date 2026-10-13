@@ -184,12 +184,16 @@ impl Printer<'_> {
                     Some(Repr::Positions(ids)) => ids.take().expect("single pipe consumer"),
                     Some(Repr::Selection { selection, .. }) => quote!(#selection.positions()),
                     Some(Repr::Host) => {
-                        let host = format_ident!(
-                            "__cq_positional_{}",
-                            self.analysis.lineage[&name].base,
-                            span = proc_macro2::Span::mixed_site()
-                        );
-                        quote!(::cq_storage::PositionalRows::positions(#host))
+                        if let Some(ids) = self.join_filter_ids(&name) {
+                            ids
+                        } else {
+                            let host = format_ident!(
+                                "__cq_positional_{}",
+                                self.analysis.lineage[&name].base,
+                                span = proc_macro2::Span::mixed_site()
+                            );
+                            quote!(::cq_storage::PositionalRows::positions(#host))
+                        }
                     }
                     _ => unreachable!(),
                 };

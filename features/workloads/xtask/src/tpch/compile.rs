@@ -56,7 +56,9 @@ pub(super) fn build(root: &Path, source: &Path, name: &str) -> Result<Built> {
         root.join("xtask/src/tpch/worker.rs"),
     );
     std::fs::write(directory.join("src/main.rs"), source_text)?;
-    let target = cache.join("build");
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(|path| PathBuf::from(path).join("tpch-workers"))
+        .unwrap_or_else(|| cache.join("build"));
     let mut lock = metadata(&directory, &target, true)?;
     if !lock.status.success() {
         // The oracle does not itself need Rust's Parquet reader. On a fresh
