@@ -37,8 +37,8 @@ STR-Key	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule S
 STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-Range:	Const/range reads have direct or scan/filter implementations and never justify a build.
 STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Merge:	Require a direct ordered host read, built entry, or same-key merge pipe.
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
-CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, unified Rust chain, source-before inclusion and exact Written order.
-CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check reduction erasure, tree edges only in acyclic scopes and exact block cuts in any scope.
+CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, Rust Before, Written order and Filtered coarse greedy choices.
+CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check erasure, filtered support versions and ordered acyclic tree obligations, plus exact block cuts on any scope.
 CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check supplied VO clause occurrences, named semijoins, equality closure, constraints, Rust chain and Before.
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
@@ -85,7 +85,7 @@ C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
 O-Join	abstract	-	-	Ghost binary-tree composition on disjoint full-atom coverages.
 L-Retention	abstract	-	-	Leibniz identity and functional extensionality permit canonical projection before an opaque Rust node whenever its free variables are retained.
-Plan-Prefix	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, reduce unless opted out, elaborate, absorb redundant support and continue with RA.
+Plan-Prefix	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Filtered/Coarse, optionally reduce and absorb, then record static build orientation before IX.
 Plan-Generic	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Generic:	External Written/Fine planner records variable-at-a-time valuation steps.
 Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Graph:	Hypergraph uses tree reductions only in acyclic scopes and exact block cuts in any scope.
 ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start surface expansion and the selected checked CQ pipeline.
@@ -103,7 +103,7 @@ ORD-Admissible	implementation	languages/cq-syntax/src/algebra.rs	/// Formal rule
 CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Bound query terms and captured constants are separate from Rust expressions.
 D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constraint:	A central step waits only for its query variables.
 E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Ordinary relational pushdown or prefix select.
-CT-Constraint	implementation	languages/cq-lang-ra/src/structural.rs	// Formal rule CT-Constraint:	Structural predicates preserve boolean shape and fixed column arguments.
+CT-Constraint	implementation	languages/cq-lang-ra/src/structural.rs	// Formal rule CT-Constraint:	Preserve exact predicate shape and fixed columns, recomputing implied unary domains on both sides.
 RA-Constraint	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-Constraint:	Relational theta checks scope and Eq/Ord premises without Rust.
 IX-Const	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Const:	Column constant equalities and literal membership produce const supply.
 IX-Range	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Range:	Constant order bounds on one column produce range supply.
@@ -112,6 +112,8 @@ IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Paramet
 IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.
 CQ-GuardRecognize	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardRecognize:	Rust comparison trait operations and pure boolean structure under Eq/Ord premises.
 CQ-GuardSplit	implementation	languages/cq-syntax/src/guard.rs	/// Formal rule CQ-GuardSplit:	Extract total conjuncts; keep one written-order residual; selecting earlier only shrinks opaque evaluation domains.
+CQ-Total	implementation	languages/cq-lang-cq/src/total.rs	/// Formal rule CQ-Total:	Typed allowlisted standard operations or explicit #[total] guard assertions become relational predicates with lexical bindings.
+E-Domain	implementation	languages/cq-syntax/src/constraint.rs	/// Formal rule E-Domain:	Project every disjunct's literal restrictions onto each commonly constrained variable and retain the exact predicate.
 Block-Union	abstract	-	-	Bottom plus Set union; permutation and witness short circuit are refinements.
 Block-Else	abstract	-	-	Ordered first nonempty branch with lazy later Rust.
 CQ-Block	implementation	languages/cq-lang-cq/src/lib.rs	fn check_body(	Recursive written scope, interface/local checks and known declared type agreement; Rust checks inference.
@@ -125,3 +127,11 @@ IF-Positional	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Po
 IF-Selection	implementation	passes/cq-print/src/positional.rs	Formal rule IF-Selection:	Immutable mask construction and reusable row projection.
 STR-Keyset	implementation	languages/cq-lang-structures/src/positional.rs	Formal rule STR-Keyset:	Keysets serve exact membership without imposing membership on supplemental payload indices.
 IF-PushPositional	implementation	features/own-dialect/printer/src/lib.rs	Formal rule IF-PushPositional:	Push the prepared exact ID stream to its sink; share recorded snapshot and Build construction.
+STR-Existential	implementation	languages/cq-lang-structures/src/filtered.rs	/// Formal rule STR-Existential:	Full-key filtered projections with no observed payload use exact membership, not witness enumeration.
+EXT-SetFold	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-SetFold:	Checked canonical terminals need no extension dedup; unknown terminals retain fast-hashed set boundaries.
+EXT-ConstantGroup	implementation	features/extensions/cq-ext-aggregate/src/expansion.rs	/// Formal rule EXT-ConstantGroup:	Literal-bound group columns use an optional accumulator and preserve empty-input semantics.
+H-FilterRank	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-FilterRank:	Rank local total predicates through equality classes, without data statistics.
+S-Filtered	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Filtered:	Rank ready occurrences by connectivity, local filter strength, then written position.
+R-Filtered	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Filtered:	Propagate independently filtered components, omitting range-only support against a point-filtered component; order strongest siblings first.
+L-Orient	implementation	passes/cq-physical-lowering/src/orientation.rs	/// Formal rule L-Orient:	Build the stronger statically filtered natural-join operand, preserving directional operators and Rust ancestry.
+CK-Orient	implementation	passes/cq-physical-lowering/src/orientation.rs	/// Formal rule CK-Orient:	Require only rank-justified natural-join commutations and independently validate relational refinement.

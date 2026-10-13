@@ -6,7 +6,7 @@
 //!
 //! Surface: `by(d); n=count(); s=sum(a); lo=min(a); hi=max(a);` followed by a CQ `rows(d,id,a) :- Sale(d,id,a);`
 //!
-//! Result and openings: `GroupedAnswers<(d,), (n,s,lo,hi)>`; distinct row output folded outside the core and reusable as a leading-key host
+//! Result: `GroupedAnswers`, or allocation-free `SingleGroup` for literal-bound keys.
 //!
 //! Aggregation is over a set of the CQ head rows, rather than bags of base-table
 //! occurrences. Include an identity column in `rows` to count different sales with
@@ -18,10 +18,10 @@
 //! the extension fold; the core never copies logical bindings.
 //! Select `pipeline { surface = [cq_ext_aggregate::aggregate]; }` inside
 //! `mini_linq::compile!`. Unowned quotations continue unchanged. The row query
-//! resumes the remaining pipeline. Its row stream is deduplicated before folding,
-//! so distinct witnesses count once even with a different downstream printer.
-//! Generated Rust records a HashSet witness boundary, HashMap groups and
-//! GroupedAnswers output. Dedup retains the row stream's first-occurrence order.
+//! resumes the remaining pipeline. A stock terminal's checked canonical-return
+//! fact removes the redundant extension dedup; unknown printers retain an explicit
+//! `HashState` set boundary. General grouping also records `HashState`. A constant
+//! group folds directly into an optional accumulator, including owned measures.
 //! Authored leaf inputs are evaluated once in the fold context and borrowed by
 //! its row query; key and measure clones close their lifetimes before return.
 //! Finite immutable hosts, Leibniz equality and pure Rust expressions are premises.
@@ -43,8 +43,8 @@ pub fn aggregate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             return Ok(None);
         };
         let source = syn::parse2(tokens)?;
-        let plan = expansion::compile(&source)?;
-        expansion::check(&source, &plan)?;
+        let plan = expansion::compile_with_pipeline(&source, pipeline)?;
+        expansion::check_with_pipeline(&source, &plan, pipeline)?;
         expansion::render(&plan, pipeline).map(Some)
     })
     .into()

@@ -7,30 +7,24 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
-- The default facade now performs checked Hypergraph semijoin reduction between
-  Written/Coarse ordering and elaboration: a tree reducer only on acyclic scopes,
-  but exact atom-to-block cuts on any scope. Each block branch is analyzed
-  independently. Opaque Rust guards remain in place.
-- Select `plan = mini_linq::passes::plan_written(no_reduce);` in `compile!`'s
-  existing pipeline configuration to recover the previous unreduced plan.
-  Reduction correspondence is checked before elaboration in both modes.
-- Split-witness RA correspondence recognizes local semijoin/projection
-  identities while retaining predicate ownership and hidden-column correlation
-  checks, so reduced plans can retain their written guard prefixes.
-- Both the facade and external Hypergraph planner apply
-  `cq_elaborate::simplify_reductions`, a checked RA rewrite which absorbs a
-  redundant reduced support only when the probe's other input already supplies
-  its required key. This preserves native host reads and the unchanged
-  ordered-only-key fixture without introducing a hash requirement. Negative
-  operands and unrelated supports remain intact.
-- Replayed positional union inputs construct an owned predicate per traversal,
-  rather than moving one shared predicate into several index builds. This fixes
-  the H07-block compilation exposed by absorption without adding `Copy` bounds.
-- Reduction scope is explicit and tested: cyclic bodies keep exact block cuts
-  but no tree reductions; cyclic block-free bodies have no reductions. Acyclic
-  branches under cyclic roots may receive their own tree reducers.
-- Current on/off benchmark results and environment limitations are recorded in
-  `doc/STATUS.md`; the historical gate claim above does not apply to this entry.
+- Default facade pass `mini_linq::passes::plan` (renamed from `plan_written`,
+  no alias): static Filtered/Coarse ordering, checked Hypergraph reduction,
+  redundant-support absorption (`cq_elaborate::simplify_reductions`), and
+  static build orientation recorded in RA before IX. `plan(no_reduce)` emits no
+  semijoins. Tree reduction only on acyclic scopes and only along
+  filter-supported edges; exact block cuts on any scope.
+- Relational disjunctions derive implied per-occurrence domains, keeping the
+  exact predicate. Guards over allowlisted total std operations, or marked
+  `#[total] if <expr>`, move like relational filters; checkers recompute
+  domains and reject invented totality.
+- Aggregates: redundant dedup layers removed, `SingleGroup` for constant-group
+  folds, fast hasher for grouped containers; `AdaptiveKeySet` no longer
+  allocates per duplicate key.
+- Fixes: reduced prefix-guard RA correspondence, positional predicate reuse in
+  replayed unions, correlated-block provenance after reordering, partial
+  absorption of shared supports, planner-checker branch erasure.
+- SF 1 vs DuckDB 1 thread: 1.5–3.8× (Q19 0.21×), from 2.5–48×; H07
+  880 → 44 ms, H09 2,170 → 181 ms, H05 269 → 68 ms. Details in `doc/STATUS.md`.
 
 ## Execution model (exact semijoin pushdown, hashing)
 

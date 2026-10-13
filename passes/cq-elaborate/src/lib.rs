@@ -184,6 +184,9 @@ mod structural;
 /// named result through projections, selections, semijoin left inputs and
 /// natural-join inputs; it never identifies independent projected witnesses
 /// or infers facts from types, data, predicates or source occurrence numbers.
+/// A shared restricted support is bypassed only when every bypassed result
+/// becomes unreachable. Otherwise its consumers keep the same materialized
+/// row witness, preserving independent projections' correlation obligations.
 ///
 /// Opaque Rust operators and negative-operand ancestry are not rewritten.
 /// Reductions containing Rust are not bypassed, and all remaining operator
@@ -314,12 +317,14 @@ impl<'a> State<'a> {
             .body
             .iter()
             .enumerate()
-            .filter_map(|(clause, item)| match item {
-                valuation::cq::BodyItem::Constraint(c) => Some((
-                    c.clone(),
-                    targets(c.variables().map(symbol_name).collect(), clause),
-                )),
-                _ => None,
+            .flat_map(|(clause, item)| match item {
+                valuation::cq::BodyItem::Constraint(c) => std::iter::once(c.clone())
+                    .chain(c.implied_domains())
+                    .map(|predicate| {
+                        let binders = targets(predicate.variables().map(symbol_name).collect(), clause);
+                        (predicate, binders)
+                    }).collect::<Vec<_>>(),
+                _ => Vec::new(),
             })
             .collect();
         self.equalities = self

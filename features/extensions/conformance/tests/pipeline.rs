@@ -33,7 +33,7 @@ fn direct_surface_packet_carries_arguments_through_stacked_union_negation() {
     let S = [(2,)];
     let rows: Vec<_> = cq_ext_negation::negation! {
         pipeline {
-            mini_linq::passes::plan_written,
+            mini_linq::passes::plan,
             mini_linq::passes::index_demands,
             mini_linq::passes::lower,
             mini_linq::passes::select,

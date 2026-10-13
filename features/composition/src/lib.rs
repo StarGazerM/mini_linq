@@ -50,7 +50,7 @@ pub fn query<'a>(
 ) -> HashSet<(&'a i32, &'a i32, &'a i32)> {
     mini_linq::compile! {
         pipeline {
-            plan = mini_linq::passes::plan_written;
+            plan = mini_linq::passes::plan;
             ix = mini_linq::passes::index_demands;
             lower = mini_linq::passes::lower;
             physical = [];
@@ -71,7 +71,7 @@ pub fn query<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_testkit::{Database, Rows, cq_semantics, harness};
+    use cq_testkit::{cq_semantics, harness, Database, Rows};
 
     #[test]
     fn composed_pipeline_preserves_nested_union_and_fallback() {
@@ -80,7 +80,7 @@ mod tests {
         let S = BTreeMap::from([((1_i32,), vec![(99_i32,)]), ((2,), vec![(20,)])]);
         let answer: Rows = mini_linq::compile! {
             pipeline {
-                plan = mini_linq::passes::plan_written;
+                plan = mini_linq::passes::plan;
                 ix = mini_linq::passes::index_demands;
                 lower = mini_linq::passes::lower;
                 select = mini_linq::passes::select;
@@ -204,7 +204,7 @@ mod tests {
         let S = BTreeMap::from([((OrderedKey(10),), vec![(100,)])]);
         let answer: Rows = mini_linq::compile! {
             pipeline {
-                plan = mini_linq::passes::plan_written;
+                plan = mini_linq::passes::plan;
                 ix = mini_linq::passes::index_demands;
                 lower = mini_linq::passes::lower;
                 select = mini_linq::passes::select;
@@ -258,7 +258,7 @@ mod tests {
                         || {
                             mini_linq::compile! {
                                 pipeline {
-                                    plan = mini_linq::passes::plan_written;
+                                    plan = mini_linq::passes::plan;
                                     ix = mini_linq::passes::index_demands;
                                     lower = mini_linq::passes::lower;
                                     select = mini_linq::passes::select;

@@ -18,9 +18,12 @@
 //! opaque residual guard at the written position, in written order. In `a && f`,
 //! f already runs only where a holds; in `f && a`, moving total a earlier only
 //! shrinks f's domain. Mixed disjunctions and negations stay wholly opaque.
-//! Arithmetic, calls, methods, casts, indexing, blocks, macros and field access
-//! remain opaque. Bare comparisons, `between`, and set membership are not CQ
-//! syntax. Normalized internal constraints retain the RA/IX/Physical forms.
+//! Declared standard string `contains`/`starts_with`/`ends_with` and total
+//! Boolean compositions are also relational; `#[total] if e` explicitly asserts
+//! totality for other Rust expressions. Otherwise arithmetic, calls, methods,
+//! casts, indexing, blocks, macros and field access remain opaque.
+//! Bare comparisons, `between`, and set membership are not CQ syntax.
+//! Normalized internal constraints retain the RA/IX/Physical forms.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
@@ -45,6 +48,7 @@ pub mod hypergraph;
 pub mod normal;
 pub use blocks::{Block, Branch};
 mod sugar;
+mod total;
 pub use cq_syntax::Constraint;
 pub use cq_syntax::rust;
 pub use cq_syntax::{Equality, EqualityValue};
@@ -82,6 +86,8 @@ impl syn::parse::Parse for Program {
         }
         if queries.len() > 1 {
             sugar::combine(&mut program, queries)?;
+            let schema = program.declarations.iter().map(|d| (symbol_name(&d.name), d)).collect();
+            total::recognize(&schema, &mut program.query.body, &BTreeMap::new())?;
         }
         Ok(program)
     }
@@ -99,14 +105,17 @@ impl Program {
     /// Surface extensions owning recursive rule syntax parse one rule before
     /// their own expansion; contracted core parsing combines multiple heads.
     pub fn parse_single(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        Ok(Self {
+        let mut program = Self {
             visibility: input.parse()?,
             struct_token: input.parse()?,
             name: input.parse()?,
             declaration_semi: input.parse()?,
             declarations: parse_declarations(input)?,
             query: input.parse()?,
-        })
+        };
+        let schema = program.declarations.iter().map(|d| (symbol_name(&d.name), d)).collect();
+        total::recognize(&schema, &mut program.query.body, &BTreeMap::new())?;
+        Ok(program)
     }
     /// Input schemas in declaration order. Classifying the head is analysis,
     /// so parsing and token emission preserve every declaration where written.
@@ -189,7 +198,7 @@ impl Query {
 /// across that chain under the sufficient refinement check.
 ///
 /// ```text
-/// BodyItem ::= Atom | "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
+/// BodyItem ::= Atom | ["#[total]"] "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
 ///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
 /// ```
@@ -218,7 +227,7 @@ impl syn::parse::Parse for BodyItem {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let item = if input.peek(token::Brace) {
             Self::Block(input.parse()?)
-        } else if input.peek(Token![if]) {
+        } else if input.peek(Token![if]) || input.peek(Token![#]) {
             Self::Filter(input.parse()?)
         } else if input.peek(Token![let]) {
             Self::Let(input.parse()?)
@@ -262,6 +271,9 @@ impl quote::ToTokens for BodyItem {
             Self::Equality(x) => {
                 let expr = Constraint::from_equality(x).cq_tokens();
                 output.extend(quote::quote!(if #expr));
+            }
+            Self::Constraint(Constraint::Total { expression, .. }) => {
+                output.extend(quote::quote!(#[total] if #expression));
             }
             Self::Constraint(x) => {
                 let expr = x.cq_tokens();
@@ -600,7 +612,7 @@ fn check_body(
             }
             // Formal rule IF-Environment: Check logical scope; Rust resolves enclosing values.
             BodyItem::Filter(filter) => {
-                if !cq_syntax::guard::split(&filter.condition, logical)
+                if filter.total.is_some() || !cq_syntax::guard::split(&filter.condition, logical)
                     .constraints
                     .is_empty()
                 {

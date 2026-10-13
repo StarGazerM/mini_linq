@@ -34,7 +34,7 @@ pipeline {
 \end{lstlisting}
 The order is surface, plan, ix, lower, Physical rewrites, select, Structures
 rewrites, print; omitted phases default to the \code{mini_linq::passes} entries
-\code{plan_written}, \code{index_demands}, \code{lower}, \code{select} and
+\code{plan}, \code{index_demands}, \code{lower}, \code{select} and
 \code{print_pull}. An authored program may enter at any compatible macro
 with \code{arguments \{..\}; pipeline \{..\}; <program>}. The protocol registers
 no pass names, and passes receive no configuration beyond their arguments: every
@@ -57,3 +57,24 @@ a common observation under compatible closing contexts, then so does $g\circ f$.
 \begin{proof}Compose the representation relations and observation equalities;
 domain inclusion makes $g$ defined; context adequacy lifts the argument to macro
 invocations.\end{proof}
+
+\paragraph{Set aggregate contexts.}
+The aggregate context records its row-stream canonicality proof, owned head
+columns, constant-group proof and \code{cq_storage::HashState}. A stock pull
+terminal checks the Structures canonical-return boundary; the extension folds
+that stream directly without adding another distinct set. Unknown terminals
+may repeat rows and retain an explicit fast-hashed distinct boundary.
+\begin{mathpar}
+\Rule{EXT-SetFold}{\mathsf{checkedCanonicalTerminal}(\pi)\quad
+ Q:\bot+\mathcal P(Row)}
+ {\mathsf{aggregate}(Q)=\mathsf{fold}(Q)}
+
+\Rule{EXT-ConstantGroup}{\forall k\in K.\ \mathsf{literalBound}(k)}
+ {\mathsf{groupFold}_K(Q)=\mathsf{optionalAccumulator}(Q)}
+\end{mathpar}
+Constant grouping emits \code{SingleGroup}, which stores zero or one key and
+measure tuple without hashing. Empty input still has no group. Computed measures
+are borrowed for cloning at the fold, rather than materialized as another CQ
+input. General groups use the recorded fast hash state, including their reusable
+answer storage. None of these facts implies input-row or primary-key uniqueness:
+the core's necessary result deduplication remains.

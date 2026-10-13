@@ -99,7 +99,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_testkit::{Rows, harness};
+    use cq_testkit::{harness, Rows};
     use std::collections::BTreeSet;
 
     fn names(values: &[&str]) -> BTreeSet<String> {
@@ -227,7 +227,7 @@ mod tests {
                 || {
                     mini_linq::compile! {
                         pipeline {
-                            plan = mini_linq::passes::plan_written;
+                            plan = mini_linq::passes::plan;
                             ix = mini_linq::passes::index_demands;
                             lower = mini_linq::passes::lower;
                             select = mini_linq::passes::select;

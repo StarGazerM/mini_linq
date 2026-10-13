@@ -95,6 +95,74 @@ pub fn check(module: &Program) -> syn::Result<Analysis> {
     Ok(Analysis::of(module))
 }
 
+/// Static occurrence priorities, never estimates of data cardinality.
+/// Smaller ranks mean point, range, derived/total/block, then unfiltered.
+/// Opaque Rust filters are deliberately excluded.
+/// Formal rule H-FilterRank: Rank local total predicates through equality classes, without data statistics.
+pub fn filter_ranks(body: &super::CommaList<BodyItem>, graph: &Analysis) -> BTreeMap<usize, u8> {
+    use cq_syntax::constraint::{Comparison, Constraint, Term};
+    let mut ranks: BTreeMap<_, _> = graph
+        .clauses
+        .keys()
+        .map(|&c| {
+            (
+                c,
+                if matches!(body[c], BodyItem::Block(_)) {
+                    2
+                } else {
+                    3
+                },
+            )
+        })
+        .collect();
+    let mut apply = |variables: Vec<String>, rank: u8| {
+        if variables.is_empty() {
+            return;
+        }
+        for (&clause, columns) in &graph.clauses {
+            if variables
+                .iter()
+                .all(|v| columns.iter().any(|c| graph.equivalent(c, v)))
+            {
+                ranks.entry(clause).and_modify(|r| *r = (*r).min(rank));
+            }
+        }
+    };
+    for item in body {
+        match item {
+            BodyItem::Equality(e) if !matches!(e.right, super::EqualityValue::Variable(_)) => {
+                apply(vec![symbol_name(&e.left)], 0);
+            }
+            BodyItem::Constraint(c) => {
+                let rank = match c {
+                    Constraint::Compare {
+                        left,
+                        comparison: Comparison::Eq(_),
+                        right,
+                    } if left.constant() || right.constant() => 0,
+                    Constraint::Compare {
+                        left,
+                        comparison,
+                        right,
+                    } if comparison.ordered() && (left.constant() || right.constant()) => 1,
+                    Constraint::Between {
+                        term: Term::Variable(_),
+                        low,
+                        high,
+                    } if low.constant() && high.constant() => 1,
+                    _ => 2,
+                };
+                apply(c.variables().map(symbol_name).collect(), rank);
+                for domain in c.implied_domains() {
+                    apply(domain.variables().map(symbol_name).collect(), 2);
+                }
+            }
+            _ => (),
+        }
+    }
+    ranks
+}
+
 impl Analysis {
     /// The facts of a normal-form CQ program; see [`check`] to establish normal
     /// form first. Non-variable atom arguments are not vertices.

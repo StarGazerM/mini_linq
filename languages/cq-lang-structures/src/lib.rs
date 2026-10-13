@@ -167,6 +167,7 @@ pub struct Keyed {
     #[parse(parse_levels)]
     #[to_tokens(|tokens, levels| quote::TokenStreamExt::append_all(tokens, levels))]
     pub levels: Vec<Level>,
+    pub membership: Option<kw::membership>,
     #[parse(parse_filtered)]
     pub filtered: Option<Filtered>,
 }
@@ -277,6 +278,8 @@ pub struct Analysis {
     pub retained: BTreeMap<String, syn::Type>,
     /// Explicit projections and constant bindings of index-only selections.
     pub filtered: BTreeMap<String, Filtered>,
+    /// Full-key probes certified to observe existence only, not witness payloads.
+    pub membership: BTreeSet<(String, Vec<String>)>,
     /// Emitted row layouts, derived from the recorded filtered projections.
     pub layouts: BTreeMap<String, Vec<String>>,
     /// Results that are canonical (a set) by inference or flag, with the key
@@ -355,6 +358,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         head_dedup: BTreeMap::new(),
         retained: BTreeMap::new(),
         filtered: BTreeMap::new(),
+        membership: BTreeSet::new(),
         layouts: BTreeMap::new(),
         unique: BTreeMap::new(),
     };
@@ -374,8 +378,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
             Structure::Built { keyed, .. } => keyed,
             Structure::Host { reader, keyed, .. } => {
-                if keyed.filtered.is_some() {
-                    return error(keyed, "a host fallback cannot retain a filtered projection");
+                if keyed.filtered.is_some() || keyed.membership.is_some() {
+                    return error(keyed, "a host fallback cannot retain a filtered projection or membership proof");
                 }
                 if !(analysis.host_read(&name)
                     || reader == "scan" && analysis.physical.hosts.contains_key(&name))
@@ -533,6 +537,13 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 .entry(name.clone())
                 .or_default()
                 .push((columns, keyed.ty.clone()));
+            if keyed.membership.is_some() {
+                if keyed.levels.len() != 1 || keyed.filtered.is_none() {
+                    return error(keyed, "membership storage requires one filtered key");
+                }
+                admissible(&keyed.ty, "membership")?;
+                analysis.membership.insert((name.clone(), keyed.level_names().concat()));
+            }
             if let Some(filtered) = &keyed.filtered {
                 if analysis
                     .filtered
@@ -666,7 +677,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     symbol_name(&d.name) == *reader && matches!(d.operator, Operator::Probe(..))
                 });
                 if payload {
-                    admissible(ty, "payload")?;
+                    if !analysis.membership.contains(&(result.clone(), columns.clone())) {
+                        admissible(ty, "payload")?;
+                    }
                     let levels = &analysis.built[result]
                         .iter()
                         .find(|(levels, t)| t == ty && prefix_depth(levels, columns) == Some(depth))

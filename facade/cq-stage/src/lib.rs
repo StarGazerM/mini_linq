@@ -18,7 +18,7 @@
 //! }
 //! ```
 //! Planning options use that same invocation argument slot, for example
-//! `plan = mini_linq::passes::plan_written(no_reduce);` opts out of the facade's
+//! `plan = mini_linq::passes::plan(no_reduce);` opts out of the facade's
 //! default Hypergraph semijoin reduction without adding a phase-level setting.
 //! Surface passes receive raw CQ tokens before the CQ contract. They expand
 //! authored `name!{...}` clauses. The planner then parses and checks CQ.
@@ -54,9 +54,9 @@
 //! against the generated Build, read and dedup obligations.
 
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
-use syn::{Token, braced, parenthesized};
+use syn::{braced, parenthesized, Token};
 
 mod kw {
     syn::custom_keyword!(pipeline);

@@ -9,7 +9,8 @@ token trees~\cite{host-synmacro}.
 Program ::= struct Name; Decl* Rule+
 Decl    ::= relation R(c: Type, ...) [= (Expr)];
 Rule    ::= h(Expr, ...) :- Clause, ... ;
-Clause  ::= R(Arg, ...) | if Expr | let Pat [: Type] = Expr | Block
+Clause  ::= R(Arg, ...) | Guard | let Pat [: Type] = Expr | Block
+Guard   ::= ["#[total]"] "if" Expr
 Arg     ::= x | _ | Expr
 Block   ::= { Body } ( | { Body } )+  |  { Body } ( else { Body } )+
 \end{lstlisting}
@@ -113,9 +114,10 @@ them only under the premises.
    \sqsupseteq\sem{\mathsf{if}\ e}}
 \end{mathpar}
 Recognized comparisons are total, so short-circuit \code{\&\&}, \code{||} and
-\code{!} mean classical connectives on them. Arithmetic, calls, methods, casts,
-indexing, blocks, macros, qualified paths and field access are opaque; a mixed
-\code{||} or \code{!} is one opaque leaf; only the top-level conjunction splits.
+\code{!} mean classical connectives on them. Except for CQ-Total below,
+arithmetic, calls, methods, casts, indexing, blocks, macros, qualified paths
+and field access are opaque; a mixed \code{||} or \code{!} is one opaque leaf;
+only the top-level conjunction splits.
 Parameters print as \code{@name} in later languages and are borrowed once outside
 query loops.
 \begin{proof}[Proof of CQ-GuardSplit]
@@ -127,6 +129,33 @@ either a relational leaf rejects first or all hold and the residual evaluates
 the same opaque leaves in the same order. A disjunction or negation lacks this
 argument and is never split.
 \end{proof}
+
+\paragraph{Total Rust predicates.}
+\[
+\Rule{CQ-Total}{e\text{ is allowlisted over declared primitive types, or explicitly asserted total}\\
+ F=\uses(e,B)}
+ {[\code{\#[total]}]\ \mathsf{if}\ e\rightsquigarrow
+  \mathsf{constraint}\ \code{\#[total]}\{x=x\mid x\in F\}(e)}
+\]
+The allowlist admits standard \code{str}/\code{String}
+\code{contains}, \code{starts_with}, and \code{ends_with} with literal or
+declared string arguments, primitive comparisons, Boolean literals, and
+\code{\&\&}/\code{||} compositions. Unknown column types, calls, arithmetic,
+mutable references, attributes and macros are not inferred total.
+Transparent macro-forwarding groups preserve the declared-type proof, and
+lexical predicate bindings retain the original identifier hygiene.
+\code{\#[total] if e} is a trusted user premise that $e$ cannot diverge or panic,
+in addition to the existing pure functional Rust premise. Hidden macro uses
+conservatively retain the complete logical environment.
+The normalized predicate retains the original Rust expression and explicit
+lexical-to-relational bindings; aliases change bindings, not Rust tokens.
+Its totality permits ordinary selection motion; unrecognized guards still
+belong to the exact Rust chain. No data statistics or key assumptions enter
+this classification.
+The marker is an outer guard attribute, not a reserved identifier:
+\code{total} remains available as a query variable, let binding and Boolean
+guard operand. Normalized predicates also use the attribute-prefixed wire
+form, so a relational comparison such as \code{total > 0} is unambiguous.
 
 \paragraph{Normal form.}
 CQ$_{\rm NF}$ restricts the same \code{cq::Program}: every atom argument is a

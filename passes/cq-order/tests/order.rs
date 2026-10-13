@@ -787,3 +787,65 @@ fn shared_free_variables_can_be_supplied_by_any_admissible_atom() {
         Split::Coarse,
     );
 }
+
+#[test]
+fn filtered_order_starts_with_point_then_grows_connected_before_disconnected_ranges() {
+    let source = normal(quote! {
+        struct Q; relation Customer(c:i32,n:i32); relation Orders(o:i32,c:i32,d:i32);
+        relation Lineitem(o:i32,s:i32); relation Supplier(s:i32,n:i32);
+        relation Nation(n:i32,r:i32); relation Region(r:i32,name:i32);
+        answer(c,o,s) :- Customer(c,n), Orders(o,c,d), if *d >= 10,
+            Lineitem(o,s), Supplier(s,n), Nation(n,r), Region(r,name), if *name == 1;
+    });
+    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
+    let atoms: Vec<_> = target
+        .valuation
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            valuation::Step::Atom(a, _) => Some(a.relation.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        atoms,
+        [
+            "Region", "Nation", "Customer", "Orders", "Lineitem", "Supplier"
+        ]
+    );
+    let written = plan(&source, Heuristic::Written, Split::Coarse);
+    assert!(
+        cq_order::check(
+            &source,
+            &written,
+            &Options {
+                heuristic: Heuristic::Filtered,
+                split: Split::Coarse
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn filtered_order_preserves_opaque_before_and_rust_chain() {
+    let source = normal(quote! {
+        struct Q; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+        answer(a,c) :- R(a,b), if opaque(a), S(b,c), if *c == 1;
+    });
+    let target = plan(&source, Heuristic::Filtered, Split::Coarse);
+    valuation::contract::check(&target).unwrap();
+    let guard = target
+        .valuation
+        .steps
+        .iter()
+        .position(|s| matches!(s, valuation::Step::Guard(..)))
+        .unwrap();
+    let before = target
+        .valuation
+        .steps
+        .iter()
+        .position(|s| matches!(s, valuation::Step::Atom(a, _) if a.relation == "R"))
+        .unwrap();
+    assert!(before < guard);
+}

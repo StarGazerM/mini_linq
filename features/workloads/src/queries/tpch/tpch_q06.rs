@@ -41,8 +41,9 @@ macro_rules! query_body {
             let discount_low = Decimal::from_scaled(5).unwrap();
             let discount_high = Decimal::from_scaled(7).unwrap();
             let quantity_limit = Decimal::from_scaled(2400).unwrap();
-            let computed: Vec<(i32, i64, i64, i128)> = query! {
-                positional(lineitem);
+            let aggregates = query! {
+                positional(lineitem); aggregate! {
+                by (group); revenue = sum(amount);
                 struct Query06;
                 relation lineitem(
                     orderkey: i64, linenumber: i64, quantity: Decimal,
@@ -55,17 +56,7 @@ macro_rules! query_body {
                     if *quantity < quantity_limit,
                     let group: i32 = 0,
                     let amount: i128 = i128::from(price.scaled()) * i128::from(discount.scaled());
-            }.map(|(group, orderkey, linenumber, amount)| (group, *orderkey, *linenumber, amount)).collect();
-            // Aggregate currently expects borrowed measure columns. Materialize
-            // the authored CQ's computed rows, then compose the aggregate hole.
-            // This allocation and both CQ executions remain inside query time.
-            let computed = computed.as_slice();
-            let aggregates = query! {positional(computed); aggregate! {
-                by (group); revenue = sum(amount);
-                struct Revenue;
-                relation computed(group: i32, orderkey: i64, linenumber: i64, amount: i128);
-                rows(group, orderkey, linenumber, amount) :- computed(group, orderkey, linenumber, amount);
-             }};
+            }};
             vec![aggregates
                 .iter()
                 .flat_map(|(_, values)| values.iter())

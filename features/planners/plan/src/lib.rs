@@ -24,7 +24,7 @@ pub use cq_lang_vo as vo;
 
 use cq_order::{Heuristic, Options, Ranking, Split};
 use proc_macro2::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token};
 
@@ -202,8 +202,8 @@ pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Progra
     Ok(target)
 }
 
-/// Independently check an authored valuation, including split and full-reducer
-/// obligations. Free heuristic rankings are admissible; selectors are not run.
+/// Independently check an authored valuation, including split and selected
+/// reducer obligations in every block branch. Rankings are not reselected.
 pub fn check_valuation(
     source: &cq::Program,
     target: &vo::Program,
@@ -212,10 +212,19 @@ pub fn check_valuation(
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;
     let mut erased = target.clone();
-    erased
-        .valuation
-        .steps
-        .retain(|step| !matches!(step, vo::Step::Reduce(..)));
+    fn erase_reductions(steps: &mut Vec<vo::Step>) {
+        steps.retain_mut(|step| match step {
+            vo::Step::Reduce(..) => false,
+            vo::Step::Block(block, _) => {
+                for branch in &mut block.branches {
+                    erase_reductions(&mut branch.steps);
+                }
+                true
+            }
+            _ => true,
+        });
+    }
+    erase_reductions(&mut erased.valuation.steps);
     cq_order::check(&normal, &erased, &planner.ordering())?;
     cq_reduce::check(&erased, target, &planner.reductions(&normal))
 }

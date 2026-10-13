@@ -13,7 +13,7 @@ macro_rules! configuration {
     (default, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
         crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, { $($body)* });
         crate::tpch_runtime::configuration!(@named no_reduce, $d, {
-            plan = ::mini_linq::passes::plan_written(no_reduce);
+            plan = ::mini_linq::passes::plan(no_reduce);
             $($stages)*
         }, { $($body)* });
     };
@@ -151,17 +151,23 @@ pub(crate) fn date(value: &str) -> cq_load::Date {
 thread_local! {
     static ZONE_COST: std::cell::Cell<(f64, usize)> = const { std::cell::Cell::new((0.0, 0)) };
 }
-pub fn zone_metrics() -> (f64, usize) { ZONE_COST.with(std::cell::Cell::get) }
+pub fn zone_metrics() -> (f64, usize) {
+    ZONE_COST.with(std::cell::Cell::get)
+}
 pub fn record_zones(start: std::time::Instant, bytes: usize) {
     ZONE_COST.with(|c| c.set((start.elapsed().as_secs_f64() * 1000.0, bytes)));
 }
 macro_rules! extra_run {
-    ([]; $data:expr, $config:expr) => { panic!("unknown configuration {}", $config) };
-    ([hypergraph]; $data:expr, $config:expr) => { match $config {
-        "hypergraph" => hypergraph_extra::run($data),
-        "hypergraph_zone" => hypergraph_zone::run($data),
-        _ => panic!("unknown configuration {}", $config),
-    } };
+    ([]; $data:expr, $config:expr) => {
+        panic!("unknown configuration {}", $config)
+    };
+    ([hypergraph]; $data:expr, $config:expr) => {
+        match $config {
+            "hypergraph" => hypergraph_extra::run($data),
+            "hypergraph_zone" => hypergraph_zone::run($data),
+            _ => panic!("unknown configuration {}", $config),
+        }
+    };
 }
 pub(crate) use extra_run;
 macro_rules! extra_zone {
@@ -216,10 +222,15 @@ pub(crate) use extra_zone;
 // Workers load one configuration per process. Move decoded buffers into the
 // explicitly selected host once; ordinary configurations retain their Vecs.
 macro_rules! extra_prepare {
-    ([]; $data:expr, $config:expr) => {{ let _ = $config; $data }};
+    ([]; $data:expr, $config:expr) => {{
+        let _ = $config;
+        $data
+    }};
     ([hypergraph]; $data:expr, $config:expr) => {{
         let mut data = $data;
-        if $config == "hypergraph_zone" { prepare_zones(&mut data); }
+        if $config == "hypergraph_zone" {
+            prepare_zones(&mut data);
+        }
         data
     }};
 }

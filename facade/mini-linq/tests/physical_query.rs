@@ -425,3 +425,21 @@ fn generic_join_reads_multiple_host_keys_through_dispatch() {
     assert_eq!(generic::run(&r, &s, &t), expected);
     assert_eq!(generic_smallest::run(&r, &s, &t), expected);
 }
+
+#[test]
+fn key_only_filtered_index_preserves_existential_answers_without_primary_keys() {
+    let l = [(1_i64,), (1,), (2,), (3,), (4,)];
+    let r = [(1_i64, 2_i64), (1, 3), (1, 3), (2, 0), (3, 2), (9, 5)];
+    let rows: Vec<_> = mini_linq::passes::select! {
+        pipeline { mini_linq::passes::print_pull };
+        physical {
+            relation l(a:i64); relation r(a:i64,b:i64);
+            left = pipe rename l@0 {a -> x};
+            right = pipe rename r@1 {a -> x,b -> y};
+            selected = let range select right if (y > 1);
+            joined = pipe probe first [x] left,selected;
+            result = pipe canon project joined keep {x}; return result as answer(x);
+        }
+    }.map(|(x,)| *x).collect();
+    assert_eq!(rows, [1, 3]);
+}

@@ -65,5 +65,5 @@ correspondence `check`.
 
 The manuscript describes source revision `241f37c`. Its exact written reference
 is desugared CQ-NF with Written/Coarse and `cq_elaborate::compile_written`;
-the default `plan_written` uses optimizing elaboration. Core blocks and
+the default `plan` uses optimizing elaboration. Core blocks and
 multi-rule union sugar require no surface union extension.

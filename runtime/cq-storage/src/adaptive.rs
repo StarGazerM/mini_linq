@@ -6,6 +6,7 @@
 //! hash-array sorting. Dense retained memory is 8 * ceil(span / 64) bytes;
 //! hash memory includes table capacity, shared key cells, and the sorted array.
 //! Hash keys are shared between the table and array without requiring Clone.
+//! Duplicate input witnesses are tested before allocating their shared key cell.
 //! Retained bytes count owned capacities and key cells, excluding allocator
 //! overhead and allocations owned by K. Staging bytes are reported separately.
 use crate::instrument::HashSet;
@@ -90,6 +91,11 @@ impl<K: Eq + Hash + Ord, C: KeyCodec<K>, const B: usize> AdaptiveKeySet<K, C, B>
         let mut ordinal = true;
         for key in keys {
             crate::count!(distinct_insertions);
+            // Membership-only builds often receive many witnesses per key.
+            // Do not allocate and immediately discard a shared cell for each.
+            if staging.contains(&key) {
+                continue;
+            }
             match codec.ordinal(&key) {
                 Some(x) => range = Some(range.map_or((x, x), |(lo, hi)| (lo.min(x), hi.max(x)))),
                 None => ordinal = false,

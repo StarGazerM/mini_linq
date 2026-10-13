@@ -36,10 +36,18 @@ pub(super) fn check(source: &Program, target: &Program, schedule: &Schedule) -> 
             }
         }
     }
+    let mut retained = vec![false; schedule.nodes.len()];
+    for definition in &target.plan.definitions {
+        let Some(&index) = indices.get(&symbol_name(&definition.result)) else {
+            return false;
+        };
+        retained[index] = true;
+    }
     let proof = Proof {
         schedule,
         negative,
         opaque,
+        retained,
     };
     let mut remaining = target.plan.definitions.iter().peekable();
     let mut substituted = false;
@@ -97,6 +105,7 @@ struct Proof<'a> {
     schedule: &'a Schedule,
     negative: Vec<bool>,
     opaque: Vec<bool>,
+    retained: Vec<bool>,
 }
 
 impl Proof<'_> {
@@ -106,6 +115,10 @@ impl Proof<'_> {
             if !matches!(node.kind, Kind::Join(true))
                 || self.negative[reduced]
                 || self.opaque[reduced]
+                // A surviving restricted row still supplies correlated
+                // projected witnesses. All its consumers must keep that
+                // same row rather than partially bypass its restrictions.
+                || self.retained[reduced]
             {
                 return false;
             }

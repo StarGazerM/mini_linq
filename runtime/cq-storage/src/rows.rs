@@ -208,3 +208,17 @@ where
         )
     }
 }
+
+impl<'a, K: 'a, V: 'a> Rows for &'a crate::SingleGroup<K, V>
+where
+    &'a K: Columns,
+    &'a V: Columns,
+    <&'a K as Columns>::Row: Concat<<&'a V as Columns>::Row>,
+{
+    type Row = <<&'a K as Columns>::Row as Concat<<&'a V as Columns>::Row>>::Row;
+    fn rows(self) -> impl Iterator<Item = Self::Row> {
+        crate::instrument::cursor!(
+            self.iter().flat_map(|(key, values)| values.iter().map(move |value| key.columns().concat(value.columns()))),
+        )
+    }
+}

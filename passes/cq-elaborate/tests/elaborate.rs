@@ -266,6 +266,96 @@ fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
 }
 
 #[test]
+fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
+    let query = scenarios::SCENARIOS
+        .iter()
+        .find(|scenario| scenario.name == "ternary_guard")
+        .unwrap()
+        .parse_cq()
+        .unwrap();
+    let written = coarse(&query);
+    let reduced = vo(
+        &query,
+        quote! {
+            reduce Stock@3 with C@2(d,t);
+            reduce Stock@3 with B@1(i,t);
+            reduce Stock@3 with A@0(d,i);
+            reduce A@0 with Stock@3(d,i,_);
+            reduce B@1 with Stock@3(_,i,t);
+            reduce C@2 with Stock@3(d,_,t);
+            A@0(d,i); B@1(i,t); C@2(d,t); Stock@3(d,i,t);
+        },
+    );
+    let source = compile(&reduced).unwrap();
+    let target = cq_elaborate::simplify_reductions(&source).unwrap();
+    // This is the final external-planner contract, not just the local
+    // source-to-target absorption certificate.
+    check(&written, &target).unwrap();
+    let reference = cq_elaborate::compile_written(&written).unwrap();
+    ra::check_rewrite(&reference, &target).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
+    let full_input = |plan: &ra::Program| {
+        plan.plan
+            .definitions
+            .iter()
+            .rev()
+            .find_map(|definition| {
+                if let ra::Operator::NaturalJoin(join) = &definition.operator {
+                    Some(join.right.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap()
+    };
+    assert_eq!(full_input(&target), full_input(&source));
+    let full_stock = full_input(&source);
+    let older_stock = source
+        .plan
+        .definitions
+        .iter()
+        .find_map(|definition| {
+            if let ra::Operator::Semijoin(join) = &definition.operator
+                && definition.result == full_stock
+            {
+                Some(join.left.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    // Partially bypassing the shared restriction is algebraically exact, but
+    // splits independently projected witnesses under the structural contract.
+    let mut split_witness = target.clone();
+    let first_support = split_witness
+        .plan
+        .definitions
+        .iter_mut()
+        .find_map(|definition| {
+            if let ra::Operator::Semijoin(join) = &mut definition.operator
+                && join.right == full_stock
+            {
+                Some(join)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    first_support.right = older_stock;
+    ra::contract::check(&split_witness).unwrap();
+    assert!(check(&written, &split_witness).is_err());
+    assert!(ra::check_rewrite(&source, &split_witness).is_err());
+    for seed in 0..64 {
+        let database = databases::binary_database(&query, seed);
+        assert_eq!(
+            oracle::evaluate_ra(&target, &database).output,
+            cq_oracle::evaluate_cq(&query, &database),
+            "seed {seed}"
+        );
+    }
+}
+
+#[test]
 fn reduction_absorption_certificate_rejects_changed_support_predicates() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation l(k:i32); relation r(k:i32,v:i32);
@@ -842,4 +932,86 @@ fn vo_clause_identity_and_partial_subatom_columns_are_checked() {
     projection.attributes[0] = syn::parse_quote!(b);
     ra::contract::check(&changed).unwrap();
     assert!(check(&valuation, &changed).is_err());
+}
+
+#[test]
+fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation S(b:i32);
+        answer(x,y) :- R(x), S(y), if (x == 1 && y >= 2) || (x == 3 && y <= 4);
+    });
+    let vo = coarse(&source);
+    let target = compile(&vo).unwrap();
+    let selections: Vec<_> = target.plan.definitions.iter().filter_map(|d| match &d.operator {
+        ra::Operator::Select(s) => Some(s),
+        _ => None,
+    }).collect();
+    assert_eq!(selections.len(), 3);
+    assert_eq!(selections.iter().filter(|s| target.plan.definitions.iter().any(|d| d.result == s.input && matches!(d.operator, ra::Operator::Rename(_)))).count(), 2);
+    for seed in 0..16 {
+        let database = databases::binary_database(&source, seed);
+        assert_eq!(oracle::evaluate_ra(&target, &database).output, cq_oracle::evaluate_cq(&source, &database));
+    }
+    let mut changed = target.clone();
+    let ra::Operator::Select(selection) = &mut changed.plan.definitions.iter_mut().find(|d| matches!(d.operator, ra::Operator::Select(_))).unwrap().operator else { panic!() };
+    selection.condition.constraints[0] = syn::parse_quote!(x > 99);
+    assert!(check(&vo, &changed).is_err());
+    let mut changed = target;
+    let last = changed.plan.definitions.iter_mut().rev().find(|d| matches!(d.operator, ra::Operator::Select(_))).unwrap();
+    let ra::Operator::Select(selection) = &last.operator else { panic!() };
+    let input = &selection.input;
+    last.operator = syn::parse_quote!(project #input keep {x,y});
+    assert!(check(&vo, &changed).is_err());
+}
+
+#[test]
+fn total_guards_push_into_scans_while_partial_guards_keep_their_prefix() {
+    for guard in ["if name.contains(\"green\")", "#[total] if custom(name)"] {
+        let source: cq::Program = syn::parse_str(&format!(
+            "struct Q; relation R(a:i32); relation P(k:i32,n:String); answer(x,name) :- R(x), P(x,name), {guard};"
+        )).unwrap();
+        let vo = coarse(&source);
+        let target = compile(&vo).unwrap();
+        let select = target.plan.definitions.iter().find_map(|d| match &d.operator {
+            ra::Operator::Select(s) => Some(s), _ => None,
+        }).unwrap();
+        assert!(target.plan.definitions.iter().any(|d| d.result == select.input && matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "P")));
+        assert!(!target.plan.definitions.iter().any(|d| matches!(d.operator, ra::Operator::Guard(_))));
+        assert_eq!(syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(), target);
+    }
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation S(b:i32);
+        answer(x,y) :- R(x), S(y), if 10 / *x > 1;
+    });
+    let target = compile(&coarse(&source)).unwrap();
+    let guard = target.plan.definitions.iter().find_map(|d| match &d.operator {
+        ra::Operator::Guard(g) => Some(g), _ => None,
+    }).unwrap();
+    assert!(target.plan.definitions.iter().any(|d| d.result == guard.input && matches!(d.operator, ra::Operator::NaturalJoin(_))));
+    let mut forged = target.clone();
+    let step = forged.plan.definitions.iter_mut().find(|d| matches!(d.operator, ra::Operator::Guard(_))).unwrap();
+    let input = &guard.input;
+    step.operator = syn::parse_quote!(select #input if (#[total] { x = x } (10 / *x > 1)));
+    ra::contract::check(&forged).unwrap();
+    assert!(check(&coarse(&source), &forged).is_err(), "a target cannot invent a totality assertion for a partial source guard");
+}
+
+#[test]
+fn total_multi_atom_guard_moves_to_first_bound_prefix() {
+    let source = cq(quote! {
+        struct Q; relation R(a:i32); relation S(b:i32); relation T(c:i32);
+        answer(x,y,z) :- R(x), S(y), T(z), #[total] if compatible(x,y);
+    });
+    let planned = cq_order::compile(&source, &cq_order::Options {
+        heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+        split: cq_order::Split::Coarse,
+    }).unwrap();
+    let position = planned.valuation.steps.iter().position(|step| matches!(step, valuation::Step::Constraint(cq::Constraint::Total { .. }, _))).unwrap();
+    assert_eq!(position, 2);
+    assert!(matches!(&planned.valuation.steps[3], valuation::Step::Atom(atom, _) if atom.relation == "T"));
+    let target = compile(&planned).unwrap();
+    let select = target.plan.definitions.iter().find_map(|d| match &d.operator {
+        ra::Operator::Select(s) => Some(s), _ => None,
+    }).unwrap();
+    assert!(target.plan.definitions.iter().any(|d| d.result == select.input && matches!(d.operator, ra::Operator::NaturalJoin(_))));
 }

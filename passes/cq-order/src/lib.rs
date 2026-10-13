@@ -42,6 +42,8 @@ pub struct Options {
 /// Which clause comes next.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Heuristic {
+    /// Connected growth from the strongest static relational filter.
+    Filtered,
     #[default]
     Written,
     Prefix(Ranking),
@@ -92,10 +94,10 @@ impl Clause<'_> {
 /// Formal rule D-Atom: Atom provides its columns and requires let-supplied columns.
 /// Formal rule D-Guard: Guard requires dependencies on the written prefix.
 /// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
-fn clauses<'a>(query: &'a cq::Query, context: &BTreeSet<String>) -> Vec<Clause<'a>> {
+fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) -> Vec<Clause<'a>> {
     let mut let_bound = BTreeSet::new();
     let mut written = context.clone();
-    for item in &query.body {
+    for item in body {
         match item {
             BodyItem::Let(binding) => {
                 let names = rust::bindings(&binding.pattern)
@@ -117,9 +119,7 @@ fn clauses<'a>(query: &'a cq::Query, context: &BTreeSet<String>) -> Vec<Clause<'
         }
     }
     let mut prefix = context.clone();
-    query
-        .body
-        .iter()
+    body.iter()
         .map(|item| {
             let (provides, requires) = match item {
                 BodyItem::Block(block) => {
@@ -276,6 +276,35 @@ fn prefix_rank<'a>(
             Ranking::GreedyWidth | Ranking::Auto => available.union(&supplied).count(),
         };
         (true, shared == 0, width, clause)
+    }
+}
+
+/// Formal rule S-Filtered: Rank ready occurrences by connectivity, local filter strength, then written position.
+fn filtered_rank<'a>(
+    clauses: &'a [Clause<'a>],
+    graph: &'a cq::hypergraph::Analysis,
+    filters: &'a BTreeMap<usize, u8>,
+) -> impl Fn(usize, &BTreeSet<String>) -> Rank + 'a {
+    move |clause, bound| {
+        let facts = &clauses[clause];
+        if !facts.is_atom() {
+            return (
+                false,
+                false,
+                usize::from(!matches!(facts.item, BodyItem::Constraint(_))),
+                clause,
+            );
+        }
+        let connected = facts
+            .provides
+            .iter()
+            .any(|name| bound.iter().any(|b| graph.equivalent(name, b)));
+        (
+            true,
+            !connected,
+            usize::from(filters.get(&clause).copied().unwrap_or(3)),
+            clause,
+        )
     }
 }
 
@@ -575,9 +604,20 @@ fn compile_body(
     parent: Option<(valuation::Occurrence, usize)>,
 ) -> syn::Result<Vec<valuation::Step>> {
     let query = &source.query;
-    let clauses = clauses(query, context);
+    let clauses = clauses(&query.body, context);
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
+        Heuristic::Filtered => {
+            let filters = cq::hypergraph::filter_ranks(&query.body, &hypergraph);
+            let sequence = schedule(
+                query,
+                &clauses,
+                context,
+                filtered_rank(&clauses, &hypergraph, &filters),
+            )?;
+            let variables = binding_order(&clauses, &sequence);
+            (sequence, variables)
+        }
         Heuristic::Written => {
             let sequence: Vec<usize> = (0..clauses.len()).collect();
             let variables = binding_order(&clauses, &sequence);
@@ -687,7 +727,7 @@ fn compile_body(
 
 /// Check normal form, unchanged CQ, split granularity and explicit order.
 /// Prefix and elimination rankings are expansion choices, not obligations.
-/// Formal rule CK-Order: Validate unchanged CQ, split, coverage and Written introducing order.
+/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, Rust Before, Written order and Filtered coarse greedy choices.
 pub fn check(
     source: &cq::Program,
     target: &valuation::Program,
@@ -718,7 +758,9 @@ fn check_steps(
     analysis: &valuation::Analysis,
     options: &Options,
 ) -> syn::Result<()> {
-    if options.heuristic == Heuristic::Written {
+    if options.heuristic == Heuristic::Written
+        || options.heuristic == Heuristic::Filtered && options.split == Split::Coarse
+    {
         let mut written = Vec::new();
         let mut previous_atom = None;
         for step in steps {
@@ -771,7 +813,8 @@ fn check_steps(
                 valuation::Step::Reduce(..) => {}
             }
         }
-        if written != (0..body.len()).collect::<Vec<_>>() {
+        if options.heuristic == Heuristic::Written && written != (0..body.len()).collect::<Vec<_>>()
+        {
             let position = written
                 .iter()
                 .enumerate()
@@ -782,6 +825,52 @@ fn check_steps(
                 &quote::quote!(#(#steps)*),
                 format!("clause #{position}: Written requires every clause in normal-body order"),
             ));
+        }
+        if options.heuristic == Heuristic::Filtered {
+            let context: BTreeSet<_> = analysis
+                .bound_before
+                .first()
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect();
+            let facts = clauses(body, &context);
+            let graph = cq::hypergraph::Analysis::of_body(body, &context);
+            let filters = cq::hypergraph::filter_ranks(body, &graph);
+            let mut bound = context;
+            let mut pending: Vec<_> = (0..body.len()).collect();
+            for clause in written {
+                // Independently check the greedy choice, not compiler output equality.
+                let rank = |c: usize| {
+                    let atom = facts[c].is_atom();
+                    let disconnected = atom
+                        && !facts[c]
+                            .provides
+                            .iter()
+                            .any(|v| bound.iter().any(|b| graph.equivalent(v, b)));
+                    let strength = if atom {
+                        usize::from(filters.get(&c).copied().unwrap_or(3))
+                    } else {
+                        usize::from(!matches!(body[c], BodyItem::Constraint(_)))
+                    };
+                    (atom, disconnected, strength, c)
+                };
+                if pending
+                    .iter()
+                    .copied()
+                    .filter(|&c| ready(&facts, &pending, &bound, c))
+                    .any(|c| rank(c) < rank(clause))
+                {
+                    return Err(syn::Error::new_spanned(
+                        &body[clause],
+                        format!(
+                            "clause #{clause}: Filtered requires the strongest ready connected occurrence"
+                        ),
+                    ));
+                }
+                pending.retain(|&c| c != clause);
+                bound.extend(facts[clause].provides.iter().cloned());
+            }
         }
     }
     let mut seen = BTreeSet::new();

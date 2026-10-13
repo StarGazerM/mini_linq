@@ -53,27 +53,52 @@ pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
         if proof.negative[index] {
             continue;
         }
-        match &mut definition.operator {
-            Operator::Semijoin(join) => {
-                let left = indices[&symbol_name(&join.left)];
-                let right = indices[&symbol_name(&join.right)];
-                join.right = definitions[proof.absorb(right, left)].result.clone();
-            }
-            Operator::NaturalJoin(join) => {
-                let left = indices[&symbol_name(&join.left)];
-                let right = indices[&symbol_name(&join.right)];
-                join.right = definitions[proof.absorb(right, left)].result.clone();
-            }
-            _ => {}
-        }
+        let right = match &mut definition.operator {
+            Operator::Semijoin(join) => &mut join.right,
+            Operator::NaturalJoin(join) => &mut join.right,
+            _ => continue,
+        };
+        let left = dependencies[index][0];
+        *right = definitions[proof.absorb(indices[&symbol_name(right)], left)]
+            .result
+            .clone();
     }
+    // Partial absorption of a shared restricted result gives its projected
+    // consumers different row witnesses. Keep that shared materialization
+    // unless every bypassed result becomes dead. Restoring one operand can
+    // revive another bypassed result, so propagate restoration to a fixed point.
     let mut reachable = vec![false; definitions.len()];
-    reachable[indices[&symbol_name(&target.plan.output.input)]] = true;
-    for (index, definition) in target.plan.definitions.iter().enumerate().rev() {
-        if reachable[index] {
-            operands(&definition.operator, |input| {
-                reachable[indices[&symbol_name(input)]] = true;
-            });
+    loop {
+        reachable.fill(false);
+        reachable[indices[&symbol_name(&target.plan.output.input)]] = true;
+        for (index, definition) in target.plan.definitions.iter().enumerate().rev() {
+            if reachable[index] {
+                operands(&definition.operator, |input| {
+                    reachable[indices[&symbol_name(input)]] = true;
+                });
+            }
+        }
+        let mut restored = false;
+        for (index, definition) in target.plan.definitions.iter_mut().enumerate() {
+            let right = match &mut definition.operator {
+                Operator::Semijoin(join) => &mut join.right,
+                Operator::NaturalJoin(join) => &mut join.right,
+                _ => continue,
+            };
+            let original = dependencies[index][1];
+            let replacement = indices[&symbol_name(right)];
+            let mut bypassed = original;
+            while bypassed != replacement {
+                if reachable[bypassed] {
+                    *right = definitions[original].result.clone();
+                    restored = true;
+                    break;
+                }
+                bypassed = dependencies[bypassed][0];
+            }
+        }
+        if !restored {
+            break;
         }
     }
     let mut index = 0;

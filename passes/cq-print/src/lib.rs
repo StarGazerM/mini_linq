@@ -404,6 +404,9 @@ impl<'a> Context<'a> {
     /// Keep original borrowed key columns alongside owned comparison keys,
     /// so result rows retain their original ownership and input identity.
     pub fn built_payload(&self, result: &str, levels: &[Vec<String>]) -> Vec<String> {
+        if self.analysis.membership.contains(&(result.to_owned(), levels.concat())) {
+            return Vec::new();
+        }
         let columns: Vec<_> = levels
             .iter()
             .flat_map(|level| self.stored_key(result, level))
@@ -629,7 +632,13 @@ impl<'a> Context<'a> {
         for (reader, read) in physical.key_reads.get(result).into_iter().flatten() {
             if read == columns {
                 match &self.physical[reader].operator {
-                    Operator::Probe(..) => require("seek"),
+                    Operator::Probe(..) => {
+                        require(if self.analysis.membership.contains(&(result.to_owned(), columns.to_vec())) {
+                            "contains"
+                        } else {
+                            "seek"
+                        });
+                    }
                     Operator::Semi(..) | Operator::Anti(..) => {
                         if !self
                             .analysis
@@ -685,6 +694,10 @@ impl<'a> Context<'a> {
         columns: &[String],
     ) -> TokenStream {
         let levels = self.levels_of(right, structure);
+        if self.analysis.membership.contains(&(right.to_owned(), columns.to_vec())) {
+            let contains = self.chained_contains(left, structure, right, &levels);
+            return quote!(::core::iter::IntoIterator::into_iter((#contains).then_some(())));
+        }
         debug_assert_eq!(
             structures::prefix_depth(&levels, columns),
             Some(levels.len())

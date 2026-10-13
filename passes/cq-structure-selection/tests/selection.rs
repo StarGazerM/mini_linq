@@ -5,6 +5,54 @@ use cq_testkit::corpus as scenarios;
 use quote::ToTokens;
 
 #[test]
+fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
+    let source: physical::Program = syn::parse_quote! {physical {
+        relation L(a:i64); relation R(a:i64,b:i64);
+        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x,b -> y};
+        selected = let range select r if (y > 1);
+        joined = pipe probe first [x] l,selected;
+        result = pipe canon project joined keep {x}; return result as answer(x);
+    }};
+    let target = compile(&source).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert!(facts.membership.contains(&("selected".into(), vec!["x".into()])));
+    assert!(target.to_token_stream().to_string().contains("AdaptiveKeySet"));
+    let mut changed = target.clone();
+    let entry = changed.structures.entries.iter_mut().find(|entry|
+        entry.name == "selected" && matches!(entry.structure, structures::Structure::Built {..})
+    ).unwrap();
+    let structures::Structure::Built {keyed, ..} = &mut entry.structure else { unreachable!() };
+    keyed.filtered.as_mut().unwrap().payload.columns.push(syn::parse_quote!(y));
+    assert!(check(&source, &changed).is_err());
+    let mut incompatible = target.clone();
+    let entry = incompatible.structures.entries.iter_mut().find(|entry|
+        entry.name == "selected" && matches!(entry.structure, structures::Structure::Built {..})
+    ).unwrap();
+    let structures::Structure::Built {keyed, ..} = &mut entry.structure else { unreachable!() };
+    keyed.ty = syn::parse_quote!(::cq_storage::Selection<_>);
+    assert!(check(&source, &incompatible).is_err());
+    let mut changed = target;
+    let entry = changed.structures.entries.iter_mut().find(|entry|
+        entry.name == "selected" && matches!(entry.structure, structures::Structure::Built {..})
+    ).unwrap();
+    let structures::Structure::Built {keyed, ..} = &mut entry.structure else { unreachable!() };
+    keyed.membership = None;
+    assert!(check(&source, &changed).is_err());
+    let mut grouped_types = source;
+    for declaration in &mut grouped_types.program.declarations {
+        for column in &mut declaration.columns {
+            column.ty = syn::Type::Group(syn::TypeGroup {
+                group_token: Default::default(),
+                elem: Box::new(column.ty.clone()),
+            });
+        }
+    }
+    let grouped = compile(&grouped_types).unwrap();
+    assert!(structures::contract::check(&grouped).unwrap().membership
+        .contains(&("selected".into(), vec!["x".into()])));
+}
+
+#[test]
 fn overlapping_union_cannot_drop_its_final_dedup_provider() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation R(a:i32); relation S(a:i32);

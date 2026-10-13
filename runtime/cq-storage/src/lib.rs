@@ -13,8 +13,9 @@
 //! [`Build`] plus the access traits a plan uses is a first-class structure,
 //! and the compiler names it without inspecting it.
 //!
-//! [`Answers`] and [`GroupedAnswers`] compose query outputs as inputs. Grouped
-//! keys occupy the leading declared columns. [`dispatch`] selects direct reads
+//! [`Answers`], [`GroupedAnswers`] and allocation-free [`SingleGroup`] compose
+//! query outputs as inputs. Grouped keys occupy the leading declared columns.
+//! [`dispatch`] selects direct reads
 //! by type, with one lazy fallback per query read. Host uniqueness is never a
 //! language premise; caller-selected distinct state establishes canonical plans.
 //!
@@ -88,7 +89,7 @@ mod ordered;
 pub mod rows;
 mod trie;
 
-pub use answers::{Answers, GroupedAnswers};
+pub use answers::{Answers, GroupedAnswers, SingleGroup};
 pub use candidates::{Candidates, Keys};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
 pub use hash_state::{HashSet, HashSetConstructor, HashState};

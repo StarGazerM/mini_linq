@@ -12,7 +12,7 @@
 //! let rows = [(1_i32,), (1,), (2,)];
 //! let answers: Vec<_> = mini_linq::compile! {
 //!     pipeline {
-//!         plan = mini_linq::passes::plan_written;
+//!         plan = mini_linq::passes::plan;
 //!         print = mini_linq::passes::print_pull;
 //!     }
 //!     struct Q;
@@ -33,7 +33,7 @@ pub use mini_linq_macros::{compile, mini_linq, relation_loaders, workload_query}
 
 /// Core default passes. Customization is an external pass or an authored IR.
 pub mod passes {
-    pub use mini_linq_macros::{index_demands, lower, plan_written, print_pull, select};
+    pub use mini_linq_macros::{index_demands, lower, plan, print_pull, select};
 }
 
 #[cfg(doctest)]

@@ -146,3 +146,47 @@ fn chain_reordering_fails_erasure_even_if_local_program_is_scoped() {
     physical::contract::check(&changed).unwrap();
     assert!(check(&source, &changed).is_err());
 }
+
+#[test]
+fn static_orientation_builds_filtered_branch_and_streams_unfiltered_host() {
+    let source: ix::ra::Program = syn::parse_quote! {
+        relational {
+            relation Orders(o:i32,c:i32); relation Lineitem(o:i32,s:i32);
+            o = rename Orders@0 {o -> k,c -> c};
+            f = select o if (c = 7);
+            l = rename Lineitem@1 {o -> k,s -> s};
+            j = natural_join f with l;
+            output j as answer(k,c,s);
+        }
+    };
+    let target = cq_physical_lowering::orient(&source).unwrap();
+    cq_physical_lowering::check_orientation(&source, &target).unwrap();
+    assert_eq!(
+        target.plan.definitions[3],
+        syn::parse_quote!(j = natural_join l with f;)
+    );
+    assert!(cq_physical_lowering::check_orientation(&source, &source).is_err());
+    let mut wrong = target.clone();
+    wrong.plan.definitions[1] = syn::parse_quote!(f = select o if (c = 8););
+    assert!(cq_physical_lowering::check_orientation(&source, &wrong).is_err());
+    let source_ix: ix::Program = syn::parse_quote!(#target indexes {
+        i0 = @o[0] const; i1 = @f[1] stream;
+    });
+    // Sorted headings are c,k: point reads c, join reads k.
+    let physical = compile(&source_ix).unwrap();
+    check(&source_ix, &physical).unwrap();
+    assert_eq!(erase(&physical), target);
+}
+
+#[test]
+fn static_orientation_never_commutes_directional_membership() {
+    let source: ix::ra::Program = syn::parse_quote! {
+        relational {
+            relation R(a:i32); relation S(a:i32);
+            r = rename R@0 {a -> x}; f = select r if (x = 7);
+            s = rename S@1 {a -> x}; j = semijoin f with s;
+            output j as answer(x);
+        }
+    };
+    assert_eq!(cq_physical_lowering::orient(&source).unwrap(), source);
+}

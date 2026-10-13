@@ -1,6 +1,6 @@
-use cq_planners::{Planner, check, check_valuation, compile, compile_valuation, cq, ra, vo};
-use cq_testkit::{PassCase, SCENARIOS, cq_semantics, databases, semantics, valuation_semantics};
-use quote::{ToTokens, quote};
+use cq_planners::{check, check_valuation, compile, compile_valuation, cq, ra, vo, Planner};
+use cq_testkit::{cq_semantics, databases, semantics, valuation_semantics, PassCase, SCENARIOS};
+use quote::{quote, ToTokens};
 
 #[test]
 fn prefix_let_domain_keeps_hoisting_and_waits_before_full_reduction() {
@@ -138,33 +138,66 @@ fn retail_h07_block_reduces_country_keys_before_lineitem() {
     };
     let valuation = compile_valuation(&source, Planner::Hypergraph).unwrap();
     assert!(!cq::hypergraph::Analysis::of(&valuation.cq).acyclic);
-    let cuts: Vec<_> = valuation.valuation.steps.iter().filter_map(|step| {
-        let vo::Step::Reduce(reduce, _) = step else { return None };
-        let vo::Reduction::With(_, support) = &reduce.reduction;
-        Some((reduce.relation.to_string(), support.relation.to_string()))
-    }).collect();
-    assert_eq!(cuts, [("Supplier".into(), "block".into()), ("Customer".into(), "block".into())]);
+    let cuts: Vec<_> = valuation
+        .valuation
+        .steps
+        .iter()
+        .filter_map(|step| {
+            let vo::Step::Reduce(reduce, _) = step else {
+                return None;
+            };
+            let vo::Reduction::With(_, support) = &reduce.reduction;
+            Some((reduce.relation.to_string(), support.relation.to_string()))
+        })
+        .collect();
+    assert_eq!(
+        cuts,
+        [
+            ("Supplier".into(), "block".into()),
+            ("Customer".into(), "block".into())
+        ]
+    );
     check_valuation(&source, &valuation, Planner::Hypergraph).unwrap();
     let target = compile(&source, Planner::Hypergraph).unwrap();
     assert_eq!(
-        target.plan.definitions.iter().filter(|d| matches!(d.operator, ra::Operator::Semijoin(_))).count(),
+        target
+            .plan
+            .definitions
+            .iter()
+            .filter(|d| matches!(d.operator, ra::Operator::Semijoin(_)))
+            .count(),
         4,
-        "{}", target.to_token_stream()
+        "{}",
+        target.to_token_stream()
     );
-    let union = target.plan.definitions.iter()
-        .find(|d| matches!(d.operator, ra::Operator::Union(_))).unwrap();
+    let union = target
+        .plan
+        .definitions
+        .iter()
+        .find(|d| matches!(d.operator, ra::Operator::Union(_)))
+        .unwrap();
     let mut reduced = std::collections::BTreeSet::new();
     for definition in &target.plan.definitions {
-        let ra::Operator::Semijoin(semi) = &definition.operator else { continue };
+        let ra::Operator::Semijoin(semi) = &definition.operator else {
+            continue;
+        };
         if semi.right != union.result {
             continue;
         }
-        let input = target.plan.definitions.iter().find(|d| d.result == semi.left).unwrap();
+        let input = target
+            .plan
+            .definitions
+            .iter()
+            .find(|d| d.result == semi.left)
+            .unwrap();
         if let ra::Operator::Rename(rename) = &input.operator {
             reduced.insert(rename.relation.to_string());
         }
     }
-    assert_eq!(reduced, std::collections::BTreeSet::from(["Customer".into(), "Supplier".into()]));
+    assert_eq!(
+        reduced,
+        std::collections::BTreeSet::from(["Customer".into(), "Supplier".into()])
+    );
     let stream = target.plan.definitions.iter().position(|d| {
         matches!(&d.operator, ra::Operator::NaturalJoin(j) if target.plan.definitions.iter().any(
             |r| r.result == j.right && matches!(&r.operator, ra::Operator::Rename(a) if a.relation == "Lineitem")
@@ -215,17 +248,57 @@ fn hypergraph_reduces_cyclic_block_branches_and_acyclic_descendants_independentl
     };
     let target = compile_valuation(&source, Planner::Hypergraph).unwrap();
     assert!(cq::hypergraph::Analysis::of(&target.cq).acyclic);
-    assert!(!target.valuation.steps.iter().any(|step| matches!(step, vo::Step::Reduce(..))));
-    let vo::Step::Block(block, _) = &target.valuation.steps[0] else { unreachable!() };
-    let cuts: Vec<_> = block.branches[0].steps.iter().filter_map(|step| {
-        let vo::Step::Reduce(reduce, _) = step else { return None };
-        let vo::Reduction::With(_, support) = &reduce.reduction;
-        Some((reduce.relation.to_string(), support.relation.to_string()))
-    }).collect();
-    assert_eq!(cuts, [("R".into(), "block".into()), ("T".into(), "block".into())]);
-    let vo::Step::Block(nested, _) = block.branches[0].steps.last().unwrap() else { unreachable!() };
-    assert_eq!(nested.branches[0].steps.iter().filter(|step| matches!(step, vo::Step::Reduce(..))).count(), 2);
+    assert!(!target
+        .valuation
+        .steps
+        .iter()
+        .any(|step| matches!(step, vo::Step::Reduce(..))));
+    let vo::Step::Block(block, _) = &target.valuation.steps[0] else {
+        unreachable!()
+    };
+    let cuts: Vec<_> = block.branches[0]
+        .steps
+        .iter()
+        .filter_map(|step| {
+            let vo::Step::Reduce(reduce, _) = step else {
+                return None;
+            };
+            let vo::Reduction::With(_, support) = &reduce.reduction;
+            Some((reduce.relation.to_string(), support.relation.to_string()))
+        })
+        .collect();
+    assert_eq!(
+        cuts,
+        [("R".into(), "block".into()), ("T".into(), "block".into())]
+    );
+    let vo::Step::Block(nested, _) = block.branches[0].steps.last().unwrap() else {
+        unreachable!()
+    };
+    // Neither U nor V has a filter, so this branch has no useful tree reduction.
+    assert!(!nested.branches[0]
+        .steps
+        .iter()
+        .any(|step| matches!(step, vo::Step::Reduce(..))));
     check_valuation(&source, &target, Planner::Hypergraph).unwrap();
+}
+
+#[test]
+fn hypergraph_checker_requires_nested_filtered_reductions() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Nested;
+        relation R(x:i32); relation S(x:i32,tag:i32);
+        answer(x) :- { R(x), S(x,1) } | { R(x), S(x,2) };
+    };
+    let mut target = compile_valuation(&source, Planner::Hypergraph).unwrap();
+    check_valuation(&source, &target, Planner::Hypergraph).unwrap();
+    let vo::Step::Block(block, _) = &mut target.valuation.steps[0] else {
+        unreachable!()
+    };
+    let steps = &mut block.branches[0].steps;
+    let before = steps.len();
+    steps.retain(|step| !matches!(step, vo::Step::Reduce(..)));
+    assert!(steps.len() < before);
+    assert!(check_valuation(&source, &target, Planner::Hypergraph).is_err());
 }
 
 #[test]
@@ -368,13 +441,11 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
         4
     );
     let target = compile(&source, Planner::Hypergraph).unwrap();
-    assert!(
-        target
-            .plan
-            .definitions
-            .iter()
-            .any(|d| matches!(d.operator, ra::Operator::Select(_)))
-    );
+    assert!(target
+        .plan
+        .definitions
+        .iter()
+        .any(|d| matches!(d.operator, ra::Operator::Select(_))));
     let chain: Vec<_> = target
         .plan
         .definitions
@@ -394,13 +465,11 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
         .parse_cq()
         .unwrap();
     let cyclic = compile_valuation(&cyclic, Planner::Hypergraph).unwrap();
-    assert!(
-        !cyclic
-            .valuation
-            .steps
-            .iter()
-            .any(|s| matches!(s, vo::Step::Reduce(..)))
-    );
+    assert!(!cyclic
+        .valuation
+        .steps
+        .iter()
+        .any(|s| matches!(s, vo::Step::Reduce(..))));
 
     let mut missing_edge = valuation.clone();
     let edge = missing_edge

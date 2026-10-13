@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 /// Check the source domain, unchanged query/steps, and reduction obligations.
 /// A full tree reducer obeys dependencies, but need not use breadth-first order.
-/// Formal rule CK-Reduce: Check reduction erasure, tree edges only in acyclic scopes and exact block cuts in any scope.
+/// Formal rule CK-Reduce: Check erasure, filtered support versions and ordered acyclic tree obligations, plus exact block cuts on any scope.
 pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> syn::Result<()> {
     let source_info = vo::contract::check(source)?;
     vo::contract::check(target)?;
@@ -98,6 +98,44 @@ fn check_steps(
         .flatten()
         .filter_map(|(child, parent)| parent.map(|p| (child, p)))
         .collect();
+    let local_ranks = vo::cq::hypergraph::filter_ranks(body, &graph);
+    let mut subtree_ranks = local_ranks.clone();
+    // Independent ancestor closure, rather than the constructor's DFS.
+    for (&node, &rank) in &local_ranks {
+        let mut node = node;
+        while let Some(&parent) = parents.get(&node) {
+            subtree_ranks
+                .entry(parent)
+                .and_modify(|r| *r = (*r).min(rank));
+            node = parent;
+        }
+    }
+    let filtered = options.semijoins == Reductions::Hypergraph;
+    let component_rank = |target: usize, support: usize| {
+        // Independently inspect the component after cutting this edge.
+        let mut pending = vec![(support, target)];
+        let mut rank = 3;
+        while let Some((node, previous)) = pending.pop() {
+            rank = rank.min(local_ranks[&node]);
+            for (&child, &parent) in &parents {
+                if parent == node && child != previous {
+                    pending.push((child, node));
+                } else if child == node && parent != previous {
+                    pending.push((parent, node));
+                }
+            }
+        }
+        rank
+    };
+    let required = |target: usize, support: usize| {
+        if !filtered {
+            return true;
+        }
+        let rank = component_rank(target, support);
+        rank < 3 && !(rank == 1 && component_rank(support, target) == 0)
+    };
+    let mut versions = local_ranks.clone();
+    let mut previous_support: BTreeMap<usize, u8> = BTreeMap::new();
     let mut downward = false;
     for (position, step) in target_steps.iter().enumerate() {
         let Step::Reduce(r, _) = step else { continue };
@@ -122,6 +160,29 @@ fn check_steps(
                     return Err(fail(&format!(
                         "semijoin with clause #{other} is not a join-tree edge"
                     )));
+                }
+                if filtered {
+                    let rank = versions[&other];
+                    if rank == 3 {
+                        return Err(fail(
+                            "semijoin support has no relational filter or filtered reduction",
+                        ));
+                    }
+                    if !block_cut && !required(clause, other) {
+                        return Err(fail(
+                            "support edge is not selected by independent component filter ranks",
+                        ));
+                    }
+                    if up && !block_cut {
+                        let rank = subtree_ranks[&other];
+                        if previous_support
+                            .insert(clause, rank)
+                            .is_some_and(|previous| previous > rank)
+                        {
+                            return Err(fail("upward supports must run strongest filtered first"));
+                        }
+                    }
+                    versions.entry(clause).and_modify(|r| *r = (*r).min(rank));
                 }
                 if edges.insert((clause, other), position).is_some() {
                     return Err(fail(&format!(
@@ -160,7 +221,7 @@ fn check_steps(
     }
     for (&child, &parent) in &parents {
         for edge in [(parent, child), (child, parent)] {
-            if !edges.contains_key(&edge) {
+            if required(edge.0, edge.1) && !edges.contains_key(&edge) {
                 return Err(syn::Error::new_spanned(
                     &source_info.atoms[&edge.0],
                     format!(
@@ -173,13 +234,21 @@ fn check_steps(
     }
     for (&child, &parent) in &parents {
         if let Some(&grandparent) = parents.get(&parent) {
-            if edges[&(parent, child)] > edges[&(grandparent, parent)] {
+            if edges
+                .get(&(parent, child))
+                .zip(edges.get(&(grandparent, parent)))
+                .is_some_and(|(a, b)| a > b)
+            {
                 return Err(syn::Error::new_spanned(
                     &source_info.atoms[&parent],
                     format!("clause #{parent}: upward reduction must follow child clause #{child}"),
                 ));
             }
-            if edges[&(parent, grandparent)] > edges[&(child, parent)] {
+            if edges
+                .get(&(parent, grandparent))
+                .zip(edges.get(&(child, parent)))
+                .is_some_and(|(a, b)| a > b)
+            {
                 return Err(syn::Error::new_spanned(
                     &source_info.atoms[&child],
                     format!(

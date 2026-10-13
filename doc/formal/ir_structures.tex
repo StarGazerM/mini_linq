@@ -4,7 +4,7 @@
 \paragraph{Grammar.} Structures extends a complete Physical program.
 \begin{lstlisting}
 Structures ::= Physical structures { Entry* }
-Entry ::= r = Type [K]... [payload[P] constants{c = term, ...}];
+Entry ::= r = Type [K]... [membership] [payload[P] constants{c = term, ...}];
         | r host reader = Type [K]...;
         | r rows = Type; | r canon = Type; | r head = Type;
         | r selection = Type base H lineage{a -> c, ...}
@@ -63,6 +63,10 @@ obligations; a trait implementation must obey the storage abstraction laws.
  \mathsf{reusableRows}(r)\quad T:\code{ExactMembership}(K)}
  {\mathsf{answers}(r,K,semi/anti)\text{ independently of payload indexes}}
 
+\Rule{STR-Existential}{\mathsf{filtered}(r,P,C)\quad P\subseteq K\\
+ \mathsf{readKeys}(r)=\{K\}\quad \mathsf{reads}(r)\subseteq\{probe\ first,semi,anti\}}
+ {\mathsf{membershipBuild}(r,K)\text{ replaces witness enumeration by existence}}
+
 \Rule{STR-Range}{\text{constant window on }r,c}
  {\mathsf{answers}(r,\{c\},range)\text{ by direct range or scan/filter; no build}}
 
@@ -79,6 +83,13 @@ keys and unions them; semi/anti keep the left key; union infers none;
 selections, guards and binds preserve it; projection preserves it only if no key
 column is dropped; a canon flag gives the full heading through its dedup type.
 A built structure alone proves no uniqueness.
+An explicit \code{membership} modifier on a single-level filtered build proves
+that every downstream observation is a supplied key or reconstructed constant.
+The checker rederives projection coverage and rejects partial-key or ordered
+reads. The printer emits one unit witness on successful membership, without an
+occurrence-preserving payload index. The default integral-key representation is
+\code{AdaptiveKeySet} with its recorded borrowed codec and bitmap bound.
+No base-table key or foreign-key assumption is used.
 
 \paragraph{Meaning.} That of the embedded Physical. Each Rust type is a
 representation whose abstraction function $\alpha$ satisfies the

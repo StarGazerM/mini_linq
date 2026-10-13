@@ -256,6 +256,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-reduce"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-vo",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
@@ -346,6 +355,7 @@ dependencies = [
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
+ "cq-reduce",
  "cq-stage",
  "cq-structure-selection",
  "proc-macro2",

@@ -52,8 +52,8 @@ pub enum Reductions {
     None,
     /// The Yannakakis full reducer over the join tree.
     Tree,
-    /// A tree reducer only on acyclic scopes, plus exact atom-to-block cuts on
-    /// any scope. Each block branch is analyzed independently.
+    /// Filter-supported tree reductions on acyclic scopes, plus exact
+    /// atom-to-block cuts on any scope. Branches are independent scopes.
     Hypergraph,
 }
 
@@ -107,7 +107,11 @@ fn compile_steps(
     if options.semijoins == Reductions::Tree
         || options.semijoins == Reductions::Hypergraph && graph.acyclic
     {
-        let reducer = tree(graph, analysis, body)?;
+        let reducer = if options.semijoins == Reductions::Hypergraph {
+            filtered_tree(graph, analysis, body)?
+        } else {
+            tree(graph, analysis, body)?
+        };
         if let Some(first) = first_atom {
             before.entry(first).or_default().extend(reducer);
         }
@@ -280,6 +284,110 @@ fn tree(
     let down = order.iter().skip(1).map(edge).map(|(p, c)| (c, p));
     Ok(up
         .chain(down)
+        .map(|(target, support)| semijoin(analysis, graph, target, support))
+        .collect())
+}
+
+/// Formal rule R-Filtered: Propagate independently filtered components, omitting range-only support against a point-filtered component; order strongest siblings first.
+fn filtered_tree(
+    graph: &valuation::cq::hypergraph::Analysis,
+    analysis: &valuation::Analysis,
+    body: &cq::CommaList<valuation::cq::BodyItem>,
+) -> syn::Result<Vec<Step>> {
+    let Some(tree) = &graph.join_tree else {
+        return Err(syn::Error::new_spanned(
+            body,
+            "filtered tree reduction requires an acyclic query",
+        ));
+    };
+    let mut children: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    let mut root = None;
+    for &(node, parent) in tree {
+        if let Some(parent) = parent {
+            children.entry(parent).or_default().push(node);
+        } else {
+            root = Some(node);
+        }
+    }
+    let Some(root) = root else {
+        return Ok(Vec::new());
+    };
+    let local = valuation::cq::hypergraph::filter_ranks(body, graph);
+    let mut ranks = local.clone();
+    fn summarize(
+        node: usize,
+        children: &BTreeMap<usize, Vec<usize>>,
+        ranks: &mut BTreeMap<usize, u8>,
+    ) -> u8 {
+        let mut rank = ranks[&node];
+        for &child in children.get(&node).into_iter().flatten() {
+            rank = rank.min(summarize(child, children, ranks));
+        }
+        ranks.insert(node, rank);
+        rank
+    }
+    summarize(root, &children, &mut ranks);
+    for siblings in children.values_mut() {
+        siblings.sort_by_key(|c| (ranks[c], *c));
+    }
+    fn up(
+        node: usize,
+        children: &BTreeMap<usize, Vec<usize>>,
+        ranks: &BTreeMap<usize, u8>,
+        edges: &mut Vec<(usize, usize)>,
+    ) {
+        for &child in children.get(&node).into_iter().flatten() {
+            up(child, children, ranks, edges);
+            if ranks[&child] < 3 {
+                edges.push((node, child));
+            }
+        }
+    }
+    fn down(
+        node: usize,
+        outside: u8,
+        children: &BTreeMap<usize, Vec<usize>>,
+        local: &BTreeMap<usize, u8>,
+        ranks: &BTreeMap<usize, u8>,
+        edges: &mut Vec<(usize, usize)>,
+        outside_ranks: &mut BTreeMap<usize, u8>,
+    ) {
+        for &child in children.get(&node).into_iter().flatten() {
+            let support = children
+                .get(&node)
+                .into_iter()
+                .flatten()
+                .filter(|&&sibling| sibling != child)
+                .fold(outside.min(local[&node]), |rank, sibling| {
+                    rank.min(ranks[sibling])
+                });
+            // A filter learned only from this child cannot prune it on return.
+            outside_ranks.insert(child, support);
+            if support < 3 {
+                edges.push((child, node));
+            }
+            down(child, support, children, local, ranks, edges, outside_ranks);
+        }
+    }
+    let mut edges = Vec::new();
+    up(root, &children, &ranks, &mut edges);
+    let mut outside = BTreeMap::new();
+    down(root, 3, &children, &local, &ranks, &mut edges, &mut outside);
+    edges.retain(|&(target, support)| {
+        let upward = tree
+            .iter()
+            .any(|&(child, parent)| child == support && parent == Some(target));
+        let (support_rank, target_rank) = if upward {
+            (ranks[&support], outside[&support])
+        } else {
+            (outside[&target], ranks[&target])
+        };
+        // A range-only branch should stream against the point-filtered driving
+        // branch, not force a full range index merely to prune that branch.
+        !(support_rank == 1 && target_rank == 0)
+    });
+    Ok(edges
+        .into_iter()
         .map(|(target, support)| semijoin(analysis, graph, target, support))
         .collect())
 }

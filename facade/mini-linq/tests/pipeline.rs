@@ -148,14 +148,14 @@ fn ordered_host_fallback_records_must_be_ordered_admissible() {
     assert!(cq_lang_structures::check_rewrite(&structured, &invalid).is_err());
 }
 
-macro_rules! capture_written_plan {
+macro_rules! capture_plan {
     (pipeline {}; $($plan:tt)*) => {
         stringify!($($plan)*)
     };
 }
 
 #[test]
-fn written_default_reduces_acyclic_queries_and_opt_out_preserves_prior_ir() {
+fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
     use quote::ToTokens;
 
     let source: cq_lang_cq::Program = syn::parse_quote! {
@@ -163,15 +163,15 @@ fn written_default_reduces_acyclic_queries_and_opt_out_preserves_prior_ir() {
         relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
         answer(a,b,c,d) :- R(a,b), S(b,c), T(c,d);
     };
-    let default = mini_linq::passes::plan_written! {
-        pipeline { capture_written_plan };
+    let default = mini_linq::passes::plan! {
+        pipeline { capture_plan };
         struct Q;
         relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
         answer(a,b,c,d) :- R(a,b), S(b,c), T(c,d);
     };
-    let opted_out = mini_linq::passes::plan_written! {
+    let opted_out = mini_linq::passes::plan! {
         arguments { no_reduce };
-        pipeline { capture_written_plan };
+        pipeline { capture_plan };
         struct Q;
         relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
         answer(a,b,c,d) :- R(a,b), S(b,c), T(c,d);
@@ -180,7 +180,7 @@ fn written_default_reduces_acyclic_queries_and_opt_out_preserves_prior_ir() {
     let ordered = cq_order::compile(
         &normal,
         &cq_order::Options {
-            heuristic: cq_order::Heuristic::Written,
+            heuristic: cq_order::Heuristic::Filtered,
             split: cq_order::Split::Coarse,
         },
     )
@@ -199,10 +199,19 @@ fn written_default_reduces_acyclic_queries_and_opt_out_preserves_prior_ir() {
     let expected = cq_elaborate::simplify_reductions(&expected).unwrap();
     let default: cq_lang_ra::Program = syn::parse_str(default).unwrap();
     let opted_out: cq_lang_ra::Program = syn::parse_str(opted_out).unwrap();
-    assert_eq!(opted_out, prior, "no_reduce must retain the prior emitted IR");
-    assert_eq!(default, expected, "the default must run Hypergraph reduction");
-    assert_ne!(default, opted_out, "the acyclic fixture must actually reduce");
-    assert!(default.to_token_stream().to_string().contains("semijoin"));
+    assert_eq!(
+        opted_out, prior,
+        "no_reduce must retain the prior emitted IR"
+    );
+    assert_eq!(
+        default, expected,
+        "the default must run Hypergraph reduction"
+    );
+    assert_eq!(
+        default, opted_out,
+        "unfiltered acyclic inputs need no optional reductions"
+    );
+    assert!(!default.to_token_stream().to_string().contains("semijoin"));
 }
 
 #[test]
@@ -219,13 +228,20 @@ fn default_reduction_and_opt_out_agree_on_host_and_fallback_inputs() {
             let default: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
                 struct Q; relation left(a:i32,b:i32); relation $right(b:i32,c:i32);
                 answer(a,c) :- left(a,b), $right(b,c);
-            }.map(|(a,c)| (*a,*c)).collect();
+            }
+            .map(|(a, c)| (*a, *c))
+            .collect();
             let opted_out: std::collections::BTreeSet<_> = mini_linq::compile! {
-                pipeline { plan = mini_linq::passes::plan_written(no_reduce); }
+                pipeline { plan = mini_linq::passes::plan(no_reduce); }
                 struct Q; relation left(a:i32,b:i32); relation $right(b:i32,c:i32);
                 answer(a,c) :- left(a,b), $right(b,c);
-            }.map(|(a,c)| (*a,*c)).collect();
-            assert_eq!(default, std::collections::BTreeSet::from([(1, 100), (3, 300)]));
+            }
+            .map(|(a, c)| (*a, *c))
+            .collect();
+            assert_eq!(
+                default,
+                std::collections::BTreeSet::from([(1, 100), (3, 300)])
+            );
             assert_eq!(default, opted_out);
         }};
     }
@@ -234,28 +250,34 @@ fn default_reduction_and_opt_out_agree_on_host_and_fallback_inputs() {
 }
 
 #[test]
-fn written_default_reduces_cyclic_block_scopes_and_preserves_answers() {
+fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
+    fn has_reduction(steps: &[cq_lang_vo::Step]) -> bool {
+        steps.iter().any(|step| match step {
+            cq_lang_vo::Step::Reduce(..) => true,
+            cq_lang_vo::Step::Block(block, _) => block
+                .branches
+                .iter()
+                .any(|branch| has_reduction(&branch.steps)),
+            _ => false,
+        })
+    }
     macro_rules! assert_reduced {
         ($($query:tt)*) => {{
-            let default = mini_linq::passes::plan_written! {
-                pipeline { capture_written_plan };
+            let default = mini_linq::passes::plan! {
+                pipeline { capture_plan };
                 $($query)*
             };
-            let opted_out = mini_linq::passes::plan_written! {
+            let opted_out = mini_linq::passes::plan! {
                 arguments { no_reduce };
-                pipeline { capture_written_plan };
+                pipeline { capture_plan };
                 $($query)*
             };
             let default: cq_lang_ra::Program = syn::parse_str(default).unwrap();
             let opted_out: cq_lang_ra::Program = syn::parse_str(opted_out).unwrap();
-            assert_ne!(default, opted_out);
-            assert!(default.plan.definitions.iter().any(|definition| {
-                matches!(definition.operator, cq_lang_ra::Operator::Semijoin(_))
-            }));
             let source: cq_lang_cq::Program = syn::parse_quote! { $($query)* };
             let normal = cq_lang_cq::normal::normalize(&source).unwrap();
             let ordered = cq_order::compile(&normal, &cq_order::Options {
-                heuristic: cq_order::Heuristic::Written,
+                heuristic: cq_order::Heuristic::Filtered,
                 split: cq_order::Split::Coarse,
             }).unwrap();
             let options = cq_reduce::Options {
@@ -264,10 +286,12 @@ fn written_default_reduces_cyclic_block_scopes_and_preserves_answers() {
             };
             let reduced = cq_reduce::compile(&ordered, &options).unwrap();
             cq_reduce::check(&ordered, &reduced, &options).unwrap();
+            assert!(has_reduction(&reduced.valuation.steps));
             let expected = cq_elaborate::compile(&reduced).unwrap();
             cq_elaborate::check(&reduced, &expected).unwrap();
-            assert_eq!(default, cq_elaborate::simplify_reductions(&expected).unwrap());
-            assert_eq!(opted_out, cq_elaborate::compile(&ordered).unwrap());
+            let expected = cq_elaborate::simplify_reductions(&expected).unwrap();
+            assert_eq!(default, cq_physical_lowering::orient(&expected).unwrap());
+            assert_eq!(opted_out, cq_physical_lowering::orient(&cq_elaborate::compile(&ordered).unwrap()).unwrap());
             cq_lang_ra::check_rewrite(&opted_out, &default).unwrap();
         }};
     }
@@ -285,4 +309,96 @@ fn written_default_reduces_cyclic_block_scopes_and_preserves_answers() {
             R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)}
         } | {U(a)};
     }
+}
+
+#[test]
+fn total_string_filters_and_derived_country_domains_execute_exactly() {
+    let parts = [
+        (1, "green brass".to_owned()),
+        (2, "blue".to_owned()),
+        (3, "green dangling".to_owned()),
+    ];
+    let lines = [(1,), (1,), (2,)];
+    let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
+        answer(key) :- lines(key), parts(key,name), if name.contains("green");
+    }
+    .map(|(key,)| *key)
+    .collect();
+    assert_eq!(actual, [1].into());
+    fn green(name: &String) -> bool {
+        name.contains("green")
+    }
+    let asserted: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
+        answer(key) :- lines(key), parts(key,name), #[total] if green(name);
+    }
+    .map(|(key,)| *key)
+    .collect();
+    assert_eq!(asserted, actual);
+    let countries = [
+        (1, "FRANCE".to_owned()),
+        (2, "GERMANY".to_owned()),
+        (3, "CANADA".to_owned()),
+    ];
+    let links = [(1, 2), (2, 1), (1, 1), (3, 2), (99, 1)];
+    let pairs: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation countries(key:i32,name:String); relation links(a:i32,b:i32);
+        answer(a,b) :- links(a,b), countries(a,left), countries(b,right),
+            if (left == "FRANCE" && right == "GERMANY") || (left == "GERMANY" && right == "FRANCE");
+    }
+    .map(|(a, b)| (*a, *b))
+    .collect();
+    assert_eq!(pairs, [(1, 2), (2, 1)].into());
+}
+
+#[test]
+fn unrecognized_partial_string_guard_does_not_run_on_dangling_parts() {
+    let parts = [(1, "g".to_owned()), (2, String::new())];
+    let lines = [(1,)];
+    let actual: Vec<_> = mini_linq::mini_linq! {
+        struct Q; relation parts(key:i32,name:String); relation lines(part:i32);
+        answer(key) :- lines(key), parts(key,name), if name.as_bytes()[0] == b'g';
+    }
+    .map(|(key,)| *key)
+    .collect();
+    assert_eq!(actual, [1]);
+}
+
+#[test]
+fn total_allowlist_preserves_macro_forwarded_type_and_name_hygiene() {
+    macro_rules! filtered {
+        ($ty:ty; $rows:ident; $name:ident) => {
+            mini_linq::mini_linq! {
+                struct Q; relation $rows(name:$ty);
+                answer($name) :- $rows($name), if $name.contains("green");
+            }
+        };
+    }
+    let rows = [("green".to_owned(),), ("blue".to_owned(),)];
+    let answer: Vec<_> = filtered!(String; rows; name).collect();
+    assert_eq!(answer.len(), 1);
+    assert_eq!(answer[0].0, "green");
+}
+
+#[test]
+fn total_identifier_remains_available_in_let_bindings_and_guards() {
+    let rows = [(2, 3), (-2, 1)];
+    let actual: Vec<_> = mini_linq::mini_linq! {
+        struct Q; relation rows(x:i32,y:i32);
+        answer(total) :- rows(x,y), let total:i32 = *x + *y, if *total > 0;
+    }.map(|(total,)| total).collect();
+    assert_eq!(actual, [5]);
+    let total = true;
+    let y = true;
+    let actual: Vec<_> = mini_linq::mini_linq! {
+        struct Q; relation rows(x:i32,y:i32);
+        answer(x) :- rows(x,_), if total && y;
+    }.map(|(x,)| *x).collect();
+    assert_eq!(actual, [2, -2]);
+    let actual: Vec<_> = mini_linq::mini_linq! {
+        struct Q; relation rows(x:i32,y:i32);
+        answer(total) :- rows(total,_), #[total] if total.is_positive();
+    }.map(|(total,)| *total).collect();
+    assert_eq!(actual, [2]);
 }

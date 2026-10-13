@@ -260,3 +260,36 @@ fn correlated_leaf_inputs_are_evaluated_once_before_outer_iteration() {
     assert_eq!(result, [(1,), (2,)].into());
     assert_eq!(calls.get(), 2);
 }
+
+#[test]
+fn constant_group_fuses_owned_measures_without_losing_set_semantics() {
+    let Sale = [(1_i32, 10_i64), (1, 10), (2, 10), (3, -4)];
+    let groups = mini_linq::compile! {
+        pipeline { surface = [cq_ext_aggregate::aggregate]; }
+        aggregate! {
+            by(group); n=count(); total=sum(amount); lo=min(amount); hi=max(amount);
+            struct Constant; relation Sale(id:i32,value:i64);
+            rows(group,id,amount) :- Sale(id,value),
+                let group:i32 = 0, let amount:i64 = *value * 2;
+        }
+    };
+    let rows: Vec<_> = groups.iter().flat_map(|(key, values)| values.iter().map(move |value| (*key,*value))).collect();
+    assert_eq!(rows, [((0,), (3, 32, -8, 20))]);
+    // The allocation-free result remains a reusable keyed and scanned CQ host.
+    let selected: Vec<_> = mini_linq::compile! {
+        pipeline {}
+        struct Reuse; relation groups(group:i32,n:usize,total:i64,lo:i64,hi:i64);
+        answer(total) :- groups(group,n,total,lo,hi), if *group == 0;
+    }.map(|(total,)| *total).collect();
+    assert_eq!(selected, [32]);
+    let Sale: [(i32, i64); 0] = [];
+    let empty = mini_linq::compile! {
+        pipeline { surface = [cq_ext_aggregate::aggregate]; }
+        aggregate! {
+            by(group); total=sum(value);
+            struct EmptyConstant; relation Sale(id:i32,value:i64);
+            rows(group,id,value) :- Sale(id,value), let group:i32 = 0;
+        }
+    };
+    assert_eq!(empty.iter().count(), 0);
+}

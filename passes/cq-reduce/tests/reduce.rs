@@ -279,7 +279,11 @@ const HYPERGRAPH: Options = Options {
 };
 
 fn direct_reductions(steps: &[valuation::Step]) -> Vec<valuation::Step> {
-    steps.iter().filter(|step| matches!(step, valuation::Step::Reduce(..))).cloned().collect()
+    steps
+        .iter()
+        .filter(|step| matches!(step, valuation::Step::Reduce(..)))
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -293,17 +297,18 @@ fn cyclic_body_keeps_exact_block_cuts_and_reduces_acyclic_branches() {
     );
     assert!(!cq::hypergraph::Analysis::of(&source.cq).acyclic);
     let target = compile(&source, &HYPERGRAPH).unwrap();
-    assert_eq!(direct_reductions(&target.valuation.steps), vec![
-        syn::parse_quote!(reduce R@0 with block@3(a);),
-        syn::parse_quote!(reduce T@2 with block@3(a);),
-    ]);
+    assert_eq!(
+        direct_reductions(&target.valuation.steps),
+        vec![
+            syn::parse_quote!(reduce R@0 with block@3(a);),
+            syn::parse_quote!(reduce T@2 with block@3(a);),
+        ]
+    );
     let valuation::Step::Block(block, _) = target.valuation.steps.last().unwrap() else {
         unreachable!()
     };
-    assert_eq!(direct_reductions(&block.branches[0].steps), vec![
-        syn::parse_quote!(reduce V@3.0.1 with U@3.0.0(a);),
-        syn::parse_quote!(reduce U@3.0.0 with V@3.0.1(a);),
-    ]);
+    // Acyclic does not by itself justify indexing unfiltered supports.
+    assert!(direct_reductions(&block.branches[0].steps).is_empty());
     assert!(direct_reductions(&block.branches[1].steps).is_empty());
     check(&source, &target, &HYPERGRAPH).unwrap();
     assert!(compile(&source, &TREE).is_err());
@@ -314,7 +319,10 @@ fn cyclic_body_keeps_exact_block_cuts_and_reduces_acyclic_branches() {
         assert!(check(&source, &missing, &HYPERGRAPH).is_err());
     }
     let mut extra = target.clone();
-    extra.valuation.steps.insert(0, syn::parse_quote!(reduce R@0 with S@1(b,_);));
+    extra
+        .valuation
+        .steps
+        .insert(0, syn::parse_quote!(reduce R@0 with S@1(b,_);));
     valuation::contract::check(&extra).unwrap();
     assert!(check(&source, &extra, &HYPERGRAPH).is_err());
 }
@@ -337,17 +345,17 @@ fn cyclic_branches_keep_block_cuts_and_plan_descendants_independently() {
     let valuation::Step::Block(block, _) = &target.valuation.steps[0] else {
         unreachable!()
     };
-    assert_eq!(direct_reductions(&block.branches[0].steps), vec![
-        syn::parse_quote!(reduce R@0.0.0 with block@0.0.3(a);),
-        syn::parse_quote!(reduce T@0.0.2 with block@0.0.3(a);),
-    ]);
+    assert_eq!(
+        direct_reductions(&block.branches[0].steps),
+        vec![
+            syn::parse_quote!(reduce R@0.0.0 with block@0.0.3(a);),
+            syn::parse_quote!(reduce T@0.0.2 with block@0.0.3(a);),
+        ]
+    );
     let valuation::Step::Block(nested, _) = block.branches[0].steps.last().unwrap() else {
         unreachable!()
     };
-    assert_eq!(direct_reductions(&nested.branches[0].steps), vec![
-        syn::parse_quote!(reduce V@0.0.3.0.1 with U@0.0.3.0.0(a);),
-        syn::parse_quote!(reduce U@0.0.3.0.0 with V@0.0.3.0.1(a);),
-    ]);
+    assert!(direct_reductions(&nested.branches[0].steps).is_empty());
     check(&source, &target, &HYPERGRAPH).unwrap();
     for position in 0..2 {
         let mut missing = target.clone();
@@ -361,9 +369,9 @@ fn cyclic_branches_keep_block_cuts_and_plan_descendants_independently() {
     let valuation::Step::Block(block, _) = &mut extra.valuation.steps[0] else {
         unreachable!()
     };
-    block.branches[0].steps.insert(
-        0, syn::parse_quote!(reduce R@0.0.0 with S@0.0.1(b,_);),
-    );
+    block.branches[0]
+        .steps
+        .insert(0, syn::parse_quote!(reduce R@0.0.0 with S@0.0.1(b,_);));
     valuation::contract::check(&extra).unwrap();
     assert!(check(&source, &extra, &HYPERGRAPH).is_err());
 }
@@ -377,19 +385,24 @@ fn acyclic_body_retains_tree_reductions_and_additional_block_cuts() {
         "R@0(a,b); S@1(b,c); block @2(b) {U@2.0.0(b);} | {V@2.1.0(b);};",
     );
     assert!(cq::hypergraph::Analysis::of(&source.cq).acyclic);
-    let tree = compile(&source, &TREE).unwrap();
     let target = compile(&source, &HYPERGRAPH).unwrap();
     check(&source, &target, &HYPERGRAPH).unwrap();
-    for step in tree.valuation.steps.iter().filter(|s| matches!(s, valuation::Step::Reduce(..))) {
-        assert!(target.valuation.steps.contains(step));
-    }
+    assert!(
+        direct_reductions(&target.valuation.steps).len()
+            < direct_reductions(&compile(&source, &TREE).unwrap().valuation.steps).len() + 2
+    );
     for cut in [
         syn::parse_quote!(reduce R@0 with block@2(b);),
         syn::parse_quote!(reduce S@1 with block@2(b);),
     ] {
         assert!(target.valuation.steps.contains(&cut));
         let mut missing = target.clone();
-        let position = missing.valuation.steps.iter().position(|step| step == &cut).unwrap();
+        let position = missing
+            .valuation
+            .steps
+            .iter()
+            .position(|step| step == &cut)
+            .unwrap();
         missing.valuation.steps.remove(position);
         assert!(check(&source, &missing, &HYPERGRAPH).is_err());
     }
@@ -406,7 +419,144 @@ fn cyclic_body_without_blocks_has_no_hypergraph_reductions() {
     assert_eq!(compile(&source, &HYPERGRAPH).unwrap(), source);
     check(&source, &source, &HYPERGRAPH).unwrap();
     let mut extra = source.clone();
-    extra.valuation.steps.insert(0, syn::parse_quote!(reduce R@0 with S@1(b,_);));
+    extra
+        .valuation
+        .steps
+        .insert(0, syn::parse_quote!(reduce R@0 with S@1(b,_);));
     valuation::contract::check(&extra).unwrap();
     assert!(check(&source, &extra, &HYPERGRAPH).is_err());
+}
+
+#[test]
+fn filtered_reducer_omits_unfiltered_dangling_checks_without_assuming_keys() {
+    let source = schedule(CHAIN, ATOMS);
+    assert_eq!(compile(&source, &HYPERGRAPH).unwrap(), source);
+    check(&source, &source, &HYPERGRAPH).unwrap();
+    let full = compile(&source, &TREE).unwrap();
+    assert!(
+        check(&source, &full, &HYPERGRAPH)
+            .unwrap_err()
+            .to_string()
+            .contains("no relational filter")
+    );
+    // The join still rejects dangling tuples; omission does not claim they exist.
+    for seed in 0..16 {
+        let database = databases::binary_database(&source.cq, seed);
+        assert_eq!(
+            evaluator::evaluate(&source, &database),
+            evaluator::evaluate(&full, &database)
+        );
+    }
+}
+
+#[test]
+fn filtered_supports_run_point_before_domain_and_propagate_to_unfiltered_parents() {
+    let query = "struct Star; relation Domain(a:i32,x:i32); relation Point(b:i32,y:i32);
+        relation Empty(c:i32,z:i32); relation Fact(a:i32,b:i32,c:i32);
+        answer(a,b,c) :- Domain(a,x), if *x != 4, Point(b,y), if *y == 7, Empty(c,z), Fact(a,b,c);";
+    let mut source = schedule(
+        query,
+        "Domain@0(a,x); Point@2(b,y); Empty@4(c,z); Fact@5(a,b,c);",
+    );
+    source.cq = cq::normal::normalize(&source.cq).unwrap();
+    for clause in [1, 3] {
+        let step = match &source.cq.query.body[clause] {
+            cq::BodyItem::Constraint(c) => {
+                valuation::Step::Constraint(c.clone(), Default::default())
+            }
+            cq::BodyItem::Equality(e) => valuation::Step::Equality(e.clone(), Default::default()),
+            other => panic!("expected relational predicate: {other:?}"),
+        };
+        source.valuation.steps.insert(clause, step);
+    }
+    let target = compile(&source, &HYPERGRAPH).unwrap();
+    check(&source, &target, &HYPERGRAPH).unwrap();
+    let reductions = direct_reductions(&target.valuation.steps);
+    let supports: Vec<_> = reductions
+        .iter()
+        .map(|step| {
+            let valuation::Step::Reduce(r, _) = step else {
+                unreachable!()
+            };
+            let valuation::Reduction::With(_, support) = &r.reduction;
+            support.relation.to_string()
+        })
+        .collect();
+    assert_eq!(supports[0], "Point");
+    assert_eq!(supports[1], "Domain");
+    assert!(!supports.contains(&"Empty".to_string()));
+    let mut wrong = target.clone();
+    wrong.valuation.steps.swap(0, 1);
+    assert!(check(&source, &wrong, &HYPERGRAPH).is_err());
+    let mut missing = target.clone();
+    missing.valuation.steps.remove(0);
+    assert!(check(&source, &missing, &HYPERGRAPH).is_err());
+    for seed in 0..16 {
+        let database = databases::binary_database(&source.cq, seed);
+        assert_eq!(
+            evaluator::evaluate(&source, &database),
+            evaluator::evaluate(&target, &database)
+        );
+    }
+}
+
+#[test]
+fn leaf_only_filter_never_flows_back_into_its_own_subtree() {
+    let query = "struct Leaf; relation L(a:i32,x:i32); relation R(a:i32,b:i32);
+        relation S(b:i32,c:i32); answer(a,c) :- L(a,x), if *x == 1, R(a,b), S(b,c);";
+    let mut source = schedule(query, "L@0(a,x); R@2(a,b); S@3(b,c);");
+    source.cq = cq::normal::normalize(&source.cq).unwrap();
+    let step = match &source.cq.query.body[1] {
+        cq::BodyItem::Constraint(c) => valuation::Step::Constraint(c.clone(), Default::default()),
+        cq::BodyItem::Equality(e) => valuation::Step::Equality(e.clone(), Default::default()),
+        other => panic!("expected relational predicate: {other:?}"),
+    };
+    source.valuation.steps.insert(1, step);
+    let target = compile(&source, &HYPERGRAPH).unwrap();
+    check(&source, &target, &HYPERGRAPH).unwrap();
+    let reductions = direct_reductions(&target.valuation.steps);
+    assert_eq!(
+        reductions,
+        vec![
+            syn::parse_quote!(reduce R@2 with L@0(a,_);),
+            syn::parse_quote!(reduce S@3 with R@2(_,b);),
+        ]
+    );
+}
+
+#[test]
+fn range_side_streams_against_point_driving_component_without_reverse_index() {
+    let query = "struct PointRange; relation P(k:i32,x:i32); relation R(k:i32,y:i32);
+        answer(k) :- P(k,x), if *x == 1, R(k,y), if *y > 4;";
+    let mut source = schedule(query, "P@0(k,x); R@2(k,y);");
+    source.cq = cq::normal::normalize(&source.cq).unwrap();
+    for clause in [1, 3] {
+        let step = match &source.cq.query.body[clause] {
+            cq::BodyItem::Constraint(c) => {
+                valuation::Step::Constraint(c.clone(), Default::default())
+            }
+            cq::BodyItem::Equality(e) => valuation::Step::Equality(e.clone(), Default::default()),
+            other => panic!("expected relational predicate: {other:?}"),
+        };
+        source.valuation.steps.insert(clause, step);
+    }
+    let target = compile(&source, &HYPERGRAPH).unwrap();
+    check(&source, &target, &HYPERGRAPH).unwrap();
+    assert_eq!(
+        direct_reductions(&target.valuation.steps),
+        vec![syn::parse_quote!(reduce R@2 with P@0(k,_);)]
+    );
+    let mut reverse = target.clone();
+    reverse
+        .valuation
+        .steps
+        .insert(1, syn::parse_quote!(reduce P@0 with R@2(k,_);));
+    assert!(check(&source, &reverse, &HYPERGRAPH).is_err());
+    for seed in 0..16 {
+        let database = databases::binary_database(&source.cq, seed);
+        assert_eq!(
+            evaluator::evaluate(&source, &database),
+            evaluator::evaluate(&target, &database)
+        );
+    }
 }

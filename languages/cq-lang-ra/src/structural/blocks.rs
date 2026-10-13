@@ -527,6 +527,15 @@ impl<'a> View<'a> {
             return Ok(node);
         }
         let original = &self.original.nodes[index];
+        if let Kind::Atom(id) = original.kind {
+            // A collapsed block may expose this occurrence's free columns
+            // before its actual atom is visited. That symbolic interface must
+            // not replace the atom's own provenance: the subsequent join
+            // records their equality explicitly.
+            for column in self.original.atoms[&id].bindings.keys() {
+                self.columns.remove(&Column::Atom(id, column.clone()));
+            }
+        }
         if self
             .allowed
             .is_some_and(|allowed| foreign_semi(self.original, index, allowed, &self.common))

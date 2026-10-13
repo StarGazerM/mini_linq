@@ -1,5 +1,7 @@
 //! Materialized answer sets at the output/input boundary.
-use std::collections::{HashMap, HashSet, hash_map, hash_set};
+use std::collections::{hash_map, hash_set};
+use crate::HashSet;
+type HashMap<K, V> = std::collections::HashMap<K, V, crate::HashState>;
 use std::hash::Hash;
 
 use crate::{Canonical, ExactMembership, IndexRead};
@@ -61,12 +63,12 @@ pub struct GroupedAnswers<K, V> {
 }
 impl<K: Eq + Hash, V: Eq + Hash> GroupedAnswers<K, V> {
     pub fn collect_from(rows: impl IntoIterator<Item = (K, V)>) -> Self {
-        let mut groups: HashMap<K, Answers<V>> = HashMap::new();
+        let mut groups: HashMap<K, Answers<V>> = HashMap::default();
         for (key, value) in rows {
             groups
                 .entry(key)
                 .or_insert_with(|| Answers {
-                    rows: HashSet::new(),
+                    rows: HashSet::default(),
                 })
                 .rows
                 .insert(value);
@@ -135,6 +137,52 @@ where
     }
 }
 
+/// A checked constant-key aggregate: zero or one group, with no hashing.
+#[derive(Clone, Debug)]
+pub struct SingleGroup<K, V> {
+    group: Option<(K, [V; 1])>,
+}
+impl<K, V> SingleGroup<K, V> {
+    pub fn from_option(group: Option<(K, V)>) -> Self {
+        Self { group: group.map(|(key, value)| (key, [value])) }
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &[V; 1])> {
+        self.group.iter().map(|(key, values)| (key, values))
+    }
+}
+impl<K, V> Canonical for SingleGroup<K, V> {}
+impl<K: Eq, V> ExactMembership<K> for SingleGroup<K, V> {
+    fn contains(&self, key: &K) -> bool {
+        self.group.as_ref().is_some_and(|(stored, _)| stored == key)
+    }
+}
+impl<'a, K: Eq, V> IndexRead for &'a SingleGroup<K, V> {
+    type Key = K;
+    type Item = &'a V;
+    type Cursor = std::option::IntoIter<&'a V>;
+    fn lookup(&self, key: &K) -> Self::Cursor {
+        self.group.as_ref().filter(|(stored, _)| stored == key)
+            .map(|(_, values)| &values[0]).into_iter()
+    }
+}
+impl<'a, K: Eq, V> crate::PointLookup for &'a SingleGroup<K, V>
+where
+    &'a K: crate::rows::Columns,
+    &'a V: crate::rows::Columns,
+    <&'a K as crate::rows::Columns>::Row: crate::rows::Concat<<&'a V as crate::rows::Columns>::Row>,
+{
+    type Key = K;
+    type Row = <<&'a K as crate::rows::Columns>::Row as crate::rows::Concat<<&'a V as crate::rows::Columns>::Row>>::Row;
+    type Cursor = crate::PointRows<&'a K, std::option::IntoIter<&'a V>>;
+    fn point_lookup(&self, key: &K) -> Self::Cursor {
+        let found = self.group.as_ref().filter(|(stored, _)| stored == key);
+        crate::PointRows {
+            key: found.map(|(key, _)| key),
+            values: found.map(|(_, values)| &values[0]).into_iter(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,7 +192,7 @@ mod tests {
         assert_eq!(answers.len(), 3);
         let grouped = GroupedAnswers::collect_from(answers.iter().map(|(k, v)| ((k,), (v,))));
         let values: HashSet<_> = (&grouped).lookup(&(&1,)).copied().collect();
-        assert_eq!(values, [(&2,), (&3,)].into());
+        assert_eq!(values, [(&2,), (&3,)].into_iter().collect());
         assert_eq!((&grouped).lookup(&(&9,)).count(), 0);
         assert!(grouped.contains(&(&2,)));
         assert_eq!(grouped.iter().map(|(_, v)| v.len()).sum::<usize>(), 3);

@@ -172,11 +172,37 @@ impl Atom {
     }
 }
 
-/// An embedded Rust condition. Parsing does not establish reorderability.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+/// An embedded Rust condition, optionally asserted total by `#[total]`.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Filter {
+    pub total: Option<syn::Attribute>,
     pub if_token: Token![if],
     pub condition: syn::Expr,
+}
+
+pub(crate) fn parse_total_attribute(
+    input: syn::parse::ParseStream<'_>,
+) -> syn::Result<Option<syn::Attribute>> {
+    let attributes = input.call(syn::Attribute::parse_outer)?;
+    if attributes.is_empty() {
+        return Ok(None);
+    }
+    if attributes.len() != 1 || !matches!(&attributes[0].meta, syn::Meta::Path(path) if path.is_ident("total")) {
+        return Err(syn::Error::new_spanned(
+            &attributes[0], "expected a single `#[total]` attribute",
+        ));
+    }
+    Ok(attributes.into_iter().next())
+}
+
+impl syn::parse::Parse for Filter {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        Ok(Self {
+            total: parse_total_attribute(input)?,
+            if_token: input.parse()?,
+            condition: input.parse()?,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]

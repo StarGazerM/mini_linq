@@ -583,8 +583,8 @@ impl Schedule {
                 }),
             }
         }
-        // Formal rule CT-Constraint: Preserve predicate shape and its fixed column arguments.
-        for constraint in &theta.constraints {
+        // Formal rule CT-Constraint: Preserve exact predicate shape and fixed columns, recomputing implied unary domains on both sides.
+        for constraint in theta.constraints.iter().flat_map(|c| std::iter::once(c.clone()).chain(c.implied_domains())) {
             let columns = constraint
                 .variables()
                 .map(|v| node.heading[&symbol_name(v)].clone())
@@ -779,6 +779,7 @@ impl Schedule {
                     results[&symbol_name(&g.input)],
                     &crate::syntax::Filter {
                         if_token: g.if_token,
+                        total: None,
                         condition: g.condition.clone(),
                     },
                     g.environment.as_ref(),

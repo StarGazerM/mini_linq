@@ -23,7 +23,7 @@ impl Parse for Source {
 }
 fn defaults() -> cq_stage::Configuration {
     syn::parse_quote! { pipeline {
-        plan = ::mini_linq::passes::plan_written;
+        plan = ::mini_linq::passes::plan;
         ix = ::mini_linq::passes::index_demands;
         lower = ::mini_linq::passes::lower;
         select = ::mini_linq::passes::select;
@@ -65,10 +65,10 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 }
 
 #[derive(Default)]
-struct WrittenOptions {
+struct PlanOptions {
     no_reduce: bool,
 }
-impl Parse for WrittenOptions {
+impl Parse for PlanOptions {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         if input.is_empty() {
             return Ok(Self::default());
@@ -81,16 +81,20 @@ impl Parse for WrittenOptions {
     }
 }
 
-/// CQ → RA′ in written order with checked Hypergraph semijoin reduction.
-/// Use `plan_written(no_reduce)` to retain the unreduced written plan.
-/// Formal rule Plan-Prefix: Normalize, order Written/Coarse, reduce unless opted out, elaborate, absorb redundant support and continue with RA.
+/// CQ → RA′ with static filtered-connected ordering and checked reductions.
+/// `plan(no_reduce)` disables reductions, not static ordering.
+/// Formal rule Plan-Prefix: Normalize, order Filtered/Coarse, optionally reduce and absorb, then record static build orientation before IX.
 #[proc_macro]
-pub fn plan_written(input: TokenStream) -> TokenStream {
+pub fn plan(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input.into(), |source, args| {
-        let args: WrittenOptions = syn::parse2(args)?;
+        let args: PlanOptions = syn::parse2(args)?;
         let normal = cq_lang_cq::normal::normalize(source)?;
-        let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
-        cq_order::check(&normal, &plan, &cq_order::Options::default())?;
+        let ordering = cq_order::Options {
+            heuristic: cq_order::Heuristic::Filtered,
+            split: cq_order::Split::Coarse,
+        };
+        let plan = cq_order::compile(&normal, &ordering)?;
+        cq_order::check(&normal, &plan, &ordering)?;
         let options = cq_reduce::Options {
             guards: cq_reduce::Pushdown::None,
             semijoins: if args.no_reduce {
@@ -103,11 +107,12 @@ pub fn plan_written(input: TokenStream) -> TokenStream {
         cq_reduce::check(&plan, &reduced, &options)?;
         let target = cq_elaborate::compile(&reduced)?;
         cq_elaborate::check(&reduced, &target)?;
-        if args.no_reduce {
-            Ok(target)
+        let target = if args.no_reduce {
+            target
         } else {
-            cq_elaborate::simplify_reductions(&target)
-        }
+            cq_elaborate::simplify_reductions(&target)?
+        };
+        cq_physical_lowering::orient(&target)
     })
     .into()
 }
@@ -172,21 +177,21 @@ pub fn workload_query(input: TokenStream) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use super::WrittenOptions;
+    use super::PlanOptions;
     use quote::quote;
 
     #[test]
-    fn written_options_reduce_by_default_and_allow_explicit_opt_out() {
-        assert!(!syn::parse2::<WrittenOptions>(quote!()).unwrap().no_reduce);
+    fn plan_options_reduce_by_default_and_allow_explicit_opt_out() {
+        assert!(!syn::parse2::<PlanOptions>(quote!()).unwrap().no_reduce);
         assert!(
-            syn::parse2::<WrittenOptions>(quote!(no_reduce))
+            syn::parse2::<PlanOptions>(quote!(no_reduce))
                 .unwrap()
                 .no_reduce
         );
     }
 
     #[test]
-    fn written_options_reject_unknown_and_extra_arguments() {
+    fn plan_options_reject_unknown_and_extra_arguments() {
         for arguments in [
             quote!(unknown),
             quote!(no_reduce no_reduce),
@@ -194,7 +199,33 @@ mod tests {
             quote!(no_reduce,),
             quote!(no_reduce = true),
         ] {
-            assert!(syn::parse2::<WrittenOptions>(arguments).is_err());
+            assert!(syn::parse2::<PlanOptions>(arguments).is_err());
         }
+    }
+
+    #[test]
+    fn filtered_default_handles_correlated_test_blocks() {
+        let source = syn::parse_quote! {
+            struct Q; relation P(x:i32);
+            answer(x) :- P(x), { if *x == 1 } | { if *x == 2 };
+        };
+        let normal = cq_lang_cq::normal::normalize(&source).unwrap();
+        let ordering = cq_order::Options {
+            heuristic: cq_order::Heuristic::Filtered,
+            split: cq_order::Split::Coarse,
+        };
+        let vo = cq_order::compile(&normal, &ordering).unwrap();
+        cq_order::check(&normal, &vo, &ordering).unwrap();
+        let reductions = cq_reduce::Options {
+            guards: cq_reduce::Pushdown::None,
+            semijoins: cq_reduce::Reductions::Hypergraph,
+        };
+        let vo = cq_reduce::compile(&vo, &reductions).unwrap();
+        let ra = cq_elaborate::compile(&vo).unwrap();
+        cq_elaborate::check(&vo, &ra).unwrap();
+        let ra = cq_elaborate::simplify_reductions(&ra).unwrap();
+        let ra = cq_physical_lowering::orient(&ra).unwrap();
+        let ix = cq_index_policy::compile(&ra).unwrap();
+        cq_physical_lowering::compile(&ix).unwrap();
     }
 }

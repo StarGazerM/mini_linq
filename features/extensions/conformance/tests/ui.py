@@ -40,7 +40,7 @@ expressions = [(name, compile_expression(extension, source), needle) for name, e
 expressions += [
     ("unexpanded", "mini_linq::compile! { pipeline { surface = [cq_ext_negation::negation, cq_ext_aggregate::aggregate, cq_ext_recursion::recursion, cq_ext_correlated::correlated]; } struct C; relation A(x:i32); answer(x) :- A(x), name!{opaque tokens}; }", "name!"),
     ("empty_queue", "cq_ext_negation::negation! { pipeline {}; struct U; answer(x) :- A(x); }", "requires a remaining pipeline"),
-    ("surface_arguments", "cq_ext_negation::negation! { arguments { unexpected }; pipeline {mini_linq::passes::plan_written}; struct U; answer(x) :- A(x); }", "accepts no arguments"),
+    ("surface_arguments", "cq_ext_negation::negation! { arguments { unexpected }; pipeline {mini_linq::passes::plan}; struct U; answer(x) :- A(x); }", "accepts no arguments"),
 ]
 
 # Resolve public package identities from the running workspace. A packaged core

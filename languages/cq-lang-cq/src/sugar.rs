@@ -255,6 +255,15 @@ fn rename_body(
                 bound.extend(bindings.iter().map(|id| (symbol_name(id), id.clone())));
             }
             BodyItem::Filter(filter) => rename_expression(&mut filter.condition, names, &bound),
+            BodyItem::Constraint(crate::Constraint::Total { expression, bindings }) => {
+                rename_expression(expression, names, &bound);
+                let logical = bound.keys().map(|name| {
+                    names.get(name).map(symbol_name).unwrap_or_else(|| name.clone())
+                }).collect();
+                let crate::Constraint::Total { bindings: renamed, .. } =
+                    crate::Constraint::total((**expression).clone(), &logical) else { unreachable!() };
+                *bindings = renamed;
+            }
             BodyItem::Equality(equality) => {
                 if let Some(new) = names.get(&symbol_name(&equality.left)) {
                     equality.left = new.clone();

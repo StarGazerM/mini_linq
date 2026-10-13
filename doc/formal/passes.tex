@@ -75,6 +75,9 @@ equality-class map and $s_i=|\kappa(O_i)\cap\kappa(B)|$:
 \Rule{S-Connected}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|}
  {\mathsf{rank}_{Connected}(i,B)=(1,[s_i=0],0,i)}
 
+\Rule{S-Filtered}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|}
+ {\mathsf{rank}_{Filtered}(i,B)=(1,[s_i=0],f_i,i)}
+
 \Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|\kappa(O_i)\cap\kappa(B)|\\
  r\in\{GreedyWidth,Auto\}}
  {\mathsf{rank}_{r}(i,B)=(1,[s_i=0],|\kappa(B)\cup\kappa(O_i)|,i)}
@@ -98,6 +101,16 @@ steps (constraints first); a variable is eligible if no Rust step supplies it or
 it is bound; $\mathsf{introduce}$ emits a subatom of its first holding atom and
 then the others' checks. Incomplete atoms count toward Before until their full
 row is checked.
+The production facade uses Filtered/Coarse. Under H-FilterRank, $f_i$ is
+$0$ for a local constant equality, $1$ for a local constant range,
+$2$ for a derived domain, total predicate or finite relational block, and
+$3$ otherwise. Equality classes determine locality; opaque Rust guards
+never improve a rank. This is a syntax-only priority, not a cardinality
+estimate. Written remains available to explicit planner clients.
+\[
+\Rule{H-FilterRank}{P_i=\text{local total predicates on }\kappa(O_i)}
+ {f_i=\min(\{3\}\cup\{\mathsf{strength}(p)\mid p\in P_i\})}
+\]
 \[
 \Rule{CK-Order}{\mathsf{WF}_{NF}(s)\quad\mathsf{WF}_{VO}(t)\\
  \mathsf{OrderObligations}(s,t,\chi)}
@@ -105,9 +118,10 @@ row is checked.
 \]
 $\mathsf{OrderObligations}$: unchanged CQ; no reductions; every atom has a
 subatom; Coarse has one full subatom per atom; Fine introduces at most one
-variable per subatom; Written keeps NF order. Rankings are construction choices,
-not obligations. \emph{Refinement:} by the VO contract (relational steps earlier,
-Rust order and Before kept, full rows checked).
+variable per subatom; Written keeps NF order. Filtered/Coarse independently
+checks that no ready occurrence outranks the recorded choice. Other rankings
+remain construction choices. \emph{Refinement:} by the VO contract (relational
+steps earlier, Rust order and Before kept, full rows checked).
 
 \subsection{Hypergraph analysis and GYO}
 \label{sec:graph-extraction}\label{sec:gyo-construction}
@@ -169,11 +183,27 @@ and $\mathsf{red}(i,j)$ the reduction of $i$ by $j$ on their shared classes:
  {\mathsf{Tree}(VO)=\mathsf{insertAtReadyPrefix}(VO,\mathsf{up}(J)\concat\mathsf{down}(J))}
 \end{mathpar}
 The insertion point is the first atom/block, or the earliest prefix providing
-the Rust bindings a finite block domain needs. \code{Hypergraph} uses a tree
-reducer only on acyclic scopes, but exact atom-to-block cuts on any scope:
-each atom sharing columns with a finite Rust-free block is semijoined through
-that block's derived relation. Each branch is analyzed independently; an
-acyclic branch under a cyclic root may receive its own tree reducer.
+the Rust bindings a finite block domain needs. \code{Hypergraph} uses the
+filtered reducer only on acyclic scopes, but exact atom-to-block cuts on any
+scope: each atom sharing columns with a finite Rust-free block is semijoined
+through that block's derived relation. Each branch is analyzed independently.
+For R-Filtered, remove a tree edge $(i,j)$ and let $C_{j\mid i}$ be the
+component containing support $j$. A candidate $\mathsf{red}(i,j)$ requires
+$\min_{k\in C_{j\mid i}} f_k<3$. An upward support first receives its selected
+child reductions; siblings run in ascending subtree rank, then written order.
+Downward support uses the parent's local filter, sibling subtrees and outside
+rank, never a filter learned solely from the target subtree. Explicit
+\code{Tree} retains the full reducer for teaching and comparison.
+\[
+\Rule{R-Filtered}{J\text{ acyclic}\quad
+ f_{j\mid i}=\min_{k\in\mathsf{component}(J-\{(i,j)\},j)}f_k\\
+ f_{j\mid i}<3\quad\neg(f_{j\mid i}=1\land f_{i\mid j}=0)}
+ {\mathsf{red}(i,j)\in\mathsf{filtered}(J)}
+\]
+Range-only support is omitted against a point-filtered driving component:
+its eventual natural join streams the range side instead of prebuilding its
+full support index. This optional omission preserves exact joins, makes no
+key assumptions, and does not suppress derived-domain support.
 Reductions distribute into positive uses and never into negated originals.
 \[
 \Rule{CK-Reduce}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{VO}(t)\\
@@ -184,8 +214,30 @@ $\mathsf{ReduceObligations}$: reduction-free source, unchanged CQ, equal step
 erasure; under None no reductions; under Tree an acyclic source with every
 directed tree edge once, all upward before downward, respecting parent/child
 order; Hypergraph requires exact atom-to-block cuts in both cyclic and acyclic
-scopes, and tree edges only in acyclic scopes. Cyclic block-free scopes have no
-reductions. Missing cuts and non-tree atom-to-atom reductions are rejected.
+scopes, and only the independently filter-supported tree edges in acyclic
+scopes, with strongest upward siblings first. The checker traverses each
+cut component independently and checks actual support-version provenance.
+Cyclic block-free scopes have no reductions. Missing cuts, unsupported
+reductions, and non-tree atom-to-atom reductions are rejected.
+
+Static build orientation (L-Orient) is recorded in RA before IX derivation:
+the left natural-join operand streams and the right builds. Unary selections
+contribute point/range/other strength; joins and semijoins inherit the stronger
+operand; projects and opaque steps inherit their input; unions use their
+weakest arm (at least block strength). A strictly stronger left operand swaps
+with the right; ties retain the written orientation. Semijoins and antijoins
+never swap. CK-Orient checks only these rank-justified commutations, unchanged
+definitions/interfaces, and the independent RA refinement contract, including
+Rust ancestry. IX and Physical retain exact demand and erasure checking.
+\begin{mathpar}
+\Rule{L-Orient}{a=\mathsf{naturalJoin}(l,r)\quad f(l)<f(r)}
+ {\mathsf{orient}(a)=\mathsf{naturalJoin}(r,l)}
+
+\Rule{CK-Orient}{\mathsf{OnlyRankJustifiedSwaps}(s,t)\quad
+ \mathsf{checkRewrite}_{RA}(s,t)\Downarrow\ok}
+ {\mathsf{checkOrientation}(s,t)\Downarrow\ok}
+\end{mathpar}
+
 \begin{theorem}[Full reducer]
 On a join tree, upward reverse-BFS then downward BFS semijoins preserve
 $Q=\bowtie_iL_i$ and leave each $L_i=\pi_{X_i}Q$, in $2(n-1)$ steps.
@@ -245,8 +297,16 @@ fixed occurrence paths.
  {C\text{ may select }R\text{ before joining};\quad
   \text{otherwise select the bound prefix}}
 
-\Rule{CT-Constraint}{\vars(C)=\bar x\quad\mathsf{columns}(\bar x)=\bar t}
- {\mathsf{facts}\longmapsto\mathsf{facts}\cup\{\mathsf{predicate}_{shape(C)}(\bar t)\}}
+\Rule{E-Domain}{C=\bigvee_i\bigwedge_j C_{ij}\quad
+ D_{ix}=\{C_{ij}\mid C_{ij}\text{ restricts only }x\text{ against literals}\}\\
+ \forall i.\ D_{ix}\ne\varnothing}
+ {C\Longrightarrow D_x=\bigvee_i\bigwedge D_{ix}\quad
+  \text{push }D_x\text{ onto }x\text{'s complete binder; retain }C}
+
+\Rule{CT-Constraint}{\vars(C)=\bar x\quad\mathsf{columns}(\bar x)=\bar t\\
+ \mathsf{closure}(C)=\{C\}\cup\{D_x\mid\text{E-Domain derives }D_x\}}
+ {\mathsf{facts}\longmapsto\mathsf{facts}\cup
+   \{\mathsf{predicate}_{shape(D)}(\mathsf{columns}(\vars(D)))\mid D\in\mathsf{closure}(C)\}}
 
 \Rule{RA-Constraint}{\vars(\theta)\subseteq V\quad
  \theta\text{ central and Eq/Ord-admissible}}
@@ -263,6 +323,13 @@ applied only to block-free queries. Rust-free blocks hoist to a derived relation
 over $F\cup I$, using a named finite prefix domain for missing generators;
 blocks with Rust run per row over the prefix. The written reference
 (\code{compile_written}) disables all hoisting.
+The E-Domain closure is recomputed independently while checking both schedules;
+unjustified added selections and removal of the original disjunction are
+rejected. Total Rust predicates are selections with exact expression and
+binding payloads; an opaque source guard cannot be replaced by one because
+the Rust-chain obligation would fail. Domain derivation uses only literal
+equalities, comparisons, inclusive ranges and literal membership, never
+database statistics or foreign-key assumptions.
 \[
 \Rule{CK-Elaborate}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
  t.declarations=s.cq.declarations\quad t.head=s.cq.head\\
@@ -486,10 +553,10 @@ never follows from a host type.
 With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction, $E$ elaboration,
 and $S$ checked redundant-support absorption:
 \begin{mathpar}
-\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
+\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Filtered,Coarse}(n)\\
  r=\text{None if \code{no_reduce}, otherwise Hypergraph}\\
  w=R_{None,r}(v)\quad a=\begin{cases}E(w)&\text{if \code{no_reduce}}\\S(E(w))&\text{otherwise}\end{cases}}
- {\code{mini_linq::passes::plan_written}(q)=a}
+ {\code{mini_linq::passes::plan}(q)=\mathsf{orient}(a)}
 
 \Rule{Plan-Generic}{n=N(q)\quad v=O_{Written,Fine}(n)\quad a=E(v)}
  {\code{cq_planners::order(written, fine)}(q)=a}
@@ -499,8 +566,8 @@ and $S$ checked redundant-support absorption:
  w=R_{None,r}(v)\quad a=S(E(w))}
  {\code{cq_planners::order(hypergraph)}(q)=a}
 \end{mathpar}
-\code{plan_written} defaults to checked Hypergraph reduction: acyclic bodies
-receive a full upward/downward tree reducer. Both acyclic and cyclic scopes may
+\code{plan} defaults to checked Hypergraph reduction: acyclic bodies receive
+filter-supported upward/downward tree reductions. Both acyclic and cyclic scopes may
 receive exact atom-to-block cuts; cyclic block-free scopes receive no reductions.
 Every branch is its own scope. Reduction compilation is independently checked before
 elaboration. After checking elaboration against the reduced VO schedule, the
@@ -513,10 +580,12 @@ removed; independent consumers that still need a reduction keep it alive.
 The rewrite is checked against the original RA, does not alter the reduction
 algorithm, and can retain native host probes instead of materializing redundant
 hash indices. Set
-\code{pipeline \{ plan = mini_linq::passes::plan_written(no_reduce); \}}
-to recover the previous unreduced Written/Coarse plan. Configuration passes this
-argument through its existing named planning invocation.
-\code{plan_written} uses the optimizing elaborator, so even the opt-out is not
+\code{pipeline \{ plan = mini_linq::passes::plan(no_reduce); \}}
+to disable optional semijoins while retaining Filtered/Coarse ordering and static
+build orientation. Configuration passes this argument through its existing
+named planning invocation.
+\code{plan} uses the optimizing elaborator, so even the opt-out is not
 the exact reference. Generic and the external Graph spelling belong to the
-external \code{cq-planners} consumer; Graph and the facade default have the same
-reduction and realization policy.
+external \code{cq-planners} consumer. The facade additionally records its
+filtered-connected order and build orientation; the external planner preserves
+its explicitly requested ordering policy.

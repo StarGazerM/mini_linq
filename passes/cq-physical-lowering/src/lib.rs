@@ -493,3 +493,6 @@ fn check_demands(source: &ix::Program, target: &physical::Program) -> syn::Resul
 
 mod correspondence;
 pub use correspondence::check;
+
+mod orientation;
+pub use orientation::{check_orientation, orient};
