@@ -911,6 +911,7 @@ fn admissible(ty: &syn::Type, need: &str) -> syn::Result<()> {
     if !matches!(
         qualified.as_str(),
         "std::collections::HashSet"
+            | "cq_storage::HashSet"
             | "std::collections::BTreeSet"
             | "std::collections::HashMap"
             | "cq_storage::HashIndex"

@@ -3,8 +3,10 @@
 
 #[cfg(feature = "counters")]
 pub type Dedup<T> = cq_storage::counters::DistinctSet<T>;
+// Keep the recorded measurement alias aligned with the default provider.
+// The counter build retains its explicit deterministic instrumentation state.
 #[cfg(not(feature = "counters"))]
-pub type Dedup<T> = std::collections::HashSet<T>;
+pub type Dedup<T> = cq_storage::HashSet<T>;
 
 /// Expand the same authored CQ with an explicit sequence of public passes.
 macro_rules! configuration {

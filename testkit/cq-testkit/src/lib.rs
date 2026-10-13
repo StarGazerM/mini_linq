@@ -143,3 +143,69 @@ pub use values::{Binding, Database, Relation, Rows};
 
 /// Fallible I/O and DuckDB helpers preserve their underlying error.
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+/// Rustc configured to link dependencies of the storage source in conformance
+/// fixtures. Call from a Cargo-built test executable so its dependency artifacts
+/// are available beside it. This does not link compiler passes into the fixture.
+pub fn runtime_rustc() -> std::process::Command {
+    let executable = std::env::current_exe().expect("test executable path");
+    let dependencies = executable.parent().expect("Cargo dependency directory");
+    static AHASH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let ahash = AHASH.get_or_init(|| {
+        let mut candidates: Vec<_> = std::fs::read_dir(dependencies)
+            .expect("Cargo dependency artifacts")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("libahash-") && name.ends_with(".rlib"))
+            })
+            .collect();
+        candidates.sort_by_key(|path| {
+            std::cmp::Reverse(path.metadata().and_then(|meta| meta.modified()).ok())
+        });
+        // Cargo/rustdoc can leave rlibs whose proc-macro dependencies were
+        // replaced by another feature build. Recency alone does not establish
+        // that rustc can resolve an artifact's complete dependency graph.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("cq-hash-link-{stamp}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("probe.rs");
+        std::fs::write(&source, "pub type State = ahash::RandomState;").unwrap();
+        let mut failures = String::new();
+        for candidate in candidates {
+            let output = std::process::Command::new(
+                std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
+            )
+            .args(["--edition=2024", "--crate-type=lib", "--emit=metadata"])
+            .arg(&source)
+            .arg("--out-dir")
+            .arg(&directory)
+            .arg("-L")
+            .arg(format!("dependency={}", dependencies.display()))
+            .arg("--extern")
+            .arg(format!("ahash={}", candidate.display()))
+            .output()
+            .expect("probe the raw-rustc dependency graph");
+            if output.status.success() {
+                std::fs::remove_dir_all(directory).unwrap();
+                return candidate;
+            }
+            failures.push_str(&String::from_utf8_lossy(&output.stderr));
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+        panic!("no usable ahash rlib built by cq-testkit's dependency: {failures}");
+    });
+    let mut command =
+        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
+    command
+        .arg("-L")
+        .arg(format!("dependency={}", dependencies.display()))
+        .arg("--extern")
+        .arg(format!("ahash={}", ahash.display()));
+    command
+}

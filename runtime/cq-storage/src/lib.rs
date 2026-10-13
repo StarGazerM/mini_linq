@@ -80,6 +80,7 @@ pub(crate) use count;
 pub mod counters;
 pub mod dispatch;
 mod hash_index;
+mod hash_state;
 mod host;
 mod instrument;
 mod membership;
@@ -90,6 +91,7 @@ mod trie;
 pub use answers::{Answers, GroupedAnswers};
 pub use candidates::{Candidates, Keys};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
+pub use hash_state::{HashSet, HashSetConstructor, HashState};
 pub use membership::{Canonical, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,

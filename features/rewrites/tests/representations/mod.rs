@@ -101,6 +101,22 @@ fn named_payload_and_dedup_retypes_execute_corpus_physical() {
 
 #[test]
 #[allow(non_snake_case)]
+fn standard_hash_state_retypes_execute_after_fast_default_selection() {
+    let (R, S, expected) = intersection_inputs();
+    let actual: Rows = cq_rewrite_test_driver::corpus_physical! {
+        intersection; pipeline {
+            mini_linq::passes::select,
+            cq_rewrites::retype(dedup => ::std::collections::HashSet<_>),
+            mini_linq::passes::print_pull
+        }
+    }
+    .map(|(x, y)| vec![*x, *y])
+    .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
     let L = BTreeMap::from([((1,), vec![()]), ((2,), vec![()]), ((3,), vec![()])]);
     let R = [(1, 10), (1, 11), (2, 20), (3, 30), (1, 10)];

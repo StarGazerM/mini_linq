@@ -197,7 +197,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
             r host scan = ::core::iter::Map<_, _> [];
             r host s = Shared<'_, _, _> [x];
             r host p = Shared<'_, _, _> [x];
-            p canon = ::std::collections::HashSet<_>;
+            p canon = ::cq_storage::HashSet<_>;
         }
     };
     assert_eq!(target, expected);

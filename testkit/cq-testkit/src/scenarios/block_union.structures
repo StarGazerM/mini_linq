@@ -1,1 +1,1 @@
-structures {r0 host scan=::core::iter::Map<_,_>[]; r2 host scan=::core::iter::Map<_,_>[]; u canon=::std::collections::HashSet<_>;}
+structures {r0 host scan=::core::iter::Map<_,_>[]; r2 host scan=::core::iter::Map<_,_>[]; u canon=::cq_storage::HashSet<_>;}

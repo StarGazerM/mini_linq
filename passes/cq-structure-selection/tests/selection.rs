@@ -114,7 +114,7 @@ fn concrete_types_and_preservation_are_checked_independently() {
     let target = compile(&source).unwrap();
     assert_eq!(
         built_entries(&target),
-        syn::parse_quote!(structures { l = ::std::collections::HashSet<_> [a]; r = ::cq_storage::HashIndex<'_, _, _> [a]; })
+        syn::parse_quote!(structures { l = ::cq_storage::HashSet<_> [a]; r = ::cq_storage::HashIndex<'_, _, _> [a]; })
     );
     check(&source, &target).unwrap();
     let mut reordered = target.clone();
@@ -308,7 +308,7 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
         assert_eq!(
             built_entries(&target),
             syn::parse_str::<structures::Structures>(&format!(
-                "structures {{ {retained} = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [{prefix}][c]; }}"
+                "structures {{ {retained} = ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [{prefix}][c]; }}"
             ))
             .unwrap()
         );
@@ -381,12 +381,12 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
     assert_eq!(
         built_entries(&target),
         syn::parse_quote!(structures {
-            r = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [b][c];
+            r = ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [b][c];
             r = ::cq_storage::HashIndex<'_, _, _> [b];
             r = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [b,c];
-            r = ::std::collections::HashSet<_> [c];
-            members = ::std::collections::HashSet<_> [a];
-            ordered = ::std::collections::HashSet<_> [b];
+            r = ::cq_storage::HashSet<_> [c];
+            members = ::cq_storage::HashSet<_> [a];
+            ordered = ::cq_storage::HashSet<_> [b];
         })
     );
     let mut reordered = target.clone();
@@ -431,7 +431,7 @@ fn nonemptiness_and_keyed_membership_share_a_trie_with_an_empty_first_level() {
     assert_eq!(
         built_entries(&target),
         syn::parse_quote!(structures {
-            r = ::cq_storage::Trie<'_, _, ::std::collections::HashSet<_>> [][x];
+            r = ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [][x];
         })
     );
     check(&p, &target).unwrap();

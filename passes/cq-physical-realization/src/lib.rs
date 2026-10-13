@@ -291,6 +291,8 @@ impl Printer<'_> {
             quote!(&#nested)
         };
         quote! {{
+            #[allow(unused_imports)]
+            use ::cq_storage::HashSetConstructor as _;
             let mut __cq_seen = <#ty>::new();
             ::core::iter::Iterator::filter(#rows, move |__cq_row| {
                 ::cq_storage::require::leibniz(#key);

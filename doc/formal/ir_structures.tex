@@ -93,6 +93,35 @@ markers, keyset ownership/codec/budget and exact versus row-only read summaries.
 Positions identify base occurrences without becoming logical columns. A selection
 is not Canonical or OrderedRead. Nothing is substituted at print time.
 
+\paragraph{Default hash representations.} Selection records
+\code{::cq_storage::HashSet<_>} for built membership, canonicalization and
+head deduplication. This alias names
+\code{std::collections::HashSet<K, cq_storage::HashState>};
+\code{HashState} uses keyed aHash. Payload reads record
+\code{::cq_storage::HashIndex<'_,_,_>}; its definition uses the same fast
+hash state. A deferred host membership fallback records
+\code{::cq_storage::dispatch::KeySet<_>} (or the lazy \code{false} form),
+whose key set uses that state. Trie levels and the staging and hash forms of
+\code{AdaptiveKeySet} likewise fix their hash representation in the named
+runtime type. The printer emits recorded type tokens directly; retyping to
+\code{std::collections::HashSet<_>} retains the standard hasher.
+Dedup construction imports \code{HashSetConstructor} for hash sets with an
+explicit state, preserving the existing \code{new()} protocol and inherent
+constructors of custom providers. It does not replace a recorded type.
+Counter builds retain their deterministic measurement collections and fixed
+seeds; their hash-finish counts cover runtime internal collections, not every
+canonicalization or host hash operation.
+
+\code{HashIndex} stores table keys with arena slots and a contiguous arena of
+first payloads. Only keys with additional occurrences allocate a shared tail.
+Initialization consumes the source once, on first access, and is shared by
+cloned handles. A lookup cursor copies the first payload and owns its tail;
+it survives dropping the index and advances independently of other cursors.
+Lookup preserves source order and bag multiplicity. Candidate counts are exact
+occurrence counts (upper bounds for distinct candidate enumeration), without
+enumerating a bucket. Retained-capacity counters account for the table, arena
+and live tail buffers separately.
+
 \paragraph{Rewrite check (\code{cq_lang_structures::check_rewrite}).} Both local
 contracts hold and the embedded Physical AST and token serialization are exactly
 equal. Lineage, read coverage and summary obligations are rederived independently.

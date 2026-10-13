@@ -10,7 +10,7 @@ use crate::ExactMembership;
 use crate::instrument::{HashMap, RetainedVec};
 
 /// Exact lookup preserves stored occurrences. A cursor is independent of the
-/// temporary lookup handle: HashIndex cursors retain an owned bucket reference,
+/// temporary lookup handle: HashIndex cursors copy the first item and retain an owned tail reference,
 /// while host and trie cursors borrow their backing value for its lifetime.
 #[diagnostic::on_unimplemented(
     message = "this direct read requires IndexRead at the leading declared key type"
@@ -77,7 +77,17 @@ struct State<'a, K, V> {
     #[cfg(feature = "counters")]
     allocation: RefCell<crate::counters_memory::Allocation>,
     source: RefCell<Option<Source<'a, K, V>>>,
-    buckets: OnceCell<HashMap<K, Rc<RetainedVec<V>>>>,
+    buckets: OnceCell<Buckets<K, V>>,
+}
+// Keys retain compact table slots; payloads occupy a contiguous arena. A
+// singleton needs no allocation or reference-counted handle of its own.
+struct Buckets<K, V> {
+    index: HashMap<K, usize>,
+    values: Vec<Bucket<V>>,
+}
+struct Bucket<V> {
+    first: V,
+    tail: Option<Rc<RetainedVec<V>>>,
 }
 impl<K, V> Clone for HashIndex<'_, K, V> {
     fn clone(&self) -> Self {
@@ -105,15 +115,17 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
     fn lookup(&self, key: &K) -> Self::Cursor {
         crate::count!(lookups);
         let buckets = self.buckets();
+        let bucket = buckets.index.get(key).map(|&slot| &buckets.values[slot]);
         BucketCursor {
-            bucket: buckets.get(key).cloned(),
+            first: bucket.map(|bucket| bucket.first),
+            tail: bucket.and_then(|bucket| bucket.tail.clone()),
             position: 0,
         }
     }
 }
 
 impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
-    fn buckets(&self) -> &HashMap<K, Rc<RetainedVec<V>>> {
+    fn buckets(&self) -> &Buckets<K, V> {
         self.state.buckets.get_or_init(|| {
             crate::count!(index_builds);
             let source = self
@@ -122,28 +134,43 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
                 .borrow_mut()
                 .take()
                 .expect("the source is consumed only by this initialization");
-            let mut buckets = HashMap::<K, Rc<RetainedVec<V>>>::default();
+            let mut index = HashMap::default();
+            let mut values: Vec<Bucket<V>> = Vec::new();
             for (key, value) in source {
                 crate::count!(rows_copied);
-                let bucket = buckets.entry(key).or_default();
-                // No cursor can see these buckets until initialization finishes.
-                Rc::get_mut(bucket)
-                    .expect("unpublished bucket is uniquely owned")
-                    .push(value);
+                match index.entry(key) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(values.len());
+                        values.push(Bucket {
+                            first: value,
+                            tail: None,
+                        });
+                    }
+                    std::collections::hash_map::Entry::Occupied(entry) => {
+                        let tail = values[*entry.get()]
+                            .tail
+                            .get_or_insert_with(Default::default);
+                        // No cursor can see these buckets until initialization finishes.
+                        Rc::get_mut(tail)
+                            .expect("unpublished bucket is uniquely owned")
+                            .push(value);
+                    }
+                }
             }
             #[cfg(feature = "counters")]
             {
-                for bucket in buckets.values_mut() {
-                    Rc::get_mut(bucket).expect("unpublished bucket").account();
+                for bucket in &mut values {
+                    if let Some(tail) = &mut bucket.tail {
+                        Rc::get_mut(tail).expect("unpublished tail").account();
+                    }
                 }
                 *self.state.allocation.borrow_mut() = crate::counters_memory::Allocation::new(
-                    buckets.capacity()
-                        * (std::mem::size_of::<K>()
-                            + std::mem::size_of::<Rc<RetainedVec<V>>>()
-                            + 1),
+                    index.capacity()
+                        * (std::mem::size_of::<K>() + std::mem::size_of::<usize>() + 1)
+                        + values.capacity() * std::mem::size_of::<Bucket<V>>(),
                 );
             }
-            buckets
+            Buckets { index, values }
         })
     }
 }
@@ -151,14 +178,14 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
 impl<K: Eq + Hash, V> crate::Keys for HashIndex<'_, K, V> {
     type Key = K;
     type Iter<'a>
-        = crate::instrument::Cursor<std::collections::hash_map::Keys<'a, K, Rc<RetainedVec<V>>>>
+        = crate::instrument::Cursor<std::collections::hash_map::Keys<'a, K, usize>>
     where
         Self: 'a;
     fn key_count(&self) -> usize {
-        self.buckets().len()
+        self.buckets().index.len()
     }
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        crate::instrument::cursor!(self.buckets().keys())
+        crate::instrument::cursor!(self.buckets().index.keys())
     }
 }
 
@@ -168,7 +195,15 @@ impl<K: Eq + Hash, V: Copy + Eq + Hash> crate::Candidates for HashIndex<'_, K, V
     type Iter = crate::candidates::Distinct<BucketCursor<V>>;
     fn count(&self, key: &K) -> usize {
         crate::count!(lookups);
-        self.buckets().get(key).map_or(0, |v| v.len())
+        {
+            let buckets = self.buckets();
+            buckets.index.get(key).map_or(0, |&slot| {
+                1 + buckets.values[slot]
+                    .tail
+                    .as_ref()
+                    .map_or(0, |tail| tail.len())
+            })
+        }
     }
     fn keys(&self, key: &K) -> Self::Iter {
         crate::candidates::Distinct::new(self.lookup(key))
@@ -176,14 +211,22 @@ impl<K: Eq + Hash, V: Copy + Eq + Hash> crate::Candidates for HashIndex<'_, K, V
 }
 
 pub struct BucketCursor<V> {
-    bucket: Option<Rc<RetainedVec<V>>>,
+    first: Option<V>,
+    tail: Option<Rc<RetainedVec<V>>>,
     position: usize,
 }
+// A cursor exposes copied items, never a pinned projection into its first item.
+// Retain the unconditional Unpin contract of the previous Rc-backed cursor.
+impl<V> Unpin for BucketCursor<V> {}
 impl<V: Copy> Iterator for BucketCursor<V> {
     type Item = V;
     fn next(&mut self) -> Option<V> {
         crate::count!(cursor_steps);
-        let item = self.bucket.as_ref()?.get(self.position).copied();
+        if let Some(item) = self.first.take() {
+            crate::count!(rows_enumerated);
+            return Some(item);
+        }
+        let item = self.tail.as_ref()?.get(self.position).copied();
         if item.is_some() {
             crate::count!(rows_enumerated);
             self.position += 1;
@@ -204,6 +247,30 @@ impl<K: Eq + Hash, V: Copy> ExactMembership<K> for HashIndex<'_, K, V> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn cursors_are_independent_fused_and_unconditionally_unpin() {
+        fn unpin<T: Unpin>() {}
+        unpin::<BucketCursor<std::marker::PhantomPinned>>();
+        let index = HashIndex::build([(1, 10), (1, 10), (2, 20), (1, 11)].into_iter());
+        let mut first = index.lookup(&1);
+        let second = index.lookup(&1);
+        let singleton = index.lookup(&2);
+        let mut missing = index.lookup(&3);
+        assert_eq!(crate::Candidates::count(&index, &1), 3);
+        assert_eq!(crate::Candidates::count(&index, &2), 1);
+        assert_eq!(crate::Candidates::count(&index, &3), 0);
+        assert_eq!(crate::Keys::key_count(&index), 2);
+        assert_eq!(first.next(), Some(10));
+        drop(index);
+        assert_eq!(second.collect::<Vec<_>>(), [10, 10, 11]);
+        assert_eq!(singleton.collect::<Vec<_>>(), [20]);
+        assert_eq!(first.by_ref().collect::<Vec<_>>(), [10, 11]);
+        assert_eq!(first.next(), None);
+        assert_eq!(first.next(), None);
+        assert_eq!(missing.next(), None);
+        assert_eq!(missing.next(), None);
+    }
     #[test]
     fn deferred_build_is_shared_and_cursors_own_buckets() {
         let polls = Cell::new(0);
@@ -215,12 +282,15 @@ mod tests {
         let shared = index.clone();
         assert_eq!(polls.get(), 0);
         let cursor = index.lookup(&1);
+        let singleton = shared.lookup(&2);
         assert_eq!(polls.get(), 3);
         assert_eq!(shared.lookup(&2).collect::<Vec<_>>(), vec![&values[2]]);
         assert_eq!(shared.lookup(&9).next(), None);
         assert_eq!(polls.get(), 3);
         drop(index);
         drop(shared);
+        let unique = singleton.collect::<Vec<_>>();
+        assert!(std::ptr::eq(unique[0], &values[2]));
         let rows = cursor.collect::<Vec<_>>();
         assert!(std::ptr::eq(rows[0], &values[0]));
         assert!(std::ptr::eq(rows[1], &values[1]));

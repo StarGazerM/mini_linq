@@ -37,7 +37,7 @@ enum Need {
 impl Need {
     fn default_type(self) -> syn::Type {
         match self {
-            Need::Contains => syn::parse_quote!(::std::collections::HashSet<_>),
+            Need::Contains => syn::parse_quote!(::cq_storage::HashSet<_>),
             Need::Seek => syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>),
             Need::Ordered => {
                 syn::parse_quote!(::std::collections::BTreeMap<_, ::std::vec::Vec<_>>)
@@ -88,7 +88,7 @@ fn chain(reads: &[(&Vec<String>, &BTreeSet<Need>)]) -> Option<Vec<Vec<String>>> 
 }
 
 fn payload_provider(ty: &mut syn::Type) {
-    if *ty == syn::parse_quote!(::std::collections::HashSet<_>) {
+    if *ty == syn::parse_quote!(::cq_storage::HashSet<_>) {
         *ty = Need::Seek.default_type();
         return;
     }
@@ -276,7 +276,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         let name = symbol_name(&definition.name);
         let ident = &definition.name;
         if definition.canon.is_some() {
-            entries.extend(quote!(#ident canon = ::std::collections::HashSet<_>;));
+            entries.extend(quote!(#ident canon = ::cq_storage::HashSet<_>;));
         }
         if analysis.modes[&name] != ModeKind::Pipe {
             let ty: syn::Type = if analysis.modes[&name] == ModeKind::Exists {
@@ -384,7 +384,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     }
     if structures::head_needs_dedup(source, &analysis) {
         let returned = &program.returned;
-        entries.extend(quote!(#returned head = ::std::collections::HashSet<_>;));
+        entries.extend(quote!(#returned head = ::cq_storage::HashSet<_>;));
     }
     // Record the storage decision, including its row projection, before any
     // realization. Readers on one key share a single filtered build.

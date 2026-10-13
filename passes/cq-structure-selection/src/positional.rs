@@ -303,7 +303,7 @@ pub(super) fn choose(
             Structure::Host { reader, .. } if reads.contains(&symbol_name(reader)) => false,
             Structure::Rows { .. } => !selections.contains(&symbol_name(&entry.name)),
             Structure::Built { keyed, .. }
-                if keyed.ty == syn::parse_quote!(::std::collections::HashSet<_>)
+                if keyed.ty == syn::parse_quote!(::cq_storage::HashSet<_>)
                     && keyed.levels.len() == 1 =>
             {
                 !sets.contains(&(symbol_name(&entry.name), keyed.level_names()[0].clone()))

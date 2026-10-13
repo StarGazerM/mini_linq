@@ -1,9 +1,11 @@
-//! Feature-off aliases are the original collections and cursors, with no state
+//! Feature-off aliases are the selected fast-hash collections and cursors, with no counter state
 //! or counter calls. Compiler-emitted tokens never depend on this feature.
 #[cfg(feature = "counters")]
 pub(crate) use crate::counters::{HashMap, HashSet};
 #[cfg(not(feature = "counters"))]
-pub(crate) use std::collections::{HashMap, HashSet};
+pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, crate::HashState>;
+#[cfg(not(feature = "counters"))]
+pub(crate) use crate::HashSet;
 
 #[cfg(feature = "counters")]
 pub struct Cursor<I> {

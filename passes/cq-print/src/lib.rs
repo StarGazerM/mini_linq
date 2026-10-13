@@ -543,7 +543,9 @@ impl<'a> Context<'a> {
                 quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
             };
             statements.push(syn::parse_quote! { let #structure = &#build; });
-            if *ty == syn::parse_quote!(::std::collections::HashSet<_>) {
+            if *ty == syn::parse_quote!(::std::collections::HashSet<_>)
+                || *ty == syn::parse_quote!(::cq_storage::HashSet<_>)
+            {
                 let allocation = format_ident!(
                     "__cq_{}_keys_allocation",
                     structure,

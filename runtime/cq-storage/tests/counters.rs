@@ -70,3 +70,29 @@ fn retained_payload_cursors_and_reset_epochs_have_correct_ownership() {
     drop(cursor);
     assert_eq!(counters::snapshot().bytes_retained_current, 0);
 }
+
+#[test]
+fn singleton_cursor_needs_no_retained_allocation_and_count_does_not_walk_bags() {
+    use cq_storage::Candidates;
+    counters::reset();
+    let singleton = HashIndex::build([(1, 10)].into_iter());
+    let cursor = singleton.lookup(&1);
+    assert!(counters::snapshot().bytes_retained_current > 0);
+    drop(singleton);
+    assert_eq!(counters::snapshot().bytes_retained_current, 0);
+    assert_eq!(cursor.collect::<Vec<_>>(), [10]);
+
+    counters::reset();
+    let index = HashIndex::build([(1, 10), (1, 10), (1, 11)].into_iter());
+    assert_eq!(index.count(&1), 3);
+    let built = counters::snapshot();
+    assert_eq!(built.index_builds, 1);
+    assert_eq!(built.rows_copied, 3);
+    assert_eq!(built.cursor_steps, 0);
+    assert_eq!(index.count(&1), 3);
+    assert_eq!(index.count(&2), 0);
+    let counted = counters::snapshot();
+    assert_eq!(counted.index_builds, 1);
+    assert_eq!(counted.rows_copied, 3);
+    assert_eq!(counted.cursor_steps, 0);
+}

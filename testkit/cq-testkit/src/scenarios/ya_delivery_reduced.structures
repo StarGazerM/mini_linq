@@ -1,4 +1,4 @@
-structures { r2 = :: std :: collections :: HashSet < _ > [item];
+structures { r2 = :: cq_storage :: HashSet < _ > [item];
  r4 = :: cq_storage :: HashIndex < '_ , _ , _ > [item];
  r5 = :: cq_storage :: HashIndex < '_ , _ , _ > [depot];
  r0 host scan = :: core :: iter :: Map < _ , _ > [];
@@ -6,5 +6,5 @@ structures { r2 = :: std :: collections :: HashSet < _ > [item];
  r1 host r2 = :: cq_storage :: dispatch :: KeySet < _ > [depot];
  r2 rows = :: std :: vec :: Vec < _ >;
  r3 host scan = :: core :: iter :: Map < _ , _ > [];
- r9 canon = :: std :: collections :: HashSet < _ >;
+ r9 canon = :: cq_storage :: HashSet < _ >;
  }

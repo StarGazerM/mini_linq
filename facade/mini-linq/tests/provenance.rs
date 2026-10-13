@@ -447,7 +447,7 @@ fn run_cases(cases: &[TokenStream]) {
         .join(std::thread::current().name().unwrap());
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("main.rs"), program.to_string()).unwrap();
-    let runtime = std::process::Command::new("rustc")
+    let runtime = cq_testkit::runtime_rustc()
         .args([
             "--edition=2024",
             "--crate-name",
@@ -467,7 +467,7 @@ fn run_cases(cases: &[TokenStream]) {
         "{}",
         String::from_utf8_lossy(&runtime.stderr)
     );
-    let build = std::process::Command::new("rustc")
+    let build = cq_testkit::runtime_rustc()
         .arg("--edition=2024")
         .arg(dir.join("main.rs"))
         .arg("--extern")

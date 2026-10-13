@@ -105,6 +105,8 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
     });
     let statements = &push.statements;
     let mut expression = syn::parse2(quote!({
+        #[allow(unused_imports)]
+        use ::cq_storage::HashSetConstructor as _;
         #(#statements)*
         let mut #out = ::std::vec::Vec::new();
         #head_state

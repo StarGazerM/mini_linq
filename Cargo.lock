@@ -571,6 +571,9 @@ version = "0.1.0"
 [[package]]
 name = "cq-storage"
 version = "0.1.0"
+dependencies = [
+ "ahash",
+]
 
 [[package]]
 name = "cq-structure-selection"
@@ -599,6 +602,7 @@ dependencies = [
 name = "cq-testkit"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "cq-lang-cq",
  "cq-lang-ix",
  "cq-lang-physical",

@@ -17,6 +17,56 @@ fn program(module: &structures::Program) -> String {
     text(expr)
 }
 
+#[test]
+fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
+    use structures::Structure;
+    use syn::visit_mut::VisitMut;
+    struct ReplaceSets(syn::Type);
+    impl VisitMut for ReplaceSets {
+        fn visit_type_mut(&mut self, ty: &mut syn::Type) {
+            if *ty == syn::parse_quote!(::cq_storage::HashSet<_>) {
+                *ty = self.0.clone();
+            } else {
+                syn::visit_mut::visit_type_mut(self, ty);
+            }
+        }
+    }
+    let fast: syn::Type = syn::parse_quote!(::cq_storage::HashSet<_>);
+    let standard: syn::Type = syn::parse_quote!(::std::collections::HashSet<_>);
+    let explicit: syn::Type = syn::parse_quote!(
+        ::std::collections::HashSet<_, ::std::collections::hash_map::RandomState>
+    );
+    for case in scenarios::SCENARIOS {
+        let source = case.parse_physical().unwrap();
+        let selected = cq_structure_selection::compile(&source).unwrap();
+        assert!(!text(&selected.structures).contains(&text(&standard)));
+        for ty in [&fast, &standard, &explicit] {
+            let mut recorded = selected.clone();
+            let mut replace = ReplaceSets(ty.clone());
+            for entry in &mut recorded.structures.entries {
+                let provider = match &mut entry.structure {
+                    Structure::Built { keyed, .. } | Structure::Host { keyed, .. } => &mut keyed.ty,
+                    Structure::Rows { ty, .. }
+                    | Structure::Dedup { ty, .. }
+                    | Structure::HeadDedup { ty, .. }
+                    | Structure::Selection { ty, .. }
+                    | Structure::KeySet { ty, .. } => ty,
+                    Structure::Read { .. } => continue,
+                };
+                replace.visit_type_mut(provider);
+            }
+            structures::check_rewrite(&selected, &recorded).unwrap();
+            let printed = text(compile(&recorded).unwrap());
+            if text(&recorded.structures).contains(&text(ty)) {
+                assert!(printed.contains(&text(ty)), "{}: {printed}", case.name);
+            }
+            if ty != &fast {
+                assert!(!printed.contains(&text(&fast)), "{}: {printed}", case.name);
+            }
+        }
+    }
+}
+
 /// Default selection and printed Rust must agree with an independent CQ Set
 /// oracle for every host/retained orientation, including shared storage reads.
 fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
@@ -360,10 +410,9 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         #![allow(non_snake_case, unused_variables)]
         fn main() { #(#checks)* }
     };
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let runtime = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
         .join("../../runtime/cq-storage/src/lib.rs");
-    let compiled = Command::new(&rustc)
+    let compiled = cq_testkit::runtime_rustc()
         .args([
             "--edition=2024",
             "--crate-name",
@@ -384,7 +433,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     let path = directory.join("main.rs");
     std::fs::write(&path, source.to_string()).unwrap();
     let binary = directory.join("answers");
-    let compiled = Command::new(&rustc)
+    let compiled = cq_testkit::runtime_rustc()
         .arg("--edition=2024")
         .arg(&path)
         .arg("--extern")
@@ -422,7 +471,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
         }
     );
     std::fs::write(&path, invalid.to_string()).unwrap();
-    let rejected = Command::new(&rustc)
+    let rejected = cq_testkit::runtime_rustc()
         .arg("--edition=2024")
         .arg(&path)
         .arg("--extern")

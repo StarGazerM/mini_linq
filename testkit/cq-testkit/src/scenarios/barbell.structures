@@ -11,5 +11,5 @@ structures { r0 host scan = :: core :: iter :: Map < _ , _ > [];
  r9 host r10 = :: cq_storage :: HashIndex < '_ , _ , _ > [v];
  r11 host scan = :: core :: iter :: Map < _ , _ > [];
  r11 host r12 = :: cq_storage :: HashIndex < '_ , _ , _ > [u , w];
- r13 canon = :: std :: collections :: HashSet < _ >;
+ r13 canon = :: cq_storage :: HashSet < _ >;
  }
