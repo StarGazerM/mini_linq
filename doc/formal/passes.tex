@@ -169,10 +169,12 @@ and $\mathsf{red}(i,j)$ the reduction of $i$ by $j$ on their shared classes:
  {\mathsf{Tree}(VO)=\mathsf{insertAtReadyPrefix}(VO,\mathsf{up}(J)\concat\mathsf{down}(J))}
 \end{mathpar}
 The insertion point is the first atom/block, or the earliest prefix providing
-the Rust bindings a finite block domain needs. \code{Hypergraph} uses Tree when
-acyclic and additionally cuts each atom sharing columns with a Rust-free block
-through that block's derived relation, also on cyclic inputs; reductions recurse
-into arms, distribute into positive uses and never into negated originals.
+the Rust bindings a finite block domain needs. \code{Hypergraph} uses a tree
+reducer only on acyclic scopes, but exact atom-to-block cuts on any scope:
+each atom sharing columns with a finite Rust-free block is semijoined through
+that block's derived relation. Each branch is analyzed independently; an
+acyclic branch under a cyclic root may receive its own tree reducer.
+Reductions distribute into positive uses and never into negated originals.
 \[
 \Rule{CK-Reduce}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{VO}(t)\\
  \mathsf{ReduceObligations}(s,t,\chi)}
@@ -181,7 +183,9 @@ into arms, distribute into positive uses and never into negated originals.
 $\mathsf{ReduceObligations}$: reduction-free source, unchanged CQ, equal step
 erasure; under None no reductions; under Tree an acyclic source with every
 directed tree edge once, all upward before downward, respecting parent/child
-order; Hypergraph adds every atom-to-block cut.
+order; Hypergraph requires exact atom-to-block cuts in both cyclic and acyclic
+scopes, and tree edges only in acyclic scopes. Cyclic block-free scopes have no
+reductions. Missing cuts and non-tree atom-to-atom reductions are rejected.
 \begin{theorem}[Full reducer]
 On a join tree, upward reverse-BFS then downward BFS semijoins preserve
 $Q=\bowtie_iL_i$ and leave each $L_i=\pi_{X_i}Q$, in $2(n-1)$ steps.
@@ -479,9 +483,12 @@ host and built fields; computed columns and lookup keys are owned; canonicality
 never follows from a host type.
 
 \subsection{Facade compositions}
-With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction and $E$ elaboration:
+With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction, $E$ elaboration,
+and $S$ checked redundant-support absorption:
 \begin{mathpar}
-\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad a=E(v)}
+\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
+ r=\text{None if \code{no_reduce}, otherwise Hypergraph}\\
+ w=R_{None,r}(v)\quad a=\begin{cases}E(w)&\text{if \code{no_reduce}}\\S(E(w))&\text{otherwise}\end{cases}}
  {\code{mini_linq::passes::plan_written}(q)=a}
 
 \Rule{Plan-Generic}{n=N(q)\quad v=O_{Written,Fine}(n)\quad a=E(v)}
@@ -489,8 +496,27 @@ With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction and $E$ elaborat
 
 \Rule{Plan-Graph}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
  r=\text{Hypergraph if blocks; otherwise Tree if acyclic, else None}\\
- w=R_{None,r}(v)\quad a=E(w)}
+ w=R_{None,r}(v)\quad a=S(E(w))}
  {\code{cq_planners::order(hypergraph)}(q)=a}
 \end{mathpar}
-\code{plan_written} uses the optimizing elaborator, so it is not the exact
-reference. Generic and Graph belong to the external \code{cq-planners} consumer.
+\code{plan_written} defaults to checked Hypergraph reduction: acyclic bodies
+receive a full upward/downward tree reducer. Both acyclic and cyclic scopes may
+receive exact atom-to-block cuts; cyclic block-free scopes receive no reductions.
+Every branch is its own scope. Reduction compilation is independently checked before
+elaboration. After checking elaboration against the reduced VO schedule, the
+default and external Hypergraph planner apply the same checked RA realization
+rewrite. It uses
+$L\ltimes(R\ltimes L)=L\ltimes R$ and
+$L'\bowtie(R\ltimes L)=L'\bowtie R$ only when the required shared columns of $L'$
+are proven contained in $L$ by reduction lineage. Dead reduced copies are then
+removed; independent consumers that still need a reduction keep it alive.
+The rewrite is checked against the original RA, does not alter the reduction
+algorithm, and can retain native host probes instead of materializing redundant
+hash indices. Set
+\code{pipeline \{ plan = mini_linq::passes::plan_written(no_reduce); \}}
+to recover the previous unreduced Written/Coarse plan. Configuration passes this
+argument through its existing named planning invocation.
+\code{plan_written} uses the optimizing elaborator, so even the opt-out is not
+the exact reference. Generic and the external Graph spelling belong to the
+external \code{cq-planners} consumer; Graph and the facade default have the same
+reduction and realization policy.

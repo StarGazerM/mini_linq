@@ -1262,6 +1262,7 @@ dependencies = [
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
+ "cq-reduce",
  "cq-stage",
  "cq-structure-selection",
  "proc-macro2",

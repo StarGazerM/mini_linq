@@ -17,6 +17,7 @@ struct Options {
     sf: String,
     runs: usize,
     query: Option<String>,
+    reduction_comparison: bool,
 }
 impl Options {
     fn parse(arguments: Vec<String>) -> Result<Self> {
@@ -24,10 +25,12 @@ impl Options {
         let mut sf = None;
         let mut runs = None;
         let mut query = None;
+        let mut reduction_comparison = false;
         let mut args = arguments.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--tpch" if !tpch => tpch = true,
+                "--reduction-comparison" if !reduction_comparison => reduction_comparison = true,
                 "--query" if query.is_none() => {
                     query = Some(args.next().ok_or("--query requires a catalog query")?)
                 }
@@ -54,7 +57,7 @@ impl Options {
         if runs < 3 || runs % 2 == 0 {
             return Err("--runs must be odd and at least 3".into());
         }
-        Ok(Self { sf, runs, query })
+        Ok(Self { sf, runs, query, reduction_comparison })
     }
 }
 
@@ -144,7 +147,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             return Err(format!("unknown TPC query {name}").into());
         }
     }
-    let queries = cq_workloads::tpch::CASES
+    let mut queries = cq_workloads::tpch::CASES
         .iter()
         .filter(|case| options.query.as_ref().is_none_or(|name| case.name == name))
         .map(|case| {
@@ -158,6 +161,15 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             )
         })
         .collect::<Result<Vec<_>>>()?;
+    if options.reduction_comparison {
+        for query in &mut queries {
+            query.configs.retain(|config| matches!(config.as_str(), "default" | "no-reduce"));
+        }
+    } else {
+        for query in &mut queries {
+            query.configs.retain(|config| config != "no-reduce");
+        }
+    }
     // Gate every query/configuration on SF 0.1 before any timed measurements,
     // even when this invocation requests SF 1. Use the freshly compiled workers.
     let small = if options.sf == "0.1" {
@@ -185,10 +197,13 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             );
         }
     }
-    let suffix = options
+    let mut suffix = options
         .query
         .as_ref()
         .map_or(String::new(), |name| format!("-{name}"));
+    if options.reduction_comparison {
+        suffix.push_str("-reduction-comparison");
+    }
     let path = bench.join(format!("tpch-{}{suffix}.tsv", options.sf));
     let pending = path.with_extension("tsv.partial");
     let mut table = String::from(
@@ -503,6 +518,7 @@ mod tests {
                 sf: "0.1".into(),
                 runs: 5,
                 query: None,
+                reduction_comparison: false,
             }
         );
         for args in [
@@ -510,6 +526,7 @@ mod tests {
             vec!["--tpch", "--sf", "2"],
             vec!["--tpch", "--sf", "1", "--runs", "2"],
             vec!["--tpch", "--sf", "1", "--sf", "1"],
+            vec!["--tpch", "--sf", "1", "--reduction-comparison", "--reduction-comparison"],
         ] {
             assert!(parse(&args).is_err());
         }

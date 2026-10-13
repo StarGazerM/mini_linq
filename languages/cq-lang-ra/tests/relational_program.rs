@@ -753,6 +753,61 @@ fn predicates_belong_to_their_independent_projected_witnesses() {
 }
 
 #[test]
+fn split_witness_wiring_accepts_local_semijoin_identities() {
+    let compact: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        px = project r keep {x}; py = project r keep {y};
+        filtered = select py if (y = 1);
+        j = semijoin px with filtered; output j as answer(x);
+    }};
+    let expanded: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        px = project r keep {x}; py = project r keep {y};
+        filtered = select py if (y = 1);
+        identity = select filtered if (y = y);
+        j = natural_join px with identity;
+        p = project j keep {x}; output p as answer(x);
+    }};
+    let projected: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        px = project r keep {x}; py = project r keep {y};
+        filtered = select py if (y = 1);
+        exists = project filtered keep {};
+        j = natural_join px with exists;
+        p = project j keep {x}; output p as answer(x);
+    }};
+    for target in [&expanded, &projected] {
+        ra::check_rewrite(&compact, target).unwrap();
+        ra::check_rewrite(target, &compact).unwrap();
+    }
+}
+
+#[test]
+fn semijoin_wiring_cannot_restore_a_hidden_shared_support_column() {
+    let independent: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        px = project r keep {x}; filtered = select r if (y = 1);
+        exists = project filtered keep {};
+        j = semijoin px with exists; output j as answer(x);
+    }};
+    let correlated: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        px = project r keep {x}; filtered = select r if (y = 1);
+        j = semijoin px with filtered; output j as answer(x);
+    }};
+    ra::check_rewrite(&independent, &independent).unwrap();
+    ra::check_rewrite(&correlated, &correlated).unwrap();
+    for (source, target) in [(&independent, &correlated), (&correlated, &independent)] {
+        assert!(
+            ra::check_rewrite(source, target)
+                .unwrap_err()
+                .to_string()
+                .contains("projection correlations")
+        );
+    }
+}
+
+#[test]
 fn final_equality_does_not_deduplicate_distinct_before_constraints() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};

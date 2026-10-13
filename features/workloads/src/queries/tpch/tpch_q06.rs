@@ -10,7 +10,7 @@ pub const EXPORTS: &[(&str, &str)] = &[(
     "lineitem",
     "l_orderkey,l_linenumber,l_quantity,l_extendedprice,l_discount,l_shipdate",
 )];
-pub const CONFIGS: &[&str] = &["default", "generic-smallest"];
+pub const CONFIGS: &[&str] = &["default", "no-reduce", "generic-smallest"];
 
 ::mini_linq::relation_loaders! {
     relation Lineitem(
@@ -88,6 +88,7 @@ crate::tpch_runtime::configuration!(generic_smallest, $,
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::execute(data),
+        "no-reduce" => no_reduce::execute(data),
         "generic-smallest" => generic_smallest::execute(data),
         _ => panic!("unknown Q6 configuration: {config}"),
     }

@@ -216,6 +216,203 @@ fn semijoin_reductions_restrict_clause_relations() {
 }
 
 #[test]
+fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
+    let query = cq(quote! {
+        struct Q; relation l(k:i32); relation r(k:i32,v:i32);
+        answer(k,v) :- l(k), r(k,v);
+    });
+    let reduced = vo(
+        &query,
+        quote! {
+            reduce r@1 with l@0(k); reduce l@0 with r@1(k,_);
+            l@0(k); r@1(k,v);
+        },
+    );
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation l(k:i32); relation r(k:i32,v:i32);
+        r0 = rename r@1 {k -> k,v -> v};
+        r1 = rename l@0 {k -> k};
+        r2 = semijoin r0 with r1;
+        r3 = semijoin r1 with r2;
+        r4 = natural_join r3 with r2;
+        output r4 as answer(k,v);
+    }};
+    check(&reduced, &source).unwrap();
+    let target = cq_elaborate::simplify_reductions(&source).unwrap();
+    assert_plan(
+        &target,
+        quote! {
+            r0 = rename r@1 {k -> k,v -> v};
+            r1 = rename l@0 {k -> k};
+            r3 = semijoin r1 with r0;
+            r4 = natural_join r3 with r0;
+            output r4 as answer(k,v);
+        },
+    );
+    let reference = cq_elaborate::compile_written(&coarse(&query)).unwrap();
+    ra::check_rewrite(&source, &target).unwrap();
+    ra::check_rewrite(&reference, &target).unwrap();
+    // Absorption is an RA rewrite, not permission to omit a named VO reduction.
+    assert!(check(&reduced, &target).is_err());
+    assert_eq!(cq_elaborate::simplify_reductions(&target).unwrap(), target);
+    for seed in 0..64 {
+        let database = databases::binary_database(&query, seed);
+        assert_eq!(
+            oracle::evaluate_ra(&target, &database).output,
+            cq_oracle::evaluate_cq(&query, &database),
+            "seed {seed}"
+        );
+    }
+}
+
+#[test]
+fn reduction_absorption_certificate_rejects_changed_support_predicates() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation l(k:i32); relation r(k:i32,v:i32);
+        r0 = rename r@1 {k -> k,v -> v};
+        r1 = rename l@0 {k -> k};
+        support = select r1 if (k > 0);
+        r2 = semijoin r0 with support;
+        r3 = semijoin support with r2;
+        r4 = natural_join r3 with r2;
+        output r4 as answer(k,v);
+    }};
+    let target = cq_elaborate::simplify_reductions(&source).unwrap();
+    assert_plan(
+        &target,
+        quote! {
+            r0 = rename r@1 {k -> k,v -> v};
+            r1 = rename l@0 {k -> k};
+            support = select r1 if (k > 0);
+            r3 = semijoin support with r0;
+            r4 = natural_join r3 with r0;
+            output r4 as answer(k,v);
+        },
+    );
+    ra::check_rewrite(&source, &target).unwrap();
+    let mut changed = target;
+    changed.plan.definitions[2].operator = syn::parse_quote!(select r1 if (k >= 0));
+    ra::contract::check(&changed).unwrap();
+    assert!(ra::check_rewrite(&source, &changed).is_err());
+}
+
+#[test]
+fn reduction_absorption_retains_support_for_an_uncontained_consumer() {
+    let query = cq(quote! {
+        struct Q; relation R(x:i32,y:i32); relation T(y:i32); relation U(x:i32);
+        answer(x,y) :- R(x,y), T(y), U(x);
+    });
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(x:i32,y:i32); relation T(y:i32); relation U(x:i32);
+        r = rename R@0 {x -> x,y -> y};
+        t = rename T@1 {y -> y};
+        u = rename U@2 {x -> x};
+        reduced = semijoin r with t;
+        result = natural_join u with reduced;
+        output result as answer(x,y);
+    }};
+    let target = cq_elaborate::simplify_reductions(&source).unwrap();
+    assert_eq!(target, source);
+    let reference = cq_elaborate::compile_written(&coarse(&query)).unwrap();
+    ra::check_rewrite(&reference, &target).unwrap();
+    let mut bypassed = source.clone();
+    bypassed.plan.definitions[4].operator = syn::parse_quote!(natural_join u with r);
+    assert!(ra::check_rewrite(&source, &bypassed).is_err());
+    let mut database = databases::binary_database(&query, 0);
+    database.insert("R".into(), [vec![0, 1]].into());
+    database.insert("T".into(), [vec![0]].into());
+    database.insert("U".into(), [vec![0]].into());
+    let expected = cq_oracle::evaluate_cq(&query, &database);
+    assert_eq!(oracle::evaluate_ra(&target, &database).output, expected);
+    assert_ne!(oracle::evaluate_ra(&bypassed, &database).output, expected);
+}
+
+#[test]
+fn reduction_absorption_does_not_confuse_projected_aliases_with_full_key_support() {
+    // Sharing T's x projection is insufficient: the reducer also matches y.
+    // The aliases deliberately share a base occurrence but not its full heading.
+    for (consumer, bypass, head) in [
+        (
+            quote!(natural_join alias with reduced),
+            quote!(natural_join alias with r),
+            quote!(answer(x,y)),
+        ),
+        (
+            quote!(semijoin alias with reduced),
+            quote!(semijoin alias with r),
+            quote!(answer(x)),
+        ),
+    ] {
+        let query = cq(quote! {
+            struct Q; relation R(x:i32,y:i32); relation T(x:i32,y:i32);
+            #head :- R(x,y), T(x,y);
+        });
+        let source: ra::Program = syn::parse_quote! { relational {
+            relation R(x:i32,y:i32); relation T(x:i32,y:i32);
+            r = rename R@0 {x -> x,y -> y};
+            t = rename T@1 {x -> x,y -> y};
+            reduced = semijoin r with t;
+            projected = project t keep {x};
+            alias = project projected keep {x};
+            result = #consumer;
+            output result as #head;
+        }};
+        let target = cq_elaborate::simplify_reductions(&source).unwrap();
+        assert_eq!(target, source);
+        ra::check_rewrite(&source, &target).unwrap();
+        let mut bypassed = source.clone();
+        bypassed.plan.definitions[5].operator = syn::parse2(bypass).unwrap();
+        assert!(ra::check_rewrite(&source, &bypassed).is_err());
+        let mut database = databases::binary_database(&query, 0);
+        database.insert("R".into(), [vec![0, 1]].into());
+        database.insert("T".into(), [vec![0, 0]].into());
+        let expected = cq_oracle::evaluate_cq(&query, &database);
+        assert_eq!(oracle::evaluate_ra(&target, &database).output, expected);
+        assert_ne!(oracle::evaluate_ra(&bypassed, &database).output, expected);
+    }
+}
+
+#[test]
+fn reduced_prefix_guards_keep_independent_support_witnesses() {
+    let source = cq(quote! {
+        struct PrefixTuple;
+        relation R(x:i32); relation Other(y:i32); relation T(x:i32,y:i32,z:i32);
+        answer(z) :- R(x), Other(y), if *x > *y, if 10 / (*x - *y) > 0, T(x,y,z);
+    });
+    let written = coarse(&source);
+    let steps = &written.valuation.steps;
+    let reduced = vo(
+        &source,
+        quote! {
+            reduce T@4 with Other@1(y);
+            reduce R@0 with T@4(x,_,_);
+            reduce T@4 with R@0(x);
+            reduce Other@1 with T@4(_,y,_);
+            #(#steps)*
+        },
+    );
+    let target = compile(&reduced).unwrap();
+    assert_plan(
+        &target,
+        quote! {
+            r0 = rename T@4 { x -> x, y -> y, z -> z };
+            r1 = rename Other@1 { y -> y };
+            r2 = semijoin r0 with r1;
+            r3 = rename R@0 { x -> x };
+            r4 = semijoin r3 with r2;
+            r5 = semijoin r2 with r4;
+            r6 = semijoin r1 with r5;
+            r7 = natural_join r4 with r6;
+            r8 = select r7 if (x > y);
+            r9 = guard r8 if (10 / (*x - *y) > 0);
+            r10 = natural_join r9 with r5;
+            r11 = project r10 keep { z };
+            output r11 as answer(z);
+        },
+    );
+}
+
+#[test]
 fn seed_997_reductions_match_equality_classes_before_rust() {
     let surface = syn::parse_str(include_str!("fixtures/fuzz_997.cq")).unwrap();
     let normal = cq::normal::normalize(&surface).unwrap();

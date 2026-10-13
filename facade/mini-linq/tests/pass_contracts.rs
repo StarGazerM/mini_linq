@@ -365,6 +365,41 @@ fn shared_names_survive_order_reduce_and_elaborate_as_natural_join_columns() {
 }
 
 #[test]
+fn hypergraph_reduced_prefix_tuple_survives_elaboration_checks() {
+    let source: cq::Program = syn::parse_quote! {
+        struct PrefixTuple;
+        relation R(x:i32); relation Other(y:i32); relation T(x:i32,y:i32,z:i32);
+        answer(z) :- R(x), Other(y), if *x > *y, if 10 / (*x - *y) > 0, T(x,y,z);
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let order = cq_order::Options {
+        heuristic: cq_order::Heuristic::Written,
+        split: cq_order::Split::Coarse,
+    };
+    let written = cq_order::compile(&normal, &order).unwrap();
+    cq_order::check(&normal, &written, &order).unwrap();
+    let options = cq_reduce::Options {
+        guards: cq_reduce::Pushdown::None,
+        semijoins: cq_reduce::Reductions::Hypergraph,
+    };
+    let reduced = cq_reduce::compile(&written, &options).unwrap();
+    cq_reduce::check(&written, &reduced, &options).unwrap();
+    assert!(
+        reduced
+            .valuation
+            .steps
+            .iter()
+            .any(|step| matches!(step, cq_lang_vo::Step::Reduce(..)))
+    );
+    let target = cq_elaborate::compile(&reduced).unwrap();
+    cq_elaborate::check(&reduced, &target).unwrap();
+    let indexed = cq_index_policy::compile(&target).unwrap();
+    cq_index_policy::check(&target, &indexed).unwrap();
+    let physical = cq_physical_lowering::compile(&indexed).unwrap();
+    cq_physical_lowering::check(&indexed, &physical).unwrap();
+}
+
+#[test]
 fn reduced_plans_compute_the_authored_answers() {
     for case in cases::CASES {
         let source = cq::normal::normalize(&syn::parse_str(case.cq).unwrap()).unwrap();

@@ -1105,15 +1105,82 @@ struct Wiring {
 }
 
 fn wiring(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Result<usize, String> {
-    let mut nodes = Vec::with_capacity(schedule.nodes.len());
-    for node in &schedule.nodes {
-        let mut operands: Vec<usize> = node.operands.iter().map(|i| nodes[*i]).collect();
-        if matches!(node.kind, Kind::Join(false) | Kind::Union(false, _)) {
+    #[derive(Clone, Copy)]
+    struct Wired {
+        id: usize,
+        node: usize,
+        projection: bool,
+    }
+
+    let mut nodes: Vec<Wired> = Vec::with_capacity(schedule.nodes.len());
+    for (index, node) in schedule.nodes.iter().enumerate() {
+        let identity = match node.kind {
+            Kind::Project => node.heading == schedule.nodes[node.operands[0]].heading,
+            Kind::Select => {
+                node.predicates.is_empty() && node.equalities.iter().all(|(a, b)| a == b)
+            }
+            _ => false,
+        };
+        if identity {
+            nodes.push(nodes[node.operands[0]]);
+            continue;
+        }
+        // These are local set identities, not witness identification:
+        // project_left(left join right) = left semijoin right. Transparent
+        // selections/projections above have no effect on either witness.
+        let semijoin = match node.kind {
+            Kind::Join(true) => Some(node),
+            Kind::Join(false)
+                if schedule.nodes[node.operands[1]]
+                    .heading
+                    .keys()
+                    .all(|name| schedule.nodes[node.operands[0]].heading.contains_key(name)) =>
+            {
+                Some(node)
+            }
+            Kind::Project => {
+                let input = &schedule.nodes[nodes[node.operands[0]].node];
+                (matches!(input.kind, Kind::Join(false))
+                    && node.heading == schedule.nodes[input.operands[0]].heading)
+                    .then_some(input)
+            }
+            _ => None,
+        };
+        let (kind, mut operands, equalities) = if let Some(join) = semijoin {
+            let left = join.operands[0];
+            let mut right = join.operands[1];
+            // A semijoin observes only shared names. A support projection can
+            // be erased only if it has not hidden any such name; predicates
+            // remain attached to the same support operand and its witnesses.
+            while nodes[right].projection {
+                let projection = &schedule.nodes[nodes[right].node];
+                let input = projection.operands[0];
+                if schedule.nodes[input].heading.keys().any(|name| {
+                    schedule.nodes[left].heading.contains_key(name)
+                        && !projection.heading.contains_key(name)
+                }) {
+                    break;
+                }
+                right = input;
+            }
+            (
+                Kind::Join(true),
+                vec![nodes[left].id, nodes[right].id],
+                &join.equalities,
+            )
+        } else {
+            (
+                node.kind.clone(),
+                node.operands.iter().map(|i| nodes[*i].id).collect(),
+                &node.equalities,
+            )
+        };
+        if matches!(kind, Kind::Join(false) | Kind::Union(false, _)) {
             operands.sort_unstable();
         }
         let key = Wiring {
-            correlation: node.correlation.map(|prefix| nodes[prefix]),
-            kind: node.kind.clone(),
+            correlation: node.correlation.map(|prefix| nodes[prefix].id),
+            kind,
             operands,
             heading: Facts(
                 node.heading
@@ -1122,8 +1189,9 @@ fn wiring(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Result<us
                     .collect(),
             ),
             equalities: Facts(
-                node.equalities
+                equalities
                     .iter()
+                    .filter(|(a, b)| a != b)
                     .map(|(a, b)| {
                         if a <= b {
                             (a.clone(), b.clone())
@@ -1136,9 +1204,13 @@ fn wiring(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Result<us
             predicates: Facts(node.predicates.iter().cloned().collect()),
         };
         let next = intern.len();
-        nodes.push(*intern.entry(key).or_insert(next));
+        nodes.push(Wired {
+            id: *intern.entry(key).or_insert(next),
+            node: index,
+            projection: matches!(node.kind, Kind::Project) && semijoin.is_none(),
+        });
     }
-    Ok(nodes[schedule.output.ok_or("schedule has no output")?])
+    Ok(nodes[schedule.output.ok_or("schedule has no output")?].id)
 }
 
 fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
@@ -1174,9 +1246,9 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     }
     if source.split_views() || target.split_views() {
         // Independent projected reads of a single occurrence are outside the
-        // ordinary one-row contract. Preserve their exact structural wiring,
-        // including which witness owns a predicate. There is no equivalence
-        // search; shared DAG nodes are interned once in topological order.
+        // ordinary one-row contract. Preserve their structural wiring modulo
+        // local semijoin identities, including which witness owns a predicate.
+        // There is no equivalence search; DAG nodes are interned topologically.
         let mut intern = HashMap::new();
         if wiring(source, &mut intern)? != wiring(target, &mut intern)? {
             return Err("projection correlations differ from source".into());
@@ -1373,3 +1445,12 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
 }
 
 mod blocks;
+mod reductions;
+
+pub(super) fn check_reduction_rewrite(
+    source: &Program,
+    target: &Program,
+    schedule: &Schedule,
+) -> bool {
+    reductions::check(source, target, schedule)
+}

@@ -13,8 +13,11 @@
 //! `rename R@2 { a -> x }`. Checks compare fixed column bindings, equality
 //! closure, relational constraints and their first observing Rust region.
 //! They visit the DAG and its derived headings without unfolding shared rows
-//! or searching for atom mappings. Structurally different existential splits
-//! can be rejected even when an answer oracle would find equivalent outputs.
+//! or searching for atom mappings. Split-witness wiring admits local set
+//! identities: redundant projections/selections, a join projected to its left
+//! heading as a semijoin, and support projections that hide no shared name.
+//! Predicate ownership and independent witnesses remain structural obligations;
+//! other existential splits can be rejected despite equivalent answer sets.
 //!
 //! This language separates logical query planning from index selection and
 //! Rust execution. Declared relation names are atomic input expressions;
@@ -799,6 +802,11 @@ mod structural;
 pub use constants::disjoint_unions;
 
 /// Check local contracts and fixed structural obligations of an RA rewrite.
+///
+/// A localized identity certificate also accepts absorption of a reduced
+/// support operand when exact named-result lineage supplies all shared columns.
+/// It preserves the remaining definitions, Rust payloads and negative ancestry;
+/// independent projected witnesses are never merged to establish containment.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     let source_schedule = contract::Schedule::from_program(source)?;
     let target_schedule = contract::Schedule::from_program(target)?;
@@ -810,6 +818,13 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     }
     source_schedule
         .check(&target_schedule, &[])
+        .or_else(|message| {
+            if structural::check_reduction_rewrite(source, target, &source_schedule) {
+                Ok(())
+            } else {
+                Err(message)
+            }
+        })
         .map_err(|message| {
             syn::Error::new_spanned(
                 &target.plan.output,

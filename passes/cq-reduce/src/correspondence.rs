@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 /// Check the source domain, unchanged query/steps, and reduction obligations.
 /// A full tree reducer obeys dependencies, but need not use breadth-first order.
-/// Formal rule CK-Reduce: Check reduction erasure, allowed guards and complete dependency-ordered tree edges.
+/// Formal rule CK-Reduce: Check reduction erasure, tree edges only in acyclic scopes and exact block cuts in any scope.
 pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> syn::Result<()> {
     let source_info = vo::contract::check(source)?;
     vo::contract::check(target)?;

@@ -10,7 +10,17 @@ pub type Dedup<T> = cq_storage::HashSet<T>;
 
 /// Expand the same authored CQ with an explicit sequence of public passes.
 macro_rules! configuration {
+    (default, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
+        crate::tpch_runtime::configuration!(@named default, $d, { $($stages)* }, { $($body)* });
+        crate::tpch_runtime::configuration!(@named no_reduce, $d, {
+            plan = ::mini_linq::passes::plan_written(no_reduce);
+            $($stages)*
+        }, { $($body)* });
+    };
     ($module:ident, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
+        crate::tpch_runtime::configuration!(@named $module, $d, { $($stages)* }, { $($body)* });
+    };
+    (@named $module:ident, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
         mod $module {
             use super::*;
             #[allow(unused_macros)]
@@ -74,7 +84,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", stringify!($candidate) $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "no-reduce", stringify!($candidate) $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -122,6 +132,7 @@ macro_rules! retail_kernel {
         pub fn run(data: &Data, config: &str) -> Vec<Answer> {
             match config {
                 "default" => default::run(data),
+                "no-reduce" => no_reduce::run(data),
                 stringify!($candidate) => tuned::run(data),
                 _ => crate::tpch_runtime::extra_run!([$($extra)?]; data, config),
             }

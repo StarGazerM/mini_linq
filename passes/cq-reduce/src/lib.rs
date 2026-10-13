@@ -9,7 +9,8 @@
 //! Reduction recursively retains block paths.
 //! Positive semijoins may distribute into union arms and fallback positive arms.
 //! Negative operands stay original named branch results.
-//! Hypergraph reduction also cuts surrounding relations through the derived block heading.
+//! Hypergraph uses a tree reducer only on acyclic scopes, but exact atom-to-block
+//! cuts on any scope. Each block branch is analyzed as its own scope.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
@@ -51,8 +52,8 @@ pub enum Reductions {
     None,
     /// The Yannakakis full reducer over the join tree.
     Tree,
-    /// A full reducer when acyclic, plus direct cuts of surrounding atoms by
-    /// Rust-free block relations. Cyclic joins still benefit from those cuts.
+    /// A tree reducer only on acyclic scopes, plus exact atom-to-block cuts on
+    /// any scope. Each block branch is analyzed independently.
     Hypergraph,
 }
 

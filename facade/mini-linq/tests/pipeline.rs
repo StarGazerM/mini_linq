@@ -147,3 +147,142 @@ fn ordered_host_fallback_records_must_be_ordered_admissible() {
     }
     assert!(cq_lang_structures::check_rewrite(&structured, &invalid).is_err());
 }
+
+macro_rules! capture_written_plan {
+    (pipeline {}; $($plan:tt)*) => {
+        stringify!($($plan)*)
+    };
+}
+
+#[test]
+fn written_default_reduces_acyclic_queries_and_opt_out_preserves_prior_ir() {
+    use quote::ToTokens;
+
+    let source: cq_lang_cq::Program = syn::parse_quote! {
+        struct Q;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
+        answer(a,b,c,d) :- R(a,b), S(b,c), T(c,d);
+    };
+    let default = mini_linq::passes::plan_written! {
+        pipeline { capture_written_plan };
+        struct Q;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
+        answer(a,b,c,d) :- R(a,b), S(b,c), T(c,d);
+    };
+    let opted_out = mini_linq::passes::plan_written! {
+        arguments { no_reduce };
+        pipeline { capture_written_plan };
+        struct Q;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
+        answer(a,b,c,d) :- R(a,b), S(b,c), T(c,d);
+    };
+    let normal = cq_lang_cq::normal::normalize(&source).unwrap();
+    let ordered = cq_order::compile(
+        &normal,
+        &cq_order::Options {
+            heuristic: cq_order::Heuristic::Written,
+            split: cq_order::Split::Coarse,
+        },
+    )
+    .unwrap();
+    let prior = cq_elaborate::compile(&ordered).unwrap();
+    let reduced = cq_reduce::compile(
+        &ordered,
+        &cq_reduce::Options {
+            guards: cq_reduce::Pushdown::None,
+            semijoins: cq_reduce::Reductions::Hypergraph,
+        },
+    )
+    .unwrap();
+    let expected = cq_elaborate::compile(&reduced).unwrap();
+    cq_elaborate::check(&reduced, &expected).unwrap();
+    let expected = cq_elaborate::simplify_reductions(&expected).unwrap();
+    let default: cq_lang_ra::Program = syn::parse_str(default).unwrap();
+    let opted_out: cq_lang_ra::Program = syn::parse_str(opted_out).unwrap();
+    assert_eq!(opted_out, prior, "no_reduce must retain the prior emitted IR");
+    assert_eq!(default, expected, "the default must run Hypergraph reduction");
+    assert_ne!(default, opted_out, "the acyclic fixture must actually reduce");
+    assert!(default.to_token_stream().to_string().contains("semijoin"));
+}
+
+#[test]
+fn default_reduction_and_opt_out_agree_on_host_and_fallback_inputs() {
+    let left = [(1, 10), (1, 10), (2, 20), (3, 30)];
+    let rows = [(10, 100), (10, 100), (30, 300), (40, 400)];
+    let host = std::collections::HashMap::from([
+        ((10,), vec![(100,), (100,)]),
+        ((30,), vec![(300,)]),
+        ((40,), vec![(400,)]),
+    ]);
+    macro_rules! check {
+        ($right:ident) => {{
+            let default: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+                struct Q; relation left(a:i32,b:i32); relation $right(b:i32,c:i32);
+                answer(a,c) :- left(a,b), $right(b,c);
+            }.map(|(a,c)| (*a,*c)).collect();
+            let opted_out: std::collections::BTreeSet<_> = mini_linq::compile! {
+                pipeline { plan = mini_linq::passes::plan_written(no_reduce); }
+                struct Q; relation left(a:i32,b:i32); relation $right(b:i32,c:i32);
+                answer(a,c) :- left(a,b), $right(b,c);
+            }.map(|(a,c)| (*a,*c)).collect();
+            assert_eq!(default, std::collections::BTreeSet::from([(1, 100), (3, 300)]));
+            assert_eq!(default, opted_out);
+        }};
+    }
+    check!(rows);
+    check!(host);
+}
+
+#[test]
+fn written_default_reduces_cyclic_block_scopes_and_preserves_answers() {
+    macro_rules! assert_reduced {
+        ($($query:tt)*) => {{
+            let default = mini_linq::passes::plan_written! {
+                pipeline { capture_written_plan };
+                $($query)*
+            };
+            let opted_out = mini_linq::passes::plan_written! {
+                arguments { no_reduce };
+                pipeline { capture_written_plan };
+                $($query)*
+            };
+            let default: cq_lang_ra::Program = syn::parse_str(default).unwrap();
+            let opted_out: cq_lang_ra::Program = syn::parse_str(opted_out).unwrap();
+            assert_ne!(default, opted_out);
+            assert!(default.plan.definitions.iter().any(|definition| {
+                matches!(definition.operator, cq_lang_ra::Operator::Semijoin(_))
+            }));
+            let source: cq_lang_cq::Program = syn::parse_quote! { $($query)* };
+            let normal = cq_lang_cq::normal::normalize(&source).unwrap();
+            let ordered = cq_order::compile(&normal, &cq_order::Options {
+                heuristic: cq_order::Heuristic::Written,
+                split: cq_order::Split::Coarse,
+            }).unwrap();
+            let options = cq_reduce::Options {
+                guards: cq_reduce::Pushdown::None,
+                semijoins: cq_reduce::Reductions::Hypergraph,
+            };
+            let reduced = cq_reduce::compile(&ordered, &options).unwrap();
+            cq_reduce::check(&ordered, &reduced, &options).unwrap();
+            let expected = cq_elaborate::compile(&reduced).unwrap();
+            cq_elaborate::check(&reduced, &expected).unwrap();
+            assert_eq!(default, cq_elaborate::simplify_reductions(&expected).unwrap());
+            assert_eq!(opted_out, cq_elaborate::compile(&ordered).unwrap());
+            cq_lang_ra::check_rewrite(&opted_out, &default).unwrap();
+        }};
+    }
+    assert_reduced! {
+        struct Cycle;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+        relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
+        answer(a,b,c) :- R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)};
+    }
+    assert_reduced! {
+        struct Branch;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+        relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
+        answer(a) :- {
+            R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)}
+        } | {U(a)};
+    }
+}

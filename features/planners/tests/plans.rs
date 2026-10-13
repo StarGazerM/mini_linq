@@ -136,50 +136,44 @@ fn retail_h07_block_reduces_country_keys_before_lineitem() {
         answer(o,sn,cn) :- Supplier(s,sn),Lineitem(o,s),Orders(o,c),Customer(c,cn),
             {Nation(sn,1),Nation(cn,2)} | {Nation(sn,2),Nation(cn,1)};
     };
+    let valuation = compile_valuation(&source, Planner::Hypergraph).unwrap();
+    assert!(!cq::hypergraph::Analysis::of(&valuation.cq).acyclic);
+    let cuts: Vec<_> = valuation.valuation.steps.iter().filter_map(|step| {
+        let vo::Step::Reduce(reduce, _) = step else { return None };
+        let vo::Reduction::With(_, support) = &reduce.reduction;
+        Some((reduce.relation.to_string(), support.relation.to_string()))
+    }).collect();
+    assert_eq!(cuts, [("Supplier".into(), "block".into()), ("Customer".into(), "block".into())]);
+    check_valuation(&source, &valuation, Planner::Hypergraph).unwrap();
     let target = compile(&source, Planner::Hypergraph).unwrap();
-    let union = target
-        .plan
-        .definitions
-        .iter()
-        .find(|d| matches!(d.operator, ra::Operator::Union(_)))
-        .unwrap();
-    let mut memo = std::collections::BTreeMap::<String, bool>::new();
+    assert_eq!(
+        target.plan.definitions.iter().filter(|d| matches!(d.operator, ra::Operator::Semijoin(_))).count(),
+        4,
+        "{}", target.to_token_stream()
+    );
+    let union = target.plan.definitions.iter()
+        .find(|d| matches!(d.operator, ra::Operator::Union(_))).unwrap();
     let mut reduced = std::collections::BTreeSet::new();
-    for d in &target.plan.definitions {
-        let name = d.result.to_string();
-        match &d.operator {
-            ra::Operator::Rename(r) => {
-                memo.insert(
-                    name,
-                    matches!(r.relation.to_string().as_str(), "Supplier" | "Customer"),
-                );
-            }
-            ra::Operator::Semijoin(semi)
-                if semi.right == union.result
-                    && memo.get(&semi.left.to_string()) == Some(&true) =>
-            {
-                reduced.insert(semi.left.to_string());
-            }
-            _ => (),
+    for definition in &target.plan.definitions {
+        let ra::Operator::Semijoin(semi) = &definition.operator else { continue };
+        if semi.right != union.result {
+            continue;
+        }
+        let input = target.plan.definitions.iter().find(|d| d.result == semi.left).unwrap();
+        if let ra::Operator::Rename(rename) = &input.operator {
+            reduced.insert(rename.relation.to_string());
         }
     }
-    assert_eq!(reduced.len(), 2, "{}", target.to_token_stream());
-    let stream = target.plan.definitions.iter().position(|d|matches!(&d.operator,ra::Operator::NaturalJoin(j) if target.plan.definitions.iter().any(|r|r.result==j.right && matches!(&r.operator,ra::Operator::Rename(a) if a.relation=="Lineitem")))).unwrap();
-    for d in target
-        .plan
-        .definitions
-        .iter()
-        .filter(|d| matches!(&d.operator,ra::Operator::Semijoin(s) if s.right == union.result))
-    {
-        assert!(
-            target
-                .plan
-                .definitions
-                .iter()
-                .position(|x| x.result == d.result)
-                .unwrap()
-                < stream
-        );
+    assert_eq!(reduced, std::collections::BTreeSet::from(["Customer".into(), "Supplier".into()]));
+    let stream = target.plan.definitions.iter().position(|d| {
+        matches!(&d.operator, ra::Operator::NaturalJoin(j) if target.plan.definitions.iter().any(
+            |r| r.result == j.right && matches!(&r.operator, ra::Operator::Rename(a) if a.relation == "Lineitem")
+        ))
+    }).unwrap();
+    for (position, definition) in target.plan.definitions.iter().enumerate() {
+        if matches!(&definition.operator, ra::Operator::Semijoin(s) if s.right == union.result) {
+            assert!(position < stream);
+        }
     }
     let database = std::collections::BTreeMap::from([
         (
@@ -207,6 +201,31 @@ fn retail_h07_block_reduces_country_keys_before_lineitem() {
         semantics::evaluate_ra(&target, &database).output,
         std::collections::BTreeSet::from([vec![10, 1, 2]])
     );
+}
+
+#[test]
+fn hypergraph_reduces_cyclic_block_branches_and_acyclic_descendants_independently() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Branch;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+        relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
+        answer(a) :- {
+            R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)}
+        } | {U(a)};
+    };
+    let target = compile_valuation(&source, Planner::Hypergraph).unwrap();
+    assert!(cq::hypergraph::Analysis::of(&target.cq).acyclic);
+    assert!(!target.valuation.steps.iter().any(|step| matches!(step, vo::Step::Reduce(..))));
+    let vo::Step::Block(block, _) = &target.valuation.steps[0] else { unreachable!() };
+    let cuts: Vec<_> = block.branches[0].steps.iter().filter_map(|step| {
+        let vo::Step::Reduce(reduce, _) = step else { return None };
+        let vo::Reduction::With(_, support) = &reduce.reduction;
+        Some((reduce.relation.to_string(), support.relation.to_string()))
+    }).collect();
+    assert_eq!(cuts, [("R".into(), "block".into()), ("T".into(), "block".into())]);
+    let vo::Step::Block(nested, _) = block.branches[0].steps.last().unwrap() else { unreachable!() };
+    assert_eq!(nested.branches[0].steps.iter().filter(|step| matches!(step, vo::Step::Reduce(..))).count(), 2);
+    check_valuation(&source, &target, Planner::Hypergraph).unwrap();
 }
 
 #[test]

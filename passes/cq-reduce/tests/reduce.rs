@@ -10,7 +10,7 @@ fn reductions_preserve_answers_and_correspond_to_options() {
     {
         let source: valuation::Program = syn::parse_str(case.vo).unwrap();
         for guards in [Pushdown::None, Pushdown::Atoms] {
-            for semijoins in [Reductions::None, Reductions::Tree] {
+            for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
                 let options = Options { guards, semijoins };
                 if semijoins == Reductions::Tree
                     && !cq::hypergraph::Analysis::of(&source.cq).acyclic
@@ -271,4 +271,142 @@ fn full_reducer_accepts_independent_sibling_orders() {
     );
     assert_ne!(compile(&source, &TREE).unwrap(), alternative);
     check(&source, &alternative, &TREE).unwrap();
+}
+
+const HYPERGRAPH: Options = Options {
+    guards: Pushdown::None,
+    semijoins: Reductions::Hypergraph,
+};
+
+fn direct_reductions(steps: &[valuation::Step]) -> Vec<valuation::Step> {
+    steps.iter().filter(|step| matches!(step, valuation::Step::Reduce(..))).cloned().collect()
+}
+
+#[test]
+fn cyclic_body_keeps_exact_block_cuts_and_reduces_acyclic_branches() {
+    let source = schedule(
+        "struct Cycle; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+         relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
+         answer(a,b,c) :- R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)};",
+        "R@0(a,b); S@1(b,c); T@2(a,c);
+         block @3(a) {U@3.0.0(a); V@3.0.1(a);} | {U@3.1.0(a);};",
+    );
+    assert!(!cq::hypergraph::Analysis::of(&source.cq).acyclic);
+    let target = compile(&source, &HYPERGRAPH).unwrap();
+    assert_eq!(direct_reductions(&target.valuation.steps), vec![
+        syn::parse_quote!(reduce R@0 with block@3(a);),
+        syn::parse_quote!(reduce T@2 with block@3(a);),
+    ]);
+    let valuation::Step::Block(block, _) = target.valuation.steps.last().unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(direct_reductions(&block.branches[0].steps), vec![
+        syn::parse_quote!(reduce V@3.0.1 with U@3.0.0(a);),
+        syn::parse_quote!(reduce U@3.0.0 with V@3.0.1(a);),
+    ]);
+    assert!(direct_reductions(&block.branches[1].steps).is_empty());
+    check(&source, &target, &HYPERGRAPH).unwrap();
+    assert!(compile(&source, &TREE).is_err());
+    reject(&source, &source, &TREE, &["acyclic"]);
+    for position in 0..2 {
+        let mut missing = target.clone();
+        missing.valuation.steps.remove(position);
+        assert!(check(&source, &missing, &HYPERGRAPH).is_err());
+    }
+    let mut extra = target.clone();
+    extra.valuation.steps.insert(0, syn::parse_quote!(reduce R@0 with S@1(b,_);));
+    valuation::contract::check(&extra).unwrap();
+    assert!(check(&source, &extra, &HYPERGRAPH).is_err());
+}
+
+#[test]
+fn cyclic_branches_keep_block_cuts_and_plan_descendants_independently() {
+    let source = schedule(
+        "struct Branch; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+         relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
+         answer(a) :- {R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)}} | {U(a)};",
+        "block @0(a) {
+            R@0.0.0(a,b); S@0.0.1(b,c); T@0.0.2(a,c);
+            block @0.0.3(a) {U@0.0.3.0.0(a); V@0.0.3.0.1(a);}
+                | {U@0.0.3.1.0(a);};
+         } | {U@0.1.0(a);};",
+    );
+    assert!(cq::hypergraph::Analysis::of(&source.cq).acyclic);
+    let target = compile(&source, &HYPERGRAPH).unwrap();
+    assert!(direct_reductions(&target.valuation.steps).is_empty());
+    let valuation::Step::Block(block, _) = &target.valuation.steps[0] else {
+        unreachable!()
+    };
+    assert_eq!(direct_reductions(&block.branches[0].steps), vec![
+        syn::parse_quote!(reduce R@0.0.0 with block@0.0.3(a);),
+        syn::parse_quote!(reduce T@0.0.2 with block@0.0.3(a);),
+    ]);
+    let valuation::Step::Block(nested, _) = block.branches[0].steps.last().unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(direct_reductions(&nested.branches[0].steps), vec![
+        syn::parse_quote!(reduce V@0.0.3.0.1 with U@0.0.3.0.0(a);),
+        syn::parse_quote!(reduce U@0.0.3.0.0 with V@0.0.3.0.1(a);),
+    ]);
+    check(&source, &target, &HYPERGRAPH).unwrap();
+    for position in 0..2 {
+        let mut missing = target.clone();
+        let valuation::Step::Block(block, _) = &mut missing.valuation.steps[0] else {
+            unreachable!()
+        };
+        block.branches[0].steps.remove(position);
+        assert!(check(&source, &missing, &HYPERGRAPH).is_err());
+    }
+    let mut extra = target.clone();
+    let valuation::Step::Block(block, _) = &mut extra.valuation.steps[0] else {
+        unreachable!()
+    };
+    block.branches[0].steps.insert(
+        0, syn::parse_quote!(reduce R@0.0.0 with S@0.0.1(b,_);),
+    );
+    valuation::contract::check(&extra).unwrap();
+    assert!(check(&source, &extra, &HYPERGRAPH).is_err());
+}
+
+#[test]
+fn acyclic_body_retains_tree_reductions_and_additional_block_cuts() {
+    let source = schedule(
+        "struct TreeBlock; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+         relation U(b:i32); relation V(b:i32);
+         answer(a,c) :- R(a,b), S(b,c), {U(b)} | {V(b)};",
+        "R@0(a,b); S@1(b,c); block @2(b) {U@2.0.0(b);} | {V@2.1.0(b);};",
+    );
+    assert!(cq::hypergraph::Analysis::of(&source.cq).acyclic);
+    let tree = compile(&source, &TREE).unwrap();
+    let target = compile(&source, &HYPERGRAPH).unwrap();
+    check(&source, &target, &HYPERGRAPH).unwrap();
+    for step in tree.valuation.steps.iter().filter(|s| matches!(s, valuation::Step::Reduce(..))) {
+        assert!(target.valuation.steps.contains(step));
+    }
+    for cut in [
+        syn::parse_quote!(reduce R@0 with block@2(b);),
+        syn::parse_quote!(reduce S@1 with block@2(b);),
+    ] {
+        assert!(target.valuation.steps.contains(&cut));
+        let mut missing = target.clone();
+        let position = missing.valuation.steps.iter().position(|step| step == &cut).unwrap();
+        missing.valuation.steps.remove(position);
+        assert!(check(&source, &missing, &HYPERGRAPH).is_err());
+    }
+}
+
+#[test]
+fn cyclic_body_without_blocks_has_no_hypergraph_reductions() {
+    let source = schedule(
+        "struct Cycle; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
+         relation T(a:i32,c:i32); answer(a,b,c) :- R(a,b),S(b,c),T(a,c);",
+        "R@0(a,b); S@1(b,c); T@2(a,c);",
+    );
+    assert!(!cq::hypergraph::Analysis::of(&source.cq).acyclic);
+    assert_eq!(compile(&source, &HYPERGRAPH).unwrap(), source);
+    check(&source, &source, &HYPERGRAPH).unwrap();
+    let mut extra = source.clone();
+    extra.valuation.steps.insert(0, syn::parse_quote!(reduce R@0 with S@1(b,_);));
+    valuation::contract::check(&extra).unwrap();
+    assert!(check(&source, &extra, &HYPERGRAPH).is_err());
 }

@@ -73,9 +73,10 @@ impl<'h> OrderedRead for &'h Observed<BTreeMap<(i32,), Vec<(i32,)>>> {
         (&self.value).ordered()
     }
 }
+// These cost contracts isolate unreduced probe dispatch, not reduction materialization.
 macro_rules! probe {
     ($l:ident,$r:ident) => {
-        ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
+        ::mini_linq::compile! { pipeline { plan = ::mini_linq::passes::plan_written(no_reduce); structures = [::core_pass_fixtures::ordered_dedup]; }
             struct Q; relation $l(a:i32); relation $r(a:i32,b:i32);
             answer(a,b) :- $l(a),$r(a,b);
         }
@@ -83,7 +84,7 @@ macro_rules! probe {
 }
 macro_rules! nonleading {
     ($l:ident,$r:ident) => {
-        ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
+        ::mini_linq::compile! { pipeline { plan = ::mini_linq::passes::plan_written(no_reduce); structures = [::core_pass_fixtures::ordered_dedup]; }
             struct Q; relation $l(b:i32); relation $r(a:i32,b:i32);
             answer(a,b) :- $l(b),$r(a,b);
         }
@@ -137,7 +138,8 @@ fn fallback_is_lazy_and_shared_for_membership() {
         ((1,), vec![(7,), (8,)]),
         ((2,), vec![(7,)]),
     ]));
-    let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation l(a:i32); relation r(a:i32,b:i32); answer(a) :- l(a),r(a,_); }.collect();
+    // Isolate membership dispatch from default semijoin materialization.
+    let got: Vec<_> = ::mini_linq::compile! { pipeline { plan = ::mini_linq::passes::plan_written(no_reduce); structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation l(a:i32); relation r(a:i32,b:i32); answer(a) :- l(a),r(a,_); }.collect();
     assert_eq!(got.len(), 2);
     assert_eq!(r.scans.get(), 0);
     assert_eq!(r.reads.get(), 3);
@@ -170,7 +172,8 @@ fn first_answer_owns_and_initializes_the_fallback_only_on_demand() {
         visits.set(visits.get() + 1);
         true
     };
-    let mut answers = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; }
+    // This test pins lazy fallback initialization in the unreduced probe plan.
+    let mut answers = ::mini_linq::compile! { pipeline { plan = ::mini_linq::passes::plan_written(no_reduce); structures = [::core_pass_fixtures::ordered_dedup]; }
         struct Q;
         relation l(a:i32,tag:i32); relation r(a:i32,b:i32);
         answer(tag,b) :- l(a,tag),r(a,b),if observe(tag,b);
@@ -295,13 +298,15 @@ fn ordinary_hashmap_counters_separate_native_lookups_from_build_hashes() {
     let r = HashMap::from([((Key(1, true),), vec![(7,)])]);
     HASHES.with(|h| h.set((0, 0)));
     assert_eq!(run!(l, r).count(), 1);
-    assert_eq!(HASHES.with(Cell::get), (0, 3));
+    // Three reducer membership reads plus two surviving payload probes.
+    assert_eq!(HASHES.with(Cell::get), (0, 5));
     let rows = [(Key(1, true), 7)];
     let r = rows.as_slice();
     HASHES.with(|h| h.set((0, 0)));
     assert_eq!(run!(l, r).count(), 1);
     // The source row enters one bucket map; publishing it does not rehash keys.
-    assert_eq!(HASHES.with(Cell::get), (1, 3));
+    // The shared fallback supplies reducer membership and payload probes.
+    assert_eq!(HASHES.with(Cell::get), (1, 5));
 }
 
 #[test]
@@ -310,11 +315,13 @@ fn composite_prefix_uses_declaration_order_and_shorter_keys_build() {
     let r = Observed::new(HashMap::from([((2, 1), vec![(3,)])]));
     let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation l(a:i32,b:i32); relation r(b:i32,a:i32,c:i32); answer(a,b,c) :- l(a,b),r(b,a,c); }.collect();
     assert_eq!(got, [(&1, &2, &3)]);
-    assert_eq!((r.scans.get(), r.reads.get()), (0, 1));
+    // Native membership reduction and payload probing use the same full key.
+    assert_eq!((r.scans.get(), r.reads.get()), (0, 2));
     let l = [(2,)];
     let got: Vec<_> = ::mini_linq::compile! { pipeline { structures = [::core_pass_fixtures::ordered_dedup]; } struct Q; relation l(b:i32); relation r(b:i32,a:i32,c:i32); answer(a,b,c) :- l(b),r(b,a,c); }.collect();
     assert_eq!(got, [(&1, &2, &3)]);
-    assert_eq!((r.scans.get(), r.reads.get()), (1, 1));
+    // The shorter key scans once; prior full-key native reads remain counted.
+    assert_eq!((r.scans.get(), r.reads.get()), (1, 2));
 }
 
 #[test]

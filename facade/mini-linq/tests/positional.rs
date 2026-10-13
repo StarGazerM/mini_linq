@@ -92,6 +92,30 @@ fn nonleading_filtered_index_keeps_payload_and_constant_reconstruction() {
     );
 }
 
+#[test]
+fn replayed_union_builds_own_each_positional_point_predicate() {
+    let left = [(1_i32,), (2,), (3,)];
+    let right = [(1_i32,), (2,), (3,)];
+    let countries = [
+        (1_i32, "FRANCE".to_owned()),
+        (2, "GERMANY".to_owned()),
+        (3, "OTHER".to_owned()),
+    ];
+    let result: BTreeSet<_> = mini_linq::compile! {
+        pipeline { select = mini_linq::passes::select(positional(L,R,N)); }
+        struct ReplayedUnion;
+        relation L(x:i32) = (left);
+        relation R(y:i32) = (right);
+        relation N(key:i32,name:String) = (countries);
+        answer(x,y) :- L(x), R(y),
+            { N(x,"FRANCE"), N(y,"GERMANY") }
+            | { N(x,"GERMANY"), N(y,"FRANCE") };
+    }
+    .map(|(x, y)| (*x, *y))
+    .collect();
+    assert_eq!(result, BTreeSet::from([(1, 2), (2, 1)]));
+}
+
 #[derive(Clone, Copy)]
 struct UnusedRight;
 impl cq_storage::rows::Rows for UnusedRight {

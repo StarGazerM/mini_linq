@@ -64,18 +64,50 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
     }
 }
 
-/// CQ → RA′ in written order.
-/// Formal rule Plan-Prefix: Normalize, order Written/Coarse, elaborate and continue with RA.
+#[derive(Default)]
+struct WrittenOptions {
+    no_reduce: bool,
+}
+impl Parse for WrittenOptions {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.is_empty() {
+            return Ok(Self::default());
+        }
+        let option: syn::Ident = input.parse()?;
+        if option != "no_reduce" {
+            return Err(syn::Error::new_spanned(option, "expected no_reduce"));
+        }
+        Ok(Self { no_reduce: true })
+    }
+}
+
+/// CQ → RA′ in written order with checked Hypergraph semijoin reduction.
+/// Use `plan_written(no_reduce)` to retain the unreduced written plan.
+/// Formal rule Plan-Prefix: Normalize, order Written/Coarse, reduce unless opted out, elaborate, absorb redundant support and continue with RA.
 #[proc_macro]
 pub fn plan_written(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input.into(), |source, args| {
-        no_arguments(args)?;
+        let args: WrittenOptions = syn::parse2(args)?;
         let normal = cq_lang_cq::normal::normalize(source)?;
         let plan = cq_order::compile(&normal, &cq_order::Options::default())?;
         cq_order::check(&normal, &plan, &cq_order::Options::default())?;
-        let target = cq_elaborate::compile(&plan)?;
-        cq_elaborate::check(&plan, &target)?;
-        Ok(target)
+        let options = cq_reduce::Options {
+            guards: cq_reduce::Pushdown::None,
+            semijoins: if args.no_reduce {
+                cq_reduce::Reductions::None
+            } else {
+                cq_reduce::Reductions::Hypergraph
+            },
+        };
+        let reduced = cq_reduce::compile(&plan, &options)?;
+        cq_reduce::check(&plan, &reduced, &options)?;
+        let target = cq_elaborate::compile(&reduced)?;
+        cq_elaborate::check(&reduced, &target)?;
+        if args.no_reduce {
+            Ok(target)
+        } else {
+            cq_elaborate::simplify_reductions(&target)
+        }
     })
     .into()
 }
@@ -136,4 +168,33 @@ pub fn relation_loaders(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn workload_query(input: TokenStream) -> TokenStream {
     workload::expand(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WrittenOptions;
+    use quote::quote;
+
+    #[test]
+    fn written_options_reduce_by_default_and_allow_explicit_opt_out() {
+        assert!(!syn::parse2::<WrittenOptions>(quote!()).unwrap().no_reduce);
+        assert!(
+            syn::parse2::<WrittenOptions>(quote!(no_reduce))
+                .unwrap()
+                .no_reduce
+        );
+    }
+
+    #[test]
+    fn written_options_reject_unknown_and_extra_arguments() {
+        for arguments in [
+            quote!(unknown),
+            quote!(no_reduce no_reduce),
+            quote!(no_reduce, no_reduce),
+            quote!(no_reduce,),
+            quote!(no_reduce = true),
+        ] {
+            assert!(syn::parse2::<WrittenOptions>(arguments).is_err());
+        }
+    }
 }

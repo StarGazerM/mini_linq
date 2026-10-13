@@ -17,6 +17,9 @@
 //!   surface = [Path[(tokens)], ...];
 //! }
 //! ```
+//! Planning options use that same invocation argument slot, for example
+//! `plan = mini_linq::passes::plan_written(no_reduce);` opts out of the facade's
+//! default Hypergraph semijoin reduction without adding a phase-level setting.
 //! Surface passes receive raw CQ tokens before the CQ contract. They expand
 //! authored `name!{...}` clauses. The planner then parses and checks CQ.
 //!

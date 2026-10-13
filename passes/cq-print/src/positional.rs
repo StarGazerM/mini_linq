@@ -142,15 +142,14 @@ impl Context<'_> {
             }
         }
     }
-    /// Name the predicate without forcing a source. Pipes move it into their
-    /// iterator; retained reads may borrow it inside the existing let scope.
+    /// Name a predicate and check its host. Retained reads borrow one value;
+    /// pipe expressions construct their owned predicate inside each traversal.
     pub fn prepare_read(&mut self, name: &str) -> Ident {
         let id = format_ident!(
             "__cq_{}_predicate",
             name,
             span = proc_macro2::Span::mixed_site()
         );
-        let predicate = self.read_predicate(name);
         let read = &self.analysis.reads[name];
         let host = format_ident!(
             "__cq_positional_{}",
@@ -161,8 +160,11 @@ impl Context<'_> {
         self.statements.push(
             syn::parse_quote!(::cq_storage::require::block_read(#host, <#marker>::default());),
         );
-        self.statements
-            .push(syn::parse_quote!(let #id = #predicate;));
+        if self.physical_analysis.modes[name] != physical::ModeKind::Pipe {
+            let predicate = self.read_predicate(name);
+            self.statements
+                .push(syn::parse_quote!(let #id = #predicate;));
+        }
         id
     }
     /// Formal rule IF-Positional: Read recorded predicates as positions before fetching survivors.
@@ -194,7 +196,7 @@ impl Context<'_> {
                 );
             }
         };
-        let ids = if let Some(ids) = existing {
+        let mut ids = if let Some(ids) = existing {
             quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| ::cq_storage::residual(::cq_storage::ReadPredicate::test(&#predicate, &::cq_storage::Column::key(#marker, #host, __cq_id)))))
         } else if self.physical_analysis.modes[name] == physical::ModeKind::Pipe {
             quote!(::cq_storage::BlockRead::read_owned(#host, #marker, #predicate))
@@ -219,15 +221,20 @@ impl Context<'_> {
                             )
                     });
                 let condition = self.relational_condition(&s.condition);
-                return Ok(
-                    quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| {
-                        #[allow(unused_variables)] let (#(#fields,)*) = ::cq_storage::PositionalRows::row_at(#host, __cq_id).expect("host-issued live ID");
-                        ::cq_storage::residual(#condition)
-                    })),
-                );
+                ids = quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| {
+                    #[allow(unused_variables)] let (#(#fields,)*) = ::cq_storage::PositionalRows::row_at(#host, __cq_id).expect("host-issued live ID");
+                    ::cq_storage::residual(#condition)
+                }));
             }
         }
-        Ok(ids)
+        if self.physical_analysis.modes[name] == physical::ModeKind::Pipe {
+            // A retained union may replay this pipe for several index keys.
+            // Each traversal must own its predicate, not move one shared value.
+            let value = self.read_predicate(name);
+            Ok(quote!({ let #predicate = #value; #ids }))
+        } else {
+            Ok(ids)
+        }
     }
     /// Construct the named selection through exactly its checked read spine.
     /// Formal rule IF-Selection: Construct immutable snapshots through the recorded read spine.

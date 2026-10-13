@@ -69,9 +69,11 @@
 //! | Elimination | Coarse ranks atoms by elimination variables; fine enumerates the reversed elimination order so connecting variables precede leaf products |
 //!
 //! All planners use elaboration's relational selection pushdown. Hypergraph
-//! places tree reductions before the first atom; cyclic queries carry no tree
-//! reductions. Rust guards are never pushed onto base relations. These are
-//! deterministic heuristics, without cardinality estimates or complexity claims.
+//! places tree reductions before the first atom only in acyclic scopes, but
+//! exact atom-to-block cuts apply in any scope. Each branch is independent:
+//! acyclic branches under cyclic roots may receive tree reducers. Rust guards
+//! stay on their base chain. These are deterministic heuristics without
+//! cardinality estimates or complexity claims.
 //!
 //! For library consumers, `Planner::ALL` lists the nine choices.
 //! `compile_valuation(&cq, planner)` returns complete VO text and

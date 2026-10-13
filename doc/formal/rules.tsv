@@ -38,7 +38,7 @@ STR-Range	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule 
 STR-Merge	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Merge:	Require a direct ordered host read, built entry, or same-key merge pipe.
 WF-Structures	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule WF-Structures:	Check entries, read coverage and inferred canonical return.
 CK-Order	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-Order:	Validate unchanged CQ, split, coverage, unified Rust chain, source-before inclusion and exact Written order.
-CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check exact retained steps and complete dependency-ordered relational tree reductions; no guard pushdown.
+CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check reduction erasure, tree edges only in acyclic scopes and exact block cuts in any scope.
 CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check supplied VO clause occurrences, named semijoins, equality closure, constraints, Rust chain and Before.
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA and complete first-use descriptors with iN names.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each probe or semi right-operand descriptor in source IX.
@@ -85,9 +85,9 @@ C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
 O-Join	abstract	-	-	Ghost binary-tree composition on disjoint full-atom coverages.
 L-Retention	abstract	-	-	Leibniz identity and functional extensionality permit canonical projection before an opaque Rust node whenever its free variables are retained.
-Plan-Prefix	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, elaborate and continue with RA.
+Plan-Prefix	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, reduce unless opted out, elaborate, absorb redundant support and continue with RA.
 Plan-Generic	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Generic:	External Written/Fine planner records variable-at-a-time valuation steps.
-Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Graph:	External Hypergraph planner records a complete tree reducer exactly when acyclic.
+Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Graph:	Hypergraph uses tree reductions only in acyclic scopes and exact block cuts in any scope.
 ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start surface expansion and the selected checked CQ pipeline.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
 ST-Terminal	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Terminal:	Print checked Structures to final Rust with an empty continuation.

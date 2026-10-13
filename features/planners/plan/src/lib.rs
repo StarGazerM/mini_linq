@@ -87,7 +87,7 @@ impl Planner {
     }
 
     fn reductions(self, source: &cq::Program) -> cq_reduce::Options {
-        // Formal rule Plan-Graph: Hypergraph records a complete tree reducer exactly when acyclic.
+        // Formal rule Plan-Graph: Hypergraph uses tree reductions only in acyclic scopes and exact block cuts in any scope.
         cq_reduce::Options {
             guards: cq_reduce::Pushdown::None,
             semijoins: if self == Self::Hypergraph
@@ -188,10 +188,16 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
 
 /// CQ→RA′ through the public order, reduce and elaborate APIs. Relational
 /// pushdown is performed by elaboration; opaque Rust always stays in its chain.
+/// Hypergraph plans share the facade's checked redundant-support absorption.
 pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Program> {
     let valuation = compile_valuation(source, planner)?;
     let target = cq_elaborate::compile(&valuation)?;
     cq_elaborate::check(&valuation, &target)?;
+    let target = if planner == Planner::Hypergraph {
+        cq_elaborate::simplify_reductions(&target)?
+    } else {
+        target
+    };
     check(source, &target)?;
     Ok(target)
 }

@@ -16,6 +16,7 @@ cq-lang-ix.workspace = true
 cq-lang-physical.workspace = true
 cq-lang-structures.workspace = true
 cq-order.workspace = true
+cq-reduce.workspace = true
 cq-elaborate.workspace = true
 cq-index-policy.workspace = true
 cq-physical-lowering.workspace = true

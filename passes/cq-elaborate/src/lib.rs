@@ -173,7 +173,27 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
 }
 
 mod block_contract;
+mod reductions;
 mod structural;
+
+/// Simplify already elaborated reductions using exact named-result lineage.
+///
+/// In a semijoin or natural-join support (right) operand, `R semijoin T`
+/// may be replaced by `R` when the other operand is contained in `T` on
+/// every column shared by `R` and `T`. Containment follows only the same
+/// named result through projections, selections, semijoin left inputs and
+/// natural-join inputs; it never identifies independent projected witnesses
+/// or infers facts from types, data, predicates or source occurrence numbers.
+///
+/// Opaque Rust operators and negative-operand ancestry are not rewritten.
+/// Reductions containing Rust are not bypassed, and all remaining operator
+/// payloads, result names and block dependencies are retained. Only definitions
+/// made unreachable by these identities are pruned. The result is checked with
+/// [`ra::check_rewrite`]; the separate VO-to-RA named-reduction obligation in
+/// [`crate::check`] is deliberately unchanged.
+pub fn simplify_reductions(source: &ra::Program) -> syn::Result<ra::Program> {
+    reductions::simplify(source)
+}
 
 /// The RA definitions refine the supplied VO schedule, retaining its Rust
 /// chain and preceding relational constraints.
