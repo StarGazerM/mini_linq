@@ -326,7 +326,7 @@ fn total_string_filters_and_derived_country_domains_execute_exactly() {
     .map(|(key,)| *key)
     .collect();
     assert_eq!(actual, [1].into());
-    fn green(name: &String) -> bool {
+    fn green(name: &str) -> bool {
         name.contains("green")
     }
     let asserted: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
@@ -387,18 +387,24 @@ fn total_identifier_remains_available_in_let_bindings_and_guards() {
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(x:i32,y:i32);
         answer(total) :- rows(x,y), let total:i32 = *x + *y, if *total > 0;
-    }.map(|(total,)| total).collect();
+    }
+    .map(|(total,)| total)
+    .collect();
     assert_eq!(actual, [5]);
     let total = true;
     let y = true;
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(x:i32,y:i32);
         answer(x) :- rows(x,_), if total && y;
-    }.map(|(x,)| *x).collect();
+    }
+    .map(|(x,)| *x)
+    .collect();
     assert_eq!(actual, [2, -2]);
     let actual: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(x:i32,y:i32);
         answer(total) :- rows(total,_), #[total] if total.is_positive();
-    }.map(|(total,)| *total).collect();
+    }
+    .map(|(total,)| *total)
+    .collect();
     assert_eq!(actual, [2]);
 }

@@ -584,7 +584,11 @@ impl Schedule {
             }
         }
         // Formal rule CT-Constraint: Preserve exact predicate shape and fixed columns, recomputing implied unary domains on both sides.
-        for constraint in theta.constraints.iter().flat_map(|c| std::iter::once(c.clone()).chain(c.implied_domains())) {
+        for constraint in theta
+            .constraints
+            .iter()
+            .flat_map(|c| std::iter::once(c.clone()).chain(c.implied_domains()))
+        {
             let columns = constraint
                 .variables()
                 .map(|v| node.heading[&symbol_name(v)].clone())

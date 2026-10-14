@@ -175,7 +175,12 @@ impl<'a> Context<'a> {
                     .values()
                     .map(|s| symbol_name(&s.origin.base)),
             )
-            .chain(analysis.join_filters.keys().map(|scan| analysis.lineage[scan].base.clone()))
+            .chain(
+                analysis
+                    .join_filters
+                    .keys()
+                    .map(|scan| analysis.lineage[scan].base.clone()),
+            )
             .collect();
         for base in positional_bases {
             let host = &hosts[&base].value;
@@ -405,7 +410,11 @@ impl<'a> Context<'a> {
     /// Keep original borrowed key columns alongside owned comparison keys,
     /// so result rows retain their original ownership and input identity.
     pub fn built_payload(&self, result: &str, levels: &[Vec<String>]) -> Vec<String> {
-        if self.analysis.membership.contains(&(result.to_owned(), levels.concat())) {
+        if self
+            .analysis
+            .membership
+            .contains(&(result.to_owned(), levels.concat()))
+        {
             return Vec::new();
         }
         let columns: Vec<_> = levels
@@ -552,13 +561,17 @@ impl<'a> Context<'a> {
                     continue;
                 }
                 let id = self.join_filter_ident(scan);
-                let keys = quote!(::core::iter::Iterator::map(#structure.keys(), |__cq_key| *__cq_key.0));
+                let keys =
+                    quote!(::core::iter::Iterator::map(#structure.keys(), |__cq_key| *__cq_key.0));
                 let ty = &filter.ty;
                 let value = match filter.kind {
-                    structures::FilterKind::Exact(_) => quote!(::cq_storage::Membership(&<#ty>::from_keys(#keys, ::cq_storage::I64Codec))),
+                    structures::FilterKind::Exact(_) => {
+                        quote!(::cq_storage::Membership(&<#ty>::from_keys(#keys, ::cq_storage::I64Codec)))
+                    }
                     structures::FilterKind::Bloom(_) => quote!(<#ty>::from_keys(#keys)),
                 };
-                statements.push(syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#value);));
+                statements
+                    .push(syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#value);));
             }
             if *ty == syn::parse_quote!(::std::collections::HashSet<_>)
                 || *ty == syn::parse_quote!(::cq_storage::HashSet<_>)
@@ -647,11 +660,17 @@ impl<'a> Context<'a> {
             if read == columns {
                 match &self.physical[reader].operator {
                     Operator::Probe(..) => {
-                        require(if self.analysis.membership.contains(&(result.to_owned(), columns.to_vec())) {
-                            "contains"
-                        } else {
-                            "seek"
-                        });
+                        require(
+                            if self
+                                .analysis
+                                .membership
+                                .contains(&(result.to_owned(), columns.to_vec()))
+                            {
+                                "contains"
+                            } else {
+                                "seek"
+                            },
+                        );
                     }
                     Operator::Semi(..) | Operator::Anti(..) => {
                         if !self
@@ -708,7 +727,11 @@ impl<'a> Context<'a> {
         columns: &[String],
     ) -> TokenStream {
         let levels = self.levels_of(right, structure);
-        if self.analysis.membership.contains(&(right.to_owned(), columns.to_vec())) {
+        if self
+            .analysis
+            .membership
+            .contains(&(right.to_owned(), columns.to_vec()))
+        {
             let contains = self.chained_contains(left, structure, right, &levels);
             return quote!(::core::iter::IntoIterator::into_iter((#contains).then_some(())));
         }

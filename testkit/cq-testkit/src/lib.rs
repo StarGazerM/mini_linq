@@ -198,14 +198,28 @@ pub fn runtime_rustc() -> std::process::Command {
         std::fs::remove_dir_all(directory).unwrap();
         panic!("no usable {name} rlib built by cq-testkit's dependency: {failures}");
     }
-    static ARTIFACTS: std::sync::LazyLock<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> =
-        std::sync::LazyLock::new(|| {
-            let executable = std::env::current_exe().expect("test executable path");
-            let dependencies = executable.parent().expect("Cargo dependency directory").to_path_buf();
-            let ahash = artifact(&dependencies, "ahash", "pub type State = ahash::RandomState;");
-            let hashbrown = artifact(&dependencies, "hashbrown", "pub type Table = hashbrown::HashTable<()>;");
-            (dependencies, ahash, hashbrown)
-        });
+    static ARTIFACTS: std::sync::LazyLock<(
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    )> = std::sync::LazyLock::new(|| {
+        let executable = std::env::current_exe().expect("test executable path");
+        let dependencies = executable
+            .parent()
+            .expect("Cargo dependency directory")
+            .to_path_buf();
+        let ahash = artifact(
+            &dependencies,
+            "ahash",
+            "pub type State = ahash::RandomState;",
+        );
+        let hashbrown = artifact(
+            &dependencies,
+            "hashbrown",
+            "pub type Table = hashbrown::HashTable<()>;",
+        );
+        (dependencies, ahash, hashbrown)
+    });
     let (dependencies, ahash, hashbrown) = &*ARTIFACTS;
     let mut command =
         std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));

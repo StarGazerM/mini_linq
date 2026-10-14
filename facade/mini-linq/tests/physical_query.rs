@@ -440,6 +440,8 @@ fn key_only_filtered_index_preserves_existential_answers_without_primary_keys() 
             joined = pipe probe first [x] left,selected;
             result = pipe canon project joined keep {x}; return result as answer(x);
         }
-    }.map(|(x,)| *x).collect();
+    }
+    .map(|(x,)| *x)
+    .collect();
     assert_eq!(rows, [1, 3]);
 }

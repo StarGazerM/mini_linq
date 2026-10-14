@@ -1,6 +1,6 @@
 //! Materialized answer sets at the output/input boundary.
-use std::collections::{hash_map, hash_set};
 use crate::HashSet;
+use std::collections::{hash_map, hash_set};
 type HashMap<K, V> = std::collections::HashMap<K, V, crate::HashState>;
 use std::hash::Hash;
 
@@ -144,7 +144,9 @@ pub struct SingleGroup<K, V> {
 }
 impl<K, V> SingleGroup<K, V> {
     pub fn from_option(group: Option<(K, V)>) -> Self {
-        Self { group: group.map(|(key, value)| (key, [value])) }
+        Self {
+            group: group.map(|(key, value)| (key, [value])),
+        }
     }
     pub fn iter(&self) -> impl Iterator<Item = (&K, &[V; 1])> {
         self.group.iter().map(|(key, values)| (key, values))
@@ -161,8 +163,11 @@ impl<'a, K: Eq, V> IndexRead for &'a SingleGroup<K, V> {
     type Item = &'a V;
     type Cursor = std::option::IntoIter<&'a V>;
     fn lookup(&self, key: &K) -> Self::Cursor {
-        self.group.as_ref().filter(|(stored, _)| stored == key)
-            .map(|(_, values)| &values[0]).into_iter()
+        self.group
+            .as_ref()
+            .filter(|(stored, _)| stored == key)
+            .map(|(_, values)| &values[0])
+            .into_iter()
     }
 }
 impl<'a, K: Eq, V> crate::PointLookup for &'a SingleGroup<K, V>
@@ -172,7 +177,9 @@ where
     <&'a K as crate::rows::Columns>::Row: crate::rows::Concat<<&'a V as crate::rows::Columns>::Row>,
 {
     type Key = K;
-    type Row = <<&'a K as crate::rows::Columns>::Row as crate::rows::Concat<<&'a V as crate::rows::Columns>::Row>>::Row;
+    type Row = <<&'a K as crate::rows::Columns>::Row as crate::rows::Concat<
+        <&'a V as crate::rows::Columns>::Row,
+    >>::Row;
     type Cursor = crate::PointRows<&'a K, std::option::IntoIter<&'a V>>;
     fn point_lookup(&self, key: &K) -> Self::Cursor {
         let found = self.group.as_ref().filter(|(stored, _)| stored == key);

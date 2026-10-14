@@ -187,9 +187,12 @@ pub(crate) fn parse_total_attribute(
     if attributes.is_empty() {
         return Ok(None);
     }
-    if attributes.len() != 1 || !matches!(&attributes[0].meta, syn::Meta::Path(path) if path.is_ident("total")) {
+    if attributes.len() != 1
+        || !matches!(&attributes[0].meta, syn::Meta::Path(path) if path.is_ident("total"))
+    {
         return Err(syn::Error::new_spanned(
-            &attributes[0], "expected a single `#[total]` attribute",
+            &attributes[0],
+            "expected a single `#[total]` attribute",
         ));
     }
     Ok(attributes.into_iter().next())

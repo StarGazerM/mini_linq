@@ -54,9 +54,9 @@
 //! against the generated Build, read and dedup obligations.
 
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
-use syn::{braced, parenthesized, Token};
+use syn::{Token, braced, parenthesized};
 
 mod kw {
     syn::custom_keyword!(pipeline);

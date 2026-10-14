@@ -144,7 +144,9 @@ impl Lineage<'_> {
         let mut seen = BTreeSet::new();
         while let Some(index) = pending.pop() {
             if !seen.insert(index)
-                || shared.iter().any(|name| !self.headings[index].contains(*name))
+                || shared
+                    .iter()
+                    .any(|name| !self.headings[index].contains(*name))
             {
                 continue;
             }

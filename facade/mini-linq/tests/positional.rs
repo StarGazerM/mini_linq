@@ -332,22 +332,40 @@ macro_rules! filtered_join {
 
 #[test]
 fn covered_exact_and_bloom_scan_filters_preserve_answers_and_skip_blocks() {
-    let left = vec![(i64::MIN,10_i64),(1,9),(1,20),(1,20),(2,30),(3,40),(i64::MAX,50)];
-    let right = vec![(1_i64,2_i64),(1,4),(1,4),(2,0),(i64::MAX,4)];
-    let expected = BTreeSet::from([(1,20,2),(1,20,4),(i64::MAX,50,4)]);
-    assert_eq!(filtered_join!(left,right,{b = let project s keep {x,z};}), expected);
-    let left = ZoneRows::from_rows::<(MinMax<i64>,MinMax<i64>)>(left, NonZeroUsize::new(1).unwrap());
+    let left = vec![
+        (i64::MIN, 10_i64),
+        (1, 9),
+        (1, 20),
+        (1, 20),
+        (2, 30),
+        (3, 40),
+        (i64::MAX, 50),
+    ];
+    let right = vec![(1_i64, 2_i64), (1, 4), (1, 4), (2, 0), (i64::MAX, 4)];
+    let expected = BTreeSet::from([(1, 20, 2), (1, 20, 4), (i64::MAX, 50, 4)]);
+    assert_eq!(
+        filtered_join!(left,right,{b = let project s keep {x,z};}),
+        expected
+    );
+    let left =
+        ZoneRows::from_rows::<(MinMax<i64>, MinMax<i64>)>(left, NonZeroUsize::new(1).unwrap());
     cq_storage::counters::reset();
-    assert_eq!(filtered_join!(left,right,{b = let project s keep {x,z};}), expected);
+    assert_eq!(
+        filtered_join!(left,right,{b = let project s keep {x,z};}),
+        expected
+    );
     let costs = cq_storage::counters::snapshot();
     assert_eq!(costs.join_filter_passed, 3);
     assert!(costs.blocks_skipped_metadata > 0);
     cq_storage::counters::reset();
-    assert_eq!(filtered_join!(left,right,{
-        h = pipe rename H@2 {e -> z,f -> w};
-        b = let probe first [z] s,h;
-    }), expected);
+    assert_eq!(
+        filtered_join!(left,right,{
+            h = pipe rename H@2 {e -> z,f -> w};
+            b = let probe first [z] s,h;
+        }),
+        expected
+    );
     assert_eq!(cq_storage::counters::snapshot().join_filter_passed, 3);
-    let empty: Vec<(i64,i64)> = Vec::new();
+    let empty: Vec<(i64, i64)> = Vec::new();
     assert!(filtered_join!(left,empty,{b = let project s keep {x,z};}).is_empty());
 }

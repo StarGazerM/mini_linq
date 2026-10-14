@@ -58,7 +58,10 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
 pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> {
     valuation::contract::check(source)?;
     if source.valuation.join_branches.is_some() {
-        return Err(syn::Error::new_spanned(&source.valuation, "written reference cannot contain independent join branches"));
+        return Err(syn::Error::new_spanned(
+            &source.valuation,
+            "written reference cannot contain independent join branches",
+        ));
     }
     use valuation::cq::BodyItem;
     fn exact(
@@ -178,9 +181,9 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
 }
 
 mod block_contract;
+mod join_branches;
 mod reductions;
 mod structural;
-mod join_branches;
 
 /// Simplify already elaborated reductions using exact named-result lineage.
 ///
@@ -330,9 +333,11 @@ impl<'a> State<'a> {
                 valuation::cq::BodyItem::Constraint(c) => std::iter::once(c.clone())
                     .chain(c.implied_domains())
                     .map(|predicate| {
-                        let binders = targets(predicate.variables().map(symbol_name).collect(), clause);
+                        let binders =
+                            targets(predicate.variables().map(symbol_name).collect(), clause);
                         (predicate, binders)
-                    }).collect::<Vec<_>>(),
+                    })
+                    .collect::<Vec<_>>(),
                 _ => Vec::new(),
             })
             .collect();
@@ -373,7 +378,12 @@ impl<'a> State<'a> {
                     if self.joined_branch_atoms.contains(&subatom.clause()) {
                         continue;
                     }
-                    if let Some(branch) = self.join_branches.and_then(|groups| groups.branches.iter().find(|b| b.clauses().contains(&subatom.clause()))) {
+                    if let Some(branch) = self.join_branches.and_then(|groups| {
+                        groups
+                            .branches
+                            .iter()
+                            .find(|b| b.clauses().contains(&subatom.clause()))
+                    }) {
                         self.join_branch(branch);
                         continue;
                     }
@@ -392,11 +402,15 @@ impl<'a> State<'a> {
                 valuation::Step::Let(binding, _) => self.bind(binding),
                 valuation::Step::Equality(equality, _) => {
                     let local = self.branch_local(equality.variables().map(symbol_name).collect());
-                    if !local { self.equality(equality); }
+                    if !local {
+                        self.equality(equality);
+                    }
                 }
                 valuation::Step::Constraint(c, _) => {
                     let local = self.branch_local(c.variables().map(symbol_name).collect());
-                    if !local { self.constraint(c); }
+                    if !local {
+                        self.constraint(c);
+                    }
                 }
             }
             let introduced: Vec<_> = introduces

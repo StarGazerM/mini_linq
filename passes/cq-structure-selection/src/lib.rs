@@ -467,20 +467,39 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
                     keyed.filtered = Some(projection.clone());
                     // The recorded projection contains no witness-dependent
                     // payload. Integral borrowed keys have an exact dense codec.
-                    let stored = key.concat().into_iter()
+                    let stored = key
+                        .concat()
+                        .into_iter()
                         .filter(|column| !constants.contains_key(column))
                         .collect::<Vec<_>>();
                     if key.len() == 1
                         && stored.len() == 1
-                        && required[&name].iter().all(|column| key[0].contains(column) || constants.contains_key(column))
+                        && required[&name]
+                            .iter()
+                            .all(|column| key[0].contains(column) || constants.contains_key(column))
                         && analysis.rows[&name].computed.is_empty()
                         && matches!(structures::ungroup_type(&analysis.rows[&name].types[&stored[0]]), syn::Type::Path(p) if p.path.is_ident("i64") || p.path.is_ident("i32"))
-                        && analysis.keyed_reads.get(&name).into_iter().flatten().all(|(_, columns, _)| columns == &key[0])
-                        && analysis.key_reads.get(&name).into_iter().flatten().all(|(reader, _)| match operators[reader] {
-                            Operator::Probe(_, read) | Operator::Semi(_, read) | Operator::Anti(_, read) =>
-                                !analysis.rows[&symbol_name(&read.left)].computed.iter().any(|column| key[0].contains(column)),
-                            _ => false,
-                        })
+                        && analysis
+                            .keyed_reads
+                            .get(&name)
+                            .into_iter()
+                            .flatten()
+                            .all(|(_, columns, _)| columns == &key[0])
+                        && analysis
+                            .key_reads
+                            .get(&name)
+                            .into_iter()
+                            .flatten()
+                            .all(|(reader, _)| match operators[reader] {
+                                Operator::Probe(_, read)
+                                | Operator::Semi(_, read)
+                                | Operator::Anti(_, read) => !analysis.rows
+                                    [&symbol_name(&read.left)]
+                                    .computed
+                                    .iter()
+                                    .any(|column| key[0].contains(column)),
+                                _ => false,
+                            })
                     {
                         keyed.membership = Some(Default::default());
                         keyed.ty = syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>);

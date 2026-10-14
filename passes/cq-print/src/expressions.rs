@@ -52,9 +52,14 @@ pub fn relational_constraint(c: &Constraint, parameters: &BTreeMap<String, Ident
         }
     };
     match c {
-        Constraint::Total { expression, bindings } => {
+        Constraint::Total {
+            expression,
+            bindings,
+        } => {
             let names = bindings.iter().map(|(name, _)| name);
-            let values = bindings.iter().map(|(_, term)| term_reference(term, parameters));
+            let values = bindings
+                .iter()
+                .map(|(_, term)| term_reference(term, parameters));
             quote!({ let (#(#names,)*) = (#(#values,)*); #expression })
         }
         Constraint::Compare {

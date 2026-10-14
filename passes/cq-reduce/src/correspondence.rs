@@ -20,10 +20,18 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
         ));
     }
     if target.valuation.join_branches != source.valuation.join_branches {
-        return Err(syn::Error::new_spanned(&target.valuation, "reductions must preserve independent join branches"));
+        return Err(syn::Error::new_spanned(
+            &target.valuation,
+            "reductions must preserve independent join branches",
+        ));
     }
-    let branch_options = Options { guards: options.guards, semijoins: Reductions::None };
-    let options = if source.valuation.join_branches.is_some() && options.semijoins == Reductions::Hypergraph {
+    let branch_options = Options {
+        guards: options.guards,
+        semijoins: Reductions::None,
+    };
+    let options = if source.valuation.join_branches.is_some()
+        && options.semijoins == Reductions::Hypergraph
+    {
         &branch_options
     } else {
         options

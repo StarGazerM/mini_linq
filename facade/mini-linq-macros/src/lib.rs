@@ -67,22 +67,48 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 #[derive(Default)]
 struct PlanOptions {
     no_reduce: bool,
+    advice: cq_physical_lowering::Advice,
 }
 impl Parse for PlanOptions {
+    /// `no_reduce` and/or `stream(Relation, ...)`, comma separated.
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if input.is_empty() {
-            return Ok(Self::default());
+        let mut options = Self::default();
+        while !input.is_empty() {
+            let option: syn::Ident = input.parse()?;
+            if option == "no_reduce" && !options.no_reduce {
+                options.no_reduce = true;
+            } else if option == "stream" && options.advice.stream.is_empty() {
+                let content;
+                syn::parenthesized!(content in input);
+                let names = content.parse_terminated(syn::Ident::parse, syn::Token![,])?;
+                if names.is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        option,
+                        "stream advice names at least one relation",
+                    ));
+                }
+                options.advice.stream = names.iter().map(|n| n.to_string()).collect();
+            } else {
+                return Err(syn::Error::new_spanned(
+                    option,
+                    "expected no_reduce or stream(Relation, ...), each at most once",
+                ));
+            }
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
+                if input.is_empty() {
+                    return Err(input.error("trailing comma after plan options"));
+                }
+            }
         }
-        let option: syn::Ident = input.parse()?;
-        if option != "no_reduce" {
-            return Err(syn::Error::new_spanned(option, "expected no_reduce"));
-        }
-        Ok(Self { no_reduce: true })
+        Ok(options)
     }
 }
 
 /// CQ → RA′ with static filtered-connected ordering and checked reductions.
-/// `plan(no_reduce)` disables reductions, not static ordering.
+/// `plan(no_reduce)` disables reductions, not static ordering. `plan(stream(R, ..))`
+/// advises streaming the join side that reads `R`; the choice is recorded in RA
+/// operand order and checked under the same advice.
 /// Formal rule Plan-Prefix: Normalize, order Filtered/Coarse, optionally reduce and absorb, then record static build orientation before IX.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
@@ -112,7 +138,7 @@ pub fn plan(input: TokenStream) -> TokenStream {
         } else {
             cq_elaborate::simplify_reductions(&target)?
         };
-        cq_physical_lowering::orient(&target)
+        cq_physical_lowering::orient_with(&target, &args.advice)
     })
     .into()
 }

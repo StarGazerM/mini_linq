@@ -425,7 +425,7 @@ fn reduction_absorption_does_not_confuse_projected_aliases_with_full_key_support
         (
             quote!(natural_join alias with reduced),
             quote!(natural_join alias with r),
-            quote!(answer(x,y)),
+            quote!(answer(x, y)),
         ),
         (
             quote!(semijoin alias with reduced),
@@ -942,23 +942,58 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
     });
     let vo = coarse(&source);
     let target = compile(&vo).unwrap();
-    let selections: Vec<_> = target.plan.definitions.iter().filter_map(|d| match &d.operator {
-        ra::Operator::Select(s) => Some(s),
-        _ => None,
-    }).collect();
+    let selections: Vec<_> = target
+        .plan
+        .definitions
+        .iter()
+        .filter_map(|d| match &d.operator {
+            ra::Operator::Select(s) => Some(s),
+            _ => None,
+        })
+        .collect();
     assert_eq!(selections.len(), 3);
-    assert_eq!(selections.iter().filter(|s| target.plan.definitions.iter().any(|d| d.result == s.input && matches!(d.operator, ra::Operator::Rename(_)))).count(), 2);
+    assert_eq!(
+        selections
+            .iter()
+            .filter(|s| target
+                .plan
+                .definitions
+                .iter()
+                .any(|d| d.result == s.input && matches!(d.operator, ra::Operator::Rename(_))))
+            .count(),
+        2
+    );
     for seed in 0..16 {
         let database = databases::binary_database(&source, seed);
-        assert_eq!(oracle::evaluate_ra(&target, &database).output, cq_oracle::evaluate_cq(&source, &database));
+        assert_eq!(
+            oracle::evaluate_ra(&target, &database).output,
+            cq_oracle::evaluate_cq(&source, &database)
+        );
     }
     let mut changed = target.clone();
-    let ra::Operator::Select(selection) = &mut changed.plan.definitions.iter_mut().find(|d| matches!(d.operator, ra::Operator::Select(_))).unwrap().operator else { panic!() };
+    let ra::Operator::Select(selection) = &mut changed
+        .plan
+        .definitions
+        .iter_mut()
+        .find(|d| matches!(d.operator, ra::Operator::Select(_)))
+        .unwrap()
+        .operator
+    else {
+        panic!()
+    };
     selection.condition.constraints[0] = syn::parse_quote!(x > 99);
     assert!(check(&vo, &changed).is_err());
     let mut changed = target;
-    let last = changed.plan.definitions.iter_mut().rev().find(|d| matches!(d.operator, ra::Operator::Select(_))).unwrap();
-    let ra::Operator::Select(selection) = &last.operator else { panic!() };
+    let last = changed
+        .plan
+        .definitions
+        .iter_mut()
+        .rev()
+        .find(|d| matches!(d.operator, ra::Operator::Select(_)))
+        .unwrap();
+    let ra::Operator::Select(selection) = &last.operator else {
+        panic!()
+    };
     let input = &selection.input;
     last.operator = syn::parse_quote!(project #input keep {x,y});
     assert!(check(&vo, &changed).is_err());
@@ -972,28 +1007,70 @@ fn total_guards_push_into_scans_while_partial_guards_keep_their_prefix() {
         )).unwrap();
         let vo = coarse(&source);
         let target = compile(&vo).unwrap();
-        let select = target.plan.definitions.iter().find_map(|d| match &d.operator {
-            ra::Operator::Select(s) => Some(s), _ => None,
-        }).unwrap();
-        assert!(target.plan.definitions.iter().any(|d| d.result == select.input && matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "P")));
-        assert!(!target.plan.definitions.iter().any(|d| matches!(d.operator, ra::Operator::Guard(_))));
-        assert_eq!(syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(), target);
+        let select = target
+            .plan
+            .definitions
+            .iter()
+            .find_map(|d| match &d.operator {
+                ra::Operator::Select(s) => Some(s),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            target
+                .plan
+                .definitions
+                .iter()
+                .any(|d| d.result == select.input
+                    && matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "P"))
+        );
+        assert!(
+            !target
+                .plan
+                .definitions
+                .iter()
+                .any(|d| matches!(d.operator, ra::Operator::Guard(_)))
+        );
+        assert_eq!(
+            syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
+            target
+        );
     }
     let source = cq(quote! {
         struct Q; relation R(a:i32); relation S(b:i32);
         answer(x,y) :- R(x), S(y), if 10 / *x > 1;
     });
     let target = compile(&coarse(&source)).unwrap();
-    let guard = target.plan.definitions.iter().find_map(|d| match &d.operator {
-        ra::Operator::Guard(g) => Some(g), _ => None,
-    }).unwrap();
-    assert!(target.plan.definitions.iter().any(|d| d.result == guard.input && matches!(d.operator, ra::Operator::NaturalJoin(_))));
+    let guard = target
+        .plan
+        .definitions
+        .iter()
+        .find_map(|d| match &d.operator {
+            ra::Operator::Guard(g) => Some(g),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        target
+            .plan
+            .definitions
+            .iter()
+            .any(|d| d.result == guard.input && matches!(d.operator, ra::Operator::NaturalJoin(_)))
+    );
     let mut forged = target.clone();
-    let step = forged.plan.definitions.iter_mut().find(|d| matches!(d.operator, ra::Operator::Guard(_))).unwrap();
+    let step = forged
+        .plan
+        .definitions
+        .iter_mut()
+        .find(|d| matches!(d.operator, ra::Operator::Guard(_)))
+        .unwrap();
     let input = &guard.input;
     step.operator = syn::parse_quote!(select #input if (#[total] { x = x } (10 / *x > 1)));
     ra::contract::check(&forged).unwrap();
-    assert!(check(&coarse(&source), &forged).is_err(), "a target cannot invent a totality assertion for a partial source guard");
+    assert!(
+        check(&coarse(&source), &forged).is_err(),
+        "a target cannot invent a totality assertion for a partial source guard"
+    );
 }
 
 #[test]
@@ -1002,17 +1079,39 @@ fn total_multi_atom_guard_moves_to_first_bound_prefix() {
         struct Q; relation R(a:i32); relation S(b:i32); relation T(c:i32);
         answer(x,y,z) :- R(x), S(y), T(z), #[total] if compatible(x,y);
     });
-    let planned = cq_order::compile(&source, &cq_order::Options {
-        heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
-        split: cq_order::Split::Coarse,
-    }).unwrap();
-    let position = planned.valuation.steps.iter().position(|step| matches!(step, valuation::Step::Constraint(cq::Constraint::Total { .. }, _))).unwrap();
+    let planned = cq_order::compile(
+        &source,
+        &cq_order::Options {
+            heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+            split: cq_order::Split::Coarse,
+        },
+    )
+    .unwrap();
+    let position = planned
+        .valuation
+        .steps
+        .iter()
+        .position(|step| {
+            matches!(
+                step,
+                valuation::Step::Constraint(cq::Constraint::Total { .. }, _)
+            )
+        })
+        .unwrap();
     assert_eq!(position, 2);
-    assert!(matches!(&planned.valuation.steps[3], valuation::Step::Atom(atom, _) if atom.relation == "T"));
+    assert!(
+        matches!(&planned.valuation.steps[3], valuation::Step::Atom(atom, _) if atom.relation == "T")
+    );
     let target = compile(&planned).unwrap();
-    let select = target.plan.definitions.iter().find_map(|d| match &d.operator {
-        ra::Operator::Select(s) => Some(s), _ => None,
-    }).unwrap();
+    let select = target
+        .plan
+        .definitions
+        .iter()
+        .find_map(|d| match &d.operator {
+            ra::Operator::Select(s) => Some(s),
+            _ => None,
+        })
+        .unwrap();
     assert!(target.plan.definitions.iter().any(|d| d.result == select.input && matches!(d.operator, ra::Operator::NaturalJoin(_))));
 }
 
@@ -1028,7 +1127,8 @@ fn independent_branch_is_exact_projected_and_checked() {
         #source valuation branches { branch [1,2] (s); } {
             L@0(o,p,s); S@1(s,n); N@2(n,label); label = 7;
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&grouped).unwrap();
     assert!(target.plan.definitions.iter().any(|d| matches!(&d.operator, ra::Operator::Project(p) if p.attributes.iter().map(ToString::to_string).collect::<Vec<_>>() == ["s"])));
     let flat = compile(&coarse(&source)).unwrap();
@@ -1036,7 +1136,10 @@ fn independent_branch_is_exact_projected_and_checked() {
     assert!(cq_elaborate::compile_written(&grouped).is_err());
     for seed in 0..32 {
         let database = databases::binary_database(&source, seed);
-        assert_eq!(oracle::evaluate_ra(&target, &database).output, oracle::evaluate_ra(&flat, &database).output);
+        assert_eq!(
+            oracle::evaluate_ra(&target, &database).output,
+            oracle::evaluate_ra(&flat, &database).output
+        );
     }
 }
 
@@ -1052,12 +1155,16 @@ fn grouped_branch_preserves_multi_atom_predicates_and_duplicate_witnesses() {
         #source valuation branches { branch [1,2] (s); } {
             L@0(o,p,s); S@1(s,n); N@2(n,k); n < k;
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&grouped).unwrap();
     let flat = compile(&coarse(&source)).unwrap();
     for seed in 0..32 {
         let database = databases::binary_database(&source, seed);
-        assert_eq!(oracle::evaluate_ra(&target, &database).output, oracle::evaluate_ra(&flat, &database).output);
+        assert_eq!(
+            oracle::evaluate_ra(&target, &database).output,
+            oracle::evaluate_ra(&flat, &database).output
+        );
     }
 }
 
@@ -1073,15 +1180,31 @@ fn dimension_subtrees_build_before_their_parent_without_cartesian_children() {
         #source valuation branches { branch [1,2,3,4] (p,s); } {
             L@0(o,p,s); PS@1(p,s); P@2(p); S@3(s,n); N@4(n); O@5(o);
         }
-    }).unwrap();
+    })
+    .unwrap();
     let target = compile(&grouped).unwrap();
     let facts = ra::contract::check(&target).unwrap();
-    let supplier = target.plan.definitions.iter().find(|d| matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "S")).unwrap();
-    let nation = target.plan.definitions.iter().find(|d| matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "N")).unwrap();
+    let supplier = target
+        .plan
+        .definitions
+        .iter()
+        .find(|d| matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "S"))
+        .unwrap();
+    let nation = target
+        .plan
+        .definitions
+        .iter()
+        .find(|d| matches!(&d.operator, ra::Operator::Rename(r) if r.relation == "N"))
+        .unwrap();
     assert!(target.plan.definitions.iter().any(|d| matches!(&d.operator, ra::Operator::NaturalJoin(j) if j.left == supplier.result && j.right == nation.result)));
     for definition in &target.plan.definitions {
         if let ra::Operator::NaturalJoin(join) = &definition.operator {
-            assert!(facts[&join.left.to_string()].bindings.keys().any(|v| facts[&join.right.to_string()].bindings.contains_key(v)));
+            assert!(
+                facts[&join.left.to_string()]
+                    .bindings
+                    .keys()
+                    .any(|v| facts[&join.right.to_string()].bindings.contains_key(v))
+            );
         }
     }
 }

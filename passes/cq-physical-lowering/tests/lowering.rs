@@ -209,7 +209,10 @@ fn compound_dimension_build_survives_a_filtered_fact_spine() {
     };
     let target = cq_physical_lowering::orient(&source).unwrap();
     cq_physical_lowering::check_orientation(&source, &target).unwrap();
-    assert_eq!(target.plan.definitions[10], syn::parse_quote!(j = natural_join lo with bp;));
+    assert_eq!(
+        target.plan.definitions[10],
+        syn::parse_quote!(j = natural_join lo with bp;)
+    );
     let mut wrong = target.clone();
     wrong.plan.definitions[10] = syn::parse_quote!(j = natural_join bp with lo;);
     assert!(cq_physical_lowering::check_orientation(&source, &wrong).is_err());

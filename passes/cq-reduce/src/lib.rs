@@ -66,8 +66,13 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
     // Independent branches are exact build-side joins, not fact-dependent
     // semijoin supports. The optional Hypergraph policy does not interpose a
     // reducer across this recorded physical decomposition.
-    let branch_options = Options { guards: options.guards, semijoins: Reductions::None };
-    let options = if source.valuation.join_branches.is_some() && options.semijoins == Reductions::Hypergraph {
+    let branch_options = Options {
+        guards: options.guards,
+        semijoins: Reductions::None,
+    };
+    let options = if source.valuation.join_branches.is_some()
+        && options.semijoins == Reductions::Hypergraph
+    {
         &branch_options
     } else {
         options

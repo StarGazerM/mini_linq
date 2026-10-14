@@ -217,8 +217,10 @@ where
 {
     type Row = <<&'a K as Columns>::Row as Concat<<&'a V as Columns>::Row>>::Row;
     fn rows(self) -> impl Iterator<Item = Self::Row> {
-        crate::instrument::cursor!(
-            self.iter().flat_map(|(key, values)| values.iter().map(move |value| key.columns().concat(value.columns()))),
-        )
+        crate::instrument::cursor!(self.iter().flat_map(|(key, values)| {
+            values
+                .iter()
+                .map(move |value| key.columns().concat(value.columns()))
+        }),)
     }
 }

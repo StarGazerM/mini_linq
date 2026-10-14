@@ -23,7 +23,11 @@ pub trait IndexRead: Clone {
     /// Stable probe realization with at most N rows of lookahead. N=1 preserves
     /// scalar demand; larger batches require a total source/key for consumers
     /// that may stop early. Outer and within-bucket occurrence order are exact.
-    fn probe<const N: usize, I, F>(self, source: I, mut key: F) -> impl Iterator<Item = (I::Item, Self::Item)>
+    fn probe<const N: usize, I, F>(
+        self,
+        source: I,
+        mut key: F,
+    ) -> impl Iterator<Item = (I::Item, Self::Item)>
     where
         I: Iterator,
         I::Item: Copy,
@@ -41,7 +45,11 @@ impl<T: IndexRead> IndexRead for &T {
     fn lookup(&self, key: &Self::Key) -> Self::Cursor {
         T::lookup(*self, key)
     }
-    fn probe<const N: usize, I, F>(self, source: I, key: F) -> impl Iterator<Item = (I::Item, Self::Item)>
+    fn probe<const N: usize, I, F>(
+        self,
+        source: I,
+        key: F,
+    ) -> impl Iterator<Item = (I::Item, Self::Item)>
     where
         I: Iterator,
         I::Item: Copy,
@@ -118,13 +126,20 @@ struct Directory<K> {
 }
 impl<K: Eq + Hash> Directory<K> {
     fn new() -> Self {
-        Self { table: hashbrown::HashTable::new(), hasher: crate::HashState::default() }
+        Self {
+            table: hashbrown::HashTable::new(),
+            hasher: crate::HashState::default(),
+        }
     }
     fn entry(&mut self, key: K) -> (usize, bool) {
         let hash = self.hash(&key);
         let slot = self.table.len();
         let hasher = &self.hasher;
-        match self.table.entry(hash, |(stored, _)| stored == &key, |(stored, _)| Self::hash_with(hasher, stored)) {
+        match self.table.entry(
+            hash,
+            |(stored, _)| stored == &key,
+            |(stored, _)| Self::hash_with(hasher, stored),
+        ) {
             hashbrown::hash_table::Entry::Occupied(entry) => (entry.get().1, false),
             hashbrown::hash_table::Entry::Vacant(entry) => {
                 entry.insert((key, slot));
@@ -143,7 +158,9 @@ impl<K: Eq + Hash> Directory<K> {
     }
     #[inline]
     fn get_hashed(&self, key: &K, hash: u64) -> Option<usize> {
-        self.table.find(hash, |(stored, _)| stored == key).map(|entry| entry.1)
+        self.table
+            .find(hash, |(stored, _)| stored == key)
+            .map(|entry| entry.1)
     }
     #[inline]
     fn get(&self, key: &K) -> Option<usize> {
@@ -155,7 +172,9 @@ impl<K: Eq + Hash> Directory<K> {
     }
     #[inline]
     fn prefetch(&self, hash: u64) {
-        let Some(candidate) = self.table.iter_hash(hash).next() else { return };
+        let Some(candidate) = self.table.iter_hash(hash).next() else {
+            return;
+        };
         let address = candidate as *const (K, usize);
         // SAFETY: this immutable candidate reference names an allocated bucket;
         // prefetch neither dereferences it nor changes memory.
@@ -210,7 +229,9 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
         I::Item: Copy,
         F: FnMut(&I::Item) -> K,
     {
-        const { assert!(N > 0, "probe batch must be nonempty"); }
+        const {
+            assert!(N > 0, "probe batch must be nonempty");
+        }
         BatchedProbe {
             index: self,
             source,
@@ -245,7 +266,10 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
                 crate::count!(rows_copied);
                 let (slot, fresh) = index.entry(key);
                 if fresh {
-                    values.push(Bucket { first: value, tail: None });
+                    values.push(Bucket {
+                        first: value,
+                        tail: None,
+                    });
                 } else {
                     let tail = values[slot].tail.get_or_insert_with(Default::default);
                     // No cursor can see these buckets until initialization finishes.
@@ -274,14 +298,22 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
 impl<K: Eq + Hash, V> crate::Keys for HashIndex<'_, K, V> {
     type Key = K;
     type Iter<'a>
-        = crate::instrument::Cursor<std::iter::Map<hashbrown::hash_table::Iter<'a, (K, usize)>, fn(&'a (K, usize)) -> &'a K>>
+        = crate::instrument::Cursor<
+        std::iter::Map<hashbrown::hash_table::Iter<'a, (K, usize)>, fn(&'a (K, usize)) -> &'a K>,
+    >
     where
         Self: 'a;
     fn key_count(&self) -> usize {
         self.buckets().index.table.len()
     }
     fn distinct_keys(&self) -> Self::Iter<'_> {
-        crate::instrument::cursor!(self.buckets().index.table.iter().map((|(key, _)| key) as fn(&(K, usize)) -> &K))
+        crate::instrument::cursor!(
+            self.buckets()
+                .index
+                .table
+                .iter()
+                .map((|(key, _)| key) as fn(&(K, usize)) -> &K)
+        )
     }
 }
 
@@ -351,7 +383,8 @@ struct BatchedProbe<'a, K, V, I: Iterator, F, const N: usize> {
     value: usize,
     finished: bool,
 }
-impl<K: Eq + Hash, V: Copy, I: Iterator, F, const N: usize> Iterator for BatchedProbe<'_, K, V, I, F, N>
+impl<K: Eq + Hash, V: Copy, I: Iterator, F, const N: usize> Iterator
+    for BatchedProbe<'_, K, V, I, F, N>
 where
     I::Item: Copy,
     F: FnMut(&I::Item) -> K,
@@ -397,7 +430,9 @@ where
                     }
                     for i in 0..self.len {
                         crate::count!(lookups);
-                        self.slots[i] = buckets.index.get_hashed(keys[i].as_ref().unwrap(), hashes[i]);
+                        self.slots[i] = buckets
+                            .index
+                            .get_hashed(keys[i].as_ref().unwrap(), hashes[i]);
                     }
                 }
                 self.row = 0;
@@ -412,7 +447,11 @@ where
             let value = if self.value == 0 {
                 Some(bucket.first)
             } else {
-                bucket.tail.as_ref().and_then(|tail| tail.get(self.value - 1)).copied()
+                bucket
+                    .tail
+                    .as_ref()
+                    .and_then(|tail| tail.get(self.value - 1))
+                    .copied()
             };
             if let Some(value) = value {
                 self.value += 1;
@@ -432,21 +471,36 @@ mod tests {
     fn batched_probe_preserves_outer_and_multi_match_order() {
         let index = HashIndex::build([(1, 10), (1, 10), (2, 20), (1, 11)].into_iter());
         let outer: Vec<_> = (0..(PROBE_BATCH * 3 + 7)).map(|i| (i, i % 4)).collect();
-        let scalar: Vec<_> = outer.iter().copied()
+        let scalar: Vec<_> = outer
+            .iter()
+            .copied()
             .flat_map(|row| index.lookup(&row.1).map(move |value| (row, value)))
             .collect();
-        let batched: Vec<_> = (&index).probe::<PROBE_BATCH, _, _>(outer.iter().copied(), |row| row.1).collect();
+        let batched: Vec<_> = (&index)
+            .probe::<PROBE_BATCH, _, _>(outer.iter().copied(), |row| row.1)
+            .collect();
         assert_eq!(batched, scalar);
-        assert_eq!((&index).probe::<1, _, _>(outer.iter().copied(), |row| row.1).collect::<Vec<_>>(), scalar);
+        assert_eq!(
+            (&index)
+                .probe::<1, _, _>(outer.iter().copied(), |row| row.1)
+                .collect::<Vec<_>>(),
+            scalar
+        );
         let borrowed = &index;
-        assert_eq!(borrowed.probe::<PROBE_BATCH, _, _>(outer.into_iter(), |row| row.1).collect::<Vec<_>>(), scalar);
+        assert_eq!(
+            borrowed
+                .probe::<PROBE_BATCH, _, _>(outer.into_iter(), |row| row.1)
+                .collect::<Vec<_>>(),
+            scalar
+        );
     }
 
     #[test]
     fn batched_probe_retains_one_index_handle_and_no_bucket_handles() {
         let index = HashIndex::build([(1, 10), (1, 11)].into_iter());
         let tail = index.buckets().values[0].tail.as_ref().unwrap();
-        let mut probe = (&index).probe::<PROBE_BATCH, _, _>(std::iter::repeat_n(1, PROBE_BATCH + 1), |key| *key);
+        let mut probe = (&index)
+            .probe::<PROBE_BATCH, _, _>(std::iter::repeat_n(1, PROBE_BATCH + 1), |key| *key);
         assert_eq!(Rc::strong_count(&index.state), 2);
         assert_eq!(Rc::strong_count(tail), 1);
         for _ in 0..PROBE_BATCH + 1 {
@@ -475,7 +529,12 @@ mod tests {
         let index = HashIndex::build(std::iter::once_with(|| -> (i32, i32) {
             panic!("empty outer must not build the index")
         }));
-        assert_eq!(index.probe::<PROBE_BATCH, _, _>(std::iter::empty::<i32>(), |row| *row).next(), None);
+        assert_eq!(
+            index
+                .probe::<PROBE_BATCH, _, _>(std::iter::empty::<i32>(), |row| *row)
+                .next(),
+            None
+        );
     }
 
     #[test]
@@ -483,7 +542,12 @@ mod tests {
         let index = HashIndex::build(std::iter::empty::<(i32, i32)>());
         assert_eq!(index.lookup(&1).next(), None);
         assert!(!index.contains(&1));
-        assert_eq!((&index).probe::<PROBE_BATCH, _, _>(0..300, |key| *key).count(), 0);
+        assert_eq!(
+            (&index)
+                .probe::<PROBE_BATCH, _, _>(0..300, |key| *key)
+                .count(),
+            0
+        );
         assert_eq!(index.buckets().index.table.allocation_size(), 0);
     }
 
@@ -497,8 +561,15 @@ mod tests {
             }
         }
         let index = HashIndex::build((0..200).map(|i| (Collision(i), i)));
-        let scalar: Vec<_> = (0..300).flat_map(|i| index.lookup(&Collision(i)).map(move |v| (i, v))).collect();
-        assert_eq!((&index).probe::<PROBE_BATCH, _, _>(0..300, |i| Collision(*i)).collect::<Vec<_>>(), scalar);
+        let scalar: Vec<_> = (0..300)
+            .flat_map(|i| index.lookup(&Collision(i)).map(move |v| (i, v)))
+            .collect();
+        assert_eq!(
+            (&index)
+                .probe::<PROBE_BATCH, _, _>(0..300, |i| Collision(*i))
+                .collect::<Vec<_>>(),
+            scalar
+        );
         assert!(!index.contains(&Collision(400)));
         assert_eq!(index.keys().count(), 200);
     }

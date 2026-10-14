@@ -86,7 +86,11 @@ impl syn::parse::Parse for Program {
         }
         if queries.len() > 1 {
             sugar::combine(&mut program, queries)?;
-            let schema = program.declarations.iter().map(|d| (symbol_name(&d.name), d)).collect();
+            let schema = program
+                .declarations
+                .iter()
+                .map(|d| (symbol_name(&d.name), d))
+                .collect();
             total::recognize(&schema, &mut program.query.body, &BTreeMap::new())?;
         }
         Ok(program)
@@ -113,7 +117,11 @@ impl Program {
             declarations: parse_declarations(input)?,
             query: input.parse()?,
         };
-        let schema = program.declarations.iter().map(|d| (symbol_name(&d.name), d)).collect();
+        let schema = program
+            .declarations
+            .iter()
+            .map(|d| (symbol_name(&d.name), d))
+            .collect();
         total::recognize(&schema, &mut program.query.body, &BTreeMap::new())?;
         Ok(program)
     }
@@ -202,6 +210,9 @@ impl Query {
 ///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
 /// ```
+// Syntax-tree enum parsed once per clause, like syn's AST; boxing `Filter`
+// would change every public constructor and match for no measured gain.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum BodyItem {
     Block(Block),
@@ -612,9 +623,10 @@ fn check_body(
             }
             // Formal rule IF-Environment: Check logical scope; Rust resolves enclosing values.
             BodyItem::Filter(filter) => {
-                if filter.total.is_some() || !cq_syntax::guard::split(&filter.condition, logical)
-                    .constraints
-                    .is_empty()
+                if filter.total.is_some()
+                    || !cq_syntax::guard::split(&filter.condition, logical)
+                        .constraints
+                        .is_empty()
                 {
                     return Err(syn::Error::new_spanned(
                         filter,

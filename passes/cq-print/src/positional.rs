@@ -4,14 +4,22 @@ use structures::{KeyOwnership, MembershipSummary, ReadPredicate, Summary};
 
 impl Context<'_> {
     pub fn join_filter_ident(&self, scan: &str) -> Ident {
-        format_ident!("__cq_{}_join_filter", scan, span = proc_macro2::Span::mixed_site())
+        format_ident!(
+            "__cq_{}_join_filter",
+            scan,
+            span = proc_macro2::Span::mixed_site()
+        )
     }
     /// Formal rule IF-JoinFilter: Filter scan positions conservatively and retain the covering exact probe unchanged.
     pub fn join_filter_ids(&self, name: &str) -> Option<TokenStream> {
         let origin = self.analysis.lineage.get(name)?;
         let filter = self.analysis.join_filters.get(&origin.occurrence)?;
         let id = self.join_filter_ident(&origin.occurrence);
-        let host = format_ident!("__cq_positional_{}", origin.base, span = proc_macro2::Span::mixed_site());
+        let host = format_ident!(
+            "__cq_positional_{}",
+            origin.base,
+            span = proc_macro2::Span::mixed_site()
+        );
         let marker = &filter.marker;
         Some(quote!(::cq_storage::BlockRead::read(#host, <#marker>::default(), #id)))
     }
@@ -34,10 +42,16 @@ impl Context<'_> {
             }
         }
         let id = self.join_filter_ident(&origin.occurrence);
-        let host = format_ident!("__cq_positional_{}", origin.base, span = proc_macro2::Span::mixed_site());
+        let host = format_ident!(
+            "__cq_positional_{}",
+            origin.base,
+            span = proc_macro2::Span::mixed_site()
+        );
         let marker = &self.analysis.reads[name].marker;
         let key_marker = &filter.marker;
-        Some(quote!(::cq_storage::read_with_filter(#host, <#marker>::default(), #predicate, <#key_marker>::default(), #id)))
+        Some(
+            quote!(::cq_storage::read_with_filter(#host, <#marker>::default(), #predicate, <#key_marker>::default(), #id)),
+        )
     }
     pub fn keyset_ident(&self, name: &str, key: &[String]) -> Ident {
         format_ident!(

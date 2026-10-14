@@ -18,7 +18,11 @@ impl<const WORDS: usize> BloomFilter<WORDS> {
             _allocation: crate::counters_memory::Allocation::new(WORDS * 8),
         };
         for key in keys {
-            result.bounds = Some(result.bounds.map_or((key, key), |(lo, hi)| (lo.min(key), hi.max(key))));
+            result.bounds = Some(
+                result
+                    .bounds
+                    .map_or((key, key), |(lo, hi)| (lo.min(key), hi.max(key))),
+            );
             for bit in Self::positions(key) {
                 result.bits[bit / 64] |= 1 << (bit % 64);
             }
@@ -33,38 +37,23 @@ impl<const WORDS: usize> BloomFilter<WORDS> {
         };
         let a = mix(key as u64);
         let b = mix((key as u64).wrapping_add(0x9e3779b97f4a7c15)) | 1;
-        std::array::from_fn(|i| (a.wrapping_add((i as u64).wrapping_mul(b)) % (WORDS as u64 * 64)) as usize)
+        std::array::from_fn(|i| {
+            (a.wrapping_add((i as u64).wrapping_mul(b)) % (WORDS as u64 * 64)) as usize
+        })
     }
 }
 impl<const WORDS: usize> ReadPredicate<i64> for BloomFilter<WORDS> {
     fn test(&self, key: &i64) -> bool {
         self.bounds.is_some_and(|(lo, hi)| lo <= *key && *key <= hi)
-            && Self::positions(*key).into_iter().all(|bit| self.bits[bit / 64] & (1 << (bit % 64)) != 0)
+            && Self::positions(*key)
+                .into_iter()
+                .all(|bit| self.bits[bit / 64] & (1 << (bit % 64)) != 0)
     }
     fn any_in(&self, lo: &i64, hi: &i64) -> bool {
-        lo <= hi && self.bounds.is_some_and(|(min, max)| *lo <= max && min <= *hi)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn bloom_has_no_false_negatives_including_collisions_and_extremes() {
-        let keys: Vec<_> = (0..10000).map(|x| x * 7919 - 40000000).chain([i64::MIN, i64::MAX, 0, 0]).collect();
-        // Tiny budget deliberately saturates and exercises collisions.
-        let filter = BloomFilter::<2>::from_keys(keys.iter().copied());
-        for key in keys {
-            assert!(filter.test(&key));
-            assert!(filter.any_in(&key, &key));
-        }
-        let empty = BloomFilter::<2>::from_keys([]);
-        assert!(!empty.test(&0));
-        assert!(!empty.any_in(&i64::MIN, &i64::MAX));
-        let filter = BloomFilter::<16>::from_keys([-7, 4, 99]);
-        assert!(!filter.any_in(&100, &200));
-        assert!(!filter.any_in(&-20, &-8));
-        assert!(!filter.any_in(&9, &8));
+        lo <= hi
+            && self
+                .bounds
+                .is_some_and(|(min, max)| *lo <= max && min <= *hi)
     }
 }
 
@@ -81,5 +70,30 @@ impl<K, P: ReadPredicate<K>> ReadPredicate<K> for JoinFilterPredicate<P> {
     }
     fn any_in(&self, lo: &K, hi: &K) -> bool {
         self.0.any_in(lo, hi)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bloom_has_no_false_negatives_including_collisions_and_extremes() {
+        let keys: Vec<_> = (0..10000)
+            .map(|x| x * 7919 - 40000000)
+            .chain([i64::MIN, i64::MAX, 0, 0])
+            .collect();
+        // Tiny budget deliberately saturates and exercises collisions.
+        let filter = BloomFilter::<2>::from_keys(keys.iter().copied());
+        for key in keys {
+            assert!(filter.test(&key));
+            assert!(filter.any_in(&key, &key));
+        }
+        let empty = BloomFilter::<2>::from_keys([]);
+        assert!(!empty.test(&0));
+        assert!(!empty.any_in(&i64::MIN, &i64::MAX));
+        let filter = BloomFilter::<16>::from_keys([-7, 4, 99]);
+        assert!(!filter.any_in(&100, &200));
+        assert!(!filter.any_in(&-20, &-8));
+        assert!(!filter.any_in(&9, &8));
     }
 }

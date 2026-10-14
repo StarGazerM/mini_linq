@@ -15,27 +15,66 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     }};
     let target = compile(&source).unwrap();
     let facts = structures::contract::check(&target).unwrap();
-    assert!(facts.membership.contains(&("selected".into(), vec!["x".into()])));
-    assert!(target.to_token_stream().to_string().contains("AdaptiveKeySet"));
+    assert!(
+        facts
+            .membership
+            .contains(&("selected".into(), vec!["x".into()]))
+    );
+    assert!(
+        target
+            .to_token_stream()
+            .to_string()
+            .contains("AdaptiveKeySet")
+    );
     let mut changed = target.clone();
-    let entry = changed.structures.entries.iter_mut().find(|entry|
-        entry.name == "selected" && matches!(entry.structure, structures::Structure::Built {..})
-    ).unwrap();
-    let structures::Structure::Built {keyed, ..} = &mut entry.structure else { unreachable!() };
-    keyed.filtered.as_mut().unwrap().payload.columns.push(syn::parse_quote!(y));
+    let entry = changed
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| {
+            entry.name == "selected"
+                && matches!(entry.structure, structures::Structure::Built { .. })
+        })
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
+    keyed
+        .filtered
+        .as_mut()
+        .unwrap()
+        .payload
+        .columns
+        .push(syn::parse_quote!(y));
     assert!(check(&source, &changed).is_err());
     let mut incompatible = target.clone();
-    let entry = incompatible.structures.entries.iter_mut().find(|entry|
-        entry.name == "selected" && matches!(entry.structure, structures::Structure::Built {..})
-    ).unwrap();
-    let structures::Structure::Built {keyed, ..} = &mut entry.structure else { unreachable!() };
+    let entry = incompatible
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| {
+            entry.name == "selected"
+                && matches!(entry.structure, structures::Structure::Built { .. })
+        })
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
     keyed.ty = syn::parse_quote!(::cq_storage::Selection<_>);
     assert!(check(&source, &incompatible).is_err());
     let mut changed = target;
-    let entry = changed.structures.entries.iter_mut().find(|entry|
-        entry.name == "selected" && matches!(entry.structure, structures::Structure::Built {..})
-    ).unwrap();
-    let structures::Structure::Built {keyed, ..} = &mut entry.structure else { unreachable!() };
+    let entry = changed
+        .structures
+        .entries
+        .iter_mut()
+        .find(|entry| {
+            entry.name == "selected"
+                && matches!(entry.structure, structures::Structure::Built { .. })
+        })
+        .unwrap();
+    let structures::Structure::Built { keyed, .. } = &mut entry.structure else {
+        unreachable!()
+    };
     keyed.membership = None;
     assert!(check(&source, &changed).is_err());
     let mut grouped_types = source;
@@ -48,8 +87,12 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
         }
     }
     let grouped = compile(&grouped_types).unwrap();
-    assert!(structures::contract::check(&grouped).unwrap().membership
-        .contains(&("selected".into(), vec!["x".into()])));
+    assert!(
+        structures::contract::check(&grouped)
+            .unwrap()
+            .membership
+            .contains(&("selected".into(), vec!["x".into()]))
+    );
 }
 
 #[test]

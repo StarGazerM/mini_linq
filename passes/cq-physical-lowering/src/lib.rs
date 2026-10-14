@@ -495,4 +495,4 @@ mod correspondence;
 pub use correspondence::check;
 
 mod orientation;
-pub use orientation::{check_orientation, orient};
+pub use orientation::{Advice, check_orientation, check_orientation_with, orient, orient_with};

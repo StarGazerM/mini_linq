@@ -386,13 +386,19 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             continue;
         }
         let keyed = match &entry.structure {
-            Structure::JoinFilter { .. } | Structure::Selection { .. } | Structure::KeySet { .. } | Structure::Read { .. } => {
+            Structure::JoinFilter { .. }
+            | Structure::Selection { .. }
+            | Structure::KeySet { .. }
+            | Structure::Read { .. } => {
                 unreachable!()
             }
             Structure::Built { keyed, .. } => keyed,
             Structure::Host { reader, keyed, .. } => {
                 if keyed.filtered.is_some() || keyed.membership.is_some() {
-                    return error(keyed, "a host fallback cannot retain a filtered projection or membership proof");
+                    return error(
+                        keyed,
+                        "a host fallback cannot retain a filtered projection or membership proof",
+                    );
                 }
                 if !(analysis.host_read(&name)
                     || reader == "scan" && analysis.physical.hosts.contains_key(&name))
@@ -555,7 +561,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     return error(keyed, "membership storage requires one filtered key");
                 }
                 admissible(&keyed.ty, "membership")?;
-                analysis.membership.insert((name.clone(), keyed.level_names().concat()));
+                analysis
+                    .membership
+                    .insert((name.clone(), keyed.level_names().concat()));
             }
             if let Some(filtered) = &keyed.filtered {
                 if analysis
@@ -690,7 +698,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     symbol_name(&d.name) == *reader && matches!(d.operator, Operator::Probe(..))
                 });
                 if payload {
-                    if !analysis.membership.contains(&(result.clone(), columns.clone())) {
+                    if !analysis
+                        .membership
+                        .contains(&(result.clone(), columns.clone()))
+                    {
                         admissible(ty, "payload")?;
                     }
                     let levels = &analysis.built[result]

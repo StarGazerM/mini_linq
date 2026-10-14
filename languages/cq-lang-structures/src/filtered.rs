@@ -243,14 +243,33 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             );
         }
         // No downstream value distinguishes witnesses sharing this key.
-        for (_, key) in analysis.membership.iter().filter(|(result, _)| result == name) {
-            if filtered.payload.columns.iter().any(|column| !key.contains(&symbol_name(column)))
-                || analysis.physical.keyed_reads.get(name).into_iter().flatten().any(
-                    |(_, columns, supply)| columns != key || *supply != SupplyKind::Stream,
-                )
-                || analysis.physical.merge_reads.get(name).is_some_and(|reads| !reads.is_empty())
+        for (_, key) in analysis
+            .membership
+            .iter()
+            .filter(|(result, _)| result == name)
+        {
+            if filtered
+                .payload
+                .columns
+                .iter()
+                .any(|column| !key.contains(&symbol_name(column)))
+                || analysis
+                    .physical
+                    .keyed_reads
+                    .get(name)
+                    .into_iter()
+                    .flatten()
+                    .any(|(_, columns, supply)| columns != key || *supply != SupplyKind::Stream)
+                || analysis
+                    .physical
+                    .merge_reads
+                    .get(name)
+                    .is_some_and(|reads| !reads.is_empty())
             {
-                return error(filtered, "membership projection must observe only its complete key and proven constants");
+                return error(
+                    filtered,
+                    "membership projection must observe only its complete key and proven constants",
+                );
             }
         }
     }

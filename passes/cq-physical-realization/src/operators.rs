@@ -324,8 +324,9 @@ impl<'a> Printer<'a> {
     fn batch_scan(&self, name: &str) -> bool {
         match &self.physical[name].operator {
             Operator::Rename(_) => true,
-            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) =>
-                self.batch_scan(&symbol_name(&s.input)),
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
+                self.batch_scan(&symbol_name(&s.input))
+            }
             Operator::Project(p) => self.batch_scan(&symbol_name(&p.input)),
             _ => false,
         }
@@ -407,10 +408,19 @@ impl<'a> Printer<'a> {
             let levels = self.levels_of(&right, structure);
             if levels.len() == 1
                 && self.infos[&left].computed.is_empty()
-                && !self.analysis.membership.contains(&(right.clone(), columns.clone()))
-                && self.constant_key_condition(&left, &right, &columns).is_none()
+                && !self
+                    .analysis
+                    .membership
+                    .contains(&(right.clone(), columns.clone()))
+                && self
+                    .constant_key_condition(&left, &right, &columns)
+                    .is_none()
             {
-                let batch = if self.batch_scan(&left) { 128usize } else { 1usize };
+                let batch = if self.batch_scan(&left) {
+                    128usize
+                } else {
+                    1usize
+                };
                 let owned = self.owned_key(&right, &levels[0]);
                 let stored_key = self.stored_key(&right, &levels[0]);
                 let key = stored_key.iter().map(|c| self.key_field(&left, c, owned));

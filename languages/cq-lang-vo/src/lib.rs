@@ -69,6 +69,8 @@ fn parse_steps(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Step>> {
     Ok(steps)
 }
 
+// Syntax-tree enum, like syn's AST; boxing would change public construction.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub enum Step {
     Block(blocks::Block, Token![;]),

@@ -591,7 +591,9 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
         cq: source.clone(),
         valuation: valuation::Valuation {
             valuation_token: Default::default(),
-            join_branches: if options.heuristic == Heuristic::Filtered && options.split == Split::Coarse {
+            join_branches: if options.heuristic == Heuristic::Filtered
+                && options.split == Split::Coarse
+            {
                 branches::choose(source)
             } else {
                 None
@@ -621,7 +623,9 @@ fn compile_body(
                     for branch in groups.branches {
                         let members = branch.clauses();
                         let rank = members.iter().map(|c| filters[c]).min().unwrap();
-                        for clause in members { filters.insert(clause, rank); }
+                        for clause in members {
+                            filters.insert(clause, rank);
+                        }
                     }
                 }
             }
@@ -760,13 +764,17 @@ pub fn check(
             ),
         ));
     }
-    let expected_branches = if options.heuristic == Heuristic::Filtered && options.split == Split::Coarse {
-        branches::choose(source)
-    } else {
-        None
-    };
+    let expected_branches =
+        if options.heuristic == Heuristic::Filtered && options.split == Split::Coarse {
+            branches::choose(source)
+        } else {
+            None
+        };
     if target.valuation.join_branches != expected_branches {
-        return Err(syn::Error::new_spanned(&target.valuation, "join branches must match the static dimension-ear policy"));
+        return Err(syn::Error::new_spanned(
+            &target.valuation,
+            "join branches must match the static dimension-ear policy",
+        ));
     }
     check_steps(
         &source.query.body,
@@ -869,7 +877,9 @@ fn check_steps(
                 for branch in &groups.branches {
                     let members = branch.clauses();
                     let strongest = members.iter().map(|c| filters[c]).min().unwrap();
-                    for clause in members { filters.insert(clause, strongest); }
+                    for clause in members {
+                        filters.insert(clause, strongest);
+                    }
                 }
             }
             let mut bound = context;

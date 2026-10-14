@@ -159,9 +159,16 @@ fn total_guards_require_a_typed_allowlist_or_explicit_assertion() {
     ] {
         let q: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:String,b:i32); answer(name) :- R(name,id), {guard};"
-        )).unwrap();
+        ))
+        .unwrap();
         cq::contract::check(&q).unwrap();
-        assert!(q.query.body.iter().any(|item| matches!(item, cq::BodyItem::Constraint(cq::Constraint::Total { .. }))), "{guard}");
+        assert!(
+            q.query
+                .body
+                .iter()
+                .any(|item| matches!(item, cq::BodyItem::Constraint(cq::Constraint::Total { .. }))),
+            "{guard}"
+        );
         assert_eq!(syn::parse2::<cq::Program>(q.to_token_stream()).unwrap(), q);
     }
     for (ty, guard) in [
@@ -172,20 +179,34 @@ fn total_guards_require_a_typed_allowlist_or_explicit_assertion() {
     ] {
         let q: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:{ty}); answer(name) :- R(name), if {guard};"
-        )).unwrap();
-        assert!(matches!(q.query.body[1], cq::BodyItem::Filter(_)), "{guard}");
+        ))
+        .unwrap();
+        assert!(
+            matches!(q.query.body[1], cq::BodyItem::Filter(_)),
+            "{guard}"
+        );
     }
 }
 
 #[test]
 fn disjunctive_domains_require_every_branch_to_constrain_the_variable() {
     let q = query("(x == 1 && y >= 2) || (x == 3 && y <= 4)");
-    let cq::BodyItem::Constraint(c) = &q.query.body[1] else { panic!() };
+    let cq::BodyItem::Constraint(c) = &q.query.body[1] else {
+        panic!()
+    };
     let domains = c.implied_domains();
     assert_eq!(domains.len(), 2);
-    assert!(domains.iter().all(|c| c.variables().map(cq::symbol_name).collect::<std::collections::BTreeSet<_>>().len() == 1));
+    assert!(domains.iter().all(|c| {
+        c.variables()
+            .map(cq::symbol_name)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == 1
+    }));
     let q = query("(x == 1 && y >= 2) || x == 3");
-    let cq::BodyItem::Constraint(c) = &q.query.body[1] else { panic!() };
+    let cq::BodyItem::Constraint(c) = &q.query.body[1] else {
+        panic!()
+    };
     let domains = c.implied_domains();
     assert_eq!(domains.len(), 1);
     assert!(domains[0].variables().all(|v| v == "x"));
@@ -203,18 +224,31 @@ fn total_predicates_survive_multi_rule_alpha_renaming() {
     assert_eq!(round_trip, q);
     let normal = cq::normal::normalize(&q).unwrap();
     cq::normal::check(&normal).unwrap();
-    assert_eq!(cq::blocks::walk(&q.query.body).into_iter().filter(|item| matches!(item, cq::BodyItem::Constraint(cq::Constraint::Total { .. }))).count(), 2);
+    assert_eq!(
+        cq::blocks::walk(&q.query.body)
+            .into_iter()
+            .filter(|item| matches!(item, cq::BodyItem::Constraint(cq::Constraint::Total { .. })))
+            .count(),
+        2
+    );
 }
 
 #[test]
 fn macro_forwarded_column_types_and_expressions_remain_allowlisted() {
     let ty = proc_macro2::Group::new(proc_macro2::Delimiter::None, quote::quote!(String));
-    let expr = proc_macro2::Group::new(proc_macro2::Delimiter::None, quote::quote!(name.contains("green")));
+    let expr = proc_macro2::Group::new(
+        proc_macro2::Delimiter::None,
+        quote::quote!(name.contains("green")),
+    );
     let q: cq::Program = syn::parse2(quote::quote! {
         struct Q; relation Part(name:#ty);
         answer(name) :- Part(name), if #expr;
-    }).unwrap();
-    assert!(matches!(q.query.body[1], cq::BodyItem::Constraint(cq::Constraint::Total { .. })));
+    })
+    .unwrap();
+    assert!(matches!(
+        q.query.body[1],
+        cq::BodyItem::Constraint(cq::Constraint::Total { .. })
+    ));
     cq::contract::check(&q).unwrap();
 }
 
@@ -231,12 +265,24 @@ fn total_is_an_ordinary_identifier_and_only_the_attribute_asserts_totality() {
         assert_eq!(syn::parse2::<cq::Program>(q.to_token_stream()).unwrap(), q);
         cq::normal::check(&cq::normal::normalize(&q).unwrap()).unwrap();
     }
-    for guard in ["#[total(false)] if custom(x)", "#[other] if custom(x)", "#[total] #[total] if custom(x)", "if total custom(x)"] {
-        assert!(syn::parse_str::<cq::Program>(&format!(
-            "struct Q; relation R(a:i32); answer(x) :- R(x), {guard};"
-        )).is_err(), "{guard}");
+    for guard in [
+        "#[total(false)] if custom(x)",
+        "#[other] if custom(x)",
+        "#[total] #[total] if custom(x)",
+        "if total custom(x)",
+    ] {
+        assert!(
+            syn::parse_str::<cq::Program>(&format!(
+                "struct Q; relation R(a:i32); answer(x) :- R(x), {guard};"
+            ))
+            .is_err(),
+            "{guard}"
+        );
     }
     let mut q = query("custom(x)");
     q.query.body[1] = cq::BodyItem::Filter(syn::parse_quote!(#[total] if custom(x)));
-    assert!(cq::contract::check(&q).is_err(), "the contract rejects an assertion not normalized into a total constraint");
+    assert!(
+        cq::contract::check(&q).is_err(),
+        "the contract rejects an assertion not normalized into a total constraint"
+    );
 }

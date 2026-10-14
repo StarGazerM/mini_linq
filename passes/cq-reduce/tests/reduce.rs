@@ -571,14 +571,20 @@ fn reductions_preserve_and_check_independent_branch_metadata() {
         }
     };
     for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
-        let options = Options { guards: Pushdown::None, semijoins };
+        let options = Options {
+            guards: Pushdown::None,
+            semijoins,
+        };
         if semijoins == Reductions::Tree {
             assert!(compile(&source, &options).is_err());
             continue;
         }
         let target = compile(&source, &options).unwrap();
         check(&source, &target, &options).unwrap();
-        assert_eq!(source.valuation.join_branches, target.valuation.join_branches);
+        assert_eq!(
+            source.valuation.join_branches,
+            target.valuation.join_branches
+        );
         let mut wrong = target;
         wrong.valuation.join_branches = None;
         assert!(check(&source, &wrong, &options).is_err());

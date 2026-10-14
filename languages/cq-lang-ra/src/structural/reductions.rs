@@ -26,8 +26,8 @@ pub(super) fn check(source: &Program, target: &Program, schedule: &Schedule) -> 
         if matches!(node.kind, Kind::Anti(_)) {
             negative[node.operands[1]] = true;
         }
-        opaque[index] = matches!(node.kind, Kind::Rust(_))
-            || dependencies(node).any(|input| opaque[input]);
+        opaque[index] =
+            matches!(node.kind, Kind::Rust(_)) || dependencies(node).any(|input| opaque[input]);
     }
     for (index, node) in schedule.nodes.iter().enumerate().rev() {
         if negative[index] {
@@ -142,9 +142,7 @@ impl Proof<'_> {
         let mut seen = HashSet::new();
         while let Some(index) = pending.pop() {
             let node = &self.schedule.nodes[index];
-            if !seen.insert(index)
-                || shared.iter().any(|name| !node.heading.contains_key(*name))
-            {
+            if !seen.insert(index) || shared.iter().any(|name| !node.heading.contains_key(*name)) {
                 continue;
             }
             if index == support {

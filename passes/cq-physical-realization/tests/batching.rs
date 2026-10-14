@@ -5,7 +5,11 @@ use quote::ToTokens;
 fn only_coarse_total_scans_use_lookahead() {
     for (outer, guard, expected) in [
         ("l", "", true),
-        ("g", "g = pipe guard l if ({ assert!(*k != 2); true });", false),
+        (
+            "g",
+            "g = pipe guard l if ({ assert!(*k != 2); true });",
+            false,
+        ),
         ("g", "g = pipe semi eager [k] l,r;", false),
     ] {
         let physical = syn::parse_str(&format!(
@@ -17,7 +21,8 @@ fn only_coarse_total_scans_use_lookahead() {
                 j = pipe canon probe first [k] {outer},r;
                 return j as answer(k,v);
             }}"
-        )).unwrap();
+        ))
+        .unwrap();
         let structures = cq_structure_selection::compile(&physical).unwrap();
         let expression = cq_physical_realization::compile(&structures).unwrap();
         let printed = expression.to_token_stream().to_string();

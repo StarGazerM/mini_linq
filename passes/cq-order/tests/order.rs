@@ -866,19 +866,37 @@ fn filtered_order_records_independent_dimension_branches() {
     let target = plan(&source, Heuristic::Filtered, Split::Coarse);
     let groups = target.valuation.join_branches.as_ref().unwrap();
     assert_eq!(groups.branches.len(), 1);
-    let relations: Vec<_> = groups.branches[0].clauses().into_iter().map(|c| {
-        let BodyItem::Positive { atom } = &source.query.body[c] else { panic!() };
-        atom.relation.to_string()
-    }).collect();
+    let relations: Vec<_> = groups.branches[0]
+        .clauses()
+        .into_iter()
+        .map(|c| {
+            let BodyItem::Positive { atom } = &source.query.body[c] else {
+                panic!()
+            };
+            atom.relation.to_string()
+        })
+        .collect();
     assert_eq!(relations, ["PS", "S", "N"]);
     let reparsed: valuation::Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(reparsed, target);
     let mut wrong = target.clone();
-    wrong.valuation.join_branches.as_mut().unwrap().branches[0].columns.clear();
+    wrong.valuation.join_branches.as_mut().unwrap().branches[0]
+        .columns
+        .clear();
     assert!(valuation::contract::check(&wrong).is_err());
     let mut omitted = target.clone();
     omitted.valuation.join_branches = None;
-    assert!(cq_order::check(&source, &omitted, &Options { heuristic: Heuristic::Filtered, split: Split::Coarse }).is_err());
+    assert!(
+        cq_order::check(
+            &source,
+            &omitted,
+            &Options {
+                heuristic: Heuristic::Filtered,
+                split: Split::Coarse
+            }
+        )
+        .is_err()
+    );
     assert!(valuation::check_rewrite(&target, &omitted).is_err());
 }
 
@@ -903,10 +921,21 @@ fn dimension_ears_keep_a_customer_supplier_cycle_on_the_spine() {
     });
     let target = plan(&source, Heuristic::Filtered, Split::Coarse);
     let groups = target.valuation.join_branches.as_ref().unwrap();
-    let relations: Vec<Vec<_>> = groups.branches.iter().map(|b| b.clauses().into_iter().map(|c| {
-        let BodyItem::Positive { atom } = &source.query.body[c] else { panic!() };
-        atom.relation.to_string()
-    }).collect()).collect();
+    let relations: Vec<Vec<_>> = groups
+        .branches
+        .iter()
+        .map(|b| {
+            b.clauses()
+                .into_iter()
+                .map(|c| {
+                    let BodyItem::Positive { atom } = &source.query.body[c] else {
+                        panic!()
+                    };
+                    atom.relation.to_string()
+                })
+                .collect()
+        })
+        .collect();
     assert_eq!(relations, [vec!["PS", "P"], vec!["S", "N"]]);
 }
 
@@ -919,8 +948,17 @@ fn filtered_dimension_branch_precedes_a_weaker_fact_neighbor() {
             P(p,b), if *b == 7, S(s,n), N(n,k), if *k == 1;
     });
     let target = plan(&source, Heuristic::Filtered, Split::Coarse);
-    let atom_order: Vec<_> = target.valuation.steps.iter().filter_map(|step| {
-        if let valuation::Step::Atom(a, _) = step { Some(a.relation.to_string()) } else { None }
-    }).collect();
+    let atom_order: Vec<_> = target
+        .valuation
+        .steps
+        .iter()
+        .filter_map(|step| {
+            if let valuation::Step::Atom(a, _) = step {
+                Some(a.relation.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(atom_order.iter().position(|r| r == "S") < atom_order.iter().position(|r| r == "O"));
 }

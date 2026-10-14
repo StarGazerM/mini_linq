@@ -227,7 +227,8 @@ pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<St
             BodyItem::Filter(filter) => {
                 if filter.total.is_some() {
                     result.push(BodyItem::Constraint(crate::Constraint::total(
-                        filter.condition.clone(), logical,
+                        filter.condition.clone(),
+                        logical,
                     )));
                     continue;
                 }

@@ -152,8 +152,9 @@ fn join_filter_plan(branch: bool) -> ir::Program {
         #build
         j = pipe probe first [x] l,b;
         out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
-    }}).unwrap();
-    cq_structure_selection::compile_with(&source, quote!(positional(L,R,H))).unwrap()
+    }})
+    .unwrap();
+    cq_structure_selection::compile_with(&source, quote!(positional(L, R, H))).unwrap()
 }
 
 #[test]
@@ -165,7 +166,10 @@ fn join_filters_record_static_kind_and_exact_covering_probe() {
         let filter = &facts.join_filters["l"];
         assert_eq!(matches!(filter.kind, ir::FilterKind::Bloom(_)), branch);
         assert_eq!(filter.covering, "j");
-        assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
+        assert_eq!(
+            syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(),
+            selected
+        );
         for forgery in 0..5 {
             let mut bad = selected.clone();
             for entry in &mut bad.structures.entries {
@@ -187,9 +191,20 @@ fn join_filters_record_static_kind_and_exact_covering_probe() {
 #[test]
 fn join_filter_cannot_cross_an_opaque_guard() {
     let mut selected = join_filter_plan(true);
-    let index = selected.physical.program.definitions.iter().position(|d| d.name == "j").unwrap();
-    selected.physical.program.definitions.insert(index, syn::parse_quote!(g = pipe guard l if (panic!("must not disappear"));));
-    if let physical::Operator::Probe(_, k) = &mut selected.physical.program.definitions[index + 1].operator {
+    let index = selected
+        .physical
+        .program
+        .definitions
+        .iter()
+        .position(|d| d.name == "j")
+        .unwrap();
+    selected.physical.program.definitions.insert(
+        index,
+        syn::parse_quote!(g = pipe guard l if (panic!("must not disappear"));),
+    );
+    if let physical::Operator::Probe(_, k) =
+        &mut selected.physical.program.definitions[index + 1].operator
+    {
         k.left = syn::parse_quote!(g);
     }
     assert!(ir::contract::check(&selected).is_err());

@@ -110,7 +110,7 @@ fn generate(Declarations(declarations): Declarations) -> syn::Result<proc_macro2
 
 #[cfg(test)]
 mod tests {
-    use super::{generate, Declarations};
+    use super::{Declarations, generate};
 
     #[test]
     fn malformed_loader_schemas_return_diagnostics() {
