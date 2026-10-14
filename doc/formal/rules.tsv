@@ -142,3 +142,10 @@ WF-JoinBranch	implementation	languages/cq-lang-vo/src/join_branches.rs	/// Forma
 S-JoinBranch	implementation	passes/cq-order/src/branches.rs	/// Formal rule S-JoinBranch:	Pick the widest shared-key occurrence as the fact spine and absorb connected dimension ears through one external key set.
 E-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule E-JoinBranch:	Materialize each independent exact atom join once, project its interface, and join the prefix against that result.
 CK-JoinBranch	implementation	passes/cq-elaborate/src/join_branches.rs	/// Formal rule CK-JoinBranch:	Require an exact projected branch DAG for every VO atom group in addition to global occurrence, predicate, and Before correspondence.
+INC-Adequacy	abstract	-	-	Planned; supp of the operational bag stream equals the core denotation.
+INC-Supp	abstract	-	-	Planned; dedup is one supp application that commutes with bind and union.
+STR-Maintain	abstract	-	-	Planned; Runs<S> preserves abstraction under insert, merge and required cuts.
+CQ-Diff	abstract	-	-	Planned; product rule for changing atoms; covers are sound under supp.
+DL-InsertNew	abstract	-	-	Planned; incremental distinct is an anti-join against the canonical entry.
+DL-Strata	abstract	-	-	Planned; stratified least model, no negative or aggregate edge inside an SCC.
+DL-Delta	abstract	-	-	Planned; variants erase to the rule and read delta once per changing position.

@@ -1,0 +1,162 @@
+\section{Incremental evaluation and Datalog (design)}
+\label{sec:incremental}
+This section is a design. No rule in it is implemented. It fixes the
+semantics that a Datalog level above CQ, maintained structures and delta
+evaluation must refine, and assigns every law to exactly one level.
+Annotations are restricted to $K\in\{\mathbb B,\mathbb N\}$, time to rounds
+$\mathbb N$, and updates to insertions. Z-sets and partially ordered time are
+out of scope; \S\ref{sec:incremental-scope} states the extension point.
+
+\subsection{Annotated relations}
+\begin{definition}
+For a commutative semiring $K$, $\mathrm{Rel}_K(\tau)=\tau\to_{fin}K$. It
+carries the free $K$-semimodule monad $M_K$: $\eta(x)=\{x\mapsto1\}$, and bind
+multiplies along a valuation and adds across valuations. A semiring
+homomorphism $h:K\to K'$ induces a monad morphism $M_K\to M_{K'}$. The support
+$\mathrm{supp}:\mathbb N\to\mathbb B$ is the instance used here; it is
+idempotent and commutes with bind and $\uplus$.
+\end{definition}
+The core denotation of \S\ref{sec:composition} is $\bot+M_{\mathbb B}$. A body
+atom is a bind, a guard is $\mathsf{guard}$, the head is $\mathsf{fmap}$.
+$M_{\mathbb B}$ and $M_{\mathbb N}$ are commutative, so atom order is
+denotationally irrelevant. Guard placement is not a commutativity question:
+moving a partial guard changes the set of valuations it is applied to and so
+whether $\bot$ is reached; total guards move freely.
+
+\subsection{Operational streams and dedup motion}
+An operational run of a call yields a bag stream $\sem{q}_{op}$; pull printers
+realize it as an unfold, push printers as a fold.
+\begin{mathpar}
+\Rule{INC-Adequacy}{q\text{ consumed to exhaustion}}
+ {\mathrm{supp}\circ\sem{q}_{op}=\sem{q}}
+
+\Rule{INC-Supp}{e\text{ a bind, }\uplus\text{ or projection context}}
+ {\mathrm{supp}(e[\,b\,])=\mathrm{supp}(e[\,\mathrm{supp}(b)\,])}
+\end{mathpar}
+Every dedup point (\code{canon}, \code{head}, aggregate set folds, Datalog
+insertion) is one application of $\mathrm{supp}$; \textsc{INC-Supp} is the only
+law that moves it. A consumer that applies $\mathrm{supp}$ itself may receive a
+bag; this is the bag-output contract. A fold into a monoid $(M,\cdot)$ needs
+$\mathrm{supp}$ first unless $M$ is idempotent (min, max), in which case
+folding the bag gives the same value.
+
+\subsection{Representations}
+A structure type $S$ has an abstraction $\alpha_S:S\to\mathrm{Rel}_K$; a layout
+$L$ has $\mathrm{rep}_L$ with $\alpha\circ\mathrm{rep}_L=\mathrm{id}$.
+\begin{obligation}[per type, premise like \textsc{H-Eval}]
+Probe: $\alpha(\mathsf{lookup}(s,k))=\sigma_{key=k}\,\alpha(s)$.
+Merge: $\alpha(s\oplus s')=\alpha(s)+\alpha(s')$.
+Disjoint merge: if $\alpha(s)\cdot\alpha(s')=0$ then $s\oplus s'$ may be the
+cheaper $s\uplus s'$. Retyping replaces $S$ and preserves $\alpha$.
+\end{obligation}
+\begin{definition}
+$\mathsf{Runs}\langle S\rangle$ is a sequence of runs $r_i:S$ with round
+intervals $[l_i,u_i)$, contiguous and increasing. Its abstraction is
+$\sum_i\alpha(r_i)$; $\mathsf{cut}_u=\sum_{u_i\le u}\alpha(r_i)$.
+\end{definition}
+\begin{mathpar}
+\Rule{STR-Maintain}{\text{merge obligation for }S\quad
+ \text{every required cut }u\text{ is a run boundary}}
+ {\alpha(\mathsf{insert}(x,r))=\alpha(x)+\alpha(r)\quad
+  \alpha(\mathsf{merge}_i(x))=\alpha(x)\quad
+  \mathsf{cut}_u\text{ preserved}}
+\end{mathpar}
+\begin{theorem}
+For every $S$ satisfying the merge obligation, a maintained entry over a
+growing host $R$ satisfies $\alpha(x_t)=R^t$ at every call $t$, and every
+required cut $u\le t$ equals $R^u$. The proof is by induction on rounds and is
+parametric in $S$.
+\end{theorem}
+Time, run intervals and merge scheduling therefore belong to
+$\mathsf{Runs}$, not to $S$; $S$ owes only the merge law. The Structures IR
+records which entries are maintained and which cuts readers require; it may
+compact only beyond them.
+
+\subsection{Streams of versions}
+A relation over rounds is $\mathbb N\to\mathrm{Rel}_K$ with integration $I$,
+differentiation $D$ and delay $z^{-1}$; $DI=ID=\mathrm{id}$.
+\begin{mathpar}
+\Rule{CQ-Diff}{q=A_1\bowtie\cdots\bowtie A_k\text{ over changing }A_i\quad
+ \text{other inputs constant}}
+ {D\Big(\prod_j IA_j\Big)=\sum_i\Big(\prod_{j<i}IA_j\Big)\,DA_i\,
+  \Big(\prod_{j>i}z^{-1}IA_j\Big)}
+
+\Rule{DL-InsertNew}{\text{insertions only}\quad K=\mathbb B}
+ {D(\mathrm{supp}\circ I)\,N_t=\mathrm{supp}(N_t)\setminus
+  (I\,\mathrm{supp}\,N)_{t-1}}
+\end{mathpar}
+\textsc{CQ-Diff} is exact in $\mathbb N$. Under $\mathrm{supp}$ any family of
+terms covering every valuation with at least one changed atom is sound;
+reading the current version at every non-delta position is such a cover and
+only enlarges the bag $N_t$. The exact form needs $\mathsf{cut}$ at the previous
+round. \textsc{DL-InsertNew} is the only non-linear step; it is an anti-join
+against the canonical entry, which must therefore be stateful. By
+\textsc{STR-Maintain}, $\mathrm{rep}_L\circ I=I_\oplus\circ\mathrm{rep}_L$.
+
+\subsection{Datalog}
+A program has extensional hosts and intensional relations defined by rules
+whose bodies are core bodies. Negated atoms and aggregates refer only to lower
+strata. Termination requires that heads in a recursive component copy columns
+of positive atoms.
+\begin{mathpar}
+\Rule{DL-Strata}{G\text{ the dependency graph}\quad
+ \text{no negative or aggregate edge inside an SCC of }G}
+ {\sem{P}=\mathrm{lfp}\text{ of each SCC in topological order}}
+
+\Rule{DL-Delta}{F_1..F_k\text{ the variants of a rule}\quad
+ \text{erasure of delta and cut renames gives the rule}\\
+ \text{each changing position read as delta in exactly one }F_i}
+ {F(R\cup\Delta)=F(R)\cup\textstyle\bigcup_iF_i(R\cup\Delta,\Delta)}
+\end{mathpar}
+Within one SCC let $F$ be monotone. Naive evaluation is
+$R^{t+1}=F(R^t)$. Semi-naive evaluation is
+\[
+\Delta^{t+1}=\mathrm{supp}\Big(\biguplus_iF_i(R^t,\Delta^t)\Big)\setminus R^t,
+\qquad R^{t+1}=R^t\uplus\Delta^{t+1}.
+\]
+\begin{theorem}
+$R^t_{semi}=R^t_{naive}$ for every $t$. Each valuation is enumerated in the
+round in which its last delta atom appears, so a partial guard sees the same
+valuation as in naive evaluation and $\bot$ arises exactly when it does there.
+\end{theorem}
+\begin{proof}[Sketch]
+Induction on $t$ using \textsc{DL-Delta}, monotonicity
+($R^t\subseteq F(R^t)$), and \textsc{DL-InsertNew}.
+\end{proof}
+Within a round, every variant reads hosts that are immutable for the call:
+the answer iterator borrows the current entry, so Rust rejects insertion until
+it is dropped. Composing \textsc{INC-Adequacy}, \textsc{STR-Maintain}, the
+theorem above and each pass checker gives
+$\mathrm{supp}\circ\sem{\text{generated Rust}}=\sem{P}$ under the premises of
+\S\ref{sec:incremental-scope}.
+
+\subsection{Ownership of laws}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Level & Concept & Law\\
+\midrule
+Datalog & strata, fixpoint, insertion & \textsc{DL-Strata}, \textsc{DL-Delta}, \textsc{DL-InsertNew}\\
+CQ/RA & variants and the cuts they read & \textsc{CQ-Diff}\\
+CQ contract & bag output & \textsc{INC-Adequacy}, \textsc{INC-Supp}\\
+Structures IR & maintained entries, required cuts & \textsc{STR-Maintain}\\
+Runtime types & $S$, merge, probe & obligations (premise)\\
+Rust & isolation within a round & borrow checking\\
+\bottomrule
+\end{tabular}
+\end{center}
+Choices recorded at their level: variant form (exact or cover), merge policy
+(eager $\uplus$ or kept runs), dedup order ($\mathrm{supp}(N)\setminus R$ or
+$\mathrm{supp}(N\setminus R)$), canonical layout, and whether holes own their
+layouts or bind shared ones.
+
+\subsection{Premises and scope}
+\label{sec:incremental-scope}
+Unproved premises: the probe and merge obligations of user types; purity of
+Rust guards apart from $\bot$; adequacy of Rust resolution and ownership.
+Differential dataflow uses $K=T\to_{fin}\mathbb Z$ with partially ordered
+time and per-operator squares $\mathrm{acc}\circ impl=D\circ\mathrm{acc}$; it
+places the annotation algebra in each structure's merger. Here it belongs to
+$K$ and to $\mathsf{Runs}$. Extending to $\mathbb Z$ adds an annotation
+parameter to structure leaves with addition and compaction; no structure
+changes its abstraction.
