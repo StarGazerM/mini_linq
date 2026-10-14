@@ -102,6 +102,8 @@ impl<K: Eq + Hash + Ord, C: KeyCodec<K>, const B: usize> AdaptiveKeySet<K, C, B>
             }
             staging.insert(Rc::new(key));
         }
+        #[cfg(feature = "counters")]
+        crate::counters::build_cardinality(staging.len());
         let stage_bytes = staging.capacity() * (std::mem::size_of::<Rc<K>>() + 1)
             + staging.len() * (std::mem::size_of::<K>() + 2 * std::mem::size_of::<usize>());
         let mut allocation = crate::counters_memory::Allocation::new(stage_bytes);

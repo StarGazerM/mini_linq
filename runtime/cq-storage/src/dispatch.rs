@@ -297,6 +297,8 @@ where
 /// A deferred membership set. Construction imposes no key capability on a
 /// direct host path; hashing is required only when the fallback is selected.
 pub struct KeySet<I: Iterator, const EAGER: bool = true> {
+    #[cfg(any(feature = "counters", feature = "operator-timing"))]
+    profile: Option<crate::counters::DeferredBuild>,
     source: RefCell<Option<I>>,
     keys: OnceCell<RefCell<crate::instrument::HashSet<I::Item>>>,
 }
@@ -305,6 +307,8 @@ impl<K, V, I: Iterator<Item = (K, V)>, const EAGER: bool> crate::Build<I>
 {
     fn build(source: I) -> Self {
         Self {
+            #[cfg(any(feature = "counters", feature = "operator-timing"))]
+            profile: crate::counters::defer_build(),
             source: RefCell::new(Some(source.map(|(k, _)| k))),
             keys: OnceCell::new(),
         }
@@ -319,7 +323,9 @@ impl<K: Eq + std::hash::Hash, I: Iterator<Item = K>, const EAGER: bool> ExactMem
             .keys
             .get_or_init(|| {
                 crate::count!(index_builds);
-                let keys = if EAGER {
+                #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                let _profile = self.profile.as_ref().map(|p| p.start());
+                let keys: crate::instrument::HashSet<_> = if EAGER {
                     let source = self.source.borrow_mut().take().expect("one initialization");
                     #[cfg(feature = "counters")]
                     let source = source.inspect(|_| {
@@ -329,6 +335,10 @@ impl<K: Eq + std::hash::Hash, I: Iterator<Item = K>, const EAGER: bool> ExactMem
                 } else {
                     crate::instrument::HashSet::default()
                 };
+                #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                if let Some(p) = &self.profile {
+                    p.cardinality(keys.len());
+                }
                 RefCell::new(keys)
             })
             .borrow_mut();
@@ -338,6 +348,8 @@ impl<K: Eq + std::hash::Hash, I: Iterator<Item = K>, const EAGER: bool> ExactMem
         if EAGER {
             return false;
         }
+        #[cfg(any(feature = "counters", feature = "operator-timing"))]
+        let _profile = self.profile.as_ref().map(|p| p.start());
         let mut source = self.source.borrow_mut();
         if let Some(rows) = source.as_mut() {
             for candidate in rows.by_ref() {
@@ -345,11 +357,19 @@ impl<K: Eq + std::hash::Hash, I: Iterator<Item = K>, const EAGER: bool> ExactMem
                 crate::count!(distinct_insertions);
                 keys.insert(candidate);
                 if found {
+                    #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                    if let Some(p) = &self.profile {
+                        p.cardinality(keys.len());
+                    }
                     return true;
                 }
             }
         }
         *source = None;
+        #[cfg(any(feature = "counters", feature = "operator-timing"))]
+        if let Some(p) = &self.profile {
+            p.cardinality(keys.len());
+        }
         false
     }
 }

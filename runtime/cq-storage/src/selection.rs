@@ -60,6 +60,14 @@ impl<H: PositionalRows> Selection<H> {
         }
         result
     }
+    /// Cardinality from bitmap words, used only by measurement builds.
+    #[cfg(any(feature = "counters", feature = "operator-timing"))]
+    pub fn profile_len(&self) -> u64 {
+        self.bits
+            .iter()
+            .map(|word| u64::from(word.count_ones()))
+            .sum()
+    }
     pub fn positions(&self) -> impl Iterator<Item = RowId> + '_ {
         self.host.positions().filter(|&id| self.contains(id))
     }

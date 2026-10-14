@@ -17,7 +17,8 @@ impl Context<'_> {
             .expect("checked range demand");
         let condition = self.relational_condition(&select.condition);
         let pattern = self.borrowed_pattern(&input);
-        let rows = self.host_scan(&input);
+        let rows = self.profile_stream(&input, self.host_scan(&input));
+        let rows = self.profile_input(name, rows);
         let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition)));
         let access = self.host_access(&input, std::slice::from_ref(&column));
         if !access.prefix {
@@ -63,6 +64,8 @@ impl Context<'_> {
                 move |(#(#fields,)*)| #row
             )
         });
+        let read = self.profile_stream(&input, read);
+        let read = self.profile_input(name, read);
         Some(
             quote!(::core::iter::Iterator::filter(#read, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))),
         )

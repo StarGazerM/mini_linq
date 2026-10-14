@@ -2,6 +2,7 @@
 //! separate from the tiny synthetic workload/golden corpus.
 mod comparison;
 mod compile;
+pub(crate) mod profile;
 use comparison::normalize_set;
 mod data;
 
@@ -57,7 +58,12 @@ impl Options {
         if runs < 3 || runs % 2 == 0 {
             return Err("--runs must be odd and at least 3".into());
         }
-        Ok(Self { sf, runs, query, reduction_comparison })
+        Ok(Self {
+            sf,
+            runs,
+            query,
+            reduction_comparison,
+        })
     }
 }
 
@@ -70,13 +76,19 @@ struct Query {
 }
 
 fn describe(root: &Path, source: &Path) -> Result<Query> {
+    describe_in(root, source, None)
+}
+fn describe_in(root: &Path, source: &Path, cache: Option<&Path>) -> Result<Query> {
     let name = source
         .file_stem()
         .unwrap()
         .to_str()
         .ok_or("non-UTF8 query filename")?;
     eprintln!("building TPC-H-derived query {name} in release...");
-    let built = compile::build(root, source, name)?;
+    let built = match cache {
+        Some(cache) => compile::build_in(root, source, name, cache, true)?,
+        None => compile::build(root, source, name)?,
+    };
     let output = std::process::Command::new(&built.binary)
         .arg("describe")
         .output()?;
@@ -163,7 +175,9 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     if options.reduction_comparison {
         for query in &mut queries {
-            query.configs.retain(|config| matches!(config.as_str(), "default" | "no-reduce"));
+            query
+                .configs
+                .retain(|config| matches!(config.as_str(), "default" | "no-reduce"));
         }
     } else {
         for query in &mut queries {
@@ -337,8 +351,12 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             })
             .collect::<Vec<_>>()
             .join("\t");
-            let tested = measured["join_filter_tested"].as_u64().ok_or("missing join_filter_tested counter")?;
-            let passed = measured["join_filter_passed"].as_u64().ok_or("missing join_filter_passed counter")?;
+            let tested = measured["join_filter_tested"]
+                .as_u64()
+                .ok_or("missing join_filter_tested counter")?;
+            let passed = measured["join_filter_passed"]
+                .as_u64()
+                .ok_or("missing join_filter_passed counter")?;
             table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{:.6}\t{counters}\tpass\t{tested}\t{passed}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, query.built.unit_ms));
             std::fs::write(&pending, &table)?;
             configs.push(serde_json::json!({"configuration":config,"metrics":measured}));
@@ -402,6 +420,16 @@ fn execute_worker(
     )
 }
 
+fn worker_command(binary: &Path) -> std::process::Command {
+    if let Some(cpu) = std::env::var_os("CQ_PROFILE_CPU") {
+        let mut command = std::process::Command::new("taskset");
+        command.arg("--cpu-list").arg(cpu).arg(binary);
+        command
+    } else {
+        std::process::Command::new(binary)
+    }
+}
+
 fn execute_worker_binary(
     query: &Query,
     binary: &Path,
@@ -421,7 +449,7 @@ fn execute_worker_binary(
             &serde_json::json!({"rows":expected.rows,"decimal_columns":expected.decimal_columns}),
         )?,
     )?;
-    let status = std::process::Command::new(binary)
+    let status = worker_command(binary)
         .arg(directory)
         .arg(config)
         .arg(runs.to_string())
@@ -530,7 +558,13 @@ mod tests {
             vec!["--tpch", "--sf", "2"],
             vec!["--tpch", "--sf", "1", "--runs", "2"],
             vec!["--tpch", "--sf", "1", "--sf", "1"],
-            vec!["--tpch", "--sf", "1", "--reduction-comparison", "--reduction-comparison"],
+            vec![
+                "--tpch",
+                "--sf",
+                "1",
+                "--reduction-comparison",
+                "--reduction-comparison",
+            ],
         ] {
             assert!(parse(&args).is_err());
         }

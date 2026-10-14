@@ -77,6 +77,16 @@ fn run() -> Result<()> {
         }
         "explain" => explain::run(arguments, &repository_root()),
         "bench" => bench::run(arguments),
+        "profile" => {
+            #[cfg(feature = "oracle")]
+            {
+                tpch::profile::run(arguments)
+            }
+            #[cfg(not(feature = "oracle"))]
+            {
+                rerun_with_oracle("profile", &arguments)
+            }
+        }
         "help" | "--help" | "-h" => {
             help();
             Ok(())
@@ -542,6 +552,7 @@ MiniLinq workload tasks
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
   cargo xtask bench --tpch --sf 0.1|1 [--runs N] [--query NAME] [--reduction-comparison]
+  cargo xtask profile --tpch --sf 0.1|1 [--query NAME] [--config NAME]
 
 SCENARIO is coverage, empty-input, no-match, or all.
 It defaults to all for golden, coverage for generate.

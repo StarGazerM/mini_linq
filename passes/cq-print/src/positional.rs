@@ -196,6 +196,7 @@ impl Context<'_> {
         );
         if self.physical_analysis.modes[name] != physical::ModeKind::Pipe {
             let predicate = self.read_predicate(name);
+            let predicate = self.profile_predicate(name, predicate);
             self.statements
                 .push(syn::parse_quote!(let #id = #predicate;));
         }
@@ -264,6 +265,7 @@ impl Context<'_> {
             // A retained union may replay this pipe for several index keys.
             // Each traversal must own its predicate, not move one shared value.
             let value = self.read_predicate(name);
+            let value = self.profile_predicate(name, value);
             Ok(quote!({ let #predicate = #value; #ids }))
         } else {
             Ok(ids)
@@ -304,10 +306,13 @@ impl Context<'_> {
             _ => return error(&self.physical[name].name, "unsupported selection spine"),
         };
         let predicate = self.read_predicate(name);
+        let predicate = self.profile_predicate(name, predicate);
         let mut input = input;
         while let Operator::Project(p) = &self.physical[&input].operator {
+            let previous = symbol_name(&p.input);
+            self.profile_alias(&input, &previous);
             self.take_positions(&input);
-            input = symbol_name(&p.input);
+            input = previous;
         }
         let previous = match self.reprs.get(&input) {
             Some(Repr::Selection { selection, .. }) => Some(selection.to_token_stream()),
@@ -328,6 +333,17 @@ impl Context<'_> {
         if name != root {
             self.take_positions(name);
         }
+        let result = if let Some(i) = self.profile_index(name) {
+            let profile = self.profile_handle();
+            quote!(#profile.build(#i, || {
+                let __cq_selection = #result;
+                let __cq_count = __cq_selection.profile_len();
+                #profile.rows(#i, 0, __cq_count, __cq_count);
+                __cq_selection
+            }))
+        } else {
+            result
+        };
         Ok(result)
     }
     pub fn take_positions(&mut self, name: &str) -> Option<TokenStream> {

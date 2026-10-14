@@ -107,10 +107,10 @@ impl<'a> Context<'a> {
                 keys.entry(self.heading(result).to_vec()).or_insert(false);
             }
         }
-        for (columns, _probe) in keys {
+        for (columns, probe) in keys {
             let a = self.host_access(result, &columns);
             let fallback = a.fallback;
-            let rows = self.host_scan(result);
+            let rows = self.profile_stream(result, self.host_scan(result));
             let pattern = self.pattern(result);
             let key = a.key.iter().map(|c| {
                 let ident = self.ident(result, c);
@@ -138,10 +138,22 @@ impl<'a> Context<'a> {
                     .then_some(ty)
                 })
                 .expect("checked fallback");
+            let pairs = quote!(::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*), (#(#payload,)*))));
+            let ty = ty.clone();
+            let build_name = format!("{result}.fallback.{}", columns.join("_"));
+            self.profile_label(
+                &build_name,
+                if probe { "INDEX_BUILD" } else { "KEYSET_BUILD" },
+                &columns.join(","),
+                vec![result.into()],
+            );
+            let pairs = self.profile_inserting(&build_name, pairs);
+            let build = self.profile_build(
+                &build_name,
+                quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs)),
+            );
             self.statements.push(syn::parse_quote! {
-                let #fallback: ::cq_storage::dispatch::Lazy<#ty, _> = ::cq_storage::dispatch::Lazy::new(move || <#ty as ::cq_storage::Build<_>>::build(
-                    ::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*), (#(#payload,)*)))
-                ));
+                let #fallback: ::cq_storage::dispatch::Lazy<#ty, _> = ::cq_storage::dispatch::Lazy::new(move || #build);
             });
             self.owned.push(fallback);
         }
@@ -166,7 +178,7 @@ impl<'a> Context<'a> {
             } else {
                 let name = format_ident!("__cq_{}_merge_{}", result, columns.join("_"));
                 let ty = self.fallback_type(result, reader, columns);
-                let rows = self.host_scan(result);
+                let rows = self.profile_stream(result, self.host_scan(result));
                 let pattern = self.pattern(result);
                 let key = columns.iter().map(|c| self.ident(result, c));
                 let payload = self

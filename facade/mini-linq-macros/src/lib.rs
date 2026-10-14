@@ -183,7 +183,11 @@ pub fn select(input: TokenStream) -> TokenStream {
 pub fn print_pull(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, args| {
         no_arguments(args)?;
-        cq_physical_realization::compile(source)
+        let plain = cq_physical_realization::compile(source)?;
+        let profile = cq_physical_realization::compile_profile(source)?;
+        Ok(syn::parse_quote!(
+            ::cq_storage::profile_select! { plain { #plain } counters { #profile } }
+        ))
     })
     .into()
 }

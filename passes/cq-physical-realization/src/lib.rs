@@ -61,14 +61,33 @@ use cq_print::{Context, Repr, error, index, sorted};
 
 /// Print a complete Structures program as a Rust pull expression.
 pub fn compile(module: &structures::Program) -> syn::Result<Expr> {
+    compile_with_profile(module, false)
+}
+
+/// Emit a measured pull expression. Runtime counters must be enabled.
+pub fn compile_profile(module: &structures::Program) -> syn::Result<Expr> {
+    compile_with_profile(module, true)
+}
+
+fn compile_with_profile(module: &structures::Program, profile: bool) -> syn::Result<Expr> {
     let analysis = structures::contract::check(module)?;
     let mut printer = Printer {
-        context: sources(module, &analysis)?,
+        context: sources_profile(module, &analysis, |_, _| {}, profile)?,
         active_prefixes: BTreeMap::new(),
+        consumer: None,
     };
     let returned = &module.physical.program.returned;
     let rows = printer.scan(returned)?;
+    let answer = format!("{}.answer", module.physical.program.returned);
+    if profile {
+        printer.profile_label(&answer, "ANSWER", "", vec![symbol_name(returned)]);
+    }
+    let rows = printer.profile_input(&answer, rows);
     let output = printer.head(&symbol_name(returned), &module.physical.program.head, rows);
+    let output = printer.profile_stream(&answer, output);
+    if let Some(registration) = printer.profile_registration() {
+        printer.statements.insert(0, registration);
+    }
     let statements = &printer.statements;
     let value = if !printer.bound {
         output
@@ -101,12 +120,24 @@ pub fn sources<'a>(
 pub fn sources_with<'a>(
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
+    prepared: impl FnMut(&str, &Repr),
+) -> syn::Result<Context<'a>> {
+    sources_profile(module, analysis, prepared, false)
+}
+fn sources_profile<'a>(
+    module: &'a structures::Program,
+    analysis: &'a structures::Analysis,
     mut prepared: impl FnMut(&str, &Repr),
+    profile: bool,
 ) -> syn::Result<Context<'a>> {
     let mut printer = Printer {
         context: Context::new(module, analysis),
         active_prefixes: BTreeMap::new(),
+        consumer: None,
     };
+    if profile {
+        printer.enable_profile(module);
+    }
     let definitions = &module.physical.program.definitions;
     let mut position = 0;
     let deferred: std::collections::BTreeSet<_> = analysis
@@ -151,6 +182,7 @@ pub fn sources_with<'a>(
 
 struct Printer<'a> {
     context: Context<'a>,
+    consumer: Option<String>,
     active_prefixes: BTreeMap<String, TokenStream>,
 }
 impl<'a> std::ops::Deref for Printer<'a> {
@@ -170,6 +202,7 @@ impl Printer<'_> {
         if !self.idents.contains_key(&name) {
             self.register(&name);
         }
+        let consumer = self.consumer.replace(name.clone());
         let repr = match physical::ModeKind::from(&definition.mode) {
             physical::ModeKind::Pipe if matches!(definition.operator, Operator::Rename(_)) => {
                 Repr::Host
@@ -192,22 +225,25 @@ impl Printer<'_> {
                                 self.analysis.lineage[&name].base,
                                 span = proc_macro2::Span::mixed_site()
                             );
-                            quote!(::cq_storage::PositionalRows::positions(#host))
+                            let ids = quote!(::cq_storage::PositionalRows::positions(#host));
+                            self.profile_stream(&input, ids)
                         }
                     }
                     _ => unreachable!(),
                 };
-                Repr::Positions(Some(ids))
+                let ids = self.profile_input(&name, ids);
+                Repr::Positions(Some(self.profile_stream(&name, ids)))
             }
             physical::ModeKind::Pipe if self.analysis.reads.contains_key(&name) => {
-                Repr::Positions(Some(self.read_ids(&name)?))
+                let ids = self.read_ids(&name)?;
+                Repr::Positions(Some(self.profile_stream(&name, ids)))
             }
             physical::ModeKind::Pipe => {
                 let mut rows = self.produce(&name, definition)?;
                 if definition.canon.is_some() {
                     rows = self.distinct(&definition.name, rows);
                 }
-                Repr::Pipe(Some(rows))
+                Repr::Pipe(Some(self.profile_stream(&name, rows)))
             }
             physical::ModeKind::Let if self.analysis.selections.contains_key(&name) => {
                 let selection = self.selection_source(&name)?;
@@ -218,14 +254,23 @@ impl Printer<'_> {
                 if definition.canon.is_some() {
                     rows = self.distinct(&definition.name, rows);
                 }
+                let rows = self.profile_stream(&name, rows);
                 self.materialize(&name, rows)
             }
         };
+        self.consumer = consumer;
         self.reprs.insert(name, repr);
         Ok(())
     }
 
     pub(crate) fn scan(&mut self, result: &Ident) -> syn::Result<TokenStream> {
+        let rows = self.scan_source(result)?;
+        Ok(match &self.consumer {
+            Some(name) => self.profile_input(name, rows),
+            None => rows,
+        })
+    }
+    fn scan_source(&mut self, result: &Ident) -> syn::Result<TokenStream> {
         let name = symbol_name(result);
         if let Some(row) = self.active_prefixes.get(&name) {
             return Ok(quote!(::core::iter::once(#row)));
@@ -233,11 +278,12 @@ impl Printer<'_> {
         match self.reprs.get(&name) {
             Some(Repr::Host) => {
                 let rows = self.host_scan(&name);
-                Ok(if self.physical_analysis.canon.contains(&name) {
+                let rows = if self.physical_analysis.canon.contains(&name) {
                     self.distinct(&self.physical[&name].name, rows)
                 } else {
                     rows
-                })
+                };
+                Ok(self.profile_stream(&name, rows))
             }
             Some(Repr::Pipe(_)) => match self.take_pipe(&name) {
                 Some(rows) => Ok(rows),
@@ -265,12 +311,19 @@ impl Printer<'_> {
         }
     }
 
-    pub(crate) fn distinct(&self, operator: &Ident, rows: TokenStream) -> TokenStream {
-        let ty = &self.analysis.dedup[&symbol_name(operator)];
-        self.distinct_width(ty, rows, self.heading(&symbol_name(operator)).len())
+    pub(crate) fn distinct(&mut self, operator: &Ident, rows: TokenStream) -> TokenStream {
+        let name = symbol_name(operator);
+        let ty = self.analysis.dedup[&name].clone();
+        self.distinct_width(&name, &ty, rows, self.heading(&name).len())
     }
 
-    fn distinct_width(&self, ty: &syn::Type, rows: TokenStream, width: usize) -> TokenStream {
+    fn distinct_width(
+        &mut self,
+        name: &str,
+        ty: &syn::Type,
+        rows: TokenStream,
+        width: usize,
+    ) -> TokenStream {
         // Std implements tuple Eq/Hash/Ord only through arity twelve. Keep
         // iterator rows flat, but recursively group wider equality keys. Clone
         // fields instead of borrowing the filter's temporary row: a provider
@@ -287,7 +340,12 @@ impl Printer<'_> {
             let nested = cq_print::group(&fields);
             quote!(&#nested)
         };
-        quote! {{
+        let dedup = format!("{name}.dedup");
+        let input = name.strip_suffix(".head").unwrap_or(name);
+        let key_columns = self.heading(input).join(",");
+        self.profile_label(&dedup, "DEDUP", &key_columns, vec![input.into()]);
+        let rows = self.profile_inserting(&dedup, rows);
+        let result = quote! {{
             #[allow(unused_imports)]
             use ::cq_storage::HashSetConstructor as _;
             let mut __cq_seen = <#ty>::new();
@@ -295,10 +353,19 @@ impl Printer<'_> {
                 ::cq_storage::require::leibniz(#key);
                 __cq_seen.insert(::core::clone::Clone::clone(#key))
             })
-        }}
+        }};
+        self.profile_stream(&dedup, result)
     }
 
-    pub(crate) fn head(&self, result: &str, head: &cq::Atom, rows: TokenStream) -> TokenStream {
+    pub(crate) fn head(&mut self, result: &str, head: &cq::Atom, rows: TokenStream) -> TokenStream {
+        if self.analysis.head_dedup.contains_key(result) {
+            self.profile_label(
+                &format!("{result}.head.dedup"),
+                "DEDUP",
+                &head.args.to_token_stream().to_string(),
+                vec![result.into()],
+            );
+        }
         let heading = self.heading(result);
         let variables: Vec<Option<&Ident>> = head.args.iter().map(cq::rust::variable).collect();
         let identity = variables.len() == heading.len()
@@ -308,7 +375,12 @@ impl Printer<'_> {
                 .all(|(v, h)| v.is_some_and(|v| symbol_name(v) == *h));
         if identity {
             return if let Some(ty) = self.analysis.head_dedup.get(result) {
-                self.distinct_width(ty, rows, head.args.len())
+                self.distinct_width(
+                    &format!("{result}.head"),
+                    &ty.clone(),
+                    rows,
+                    head.args.len(),
+                )
             } else {
                 rows
             };
@@ -330,7 +402,12 @@ impl Printer<'_> {
                 ::core::iter::Iterator::map(#rows, move |#pattern| (#(#output,)*))
             };
             return if let Some(ty) = self.analysis.head_dedup.get(result) {
-                self.distinct_width(ty, rows, head.args.len())
+                self.distinct_width(
+                    &format!("{result}.head"),
+                    &ty.clone(),
+                    rows,
+                    head.args.len(),
+                )
             } else {
                 rows
             };
@@ -366,7 +443,12 @@ impl Printer<'_> {
         }) {
             mapped
         } else {
-            self.distinct_width(&self.analysis.head_dedup[result], mapped, head.args.len())
+            self.distinct_width(
+                &format!("{result}.head"),
+                &self.analysis.head_dedup[result].clone(),
+                mapped,
+                head.args.len(),
+            )
         }
     }
 }

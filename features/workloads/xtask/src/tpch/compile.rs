@@ -5,19 +5,29 @@ use std::path::{Path, PathBuf};
 pub(super) struct Built {
     pub binary: PathBuf,
     pub count_binary: PathBuf,
+    pub profile_binary: Option<PathBuf>,
     pub unit_ms: f64,
     pub timing_report: PathBuf,
 }
 
 pub(super) fn build(root: &Path, source: &Path, name: &str) -> Result<Built> {
-    let cache = root.join("target/bench");
+    build_in(root, source, name, &root.join("target/bench"), false)
+}
+
+pub(super) fn build_in(
+    root: &Path,
+    source: &Path,
+    name: &str,
+    cache: &Path,
+    profile: bool,
+) -> Result<Built> {
     let directory = cache.join("crates").join(name);
     std::fs::create_dir_all(directory.join("src"))?;
     let package = format!("tpch-derived-{name}");
     let mut manifest = format!(
         "[package]\nname = {package:?}\nversion = \"0.0.0\"\nedition = \"2024\"\nrust-version = \"1.85.1\"\n[workspace]\n"
     );
-    manifest.push_str("[features]\ncounters = [\"cq-storage/counters\"]\n[dependencies]\n");
+    manifest.push_str("[features]\ncounters = [\"cq-storage/counters\"]\nprofile = [\"cq-storage/operator-timing\"]\n[dependencies]\n");
     manifest.push_str(&crate::cargo::dependencies(&[
         "mini-linq",
         "cq-load",
@@ -49,14 +59,23 @@ pub(super) fn build(root: &Path, source: &Path, name: &str) -> Result<Built> {
     // Preserve the repository's dependency versions. Cargo may only adapt the
     // root-package entries here; the actual measured build always uses --locked.
     std::fs::copy(root.join("Cargo.lock"), directory.join("Cargo.lock"))?;
+    // Only bench measures compilation. Profiling can reuse identical workers.
+    let build_stamp = if profile {
+        "operator-profile".to_owned()
+    } else {
+        format!("{:?}", std::time::SystemTime::now())
+    };
     let source_text = format!(
         "// Measurement build {:?}\n#[allow(unused_imports, unused_macros, dead_code)] #[path = {:?}] mod tpch_runtime;\n#[path = {source:?}] mod query;\n#[path = {:?}] mod comparison;\ninclude!({:?});\n",
-        std::time::SystemTime::now(),
+        build_stamp,
         root.join("src/tpch_runtime.rs"),
         root.join("xtask/src/tpch/comparison.rs"),
         root.join("xtask/src/tpch/worker.rs"),
     );
-    std::fs::write(directory.join("src/main.rs"), source_text)?;
+    let main = directory.join("src/main.rs");
+    if std::fs::read_to_string(&main).ok().as_deref() != Some(&source_text) {
+        std::fs::write(main, source_text)?;
+    }
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(|path| PathBuf::from(path).join("tpch-workers"))
         .unwrap_or_else(|| cache.join("build"));
@@ -84,7 +103,11 @@ pub(super) fn build(root: &Path, source: &Path, name: &str) -> Result<Built> {
         return Err(format!("release compilation failed for {name}: {status}").into());
     }
     let html = std::fs::read_to_string(target.join("cargo-timings/cargo-timing.html"))?;
-    let unit_ms = unit_seconds(&html, &package)? * 1000.0;
+    let unit_ms = match unit_seconds(&html, &package) {
+        Ok(seconds) => seconds * 1000.,
+        Err(_) if profile => 0., // cached worker; profile does not report compile time
+        Err(error) => return Err(error),
+    };
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
@@ -110,9 +133,32 @@ pub(super) fn build(root: &Path, source: &Path, name: &str) -> Result<Built> {
     }
     let count_binary = directory.join("counting-worker");
     std::fs::copy(target.join("release").join(&package), &count_binary)?;
+    let profile_binary = if profile {
+        let status = crate::cargo::command()
+            .current_dir(&directory)
+            .args([
+                "build",
+                "--release",
+                "--locked",
+                "--offline",
+                "--features",
+                "profile",
+            ])
+            .env("CARGO_TARGET_DIR", &target)
+            .status()?;
+        if !status.success() {
+            return Err(format!("profile compilation failed for {name}: {status}").into());
+        }
+        let path = directory.join("profile-worker");
+        std::fs::copy(target.join("release").join(&package), &path)?;
+        Some(path)
+    } else {
+        None
+    };
     Ok(Built {
         binary,
         count_binary,
+        profile_binary,
         unit_ms,
         timing_report,
     })

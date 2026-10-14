@@ -136,6 +136,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.source.find(|v| {
             crate::count!(distinct_insertions);
+            crate::count!(candidate_insertions);
             self.seen.insert(*v)
         })
     }

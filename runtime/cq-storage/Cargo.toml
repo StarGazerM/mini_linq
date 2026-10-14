@@ -12,6 +12,8 @@ hashbrown = { version = "=0.15.5", default-features = false, features = ["inline
 [features]
 default = []
 counters = []
+# Independent timing mode; enabling counters as well retains every counter.
+operator-timing = []
 
 [[test]]
 name = "counters"

@@ -75,7 +75,7 @@ macro_rules! count {
 }
 pub(crate) use count;
 
-#[cfg(feature = "counters")]
+#[cfg(any(feature = "counters", feature = "operator-timing"))]
 pub mod counters;
 pub mod dispatch;
 mod hash_index;
@@ -232,3 +232,17 @@ mod misuse;
 
 pub mod retention;
 pub use retention::{Retention, residual, retain_keys, retain_rows};
+
+/// Select printer output using the runtime's counters feature. The unselected
+/// tokens are discarded before type checking; the plain branch expands verbatim.
+#[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+#[macro_export]
+macro_rules! profile_select {
+    (plain { $($plain:tt)* } counters { $($profile:tt)* }) => { $($plain)* };
+}
+/// Select printer output using the runtime's counters feature.
+#[cfg(any(feature = "counters", feature = "operator-timing"))]
+#[macro_export]
+macro_rules! profile_select {
+    (plain { $($plain:tt)* } counters { $($profile:tt)* }) => { $($profile)* };
+}

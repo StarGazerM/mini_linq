@@ -42,6 +42,7 @@ mod filtered;
 mod ownership;
 mod point;
 mod positional;
+pub mod profile;
 mod range;
 pub use ownership::own_captures;
 
@@ -74,6 +75,7 @@ pub enum Repr {
 }
 
 pub struct Context<'a> {
+    pub profile: Option<profile::Profile>,
     pub analysis: &'a structures::Analysis,
     pub physical_analysis: &'a physical::Analysis,
     pub infos: BTreeMap<String, physical::Row>,
@@ -231,6 +233,7 @@ impl<'a> Context<'a> {
             }
         }
         Context {
+            profile: None,
             physical_analysis: &analysis.physical,
             analysis,
             infos: analysis.physical.rows.clone(),
@@ -471,11 +474,16 @@ impl<'a> Context<'a> {
         let direct_source = source.clone();
         let source = match &rows {
             Some(rows) => {
-                let ty = &self.analysis.retained[name];
-                statements.push(syn::parse_quote! {
-                    let #rows: &#ty = &::core::iter::Iterator::collect(#source);
-                });
-                if *ty == syn::parse_quote!(::std::vec::Vec<_>) {
+                let ty = self.analysis.retained[name].clone();
+                let retained = format!("{name}.rows");
+                self.profile_label(&retained, "ROWS_BUILD", "", vec![name.into()]);
+                let counted_source = self.profile_inserting(&retained, source.clone());
+                let collect = self.profile_build(
+                    &retained,
+                    quote!(::core::iter::Iterator::collect(#counted_source)),
+                );
+                statements.push(syn::parse_quote! { let #rows: &#ty = &#collect; });
+                if ty == syn::parse_quote!(::std::vec::Vec<_>) {
                     let allocation = format_ident!(
                         "__cq_{}_rows_allocation",
                         name,
@@ -532,23 +540,50 @@ impl<'a> Context<'a> {
                     .collect::<Vec<_>>()
                     .join("__")
             );
+            let build_name = format!("{name}.index.{}", columns.join("_"));
+            let build_kind = if self
+                .analysis
+                .membership
+                .contains(&(name.into(), columns.clone()))
+                || *ty == syn::parse_quote!(::std::collections::HashSet<_>)
+                || *ty == syn::parse_quote!(::cq_storage::HashSet<_>)
+            {
+                "KEYSET_BUILD"
+            } else {
+                "INDEX_BUILD"
+            };
+            self.profile_label(
+                &build_name,
+                build_kind,
+                &columns.join(","),
+                vec![name.into()],
+            );
             let pairs = quote! {
                 ::core::iter::Iterator::map(#source, |#pattern| #nested)
             };
+            let pairs = self.profile_inserting(&build_name, pairs);
             // A bare path lets Rust infer the type's generics from the pairs;
             // written arguments (or holes) select the qualified form.
             let bare = matches!(ty, syn::Type::Path(path)
                 if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
             let build = if let Some(selection) = selection.as_ref().filter(|_| !bare) {
                 let host_pattern = self.positional_pattern(name);
+                let nested = if let Some(i) = self.profile_index(&build_name) {
+                    let profile = self.profile_handle();
+                    quote!({ #profile.rows(#i, 1, 0, 1); #nested })
+                } else {
+                    nested
+                };
                 quote!(#selection.build::<_, _, _, #ty>(|#host_pattern| #nested))
             } else if bare {
                 quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
             } else {
                 quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
             };
+            let build = self.profile_build(&build_name, build);
             statements.push(syn::parse_quote! { let #structure = &#build; });
-            for (scan, filter) in &self.analysis.join_filters {
+            let join_filters = self.analysis.join_filters.clone();
+            for (scan, filter) in &join_filters {
                 if symbol_name(&filter.build) != name || sorted(&filter.key.columns) != columns {
                     continue;
                 }
@@ -556,6 +591,14 @@ impl<'a> Context<'a> {
                 let pairs = quote!(::core::iter::Iterator::map(
                     #structure.keys(), |__cq_key| (*__cq_key.0, ())
                 ));
+                let filter_name = format!("{name}.filter.{scan}");
+                self.profile_label(
+                    &filter_name,
+                    "JOIN_FILTER_BUILD",
+                    &columns.join(","),
+                    vec![build_name.clone()],
+                );
+                let pairs = self.profile_inserting(&filter_name, pairs);
                 let ty = &filter.ty;
                 let bare = matches!(ty, syn::Type::Path(path)
                     if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
@@ -564,6 +607,7 @@ impl<'a> Context<'a> {
                 } else {
                     quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
                 };
+                let value = self.profile_build(&filter_name, value);
                 statements.push(syn::parse_quote!(let #id = &#value;));
                 statements
                     .push(syn::parse_quote!(::cq_storage::require::conservative::<i64, _>(#id);));
@@ -598,7 +642,8 @@ impl<'a> Context<'a> {
             }
             built.push((levels.clone(), structure));
         }
-        for ((result, key), set) in &self.analysis.keysets {
+        let keysets = self.analysis.keysets.clone();
+        for ((result, key), set) in &keysets {
             if result != name {
                 continue;
             }
@@ -612,7 +657,20 @@ impl<'a> Context<'a> {
                 quote!((#(#values,)*))
             };
             let pattern = self.pattern(name);
-            statements.push(syn::parse_quote!(let #id = &<#ty as ::cq_storage::Build<_>>::build(::core::iter::Iterator::map(#source, |#[allow(unused_variables)] #pattern| ::cq_storage::require::key((#key_value, ()))));));
+            let build_name = format!("{name}.keyset.{}", key.join("_"));
+            self.profile_label(
+                &build_name,
+                "KEYSET_BUILD",
+                &key.join(","),
+                vec![name.into()],
+            );
+            let pairs = quote!(::core::iter::Iterator::map(#source, |#[allow(unused_variables)] #pattern| ::cq_storage::require::key((#key_value, ()))));
+            let pairs = self.profile_inserting(&build_name, pairs);
+            let build = self.profile_build(
+                &build_name,
+                quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs)),
+            );
+            statements.push(syn::parse_quote!(let #id = &#build;));
             let types = key
                 .iter()
                 .map(|column| &self.infos[name].types[column])
