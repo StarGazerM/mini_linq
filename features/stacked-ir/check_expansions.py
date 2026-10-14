@@ -14,29 +14,15 @@ def inventory():
     expected = (BASE / "physical_query_cases.txt").read_text().splitlines()
     if not expected or len(expected) != len(set(expected)):
         raise SystemExit("empty or duplicate scenario inventory")
-    suites = [(BASE / f"tests/{target}.rs").read_text() for target in ("reference", "stacked")]
-    for suite in suites:
-        modules = re.findall(r"^mod (\w+) \{", suite, re.M)
-        if modules != expected:
-            raise SystemExit(f"scenario inventory differs: {modules}")
-    tests = [re.findall(r"#\[test\]\s+fn (\w+)", suite) for suite in suites]
-    if not tests[0] or tests[0] != tests[1]:
-        raise SystemExit("executed test inventory differs")
-    # Require identical sources apart from insertion of the Trace chain. This
-    # pins the same inputs, oracle assertions and surrounding Rust in both runs.
-    unstacked = suites[1].replace(
-        "::stacked_ir::enter! { pipeline { ::stacked_ir::leave, ::mini_linq::passes::select,",
-        "::mini_linq::passes::select! { pipeline {",
-    )
-    unstacked = re.sub(r"physical\s*=\s*\[\s*::stacked_ir::round_trip\s*\];", "", unstacked)
-    unstacked = re.sub(r",\s*::stacked_ir::round_trip(?=\s*\])", "", unstacked)
-    # rustfmt may add a trailing call comma when the inserted pipeline widens
-    # a collect invocation. Captured Rust below is still compared as raw bytes.
-    def formatted_source(source):
-        return re.sub(r"\s+", "", source).replace("},)", "})")
-
-    if formatted_source(suites[0]) != formatted_source(unstacked):
-        raise SystemExit("fixture sources differ beyond the Trace chain")
+    suite = (BASE / "tests/cases/mod.rs").read_text()
+    modules = re.findall(r"^mod (\w+) \{", suite, re.M)
+    if modules != expected:
+        raise SystemExit(f"scenario inventory differs: {modules}")
+    for target in ("reference", "stacked"):
+        if 'include!("cases/mod.rs");' not in (BASE / f"tests/{target}.rs").read_text():
+            raise SystemExit(f"{target} does not instantiate the shared fixture")
+    if not re.findall(r"#\[test\]\s+fn (\w+)", suite):
+        raise SystemExit("empty shared test inventory")
     return expected
 
 

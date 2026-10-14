@@ -979,15 +979,11 @@ fn atom_variables(atom: &Atom) -> BTreeSet<usize> {
 
 /// SplitMix64 with explicit wrapping arithmetic gives stable cases on all hosts
 /// and does not add a dependency or depend on Rust's randomized hash state.
-struct Random(u64);
+struct Random(crate::random::SplitMix64);
 
 impl Random {
     fn pick(&mut self, alternatives: usize) -> usize {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut value = self.0;
-        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        ((value ^ (value >> 31)) % alternatives as u64) as usize
+        (self.0.next_u64() % alternatives as u64) as usize
     }
 
     fn small(&mut self) -> i32 {
@@ -1139,7 +1135,7 @@ pub fn generate(seed: u64) -> Case {
     if seed & 1 == 0 {
         return generate_partial(seed);
     }
-    let mut random = Random(seed);
+    let mut random = Random(crate::random::SplitMix64::new(seed));
     let relations = 1 + random.pick(4);
     let schema = (0..relations)
         .map(|index| Relation {
@@ -1270,7 +1266,7 @@ pub fn generate(seed: u64) -> Case {
 }
 
 fn generate_block(seed: u64) -> Case {
-    let mut random = Random(seed);
+    let mut random = Random(crate::random::SplitMix64::new(seed));
     let partial = seed & 1 == 0;
     let test = (seed / 10) % 3 == 0;
     let kind = if (seed / 10) % 2 == 0 {
@@ -1398,7 +1394,7 @@ fn generate_block(seed: u64) -> Case {
 }
 
 fn generate_partial(seed: u64) -> Case {
-    let mut random = Random(seed ^ 0x0050_4152_5449_414c);
+    let mut random = Random(crate::random::SplitMix64::new(seed ^ 0x0050_4152_5449_414c));
     // Consecutive even seeds cover every operator/position combination before
     // random data and body schedules vary its domain of evaluation.
     let ordinal = seed / 2;

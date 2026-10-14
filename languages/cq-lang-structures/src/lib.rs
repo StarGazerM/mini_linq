@@ -375,6 +375,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         unique: BTreeMap::new(),
     };
     analysis.lineage = lineages(&program.physical, &analysis.physical);
+    let candidates = physical::candidate_prefixes(&program.physical, &analysis.physical);
     let mut seen = BTreeSet::new();
     for entry in &module.entries {
         let name = symbol_name(&entry.name);
@@ -433,12 +434,15 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 let valid = if reader_name == "scan" {
                     columns[0].is_empty()
                 } else if reader_name == "candidates" || reader_name == "membership" {
-                    program.physical.program.definitions.windows(2).any(|pair|
-                        matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
-                        && physical::binary_intersection(&pair[0], &pair[1], &analysis.physical).is_some_and(|(a,b,v)| {
-                            let sides = [(symbol_name(&a.right), names(&a.columns)), (symbol_name(&b.right), names(&b.columns).into_iter().filter(|c| *c != v).collect())];
-                            sides.iter().any(|(n,p)| *n == name && columns[0] == if reader_name == "candidates" { p.clone() } else { heading.clone() })
-                        }))
+                    candidates.iter().flat_map(|c| &c.sides).any(|(n, p)| {
+                        *n == name
+                            && columns[0]
+                                == if reader_name == "candidates" {
+                                    p.clone()
+                                } else {
+                                    heading.clone()
+                                }
+                    })
                 } else {
                     analysis
                         .physical
@@ -602,20 +606,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
         }
     }
-    for pair in program.physical.program.definitions.windows(2) {
-        if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
-        {
-            continue;
-        }
-        let (a, b, v) = physical::binary_intersection(&pair[0], &pair[1], &analysis.physical)
-            .expect("Physical checked intersection");
-        for (name, prefix) in [
-            (symbol_name(&a.right), names(&a.columns)),
-            (
-                symbol_name(&b.right),
-                names(&b.columns).into_iter().filter(|c| *c != v).collect(),
-            ),
-        ] {
+    for candidate in candidates {
+        let v = candidate.column;
+        for (name, prefix) in candidate.sides {
             if analysis.host_read(&name) {
                 for (reader, key) in [
                     ("candidates", prefix.clone()),
@@ -625,7 +618,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                         .fallbacks
                         .contains_key(&(name.clone(), reader.into(), key))
                     {
-                        return error(&pair[0].name, "missing intersection host fallback type");
+                        return error(candidate.reader, "missing intersection host fallback type");
                     }
                 }
             } else {
@@ -642,7 +635,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     });
                 if !valid {
                     return error(
-                        &pair[0].name,
+                        candidate.reader,
                         "smallest requires a two-level candidate structure on each retained side",
                     );
                 }
@@ -800,38 +793,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 format!("result `{name}` has no heading"),
             );
         };
-        let key = match op {
-            Operator::Union(_) => None,
-            Operator::Unit(_) => Some(Vec::new()),
-            Operator::Rename(_) => None,
-            Operator::Probe(_, k) | Operator::Merge(_, k) => {
-                match (
-                    analysis.unique.get(&symbol_name(&k.left)),
-                    analysis.unique.get(&symbol_name(&k.right)),
-                ) {
-                    (Some(kl), Some(kr)) => {
-                        let mut key: Vec<String> = kl.iter().chain(kr).cloned().collect();
-                        key.sort();
-                        key.dedup();
-                        Some(key)
-                    }
-                    _ => None,
-                }
-            }
-            Operator::Semi(_, k) | Operator::Anti(_, k) => {
-                analysis.unique.get(&symbol_name(&k.left)).cloned()
-            }
-            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
-                analysis.unique.get(&symbol_name(&s.input)).cloned()
-            }
-            Operator::Bind(b) => analysis.unique.get(&symbol_name(&b.input)).cloned(),
-            Operator::Guard(g) => analysis.unique.get(&symbol_name(&g.input)).cloned(),
-            Operator::Project(p) => analysis
-                .unique
-                .get(&symbol_name(&p.input))
-                .filter(|key| key.iter().all(|k| heading.contains(k)))
-                .cloned(),
-        };
+        let key = physical::inherited_key(op, &heading, |id| {
+            analysis.unique.get(&symbol_name(id)).cloned()
+        });
         let key = match key {
             Some(key) => Some(key),
             None if analysis.physical.canon.contains(&name) => Some(heading.clone()),

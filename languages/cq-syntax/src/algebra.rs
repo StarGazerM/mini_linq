@@ -648,3 +648,124 @@ pub fn check_ord_type(ty: &syn::Type, column: &Ident) -> syn::Result<()> {
     }
     Ok(())
 }
+
+/// Borrowed operator facts used by the literal-disjointness fold.
+pub enum LiteralStep<'a> {
+    Empty,
+    Join(&'a Ident, &'a Ident),
+    Input(&'a Ident),
+    Select(&'a Select),
+    Bind(&'a Bind),
+    Project(&'a Project),
+    Union(&'a CommaList<Ident>, Option<&'a BlockOrigin>),
+}
+
+/// Propagate literal bindings and prove only the existing literal/fallback disjointness.
+pub fn disjoint_unions<'a>(
+    steps: impl IntoIterator<Item = (&'a Ident, LiteralStep<'a>)>,
+) -> std::collections::BTreeSet<String> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut constants: BTreeMap<String, LiteralBindings> = BTreeMap::new();
+    let mut disjoint = BTreeSet::new();
+    for (name, step) in steps {
+        let of = |id: &Ident| constants[&crate::symbol_name(id)].clone();
+        let values = match step {
+            LiteralStep::Empty => LiteralBindings::new(),
+            LiteralStep::Join(left, right) => {
+                let mut values = of(left);
+                values.extend(of(right));
+                values
+            }
+            LiteralStep::Input(input) => of(input),
+            LiteralStep::Select(select) => {
+                let mut values = of(&select.input);
+                values.extend(select.condition.literal_bindings());
+                values
+            }
+            LiteralStep::Bind(bind) => {
+                let mut values = of(&bind.input);
+                if let syn::Pat::Ident(pattern) = &bind.pattern {
+                    if let Some(value) = literal_value(&bind.expression) {
+                        values.insert(crate::symbol_name(&pattern.ident), value);
+                    }
+                }
+                values
+            }
+            LiteralStep::Project(project) => {
+                let mut values = of(&project.input);
+                values.retain(|name, _| {
+                    project
+                        .attributes
+                        .iter()
+                        .any(|id| crate::symbol_name(id) == *name)
+                });
+                values
+            }
+            LiteralStep::Union(operands, origin) => {
+                let interface = origin
+                    .map(|o| o.interface.iter().map(crate::symbol_name).collect())
+                    .unwrap_or_else(|| {
+                        constants[&crate::symbol_name(&operands[0])]
+                            .keys()
+                            .cloned()
+                            .collect()
+                    });
+                if origin.is_some_and(|o| o.fallback.is_some())
+                    || constant_disjoint(
+                        operands
+                            .iter()
+                            .map(|id| &constants[&crate::symbol_name(id)]),
+                        &interface,
+                    )
+                {
+                    disjoint.insert(crate::symbol_name(name));
+                }
+                let mut values = of(&operands[0]);
+                values.retain(|name, value| {
+                    operands
+                        .iter()
+                        .all(|id| constants[&crate::symbol_name(id)].get(name) == Some(value))
+                });
+                values
+            }
+        };
+        constants.insert(crate::symbol_name(name), values);
+    }
+    disjoint
+}
+
+/// Accumulated heading and declared (noncomputed) column types of a union.
+#[derive(Default)]
+pub struct UnionSchema {
+    heading: Option<std::collections::BTreeSet<String>>,
+    types: std::collections::BTreeMap<String, syn::Type>,
+}
+impl UnionSchema {
+    pub fn include<'a>(
+        &mut self,
+        heading: impl IntoIterator<Item = &'a String>,
+        types: &std::collections::BTreeMap<String, syn::Type>,
+        computed: &std::collections::BTreeSet<String>,
+    ) -> Result<(), String> {
+        let heading = heading.into_iter().cloned().collect();
+        if self.heading.as_ref().is_some_and(|h| h != &heading) {
+            return Err("union operand headings must be identical".into());
+        }
+        for (column, ty) in types {
+            if !computed.contains(column) {
+                if self
+                    .types
+                    .get(column)
+                    .is_some_and(|previous| previous != ty)
+                {
+                    return Err(format!(
+                        "union interface `{column}` has different declared types"
+                    ));
+                }
+                self.types.insert(column.clone(), ty.clone());
+            }
+        }
+        self.heading = Some(heading);
+        Ok(())
+    }
+}

@@ -48,13 +48,9 @@ impl Config {
             ..Default::default()
         }
     }
-    fn sample(seed: &mut u64) -> Self {
-        fn next(seed: &mut u64, n: u64) -> usize {
-            *seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            let mut x = *seed;
-            x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            ((x ^ (x >> 31)) % n) as usize
+    fn sample(seed: &mut cq_testkit::random::SplitMix64) -> Self {
+        fn next(seed: &mut cq_testkit::random::SplitMix64, n: u64) -> usize {
+            (seed.next_u64() % n) as usize
         }
         Self {
             planner: next(seed, 9),
@@ -192,7 +188,7 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
     std::fs::create_dir_all(progress.parent().ok_or("preflight parent")?)?;
     for index in 0..count {
         let case = model::generate(seed.wrapping_add(index as u64));
-        let mut config_seed = case.seed ^ 0x434f_4e46_4947;
+        let mut config_seed = cq_testkit::random::SplitMix64::new(case.seed ^ 0x434f_4e46_4947);
         let config = loop {
             let config = Config::sample(&mut config_seed);
             std::fs::write(

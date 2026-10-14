@@ -165,29 +165,11 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     // The binary smallest-candidate rewrite also reads each relation at
     // prefix + new-column for membership. Keep these two-level demands
     // local: host reads, other keys and ordered reads retain their paths.
-    let mut candidate_keys = BTreeSet::new();
-    for pair in program.definitions.windows(2) {
-        if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
-        {
-            continue;
-        }
-        if let Some((a, b, v)) = physical::binary_intersection(&pair[0], &pair[1], &analysis) {
-            candidate_keys.insert((
-                symbol_name(&a.right),
-                sorted(&a.columns.iter().map(symbol_name).collect::<Vec<_>>()),
-            ));
-            candidate_keys.insert((
-                symbol_name(&b.right),
-                sorted(
-                    &b.columns
-                        .iter()
-                        .map(symbol_name)
-                        .filter(|c| *c != v)
-                        .collect::<Vec<_>>(),
-                ),
-            ));
-        }
-    }
+    let candidates = physical::candidate_prefixes(source, &analysis);
+    let candidate_keys: BTreeSet<_> = candidates
+        .iter()
+        .flat_map(|c| c.sides.iter().cloned())
+        .collect();
     let mut entries = TokenStream::new();
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
@@ -325,29 +307,8 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         }
     }
     let mut extra = BTreeSet::new();
-    for pair in program.definitions.windows(2) {
-        if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
-        {
-            continue;
-        }
-        let (a, b, v) = physical::binary_intersection(&pair[0], &pair[1], &analysis)
-            .expect("checked intersection");
-        for (name, prefix) in [
-            (
-                symbol_name(&a.right),
-                sorted(&a.columns.iter().map(symbol_name).collect::<Vec<_>>()),
-            ),
-            (
-                symbol_name(&b.right),
-                sorted(
-                    &b.columns
-                        .iter()
-                        .map(symbol_name)
-                        .filter(|c| *c != v)
-                        .collect::<Vec<_>>(),
-                ),
-            ),
-        ] {
+    for candidate in &candidates {
+        for (name, prefix) in candidate.sides.clone() {
             if !analysis.hosts.contains_key(&name) || analysis.modes[&name] != ModeKind::Pipe {
                 continue;
             }
@@ -526,8 +487,6 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
 
 mod correspondence;
 pub use correspondence::check;
-
-pub use structures::check_rewrite;
 
 mod positional;
 

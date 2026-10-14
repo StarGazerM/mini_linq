@@ -134,7 +134,7 @@ pub enum Operator {
     Anti(Box<Anti>),
     // Unit is supplied for global optional-HW4 clauses. OPTIONAL HW4 —
     // STUDENT 3/6 (LOGICAL): add AntiSemijoin and AggregateApply as
-    // languages/cq-lang-cq/tests/hw4_optional.rs requires.
+    // course/hw4_optional.rs requires.
     #[parse(peek = kw::unit)]
     Unit(Unit),
     #[parse(peek = kw::rename)]
@@ -280,7 +280,7 @@ fn check_in<'a>(
 
         // OPTIONAL HW4 — STUDENT 3/6 (LOGICAL): extend the local heading
         // rules for AntiSemijoin and AggregateApply as
-        // languages/cq-lang-cq/tests/hw4_optional.rs requires.
+        // course/hw4_optional.rs requires.
         let (heading, operands) = match &definition.operator {
             Operator::Union(union) => {
                 if union.operands.len() < 2 {
@@ -291,31 +291,12 @@ fn check_in<'a>(
                 }
                 let mut operands = Vec::new();
                 let mut heading = None;
-                let mut declared_types = BTreeMap::new();
+                let mut schema = cq_syntax::algebra::UnionSchema::default();
                 for operand in &union.operands {
                     let (name, info) = earlier_relation(operand, &relations)?;
-                    if heading.as_ref().is_some_and(|h| h != &info.heading) {
-                        return Err(syn::Error::new_spanned(
-                            operand,
-                            "union operand headings must be identical",
-                        ));
-                    }
-                    for (column, ty) in &info.types {
-                        if !info.computed.contains(column) {
-                            if declared_types
-                                .get(column)
-                                .is_some_and(|previous| previous != ty)
-                            {
-                                return Err(syn::Error::new_spanned(
-                                    operand,
-                                    format!(
-                                        "union interface `{column}` has different declared types"
-                                    ),
-                                ));
-                            }
-                            declared_types.insert(column.clone(), ty.clone());
-                        }
-                    }
+                    schema
+                        .include(&info.heading, &info.types, &info.computed)
+                        .map_err(|message| syn::Error::new_spanned(operand, message))?;
                     heading = Some(info.heading.clone());
                     operands.push(name);
                 }
@@ -729,15 +710,7 @@ fn check_rename(rename: &Rename, declaration: &cq_syntax::RelationDecl) -> syn::
     let mut heading = Heading::new();
     for column in &declaration.columns {
         let source = symbol_name(&column.name);
-        let Some(attribute) = by_source.get(&source) else {
-            return Err(syn::Error::new_spanned(
-                rename,
-                format!(
-                    "rename of `{}` must map every declared source attribute exactly once",
-                    rename.relation
-                ),
-            ));
-        };
+        let attribute = by_source[&source];
         heading.insert(symbol_name(&attribute.target));
     }
     Ok(heading)

@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-include!("../support.rs");
-
 const MERGE: &str = r#"
 physical {
     relation R(a: i32, b: i32);
@@ -133,7 +131,6 @@ fn failure(output: Output, diagnostic: &str) {
 
 #[test]
 fn unsupported_written_choices_are_refused_after_core_contracts() {
-    assert_eq!(UNSUPPORTED_SHAPES.len(), 2);
     let compiler = Compiler::new();
     for (name, physical) in [("merge", MERGE), ("smallest", SMALLEST)] {
         let scenario = cq_testkit::Scenario {

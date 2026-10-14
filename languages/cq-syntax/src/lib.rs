@@ -70,7 +70,6 @@ pub mod keyed;
 pub use keyed::SupplyKind;
 pub mod constraint;
 pub mod guard;
-pub mod predicate;
 pub use constraint::Constraint;
 pub mod rust;
 

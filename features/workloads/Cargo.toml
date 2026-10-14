@@ -73,6 +73,7 @@ debug = 0
 debug = 0
 
 [dependencies]
+cq-testkit.workspace = true
 cq-load.workspace = true
 cq-lang-cq.workspace = true
 cq-syntax.workspace = true
@@ -96,8 +97,6 @@ cq-structure-selection.workspace = true
 cq-lang-physical.workspace = true
 cq-lang-structures.workspace = true
 
-[dev-dependencies]
-cq-testkit.workspace = true
 
 [features]
 default = []

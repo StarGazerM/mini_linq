@@ -4,7 +4,7 @@ use std::collections::{hash_map, hash_set};
 type HashMap<K, V> = std::collections::HashMap<K, V, crate::HashState>;
 use std::hash::Hash;
 
-use crate::{Canonical, ExactMembership, IndexRead};
+use crate::{ExactMembership, IndexRead};
 
 /// A distinct set of answer rows, iterable as an unkeyed host.
 ///
@@ -35,7 +35,6 @@ impl<T> Answers<T> {
         self.rows.is_empty()
     }
 }
-impl<T> Canonical for Answers<T> {}
 impl<T> IntoIterator for Answers<T> {
     type Item = T;
     type IntoIter = hash_set::IntoIter<T>;
@@ -81,7 +80,6 @@ impl<K, V> GroupedAnswers<K, V> {
         self.groups.iter()
     }
 }
-impl<K, V> Canonical for GroupedAnswers<K, V> {}
 impl<'a, K: Eq + Hash, V> IndexRead for &'a GroupedAnswers<K, V> {
     type Key = K;
     type Item = &'a V;
@@ -152,7 +150,6 @@ impl<K, V> SingleGroup<K, V> {
         self.group.iter().map(|(key, values)| (key, values))
     }
 }
-impl<K, V> Canonical for SingleGroup<K, V> {}
 impl<K: Eq, V> ExactMembership<K> for SingleGroup<K, V> {
     fn contains(&self, key: &K) -> bool {
         self.group.as_ref().is_some_and(|(stored, _)| stored == key)

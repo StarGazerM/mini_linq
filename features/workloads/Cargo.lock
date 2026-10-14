@@ -771,22 +771,15 @@ dependencies = [
  "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-ix",
- "cq-lang-physical",
  "cq-lang-ra",
- "cq-lang-structures",
- "cq-lang-vo",
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
  "cq-planners-plan",
- "cq-reduce",
- "cq-rewrite-passes",
  "cq-structure-selection",
  "cq-testkit",
  "cq-workloads",
  "duckdb",
- "prettyplease",
- "proc-macro2",
  "quote",
  "serde_json",
  "syn 2.0.119",
@@ -1430,16 +1423,6 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
-
-[[package]]
-name = "prettyplease"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
-dependencies = [
- "proc-macro2",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "proc-macro2"

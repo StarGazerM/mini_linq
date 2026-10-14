@@ -59,7 +59,6 @@ fn admissible_values_and_literal_reads_refine_the_written_order() {
         cq_order::Heuristic::Written,
         cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
         cq_order::Heuristic::Prefix(cq_order::Ranking::GreedyWidth),
-        cq_order::Heuristic::Prefix(cq_order::Ranking::Auto),
         cq_order::Heuristic::Elimination,
     ] {
         for split in [cq_order::Split::Coarse, cq_order::Split::Fine] {
@@ -209,7 +208,6 @@ fn hypergraph_programs(
     let reference = cq_elaborate::compile_written(&written_vo).unwrap();
     cq_elaborate::check(&written_vo, &reference).unwrap();
     let reductions = cq_reduce::Options {
-        guards: cq_reduce::Pushdown::Atoms,
         semijoins: cq_reduce::Reductions::Tree,
     };
     let reduced = cq_reduce::compile(&written_vo, &reductions).unwrap();
@@ -440,58 +438,9 @@ fn run_cases(cases: &[TokenStream]) {
         struct Key { id:i32, flag:bool }
         fn main() { #(#cases)* }
     };
-    let root =
-        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
-    let dir = std::env::temp_dir()
-        .join(format!("cq-provenance-{}", std::process::id()))
-        .join(std::thread::current().name().unwrap());
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("main.rs"), program.to_string()).unwrap();
-    let runtime = cq_testkit::runtime_rustc()
-        .args([
-            "--edition=2024",
-            "--crate-name",
-            "cq_storage",
-            "--crate-type",
-            "rlib",
-            "--cfg",
-            "feature=\"counters\"",
-        ])
-        .arg(root.join("runtime/cq-storage/src/lib.rs"))
-        .arg("--out-dir")
-        .arg(&dir)
-        .output()
-        .unwrap();
-    assert!(
-        runtime.status.success(),
-        "{}",
-        String::from_utf8_lossy(&runtime.stderr)
-    );
-    let build = cq_testkit::runtime_rustc()
-        .arg("--edition=2024")
-        .arg(dir.join("main.rs"))
-        .arg("--extern")
-        .arg(format!(
-            "cq_storage={}",
-            dir.join("libcq_storage.rlib").display()
-        ))
-        .arg("-o")
-        .arg(dir.join("run"))
-        .output()
-        .unwrap();
-    assert!(
-        build.status.success(),
-        "{}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    let run = std::process::Command::new(dir.join("run"))
-        .output()
-        .unwrap();
-    assert!(
-        run.status.success(),
-        "{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    let runtime = cq_testkit::rustc::Runtime::new(&source, true);
+    let run = runtime.run(&program.to_string());
     print!("{}", String::from_utf8_lossy(&run.stdout));
-    std::fs::remove_dir_all(dir).unwrap();
 }

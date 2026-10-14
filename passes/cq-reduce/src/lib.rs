@@ -4,7 +4,7 @@
 //! it, but Rust steps retain their relative order and written relational
 //! predecessors. I/O, mutation and evaluation counts are outside the meaning.
 //! Erasure must preserve every non-reduction step exactly. Rust guards are
-//! never pushed onto atom inputs, including under the legacy `Atoms` option.
+//! never pushed onto atom inputs.
 
 //! Reduction recursively retains block paths.
 //! Positive semijoins may distribute into union arms and fallback positive arms.
@@ -32,17 +32,21 @@ use syn::LitInt;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Options {
-    pub guards: Pushdown,
     pub semijoins: Reductions,
 }
 
-/// Compatibility spellings; Rust guards always remain in their chain.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Pushdown {
-    #[default]
-    None,
-    /// Compatibility spelling; opaque Rust guards always stay in the chain.
-    Atoms,
+impl Options {
+    fn effective(self, suppress_hypergraph: bool, suppress_tree: bool) -> Self {
+        if suppress_hypergraph && self.semijoins == Reductions::Hypergraph
+            || suppress_tree && self.semijoins == Reductions::Tree
+        {
+            Self {
+                semijoins: Reductions::None,
+            }
+        } else {
+            self
+        }
+    }
 }
 
 /// Which semijoin reductions the plan carries.
@@ -66,17 +70,8 @@ pub fn compile(source: &valuation::Program, options: &Options) -> syn::Result<va
     // Independent branches are exact build-side joins, not fact-dependent
     // semijoin supports. The optional Hypergraph policy does not interpose a
     // reducer across this recorded physical decomposition.
-    let branch_options = Options {
-        guards: options.guards,
-        semijoins: Reductions::None,
-    };
-    let options = if source.valuation.join_branches.is_some()
-        && options.semijoins == Reductions::Hypergraph
-    {
-        &branch_options
-    } else {
-        options
-    };
+    let effective = options.effective(source.valuation.join_branches.is_some(), false);
+    let options = &effective;
     let steps = compile_steps(
         &source.cq.query.body,
         &source.valuation.steps,
@@ -218,14 +213,7 @@ fn compile_steps(
                     &written.branches[j].body,
                     &context,
                 );
-                let options = Options {
-                    guards: options.guards,
-                    semijoins: if options.semijoins == Reductions::Tree && !inner.acyclic {
-                        Reductions::None
-                    } else {
-                        options.semijoins
-                    },
-                };
+                let options = options.effective(false, !inner.acyclic);
                 branch.steps = compile_steps(
                     &written.branches[j].body,
                     &branch.steps,

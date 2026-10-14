@@ -126,7 +126,6 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
     let has_blocks = valuation::cq::blocks::walk(&source.cq.query.body)
         .iter()
         .any(|item| matches!(item, valuation::cq::BodyItem::Block(_)));
-    let block_hoisting = relational_hoisting;
 
     let mut state = State {
         inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
@@ -138,7 +137,6 @@ fn compile_in(source: &valuation::Program, relational_hoisting: bool) -> syn::Re
         joined_branch_atoms: BTreeSet::new(),
         context: BTreeSet::new(),
         path: None,
-        block_hoisting,
         fused: BTreeSet::new(),
         scoped: has_blocks,
         placed_rust: BTreeSet::new(),
@@ -253,7 +251,6 @@ struct State<'a> {
     joined_branch_atoms: BTreeSet<usize>,
     context: BTreeSet<String>,
     path: Option<(cq::Occurrence, usize)>,
-    block_hoisting: bool,
     fused: BTreeSet<usize>,
     scoped: bool,
     placed_rust: BTreeSet<usize>,
@@ -299,7 +296,7 @@ impl<'a> State<'a> {
                 }
                 valuation::cq::BodyItem::Block(block) => {
                     let facts = block.analyze(&prefix);
-                    if self.block_hoisting && !facts.rust && needs_domain(block, &facts) {
+                    if self.relational_hoisting && !facts.rust && needs_domain(block, &facts) {
                         domain_cuts.insert(clause);
                     }
                     prefix.extend(facts.interface.into_keys());
@@ -438,22 +435,9 @@ impl<'a> State<'a> {
                 _ => None,
             })
             .expect("VO places every block");
-        let mut written_prefix = self.context.clone();
-        for item in self.body.iter().take(clause) {
-            match item {
-                valuation::cq::BodyItem::Positive { atom } => {
-                    written_prefix.extend(atom.variables().map(symbol_name))
-                }
-                valuation::cq::BodyItem::Let(binding) => written_prefix
-                    .extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name)),
-                valuation::cq::BodyItem::Block(block) => {
-                    written_prefix.extend(block.analyze(&written_prefix).interface.into_keys())
-                }
-                _ => (),
-            }
-        }
+        let written_prefix = valuation::cq::blocks::bound_before(self.body, clause, &self.context);
         let facts = written.analyze(&written_prefix);
-        let hoisted = self.block_hoisting && !facts.rust;
+        let hoisted = self.relational_hoisting && !facts.rust;
         let correlated_prefix = (!hoisted).then(|| self.prefix_or_unit());
         let common: BTreeSet<_> = facts
             .free
@@ -942,21 +926,7 @@ impl<'a> State<'a> {
             .map(|(c, _)| c)
             .expect("VO Rust step source slot");
         self.placed_rust.insert(clause);
-        let mut names = self.context.clone();
-        for item in self.body.iter().take(clause) {
-            match item {
-                valuation::cq::BodyItem::Positive { atom } => {
-                    names.extend(atom.variables().map(symbol_name))
-                }
-                valuation::cq::BodyItem::Let(binding) => {
-                    names.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name))
-                }
-                valuation::cq::BodyItem::Block(block) => {
-                    names.extend(block.analyze(&names).interface.into_keys())
-                }
-                _ => (),
-            }
-        }
+        let names = valuation::cq::blocks::bound_before(self.body, clause, &self.context);
         let mut ids = BTreeMap::new();
         for definition in &self.definitions {
             match &definition.operator {

@@ -98,6 +98,71 @@ pub struct IndexDefinition {
 /// Semantic identity of an index demand; index names form a separate namespace.
 pub type Signature = (String, Vec<usize>, SupplyKind);
 
+/// One first-use demand of a checked RA program, in definition order.
+#[derive(Clone, Debug)]
+pub struct Demand<'a> {
+    pub definition: &'a Ident,
+    pub relation: &'a Ident,
+    pub signature: Signature,
+}
+
+/// Derive exact demands from the analysis returned by the RA contract.
+/// Repeated descriptors share the first occurrence, including its source span.
+pub fn demands<'a>(program: &'a ra::Program, info: &ra::Analysis) -> Vec<Demand<'a>> {
+    let mut seen = BTreeSet::new();
+    let mut demands = Vec::new();
+    for definition in &program.plan.definitions {
+        let (right, keys, supply) = match &definition.operator {
+            // IX-Join: increasing logical ordinals in the right heading.
+            ra::Operator::NaturalJoin(join) => (
+                &join.right,
+                info[&symbol_name(&join.left)].heading.clone(),
+                SupplyKind::Stream,
+            ),
+            ra::Operator::Semijoin(join) => (
+                &join.right,
+                info[&symbol_name(&join.left)].heading.clone(),
+                SupplyKind::Stream,
+            ),
+            ra::Operator::Anti(anti) => (
+                &anti.right,
+                anti.columns.iter().map(symbol_name).collect(),
+                SupplyKind::Stream,
+            ),
+            ra::Operator::Select(selection) => {
+                // IX-Const: column equalities and membership supply constant keys.
+                let (keys, supply) = if let Some(keys) = selection.condition.point_columns() {
+                    (keys, SupplyKind::Const)
+                // IX-Range: one column with constant order bounds supplies a window.
+                } else if let Some((column, _)) = selection.condition.range_bounds() {
+                    (BTreeSet::from([column]), SupplyKind::Range)
+                } else {
+                    continue;
+                };
+                (&selection.input, keys, supply)
+            }
+            // IX-Other: no demand is introduced by other operators.
+            _ => continue,
+        };
+        let columns = info[&symbol_name(right)]
+            .heading
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| keys.contains(c).then_some(i))
+            .collect();
+        let signature = (symbol_name(right), columns, supply);
+        // IX-Reuse: only the first occurrence contributes a demand.
+        if seen.insert(signature.clone()) {
+            demands.push(Demand {
+                definition: &definition.result,
+                relation: right,
+                signature,
+            });
+        }
+    }
+    demands
+}
+
 pub fn signature(index: &IndexRequirement) -> Signature {
     (
         symbol_name(&index.relation),
@@ -193,56 +258,10 @@ fn check_indexes(module: &Program) -> syn::Result<()> {
         }
     }
 
-    let mut expected = BTreeSet::new();
-    for definition in &module.ra.plan.definitions {
-        let (left, right) = match &definition.operator {
-            ra::Operator::NaturalJoin(j) => (&j.left, &j.right),
-            ra::Operator::Semijoin(j) => (&j.left, &j.right),
-            ra::Operator::Anti(anti) => {
-                let input = symbol_name(&anti.right);
-                let key: BTreeSet<_> = anti.columns.iter().map(symbol_name).collect();
-                let columns = info[&input]
-                    .heading
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, c)| key.contains(c).then_some(i))
-                    .collect();
-                expected.insert((input, columns, SupplyKind::Stream));
-                continue;
-            }
-            ra::Operator::Select(selection) => {
-                if let Some(keys) = selection.condition.point_columns() {
-                    let input = symbol_name(&selection.input);
-                    let columns = info[&input]
-                        .heading
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(ordinal, column)| keys.contains(column).then_some(ordinal))
-                        .collect();
-                    expected.insert((input, columns, SupplyKind::Const));
-                } else if let Some((column, _)) = selection.condition.range_bounds() {
-                    let input = symbol_name(&selection.input);
-                    let ordinal = info[&input]
-                        .heading
-                        .iter()
-                        .position(|c| *c == column)
-                        .expect("checked range column");
-                    expected.insert((input, vec![ordinal], SupplyKind::Range));
-                }
-                continue;
-            }
-            _ => continue,
-        };
-        let lh = &info[&symbol_name(left)].heading;
-        let rh = &info[&symbol_name(right)].heading;
-        let columns = rh
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| lh.contains(c).then_some(i))
-            .collect();
-        expected.insert((symbol_name(right), columns, SupplyKind::Stream));
-    }
-
+    let expected: BTreeSet<_> = demands(&module.ra, &info)
+        .into_iter()
+        .map(|d| d.signature)
+        .collect();
     for (name, index) in indexes {
         if !expected.contains(&signature(&index.requirement)) {
             return Err(syn::Error::new_spanned(

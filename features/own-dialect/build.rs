@@ -1,32 +1,7 @@
 use cq_testkit::{CASES, SCENARIOS};
 use quote::ToTokens;
-use std::collections::BTreeSet;
-
-include!("support.rs");
-
-fn inventory(actual: impl Iterator<Item = &'static str>, allowed: &[&str]) {
-    let actual: BTreeSet<_> = actual.collect();
-    let reviewed: BTreeSet<_> = allowed.iter().copied().collect();
-    assert_eq!(reviewed.len(), allowed.len(), "duplicate allow-list entry");
-    assert_eq!(
-        actual, reviewed,
-        "review push support for changed testkit corpus"
-    );
-}
-
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=support.rs");
-    inventory(CASES.iter().map(|case| case.name), SUPPORTED_CASES);
-    inventory(
-        SCENARIOS.iter().map(|scenario| scenario.name),
-        SUPPORTED_SCENARIOS,
-    );
-    assert!(
-        UNSUPPORTED_SHAPES
-            .iter()
-            .all(|(_, reason)| !reason.is_empty())
-    );
     let mut code = String::new();
     for case in CASES {
         let cq = case.parse_cq().unwrap();

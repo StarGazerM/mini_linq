@@ -1,6 +1,6 @@
-use cq_planners::{check, check_valuation, compile, compile_valuation, cq, ra, vo, Planner};
-use cq_testkit::{cq_semantics, databases, semantics, valuation_semantics, PassCase, SCENARIOS};
-use quote::{quote, ToTokens};
+use cq_planners::{Planner, check, check_valuation, compile, compile_valuation, cq, ra, vo};
+use cq_testkit::{PassCase, SCENARIOS, cq_semantics, databases, semantics, valuation_semantics};
+use quote::{ToTokens, quote};
 
 #[test]
 fn prefix_let_domain_keeps_hoisting_and_waits_before_full_reduction() {
@@ -248,11 +248,13 @@ fn hypergraph_reduces_cyclic_block_branches_and_acyclic_descendants_independentl
     };
     let target = compile_valuation(&source, Planner::Hypergraph).unwrap();
     assert!(cq::hypergraph::Analysis::of(&target.cq).acyclic);
-    assert!(!target
-        .valuation
-        .steps
-        .iter()
-        .any(|step| matches!(step, vo::Step::Reduce(..))));
+    assert!(
+        !target
+            .valuation
+            .steps
+            .iter()
+            .any(|step| matches!(step, vo::Step::Reduce(..)))
+    );
     let vo::Step::Block(block, _) = &target.valuation.steps[0] else {
         unreachable!()
     };
@@ -275,10 +277,12 @@ fn hypergraph_reduces_cyclic_block_branches_and_acyclic_descendants_independentl
         unreachable!()
     };
     // Neither U nor V has a filter, so this branch has no useful tree reduction.
-    assert!(!nested.branches[0]
-        .steps
-        .iter()
-        .any(|step| matches!(step, vo::Step::Reduce(..))));
+    assert!(
+        !nested.branches[0]
+            .steps
+            .iter()
+            .any(|step| matches!(step, vo::Step::Reduce(..)))
+    );
     check_valuation(&source, &target, Planner::Hypergraph).unwrap();
 }
 
@@ -349,7 +353,7 @@ fn pinned_vo_and_ra_decisions_for_each_planner() {
     for (fixture, scenario_name) in [
         ("triangle", "triangle"),
         ("chain", "oriented_chain"),
-        ("fine_triangle", "fine_triangle"),
+        ("triangle", "fine_triangle"),
     ] {
         let source = SCENARIOS
             .iter()
@@ -441,11 +445,13 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
         4
     );
     let target = compile(&source, Planner::Hypergraph).unwrap();
-    assert!(target
-        .plan
-        .definitions
-        .iter()
-        .any(|d| matches!(d.operator, ra::Operator::Select(_))));
+    assert!(
+        target
+            .plan
+            .definitions
+            .iter()
+            .any(|d| matches!(d.operator, ra::Operator::Select(_)))
+    );
     let chain: Vec<_> = target
         .plan
         .definitions
@@ -465,11 +471,13 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
         .parse_cq()
         .unwrap();
     let cyclic = compile_valuation(&cyclic, Planner::Hypergraph).unwrap();
-    assert!(!cyclic
-        .valuation
-        .steps
-        .iter()
-        .any(|s| matches!(s, vo::Step::Reduce(..))));
+    assert!(
+        !cyclic
+            .valuation
+            .steps
+            .iter()
+            .any(|s| matches!(s, vo::Step::Reduce(..)))
+    );
 
     let mut missing_edge = valuation.clone();
     let edge = missing_edge

@@ -15,11 +15,7 @@ impl Context<'_> {
         let origin = self.analysis.lineage.get(name)?;
         let filter = self.analysis.join_filters.get(&origin.occurrence)?;
         let id = self.join_filter_ident(&origin.occurrence);
-        let host = format_ident!(
-            "__cq_positional_{}",
-            origin.base,
-            span = proc_macro2::Span::mixed_site()
-        );
+        let host = Self::positional_host(&origin.base);
         let marker = &filter.marker;
         Some(quote!(::cq_storage::BlockRead::read(#host, <#marker>::default(), #id)))
     }
@@ -42,11 +38,7 @@ impl Context<'_> {
             }
         }
         let id = self.join_filter_ident(&origin.occurrence);
-        let host = format_ident!(
-            "__cq_positional_{}",
-            origin.base,
-            span = proc_macro2::Span::mixed_site()
-        );
+        let host = Self::positional_host(&origin.base);
         let marker = &self.analysis.reads[name].marker;
         let key_marker = &filter.marker;
         Some(
@@ -107,11 +99,7 @@ impl Context<'_> {
         quote!(::core::iter::Iterator::map(#selection.rows(), move |#pattern| #row))
     }
     pub fn positional_rows(&self, name: &str, ids: TokenStream) -> TokenStream {
-        let host = format_ident!(
-            "__cq_positional_{}",
-            self.analysis.lineage[name].base,
-            span = proc_macro2::Span::mixed_site()
-        );
+        let host = Self::positional_host(&self.analysis.lineage[name].base);
         let pattern = self.positional_pattern(name);
         let row = self.pattern(name);
         let rows = quote!(::core::iter::Iterator::map(#ids, move |__cq_id| {
@@ -201,11 +189,7 @@ impl Context<'_> {
             span = proc_macro2::Span::mixed_site()
         );
         let read = &self.analysis.reads[name];
-        let host = format_ident!(
-            "__cq_positional_{}",
-            symbol_name(&read.origin.base),
-            span = proc_macro2::Span::mixed_site()
-        );
+        let host = Self::positional_host(&symbol_name(&read.origin.base));
         let marker = &read.marker;
         self.statements.push(
             syn::parse_quote!(::cq_storage::require::block_read(#host, <#marker>::default());),
@@ -220,11 +204,7 @@ impl Context<'_> {
     /// Formal rule IF-Positional: Read recorded predicates as positions before fetching survivors.
     pub fn read_ids(&mut self, name: &str) -> syn::Result<TokenStream> {
         let read = &self.analysis.reads[name];
-        let host = format_ident!(
-            "__cq_positional_{}",
-            symbol_name(&read.origin.base),
-            span = proc_macro2::Span::mixed_site()
-        );
+        let host = Self::positional_host(&symbol_name(&read.origin.base));
         let marker = &read.marker;
         let marker = quote!(<#marker>::default());
         let input = match &self.physical[name].operator {
@@ -316,11 +296,7 @@ impl Context<'_> {
         summary: &TokenStream,
     ) -> syn::Result<TokenStream> {
         let read = &self.analysis.reads[name];
-        let host = format_ident!(
-            "__cq_positional_{}",
-            symbol_name(&read.origin.base),
-            span = proc_macro2::Span::mixed_site()
-        );
+        let host = Self::positional_host(&symbol_name(&read.origin.base));
         let marker = read.marker.clone();
         let input = match &self.physical[name].operator {
             Operator::Point(_, s) | Operator::Range(_, s) => symbol_name(&s.input),

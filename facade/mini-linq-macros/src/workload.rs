@@ -9,14 +9,12 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         Err(error) => return error.into_compile_error().into(),
     };
     let exported = format_ident!("__with_{}", source.name);
-    let callback = format_ident!("with_{}", source.query.head.relation);
     let catalog = quote! {
         #[macro_export]
         macro_rules! #exported {
             ($($m:ident)::+) => { $($m)::+! { #tokens } };
             (:: $($m:ident)::+) => { ::$($m)::+! { #tokens } };
         }
-        pub use #exported as #callback;
         pub use #exported as with_query;
         pub(crate) const RUST_PATH: &str = file!();
         pub(crate) const SOURCE: &str = #source_text;

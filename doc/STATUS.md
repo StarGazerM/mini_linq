@@ -63,6 +63,27 @@ Before this work (1a6460c) the same defaults were 2.5–48× slower than DuckDB
 6. **Known limits.** Static heuristics only (no statistics); no keys or
    constraints on data; no parallel execution.
 
+### Decisions needed
+
+1. **Check policy.** Checks that recompute the same decision (`orient`,
+   `join_filter_candidate` + literal budgets, cq-order rank, branch equality,
+   block_contract) vs obligation checks (cq-reduce). Decide per pass.
+2. **Derived facts in Structures text** (`Origin`/lineage, `constants`,
+   membership `build/key`, fixed `join_filter` fields): drop now or with Q5.
+3. **Knob freeze.** No new out-of-band knobs (`plan(..)` options, batch size,
+   Bloom size) until quotation Q1/Q5; do Q2 (public `cq_stage::Input`) before
+   Q1 since `SurfaceInput` rejects a `quotes {}` slot.
+4. **Pass ownership.** Move `orient`/`simplify_reductions` to an RA rewrite
+   home; expose the default plan chain as a library fn so planners/fixtures
+   stop restating it.
+5. **Artifacts.** Regenerate `features/workloads/data` (26.7k CSV lines) at test
+   time unless handouts need browsable CSV; stop committing feature
+   `Cargo.lock`s (ignored by `check_external.py`); drop or narrow API snapshots
+   (filter `kw::*`/auto-trait/tuple-macro rows); shrink
+   `regression-targets.tsv` to rows `cargo test --workspace` does not cover;
+   cut the e2e 4×4,608 matrix to pairwise + one full kernel.
+6. **cq-load split.** Move `ColumnAt` and slice impls to cq-storage.
+
 ## Next step
 
 After the runtime work is integrated: staged quotation for plan control, in

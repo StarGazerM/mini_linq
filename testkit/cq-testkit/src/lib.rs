@@ -122,7 +122,10 @@ pub mod fuzz;
 #[cfg(feature = "duckdb")]
 pub mod golden;
 pub mod harness;
+mod positional_cases;
+pub mod random;
 pub mod rewrites;
+pub mod rustc;
 pub mod semantics;
 pub mod valuation_semantics;
 pub mod values;

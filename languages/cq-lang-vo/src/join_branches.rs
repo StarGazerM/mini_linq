@@ -65,7 +65,11 @@ impl JoinBranch {
 /// Exact interface: variables used by another atom, the head, or a predicate
 /// spanning the branch boundary. Branch-local relational predicates execute inside.
 pub fn interface(program: &crate::cq::Program, members: &BTreeSet<usize>) -> BTreeSet<String> {
-    let atoms: BTreeMap<_, BTreeSet<_>> = program
+    interface_with(program, members, &atoms(program))
+}
+
+fn atoms(program: &crate::cq::Program) -> BTreeMap<usize, BTreeSet<String>> {
+    program
         .query
         .body
         .iter()
@@ -77,13 +81,20 @@ pub fn interface(program: &crate::cq::Program, members: &BTreeSet<usize>) -> BTr
                 None
             }
         })
-        .collect();
+        .collect()
+}
+
+fn interface_with(
+    program: &crate::cq::Program,
+    members: &BTreeSet<usize>,
+    atoms: &BTreeMap<usize, BTreeSet<String>>,
+) -> BTreeSet<String> {
     let own: BTreeSet<_> = members
         .iter()
         .flat_map(|i| atoms[i].iter().cloned())
         .collect();
     let mut needed: BTreeSet<_> = program.query.head.variables().map(symbol_name).collect();
-    for (i, variables) in &atoms {
+    for (i, variables) in atoms {
         if !members.contains(i) {
             needed.extend(variables.iter().cloned());
         }
@@ -119,20 +130,8 @@ pub(crate) fn check(program: &Program) -> syn::Result<()> {
             "independent join branches require a flat relational scope",
         ));
     }
-    let atoms: BTreeMap<_, BTreeSet<_>> = program
-        .cq
-        .query
-        .body
-        .iter()
-        .enumerate()
-        .filter_map(|(i, item)| {
-            if let crate::cq::BodyItem::Positive { atom } = item {
-                Some((i, atom.variables().map(symbol_name).collect()))
-            } else {
-                None
-            }
-        })
-        .collect();
+    let atoms = atoms(&program.cq);
+    let graph = crate::cq::hypergraph::Analysis::of(&program.cq);
     let mut seen = BTreeSet::new();
     for group in &groups.branches {
         let members: BTreeSet<usize> = group
@@ -150,7 +149,6 @@ pub(crate) fn check(program: &Program) -> syn::Result<()> {
                 "join branches require at least two distinct, disjoint atom occurrences",
             ));
         }
-        let graph = crate::cq::hypergraph::Analysis::of(&program.cq);
         let mut reached = BTreeSet::from([*members.first().unwrap()]);
         loop {
             let previous = reached.len();
@@ -172,7 +170,9 @@ pub(crate) fn check(program: &Program) -> syn::Result<()> {
             return Err(fail("join branch atoms must be connected"));
         }
         let columns: BTreeSet<_> = group.columns.iter().map(symbol_name).collect();
-        if columns.len() != group.columns.len() || columns != interface(&program.cq, &members) {
+        if columns.len() != group.columns.len()
+            || columns != interface_with(&program.cq, &members, &atoms)
+        {
             return Err(fail(
                 "join branch must project exactly its external interface and head columns",
             ));

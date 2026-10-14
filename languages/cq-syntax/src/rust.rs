@@ -244,34 +244,3 @@ pub fn known_uses(expr: &Expr, logical_names: &BTreeSet<String>) -> BTreeSet<Str
         free.names.intersection(logical_names).cloned().collect()
     }
 }
-
-/// Syntactically known primitive type; aliases remain for Rust to resolve.
-pub fn primitive_i32(ty: &syn::Type) -> bool {
-    let syn::Type::Path(ty) = ty else {
-        return false;
-    };
-    if ty.qself.is_some() {
-        return false;
-    }
-    let path = &ty.path;
-    path.is_ident("i32")
-        || (path.segments.len() == 3
-            && path
-                .segments
-                .iter()
-                .all(|s| matches!(s.arguments, syn::PathArguments::None))
-            && (path.segments[0].ident == "core" || path.segments[0].ident == "std")
-            && path.segments[1].ident == "primitive"
-            && path.segments[2].ident == "i32")
-}
-
-/// Closed literal expressions have no logical inputs or user computation.
-pub fn literal(expr: &Expr) -> bool {
-    match unparen(expr) {
-        Expr::Lit(_) => true,
-        Expr::Unary(e) if matches!(e.op, syn::UnOp::Neg(_)) => {
-            matches!(unparen(&e.expr), Expr::Lit(_))
-        }
-        _ => false,
-    }
-}

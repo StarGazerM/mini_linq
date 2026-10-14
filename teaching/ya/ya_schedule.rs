@@ -9,12 +9,11 @@ use cq_lang_vo as valuation;
 use cq_lang_vo::cq;
 use cq_lang_vo::cq::hypergraph::Analysis;
 use cq_lang_vo::{Reduction, Step};
-use cq_reduce::{Options, Pushdown, Reductions};
+use cq_reduce::{Options, Reductions};
 use quote::quote;
 use std::collections::BTreeSet;
 
 const TREE: Options = Options {
-    guards: Pushdown::None,
     semijoins: Reductions::Tree,
 };
 

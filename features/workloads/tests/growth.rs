@@ -26,12 +26,3 @@ fn generators_and_all_counter_columns_are_reproducible() {
         );
     }
 }
-
-#[test]
-fn yannakakis_canon_direct_reads_and_fine_orders_keep_their_strict_bounds() {
-    let runs: Vec<_> = [24, 48, 96]
-        .into_iter()
-        .map(|n| costs::run(n, adversarial::SEED))
-        .collect();
-    costs::assert_non_fan_growth(&runs);
-}

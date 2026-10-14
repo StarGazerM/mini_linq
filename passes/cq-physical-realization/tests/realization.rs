@@ -367,9 +367,6 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
 /// heading `[a, c]`, and `R` declares `b` before `a`.
 #[test]
 fn complete_scenarios_compile_and_execute_against_authored_answers() {
-    use std::process::Command;
-    let directory = std::env::temp_dir().join(format!("cq-realization-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
     let mut checks = Vec::new();
     for case in scenarios::SCENARIOS {
         let source = case.parse_structures().unwrap();
@@ -412,50 +409,8 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     };
     let runtime = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
         .join("../../runtime/cq-storage/src/lib.rs");
-    let compiled = cq_testkit::runtime_rustc()
-        .args([
-            "--edition=2024",
-            "--crate-name",
-            "cq_storage",
-            "--crate-type",
-            "rlib",
-        ])
-        .arg(runtime)
-        .arg("--out-dir")
-        .arg(&directory)
-        .output()
-        .unwrap();
-    assert!(
-        compiled.status.success(),
-        "{}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
-    let path = directory.join("main.rs");
-    std::fs::write(&path, source.to_string()).unwrap();
-    let binary = directory.join("answers");
-    let compiled = cq_testkit::runtime_rustc()
-        .arg("--edition=2024")
-        .arg(&path)
-        .arg("--extern")
-        .arg(format!(
-            "cq_storage={}",
-            directory.join("libcq_storage.rlib").display()
-        ))
-        .arg("-o")
-        .arg(&binary)
-        .output()
-        .unwrap();
-    assert!(
-        compiled.status.success(),
-        "{}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
-    let result = Command::new(binary).output().unwrap();
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+    let runtime = cq_testkit::rustc::Runtime::new(&runtime, false);
+    runtime.run(&source.to_string());
     // Direct merge premises are deliberately left to rustc, with the trait diagnostic.
     let unordered: structures::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32);
@@ -470,26 +425,13 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
             let _: Vec<_> = (#expression).collect();
         }
     );
-    std::fs::write(&path, invalid.to_string()).unwrap();
-    let rejected = cq_testkit::runtime_rustc()
-        .arg("--edition=2024")
-        .arg(&path)
-        .arg("--extern")
-        .arg(format!(
-            "cq_storage={}",
-            directory.join("libcq_storage.rlib").display()
-        ))
-        .arg("-o")
-        .arg(directory.join("invalid"))
-        .output()
-        .unwrap();
+    let rejected = runtime.compile(&invalid.to_string());
     assert!(!rejected.status.success());
     let diagnostic = String::from_utf8_lossy(&rejected.stderr);
     assert!(
         diagnostic.contains("this read requires ordered inputs"),
         "{diagnostic}"
     );
-    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

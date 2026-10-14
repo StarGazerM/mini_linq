@@ -189,7 +189,6 @@ fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
     let reduced = cq_reduce::compile(
         &ordered,
         &cq_reduce::Options {
-            guards: cq_reduce::Pushdown::None,
             semijoins: cq_reduce::Reductions::Hypergraph,
         },
     )
@@ -281,7 +280,7 @@ fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
                 split: cq_order::Split::Coarse,
             }).unwrap();
             let options = cq_reduce::Options {
-                guards: cq_reduce::Pushdown::None,
+
                 semijoins: cq_reduce::Reductions::Hypergraph,
             };
             let reduced = cq_reduce::compile(&ordered, &options).unwrap();

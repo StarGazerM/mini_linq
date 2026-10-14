@@ -344,17 +344,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "contracts"
-version = "0.6.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80771e396e09e4d428c6d034440a3fc62f3927334b66e13c8b8689d3f8785e42"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -375,6 +364,7 @@ dependencies = [
  "cq-reduce",
  "cq-stage",
  "cq-structure-selection",
+ "cq-testkit",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -563,10 +553,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
-
-[[package]]
-name = "cq-state-providers"
-version = "0.1.0"
 
 [[package]]
 name = "cq-storage"
@@ -1079,7 +1065,6 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
- "contracts",
  "core-pass-fixtures",
  "cq-elaborate",
  "cq-index-policy",
@@ -1094,17 +1079,13 @@ dependencies = [
  "cq-physical-lowering",
  "cq-physical-realization",
  "cq-reduce",
- "cq-stage",
- "cq-state-providers",
  "cq-storage",
  "cq-structure-selection",
  "cq-testkit",
  "mini-linq-macros",
- "prettyplease",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "syn_derive",
 ]
 
 [[package]]
@@ -1113,10 +1094,6 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-cq",
  "cq-lang-ra",
- "cq-state-providers",
- "cq-storage",
- "cq-syntax",
- "mini-linq",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -1281,16 +1258,6 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
-
-[[package]]
-name = "prettyplease"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
-dependencies = [
- "proc-macro2",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "proc-macro2"

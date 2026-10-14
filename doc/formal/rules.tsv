@@ -1,9 +1,9 @@
 rule	kind	path	marker	status
 H-Eval	abstract	-	-	Finite successful host boundary; host semantics and representation adequacy are premises.
-IX-Reuse	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Reuse:	Independent first-use demand derivation; authored fixtures separately check expansion.
-IX-New	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-New:	Independent first-use demand derivation; authored fixtures separately check expansion.
-IX-Join	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Join:	Independent first-use demand derivation; authored fixtures separately check expansion.
-IX-Other	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Other:	Independent first-use demand derivation; authored fixtures separately check expansion.
+IX-Reuse	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Reuse:	Language-owned first-use demand derivation; authored fixtures separately check expansion.
+IX-New	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-New:	Language-owned first-use demand derivation; authored fixtures separately check expansion.
+IX-Join	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Join:	Language-owned first-use demand derivation; authored fixtures separately check expansion.
+IX-Other	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Other:	Language-owned first-use demand derivation; authored fixtures separately check expansion.
 FV-Name	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_path	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 FV-Bound	implementation	languages/cq-syntax/src/rust.rs	fn visit_expr_path	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 FV-Children	implementation	languages/cq-syntax/src/rust.rs	visit::visit_expr(self, expr)	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
@@ -105,8 +105,8 @@ D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constrai
 E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Ordinary relational pushdown or prefix select.
 CT-Constraint	implementation	languages/cq-lang-ra/src/structural.rs	// Formal rule CT-Constraint:	Preserve exact predicate shape and fixed columns, recomputing implied unary domains on both sides.
 RA-Constraint	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-Constraint:	Relational theta checks scope and Eq/Ord premises without Rust.
-IX-Const	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Const:	Column constant equalities and literal membership produce const supply.
-IX-Range	implementation	passes/cq-index-policy/src/correspondence.rs	// IX-Range:	Constant order bounds on one column produce range supply.
+IX-Const	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Const:	Column constant equalities and literal membership produce const supply.
+IX-Range	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Range:	Constant order bounds on one column produce range supply.
 PH-Range	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-Range:	A constant window reads one column with range supply.
 IF-Parameter	implementation	passes/cq-print/src/lib.rs	// Formal rule IF-Parameter:	Read each capture once outside query loops.
 IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	Ordered leading windows or scan/filter without builds.

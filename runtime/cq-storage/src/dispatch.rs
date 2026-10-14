@@ -129,155 +129,6 @@ where
     }
 }
 
-/// Bounded windows retain native lower-bound seeking. Fallback payloads retain
-/// the full borrowed row, so output references never point into copied keys.
-pub trait Range {
-    type Key: 'static;
-    type Row: Copy;
-    type Cursor: Iterator<Item = Self::Row>;
-    fn range(
-        self,
-        low: Option<&'static Self::Key>,
-        high: Option<&'static Self::Key>,
-    ) -> Self::Cursor;
-}
-/// An ordered fallback whose cursors retain shared buckets, just like HashIndex.
-/// Keys and borrowed rows have exactly the same layout as a built BTreeMap.
-pub struct RangeIndex<K, R> {
-    buckets: Rc<BTreeMap<K, Rc<Vec<R>>>>,
-}
-impl<K: Ord, R, I: Iterator<Item = (K, R)>> crate::Build<I> for RangeIndex<K, R> {
-    fn build(source: I) -> Self {
-        let map = <BTreeMap<K, Vec<R>> as crate::Build<I>>::build(source);
-        Self {
-            buckets: Rc::new(map.into_iter().map(|(k, v)| (k, Rc::new(v))).collect()),
-        }
-    }
-}
-pub struct RangeCursor<K: 'static, R> {
-    buckets: Rc<BTreeMap<K, Rc<Vec<R>>>>,
-    low: Option<&'static K>,
-    high: Option<&'static K>,
-    previous: Option<K>,
-    current: Option<Rc<Vec<R>>>,
-    position: usize,
-    done: bool,
-}
-impl<K: Ord + Clone + 'static, R: Copy> Iterator for RangeCursor<K, R> {
-    type Item = R;
-    fn next(&mut self) -> Option<R> {
-        crate::count!(cursor_steps);
-        if self.done {
-            return None;
-        }
-        loop {
-            if let Some(row) = self
-                .current
-                .as_ref()
-                .and_then(|v| v.get(self.position))
-                .copied()
-            {
-                self.position += 1;
-                crate::count!(rows_enumerated);
-                return Some(row);
-            }
-            let low = self.previous.as_ref().map_or_else(
-                || self.low.map_or(Bound::Unbounded, Bound::Included),
-                Bound::Excluded,
-            );
-            match self.buckets.range((low, Bound::Unbounded)).next() {
-                Some((key, bucket)) if self.high.is_none_or(|h| key <= h) => {
-                    self.previous = Some(key.clone());
-                    self.current = Some(Rc::clone(bucket));
-                    self.position = 0;
-                }
-                _ => {
-                    self.done = true;
-                    return None;
-                }
-            }
-        }
-    }
-}
-impl<K: Ord + Clone + 'static, R: Copy> std::iter::FusedIterator for RangeCursor<K, R> {}
-impl<H, K: Ord + Clone + 'static, R: Copy, F: FnOnce() -> RangeIndex<K, R>> Range
-    for &Host<H, K, RangeIndex<K, R>, F>
-{
-    type Key = K;
-    type Row = R;
-    type Cursor = RangeCursor<K, R>;
-    fn range(self, low: Option<&'static K>, high: Option<&'static K>) -> Self::Cursor {
-        crate::count!(lookups);
-        RangeCursor {
-            buckets: Rc::clone(&self.1.get().buckets),
-            low,
-            high,
-            previous: None,
-            current: None,
-            position: 0,
-            done: false,
-        }
-    }
-}
-impl<'a, 'h, H: OrderedRead + 'a, K: Ord + 'static, T, F> Range for &&'a Host<H, K, T, F>
-where
-    H::Cursor<'a>: OrderedCursor<Key = &'h K>,
-    &'h K: Columns,
-    <H::Cursor<'a> as OrderedCursor>::Value: Columns,
-    <&'h K as Columns>::Row: Concat<<<H::Cursor<'a> as OrderedCursor>::Value as Columns>::Row>,
-{
-    type Key = K;
-    type Row = <<&'h K as Columns>::Row as Concat<
-        <<H::Cursor<'a> as OrderedCursor>::Value as Columns>::Row,
-    >>::Row;
-    type Cursor = std::iter::Map<
-        Window<H::Cursor<'a>, K>,
-        fn(
-            (
-                <H::Cursor<'a> as OrderedCursor>::Key,
-                <H::Cursor<'a> as OrderedCursor>::Value,
-            ),
-        ) -> Self::Row,
-    >;
-    fn range(self, low: Option<&'static K>, high: Option<&'static K>) -> Self::Cursor {
-        let mut cursor = self.0.ordered();
-        if let Some(low) = low {
-            cursor.seek(&low);
-        }
-        Window {
-            cursor,
-            high,
-            done: false,
-        }
-        .map(|(k, v)| k.columns().concat(v.columns()))
-    }
-}
-/// A fused upper-bounded view of an ordered cursor.
-pub struct Window<C, K: 'static> {
-    cursor: C,
-    high: Option<&'static K>,
-    done: bool,
-}
-impl<'a, K: Ord + 'static, C: OrderedCursor<Key = &'a K>> Iterator for Window<C, K> {
-    type Item = C::Item;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-        match self.cursor.next() {
-            Some((k, v)) if self.high.is_none_or(|h| k <= h) => Some((k, v)),
-            _ => {
-                self.done = true;
-                None
-            }
-        }
-    }
-}
-impl<'a, K: Ord + 'static, C: OrderedCursor<Key = &'a K>> std::iter::FusedIterator
-    for Window<C, K>
-{
-}
-
 /// A constant window never builds a fallback index. Bounds contain borrowed
 /// columns and can outlive the query block without copying captured values.
 pub struct RangeHost<H, Q, F>(H, F, std::marker::PhantomData<fn() -> Q>);
@@ -300,15 +151,10 @@ impl<H, Q, F: Fn() -> I, I: Iterator> RangeRead<Q> for &RangeHost<H, Q, F> {
     }
 }
 
-/// Borrowed ordered handles expose a range cursor independent of the handle's
-/// own lifetime, just as PointLookup does. The cursor borrows the host rows.
-pub trait RangeLookup<Q>: OrderedRead + Copy {
+/// A seek whose bound can be copied without invoking user Clone code.
+pub trait SeekRangeLookup<Q>: OrderedRead + Copy {
     type Row: Copy;
     type RangeCursor: Iterator<Item = Self::Row>;
-    fn range_lookup(self, low: Bound<Q>, high: Bound<Q>) -> Self::RangeCursor;
-}
-/// A seek whose bound can be copied without invoking user Clone code.
-pub trait SeekRangeLookup<Q>: RangeLookup<Q> {
     fn seek_range_lookup(self, low: Bound<Q>, high: Bound<Q>) -> Self::RangeCursor;
 }
 impl<'a, H: OrderedRead + 'a, Q: Ord + Copy, F> RangeRead<Q> for &&'a RangeHost<H, Q, F>
@@ -393,27 +239,13 @@ where
 {
 }
 
-impl<'h, T: Ord, V> RangeLookup<(&'h T,)> for &'h BTreeMap<(T,), Vec<V>>
+impl<'h, T: Ord + Copy, V> SeekRangeLookup<(&'h T,)> for &'h BTreeMap<(T,), Vec<V>>
 where
     &'h V: Columns,
     (&'h T,): Concat<<&'h V as Columns>::Row>,
 {
     type Row = <(&'h T,) as Concat<<&'h V as Columns>::Row>>::Row;
     type RangeCursor = RelationalWindow<crate::ordered::GroupedCursor<'h, (T,), V>, (&'h T,)>;
-    fn range_lookup(self, low: Bound<(&'h T,)>, high: Bound<(&'h T,)>) -> Self::RangeCursor {
-        RelationalWindow {
-            cursor: self.ordered(),
-            low,
-            high,
-            done: false,
-        }
-    }
-}
-impl<'h, T: Ord + Copy, V> SeekRangeLookup<(&'h T,)> for &'h BTreeMap<(T,), Vec<V>>
-where
-    &'h V: Columns,
-    (&'h T,): Concat<<&'h V as Columns>::Row>,
-{
     fn seek_range_lookup(self, low: Bound<(&'h T,)>, high: Bound<(&'h T,)>) -> Self::RangeCursor {
         let mut cursor = self.ordered();
         if let Bound::Included((value,)) | Bound::Excluded((value,)) = low {

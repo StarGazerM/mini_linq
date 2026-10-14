@@ -92,10 +92,6 @@ pub fn relational_constraint(c: &Constraint, parameters: &BTreeMap<String, Ident
     }
 }
 
-pub fn relational_condition(theta: &Theta) -> TokenStream {
-    relational_condition_with(theta, &BTreeMap::new())
-}
-
 pub fn relational_condition_with(
     theta: &Theta,
     parameters: &BTreeMap<String, Ident>,

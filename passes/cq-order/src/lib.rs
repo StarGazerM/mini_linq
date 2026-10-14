@@ -59,8 +59,6 @@ pub enum Ranking {
     Connected,
     /// Connected, then the narrowest heading after the join.
     GreedyWidth,
-    /// The same ranking as `GreedyWidth`.
-    Auto,
 }
 
 /// How many columns a subatom binds.
@@ -275,7 +273,7 @@ fn prefix_rank<'a>(
         let shared = supplied.intersection(&available).count();
         let width = match ranking {
             Ranking::Connected => 0,
-            Ranking::GreedyWidth | Ranking::Auto => available.union(&supplied).count(),
+            Ranking::GreedyWidth => available.union(&supplied).count(),
         };
         (true, shared == 0, width, clause)
     }
@@ -886,25 +884,12 @@ fn check_steps(
             let mut pending: Vec<_> = (0..body.len()).collect();
             for clause in written {
                 // Independently check the greedy choice, not compiler output equality.
-                let rank = |c: usize| {
-                    let atom = facts[c].is_atom();
-                    let disconnected = atom
-                        && !facts[c]
-                            .provides
-                            .iter()
-                            .any(|v| bound.iter().any(|b| graph.equivalent(v, b)));
-                    let strength = if atom {
-                        usize::from(filters.get(&c).copied().unwrap_or(3))
-                    } else {
-                        usize::from(!matches!(body[c], BodyItem::Constraint(_)))
-                    };
-                    (atom, disconnected, strength, c)
-                };
+                let rank = filtered_rank(&facts, &graph, &filters);
                 if pending
                     .iter()
                     .copied()
                     .filter(|&c| ready(&facts, &pending, &bound, c))
-                    .any(|c| rank(c) < rank(clause))
+                    .any(|c| rank(c, &bound) < rank(clause, &bound))
                 {
                     return Err(syn::Error::new_spanned(
                         &body[clause],

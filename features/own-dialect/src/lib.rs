@@ -36,14 +36,13 @@
 //! the emitted Rust's Copy requirements. `exists` consumes the full input before
 //! retaining zero or one unit row.
 //!
-//! The explicit allow-lists in `support.rs` cover all 25 public testkit
-//! cases and all 30 published Structures plans. Each is compiled with both pull
+//! All public testkit cases and published Structures plans compile with both pull
 //! and push on slice, HashMap and BTreeMap hosts, then executed on raw authored
 //! inputs (including duplicates) and eight seeded binary-domain databases.
 //! Outputs must contain no duplicates and equal authored answers or independent
-//! CQ oracle answers. A changed corpus requires reviewing the allow-lists.
+//! CQ oracle answers. New corpus entries are included automatically.
 //!
-//! Unsupported written shapes are also listed with reasons in support.rs:
+//! Unsupported written shapes are checked explicitly by compile-fail tests:
 //!
 //! - `merge`: ordered push co-iteration is not implemented.
 //! - `probe smallest`: adjacent candidate-intersection traversal is not implemented.

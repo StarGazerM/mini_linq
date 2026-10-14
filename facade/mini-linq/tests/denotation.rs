@@ -1,5 +1,5 @@
 //! Compile and run every planner/split/reducer for opaque partial Rust steps.
-use quote::{ToTokens, quote};
+use quote::quote;
 
 #[test]
 fn every_planner_keeps_partial_steps_in_their_written_domain() {
@@ -24,16 +24,15 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
             cq_order::Heuristic::Written,
             cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
             cq_order::Heuristic::Prefix(cq_order::Ranking::GreedyWidth),
-            cq_order::Heuristic::Prefix(cq_order::Ranking::Auto),
             cq_order::Heuristic::Elimination,
         ] {
             for split in [cq_order::Split::Coarse, cq_order::Split::Fine] {
                 let options = cq_order::Options { heuristic, split };
                 let ordered = cq_order::compile(&source, &options).unwrap();
                 cq_order::check(&source, &ordered, &options).unwrap();
-                for guards in [cq_reduce::Pushdown::None, cq_reduce::Pushdown::Atoms] {
+                {
                     for semijoins in [cq_reduce::Reductions::None, cq_reduce::Reductions::Tree] {
-                        let reduction = cq_reduce::Options { guards, semijoins };
+                        let reduction = cq_reduce::Options { semijoins };
                         let vo = cq_reduce::compile(&ordered, &reduction).unwrap();
                         cq_reduce::check(&ordered, &vo, &reduction).unwrap();
                         let ra = cq_elaborate::compile(&vo).unwrap();
@@ -82,53 +81,9 @@ fn every_planner_keeps_partial_steps_in_their_written_domain() {
         #![allow(non_snake_case, unused_variables)]
         fn main() { #(#tests)* }
     };
-    let root =
-        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
-    let dir = std::env::temp_dir().join(format!("cq-denotation-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("main.rs"), program.to_token_stream().to_string()).unwrap();
-    let runtime = cq_testkit::runtime_rustc()
-        .args([
-            "--edition=2024",
-            "--crate-name",
-            "cq_storage",
-            "--crate-type",
-            "rlib",
-        ])
-        .arg(root.join("runtime/cq-storage/src/lib.rs"))
-        .arg("--out-dir")
-        .arg(&dir)
-        .output()
-        .unwrap();
-    assert!(
-        runtime.status.success(),
-        "{}",
-        String::from_utf8_lossy(&runtime.stderr)
-    );
-    let build = cq_testkit::runtime_rustc()
-        .arg("--edition=2024")
-        .arg(dir.join("main.rs"))
-        .arg("--extern")
-        .arg(format!(
-            "cq_storage={}",
-            dir.join("libcq_storage.rlib").display()
-        ))
-        .arg("-o")
-        .arg(dir.join("run"))
-        .output()
-        .unwrap();
-    assert!(
-        build.status.success(),
-        "{}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    let run = std::process::Command::new(dir.join("run"))
-        .output()
-        .unwrap();
-    assert!(
-        run.status.success(),
-        "{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    std::fs::remove_dir_all(dir).unwrap();
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    let runtime = cq_testkit::rustc::Runtime::new(&source, false);
+    let run = runtime.run(&program.to_string());
+    print!("{}", String::from_utf8_lossy(&run.stdout));
 }

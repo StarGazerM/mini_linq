@@ -228,6 +228,7 @@ fn analyze_steps(
     let hypergraph = cq::hypergraph::Analysis::of_body(body, &context.iter().cloned().collect());
     let mut analysis = Analysis::default();
     let mut written_bound: BTreeSet<_> = context.iter().cloned().collect();
+    let mut block_facts = BTreeMap::new();
     let mut rust_chain = Vec::new();
     let mut dependencies = BTreeMap::new();
     let mut equalities = BTreeMap::new();
@@ -276,7 +277,8 @@ fn analyze_steps(
                     let_bound.extend(facts.interface.keys().cloned());
                     rust_chain.push(clause);
                 }
-                written_bound.extend(facts.interface.into_keys());
+                written_bound.extend(facts.interface.keys().cloned());
+                block_facts.insert(clause, facts);
             }
             cq::BodyItem::Positive { atom } => {
                 analysis.atoms.insert(clause, atom.clone());
@@ -321,7 +323,6 @@ fn analyze_steps(
         }
         Ok(variables)
     };
-    let initial_context: BTreeSet<_> = context.iter().cloned().collect();
     let mut bound = context;
     let mut seen_atoms = BTreeSet::new();
     let mut complete = BTreeSet::new();
@@ -350,25 +351,7 @@ fn analyze_steps(
                         "block must preserve its source path, operator and every branch",
                     );
                 }
-                let prefix: BTreeSet<_> =
-                    body.iter()
-                        .take(clause)
-                        .fold(initial_context.clone(), |mut names, item| {
-                            match item {
-                                cq::BodyItem::Positive { atom } => {
-                                    names.extend(atom.variables().map(symbol_name))
-                                }
-                                cq::BodyItem::Let(binding) => names.extend(
-                                    cq::rust::bindings(&binding.pattern).iter().map(symbol_name),
-                                ),
-                                cq::BodyItem::Block(b) => {
-                                    names.extend(b.analyze(&names).interface.into_keys())
-                                }
-                                _ => (),
-                            }
-                            names
-                        });
-                let facts = written.analyze(&prefix);
+                let facts = &block_facts[&clause];
                 if facts.rust {
                     if rust_chain.get(next_rust) != Some(&clause) {
                         return error(

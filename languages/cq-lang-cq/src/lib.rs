@@ -42,7 +42,6 @@
 //! its existing recognition. Only differing literals on one interface column
 //! prove union arms disjoint; no data keys or constraints are assumed.
 //!
-pub use cq_syntax::predicate::{Comparison, Predicate, Term};
 pub mod blocks;
 pub mod hypergraph;
 pub mod normal;

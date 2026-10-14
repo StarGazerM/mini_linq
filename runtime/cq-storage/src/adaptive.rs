@@ -10,7 +10,7 @@
 //! Retained bytes count owned capacities and key cells, excluding allocator
 //! overhead and allocations owned by K. Staging bytes are reported separately.
 use crate::instrument::HashSet;
-use crate::{Build, Canonical, ExactIntervalMembership, ExactMembership};
+use crate::{Build, ExactIntervalMembership, ExactMembership};
 use std::{hash::Hash, rc::Rc};
 
 /// Some ordinals must be injective and order-preserving for all supported keys.
@@ -212,4 +212,3 @@ impl<K: Eq + Hash + Ord, C: KeyCodec<K> + Default, const B: usize, V, I: Iterato
         Self::from_keys(source.map(|(k, _)| k), C::default())
     }
 }
-impl<K, C, const B: usize> Canonical for AdaptiveKeySet<K, C, B> {}

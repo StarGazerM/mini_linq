@@ -69,30 +69,13 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     let selected = Results::parse(arguments)?;
     let mut target = source.clone();
     let mut matched = BTreeSet::new();
-    let mut unique = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut unique = BTreeMap::<String, Vec<String>>::new();
     for definition in &mut target.program.definitions {
         let name = symbol_name(&definition.name);
-        let heading: BTreeSet<_> = facts.headings[&name].iter().cloned().collect();
-        let inherited = match &definition.operator {
-            Operator::Union(_) => None,
-            Operator::Anti(_, k) => unique.get(&symbol_name(&k.left)).cloned(),
-            Operator::Unit(_) => Some(BTreeSet::new()),
-            Operator::Rename(_) => None,
-            Operator::Probe(_, k) | Operator::Merge(_, k) => unique
-                .get(&symbol_name(&k.left))
-                .zip(unique.get(&symbol_name(&k.right)))
-                .map(|(l, r)| l.union(r).cloned().collect()),
-            Operator::Semi(_, k) => unique.get(&symbol_name(&k.left)).cloned(),
-            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
-                unique.get(&symbol_name(&s.input)).cloned()
-            }
-            Operator::Bind(b) => unique.get(&symbol_name(&b.input)).cloned(),
-            Operator::Guard(g) => unique.get(&symbol_name(&g.input)).cloned(),
-            Operator::Project(p) => unique
-                .get(&symbol_name(&p.input))
-                .filter(|key| key.is_subset(&heading))
-                .cloned(),
-        };
+        let heading = facts.headings[&name].clone();
+        let inherited = ir::inherited_key(&definition.operator, &heading, |id| {
+            unique.get(&symbol_name(id)).cloned()
+        });
         if selected.includes(&definition.name) {
             if let Operator::Project(p) = &definition.operator {
                 if heading.len() < facts.headings[&symbol_name(&p.input)].len() {

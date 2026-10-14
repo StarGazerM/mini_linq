@@ -10,6 +10,7 @@ publish = false
 proc-macro = true
 
 [dependencies]
+cq-testkit = { path = "../../../testkit/cq-testkit" }
 cq-stage = { path = "../../../facade/cq-stage" }
 cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
 cq-lang-ra = { path = "../../../languages/cq-lang-ra" }

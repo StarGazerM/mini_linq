@@ -121,18 +121,8 @@ fn temporary(role: &str, result: &str) -> syn::Ident {
     format_ident!("__push_{}_{}", role, result, span = Span::mixed_site())
 }
 
-// Rust's standard tuple equality implementations end at arity twelve. Group
-// wider keys while keeping the public answer and valuation rows flat.
-fn grouped(fields: &[Tokens]) -> Tokens {
-    if fields.len() <= 12 {
-        quote!((#(#fields,)*))
-    } else {
-        grouped(&fields.chunks(12).map(grouped).collect::<Vec<_>>())
-    }
-}
-
 fn cloned_key(fields: impl Iterator<Item = Tokens>) -> Tokens {
-    grouped(
+    cq_print::group(
         &fields
             .map(|field| quote!(::core::clone::Clone::clone(&#field)))
             .collect::<Vec<_>>(),

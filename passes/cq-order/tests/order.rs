@@ -312,7 +312,6 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
             (Heuristic::Written, *written),
             (Heuristic::Prefix(Ranking::Connected), *prefix),
             (Heuristic::Prefix(Ranking::GreedyWidth), *prefix),
-            (Heuristic::Prefix(Ranking::Auto), *prefix),
         ] {
             assert_eq!(
                 sequence(&plan(source, heuristic, Split::Coarse)),
@@ -611,7 +610,6 @@ fn correspondence_diagnoses_each_obligation_and_accepts_free_rankings() {
     for heuristic in [
         Heuristic::Prefix(Ranking::Connected),
         Heuristic::Prefix(Ranking::GreedyWidth),
-        Heuristic::Prefix(Ranking::Auto),
         Heuristic::Elimination,
     ] {
         let options = Options {
@@ -639,7 +637,6 @@ fn partial_rust_steps_keep_cross_kind_order_and_all_written_relations() {
             Heuristic::Written,
             Heuristic::Prefix(Ranking::Connected),
             Heuristic::Prefix(Ranking::GreedyWidth),
-            Heuristic::Prefix(Ranking::Auto),
             Heuristic::Elimination,
         ] {
             for split in [Split::Coarse, Split::Fine] {

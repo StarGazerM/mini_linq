@@ -28,30 +28,13 @@ pub fn merged(source: &physical::Program) -> syn::Result<physical::Program> {
 pub fn canonical_projects(source: &physical::Program) -> syn::Result<physical::Program> {
     let mut target = source.clone();
     let facts = physical::contract::check(source)?;
-    let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut keys: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for d in &mut target.program.definitions {
         let name = d.name.to_string();
-        let heading = facts.headings[&name].iter().cloned().collect();
-        let inherited = match &d.operator {
-            Operator::Union(_) => None,
-            Operator::Anti(_, k) => keys.get(&k.left.to_string()).cloned(),
-            Operator::Unit(_) => Some(BTreeSet::new()),
-            Operator::Rename(_) => None,
-            Operator::Probe(_, k) | Operator::Merge(_, k) => keys
-                .get(&k.left.to_string())
-                .zip(keys.get(&k.right.to_string()))
-                .map(|(l, r)| l.union(r).cloned().collect()),
-            Operator::Semi(_, k) => keys.get(&k.left.to_string()).cloned(),
-            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
-                keys.get(&s.input.to_string()).cloned()
-            }
-            Operator::Bind(b) => keys.get(&b.input.to_string()).cloned(),
-            Operator::Guard(g) => keys.get(&g.input.to_string()).cloned(),
-            Operator::Project(p) => keys
-                .get(&p.input.to_string())
-                .filter(|k| k.is_subset(&heading))
-                .cloned(),
-        };
+        let heading = facts.headings[&name].clone();
+        let inherited = physical::inherited_key(&d.operator, &heading, |id| {
+            keys.get(&id.to_string()).cloned()
+        });
         d.canon = (inherited.is_none()
             && (matches!(d.operator, Operator::Project(_)) || d.name == target.program.returned))
             .then(Default::default);

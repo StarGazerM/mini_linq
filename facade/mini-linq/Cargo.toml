@@ -11,18 +11,13 @@ mini-linq-macros = { path = "../mini-linq-macros", version = "0.1.0" }
 [dev-dependencies]
 cq-testkit.workspace = true
 cq-load.workspace = true
-cq-state-providers.workspace = true
-syn_derive.workspace = true
 cq-storage = { workspace = true, features = ["counters"] }
-contracts.workspace = true
-prettyplease.workspace = true
 syn = { workspace = true, features = ["visit-mut"] }
 
 
 
 
 
-cq-stage.workspace = true
 cq-lang-cq.workspace = true
 cq-lang-vo.workspace = true
 cq-lang-ra.workspace = true

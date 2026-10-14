@@ -1,5 +1,5 @@
 //! Tiny checked-in CSV fixtures and DuckDB goldens shared by executable consumers.
-use crate::{Scenario, dataset::Dataset};
+use crate::Scenario;
 use std::path::{Path, PathBuf};
 
 /// A Cartesian product of nonempty relations cannot have no matches.
@@ -20,12 +20,6 @@ pub fn directory(name: &str, scenario: Scenario) -> PathBuf {
         .join(name)
         .join(scenario.as_str())
         .join("tiny")
-}
-
-pub fn load(name: &str, scenario: Scenario) -> Dataset {
-    let case = crate::case(name).expect("catalog case");
-    let directory = directory(name, scenario);
-    Dataset::read_from_dir(&case.module().unwrap(), directory).unwrap()
 }
 
 pub fn check(name: &str, scenario: Scenario, mut actual: Vec<Vec<i32>>) {

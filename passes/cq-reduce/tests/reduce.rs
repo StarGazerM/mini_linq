@@ -1,5 +1,5 @@
 use cq_lang_vo as valuation;
-use cq_reduce::{Options, Pushdown, Reductions, check, compile};
+use cq_reduce::{Options, Reductions, check, compile};
 use cq_testkit::{corpus as scenarios, databases, valuation_semantics as evaluator};
 use valuation::cq;
 #[test]
@@ -9,9 +9,9 @@ fn reductions_preserve_answers_and_correspond_to_options() {
         .filter(|c| !c.name.ends_with("_reduced"))
     {
         let source: valuation::Program = syn::parse_str(case.vo).unwrap();
-        for guards in [Pushdown::None, Pushdown::Atoms] {
+        {
             for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
-                let options = Options { guards, semijoins };
+                let options = Options { semijoins };
                 if semijoins == Reductions::Tree
                     && !cq::hypergraph::Analysis::of(&source.cq).acyclic
                 {
@@ -37,10 +37,9 @@ fn reductions_preserve_answers_and_correspond_to_options() {
     }
 }
 #[test]
-fn legacy_guard_option_never_pushes_opaque_rust_steps() {
+fn reduction_never_pushes_opaque_rust_steps() {
     let source: valuation::Program = syn::parse_str("struct Q; relation R(a:i32,b:i32); answer(a) :- R(a,b), if { b > 0 }; valuation { R@0(a,b); if { b > 0 }; }").unwrap();
     let options = Options {
-        guards: Pushdown::Atoms,
         semijoins: Reductions::None,
     };
     let target = compile(&source, &options).unwrap();
@@ -57,7 +56,6 @@ fn opaque_and_multi_atom_guards_remain_steps() {
         let target = compile(
             &source,
             &Options {
-                guards: Pushdown::Atoms,
                 semijoins: Reductions::None,
             },
         )
@@ -80,7 +78,6 @@ const CHAIN: &str = "struct Chain;
     answer(a, c) :- L(a), R(a, b), S(b, c);";
 const ATOMS: &str = "L@0(a); R@1(a, b); S@2(b, c);";
 const TREE: Options = Options {
-    guards: Pushdown::None,
     semijoins: Reductions::Tree,
 };
 
@@ -119,10 +116,7 @@ fn all_guard_kinds_keep_their_schedule_around_tree_reductions() {
         &format!("{ATOMS} if {{ b > 0 }}; if {{ a != c }}; if {{ a > 0 }};"),
     );
     for semijoins in [Reductions::None, Reductions::Tree] {
-        let options = Options {
-            guards: Pushdown::Atoms,
-            semijoins,
-        };
+        let options = Options { semijoins };
         let target = compile(&source, &options).unwrap();
         let retained: Vec<_> = target
             .valuation
@@ -143,10 +137,7 @@ fn computed_and_opaque_guards_keep_their_schedule() {
         answer(a) :- L(a), let d: i32 = a + 1, if { d > 0 }, if matches!(a, 1 | 2);",
         "L@0(a); let d: i32 = a + 1; if { d > 0 }; if matches!(a, 1 | 2);",
     );
-    let options = Options {
-        guards: Pushdown::Atoms,
-        ..TREE
-    };
+    let options = Options { ..TREE };
     assert_eq!(compile(&source, &options).unwrap(), source);
 }
 
@@ -274,7 +265,6 @@ fn full_reducer_accepts_independent_sibling_orders() {
 }
 
 const HYPERGRAPH: Options = Options {
-    guards: Pushdown::None,
     semijoins: Reductions::Hypergraph,
 };
 
@@ -571,10 +561,7 @@ fn reductions_preserve_and_check_independent_branch_metadata() {
         }
     };
     for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
-        let options = Options {
-            guards: Pushdown::None,
-            semijoins,
-        };
+        let options = Options { semijoins };
         if semijoins == Reductions::Tree {
             assert!(compile(&source, &options).is_err());
             continue;

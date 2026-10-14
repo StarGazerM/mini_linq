@@ -318,20 +318,3 @@ impl Configuration {
         Ok(Pipeline { passes })
     }
 }
-
-/// Legacy single-stage library composition, independent of the pipeline facade.
-pub fn stage<S: Parse, T: ToTokens>(
-    input: TokenStream,
-    next: Option<syn::Path>,
-    lower: impl FnOnce(&S) -> syn::Result<T>,
-) -> TokenStream {
-    (|| {
-        let source = syn::parse2(input)?;
-        let target = lower(&source)?;
-        Ok(match next {
-            Some(next) => quote!(#next! { #target }),
-            None => target.to_token_stream(),
-        })
-    })()
-    .unwrap_or_else(syn::Error::into_compile_error)
-}

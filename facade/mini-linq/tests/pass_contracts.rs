@@ -332,7 +332,6 @@ fn shared_names_survive_order_reduce_and_elaborate_as_natural_join_columns() {
     let nf = cq::normal::normalize(&source).unwrap();
     let vo = cq_order::compile(&nf, &Default::default()).unwrap();
     let options = cq_reduce::Options {
-        guards: cq_reduce::Pushdown::Atoms,
         semijoins: cq_reduce::Reductions::Tree,
     };
     let reduced = cq_reduce::compile(&vo, &options).unwrap();
@@ -379,7 +378,6 @@ fn hypergraph_reduced_prefix_tuple_survives_elaboration_checks() {
     let written = cq_order::compile(&normal, &order).unwrap();
     cq_order::check(&normal, &written, &order).unwrap();
     let options = cq_reduce::Options {
-        guards: cq_reduce::Pushdown::None,
         semijoins: cq_reduce::Reductions::Hypergraph,
     };
     let reduced = cq_reduce::compile(&written, &options).unwrap();
@@ -405,7 +403,6 @@ fn reduced_plans_compute_the_authored_answers() {
         let source = cq::normal::normalize(&syn::parse_str(case.cq).unwrap()).unwrap();
         let ordered = cq_order::compile(&source, &cq_order::Options::default()).unwrap();
         let options = cq_reduce::Options {
-            guards: cq_reduce::Pushdown::Atoms,
             semijoins: if cq::hypergraph::Analysis::of(&source).acyclic {
                 cq_reduce::Reductions::Tree
             } else {

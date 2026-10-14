@@ -183,12 +183,6 @@
 //! each scale, versus two for binary. These finite measurements validate the
 //! specified growth regression; they do not establish a general complexity bound.
 //!
-//! `cargo run --example hoist_contract` demonstrates the public Physical contract
-//! and correspondence accepting an independent rename hoist. The separate
-//! `mixed_smallest_selection` example checks default selection of a mixed
-//! reusable-host/retained candidate intersection, including the retained side's
-//! candidate levels.
-//!
 //! Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
 //! `cargo test` here. The workspace defaults include both support crates.
 //! From the repository root, `python3 tools/check_external.py` exercises packaged

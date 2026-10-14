@@ -115,21 +115,7 @@ impl Body<'_, '_> {
                     .atom_path(&self.path(clause), &atom.relation, &mapping)
             }
             cq::BodyItem::Block(block) => {
-                let mut prefix = self.context.clone();
-                for item in self.body.iter().take(clause) {
-                    match item {
-                        cq::BodyItem::Positive { atom } => {
-                            prefix.extend(atom.variables().map(symbol_name))
-                        }
-                        cq::BodyItem::Let(b) => {
-                            prefix.extend(cq::rust::bindings(&b.pattern).iter().map(symbol_name))
-                        }
-                        cq::BodyItem::Block(b) => {
-                            prefix.extend(b.analyze(&prefix).interface.into_keys())
-                        }
-                        _ => (),
-                    }
-                }
+                let prefix = cq::blocks::bound_before(self.body, clause, &self.context);
                 let facts = block.analyze(&prefix);
                 let planned = self
                     .steps
@@ -330,19 +316,7 @@ impl Body<'_, '_> {
             .map(|(c, _)| c)
             .expect("VO Rust source slot");
         self.placed_rust.insert(clause);
-        let mut names = self.context.clone();
-        for item in self.body.iter().take(clause) {
-            match item {
-                cq::BodyItem::Positive { atom } => names.extend(atom.variables().map(symbol_name)),
-                cq::BodyItem::Let(binding) => {
-                    names.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name))
-                }
-                cq::BodyItem::Block(block) => {
-                    names.extend(block.analyze(&names).interface.into_keys())
-                }
-                _ => (),
-            }
-        }
+        let names = cq::blocks::bound_before(self.body, clause, &self.context);
         ra::Environment {
             path: Some(self.path(clause)),
             scope_token: Default::default(),

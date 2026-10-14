@@ -144,17 +144,6 @@ impl Schedule {
     ) -> usize {
         self.atom(self.paths[path], relation, mapping)
     }
-    pub fn union(&mut self, operands: &[usize], union: &crate::Union) -> usize {
-        self.union_over(operands, union, None)
-    }
-    pub fn union_over(
-        &mut self,
-        operands: &[usize],
-        union: &crate::Union,
-        prefix: Option<usize>,
-    ) -> usize {
-        self.union_frame(operands, union, prefix, None)
-    }
     pub fn union_frame(
         &mut self,
         operands: &[usize],

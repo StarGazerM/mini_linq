@@ -6,11 +6,7 @@ use quote::ToTokens;
 fn main() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     std::fs::create_dir_all(&root).unwrap();
-    for (fixture, scenario_name) in [
-        ("triangle", "triangle"),
-        ("chain", "oriented_chain"),
-        ("fine_triangle", "fine_triangle"),
-    ] {
+    for (fixture, scenario_name) in [("triangle", "triangle"), ("chain", "oriented_chain")] {
         let source = SCENARIOS
             .iter()
             .find(|s| s.name == scenario_name)

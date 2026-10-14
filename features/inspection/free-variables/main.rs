@@ -99,7 +99,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_testkit::{harness, Rows};
+    use cq_testkit::{Rows, harness};
     use std::collections::BTreeSet;
 
     fn names(values: &[&str]) -> BTreeSet<String> {
@@ -171,30 +171,6 @@ mod tests {
             ["total"]
         );
         assert!(cq::contract::check(&source).is_err());
-    }
-
-    #[test]
-    fn lexical_scope_and_macro_opacity_keep_dependencies_conservative() {
-        let expression: syn::Expr = syn::parse_quote! {
-            { let threshold = limit; (|limit| *x > limit)(threshold) }
-        };
-        let free = cq::rust::free_variables(&expression);
-        assert_eq!(free.names, names(&["limit", "x"]));
-        assert!(!free.opaque);
-        let environment = names(&["x", "y", "limit", "config"]);
-        assert_eq!(free.dependencies(&environment), names(&["x", "limit"]));
-        let hidden: syn::Expr = syn::parse_quote!(format!("{x}"));
-        let hidden = cq::rust::free_variables(&hidden);
-        assert!(hidden.opaque);
-        assert_eq!(hidden.dependencies(&environment), environment);
-        let pattern: syn::Pat = syn::parse_quote!((ref x, (y, r#label)));
-        assert_eq!(
-            cq::rust::bindings(&pattern)
-                .iter()
-                .map(cq::symbol_name)
-                .collect::<Vec<_>>(),
-            ["x", "y", "label"]
-        );
     }
 
     #[test]

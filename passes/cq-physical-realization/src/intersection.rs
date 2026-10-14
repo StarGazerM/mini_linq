@@ -111,7 +111,7 @@ impl Printer<'_> {
                 if second.canon.is_some() {
                     rows = self.distinct(&second.name, rows);
                 }
-                self.materialize(&name, second.canon.is_some(), rows)
+                self.materialize(&name, rows)
             }
         };
         self.reprs.insert(first_name, Repr::Pipe(None));

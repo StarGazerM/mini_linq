@@ -54,13 +54,6 @@
 //! }
 //! let _ = selected.rows().next();
 //! ```
-//! Selection does not confer Canonical:
-//! ```compile_fail
-//! use cq_storage::{Selection, PositionalRows};
-//! fn misuse<H: PositionalRows>(selection: &Selection<H>) {
-//!     cq_storage::require::canonical(selection);
-//! }
-//! ```
 //! Selection does not confer OrderedRead:
 //! ```compile_fail
 //! use cq_storage::{Selection, PositionalRows};

@@ -21,7 +21,6 @@ cq-structure-selection	test	selection	passes/cq-structure-selection/tests/select
 cq-physical-lowering	test	lowering	passes/cq-physical-lowering/tests/lowering.rs
 cq-physical-realization	test	realization	passes/cq-physical-realization/tests/realization.rs
 mini-linq	test	physical_query	facade/mini-linq/tests/physical_query.rs
-mini-linq	test	wcoj	facade/mini-linq/tests/wcoj.rs
 mini-linq-macros	lib	macro_inputs	facade/mini-linq-macros/src/lib.rs
 cq-reduce	test	ya_schedule	teaching/ya/ya_schedule.rs
 cq-print	test	expressions	passes/cq-print/tests/expressions.rs
@@ -85,8 +84,6 @@ cq-workload-corpus	manifest-target-test	planner_7	features/workloads/e2e/corpus/
 cq-workload-corpus	manifest-target-test	planner_8	features/workloads/e2e/corpus/Cargo.toml
 cq-workloads	manifest-target-test	extended_catalog	features/workloads/Cargo.toml
 cq-workload-e2e	manifest-target-test	extended	features/workloads/e2e/Cargo.toml
-cq-workload-e2e	manifest-target-test	extension_laws	features/workloads/e2e/Cargo.toml
-cq-workload-e2e	manifest-target-test	extension_compile_fail	features/workloads/e2e/Cargo.toml
 cq-rewrites	manifest-target-test	generated	features/rewrites/Cargo.toml
 cq-rewrites	manifest-target-test	growth	features/rewrites/Cargo.toml
 cq-join-filters	manifest-target-test	contracts	features/join-filters/Cargo.toml

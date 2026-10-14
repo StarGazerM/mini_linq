@@ -85,29 +85,6 @@ fn malformed_binding_type_is_rejected() {
 }
 
 #[test]
-fn comparison_recognition_respects_the_total_i32_fragment() {
-    for (text, integer) in [
-        ("x >= -2147483648", i32::MIN),
-        ("(x) < 0x7fff_ffffi32", i32::MAX),
-    ] {
-        let expr: syn::Expr = syn::parse_str(text).unwrap();
-        let predicate = cq::Predicate::from_expr(&expr).unwrap();
-        assert_eq!(predicate.right, cq::Term::Integer(integer));
-    }
-    for text in [
-        "x < 2147483648",
-        "x == 1u32",
-        "x == 1.0",
-        "x + 1 == 2",
-        "f(x) == 0",
-        "#[cfg(any())] (x == 0)",
-    ] {
-        let expr: syn::Expr = syn::parse_str(text).unwrap();
-        assert!(cq::Predicate::from_expr(&expr).is_none(), "{text}");
-    }
-}
-
-#[test]
 fn lexical_scope_excludes_local_bindings_and_retains_macro_environments() {
     let environment: BTreeSet<_> = ["x", "y", "z", "field"].map(String::from).into();
     for (expr, expected) in [

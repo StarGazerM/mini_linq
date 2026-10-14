@@ -77,8 +77,7 @@ cq_order::Heuristic::Written	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_order::Options	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_order::Options::heuristic","cq_order::Options::split"],"has_stripped_fields":false}}}}
 cq_order::Options::heuristic	{"struct_field":{"resolved_path":{"args":null,"id":"cq_order::Heuristic","path":"Heuristic"}}}
 cq_order::Options::split	{"struct_field":{"resolved_path":{"args":null,"id":"cq_order::Split","path":"Split"}}}
-cq_order::Ranking	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_order::Ranking::Connected","cq_order::Ranking::GreedyWidth","cq_order::Ranking::Auto"]}}
-cq_order::Ranking::Auto	{"variant":{"discriminant":null,"kind":"plain"}}
+cq_order::Ranking	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_order::Ranking::Connected","cq_order::Ranking::GreedyWidth"]}}
 cq_order::Ranking::Connected	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_order::Ranking::GreedyWidth	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_order::Split	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_order::Split::Coarse","cq_order::Split::Fine"]}}

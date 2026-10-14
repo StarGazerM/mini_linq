@@ -23,7 +23,6 @@ use cq_lang_ix::{
     syntax::{self, symbol_name},
 };
 use quote::quote;
-use std::collections::BTreeSet;
 use syn::{
     Ident, Token,
     parse::{Parse, ParseStream},
@@ -94,73 +93,25 @@ impl Parse for Query {
     }
 }
 impl Query {
-    /// Derive demands here; downstream compilation uses the standard IX API.
+    /// Name the language-owned demands; preserve the theta dialect's index names.
     pub fn indexes(&self) -> syn::Result<ix::Program> {
         let info = ra::contract::check(&self.ra)?;
         let mut indexes = syntax::SemicolonList::new();
-        let mut seen = BTreeSet::new();
-        for d in &self.ra.plan.definitions {
-            let (right, keys, supply) = match &d.operator {
-                ra::Operator::NaturalJoin(join) => (
-                    &join.right,
-                    info[&symbol_name(&join.left)]
-                        .heading
-                        .iter()
-                        .cloned()
-                        .collect::<BTreeSet<_>>(),
-                    ix::SupplyKind::Stream,
-                ),
-                ra::Operator::Semijoin(join) => (
-                    &join.right,
-                    info[&symbol_name(&join.left)]
-                        .heading
-                        .iter()
-                        .cloned()
-                        .collect::<BTreeSet<_>>(),
-                    ix::SupplyKind::Stream,
-                ),
-                ra::Operator::Anti(anti) => (
-                    &anti.right,
-                    anti.columns.iter().map(symbol_name).collect(),
-                    ix::SupplyKind::Stream,
-                ),
-                ra::Operator::Select(select) => {
-                    let (keys, supply) = if let Some(keys) = select.condition.point_columns() {
-                        (keys, ix::SupplyKind::Const)
-                    } else if let Some((column, _)) = select.condition.range_bounds() {
-                        (BTreeSet::from([column]), ix::SupplyKind::Range)
-                    } else {
-                        continue;
-                    };
-                    (&select.input, keys, supply)
-                }
-                ra::Operator::Union(_)
-                | ra::Operator::Unit(_)
-                | ra::Operator::Rename(_)
-                | ra::Operator::Project(_)
-                | ra::Operator::Bind(_)
-                | ra::Operator::Guard(_) => continue,
-            };
-            let columns: Vec<_> = info[&symbol_name(right)]
-                .heading
-                .iter()
-                .enumerate()
-                .filter_map(|(i, c)| keys.contains(c).then_some(i))
-                .collect();
-            if seen.insert((symbol_name(right), columns.clone(), supply)) {
-                indexes.push(ix::IndexDefinition {
-                    name: Ident::new(&format!("theta_key_{}", indexes.len()), right.span()),
-                    eq_token: Default::default(),
-                    requirement: ix::IndexRequirement {
-                        supply: supply.into(),
-                        at_token: Default::default(),
-                        relation: right.clone(),
-                        bracket_token: Default::default(),
-                        columns: columns.into_iter().map(syn::Index::from).collect(),
-                    },
-                });
-                indexes.push_punct(Default::default());
-            }
+        for demand in ix::demands(&self.ra, &info) {
+            let right = demand.relation;
+            let (_, columns, supply) = demand.signature;
+            indexes.push(ix::IndexDefinition {
+                name: syn::Ident::new(&format!("theta_key_{}", indexes.len()), right.span()),
+                eq_token: Default::default(),
+                requirement: ix::IndexRequirement {
+                    at_token: Default::default(),
+                    relation: right.clone(),
+                    bracket_token: Default::default(),
+                    columns: columns.into_iter().map(syn::Index::from).collect(),
+                    supply: supply.into(),
+                },
+            });
+            indexes.push_punct(Default::default());
         }
         let program = ix::Program {
             ra: self.ra.clone(),

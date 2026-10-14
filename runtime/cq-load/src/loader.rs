@@ -69,32 +69,6 @@ impl<S: Relation> Loader<S> {
     pub fn parquet(path: impl AsRef<Path>, options: crate::ParquetOptions) -> Result<Vec<S::Row>> {
         crate::read_parquet::<S>(path, options)
     }
-
-    /// Group a Parquet stream by its first `PREFIX` declared columns.
-    #[cfg(feature = "parquet")]
-    pub fn parquet_hash<const PREFIX: usize>(
-        path: impl AsRef<Path>,
-        options: crate::ParquetOptions,
-    ) -> Result<HashMap<S::Key, Vec<S::Value>>>
-    where
-        S: Group<PREFIX>,
-        S::Key: Eq + Hash,
-    {
-        collect_hash::<S, PREFIX>(Self::parquet_batches(path, options)?)
-    }
-
-    /// Group a Parquet stream into ordered leading-prefix keys.
-    #[cfg(feature = "parquet")]
-    pub fn parquet_btree<const PREFIX: usize>(
-        path: impl AsRef<Path>,
-        options: crate::ParquetOptions,
-    ) -> Result<BTreeMap<S::Key, Vec<S::Value>>>
-    where
-        S: Group<PREFIX>,
-        S::Key: Ord,
-    {
-        collect_btree::<S, PREFIX>(Self::parquet_batches(path, options)?)
-    }
 }
 
 fn collect_hash<S, const PREFIX: usize>(

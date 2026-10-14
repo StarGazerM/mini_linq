@@ -285,8 +285,6 @@ pub struct Analysis {
     pub merge_reads: BTreeMap<String, Vec<(String, Vec<String>)>>,
     /// Every keyed read records where its key values come from.
     pub keyed_reads: BTreeMap<String, Vec<(String, Vec<String>, cq_syntax::SupplyKind)>>,
-    /// One compile-time key per point reader; these reads never need a build.
-    pub point_reads: BTreeMap<String, Vec<(String, Vec<String>)>>,
     /// Results whose rows are enumerated (pipe input, scan of a let).
     pub scanned: BTreeSet<String>,
     /// Results flagged `canon`.
@@ -407,29 +405,13 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     return error(union, "union requires at least two operands");
                 }
                 let mut row = of(&union.operands[0])?;
-                let mut declared_types = BTreeMap::new();
+                let mut schema = cq_syntax::algebra::UnionSchema::default();
                 for operand in &union.operands {
                     let other = of(operand)?;
-                    if row.bindings.keys().collect::<Vec<_>>()
-                        != other.bindings.keys().collect::<Vec<_>>()
+                    if let Err(message) =
+                        schema.include(other.bindings.keys(), &other.types, &other.computed)
                     {
-                        return error(operand, "union operand headings must be identical");
-                    }
-                    for (column, ty) in &other.types {
-                        if !other.computed.contains(column) {
-                            if declared_types
-                                .get(column)
-                                .is_some_and(|previous| previous != ty)
-                            {
-                                return error(
-                                    operand,
-                                    format!(
-                                        "union interface `{column}` has different declared types"
-                                    ),
-                                );
-                            }
-                            declared_types.insert(column.clone(), ty.clone());
-                        }
+                        return error(operand, message);
                     }
                     row.computed.extend(other.computed);
                     deps.push(symbol_name(operand));
@@ -555,9 +537,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 } else {
                     join_columns(k, &lh, &rh)?
                 };
-                let columns = Ok::<_, syn::Error>(columns).map_err(|e| {
-                    syn::Error::new_spanned(&definition.name, format!("`{name}`: {e}"))
-                })?;
                 deps.extend([symbol_name(&k.left), symbol_name(&k.right)]);
                 let sides = if matches!(definition.operator, Operator::Merge(..)) {
                     vec![&k.left, &k.right]
@@ -632,11 +611,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         );
                     };
                     let columns: Vec<_> = keys.into_iter().collect();
-                    analysis
-                        .point_reads
-                        .entry(symbol_name(&s.input))
-                        .or_default()
-                        .push((name.clone(), columns.clone()));
                     analysis
                         .keyed_reads
                         .entry(symbol_name(&s.input))
@@ -1038,6 +1012,34 @@ pub fn binary_intersection<'a>(
     Some((a, b, v.clone()))
 }
 
+/// Candidate prefixes for a recorded smallest intersection.
+#[derive(Clone, Debug)]
+pub struct CandidatePrefixes<'a> {
+    pub reader: &'a Ident,
+    pub column: String,
+    pub sides: [(String, Vec<String>); 2],
+}
+
+/// Read the smallest decisions of a checked Physical program in definition order.
+pub fn candidate_prefixes<'a>(
+    program: &'a Program,
+    analysis: &Analysis,
+) -> Vec<CandidatePrefixes<'a>> {
+    program.program.definitions.windows(2).filter_map(|pair| {
+        if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_)))) {
+            return None;
+        }
+        let (a, b, column) = binary_intersection(&pair[0], &pair[1], analysis)?;
+        let mut left: Vec<_> = a.columns.iter().map(symbol_name).collect();
+        let mut right: Vec<_> = b.columns.iter().map(symbol_name).filter(|c| *c != column).collect();
+        left.sort(); right.sort();
+        Some(CandidatePrefixes {
+            reader: &pair[0].name, column,
+            sides: [(symbol_name(&a.right), left), (symbol_name(&b.right), right)],
+        })
+    }).collect()
+}
+
 /// Shared syntax used by this language.
 pub use cq_syntax as syntax;
 
@@ -1046,6 +1048,32 @@ fn check_leibniz(ty: &syn::Type, column: &str, at: &impl quote::ToTokens) -> syn
     let column = syn::Ident::new(column, proc_macro2::Span::call_site());
     cq_syntax::algebra::check_leibniz_type(ty, &column)
         .map_err(|e| syn::Error::new_spanned(at, e.to_string()))
+}
+
+/// Inherit an already established uniqueness key through one operator.
+/// Canonical boundaries are applied by the caller after this transfer.
+pub fn inherited_key(
+    operator: &Operator,
+    heading: &[String],
+    mut key: impl FnMut(&Ident) -> Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match operator {
+        Operator::Union(_) | Operator::Rename(_) => None,
+        Operator::Unit(_) => Some(Vec::new()),
+        Operator::Probe(_, k) | Operator::Merge(_, k) => {
+            key(&k.left).zip(key(&k.right)).map(|(mut left, right)| {
+                left.extend(right);
+                left.sort();
+                left.dedup();
+                left
+            })
+        }
+        Operator::Semi(_, k) | Operator::Anti(_, k) => key(&k.left),
+        Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => key(&s.input),
+        Operator::Bind(b) => key(&b.input),
+        Operator::Guard(g) => key(&g.input),
+        Operator::Project(p) => key(&p.input).filter(|key| key.iter().all(|k| heading.contains(k))),
+    }
 }
 
 /// Physical rewrites preserve the named logical graph and satisfy their read contracts.

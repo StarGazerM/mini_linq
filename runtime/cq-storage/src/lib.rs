@@ -37,14 +37,12 @@
 //!   retain the block. Reads preserve base order and exact predicate results.
 //! - `α(selection)` is the selected occurrence bag. Narrowing is intersection;
 //!   immutable snapshots and their projected builds preserve source order and
-//!   multiplicity. Selection confers neither Canonical nor OrderedRead.
+//!   multiplicity. Selection does not confer OrderedRead.
 //! - `α(ordered) = bag of (key, item)`, enumerated in key order from any
 //!   bound; [`merge`] is the one co-iteration primitive; [`sorted_by`]
 //!   presents an already key-ordered stream as such a cursor.
 //! - `α(trie) = { (k, r) | r ∈ α(inner[k]) }`: a [`Trie`] is a curried
 //!   index; each level is applied in turn and inner levels build lazily.
-//! - [`Canonical`] marks a collection that is a set of its keys by
-//!   construction.
 //!
 //! [`require`] holds one-line guards the compiler emits beside each
 //! structure so a missing trait fails there, naming the structure.
@@ -95,7 +93,7 @@ pub use answers::{Answers, GroupedAnswers, SingleGroup};
 pub use candidates::{Candidates, Keys};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
 pub use hash_state::{HashSet, HashSetConstructor, HashState};
-pub use membership::{Canonical, ConservativeMembership, ExactMembership};
+pub use membership::{ConservativeMembership, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
@@ -112,8 +110,6 @@ pub mod require {
     pub fn key<K: Eq, V>(pair: (K, V)) -> (K, V) {
         pair
     }
-    pub fn candidates<T: super::Candidates>(_: T) {}
-    pub fn keyed<K, T: super::IndexRead<Key = K>>(_: T) {}
     pub fn seek<T: super::IndexRead>(_: T) {}
     pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
     pub fn conservative<K: ?Sized, T: super::ConservativeMembership<K>>(_: &T) {}
@@ -129,7 +125,6 @@ pub mod require {
     )]
     pub trait OrderedKey<K> {}
     impl<K> OrderedKey<K> for &K {}
-    pub fn canonical<T: super::Canonical>(_: T) {}
     pub fn positional<T: super::PositionalRows>(_: T) {}
     pub fn block_read<H: super::BlockRead<C>, C: super::Column<H>>(_: H, _: C) {}
     pub fn interval<K: Ord, T: super::ExactIntervalMembership<K>>(_: &T) {}

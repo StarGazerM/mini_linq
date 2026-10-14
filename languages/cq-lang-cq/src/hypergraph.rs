@@ -13,41 +13,9 @@
 //! their opaque partial-function chain has denotation `bottom + Set X` and is
 //! checked by the valuation contract. Other effects are outside that meaning.
 //!
-//! The facts, and the theorem that ties them together:
-//!
-//! * **Acyclicity** is α-acyclicity, decided by the GYO reduction (Graham;
-//!   Yu–Özsoyoğlu): repeatedly drop a variable that occurs in one remaining
-//!   edge only, or remove an edge contained in another remaining edge,
-//!   recording the container as its parent. The hypergraph is acyclic iff
-//!   one empty edge remains; the parent pointers then form a **join tree**
-//!   over clause indices whose root is the last remaining edge.
-//! * The **primal graph** joins two variables that share an atom. The
-//!   **elimination order** is the maximum-cardinality search numbering
-//!   (Tarjan–Yannakakis 1984) read backwards, so that eliminating variables
-//!   in this order is a perfect elimination order iff the primal graph is
-//!   **chordal**; the analysis checks that property rather than trusting it.
-//! * **Conformality**: every clique of the primal graph lies inside some
-//!   hyperedge. It is tested by Gilmore's criterion (Berge, *Hypergraphs*,
-//!   ch. 1): for any three edges, some edge contains the union of their
-//!   pairwise intersections.
-//! * Beeri, Fagin, Maier and Yannakakis (*On the desirability of acyclic
-//!   database schemes*, JACM 1983) show the hypergraph is acyclic iff it is
-//!   conformal and its primal graph is chordal. The three facts are computed
-//!   independently, so `acyclic == chordal && conformal` is a check on the
-//!   analysis itself. The triangle is the classic witness that chordality
-//!   alone is not enough: its primal graph is complete, hence chordal, but
-//!   the clique `{x, y, z}` is no atom.
-//! * **Width** is the elimination width of the elimination order plus one:
-//!   the largest number of later neighbours a variable has when it is
-//!   eliminated, counting the fill edges elimination adds among those
-//!   neighbours. On a chordal graph the order is perfect, no fill occurs,
-//!   and the width is the clique number, i.e. treewidth plus one; otherwise
-//!   it is the width of one triangulation, an upper bound on treewidth plus
-//!   one.
-
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{BodyItem, Program, normal};
+use super::{BodyItem, Program};
 use crate::symbol_name;
 
 /// One GYO ear-removal step, kept as the certificate of [`Analysis::acyclic`].
@@ -79,20 +47,8 @@ pub struct Analysis {
     /// `(clause, parent clause)` for every atom clause, ascending by clause;
     /// the one clause without a parent is the root. Present iff acyclic.
     pub join_tree: Option<Vec<(usize, Option<usize>)>>,
-    /// Every clique of the primal graph lies inside some atom.
-    pub conformal: bool,
     /// Reversed maximum-cardinality search numbering of the primal graph.
     pub elimination_order: Vec<String>,
-    /// `elimination_order` is a perfect elimination order.
-    pub chordal: bool,
-    /// Elimination width of `elimination_order` plus one, with fill.
-    pub width: usize,
-}
-
-/// Check normal form, then analyze.
-pub fn check(module: &Program) -> syn::Result<Analysis> {
-    normal::check(module)?;
-    Ok(Analysis::of(module))
 }
 
 /// Static occurrence priorities, never estimates of data cardinality.
@@ -270,8 +226,7 @@ impl Analysis {
             analysis.clauses.insert(clause, columns);
             edges.insert(clause, edge);
         }
-        analysis.reduce(edges.clone());
-        analysis.conformal = conformal(&edges);
+        analysis.reduce(edges);
         analysis.eliminate();
         analysis
     }
@@ -344,8 +299,7 @@ impl Analysis {
         self.join_tree = self.acyclic.then(|| parent.into_iter().collect());
     }
 
-    /// Maximum-cardinality search; fills `elimination_order`, `chordal` and
-    /// `width`.
+    /// Maximum-cardinality search; fills `elimination_order`.
     fn eliminate(&mut self) {
         let mut numbered: Vec<String> = Vec::new();
         let mut unnumbered: Vec<&String> = self.variables.iter().collect();
@@ -365,54 +319,6 @@ impl Analysis {
             numbered.push(unnumbered.remove(position).clone());
         }
         numbered.reverse();
-        let position: BTreeMap<&String, usize> =
-            numbered.iter().enumerate().map(|(i, v)| (v, i)).collect();
-        let mut filled = self.primal.clone();
-        self.chordal = true;
-        self.width = 0;
-        for (i, variable) in numbered.iter().enumerate() {
-            let later: Vec<String> = filled[variable]
-                .iter()
-                .filter(|u| position[*u] > i)
-                .cloned()
-                .collect();
-            for (a, u) in later.iter().enumerate() {
-                for w in &later[a + 1..] {
-                    if !filled[u].contains(w) {
-                        self.chordal = false;
-                        filled.get_mut(u).unwrap().insert(w.clone());
-                        filled.get_mut(w).unwrap().insert(u.clone());
-                    }
-                }
-            }
-            self.width = self.width.max(later.len() + 1);
-        }
         self.elimination_order = numbered;
     }
-}
-
-/// Gilmore's criterion: for every three edges some edge contains the union
-/// of their pairwise intersections.
-fn conformal(edges: &BTreeMap<usize, BTreeSet<String>>) -> bool {
-    let edges: Vec<&BTreeSet<String>> = edges.values().collect();
-    let covered = |union: BTreeSet<&String>| {
-        edges
-            .iter()
-            .any(|edge| union.iter().all(|v| edge.contains(*v)))
-    };
-    for (i, a) in edges.iter().enumerate() {
-        for (j, b) in edges.iter().enumerate().skip(i) {
-            for c in &edges[j..] {
-                let union = a
-                    .intersection(b)
-                    .chain(b.intersection(c))
-                    .chain(a.intersection(c))
-                    .collect();
-                if !covered(union) {
-                    return false;
-                }
-            }
-        }
-    }
-    true
 }

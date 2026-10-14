@@ -107,6 +107,15 @@ pub fn index(i: usize) -> syn::Index {
 }
 
 impl<'a> Context<'a> {
+    /// The stable local name of a recorded positional host.
+    pub fn positional_host(base: &str) -> Ident {
+        format_ident!(
+            "__cq_positional_{}",
+            base,
+            span = proc_macro2::Span::mixed_site()
+        )
+    }
+
     /// Construct printer state from the complete program and its checked analysis.
     pub fn new(module: &'a structures::Program, analysis: &'a structures::Analysis) -> Self {
         let mut hosts = BTreeMap::new();
@@ -184,11 +193,7 @@ impl<'a> Context<'a> {
             .collect();
         for base in positional_bases {
             let host = &hosts[&base].value;
-            let id = format_ident!(
-                "__cq_positional_{}",
-                base,
-                span = proc_macro2::Span::mixed_site()
-            );
+            let id = Self::positional_host(&base);
             statements.push(syn::parse_quote!(let #id = { use ::cq_storage::PositionalRows as _; #host.positional_handle() };));
             statements.push(syn::parse_quote!(::cq_storage::require::positional(#id);));
         }
@@ -220,22 +225,9 @@ impl<'a> Context<'a> {
             }
         }
         let mut candidate_reads: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
-        for pair in module.physical.program.definitions.windows(2) {
-            if !matches!(&pair[0].operator, Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
-            {
-                continue;
-            }
-            if let Some((a, b, v)) =
-                physical::binary_intersection(&pair[0], &pair[1], &analysis.physical)
-            {
-                candidate_reads
-                    .entry(symbol_name(&a.right))
-                    .or_default()
-                    .push(sorted(&a.columns));
-                candidate_reads
-                    .entry(symbol_name(&b.right))
-                    .or_default()
-                    .push(sorted(&b.columns).into_iter().filter(|c| *c != v).collect());
+        for candidate in physical::candidate_prefixes(&module.physical, &analysis.physical) {
+            for (name, prefix) in candidate.sides {
+                candidate_reads.entry(name).or_default().push(prefix);
             }
         }
         Context {
@@ -451,7 +443,7 @@ impl<'a> Context<'a> {
     }
 
     /// Build the selected structures over a result and append their statements.
-    pub fn materialize(&mut self, name: &str, _canon: bool, source: TokenStream) -> Repr {
+    pub fn materialize(&mut self, name: &str, source: TokenStream) -> Repr {
         let structures: Vec<(Vec<Vec<String>>, syn::Type)> =
             self.analysis.built.get(name).cloned().unwrap_or_default();
         let rows = self
@@ -599,7 +591,7 @@ impl<'a> Context<'a> {
                 .built_on(name, &columns)
                 .is_some_and(|(selected, _)| selected == ty)
             {
-                for guard in self.guards(name, &columns, false) {
+                for guard in self.guards(name, &columns) {
                     statements
                         .push(syn::parse_quote! { ::cq_storage::require::#guard(#structure); });
                 }
@@ -653,7 +645,7 @@ impl<'a> Context<'a> {
     }
 
     /// Runtime trait checks required for reads through a particular key.
-    pub fn guards(&self, result: &str, columns: &[String], set: bool) -> Vec<Ident> {
+    pub fn guards(&self, result: &str, columns: &[String]) -> Vec<Ident> {
         let physical = &self.physical_analysis;
         let mut guards: Vec<Ident> = Vec::new();
         let mut require = |guard: &str| {
@@ -694,9 +686,6 @@ impl<'a> Context<'a> {
             if read == columns {
                 require("ordered");
             }
-        }
-        if set && physical.scanned.contains(result) {
-            require("canonical");
         }
         guards
     }
@@ -811,5 +800,15 @@ impl<'a> Context<'a> {
                 ::cq_storage::ExactMembership::contains(__cq_level, #last)
             })
         }
+    }
+}
+
+/// Group wide equality keys into tuples supported by Rust's standard traits.
+/// Public answer rows stay flat.
+pub fn group(fields: &[TokenStream]) -> TokenStream {
+    if fields.len() <= 12 {
+        quote!((#(#fields,)*))
+    } else {
+        group(&fields.chunks(12).map(group).collect::<Vec<_>>())
     }
 }

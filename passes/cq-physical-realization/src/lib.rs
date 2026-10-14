@@ -211,14 +211,14 @@ impl Printer<'_> {
             }
             physical::ModeKind::Let if self.analysis.selections.contains_key(&name) => {
                 let selection = self.selection_source(&name)?;
-                self.materialize(&name, false, selection)
+                self.materialize(&name, selection)
             }
             physical::ModeKind::Let | physical::ModeKind::Exists => {
                 let mut rows = self.produce(&name, definition)?;
                 if definition.canon.is_some() {
                     rows = self.distinct(&definition.name, rows);
                 }
-                self.materialize(&name, definition.canon.is_some(), rows)
+                self.materialize(&name, rows)
             }
         };
         self.reprs.insert(name, repr);
@@ -275,13 +275,6 @@ impl Printer<'_> {
         // iterator rows flat, but recursively group wider equality keys. Clone
         // fields instead of borrowing the filter's temporary row: a provider
         // may retain this key after that row has been yielded and dropped.
-        fn group(fields: &[TokenStream]) -> TokenStream {
-            if fields.len() <= 12 {
-                quote!((#(#fields,)*))
-            } else {
-                group(&fields.chunks(12).map(group).collect::<Vec<_>>())
-            }
-        }
         let key = if width <= 12 {
             quote!(__cq_row)
         } else {
@@ -291,7 +284,7 @@ impl Printer<'_> {
                     quote!(::core::clone::Clone::clone(&__cq_row.#field))
                 })
                 .collect::<Vec<_>>();
-            let nested = group(&fields);
+            let nested = cq_print::group(&fields);
             quote!(&#nested)
         };
         quote! {{

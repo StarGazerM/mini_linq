@@ -38,8 +38,6 @@ struct Reads {
     count: usize,
     /// Key columns of every `probe`/`semi` read of the result.
     keyed: Vec<Vec<String>>,
-    /// Key columns of every `merge` read of the result.
-    merged: Vec<Vec<String>>,
 }
 
 /// Lower IX to Physical with deterministic defaults, then check the Physical contract.
@@ -55,7 +53,7 @@ pub fn compile(source: &ix::Program) -> syn::Result<physical::Program> {
         .collect();
     let returned = source.ra.plan.output.input.clone();
     let (operators, reads) = operators(source, &info, &operations)?;
-    let mut modes = modes(&operations, &operators, &reads);
+    let mut modes = modes(&operations, &reads);
     fuse_modes(&operations, &operators, &reads, &mut modes);
     let disjoint = ix::ra::disjoint_unions(&source.ra)?;
     let unique = canonical(&info, &operations, &returned, &disjoint);
@@ -211,22 +209,7 @@ fn operators(
     Ok((operators, reads))
 }
 
-fn modes(
-    operations: &[(Ident, Op)],
-    operators: &[physical::Operator],
-    reads: &BTreeMap<String, Reads>,
-) -> Vec<physical::Mode> {
-    let own_merge: BTreeMap<String, Vec<String>> = operations
-        .iter()
-        .zip(operators)
-        .filter_map(|((name, _), op)| match op {
-            physical::Operator::Merge(_, k) => Some((
-                symbol_name(name),
-                k.columns.iter().map(symbol_name).collect(),
-            )),
-            _ => None,
-        })
-        .collect();
+fn modes(operations: &[(Ident, Op)], reads: &BTreeMap<String, Reads>) -> Vec<physical::Mode> {
     operations
         .iter()
         .map(|(name, op)| {
@@ -234,13 +217,7 @@ fn modes(
             let result = &reads[&name];
             match op {
                 Op::Rename(_) => physical::Mode::Pipe(Default::default()),
-                _ if !result.keyed.is_empty()
-                    || result.count >= 2
-                    || result
-                        .merged
-                        .iter()
-                        .any(|c| own_merge.get(&name) != Some(c)) =>
-                {
+                _ if !result.keyed.is_empty() || result.count >= 2 => {
                     physical::Mode::Let(Default::default())
                 }
                 _ => physical::Mode::Pipe(Default::default()),
@@ -298,7 +275,7 @@ fn fuse_modes(
         let all_local = operators.iter().enumerate().all(|(i, op)| {
             !operands(op).contains(&prefix) || members.contains(&symbol_name(&operations[i].0))
         });
-        if all_local && reads[&prefix].keyed.is_empty() && reads[&prefix].merged.is_empty() {
+        if all_local && reads[&prefix].keyed.is_empty() {
             if let Some(i) = operations
                 .iter()
                 .position(|(id, _)| symbol_name(id) == prefix)
@@ -381,8 +358,6 @@ fn probe(reads: &mut BTreeMap<String, Reads>, right: &Ident, columns: Vec<String
     right.count += 1;
     right.keyed.push(columns);
 }
-
-pub use physical::check_rewrite;
 
 /// Erase physical choices to the relational program they implement.
 pub fn erase(target: &physical::Program) -> ix::ra::Program {

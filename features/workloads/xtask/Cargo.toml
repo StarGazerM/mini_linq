@@ -14,26 +14,19 @@ counters = ["cq-workloads/counters"]
 [dependencies]
 cq-workloads = { path = ".." }
 cq-testkit.workspace = true
-cq-lang-vo.workspace = true
 cq-lang-cq.workspace = true
 cq-lang-ix.workspace = true
 cq-lang-ra.workspace = true
-cq-elaborate.workspace = true
 cq-index-policy.workspace = true
-cq-order.workspace = true
-cq-reduce.workspace = true
 cq-physical-lowering.workspace = true
 cq-structure-selection.workspace = true
 cq-physical-realization.workspace = true
-cq-lang-physical.workspace = true
-cq-lang-structures.workspace = true
 cq-planners-plan.workspace = true
-cq-rewrite-passes.workspace = true
 quote.workspace = true
 syn.workspace = true
-proc-macro2.workspace = true
 duckdb = { version = "=1.10505.0", features = ["bundled", "parquet"], optional = true }
 serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
-prettyplease.workspace = true
+cq-order.workspace = true
+cq-elaborate.workspace = true

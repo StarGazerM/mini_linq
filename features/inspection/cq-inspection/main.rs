@@ -44,7 +44,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_testkit::{Rows, cq_semantics, databases};
     use quote::ToTokens;
 
     #[test]
@@ -78,32 +77,5 @@ mod tests {
         );
         let roundtrip: cq::Program = syn::parse2(source.to_token_stream()).unwrap();
         assert_eq!(roundtrip, source);
-    }
-
-    #[test]
-    fn inspected_triangle_agrees_with_public_corpus_and_independent_sets() {
-        let source = source();
-        let case = cq_testkit::CASES
-            .iter()
-            .find(|case| case.name == "triangle")
-            .unwrap();
-        assert_eq!(
-            cq_semantics::evaluate_cq(&source, &case.database()),
-            case.expected_rows()
-        );
-        for seed in 0..32 {
-            let database = databases::binary_database(&source, seed);
-            let mut expected = Rows::new();
-            for r in &database["R"] {
-                for s in &database["S"] {
-                    for t in &database["T"] {
-                        if r[1] == s[0] && s[1] == t[0] && t[1] == r[0] {
-                            expected.insert(vec![r[0], r[1], s[1]]);
-                        }
-                    }
-                }
-            }
-            assert_eq!(cq_semantics::evaluate_cq(&source, &database), expected);
-        }
     }
 }

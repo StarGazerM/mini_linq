@@ -1,4 +1,3 @@
-use cq::normal::Kernel;
 use cq_lang_cq as cq;
 use quote::{ToTokens, quote};
 
@@ -30,24 +29,6 @@ fn normalization_moves_every_non_variable_argument_out_of_atoms() {
     assert!(cq::normal::check(&source).is_err());
     // Normalizing again is the identity.
     assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
-}
-
-#[test]
-fn kernels_compare_up_to_renaming_of_variables() {
-    let one = cq(quote! {
-        struct Q; relation R(a: i32, b: i32);
-        answer(x) :- R(x, y), if true;
-    });
-    let two = cq(quote! {
-        struct Q; relation R(a: i32, b: i32);
-        answer(p) :- R(p, q), if true;
-    });
-    let three = cq(quote! {
-        struct Q; relation R(a: i32, b: i32);
-        answer(p) :- R(q, p), if true;
-    });
-    assert_eq!(Kernel::of(&one), Kernel::of(&two));
-    assert_ne!(Kernel::of(&one), Kernel::of(&three));
 }
 
 #[test]
@@ -137,34 +118,6 @@ fn rust_metadata_includes_host_captures_and_pattern_bindings() {
 }
 
 #[test]
-fn kernels_preserve_cross_kind_chain_and_relational_predecessors() {
-    let source = cq(quote! {
-        struct Q; relation R(a:i32); relation S(a:i32);
-        answer(x) :- R(x), S(w), if { *x != 0 }, let y:i32 = 10 / *x;
-    });
-    let original = Kernel::of(&source);
-    let mut changed = source.clone();
-    let item = changed.query.body[2].clone();
-    changed.query.body[2] = changed.query.body[3].clone();
-    changed.query.body[3] = item;
-    assert!(!Kernel::of(&changed).refines(&original));
-    let mut changed = source.clone();
-    let item = changed.query.body[1].clone();
-    changed.query.body[1] = changed.query.body[2].clone();
-    changed.query.body[2] = item;
-    assert!(!Kernel::of(&changed).refines(&original));
-    let source = cq(quote! {
-        struct Q; relation R(a:i32); relation S(a:i32);
-        answer(x) :- R(x), if { *x != 0 }, S(w);
-    });
-    let mut earlier = source.clone();
-    let item = earlier.query.body[1].clone();
-    earlier.query.body[1] = earlier.query.body[2].clone();
-    earlier.query.body[2] = item;
-    assert!(Kernel::of(&earlier).refines(&Kernel::of(&source)));
-}
-
-#[test]
 fn equality_and_result_dedup_reject_known_non_leibniz_columns() {
     for source in [
         quote!(struct Q; relation R(value:f64); answer(x) :- R(x);),
@@ -188,19 +141,6 @@ fn equality_and_result_dedup_reject_known_non_leibniz_columns() {
         right: cq::EqualityValue::Literal(syn::parse_quote!(host())),
     };
     assert!(malformed.check().is_err());
-}
-
-#[test]
-fn kernel_never_alpha_rewrites_opaque_host_names_or_fields() {
-    let source = cq(quote! {
-        struct Q; relation R(a:i32);
-        answer(x) :- R(x), if host(v0,x) && other(v0,x);
-    });
-    let changed = cq(quote! {
-        struct Q; relation R(a:i32);
-        answer(x) :- R(x), if host(x,v0) && other(v0,x);
-    });
-    assert!(!Kernel::of(&changed).refines(&Kernel::of(&source)));
 }
 
 #[test]

@@ -122,7 +122,6 @@ pub fn plan(input: TokenStream) -> TokenStream {
         let plan = cq_order::compile(&normal, &ordering)?;
         cq_order::check(&normal, &plan, &ordering)?;
         let options = cq_reduce::Options {
-            guards: cq_reduce::Pushdown::None,
             semijoins: if args.no_reduce {
                 cq_reduce::Reductions::None
             } else {
@@ -227,31 +226,5 @@ mod tests {
         ] {
             assert!(syn::parse2::<PlanOptions>(arguments).is_err());
         }
-    }
-
-    #[test]
-    fn filtered_default_handles_correlated_test_blocks() {
-        let source = syn::parse_quote! {
-            struct Q; relation P(x:i32);
-            answer(x) :- P(x), { if *x == 1 } | { if *x == 2 };
-        };
-        let normal = cq_lang_cq::normal::normalize(&source).unwrap();
-        let ordering = cq_order::Options {
-            heuristic: cq_order::Heuristic::Filtered,
-            split: cq_order::Split::Coarse,
-        };
-        let vo = cq_order::compile(&normal, &ordering).unwrap();
-        cq_order::check(&normal, &vo, &ordering).unwrap();
-        let reductions = cq_reduce::Options {
-            guards: cq_reduce::Pushdown::None,
-            semijoins: cq_reduce::Reductions::Hypergraph,
-        };
-        let vo = cq_reduce::compile(&vo, &reductions).unwrap();
-        let ra = cq_elaborate::compile(&vo).unwrap();
-        cq_elaborate::check(&vo, &ra).unwrap();
-        let ra = cq_elaborate::simplify_reductions(&ra).unwrap();
-        let ra = cq_physical_lowering::orient(&ra).unwrap();
-        let ix = cq_index_policy::compile(&ra).unwrap();
-        cq_physical_lowering::compile(&ix).unwrap();
     }
 }

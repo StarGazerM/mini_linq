@@ -350,24 +350,10 @@ pub fn run(scale: usize, seed: u64) -> Vec<Observation> {
 /// or 1/2). Both Fine orders enumerate the disconnected query linearly;
 /// their guards still run after every written relational prerequisite.
 pub fn assert_growth(runs: &[Vec<Observation>]) {
-    assert_growth_where(runs, |_| true);
-}
-
-/// Check the independent remaining predictions while the generated fan is blocked.
-/// The complete suite above still requires every original fan assertion.
-pub fn assert_non_fan_growth(runs: &[Vec<Observation>]) {
-    assert_growth_where(runs, |observation| observation.query != "triangle");
-}
-
-fn assert_growth_where(runs: &[Vec<Observation>], include: impl Fn(&Observation) -> bool) {
     assert_eq!(runs.len(), 3);
     assert!(runs.iter().all(|observations| observations.len() == 13));
     for pair in runs.windows(2) {
-        for (small, large) in pair[0]
-            .iter()
-            .zip(&pair[1])
-            .filter(|(small, _)| include(small))
-        {
+        for (small, large) in pair[0].iter().zip(&pair[1]) {
             assert_eq!((small.query, small.config), (large.query, large.config));
             assert_eq!(large.scale, small.scale * 2);
             let (numerator, denominator, winner) = match (small.query, small.config) {

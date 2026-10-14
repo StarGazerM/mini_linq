@@ -60,7 +60,6 @@ fn merge_and_point_record_supply_kinds() {
     let a = physical::contract::check(&source).unwrap();
     assert_eq!(a.merge_reads["r"][0].0, "j");
     assert_eq!(a.merge_reads["s"][0].0, "j");
-    assert_eq!(a.point_reads["j"], [("f".into(), vec!["x".into()])]);
     assert_eq!(a.keyed_reads["j"][0].2, physical::syntax::SupplyKind::Const);
 }
 

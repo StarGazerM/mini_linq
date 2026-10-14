@@ -78,11 +78,6 @@ pub fn instantiate(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
-pub fn compare_push(input: TokenStream) -> TokenStream {
-    entry(input, Mode::Push)
-}
-
-#[proc_macro]
 pub fn compile_query(input: TokenStream) -> TokenStream {
     entry(input, Mode::Compile)
 }
@@ -90,7 +85,6 @@ pub fn compile_query(input: TokenStream) -> TokenStream {
 #[derive(Clone, Copy)]
 enum Mode {
     Test,
-    Push,
     Compile,
 }
 
@@ -169,20 +163,6 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
     let fields: Vec<_> = (0..query.query.head.args.len())
         .map(syn::Index::from)
         .collect();
-    let compare = if matches!(mode, Mode::Push) {
-        let pushed_configuration = cq_workloads::pipelines::Pipeline {
-            push: true,
-            ..selected
-        }
-        .configuration(&query)?;
-        Some(quote! {
-            let pushed = ::mini_linq::compile! { #pushed_configuration #tokens }
-                .map(|row| vec![#(*row.#fields),*]).collect();
-            cq_workloads::execution::check(#case, scenario, pushed);
-        })
-    } else {
-        None
-    };
     let test = (!matches!(mode, Mode::Compile)).then(|| quote!(#[test]));
     Ok(quote! {
         mod loaders { ::mini_linq::relation_loaders! { #tokens } }
@@ -201,7 +181,6 @@ fn expand(request: Request, mode: Mode) -> syn::Result<Tokens> {
                 let answers = ::mini_linq::compile! { #configuration #tokens }
                     .map(|row| vec![#(*row.#fields),*]).collect();
                 cq_workloads::execution::check(#case, scenario, answers);
-                #compare
             }
         }
     })

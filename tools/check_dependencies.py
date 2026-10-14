@@ -185,7 +185,7 @@ def check(data, announce=True):
 
 def negative_dependency_checks(data):
     mutations = [("cq-physical-realization", "cq-storage", None, False),
-                 ("cq-physical-realization", "cq-state-providers", "build", False),
+                 ("cq-physical-realization", "cq-load", "build", False),
                  ("cq-physical-lowering", "cq-lang-ra", None, False),
                  ("cq-lang-ix", "cq-storage", None, False),
                  ("cq-lang-ix", "cq-lang-physical", None, False),
@@ -319,7 +319,7 @@ def frontends():
 
 
 def consumers():
-    for target in ("physical_query", "wcoj", "denotation", "openings", "provenance", "dispatch", "pass_contracts"):
+    for target in ("physical_query", "denotation", "openings", "provenance", "dispatch", "pass_contracts"):
         subprocess.run(["cargo", "test", "-p", "mini-linq", "--test", target, "--locked"], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
         print(f"PASS: consumer {target}", flush=True)
 

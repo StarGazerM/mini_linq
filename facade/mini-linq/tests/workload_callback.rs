@@ -21,7 +21,6 @@ macro_rules! fixture {
                 callback_answer(a) :- R(a);
             }
             // A string/parse round trip loses the outer macro's local context.
-            assert_eq!(with_callback_answer!(consumer::leaf), &[(41,)]);
             assert_eq!(with_query!(consumer::leaf), &[(41,)]);
             assert!(RUST_PATH.ends_with("workload_callback.rs"));
             assert_eq!(module().unwrap().name, "CallbackHygiene");

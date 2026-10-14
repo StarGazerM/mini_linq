@@ -53,10 +53,7 @@ pub fn boundaries(
         } else {
             cq_reduce::Reductions::None
         };
-        let options = cq_reduce::Options {
-            guards: cq_reduce::Pushdown::Atoms,
-            semijoins,
-        };
+        let options = cq_reduce::Options { semijoins };
         let reduced = cq_reduce::compile(&ordered, &options).unwrap();
         cq_reduce::check(&ordered, &reduced, &options).unwrap();
         reduced

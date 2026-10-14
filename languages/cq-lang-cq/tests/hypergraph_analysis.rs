@@ -1,6 +1,3 @@
-//! Hypergraph facts of normal-form queries: GYO acyclicity with a join tree,
-//! maximum-cardinality search with the perfect-elimination check, Gilmore
-//! conformality, and the BFMY correspondence between them.
 use std::collections::BTreeSet;
 
 use cq_lang_cq as cq;
@@ -9,7 +6,8 @@ use quote::quote;
 
 fn analyze(tokens: proc_macro2::TokenStream) -> Analysis {
     let module: cq::Program = syn::parse2(tokens).unwrap();
-    cq::hypergraph::check(&module).unwrap()
+    cq::normal::check(&module).unwrap();
+    Analysis::of(&module)
 }
 
 fn names(vars: &[&str]) -> Vec<String> {
@@ -53,10 +51,7 @@ fn assert_join_tree(analysis: &Analysis) {
     }
 }
 
-/// Beeri–Fagin–Maier–Yannakakis: acyclic iff conformal with a chordal primal
-/// graph. The three facts are computed by different algorithms.
-fn assert_bfmy(analysis: &Analysis) {
-    assert_eq!(analysis.acyclic, analysis.chordal && analysis.conformal);
+fn assert_graph(analysis: &Analysis) {
     assert_eq!(analysis.acyclic, analysis.join_tree.is_some());
     assert_eq!(
         analysis.elimination_order.iter().collect::<BTreeSet<_>>(),
@@ -65,7 +60,7 @@ fn assert_bfmy(analysis: &Analysis) {
 }
 
 #[test]
-fn triangle_is_chordal_but_not_conformal_hence_cyclic() {
+fn triangle_is_cyclic() {
     let analysis = analyze(quote! {
         struct Q;
         relation R(a: i32, b: i32);
@@ -76,17 +71,13 @@ fn triangle_is_chordal_but_not_conformal_hence_cyclic() {
     assert_eq!(analysis.variables, names(&["x", "y", "z"]));
     assert!(!analysis.acyclic);
     assert!(analysis.join_tree.is_none());
-    // K3 is complete, so chordal; the clique {x, y, z} is no atom.
-    assert!(analysis.chordal);
-    assert!(!analysis.conformal);
-    assert_eq!(analysis.width, 3);
     assert_eq!(analysis.primal["x"], ["y", "z"].map(String::from).into());
     assert_eq!(analysis.shared(0, 1), names(&["y"]));
     assert_eq!(analysis.shared(2, 0), names(&["x"]));
     assert_eq!(analysis.shared(0, 0), names(&["x", "y"]));
     // GYO gets stuck at once: no private variable, no containment.
     assert!(analysis.gyo_steps.is_empty());
-    assert_bfmy(&analysis);
+    assert_graph(&analysis);
 }
 
 #[test]
@@ -102,16 +93,13 @@ fn chain_is_acyclic_with_a_join_tree_and_a_perfect_elimination_order() {
     assert_eq!(analysis.clauses[&1], names(&["a", "b"]));
     assert_eq!(analysis.incidence["a"], [0, 1].into());
     assert!(analysis.acyclic);
-    assert!(analysis.chordal);
-    assert!(analysis.conformal);
-    assert_eq!(analysis.width, 2);
     assert_eq!(analysis.elimination_order, names(&["c", "b", "a"]));
     assert_eq!(
         analysis.join_tree,
         Some(vec![(0, Some(1)), (1, Some(2)), (2, None)])
     );
     assert_join_tree(&analysis);
-    assert_bfmy(&analysis);
+    assert_graph(&analysis);
 }
 
 #[test]
@@ -125,9 +113,6 @@ fn star_is_acyclic_with_the_centre_shared_by_every_clause() {
     });
     assert_eq!(analysis.variables, names(&["c", "a", "b", "d"]));
     assert!(analysis.acyclic);
-    assert!(analysis.chordal);
-    assert!(analysis.conformal);
-    assert_eq!(analysis.width, 2);
     assert_eq!(
         analysis.primal["c"],
         ["a", "b", "d"].map(String::from).into()
@@ -141,7 +126,7 @@ fn star_is_acyclic_with_the_centre_shared_by_every_clause() {
     let tree = analysis.join_tree.as_ref().unwrap();
     assert_eq!(tree.iter().filter(|(_, p)| p.is_none()).count(), 1);
     assert_join_tree(&analysis);
-    assert_bfmy(&analysis);
+    assert_graph(&analysis);
 }
 
 #[test]
@@ -158,13 +143,12 @@ fn self_join_keeps_clause_indices_distinct() {
     assert_eq!(analysis.shared(0, 1), names(&["y"]));
     assert!(analysis.acyclic);
     assert_eq!(analysis.join_tree, Some(vec![(0, Some(1)), (1, None)]));
-    assert_eq!(analysis.width, 2);
     assert_join_tree(&analysis);
-    assert_bfmy(&analysis);
+    assert_graph(&analysis);
 }
 
 #[test]
-fn four_cycle_is_conformal_but_not_chordal_hence_cyclic() {
+fn four_cycle_is_cyclic() {
     let analysis = analyze(quote! {
         struct Q;
         relation R(a: i32, b: i32);
@@ -175,13 +159,8 @@ fn four_cycle_is_conformal_but_not_chordal_hence_cyclic() {
     });
     assert!(!analysis.acyclic);
     assert!(analysis.gyo_steps.is_empty());
-    assert!(!analysis.chordal);
-    assert!(analysis.conformal);
-    // Eliminating the first variable fills its two neighbours into a
-    // triangle; the width of that triangulation is 2, treewidth of C4.
-    assert_eq!(analysis.width, 3);
     assert_eq!(analysis.shared(0, 2), Vec::<String>::new());
-    assert_bfmy(&analysis);
+    assert_graph(&analysis);
 }
 
 #[test]
@@ -196,7 +175,6 @@ fn absorbed_and_bound_variables_keep_the_tree_and_the_facts_honest() {
     });
     assert_eq!(analysis.variables, names(&["a", "b", "c", "e"]));
     assert!(analysis.acyclic);
-    assert_eq!(analysis.width, 3);
     assert_eq!(analysis.shared(0, 1), names(&["b", "c"]));
     // Both private columns go first; the remaining equal edges absorb 0 into 1.
     assert_eq!(
@@ -226,7 +204,7 @@ fn absorbed_and_bound_variables_keep_the_tree_and_the_facts_honest() {
     );
     assert_eq!(analysis.join_tree, Some(vec![(0, Some(1)), (1, None)]));
     assert_join_tree(&analysis);
-    assert_bfmy(&analysis);
+    assert_graph(&analysis);
 }
 
 #[test]
@@ -237,16 +215,17 @@ fn analysis_requires_normal_form() {
         answer(x) :- R(x, 5);
     })
     .unwrap();
-    assert!(cq::hypergraph::check(&module).is_err());
+    assert!(cq::normal::check(&module).is_err());
     let normal = cq::normal::normalize(&module).unwrap();
-    let analysis = cq::hypergraph::check(&normal).unwrap();
+    cq::normal::check(&normal).unwrap();
+    let analysis = Analysis::of(&normal);
     // The constant became a let-bound join key, so it is a vertex of R.
     assert_eq!(
         analysis.clauses[&analysis.clauses.keys().next().copied().unwrap()].len(),
         2
     );
     assert!(analysis.acyclic);
-    assert_bfmy(&analysis);
+    assert_graph(&analysis);
 }
 
 #[test]
@@ -260,8 +239,6 @@ fn normalization_keeps_shared_names_cycles_and_join_tree_connectivity() {
         let before = cq_lang_cq::hypergraph::Analysis::of(&source);
         let after = cq_lang_cq::hypergraph::Analysis::of(&normalized);
         assert_eq!(after.acyclic, before.acyclic);
-        assert_eq!(after.chordal, before.chordal);
-        assert_eq!(after.conformal, before.conformal);
         assert_eq!(normalized, source);
         assert!(after.equivalent("y", "y"));
         assert!(!after.shared(0, 1).is_empty());

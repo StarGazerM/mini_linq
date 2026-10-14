@@ -25,17 +25,8 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
             "reductions must preserve independent join branches",
         ));
     }
-    let branch_options = Options {
-        guards: options.guards,
-        semijoins: Reductions::None,
-    };
-    let options = if source.valuation.join_branches.is_some()
-        && options.semijoins == Reductions::Hypergraph
-    {
-        &branch_options
-    } else {
-        options
-    };
+    let effective = options.effective(source.valuation.join_branches.is_some(), false);
+    let options = &effective;
     check_steps(
         &source.cq.query.body,
         &source.valuation.steps,
@@ -307,14 +298,7 @@ fn check_steps(
                 .into_iter()
                 .collect();
             let inner = vo::cq::hypergraph::Analysis::of_body(&written.branches[j].body, &context);
-            let options = Options {
-                guards: options.guards,
-                semijoins: if options.semijoins == Reductions::Tree && !inner.acyclic {
-                    Reductions::None
-                } else {
-                    options.semijoins
-                },
-            };
+            let options = options.effective(false, !inner.acyclic);
             check_steps(
                 &written.branches[j].body,
                 &source_branch.steps,

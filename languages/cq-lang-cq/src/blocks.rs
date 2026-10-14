@@ -187,6 +187,26 @@ pub fn bound(body: &CommaList<BodyItem>) -> BTreeMap<String, Ident> {
     names
 }
 
+/// Names bound before a clause, including the caller context and block interfaces.
+pub fn bound_before(
+    body: &CommaList<BodyItem>,
+    clause: usize,
+    context: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut names = context.clone();
+    for item in body.iter().take(clause) {
+        match item {
+            BodyItem::Positive { atom } => names.extend(atom.variables().map(symbol_name)),
+            BodyItem::Let(binding) => {
+                names.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+            }
+            BodyItem::Block(block) => names.extend(block.analyze(&names).interface.into_keys()),
+            _ => (),
+        }
+    }
+    names
+}
+
 /// Preorder over clauses; branch boundaries remain in the returned block items.
 pub fn walk(body: &CommaList<BodyItem>) -> Vec<&BodyItem> {
     let mut items = Vec::new();

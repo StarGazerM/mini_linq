@@ -27,7 +27,6 @@ members = [
     "passes/cq-physical-realization",
     "runtime/cq-storage",
     "runtime/cq-load",
-    "runtime/cq-state-providers",
     "testkit/cq-testkit",
     "facade/cq-stage",
     "facade/mini-linq",
@@ -53,7 +52,6 @@ version = "0.1.0"
 cq-testkit = { path = "testkit/cq-testkit", version = "0.1.0" }
 cq-print = { path = "passes/cq-print", version = "0.1.0", default-features = false }
 cq-stage = { path = "facade/cq-stage", version = "0.1.0" }
-contracts = "=0.6.10"
 cq-lang-physical = { path = "languages/cq-lang-physical", version = "0.1.0", default-features = false }
 cq-lang-cq = { path = "languages/cq-lang-cq", version = "0.1.0", default-features = false }
 cq-lang-structures = { path = "languages/cq-lang-structures", version = "0.1.0", default-features = false }
@@ -70,31 +68,25 @@ cq-index-policy = { path = "passes/cq-index-policy", version = "0.1.0", default-
 cq-structure-selection = { path = "passes/cq-structure-selection", version = "0.1.0", default-features = false }
 cq-physical-lowering = { path = "passes/cq-physical-lowering", version = "0.1.0", default-features = false }
 cq-physical-realization = { path = "passes/cq-physical-realization", version = "0.1.0", default-features = false }
-cq-state-providers = { path = "runtime/cq-state-providers", version = "0.1.0" }
 mini-linq = { path = "facade/mini-linq", version = "0.1.0" }
 proc-macro2 = "1"
-prettyplease = "0.2"
 quote = "1"
 syn = { version = "2", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn_derive = { version = "0.2.0", git = "https://github.com/StarGazerM/syn_derive", rev = "97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562" }
 
 [dependencies]
 cq-lang-cq.workspace = true
-cq-syntax.workspace = true
-mini-linq.workspace = true
 quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
 cq-lang-ra.workspace = true
 proc-macro2.workspace = true
-cq-state-providers.workspace = true
-cq-storage.workspace = true
 
 [features]
 hw4 = []
 
 [[test]]
 name = "hw4_optional"
-path = "languages/cq-lang-cq/tests/hw4_optional.rs"
+path = "course/hw4_optional.rs"
 required-features = ["hw4"]

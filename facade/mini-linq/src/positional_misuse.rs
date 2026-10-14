@@ -36,13 +36,7 @@
 //! }.collect();
 //! ```
 //!
-//! An alias does not turn a positional mask into a canonical or ordered index:
-//! ```compile_fail
-//! let host = [(1_i64,)];
-//! let selected = cq_storage::Selection::select(&host, cq_load::column::<0>(),
-//!     &cq_storage::Point(1_i64), cq_storage::SelectionSummary::None);
-//! cq_storage::require::canonical(&selected);
-//! ```
+//! An alias does not turn a positional mask into an ordered index:
 //! ```compile_fail
 //! let host = [(1_i64,)];
 //! let selected = cq_storage::Selection::select(&host, cq_load::column::<0>(),

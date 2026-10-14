@@ -24,7 +24,7 @@ pub use cq_lang_vo as vo;
 
 use cq_order::{Heuristic, Options, Ranking, Split};
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token};
 
@@ -89,7 +89,6 @@ impl Planner {
     fn reductions(self, source: &cq::Program) -> cq_reduce::Options {
         // Formal rule Plan-Graph: Hypergraph uses tree reductions only in acyclic scopes and exact block cuts in any scope.
         cq_reduce::Options {
-            guards: cq_reduce::Pushdown::None,
             semijoins: if self == Self::Hypergraph
                 && source
                     .query

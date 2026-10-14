@@ -10,15 +10,11 @@ pub struct Join {
     pub t: Vec<Edge>,
 }
 
-fn shuffled<T>(mut rows: Vec<T>, mut seed: u64) -> Vec<T> {
+fn shuffled<T>(mut rows: Vec<T>, seed: u64) -> Vec<T> {
     // SplitMix64 plus Fisher-Yates: no dependency on a randomized host hasher.
+    let mut random = cq_testkit::random::SplitMix64::new(seed);
     for i in (1..rows.len()).rev() {
-        seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut x = seed;
-        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        x ^= x >> 31;
-        rows.swap(i, (x % (i as u64 + 1)) as usize);
+        rows.swap(i, (random.next_u64() % (i as u64 + 1)) as usize);
     }
     rows
 }
