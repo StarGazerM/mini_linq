@@ -1,162 +1,287 @@
 \section{Incremental evaluation and Datalog (design)}
 \label{sec:incremental}
-This section is a design. No rule in it is implemented. It fixes the
-semantics that a Datalog level above CQ, maintained structures and delta
-evaluation must refine, and assigns every law to exactly one level.
-Annotations are restricted to $K\in\{\mathbb B,\mathbb N\}$, time to rounds
-$\mathbb N$, and updates to insertions. Z-sets and partially ordered time are
-out of scope; \S\ref{sec:incremental-scope} states the extension point.
+This section specifies a proposed extension, not a verified implementation.
+The rule inventory records implementation status separately. The design uses
+sets and bags, insertions only, and totally ordered rounds. It does not
+parameterize the existing compiler by a general semiring. Signed changes,
+partially ordered time and recursive aggregates are outside this scope.
 
-\subsection{Annotated relations}
-\begin{definition}
-For a commutative semiring $K$, $\mathrm{Rel}_K(\tau)=\tau\to_{fin}K$. It
-carries the free $K$-semimodule monad $M_K$: $\eta(x)=\{x\mapsto1\}$, and bind
-multiplies along a valuation and adds across valuations. A semiring
-homomorphism $h:K\to K'$ induces a monad morphism $M_K\to M_{K'}$. The support
-$\mathrm{supp}:\mathbb N\to\mathbb B$ is the instance used here; it is
-idempotent and commutes with bind and $\uplus$.
-\end{definition}
-The core denotation of \S\ref{sec:composition} is $\bot+M_{\mathbb B}$. A body
-atom is a bind, a guard is $\mathsf{guard}$, the head is $\mathsf{fmap}$.
-$M_{\mathbb B}$ and $M_{\mathbb N}$ are commutative, so atom order is
-denotationally irrelevant. Guard placement is not a commutativity question:
-moving a partial guard changes the set of valuations it is applied to and so
-whether $\bot$ is reached; total guards move freely.
+\subsection{One call: collections, iterators and partiality}
+For notation, let $\mathrm{Rel}_K(X)=X\to_{fin}K$, with
+$K\in\{\mathbb B,\mathbb N\}$. These are finite sets and finite bags,
+respectively. Each has a monad $M_K$: unit assigns weight one to a value;
+bind multiplies weights along a valuation and adds weights across valuations.
+The coefficient map $n\mapsto(n>0)$ induces the support map
+$\mathrm{supp}:M_{\mathbb N}X\to M_{\mathbb B}X$, which commutes with unit,
+bind and union. Write $\iota$ for the characteristic-bag embedding of a set
+and $\mathsf{canon}=\iota\circ\mathrm{supp}$. Canonicalization is idempotent;
+$\iota$ itself is not a homomorphism for overlapping unions.
 
-\subsection{Operational streams and dedup motion}
-An operational run of a call yields a bag stream $\sem{q}_{op}$; pull printers
-realize it as an unfold, push printers as a fold.
+The written-order denotation remains exactly that of
+\S\ref{sec:denotation}: $\bot+M_{\mathbb B}$, with strict propagation of a
+panic from any reached valuation. A relational atom extends a valuation, a
+guard retains or discards it, and the head projects or maps it.
+Commutativity of the \emph{total} set/bag fragment does not establish
+commutativity of arbitrary partial computations: an empty earlier relation
+can prevent a later panic. Total guards still require their binders, pure
+value-based behavior and the existing dependency checks; they do not move
+across arbitrary operators merely because they are total.
+
+An iterator supplies an ordered, demand-driven operational sequence, not a
+bag by definition. For a finite successful exhaustive traversal, forgetting
+order yields a bag and taking support yields a set. Push and pull are
+possible realizations of that traversal; arbitrary Rust iterators are not
+assumed to satisfy pure list-monad laws. Partial polling, effects, divergence
+and resource exhaustion stay outside the observation model, as before.
+Let $\mathsf{obs}$ take the support of a successful traversal and map an
+observed panic to $\bot$.
 \begin{mathpar}
-\Rule{INC-Adequacy}{q\text{ consumed to exhaustion}}
- {\mathrm{supp}\circ\sem{q}_{op}=\sem{q}}
+\Rule{INC-Adequacy}{\text{host premises and checked lowering}\quad
+ \text{exhaustive observation in the existing model}}
+ {\sem{q}\sqsubseteq\mathsf{obs}(\mathsf{run}(q))}
 
-\Rule{INC-Supp}{e\text{ a bind, }\uplus\text{ or projection context}}
- {\mathrm{supp}(e[\,b\,])=\mathrm{supp}(e[\,\mathrm{supp}(b)\,])}
+\Rule{INC-Supp}{E_{\mathbb N},E_{\mathbb B}\text{ the same total positive context}}
+ {\mathrm{supp}(E_{\mathbb N}(b))
+   =E_{\mathbb B}(\mathrm{supp}(b))
+   =\mathrm{supp}(E_{\mathbb N}(\mathsf{canon}(b)))}
 \end{mathpar}
-Every dedup point (\code{canon}, \code{head}, aggregate set folds, Datalog
-insertion) is one application of $\mathrm{supp}$; \textsc{INC-Supp} is the only
-law that moves it. A consumer that applies $\mathrm{supp}$ itself may receive a
-bag; this is the bag-output contract. A fold into a monoid $(M,\cdot)$ needs
-$\mathrm{supp}$ first unless $M$ is idempotent (min, max), in which case
-folding the bag gives the same value.
+Adequacy is refinement, not equality of panics: successful source results
+must agree; a target may remove a source panic. \textsc{INC-Supp} applies to
+positive bind, projection, union and value-based filtering. Extensions to
+partial code must separately discharge the existing extensionality and
+Before obligations. This is not a blanket rewrite through negation,
+first-nonempty fallback, aggregates or effectful consumers.
 
-\subsection{Representations}
-A structure type $S$ has an abstraction $\alpha_S:S\to\mathrm{Rel}_K$; a layout
-$L$ has $\mathrm{rep}_L$ with $\alpha\circ\mathrm{rep}_L=\mathrm{id}$.
-\begin{obligation}[per type, premise like \textsc{H-Eval}]
-Probe: $\alpha(\mathsf{lookup}(s,k))=\sigma_{key=k}\,\alpha(s)$.
-Merge: $\alpha(s\oplus s')=\alpha(s)+\alpha(s')$.
-Disjoint merge: if $\alpha(s)\cdot\alpha(s')=0$ then $s\oplus s'$ may be the
-cheaper $s\uplus s'$. Retyping replaces $S$ and preserves $\alpha$.
-\end{obligation}
-\begin{definition}
-$\mathsf{Runs}\langle S\rangle$ is a sequence of runs $r_i:S$ with round
-intervals $[l_i,u_i)$, contiguous and increasing. Its abstraction is
-$\sum_i\alpha(r_i)$; $\mathsf{cut}_u=\sum_{u_i\le u}\alpha(r_i)$.
-\end{definition}
-\begin{mathpar}
-\Rule{STR-Maintain}{\text{merge obligation for }S\quad
- \text{every required cut }u\text{ is a run boundary}}
- {\alpha(\mathsf{insert}(x,r))=\alpha(x)+\alpha(r)\quad
-  \alpha(\mathsf{merge}_i(x))=\alpha(x)\quad
-  \mathsf{cut}_u\text{ preserved}}
-\end{mathpar}
-\begin{theorem}
-For every $S$ satisfying the merge obligation, a maintained entry over a
-growing host $R$ satisfies $\alpha(x_t)=R^t$ at every call $t$, and every
-required cut $u\le t$ equals $R^u$. The proof is by induction on rounds and is
-parametric in $S$.
-\end{theorem}
-Time, run intervals and merge scheduling therefore belong to
-$\mathsf{Runs}$, not to $S$; $S$ owes only the merge law. The Structures IR
-records which entries are maintained and which cuts readers require; it may
-compact only beyond them.
+A consumer may own the final canonical boundary only if its contract states
+that multiplicity is unobservable there. Canonicalizing $N$ removes repeated
+rows \emph{inside} $N$; it does not remove rows already in another relation
+$R$. The latter requires $\mathrm{supp}(N)\setminus R$.
+For a pure fold of row values into a commutative idempotent monoid, duplicate
+rows do not affect the answer. Count and sum generally require canonical
+input. Counting a set is not a homomorphism for overlapping set union; no
+such law is assumed for general aggregates.
 
-\subsection{Streams of versions}
-A relation over rounds is $\mathbb N\to\mathrm{Rel}_K$ with integration $I$,
-differentiation $D$ and delay $z^{-1}$; $DI=ID=\mathrm{id}$.
-\begin{mathpar}
-\Rule{CQ-Diff}{q=A_1\bowtie\cdots\bowtie A_k\text{ over changing }A_i\quad
- \text{other inputs constant}}
- {D\Big(\prod_j IA_j\Big)=\sum_i\Big(\prod_{j<i}IA_j\Big)\,DA_i\,
-  \Big(\prod_{j>i}z^{-1}IA_j\Big)}
-
-\Rule{DL-InsertNew}{\text{insertions only}\quad K=\mathbb B}
- {D(\mathrm{supp}\circ I)\,N_t=\mathrm{supp}(N_t)\setminus
-  (I\,\mathrm{supp}\,N)_{t-1}}
-\end{mathpar}
-\textsc{CQ-Diff} is exact in $\mathbb N$. Under $\mathrm{supp}$ any family of
-terms covering every valuation with at least one changed atom is sound;
-reading the current version at every non-delta position is such a cover and
-only enlarges the bag $N_t$. The exact form needs $\mathsf{cut}$ at the previous
-round. \textsc{DL-InsertNew} is the only non-linear step; it is an anti-join
-against the canonical entry, which must therefore be stateful. By
-\textsc{STR-Maintain}, $\mathrm{rep}_L\circ I=I_\oplus\circ\mathrm{rep}_L$.
-
-\subsection{Datalog}
-A program has extensional hosts and intensional relations defined by rules
-whose bodies are core bodies. Negated atoms and aggregates refer only to lower
-strata. Termination requires that heads in a recursive component copy columns
-of positive atoms.
-\begin{mathpar}
-\Rule{DL-Strata}{G\text{ the dependency graph}\quad
- \text{no negative or aggregate edge inside an SCC of }G}
- {\sem{P}=\mathrm{lfp}\text{ of each SCC in topological order}}
-
-\Rule{DL-Delta}{F_1..F_k\text{ the variants of a rule}\quad
- \text{erasure of delta and cut renames gives the rule}\\
- \text{each changing position read as delta in exactly one }F_i}
- {F(R\cup\Delta)=F(R)\cup\textstyle\bigcup_iF_i(R\cup\Delta,\Delta)}
-\end{mathpar}
-Within one SCC let $F$ be monotone. Naive evaluation is
-$R^{t+1}=F(R^t)$. Semi-naive evaluation is
+\subsection{Representations and their obligations}
+A full-row structure has an abstraction
+$\alpha_S:S\to\mathrm{Rel}_K(X)$ and a lawful builder:
 \[
-\Delta^{t+1}=\mathrm{supp}\Big(\biguplus_iF_i(R^t,\Delta^t)\Big)\setminus R^t,
-\qquad R^{t+1}=R^t\uplus\Delta^{t+1}.
+ \alpha_S(\mathsf{build}_S(b))=b.
 \]
-\begin{theorem}
-$R^t_{semi}=R^t_{naive}$ for every $t$. Each valuation is enumerated in the
-round in which its last delta atom appears, so a partial guard sees the same
-valuation as in naive evaluation and $\bot$ arises exactly when it does there.
-\end{theorem}
-\begin{proof}[Sketch]
-Induction on $t$ using \textsc{DL-Delta}, monotonicity
-($R^t\subseteq F(R^t)$), and \textsc{DL-InsertNew}.
-\end{proof}
-Within a round, every variant reads hosts that are immutable for the call:
-the answer iterator borrows the current entry, so Rust rejects insertion until
-it is dropped. Composing \textsc{INC-Adequacy}, \textsc{STR-Maintain}, the
-theorem above and each pass checker gives
-$\mathrm{supp}\circ\sem{\text{generated Rust}}=\sem{P}$ under the premises of
-\S\ref{sec:incremental-scope}.
+A projected or filtered index instead builds its recorded view $V_L(b)$.
+It need not retain enough information to reconstruct the source relation.
+\begin{obligation}[per representation, as host premises]
+A probe enumerates exactly the abstract rows matching the requested key,
+with the representation's required multiplicities and payload reconstruction.
+A merge satisfies
+$\alpha_S(s\oplus s')=\alpha_S(s)+_K\alpha_S(s')$.
+An optimized disjoint merge must satisfy the same equation under its stated
+support-disjointness premise. Retyping preserves the observation contract,
+not the concrete abstraction function or storage layout.
+\end{obligation}
+Source-row disjointness does not imply disjoint projected keys. For example,
+$\{(a,1)\}$ and $\{(a,2)\}$ are disjoint but their projections onto the first
+column overlap. A membership layout must still combine equal keys correctly.
+Even a full-row hash or sorted index may share key prefixes across disjoint
+inputs; a fast merge cannot simply assume disjoint buckets.
+A canonical membership provider must decide full-tuple identity exactly;
+covering all columns syntactically is not sufficient without that law.
 
-\subsection{Ownership of laws}
+\begin{definition}[Generic runs]
+$\mathsf{Runs}\langle S\rangle$ holds contiguous intervals $[l_i,u_i)$,
+each containing an immutable representation $r_i$. Its full abstraction is
+$\sum_i\alpha_S(r_i)$. At an available boundary $u$, its exclusive cut is
+\[
+ \alpha(\mathsf{cut}_u(x))=\sum_{u_i\le u}\alpha_S(r_i).
+\]
+A cut inside a merged interval is unavailable unless the representation has
+an additional, explicitly specified capability to recover it.
+\end{definition}
+\begin{mathpar}
+\Rule{STR-Maintain}{\text{lawful builds, merges and reads for }S\\
+ \text{insert each interval exactly once in order}\\
+ \text{merge adjacent runs without crossing a protected cut}}
+ {\alpha(\mathsf{insert}(x,r))=\alpha(x)+_K\alpha_S(r)\\
+  \alpha(\mathsf{merge}(x))=\alpha(x)\quad
+  \alpha(\mathsf{cut}_u(\mathsf{merge}(x)))=\alpha(\mathsf{cut}_u(x))}
+\end{mathpar}
+\begin{proposition}[Parametric maintenance]
+Starting from an empty entry, insert exact increments $\delta R_0,\ldots,
+\delta R_t$, once each. Then its abstraction is
+$\sum_{j=0}^t\delta R_j$. Every protected cut $u$ denotes
+$\sum_{j<u}\delta R_j$. These claims follow by induction on insert and merge
+operations, assuming the representation obligations.
+\end{proposition}
+The cut convention is exclusive: a version after inserting round $t$ uses
+boundary $t+1$. Protection must precede a merge that would destroy a cut;
+requesting an already destroyed cut is not sound. Persistent snapshots or
+copy-on-write may discharge the same observation contract differently.
+A query obtains a version-consistent view of all required indexes before it
+runs. Publication of a new version and updates to all its indexes belong to
+the shared maintenance protocol, not to individual index semantics.
+
+The shared protocol owns rounds, publication, cut retention and scheduling;
+concrete structures own layout and lawful build/merge/probe operations.
+A selected backend may fuse operations but must refine that protocol.
+These are semantic laws and capability requirements, not a claim that a
+wrapper, merging, or multi-run probing has zero runtime cost.
+
+\subsection{Changes without subtraction}
+Option A uses supplied increments, not an invertible difference operator.
+For a stream $a_t$ of increments define
+\[
+ A_{-1}=0,\qquad A_t=I_K(a)_t=\sum_{j=0}^t a_j.
+\]
+Boolean integration is union and loses redundant insertions, so it cannot
+have a two-sided inverse. Natural-number subtraction is not defined for
+arbitrary decreasing snapshots either. An insert-only contract instead
+supplies $a_t$ and requires $A_t=A_{t-1}+_K a_t$.
+
+For a total positive join, multilinearity gives the exact batch expansion
+below; $A_{i,t}$ is the new accumulated input, and $a_{i,t}$ its supplied
+increment. All unchanged inputs are held fixed.
+\begin{mathpar}
+\Rule{CQ-Diff}{A_{i,t}=A_{i,t-1}+_K a_{i,t}\quad K\in\{\mathbb B,\mathbb N\}}
+ {\prod_i A_{i,t}=\prod_i A_{i,t-1}+_K
+   \sum_i\Big(\prod_{j<i}A_{j,t}\Big)a_{i,t}
+                \Big(\prod_{j>i}A_{j,t-1}\Big)}
+\end{mathpar}
+Products denote joins, not multiplication of tuples. The expansion partitions
+by the rightmost chosen increment and is exact for bags. When input sets
+have fresh, disjoint increments it also partitions input valuations, but
+projection or distinct rules can still produce the same output tuple.
+Reading current versions at all non-delta positions instead is a covering
+expansion: after support, union with the old result is still correct, though
+it may enumerate a valuation repeatedly. Neither form removes the need to
+reject already-known head tuples.
+
+Let $N_t$ be the candidate bag emitted at round $t$, $R_{t-1}$ the committed
+set before it, and $\delta R_t$ the accepted fresh set.
+\begin{mathpar}
+\Rule{DL-InsertNew}{\delta R_t=\mathrm{supp}(N_t)\setminus R_{t-1}}
+ {R_t=R_{t-1}\mathbin{\dot\cup}\delta R_t
+     =R_{t-1}\cup\mathrm{supp}(N_t)\quad
+   R_{t-1}\cap\delta R_t=\emptyset}
+\end{mathpar}
+A mutable staging set can implement both candidate self-deduplication and
+membership against $R_{t-1}$, but readers of this round must continue to see
+the old committed version. This may fuse physical operations; it does not
+erase their distinct semantic obligations. Cost includes processing the
+candidate bag, not only the accepted delta. A lawful maintained index needs
+work proportional to its update/merge algorithm; no universal
+$O(|\delta R_t|)$ round bound follows from these equations.
+
+\subsection{Datalog and the fixpoint boundary}
+A program distinguishes fixed extensional hosts from intensional relations.
+The dependency graph includes every rule-visible reference. Safety requires
+head and negative variables to be bound by allowed positive clauses.
+Negative or aggregate dependencies must point to completed lower strata;
+arbitrary Rust captures cannot hide reads of evolving intensional state.
+\begin{mathpar}
+\Rule{DL-Strata}{G\text{ contains all signed dependency edges}\\
+ \text{no negative or aggregate edge lies inside an SCC of }G}
+ {\text{evaluate dependency SCCs in order, freezing lower-stratum inputs}}
+\end{mathpar}
+For the following set theorem all rule expressions are total and pure.
+Within one SCC, let $S$ be the union of rules with no positive reference to
+that SCC, and let $F(R)$ be the union of the remaining recursive rules.
+The reference transition is explicitly inflationary:
+\[
+ G(R)=R\cup S\cup F(R),\qquad R^0=\emptyset,\quad R^{t+1}=G(R^t).
+\]
+Monotonicity alone would not imply $R\subseteq F(R)$ for arbitrary $R$.
+Finite fixed input domains and recursive heads that only copy positive-atom
+columns make this ascending chain stabilize. Lower-stratum seeds may add a
+finite set of values; no within-SCC value-generating operation is assumed.
+
+\begin{mathpar}
+\Rule{DL-Delta}{q\text{ a total positive recursive rule}\\
+ V_i\text{ preserves body order, head, and all fixed inputs}\\
+ V_i\text{ reads position }i\text{ from }\Delta
+ \text{ and every other SCC position from }R\cup\Delta\\
+ \{V_i\}\text{ covers exactly the positive SCC positions}}
+ {q(R\cup\Delta)=q(R)\cup\textstyle\bigcup_i V_i(R\cup\Delta,\Delta)}
+\end{mathpar}
+Delta erasure is necessary but not sufficient: a checker must also validate
+coverage, exact substitutions and dependencies. An exact old/new partition
+needs its corresponding positional version contract, not arbitrary cuts.
+
+Initialize $R^1=\Delta^1=S$. For $t\ge1$, evaluate the recursive variants
+against immutable $R^t,\Delta^t$, then set
+\[
+ N^t=\biguplus_{q,i}V_{q,i}(R^t,\Delta^t),\qquad
+ \Delta^{t+1}=\mathrm{supp}(N^t)\setminus R^t,\qquad
+ R^{t+1}=R^t\mathbin{\dot\cup}\Delta^{t+1}.
+\]
+\begin{proposition}[Total finite semi-naive evaluation]
+The semi-naive and reference sequences agree at each round, and their
+stabilized value is the least fixpoint of $G$.
+\end{proposition}
+\begin{proof}[Sketch]
+Recursive rules have a positive SCC atom, so $F(\emptyset)=\emptyset$ and the
+seed round agrees. Inductively,
+$R^t=R^{t-1}\cup\Delta^t$ and $F(R^{t-1})\subseteq R^t$.
+\textsc{DL-Delta} covers all newly enabled valuations; old derivations are
+already present. \textsc{DL-InsertNew} removes only known head tuples.
+Thus the next union is $R^t\cup S\cup F(R^t)$, as required.
+\end{proof}
+
+\paragraph{Partial Rust is a separate obligation.}
+Final-valuation coverage does not prove equality of panics: a guard may
+panic on a prefix that a later empty atom prevents from producing any answer.
+For partial code the required claim remains successful-source refinement,
+with written chains and Before facts preserved for each generated call.
+A multi-round proof must establish that every reached guard prefix is safe
+whenever the reference evaluation succeeds. Neither the total fixpoint proof
+nor a delta-renaming check alone supplies that argument. Interior mutation
+through shared references is also not ruled out by borrowing; the existing
+extensionality premise is still needed.
+
+\subsection{Ownership, comparison and remaining obligations}
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{p{.22\linewidth}p{.68\linewidth}}
 \toprule
-Level & Concept & Law\\
+Owner & Responsibility\\
 \midrule
-Datalog & strata, fixpoint, insertion & \textsc{DL-Strata}, \textsc{DL-Delta}, \textsc{DL-InsertNew}\\
-CQ/RA & variants and the cuts they read & \textsc{CQ-Diff}\\
-CQ contract & bag output & \textsc{INC-Adequacy}, \textsc{INC-Supp}\\
-Structures IR & maintained entries, required cuts & \textsc{STR-Maintain}\\
-Runtime types & $S$, merge, probe & obligations (premise)\\
-Rust & isolation within a round & borrow checking\\
+Datalog & Dependency strata, finite-domain discipline, inflationary fixpoint,
+and candidate-to-fresh-set boundary.\\
+CQ/RA & Checked per-call plans; explicit incremental expansion and version
+requirements where that optional path is introduced.\\
+Physical & Consumer-sensitive canonicalization and access scheduling.\\
+Structures & Representation and maintenance choices; declared readers and
+cuts, checked against a shared version protocol.\\
+Runtime protocol & Publication, cut retention and generic run management.\\
+Concrete type & Lawful build, merge, probe and any specialized capabilities.\\
 \bottomrule
 \end{tabular}
 \end{center}
-Choices recorded at their level: variant form (exact or cover), merge policy
-(eager $\uplus$ or kept runs), dedup order ($\mathrm{supp}(N)\setminus R$ or
-$\mathrm{supp}(N\setminus R)$), canonical layout, and whether holes own their
-layouts or bind shared ones.
+Ordinary CQ compilation retains its snapshot denotation. An incremental
+path must introduce an explicit state-transition contract; replacing an
+opaque storage type alone cannot add fixpoint or temporal semantics.
+Choices include exact versus covering variants, eager versus deferred merges,
+dedup-before-membership versus membership-before-dedup, canonical layout, and
+local versus shared indexes. Sharing must coordinate each reader's version
+requirements. Merge policy cannot invalidate an outstanding cut.
 
-\subsection{Premises and scope}
+Differential Dataflow provides a relevant implementation comparison at the
+inspected revision~\cite{code-dd}. Its \code{TraceReader} specifies accumulated
+updates and logical/physical compaction frontiers; \code{Spine<B>} and
+\code{CursorList<C>} already share substantial maintenance and reading logic.
+\code{OrdValMerger} and \code{OrdKeyMerger} each advance update timestamps;
+the generic chunk interface likewise requires an advancement operation.
+These are evidence of a particular boundary between shared contracts and
+specialized implementations, not evidence that all temporal semantics is
+duplicated or that unordered representations are semantically impossible.
+Its \code{formal/Differential/Compositional.lean} models compositional
+accumulation adequacy, but this is not a proof of our generated Rust or of
+every DD storage implementation.
+
 \label{sec:incremental-scope}
-Unproved premises: the probe and merge obligations of user types; purity of
-Rust guards apart from $\bot$; adequacy of Rust resolution and ownership.
-Differential dataflow uses $K=T\to_{fin}\mathbb Z$ with partially ordered
-time and per-operator squares $\mathrm{acc}\circ impl=D\circ\mathrm{acc}$; it
-places the annotation algebra in each structure's merger. Here it belongs to
-$K$ and to $\mathsf{Runs}$. Extending to $\mathbb Z$ adds an annotation
-parameter to structure leaves with addition and compaction; no structure
-changes its abstraction.
+Proof obligations remain: representation laws for user types, partial-Rust
+refinement across rounds, safe dedup handover, version publication and cut
+liveness, and composition of actual generated code with the total model.
+Rust trait bounds establish interfaces, not these laws. Property tests and
+counterexamples supplement, but do not replace, those arguments.
+Extending to signed weights or partially ordered time is a separate design:
+it requires stateful support/threshold handling, progress and compaction
+contracts, and appropriate operator laws. It is not just an annotation
+parameter added to otherwise unchanged structures.

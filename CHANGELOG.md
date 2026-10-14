@@ -30,6 +30,10 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   prefetched probes on scan spines; no per-row `Rc`; `HashIndex::keys()`.
 - Plan for staged quotation (plan control without touching upper stages) in
   `doc/QUOTATION.md`.
+- Formal incremental/Datalog design in `doc/formal/incremental.tex`, with seven
+  abstract rules. Distinguishes snapshot refinement from total fixpoint
+  equality, candidate dedup from freshness, and representation laws from
+  shared maintenance/version contracts. Signed changes remain out of scope.
 - SF 1 vs DuckDB 1 thread: 0.96–3.8× (Q19 0.20×), from 2.5–48×; D19 at parity;
   H07 880 → 44 ms, H09 2,170 → 107 ms, H05 269 → 41 ms. D85 regressed to
   61 ms in the integrated tree (open item). Details in `doc/STATUS.md`.
