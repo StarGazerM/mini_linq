@@ -51,10 +51,10 @@ Before this work (1a6460c) the same defaults were 2.5–48× slower than DuckDB
 
 ## Left work
 
-1. **D85 regression.** Integrated D85 is 61 ms; JoinFilter alone measured
-   20.6 ms and the previous commit 43 ms. Likely an interaction between bushy
-   branches and the join filter (filter not applied, or applied to a different
-   build side). Bisect first.
+1. **D85 regression.** The integrated baseline remains 61 ms. On isolated
+   `codex/d85-regression`, deferring a weak composite bushy branch behind a
+   stronger disjoint-key filter measured 19.7 ms. All 13 queries remained
+   exact; the branch's full workload suite passed. The fix is not integrated.
 2. **H07/H07_block/H05 build side.** Orders and Lineitem are still indexed where
    DuckDB streams them against small accumulated branches.
 3. **H21.** Both Lineitem aliases are indexed.
@@ -88,3 +88,35 @@ Before this work (1a6460c) the same defaults were 2.5–48× slower than DuckDB
 
 After the runtime work is integrated: staged quotation for plan control, in
 [`QUOTATION.md`](QUOTATION.md).
+
+## Isolated incremental/Datalog work
+
+The design is in [`formal/incremental.tex`](formal/incremental.tex). It keeps
+the existing bottom-plus-Set refinement contract; total fixpoint equality
+does not establish equality of panic domains. Maintained representations
+must preserve protected cuts and coordinate publication of all indexes.
+
+| Branch | Implementation commits | Validation / integration gate |
+|---|---|---|
+| `codex/datalog-lang` | `2292a6d` | Review clear; full workload suite running alone |
+| `codex/maintained-structures` | `17cdd52`, `08427da` | Five review findings fixed; root 550 and workloads 14,357 passed |
+| `codex/d85-regression` | `46be507` | Root 508 and workloads 14,357 passed; full SF1 comparison exact |
+
+These branches remain isolated; their tests do not validate a merged tree.
+Workload builds are serialized with `CARGO_BUILD_JOBS=1` after overlapping
+builds exhausted physical memory and accumulated swap. D85 and maintenance
+workload builds subsequently terminated successfully; no compiler
+nontermination was established.
+
+Remaining incremental work:
+
+1. Complete Datalog's serialized workload gate.
+2. Integrate staged calls/maintained state with Datalog-generated rounds;
+   the Datalog branch still rebuilds query-local indexes.
+3. Specify rule-local aggregate binding and dependency tracking; Datalog
+   currently rejects aggregate clauses and nested blocks.
+4. Establish the partial-Rust multi-round refinement argument and the
+   consumer-owned dedup contract. Structural checks are not those proofs.
+5. Check the combined tree and benchmark it before replacing the baseline
+   table above. For owned staged inputs, positional recovery is direct;
+   generic nonpositional `Rows` hosts may rescan by exact key.

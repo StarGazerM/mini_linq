@@ -38,6 +38,21 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   H07 880 → 44 ms, H09 2,170 → 107 ms, H05 269 → 41 ms. D85 regressed to
   61 ms in the integrated tree (open item). Details in `doc/STATUS.md`.
 
+### Isolated branches (not merged)
+
+- `codex/datalog-lang` (`2292a6d`): checked SCC scheduling, semi-naive
+  variants, mutual/nonlinear recursion and stratified negation; replaces
+  `cq-ext-recursion`. Aggregate clauses and nested blocks remain unsupported.
+- `codex/maintained-structures` (`17cdd52`, `08427da`): `Merge`, `Runs`,
+  protected cuts and staged parameter/growing hosts. Owns captured inputs and
+  persistent indexes; fixes native/fallback row-schema agreement and canonical
+  recovery order. Exact staged path checks build the invariant index once.
+- `codex/d85-regression` (`46be507`): defers weaker composite branches behind
+  stronger disjoint-key filters. Isolated SF1 D85: 62.3 → 19.7 ms; all queries
+  exact, no configuration more than 5% slower in the paired comparison.
+- Validation state and remaining cross-branch integration are recorded in
+  `doc/STATUS.md`; these results do not certify a combined tree.
+
 ## Execution model (exact semijoin pushdown, hashing)
 
 - `bf5206a` Fast hashing as a recorded type: default Structures types carry an
