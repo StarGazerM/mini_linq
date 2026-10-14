@@ -96,27 +96,25 @@ the existing bottom-plus-Set refinement contract; total fixpoint equality
 does not establish equality of panic domains. Maintained representations
 must preserve protected cuts and coordinate publication of all indexes.
 
-| Branch | Implementation commits | Validation / integration gate |
+| Branch | Implementation commits | Isolated validation |
 |---|---|---|
-| `codex/datalog-lang` | `2292a6d` | Review clear; full workload suite running alone |
+| `codex/datalog-lang` | `2292a6d` | Review clear; root 511 and workloads 14,357 passed |
 | `codex/maintained-structures` | `17cdd52`, `08427da` | Five review findings fixed; root 550 and workloads 14,357 passed |
 | `codex/d85-regression` | `46be507` | Root 508 and workloads 14,357 passed; full SF1 comparison exact |
 
 These branches remain isolated; their tests do not validate a merged tree.
-Workload builds are serialized with `CARGO_BUILD_JOBS=1` after overlapping
-builds exhausted physical memory and accumulated swap. D85 and maintenance
-workload builds subsequently terminated successfully; no compiler
-nontermination was established.
+All three full workload suites completed with `CARGO_BUILD_JOBS=1` after
+overlapping builds exhausted physical memory and accumulated swap. No
+compiler nontermination was established. No validation builds remain running.
 
 Remaining incremental work:
 
-1. Complete Datalog's serialized workload gate.
-2. Integrate staged calls/maintained state with Datalog-generated rounds;
+1. Integrate staged calls/maintained state with Datalog-generated rounds;
    the Datalog branch still rebuilds query-local indexes.
-3. Specify rule-local aggregate binding and dependency tracking; Datalog
+2. Specify rule-local aggregate binding and dependency tracking; Datalog
    currently rejects aggregate clauses and nested blocks.
-4. Establish the partial-Rust multi-round refinement argument and the
+3. Establish the partial-Rust multi-round refinement argument and the
    consumer-owned dedup contract. Structural checks are not those proofs.
-5. Check the combined tree and benchmark it before replacing the baseline
+4. Check the combined tree and benchmark it before replacing the baseline
    table above. For owned staged inputs, positional recovery is direct;
    generic nonpositional `Rows` hosts may rescan by exact key.
