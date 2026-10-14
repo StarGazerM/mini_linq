@@ -80,6 +80,16 @@
 //! | `rows` | Recorded retained row collections |
 //! | `selection` | Immutable positional selections, preserving base, lineage and summary policy |
 //! | `keyset` | Exact key-only builds, also matched by `membership` |
+//! | `join_filter` | Conservative filters with a mandatory covering exact probe |
+//!
+//! `retype(rN join_filter => T)` selects only that scan's join-filter entry.
+//! The type must implement `Build` and `ConservativeMembership`; the printer
+//! emits a rustc capability guard. Exact membership types qualify automatically.
+//! `join_filter(rN)` adds an exact filter when the scan has an admissible covering
+//! probe, even without default positional selection. This explicitly requires
+//! a positional host. Apply `retype` afterwards to choose another type. The
+//! Structures contract rejects missing covers, anti joins and opaque Rust in
+//! the intervening spine. Neither advice changes the exact covering probe.
 //!
 //! Keyset budget changes are explicit type rewrites. A read with an exact
 //! interval summary cannot silently lose that trait: rewrite its summary to
@@ -207,4 +217,11 @@ physical_rewrite!(lazy_semijoins);
 #[proc_macro]
 pub fn retype(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::retype).into()
+}
+
+/// Record an exact join filter on a named eligible scan occurrence.
+#[proc_macro]
+pub fn join_filter(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::join_filter)
+        .into()
 }

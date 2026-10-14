@@ -13,6 +13,7 @@ enum Kind {
     Rows,
     Selection,
     KeySet,
+    JoinFilter,
 }
 
 impl Kind {
@@ -26,6 +27,7 @@ impl Kind {
             "rows" => Some(Self::Rows),
             "selection" => Some(Self::Selection),
             "keyset" => Some(Self::KeySet),
+            "join_filter" => Some(Self::JoinFilter),
             _ => None,
         }
     }
@@ -42,6 +44,7 @@ impl Kind {
 
 enum Selector {
     Result(Ident),
+    JoinFilter(Ident),
     Kind(Kind),
 }
 
@@ -72,6 +75,20 @@ impl Parse for Retype {
             } else {
                 Kind::named(&at).map_or_else(|| Selector::Result(at.clone()), Selector::Kind)
             };
+        let selector = if input.peek(Ident) {
+            let kind: Ident = input.parse()?;
+            match selector {
+                Selector::Result(result) if kind == "join_filter" => Selector::JoinFilter(result),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        kind,
+                        "expected result join_filter => Type",
+                    ));
+                }
+            }
+        } else {
+            selector
+        };
         input.parse::<Token![=>]>()?;
         let ty = input.parse()?;
         Ok(Self { selector, at, ty })
@@ -94,6 +111,10 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
             Selector::Result(ref result) => {
                 name == symbol_name(result) && keyed_read(&entry.structure, source)
             }
+            Selector::JoinFilter(ref result) => {
+                name == symbol_name(result)
+                    && matches!(entry.structure, Structure::JoinFilter { .. })
+            }
             Selector::Kind(kind) => match &entry.structure {
                 Structure::Dedup { .. } | Structure::HeadDedup { .. } => {
                     matches!(kind, Kind::Dedup)
@@ -101,7 +122,8 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 Structure::Rows { .. } => matches!(kind, Kind::Rows),
                 Structure::Selection { .. } => matches!(kind, Kind::Selection),
                 Structure::KeySet { .. } => matches!(kind, Kind::KeySet | Kind::Membership),
-                Structure::Read { .. } | Structure::JoinFilter { .. } => false,
+                Structure::Read { .. } => false,
+                Structure::JoinFilter { .. } => matches!(kind, Kind::JoinFilter),
                 Structure::Host { reader, .. } => {
                     matches!(kind, Kind::Membership) && reader == "membership"
                         || source.physical.program.definitions.iter().any(|d| {
@@ -142,7 +164,8 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 | Structure::Rows { ty, .. }
                 | Structure::Selection { ty, .. }
                 | Structure::KeySet { ty, .. } => *ty = request.ty.clone(),
-                Structure::Read { .. } | Structure::JoinFilter { .. } => unreachable!("read is not a provider type"),
+                Structure::JoinFilter { filter, .. } => filter.ty = request.ty.clone(),
+                Structure::Read { .. } => unreachable!("read is not a provider type"),
             }
             changed = true;
         }
@@ -173,4 +196,56 @@ fn keyed_read(structure: &Structure, source: &ir::Program) -> bool {
         }
         _ => false,
     }
+}
+
+/// Add a covered scalar filter to the named scan occurrence. The default type
+/// is exact; a later `retype(scan join_filter => T)` chooses its representation.
+/// This is explicit positional-host advice, including when selection was not
+/// given positional hosts. The same Structures contract checks the result.
+pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    let scan: Ident = syn::parse2(arguments)?;
+    let facts = ir::contract::check(source)?;
+    if facts.join_filters.contains_key(&symbol_name(&scan)) {
+        return Ok(source.clone());
+    }
+    let mut candidates = source.physical.program.definitions.iter().filter_map(|d| {
+        let (candidate, build, key, _) =
+            ir::join_filter_candidate(source, &facts, &symbol_name(&d.name))?;
+        (candidate == symbol_name(&scan)).then_some((&d.name, build, key))
+    });
+    let Some((covering, build, key)) = candidates.next() else {
+        return Err(syn::Error::new_spanned(
+            scan,
+            "scan has no admissible covering exact probe",
+        ));
+    };
+    if candidates.next().is_some() {
+        return Err(syn::Error::new_spanned(
+            scan,
+            "scan has ambiguous covering probes",
+        ));
+    }
+    let origin = &facts.lineage[&symbol_name(&scan)];
+    let index = syn::Index::from(
+        facts.host_layouts[&origin.base]
+            .iter()
+            .position(|c| c == &origin.columns[&key])
+            .expect("checked lineage"),
+    );
+    let key = &facts.physical.rows[&build].bindings[&key];
+    let build = source
+        .physical
+        .program
+        .definitions
+        .iter()
+        .find(|d| symbol_name(&d.name) == build)
+        .map(|d| &d.name)
+        .expect("checked build");
+    let mut target = source.clone();
+    target.structures.entries.push(syn::parse_quote! {
+        #scan join_filter = ::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>
+            build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
+    });
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
 }

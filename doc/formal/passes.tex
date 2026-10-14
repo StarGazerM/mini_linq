@@ -605,7 +605,7 @@ and $S$ checked redundant-support absorption:
 \begin{mathpar}
 \Rule{Plan-Prefix}{n=N(q)\quad v=O_{Filtered,Coarse}(n)\\
  r=\text{None if \code{no_reduce}, otherwise Hypergraph}\\
- w=R_{None,r}(v)\quad a=\begin{cases}E(w)&\text{if \code{no_reduce}}\\S(E(w))&\text{otherwise}\end{cases}}
+ w=R_{None,r}(v)\quad {a=\begin{cases}E(w)&\text{if \code{no_reduce}}\\S(E(w))&\text{otherwise}\end{cases}}}
  {\code{mini_linq::passes::plan}(q)=\mathsf{orient}(a)}
 
 \Rule{Plan-Generic}{n=N(q)\quad v=O_{Written,Fine}(n)\quad a=E(v)}
@@ -644,23 +644,21 @@ its explicitly requested ordering policy.
 \paragraph{Join-filter selection and realization.}
 \textsc{SEL-JoinFilter} records a scalar filter only for a statically filtered,
 total hash-build branch and an exclusive declarative scan spine leading to its
-exact probe. Occurrence-preserving bounded builds select an exact
-\code{AdaptiveKeySet}; joined branches select a fixed-budget \code{BloomFilter}.
-Neither choice samples cardinalities or assumes keys or foreign keys.
+exact probe. Every eligible build selects an exact \code{AdaptiveKeySet}.
+Selection does not sample cardinalities or assume keys or foreign keys.
+Approximate structures live in an external feature and require explicit
+\code{cq_rewrites::retype} advice; the printer has no algorithm-specific branch.
 \textsc{IF-JoinFilter} constructs the recorded provider from the existing
-index's distinct keys, then filters positions before fetching payloads.
+index's distinct keys through \code{Build} on $(k,())$ pairs, emits
+\code{require::conservative::<K,T>}, then filters positions before fetching payloads.
 Host block bounds use the provider's conservative \code{any_in}; an absent bound
-never skips a block. The covering exact probe is unchanged, so Bloom false
+never skips a block. The covering exact probe is unchanged, so conservative false
 positives only perform extra probes. No opaque guard or bind is crossed.
 \begin{mathpar}
 \Rule{SEL-JoinFilter}{
  \mathsf{eligibleCoveredScan}(s,b,k,j)\quad
  \mathsf{positionalHost}(s)\\
- T=\begin{cases}
- \code{AdaptiveKeySet<i64,I64Codec,67108864>} &
-   \mathsf{singleBaseBounded}(b)\\
- \code{BloomFilter<16384>} & \text{otherwise}
- \end{cases}
+ T=\code{AdaptiveKeySet<i64,I64Codec,67108864>}
 }{
  \mathsf{select}(s,b,k,j)=
  \mathsf{joinFilter}(T,b,k,j,\mathsf{marker}(s,k))

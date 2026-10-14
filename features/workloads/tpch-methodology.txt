@@ -95,3 +95,19 @@ The complete TSV has one row per query/configuration/scale. Companion JSON
 records raw sorted samples, SQL, export schemas, configurations, compile reports,
 engine/compiler versions and methodology. A .partial TSV is used during a run;
 the final TSV is replaced only after the entire requested suite passes.
+
+Join-filter configurations
+H03, D85, H07 and H09 declare join-filter-advised explicitly in their source.
+H03, D85 and H09 use the default plan and positional selection, then retype the recorded
+join-filter entries to cq_join_filters::BloomFilter<16384> (128 KiB of bits).
+Default selection records only exact AdaptiveKeySet structures. The additional
+join-filter-always-true configuration checks the covering probes against DuckDB
+with a filter that rejects nothing. H07's default reduction retains its scans,
+so it has no eligible join-filter entries. Its three join-filter configurations
+explicitly use plan(no_reduce). The join-filter-exact configuration uses the
+same plan as join-filter-advised, isolating filter choice; for the other three
+kernels join-filter-exact is identical to default. Compare H07's default with
+its unreduced configurations as a whole-plan comparison, never as evidence of
+filter-only speedup. Retyping preserves clauses and the covering exact probes.
+All filter construction costs are inside each measured execution. The feature
+uses the public Retention accounting companion for its owned bit allocation.

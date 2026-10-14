@@ -561,17 +561,22 @@ impl<'a> Context<'a> {
                     continue;
                 }
                 let id = self.join_filter_ident(scan);
-                let keys =
-                    quote!(::core::iter::Iterator::map(#structure.keys(), |__cq_key| *__cq_key.0));
+                let pairs = quote!(::core::iter::Iterator::map(
+                    #structure.keys(), |__cq_key| (*__cq_key.0, ())
+                ));
                 let ty = &filter.ty;
-                let value = match filter.kind {
-                    structures::FilterKind::Exact(_) => {
-                        quote!(::cq_storage::Membership(&<#ty>::from_keys(#keys, ::cq_storage::I64Codec)))
-                    }
-                    structures::FilterKind::Bloom(_) => quote!(<#ty>::from_keys(#keys)),
+                let bare = matches!(ty, syn::Type::Path(path)
+                    if path.qself.is_none() && path.path.segments.iter().all(|s| s.arguments.is_none()));
+                let value = if bare {
+                    quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
+                } else {
+                    quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
                 };
+                statements.push(syn::parse_quote!(let #id = &#value;));
                 statements
-                    .push(syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#value);));
+                    .push(syn::parse_quote!(::cq_storage::require::conservative::<i64, _>(#id);));
+                statements
+                    .push(syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#id);));
             }
             if *ty == syn::parse_quote!(::std::collections::HashSet<_>)
                 || *ty == syn::parse_quote!(::cq_storage::HashSet<_>)

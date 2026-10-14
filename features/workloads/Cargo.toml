@@ -39,6 +39,7 @@ cq-physical-realization = { version = "0.1.0", path = "../../passes/cq-physical-
 cq-planners = { path = "../planners" }
 cq-planners-plan = { path = "../planners/plan" }
 cq-rewrites = { path = "../rewrites" }
+cq-join-filters = { path = "../join-filters" }
 cq-workload-passes = { path = "pipeline-passes" }
 cq-rewrite-passes = { path = "../rewrites/passes" }
 own-push = { path = "../own-dialect/printer" }
@@ -87,6 +88,7 @@ cq-planners-plan.workspace = true
 cq-rewrite-passes.workspace = true
 cq-planners.workspace = true
 cq-rewrites.workspace = true
+cq-join-filters.workspace = true
 cq-workload-passes.workspace = true
 cq-index-policy.workspace = true
 cq-physical-lowering.workspace = true

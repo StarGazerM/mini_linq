@@ -24,6 +24,7 @@ pub(super) fn build(root: &Path, source: &Path, name: &str) -> Result<Built> {
         "cq-storage",
         "cq-planners",
         "cq-rewrites",
+        "cq-join-filters",
         "cq-ext-aggregate",
         "cq-ext-correlated",
         "cq-ext-negation",

@@ -435,6 +435,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-join-filters"
+version = "0.1.0"
+dependencies = [
+ "cq-storage",
+]
+
+[[package]]
 name = "cq-lang-cq"
 version = "0.1.0"
 dependencies = [
@@ -735,6 +742,7 @@ dependencies = [
  "cq-ext-recursion",
  "cq-ext-support",
  "cq-index-policy",
+ "cq-join-filters",
  "cq-lang-cq",
  "cq-lang-physical",
  "cq-lang-structures",

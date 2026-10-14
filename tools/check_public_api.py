@@ -27,18 +27,25 @@ SNAPSHOTS=ROOT/"tools/public-api"
 def snapshot(data):
     index=data["index"]; paths=data["paths"]; root=index[str(data["root"])]; crate=root["name"]
     names={}; exported=set(); rows={}; impls=set()
-    def walk(identifier, path, inherited=False):
+    def walk(identifier, path, inherited=False, ancestors=()):
         identifier=str(identifier)
         if identifier not in index:return
         item=index[identifier]
         if item["crate_id"]!=0:return
         if not inherited and item["visibility"]!="public":return
-        names[identifier]=path;exported.add(identifier)
+        if identifier in ancestors:return
         kind,content=next(iter(item["inner"].items()))
+        if kind=="use":
+            target=index.get(str(content["id"]))
+            if target and target["crate_id"]==0:
+                if content["is_glob"] and "module" in target["inner"]:
+                    walk_children(target["inner"]["module"]["items"], path.rsplit("::",1)[0], ancestors+(identifier,))
+                else:
+                    walk(content["id"],path,True,ancestors+(identifier,))
+                return
+        names[identifier]=path;exported.add(identifier)
         if kind=="module":
-            for child in content["items"]:
-                child_item=index.get(str(child)); name=child_item and child_item["name"]
-                if name:walk(child,path+"::"+name)
+            walk_children(content["items"],path,ancestors+(identifier,))
         elif kind=="struct":
             fields=content["kind"]
             children=fields.get("plain",{}).get("fields",[]) if isinstance(fields,dict) else []
@@ -57,6 +64,12 @@ def snapshot(data):
         elif kind=="trait":
             for child in content["items"]:walk(child,path+"::"+index[str(child)]["name"],True)
             impls.update(map(str,content["implementations"]))
+    def walk_children(children,path,ancestors):
+        for child in children:
+            item=index.get(str(child))
+            if not item:continue
+            name=item["name"] or item["inner"].get("use",{}).get("name")
+            if name:walk(child,path+"::"+name,ancestors=ancestors)
     walk(data["root"],crate,True)
     def reference(identifier):
         key=str(identifier)

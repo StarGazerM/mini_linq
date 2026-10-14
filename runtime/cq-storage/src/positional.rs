@@ -238,7 +238,7 @@ impl<K: Ord> ReadPredicate<K> for Window<K> {
 
 /// Scan a static predicate and a conservative join filter together. Both
 /// independent block bounds must admit a block; static row tests precede key
-/// filtering, so rejected rows incur no Bloom hashing or exact-set lookup.
+/// filtering, so rejected rows incur no filter hashing or exact-set lookup.
 pub fn read_with_filter<H, C, D, P, Q>(
     host: H,
     column: C,

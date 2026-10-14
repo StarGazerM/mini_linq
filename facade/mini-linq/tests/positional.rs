@@ -331,7 +331,7 @@ macro_rules! filtered_join {
 }
 
 #[test]
-fn covered_exact_and_bloom_scan_filters_preserve_answers_and_skip_blocks() {
+fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
     let left = vec![
         (i64::MIN, 10_i64),
         (1, 9),

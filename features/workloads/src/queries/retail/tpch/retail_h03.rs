@@ -10,6 +10,7 @@ JOIN lineitem l ON l.l_orderkey = o.o_orderkey
 WHERE c.c_mktsegment = 'BUILDING' AND o.o_orderdate < DATE '1995-03-15'
 AND l.l_shipdate > DATE '1995-03-15'"#;
     candidate hypergraph;
+    advise join_filter ::cq_join_filters::BloomFilter<16384>;
     setup { let cutoff = date("1995-03-15"); }
     relations {
         relation Customer => customer(c_custkey: i64, c_mktsegment: String);

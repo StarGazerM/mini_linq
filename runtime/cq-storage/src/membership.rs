@@ -1,8 +1,32 @@
-//! Exact immutable key lookup, distinct from conservative summaries.
+//! Exact and conservative membership in a represented build key set.
 
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::hash::{BuildHasher, Hash};
+
+/// One-sided membership in the keys supplied through `Build`.
+///
+/// For every supplied key, `test` must be true. False positives are allowed;
+/// users must retain an exact residual probe. A provider may weaken its tests
+/// (even to always true) at runtime, but must never reject a supplied key.
+/// `Build` consumes `(key, payload)` pairs; join filters receive `(key, ())`.
+/// Rust bounds enforce capabilities, not these semantic laws.
+pub trait ConservativeMembership<K: ?Sized> {
+    fn test(&self, key: &K) -> bool;
+    /// False proves no build key lies in the closed interval. Without a
+    /// summary, retaining every block is lawful. Bounds do not prove membership.
+    fn may_contain_in(&self, _lo: &K, _hi: &K) -> bool {
+        true
+    }
+}
+
+/// Exact membership is always a lawful conservative filter. Interval pruning
+/// is optional; this blanket implementation conservatively retains blocks.
+impl<K: ?Sized, T: ExactMembership<K> + ?Sized> ConservativeMembership<K> for T {
+    fn test(&self, key: &K) -> bool {
+        self.contains(key)
+    }
+}
 
 /// Exact membership in the collection's represented key set.
 ///

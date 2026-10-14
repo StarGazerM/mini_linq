@@ -83,7 +83,7 @@ pub mod dispatch;
 mod hash_index;
 mod hash_state;
 mod join_filter;
-pub use join_filter::{BloomFilter, JoinFilterPredicate};
+pub use join_filter::JoinFilterPredicate;
 mod host;
 mod instrument;
 mod membership;
@@ -95,7 +95,7 @@ pub use answers::{Answers, GroupedAnswers, SingleGroup};
 pub use candidates::{Candidates, Keys};
 pub use hash_index::{BucketCursor, Build, HashIndex, IndexRead};
 pub use hash_state::{HashSet, HashSetConstructor, HashState};
-pub use membership::{Canonical, ExactMembership};
+pub use membership::{Canonical, ConservativeMembership, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
@@ -116,6 +116,7 @@ pub mod require {
     pub fn keyed<K, T: super::IndexRead<Key = K>>(_: T) {}
     pub fn seek<T: super::IndexRead>(_: T) {}
     pub fn contains<K: ?Sized, T: super::ExactMembership<K>>(_: T) {}
+    pub fn conservative<K: ?Sized, T: super::ConservativeMembership<K>>(_: &T) {}
     pub fn ordered<T: super::OrderedRead>(_: T) {}
     /// A direct ordered read must use the leading declared key type.
     pub fn ordered_key<'a, K, T: super::OrderedRead + 'a>(_: &'a T)

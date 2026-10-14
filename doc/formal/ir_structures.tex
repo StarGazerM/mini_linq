@@ -13,7 +13,7 @@ Entry ::= r = Type [K]... [membership] [payload[P] constants{c = term, ...}];
               base H lineage{a -> c, ...};
         | r read = positional base H lineage{a -> c, ...}
               column c marker Type predicate Predicate;
-        | r join_filter = (exact | bloom) Type build s [k]
+        | r join_filter = Type build s [k]
               covering j marker Type;
 Predicate ::= physical | membership s [K] summary (exact | row)
 \end{lstlisting}
@@ -160,22 +160,35 @@ includes keysets. Losing interval membership requires an explicit row-summary
 rewrite or rejection, never a printer fallback.
 
 \paragraph{Covered join filters.}
-An entry \code{s join_filter = bloom ::cq_storage::BloomFilter<16384>
-build b [k] covering j marker ::cq_load::ColumnAt<n>;} records the scan
-occurrence, build keys, fixed provider budget, host key column and exact
-covering probe. The alternative \code{exact} entry records
-\code{AdaptiveKeySet<i64,I64Codec,67108864>}.
+An entry \code{s join_filter = Type build b [k] covering j
+marker ::cq_load::ColumnAt<n>;} records a structure's Rust type, the scan
+occurrence, build keys, host key column and exact covering probe. The core
+neither classifies approximate algorithms nor recognizes their names.
 \textsc{STR-JoinFilter} independently checks that \code{j} is a probe of
-\code{b} on the same scalar key, that the build is total and statically
-filtered, and that the scan reaches this probe through an exclusive,
+\code{b} on the same scalar key, that the build is total, and that the scan reaches this probe through an exclusive,
 occurrence-preserving declarative pipe spine. Retained, scoped, opaque and
-occurrence-expanding stream boundaries are rejected. The exact representation
-requires a single-base selection-bounded build; joined builds use Bloom.
-The filter admits a superset of the build keys and is never a membership
-answer or uniqueness proof. Bloom false positives are eliminated by the
-unchanged exact probe; no false negatives are permitted. Exact sets answer
-block interval existence exactly; Bloom interval bounds conservatively retain
-every overlapping block. Missing block metadata retains all candidate blocks.
+occurrence-expanding stream boundaries are rejected. An anti join cannot cover
+a filter. Removing the exact probe leaves an invalid entry: a conservative
+filter can never be the only check of the constraint.
+
+For the keys $S$ supplied by \code{Build}, the capability laws are
+\[
+ \begin{aligned}
+ T:\code{ConservativeMembership<K>} &: \quad k\in S\implies T.\mathsf{test}(k),\\
+ T:\code{ExactMembership<K>} &: \quad k\in S\iff T.\mathsf{contains}(k).
+ \end{aligned}
+\]
+Every exact type also implements conservative membership by a blanket
+implementation. Neither capability is a uniqueness proof. Runtime weakening
+to an always-true test is permitted by the one-sided law; false negatives are
+never permitted. A conservative \code{may_contain_in(lo,hi)} may return false only
+when the closed interval contains no build key. Its default retains every
+block; the exact-to-conservative blanket uses this default. Missing host block
+metadata also retains the block. Exact keyset reads retain their separate
+\code{ExactIntervalMembership} capability. Rustc checks capabilities through
+\code{require::conservative::<K,T>}; semantic provider laws remain premises.
+External structures may supply stronger block summaries without changing the
+covering obligation. False positives are eliminated by the unchanged probe.
 For a positional static read directly over the rename/project spine, realization
 intersects both block summaries and tests the static row predicate before the
 join key. The optional counters \code{join_filter_tested} and
@@ -186,9 +199,9 @@ conditions and relational readers can reduce the surviving count further.
  j=\mathsf{probe}[k](l,b)\quad k:\code{i64}\quad
  \mathsf{exactHashIndex}(b,k)\\
  \mathsf{exclusiveTotalSpine}(s,l)\quad
- \mathsf{totalFilteredBuild}(b)\quad
+ \mathsf{totalBuild}(b)\quad
  \mathsf{marker}(s,k)=C\\
- \mathsf{recordedProvider}(F,b)\quad
+ T:\code{Build}\quad T:\code{ConservativeMembership}(k)\quad
  \pi_k(b)\subseteq\{x\mid F.\mathsf{test}(x)\}
 }{
  s\;\mathsf{joinFilter}(F,b,k,j,C)\text{ is admissible}
@@ -196,5 +209,10 @@ conditions and relational readers can reduce the surviving count further.
 \end{mathpar}
 Here $\mathsf{exclusiveTotalSpine}$ contains only one-use pipe renames,
 projections and declarative selections, without canon or fused scopes.
-$\mathsf{recordedProvider}$ checks the static kind, scalar layout, codec and
-budget above; it does not accept an arbitrary provider claiming coverage.
+The recorded type is checked syntactically as a Rust type, and its capabilities
+are checked by rustc, rather than by a provider-name whitelist. External
+\code{retype(s join_filter => T)} changes only the recorded type.
+\code{join_filter(s)} may explicitly add a default exact structure when default
+selection did not (including total unfiltered builds); it records
+positional-host advice and undergoes the same
+contract and correspondence checks.

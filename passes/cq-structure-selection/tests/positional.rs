@@ -158,19 +158,22 @@ fn join_filter_plan(branch: bool) -> ir::Program {
 }
 
 #[test]
-fn join_filters_record_static_kind_and_exact_covering_probe() {
+fn join_filters_record_exact_type_and_covering_probe() {
     for branch in [false, true] {
         let selected = join_filter_plan(branch);
         let facts = ir::contract::check(&selected).unwrap();
         assert_eq!(facts.join_filters.len(), 1);
         let filter = &facts.join_filters["l"];
-        assert_eq!(matches!(filter.kind, ir::FilterKind::Bloom(_)), branch);
+        assert_eq!(
+            filter.ty,
+            syn::parse_quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>)
+        );
         assert_eq!(filter.covering, "j");
         assert_eq!(
             syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(),
             selected
         );
-        for forgery in 0..5 {
+        for forgery in 0..4 {
             let mut bad = selected.clone();
             for entry in &mut bad.structures.entries {
                 if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
@@ -178,8 +181,7 @@ fn join_filters_record_static_kind_and_exact_covering_probe() {
                         0 => filter.covering = syn::parse_quote!(out),
                         1 => filter.build = syn::parse_quote!(s),
                         2 => filter.key = syn::parse_quote!([z]),
-                        3 => filter.marker = syn::parse_quote!(::cq_load::ColumnAt<1>),
-                        _ => filter.ty = syn::parse_quote!(::cq_storage::BloomFilter<1>),
+                        _ => filter.marker = syn::parse_quote!(::cq_load::ColumnAt<1>),
                     }
                 }
             }

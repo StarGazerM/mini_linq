@@ -5,6 +5,15 @@
 pub struct Retention {
     _allocation: crate::counters_memory::Allocation,
 }
+impl Retention {
+    /// Account for bytes owned by an external provider, excluding borrowed data
+    /// and allocator overhead. Dropping this value releases the accounting.
+    pub fn new(bytes: usize) -> Self {
+        Self {
+            _allocation: crate::counters_memory::Allocation::new(bytes),
+        }
+    }
+}
 /// Record a standard Vec's actual capacity and copied tuple occurrences.
 /// This performs no allocation or traversal and is a no-op without counters.
 #[allow(clippy::ptr_arg)]

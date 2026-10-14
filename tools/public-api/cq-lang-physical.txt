@@ -639,6 +639,7 @@ cq_lang_physical::Choice::Lazy	{"variant":{"discriminant":null,"kind":{"tuple":[
 cq_lang_physical::Choice::Lazy::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_physical::kw::lazy","path":"kw::lazy"}}}
 cq_lang_physical::Choice::Smallest	{"variant":{"discriminant":null,"kind":{"tuple":[1004]}}}
 cq_lang_physical::Choice::Smallest::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_physical::kw::smallest","path":"kw::smallest"}}}
+cq_lang_physical::CommaList	{"use":{"id":"cq_syntax::CommaList","is_glob":false,"name":"CommaList","source":"cq_syntax::CommaList"}}
 cq_lang_physical::Definition	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_physical::Definition::name","cq_lang_physical::Definition::eq_token","cq_lang_physical::Definition::mode","cq_lang_physical::Definition::canon","cq_lang_physical::Definition::operator","cq_lang_physical::Definition::semi_token"],"has_stripped_fields":false}}}}
 cq_lang_physical::Definition::canon	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_physical::kw::canon","path":"kw::canon"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_lang_physical::Definition::eq_token	{"struct_field":{"resolved_path":{"args":null,"id":"syn::token::Eq","path":"$crate::token::Eq"}}}
@@ -736,6 +737,7 @@ cq_lang_physical::kw::first	{"struct":{"generics":{"params":[],"where_predicates
 cq_lang_physical::kw::first::span	{"struct_field":{"resolved_path":{"args":null,"id":"syn::__private::Span","path":"$crate::__private::Span"}}}
 cq_lang_physical::kw::fused	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_physical::kw::fused::span"],"has_stripped_fields":false}}}}
 cq_lang_physical::kw::fused::span	{"struct_field":{"resolved_path":{"args":null,"id":"syn::__private::Span","path":"$crate::__private::Span"}}}
+cq_lang_physical::kw::kw	{"use":{"id":"cq_syntax::algebra::kw","is_glob":true,"name":"kw","source":"cq_syntax::algebra::kw"}}
 cq_lang_physical::kw::lazy	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_physical::kw::lazy::span"],"has_stripped_fields":false}}}}
 cq_lang_physical::kw::lazy::span	{"struct_field":{"resolved_path":{"args":null,"id":"syn::__private::Span","path":"$crate::__private::Span"}}}
 cq_lang_physical::kw::merge	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_physical::kw::merge::span"],"has_stripped_fields":false}}}}
@@ -755,3 +757,5 @@ cq_lang_physical::kw::semi::span	{"struct_field":{"resolved_path":{"args":null,"
 cq_lang_physical::kw::smallest	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_physical::kw::smallest::span"],"has_stripped_fields":false}}}}
 cq_lang_physical::kw::smallest::span	{"struct_field":{"resolved_path":{"args":null,"id":"syn::__private::Span","path":"$crate::__private::Span"}}}
 cq_lang_physical::ordinals	{"function":{"generics":{"params":[],"where_predicates":[]},"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["analysis",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"resolved_path":{"args":null,"id":"cq_lang_physical::Analysis","path":"Analysis"}}}}],["result",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"primitive":"str"}}}],["columns",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"slice":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}}}]],"is_c_variadic":false,"output":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}}}
+cq_lang_physical::symbol_name	{"use":{"id":"cq_syntax::symbol_name","is_glob":false,"name":"symbol_name","source":"cq_syntax::symbol_name"}}
+cq_lang_physical::syntax	{"use":{"id":"cq_syntax","is_glob":false,"name":"syntax","source":"cq_syntax"}}

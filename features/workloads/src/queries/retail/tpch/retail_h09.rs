@@ -12,6 +12,7 @@ JOIN orders o ON o.o_orderkey = l.l_orderkey
 JOIN nation n ON n.n_nationkey = s.s_nationkey
 WHERE p.p_name LIKE '%green%'"#;
     candidate generic_smallest;
+    advise join_filter ::cq_join_filters::BloomFilter<16384>;
     setup {}
     relations {
         relation Lineitem => lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);

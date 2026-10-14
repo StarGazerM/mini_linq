@@ -2,15 +2,7 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub enum FilterKind {
-    #[parse(peek = kw::exact)]
-    Exact(kw::exact),
-    #[parse(peek = kw::bloom)]
-    Bloom(kw::bloom),
-}
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct JoinFilter {
-    pub kind: FilterKind,
     pub ty: syn::Type,
     pub build_token: kw::build,
     pub build: Ident,
@@ -21,9 +13,9 @@ pub struct JoinFilter {
     pub marker: syn::Type,
 }
 
-/// Static candidate: a single-use declarative stream and a filtered, total build.
-/// The bool selects exact membership for an occurrence-preserving bounded build;
-/// joined build branches use a fixed-budget Bloom and keep the exact probe.
+/// A covered single-use declarative stream and a total build. The final flag
+/// reports a statically filtered build, which default selection requires;
+/// explicit advice may add a filter on an unfiltered total build as well.
 pub fn join_filter_candidate(
     program: &Program,
     facts: &Analysis,
@@ -85,10 +77,7 @@ pub fn join_filter_candidate(
             _ => None,
         }
     }
-    if !total_filtered(&build, &defs)? {
-        return None;
-    }
-    let exact = facts.lineage.contains_key(&build);
+    let filtered = total_filtered(&build, &defs)?;
     let mut current = symbol_name(&k.left);
     let mut consumer = probe.to_owned();
     loop {
@@ -118,7 +107,7 @@ pub fn join_filter_candidate(
         }
         consumer = current.clone();
         match &d.operator {
-            Operator::Rename(_) => return Some((current, build, key, exact)),
+            Operator::Rename(_) => return Some((current, build, key, filtered)),
             Operator::Project(p) => current = symbol_name(&p.input),
             Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
                 current = symbol_name(&s.input)
@@ -132,35 +121,23 @@ pub fn join_filter_candidate(
 pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Result<()> {
     for (scan, filter) in &facts.join_filters {
         let probe = symbol_name(&filter.covering);
-        let Some((expected_scan, build, key, exact)) =
-            join_filter_candidate(program, facts, &probe)
+        let Some((expected_scan, build, key, _)) = join_filter_candidate(program, facts, &probe)
         else {
             return error(
                 &filter.covering,
-                "join filter requires a covering exact probe, total filtered build and exclusive declarative scan spine",
+                "join filter requires a covering exact probe, total build and exclusive declarative scan spine",
             );
         };
         if *scan != expected_scan
             || symbol_name(&filter.build) != build
             || names(&filter.key.columns) != [key.clone()]
-            || matches!(filter.kind, FilterKind::Exact(_)) != exact
         {
             return error(
                 &filter.covering,
-                "join filter build/key/representation must match its exact covering probe and static bound",
+                "join filter build/key must match its exact covering probe",
             );
         }
-        let expected_type: syn::Type = if exact {
-            syn::parse_quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>)
-        } else {
-            syn::parse_quote!(::cq_storage::BloomFilter<16384>)
-        };
-        if filter.ty != expected_type {
-            return error(
-                &filter.ty,
-                "join filter must record its scalar provider, codec and fixed budget",
-            );
-        }
+        concrete_type(&filter.ty)?;
         let origin = &facts.lineage[scan];
         let column = &origin.columns[&key];
         let index = syn::Index::from(

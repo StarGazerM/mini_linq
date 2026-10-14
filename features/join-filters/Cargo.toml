@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+
+[package]
+name = "cq-join-filters"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "External conservative join-filter structures for MiniLinq"
+
+[dependencies]
+cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
+
+[dev-dependencies]
+own-push = { path = "../own-dialect/printer" }
+mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
+cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
+cq-rewrites = { version = "0.1.0", path = "../rewrites" }
+cq-rewrite-passes = { version = "0.1.0", path = "../rewrites/passes" }
+cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
+cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
+cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }

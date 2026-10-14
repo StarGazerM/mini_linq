@@ -89,3 +89,7 @@ cq-workload-e2e	manifest-target-test	extension_laws	features/workloads/e2e/Cargo
 cq-workload-e2e	manifest-target-test	extension_compile_fail	features/workloads/e2e/Cargo.toml
 cq-rewrites	manifest-target-test	generated	features/rewrites/Cargo.toml
 cq-rewrites	manifest-target-test	growth	features/rewrites/Cargo.toml
+cq-join-filters	manifest-target-test	contracts	features/join-filters/Cargo.toml
+cq-join-filters	manifest-target-test	execution	features/join-filters/Cargo.toml
+cq-join-filters	manifest-target-test	laws	features/join-filters/Cargo.toml
+architecture	scenario	public-api-reexports	tools/test_public_api.py

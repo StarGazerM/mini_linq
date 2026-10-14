@@ -69,7 +69,6 @@ pub mod kw {
     syn::custom_keyword!(join_filter);
     syn::custom_keyword!(build);
     syn::custom_keyword!(covering);
-    syn::custom_keyword!(bloom);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]

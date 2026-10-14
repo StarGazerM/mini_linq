@@ -15,6 +15,9 @@ WHERE ((ns.n_name = 'FRANCE' AND nc.n_name = 'GERMANY')
 OR (ns.n_name = 'GERMANY' AND nc.n_name = 'FRANCE'))
 AND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'"#;
     candidate hypergraph;
+    // The default reduction retains the scans, leaving no covered pipe scan.
+    // Compare exact/approximate filters on the same explicit unreduced plan.
+    advise join_filter ::cq_join_filters::BloomFilter<16384>, plan(no_reduce);
     setup { let start = date("1995-01-01"); let end = date("1996-12-31"); }
     relations {
         relation Supplier => supplier(s_suppkey: i64, s_nationkey: i32);
