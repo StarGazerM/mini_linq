@@ -590,7 +590,12 @@ impl<'a> Printer<'a> {
                     }
                 }
             };
-            cursors.push(cursor);
+            let cursor = if matches!(side, Side::Host(_)) {
+                self.profile_output(&result, cursor)
+            } else {
+                cursor
+            };
+            cursors.push(self.profile_input(name, cursor));
         }
         for (i, column) in columns.iter().enumerate() {
             let i = index(i);
@@ -668,7 +673,13 @@ impl<'a> Printer<'a> {
                     }))
                 }
             };
-            cursors.push(quote!(::cq_storage::sorted_by(#pairs)));
+            let pairs = if matches!(side, Side::Host(_)) {
+                self.profile_output(&result, pairs)
+            } else {
+                pairs
+            };
+            let cursor = quote!(::cq_storage::sorted_by(#pairs));
+            cursors.push(self.profile_input(name, cursor));
         }
         let left_name = symbol_name(&keyed.left);
         let right_name = symbol_name(&keyed.right);

@@ -31,6 +31,7 @@ pub fn verify_cover(rows: &[Config]) {
                 }
             }
         }
+
     }
     assert_eq!(required, 329);
     // Every value participates in at least one required pair, so pair coverage

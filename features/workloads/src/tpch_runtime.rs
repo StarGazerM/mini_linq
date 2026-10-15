@@ -21,9 +21,6 @@ macro_rules! configuration {
         crate::tpch_runtime::configuration!(@named $module, $d, { $($stages)* }, { $($body)* });
     };
     (@named $module:ident, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
-        crate::tpch_runtime::configuration!(@configured $module, $d, { $($stages)* }, [], { $($body)* });
-    };
-    (@configured $module:ident, $d:tt, { $($stages:tt)* }, [$($rewrites:tt)*], { $($body:tt)* }) => {
         mod $module {
             use super::*;
             #[allow(unused_macros)]
@@ -32,7 +29,7 @@ macro_rules! configuration {
                     pipeline {
                         $($stages)*
                         select = ::mini_linq::passes::select(positional($d($d host),*));
-                        structures = [$($rewrites)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                        structures = [::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
                         surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
                             ::cq_ext_negation::negation];
                     }
@@ -41,7 +38,7 @@ macro_rules! configuration {
                 ($d($d tokens:tt)*) => { ::mini_linq::compile! {
                     pipeline {
                         $($stages)*
-                        structures = [$($rewrites)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                        structures = [::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
                         surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
                             ::cq_ext_negation::negation];
                     }
@@ -76,8 +73,7 @@ macro_rules! retail_kernel {
         name $name:literal;
         sql $sql:literal;
         candidate $candidate:ident;
-        $(advise stream $advised:tt;)?
-        $(advise join_filter $filter:ty $(, plan($filter_plan:ident))?;)?
+        $(advise plan($($advice:tt)*);)?
         $(extra $extra:ident;)?
         setup { $($setup:tt)* }
         relations {
@@ -89,7 +85,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "no-reduce", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($advised))? $(, crate::tpch_runtime::filter_name!($filter), "join-filter-exact", "join-filter-always-true")? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "no-reduce", "transfer", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -117,7 +113,12 @@ macro_rules! retail_kernel {
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
         });
-        crate::tpch_runtime::advised_config!([$($advised)?]; $d; positional($($relation),*);
+        // Robust predicate transfer: the same written order and Structures,
+        // with forward and backward semijoin transfer before the join phase.
+        crate::tpch_runtime::configuration!(transfer, $d, {
+            plan = ::cq_planners::order(transfer);
+            select = ::mini_linq::passes::select(positional($($relation),*));
+        }, {
             #[allow(non_snake_case)]
             pub(super) fn run(data: &Data) -> Vec<Answer> {
                 $(let $relation = data.$table.as_slice();)*
@@ -128,8 +129,9 @@ macro_rules! retail_kernel {
                     answer($($out),+) :- $($body)*
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
-        );
-        crate::tpch_runtime::filter_config!([$($filter $(, $filter_plan)?)?]; $d; positional($($relation),*);
+        });
+        // The default plan with the kernel author's recorded plan advice.
+        crate::tpch_runtime::advised_config!([$($($advice)*)?]; $d; positional($($relation),*);
             #[allow(non_snake_case)]
             pub(super) fn run(data: &Data) -> Vec<Answer> {
                 $(let $relation = data.$table.as_slice();)*
@@ -162,11 +164,9 @@ macro_rules! retail_kernel {
             match config {
                 "default" => default::run(data),
                 "no-reduce" => no_reduce::run(data),
+                "transfer" => transfer::run(data),
                 stringify!($candidate) => tuned::run(data),
-                $(crate::tpch_runtime::advised_name!($advised) => advised::run(data),)?
-                $(crate::tpch_runtime::filter_name!($filter) => filter_advised::run(data),
-                  "join-filter-always-true" => filter_always_true::run(data),
-                  "join-filter-exact" => filter_exact::run(data),)?
+                $(crate::tpch_runtime::advised_name!($($advice)*) => advised::run(data),)?
                 _ => crate::tpch_runtime::extra_run!([$($extra)?]; data, config),
             }
         }
@@ -177,20 +177,19 @@ macro_rules! retail_kernel {
 }
 pub(crate) use retail_kernel;
 
-/// Configuration name of a kernel's caller-advised plan.
+/// Configuration name of a kernel's advised plan.
 macro_rules! advised_name {
-    ($advised:tt) => {
+    ($($advice:tt)*) => {
         "advised"
     };
 }
 pub(crate) use advised_name;
 
-/// The `advised` configuration: the default plan pass with caller stream advice.
 macro_rules! advised_config {
     ([]; $d:tt; positional($($host:ident),*); $($body:tt)*) => {};
-    ([($($advised:ident),+)]; $d:tt; positional($($host:ident),*); $($body:tt)*) => {
+    ([$($advice:tt)+]; $d:tt; positional($($host:ident),*); $($body:tt)*) => {
         crate::tpch_runtime::configuration!(advised, $d, {
-            plan = ::mini_linq::passes::plan(stream($($advised),+));
+            plan = ::mini_linq::passes::plan($($advice)+);
             select = ::mini_linq::passes::select(positional($($host),*));
         }, { $($body)* });
     };
@@ -288,29 +287,3 @@ macro_rules! extra_prepare {
     }};
 }
 pub(crate) use extra_prepare;
-
-// The same default plan, with only the recorded join-filter type changed.
-macro_rules! filter_name {
-    ($filter:ty) => {
-        "join-filter-advised"
-    };
-}
-pub(crate) use filter_name;
-macro_rules! filter_config {
-    ([]; $($rest:tt)*) => {};
-    ([$filter:ty $(, $plan:ident)?]; $d:tt; positional($($host:ident),*); $($body:tt)*) => {
-        crate::tpch_runtime::configuration!(@configured filter_exact, $d, {
-            $(plan = ::mini_linq::passes::plan($plan);)?
-            select = ::mini_linq::passes::select(positional($($host),*));
-        }, [], { $($body)* });
-        crate::tpch_runtime::configuration!(@configured filter_advised, $d, {
-            $(plan = ::mini_linq::passes::plan($plan);)?
-            select = ::mini_linq::passes::select(positional($($host),*));
-        }, [::cq_rewrites::retype(join_filter => $filter),], { $($body)* });
-        crate::tpch_runtime::configuration!(@configured filter_always_true, $d, {
-            $(plan = ::mini_linq::passes::plan($plan);)?
-            select = ::mini_linq::passes::select(positional($($host),*));
-        }, [::cq_rewrites::retype(join_filter => ::cq_join_filters::AlwaysTrue),], { $($body)* });
-    };
-}
-pub(crate) use filter_config;

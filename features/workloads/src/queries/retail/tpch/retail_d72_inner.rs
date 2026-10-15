@@ -20,6 +20,10 @@ JOIN nation n ON c.c_nationkey = n.n_nationkey
 WHERE l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate < DATE '1995-04-01'
 AND l.l_quantity > 20.00 AND ps.ps_availqty > 0"#;
     candidate generic_smallest;
+    // ps_availqty > 0 keeps every PartSupp row, while the Lineitem window keeps
+    // 124,846 of 800,000 (part, supplier) keys: reduce PartSupp by Lineitem
+    // instead of Lineitem by PartSupp.
+    advise plan(skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem));
     setup {
         let start = date("1995-01-01"); let end = date("1995-04-01");
         let minimum = Decimal::from_scaled(2000).expect("20.00");
@@ -34,9 +38,10 @@ AND l.l_quantity > 20.00 AND ps.ps_availqty > 0"#;
         relation Nation => nation(n_nationkey: i32);
     }
     answer(order_key: i64, part_key: i64, supplier_key: i64, nation_key: i32) :-
+        Orders(order_key, customer_key),
         Lineitem(order_key, part_key, supplier_key, ship_date, quantity),
         if *ship_date >= start && *ship_date < end, if *quantity > minimum,
-        Orders(order_key, customer_key), PartSupp(part_key, supplier_key, available), if *available > 0,
+        PartSupp(part_key, supplier_key, available), if *available > 0,
         Supplier(supplier_key, nation_key), Part(part_key), Customer(customer_key, nation_key),
         Nation(nation_key);
 }

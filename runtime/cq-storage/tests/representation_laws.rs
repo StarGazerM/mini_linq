@@ -156,3 +156,70 @@ fn positions_and_selection_preserve_occurrences_snapshots_and_projected_builds()
     );
     assert_eq!(selected.retained_bytes(), 32);
 }
+
+/// The Filter square, exhaustively: for every host bag and every key set, a
+/// semijoin filter keeps exactly the matching occurrences in source order on
+/// every read (rows, positions, contains, compact build); filtering twice is
+/// filtering by the intersection.
+#[test]
+fn filter_by_membership_commutes_with_alpha_on_every_read() {
+    use cq_storage::rows::Rows;
+    use cq_storage::{AdaptiveKeySet, Filter, I64Codec, Membership, PositionalRows};
+    let universe = [(0i64, 'a'), (0, 'b'), (1, 'a'), (2, 'c')];
+    let keys = [0i64, 1, 2, 3];
+    for pairs in subsets(&universe) {
+        let source: Vec<_> = pairs.iter().flat_map(|&p| [p, p]).collect();
+        let host = &source;
+        let alive = |first: &[i64], id| first.contains(host.row_at(id).unwrap().0);
+        for first in subsets(&keys) {
+            let m1: AdaptiveKeySet<i64, I64Codec, 64> =
+                AdaptiveKeySet::build(first.iter().map(|&k| (k, ())));
+            let filtered = host.filter(First, &Membership(&m1));
+            let expected: Vec<_> = host.rows().filter(|(k, _)| first.contains(k)).collect();
+            assert_eq!(
+                filtered.rows().collect::<Vec<_>>(),
+                expected,
+                "rows of filter"
+            );
+            for id in host.positions() {
+                assert_eq!(filtered.contains(id), alive(&first, id));
+            }
+            assert_eq!(
+                filtered.positions().collect::<Vec<_>>(),
+                host.positions()
+                    .filter(|&id| alive(&first, id))
+                    .collect::<Vec<_>>()
+            );
+            let compact: HashIndex<_, _> = filtered.build(|(k, v)| (*k, v));
+            for key in -1..=3i64 {
+                let want: Vec<_> = expected
+                    .iter()
+                    .filter(|(k, _)| **k == key)
+                    .map(|(_, v)| *v)
+                    .collect();
+                assert_eq!(compact.lookup(&key).collect::<Vec<_>>(), want);
+            }
+            for second in subsets(&keys) {
+                let m2: AdaptiveKeySet<i64, I64Codec, 64> =
+                    AdaptiveKeySet::build(second.iter().map(|&k| (k, ())));
+                let both: Vec<_> = first
+                    .iter()
+                    .filter(|k| second.contains(k))
+                    .copied()
+                    .collect();
+                let mb: AdaptiveKeySet<i64, I64Codec, 64> =
+                    AdaptiveKeySet::build(both.iter().map(|&k| (k, ())));
+                assert_eq!(
+                    (&filtered)
+                        .filter(First, &Membership(&m2))
+                        .rows()
+                        .collect::<Vec<_>>(),
+                    host.filter(First, &Membership(&mb))
+                        .rows()
+                        .collect::<Vec<_>>(),
+                    "filtering twice is filtering by the intersection"
+                );
+            }
+        }
+    }
+}

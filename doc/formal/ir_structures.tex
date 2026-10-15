@@ -162,13 +162,21 @@ rewrite or rejection, never a printer fallback.
 \paragraph{Covered join filters.}
 An entry \code{s join_filter = Type build b [k] covering j
 marker ::cq_load::ColumnAt<n>;} records a structure's Rust type, the scan
-occurrence, build keys, host key column and exact covering probe. The core
-neither classifies approximate algorithms nor recognizes their names.
-\textsc{STR-JoinFilter} independently checks that \code{j} is a probe of
-\code{b} on the same scalar key, that the build is total, and that the scan reaches this probe through an exclusive,
-occurrence-preserving declarative pipe spine. Retained, scoped, opaque and
-occurrence-expanding stream boundaries are rejected. An anti join cannot cover
-a filter. Removing the exact probe leaves an invalid entry: a conservative
+occurrence, the filtered key column, host key column and exact covering
+operator. A scan may carry several entries, one per covering operator and key
+column. The core neither classifies approximate algorithms nor recognizes their names.
+\textsc{STR-JoinFilter} independently checks that \code{j} is an eager probe or
+semijoin of \code{b} on a key $K\ni k$ served by one single-level hash index,
+that the build is total, and that the scan reaches \code{j} through an
+exclusive pipe spine whose every result carries $k$: renames, projections,
+declarative selections and left operands of eager probes and semijoins.
+Rows of the scan with $k\notin\pi_k(b)$ produce, along that spine, only rows
+with the same $k$, which \code{j} drops; so the filter keeps a superset of the
+rows \code{j} can keep ($R\ltimes b\subseteq\sigma_F(R)\subseteq R$). A key bound
+only by an intermediate build is not a scan column and is rejected.
+Retained, scoped, opaque and occurrence-expanding boundaries other than those
+left operands are rejected. An anti join cannot cover
+a filter. Removing the exact operator leaves an invalid entry: a conservative
 filter can never be the only check of the constraint.
 
 For the keys $S$ supplied by \code{Build}, the capability laws are
@@ -196,9 +204,10 @@ join key. The optional counters \code{join_filter_tested} and
 conditions and relational readers can reduce the surviving count further.
 \begin{mathpar}
 \Rule{STR-JoinFilter}{
- j=\mathsf{probe}[k](l,b)\quad k:\code{i64}\quad
- \mathsf{exactHashIndex}(b,k)\\
- \mathsf{exclusiveTotalSpine}(s,l)\quad
+ j\in\{\mathsf{probe}[K](l,b),\mathsf{semi}[K](l,b)\}\ \text{eager}\quad
+ k\in K\quad k:\code{i64}\quad
+ \mathsf{exactHashIndex}(b,K)\\
+ \mathsf{exclusiveSpine}_k(s,l)\quad
  \mathsf{totalBuild}(b)\quad
  \mathsf{marker}(s,k)=C\\
  T:\code{Build}\quad T:\code{ConservativeMembership}(k)\quad
@@ -207,12 +216,14 @@ conditions and relational readers can reduce the surviving count further.
  s\;\mathsf{joinFilter}(F,b,k,j,C)\text{ is admissible}
 }
 \end{mathpar}
-Here $\mathsf{exclusiveTotalSpine}$ contains only one-use pipe renames,
-projections and declarative selections, without canon or fused scopes.
+Here $\mathsf{exclusiveSpine}_k$ contains only one-use pipe renames,
+projections, declarative selections and left operands of eager probes and
+semijoins, each carrying $k$, without canon or fused scopes; the scan's
+lineage maps $k$ to a host column.
 The recorded type is checked syntactically as a Rust type, and its capabilities
 are checked by rustc, rather than by a provider-name whitelist. External
-\code{retype(s join_filter => T)} changes only the recorded type.
-\code{join_filter(s)} may explicitly add a default exact structure when default
-selection did not (including total unfiltered builds); it records
-positional-host advice and undergoes the same
+\code{retype(s join_filter => T)} changes only the recorded types of that scan.
+\code{join_filter(s)} may explicitly add default exact structures for every
+admissible covering operator of \code{s} not yet recorded (including total
+unfiltered builds); it records positional-host advice and undergoes the same
 contract and correspondence checks.

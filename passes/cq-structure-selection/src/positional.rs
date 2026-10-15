@@ -350,52 +350,42 @@ fn positional_source(
     }
 }
 
-/// Formal rule SEL-JoinFilter: Choose an exact key set for each eligible covered scalar scan.
+/// Formal rule SEL-JoinFilter: Choose an exact key set for each eligible covered scalar key column of a filtered build, at its scan.
 fn choose_join_filters(
     target: &mut structures::Program,
     bases: &BTreeSet<String>,
 ) -> syn::Result<()> {
     let facts = structures::contract::check(target)?;
+    let named = |name: &str| {
+        &target
+            .physical
+            .program
+            .definitions
+            .iter()
+            .find(|d| symbol_name(&d.name) == name)
+            .unwrap()
+            .name
+    };
     let mut entries = Vec::new();
     for d in &target.physical.program.definitions {
-        let Some((scan, build, key, filtered)) =
-            structures::join_filter_candidate(target, &facts, &symbol_name(&d.name))
-        else {
-            continue;
-        };
-        if !filtered {
-            continue;
+        for candidate in structures::join_filter_candidates(target, &facts, &symbol_name(&d.name)) {
+            let origin = &facts.lineage[&candidate.scan];
+            if !candidate.filtered || !bases.contains(&origin.base) {
+                continue;
+            }
+            let index = syn::Index::from(
+                facts.host_layouts[&origin.base]
+                    .iter()
+                    .position(|c| c == &origin.columns[&candidate.key])
+                    .unwrap(),
+            );
+            let scan = named(&candidate.scan);
+            let build = named(&candidate.build);
+            let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
+            let covering = &d.name;
+            let ty = quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>);
+            entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
         }
-        let origin = &facts.lineage[&scan];
-        if !bases.contains(&origin.base) {
-            continue;
-        }
-        let scan = &target
-            .physical
-            .program
-            .definitions
-            .iter()
-            .find(|d| symbol_name(&d.name) == scan)
-            .unwrap()
-            .name;
-        let build = &target
-            .physical
-            .program
-            .definitions
-            .iter()
-            .find(|d| symbol_name(&d.name) == build)
-            .unwrap()
-            .name;
-        let index = syn::Index::from(
-            facts.host_layouts[&origin.base]
-                .iter()
-                .position(|c| c == &origin.columns[&key])
-                .unwrap(),
-        );
-        let key = &facts.physical.rows[&symbol_name(build)].bindings[&key];
-        let covering = &d.name;
-        let ty = quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>);
-        entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
     }
     target.structures.entries.extend(entries);
     Ok(())

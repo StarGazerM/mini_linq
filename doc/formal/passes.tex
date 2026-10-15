@@ -101,7 +101,8 @@ steps (constraints first); a variable is eligible if no Rust step supplies it or
 it is bound; $\mathsf{introduce}$ emits a subatom of its first holding atom and
 then the others' checks. Incomplete atoms count toward Before until their full
 row is checked.
-The production facade uses Filtered/Coarse. Under H-FilterRank, $f_i$ is
+The production facade uses Written/Coarse; Filtered/Coarse serves external
+planners and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
 $0$ for a local constant equality, $1$ for a local constant range,
 $2$ for a derived domain, total predicate or finite relational block, and
 $3$ otherwise. Equality classes determine locality; opaque Rust guards
@@ -220,27 +221,34 @@ cut component independently and checks actual support-version provenance.
 Cyclic block-free scopes have no reductions. Missing cuts, unsupported
 reductions, and non-tree atom-to-atom reductions are rejected.
 
-Static build orientation (L-Orient) is recorded in RA before IX derivation:
-the left natural-join operand streams and the right builds. Unary selections
-contribute point/range/other strength; joins and semijoins inherit the stronger
-operand; projects and opaque steps inherit their input; unions use their
-weakest arm (at least block strength). An independent compound dimension
-branch builds against the widest shared-key occurrence (the static fact
-spine), even if that spine has a local filter. Inside the dimension forest,
-the operand with fewer fact-key columns builds (for example, Part or
-Supplier/Nation against composite-key PartSupp). Otherwise a strictly
-stronger left operand swaps with the right; ties retain the written orientation.
-Semijoins and antijoins never swap. CK-Orient checks these structural/rank
-choices, unchanged
-definitions/interfaces, and the independent RA refinement contract, including
-Rust ancestry. IX and Physical retain exact demand and erasure checking.
+The default plan is left-deep in written order: the left natural-join operand
+streams and the right builds, and no pass commutes operands. Its reductions
+(Masks) follow a reduction tree. H-SpanningCore defines it on every scope: the
+GYO join tree when acyclic; otherwise the GYO ears plus a spanning tree of the
+residual cyclic core whose edges join clauses sharing a variable (most shared
+first, then earliest clauses). Semijoins along it are sound reductions; only on
+acyclic scopes are they a full reducer. R-Masks roots that tree at the scope's
+first scheduled clause, the outer stream, and reduces each inner clause by its
+child subtrees that carry a relational filter or a block cut, children first and
+strongest siblings first, before the stream starts; exact atom-to-block cuts
+reduce inner atoms. The outer is never a target or a support: its probes filter
+it in written order, so no reduced stream is stored. This is the bottom-up pass
+of the Yannakakis reducer rooted at the stream; on acyclic scopes it fully
+reduces the stream, so every surviving stream row matches in every probe and
+no top-down pass is needed. CK-Masks recomputes that schedule from the source
+steps on scope-local clauses and requires the target's reductions to equal it.
 \begin{mathpar}
-\Rule{L-Orient}{a=\mathsf{naturalJoin}(l,r)\quad \mathsf{buildLeft}(l,r)}
- {\mathsf{orient}(a)=\mathsf{naturalJoin}(r,l)}
+\Rule{H-SpanningCore}{T_0=\mathsf{GYOEars}(q)\quad
+ T_1=\mathsf{spanningTree}(\mathsf{core}(q),\ \text{most shared, earliest})}
+ {\mathsf{reductionTree}(q)=T_0\cup T_1}
 
-\Rule{CK-Orient}{\mathsf{OnlyBranchOrRankJustifiedSwaps}(s,t)\quad
- \mathsf{checkRewrite}_{RA}(s,t)\Downarrow\ok}
- {\mathsf{checkOrientation}(s,t)\Downarrow\ok}
+\Rule{R-Masks}{r=\mathsf{outer}(s)\quad c\ne r\quad
+ d\in\mathsf{children}_{\mathsf{reductionTree}\ \text{rooted at}\ r}(c)\quad
+ \mathsf{filteredSubtree}(d)}
+ {\mathsf{red}(c,d)\ \text{before}\ r,\ \text{children first}}
+
+\Rule{CK-Masks}{\mathsf{reductions}(t)=\mathsf{masks}(s)\ \text{on scope-local clauses}}
+ {\mathsf{check}_{reduce}^{Masks}(s,t)\Downarrow\ok}
 \end{mathpar}
 
 \begin{theorem}[Full reducer]
@@ -603,10 +611,16 @@ never follows from a host type.
 With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction, $E$ elaboration,
 and $S$ checked redundant-support absorption:
 \begin{mathpar}
-\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Filtered,Coarse}(n)\\
- r=\text{None if \code{no_reduce}, otherwise Hypergraph}\\
- w=R_{None,r}(v)\quad {a=\begin{cases}E(w)&\text{if \code{no_reduce}}\\S(E(w))&\text{otherwise}\end{cases}}}
- {\code{mini_linq::passes::plan}(q)=\mathsf{orient}(a)}
+\Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
+ r=\text{None if \code{no_reduce}, otherwise Masks}\\
+ w=\mathsf{advise}(R_{None,r}(v))\quad a=E(w)}
+ {\code{mini_linq::passes::plan}(q)=a}
+
+\Rule{R-Advice}{\mathsf{skip}(T,S)\Rightarrow\mathsf{red}(T,S)\in w\quad
+ \mathsf{reduce}(T,S)\ \text{or}\ \mathsf{skip}(T,S)\Rightarrow
+ T\ne S\ \text{top-level atoms},\ \mathsf{shared}(T,S)\ne\emptyset}
+ {\mathsf{advise}(w)=w\setminus\{\mathsf{red}(T,S)\mid\mathsf{skip}\}
+  \ ;\ \{\mathsf{red}(T,S)\mid\mathsf{reduce}\}\ \text{before the stream}}
 
 \Rule{Plan-Generic}{n=N(q)\quad v=O_{Written,Fine}(n)\quad a=E(v)}
  {\code{cq_planners::order(written, fine)}(q)=a}
@@ -615,48 +629,81 @@ and $S$ checked redundant-support absorption:
  r=\text{Hypergraph if blocks; otherwise Tree if acyclic, else None}\\
  w=R_{None,r}(v)\quad a=S(E(w))}
  {\code{cq_planners::order(hypergraph)}(q)=a}
+
+\Rule{Plan-Transfer}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad w=R_{None,Masks}(v)\\
+ r=\mathsf{outer}(w)\quad T=\mathsf{reductionTree}(q)\ \text{rooted at}\ r\\
+ F=\{\mathsf{red}(r,c)\mid c\in\mathsf{children}(r),\ \mathsf{filteredSubtree}(c)\}\\
+ B=\{\mathsf{red}(c,p)\mid p=\mathsf{parent}(c),\ \exists\ \text{filter outside}\ \mathsf{subtree}(c)\}\ \text{parents first}}
+ {\code{cq_planners::order(transfer)}(q)=E(w;F;B)}
+
+\Rule{CK-Transfer}{\mathsf{erase}(t)=v\quad t=\mathsf{transfer}(R_{None,Masks}(v))}
+ {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
 \end{mathpar}
-\code{plan} defaults to checked Hypergraph reduction: acyclic bodies without
-recorded independent join branches receive filter-supported upward/downward
-tree reductions. Both acyclic and cyclic scopes may receive exact atom-to-block
-cuts; cyclic block-free scopes receive no reductions.
-Every branch is its own scope. Reduction compilation is independently checked before
-elaboration. After checking elaboration against the reduced VO schedule, the
-default and external Hypergraph planner apply the same checked RA realization
+\code{order(transfer)} is robust predicate transfer (Zhao et al., SIGMOD'25) on
+the written left-deep order, a diverging route through the same public
+pipeline. Its transfer graph is the reduction tree rooted at the stream: in
+fact-first written order that is the largest relation, RPT's LargestRoot, and
+the most-shared-first spanning core matches its maximum-spanning-tree weights.
+The forward pass is the Masks pass plus the stream's reductions by its filtered
+children; the backward pass then reduces each child atom by its already reduced
+parent. As in RPT, no transfer starts from a side without filters, transfers
+follow only edges whose clauses share a variable (a join predicate), and blocks
+are never transfer supports beyond the Masks atom-to-block cuts. Transfers are
+exact semijoins, not Bloom filters; they materialize reduced relations, as
+RPT's filter creators do, before the unchanged join phase. Scopes containing
+opaque Rust keep only their Masks reductions: there the structural RA
+correspondence check rejects some sound transfer schedules.
+
+\code{plan} is left-deep in written order and defaults to checked Masks
+reduction: every scope, acyclic or cyclic, reduces its inner clauses along the
+outer-rooted reduction tree (R-Masks) and by exact atom-to-block cuts; every
+branch is its own scope. Reduction compilation is independently checked before
+elaboration, and elaboration is checked against the reduced VO schedule. The
+external Hypergraph planner additionally applies a checked RA realization
 rewrite. It uses
 $L\ltimes(R\ltimes L)=L\ltimes R$ and
 $L'\bowtie(R\ltimes L)=L'\bowtie R$ only when the required shared columns of $L'$
 are proven contained in $L$ by reduction lineage. Dead reduced copies are then
 removed; independent consumers that still need a reduction keep it alive.
-The rewrite is checked against the original RA, does not alter the reduction
-algorithm, and can retain native host probes instead of materializing redundant
-hash indices. Set
+The rewrite is checked against the original RA and does not alter the reduction
+algorithm. Set
 \code{pipeline \{ plan = mini_linq::passes::plan(no_reduce); \}}
-to disable optional semijoins while retaining Filtered/Coarse ordering and static
-build orientation. Configuration passes this argument through its existing
-named planning invocation.
+to disable optional semijoins while retaining written order. Configuration
+passes this argument through its existing named planning invocation.
 \code{plan} uses the optimizing elaborator, so even the opt-out is not
 the exact reference. Generic and the external Graph spelling belong to the
-external \code{cq-planners} consumer. The facade additionally records its
-filtered-connected order and build orientation; the external planner preserves
-its explicitly requested ordering policy.
+external \code{cq-planners} consumer, which preserves its explicitly requested
+ordering policy.
 
 \paragraph{Join-filter selection and realization.}
-\textsc{SEL-JoinFilter} records a scalar filter only for a statically filtered,
-total hash-build branch and an exclusive declarative scan spine leading to its
-exact probe. Every eligible build selects an exact \code{AdaptiveKeySet}.
+\textsc{SEL-JoinFilter} records a scalar filter for every admissible
+(\textsc{STR-JoinFilter}) covering probe or semijoin into a statically filtered,
+total hash build, one per \code{i64} column of its key, at the scan its
+exclusive spine reaches; this is the bitmap a build side pushes to the deepest
+probe-side scan. A scan may therefore carry filters from several builds.
+Every eligible build selects an exact \code{AdaptiveKeySet}.
 Selection does not sample cardinalities or assume keys or foreign keys.
 Approximate structures live in an external feature and require explicit
 \code{cq_rewrites::retype} advice; the printer has no algorithm-specific branch.
-\textsc{IF-JoinFilter} constructs the recorded provider from the existing
-index's distinct keys through \code{Build} on $(k,())$ pairs, emits
-\code{require::conservative::<K,T>}, then filters positions before fetching payloads.
+\textsc{IF-JoinFilter} constructs each recorded provider from the existing
+index's distinct keys, projected to the filtered key column, through
+\code{Build} on $(k,())$ pairs, emits \code{require::conservative::<K,T>}, then
+filters positions before fetching payloads: the first filter through the
+block-skipping read, the others on its surviving positions, in decision order.
 Host block bounds use the provider's conservative \code{any_in}; an absent bound
-never skips a block. The covering exact probe is unchanged, so conservative false
+never skips a block. Each covering exact operator is unchanged, so conservative false
 positives only perform extra probes. No opaque guard or bind is crossed.
+\textsc{IF-JoinFilterAbandon} decides at runtime whether to construct the
+filters of a build at all: a build whose distinct keys exceed 35\% of the rows
+of its positional source occurrence constructs none (the creation threshold of
+dynamic predicate transfer, RPT+), and its abandoned filters pass every key,
+which the one-sided conservative law permits. A build without a single
+positional source occurrence always constructs its filters. Only the covering
+exact operators decide membership either way.
 \begin{mathpar}
 \Rule{SEL-JoinFilter}{
  \mathsf{eligibleCoveredScan}(s,b,k,j)\quad
+ \mathsf{filteredBuild}(b)\quad
  \mathsf{positionalHost}(s)\\
  T=\code{AdaptiveKeySet<i64,I64Codec,67108864>}
 }{
@@ -665,15 +712,21 @@ positives only perform extra probes. No opaque guard or bind is crossed.
 }
 
 \Rule{IF-JoinFilter}{
- F=\mathsf{buildFilter}_T(\mathsf{keys}(\mathsf{index}_b))\quad
- \mathsf{STR\text{-}JoinFilter}(s,F,b,k,j)\\
+ F_i=\mathsf{buildFilter}_{T_i}(\pi_{k_i}\mathsf{keys}(\mathsf{index}_{b_i}))\quad
+ \mathsf{STR\text{-}JoinFilter}(s,F_i,b_i,k_i,j_i)\ (1\le i\le n)\\
  \mathsf{keepBlock}(B)=
- \mathsf{staticMayMatch}(B)\land F.\mathsf{anyIn}(\mathsf{bounds}_k(B))
+ \mathsf{staticMayMatch}(B)\land F_1.\mathsf{anyIn}(\mathsf{bounds}_{k_1}(B))
 }{
- \mathsf{emit}(j)=
- \mathsf{exactProbe}_b\bigl(
- \mathsf{filter}_{F.\mathsf{test}(k)}
- (\mathsf{staticRead}_{\mathsf{keepBlock}}(s))\bigr)
+ \mathsf{scan}(s)=
+ \mathsf{filter}_{\bigwedge_i F_i.\mathsf{test}(k_i)}
+ (\mathsf{staticRead}_{\mathsf{keepBlock}}(s))
+}
+
+\Rule{IF-JoinFilterAbandon}{
+ \mathsf{source}(b)=s'\quad
+ 20\,|\mathsf{keys}(\mathsf{index}_b)| > 7\,|s'|
+}{
+ F=\top\quad(\forall x.\ F.\mathsf{test}(x))
 }
 \end{mathpar}
 Absent bounds make the corresponding block test true. The emitted filter and

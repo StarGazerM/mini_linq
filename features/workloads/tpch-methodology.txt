@@ -111,3 +111,63 @@ its unreduced configurations as a whole-plan comparison, never as evidence of
 filter-only speedup. Retyping preserves clauses and the covering exact probes.
 All filter construction costs are inside each measured execution. The feature
 uses the public Retention accounting companion for its owned bit allocation.
+
+Operator profiling
+------------------
+cargo xtask profile --tpch --sf 0.1|1 [--query NAME] [--config NAME]
+selects default when no configuration is supplied. Artifacts, raw DuckDB JSON,
+per-run counts/timings and validation witnesses go to
+/data/codex/opprofile-evidence/. The requested scale is recorded in every file;
+running a second scale replaces the named summary files. Raw runs keep the scale.
+
+cq-storage/counters selects the measured pull expression through profile_select!;
+the unselected expression disappears during macro expansion. The ordinary
+cq-physical-realization::compile function continues to emit its original tokens.
+Physical and Structures representations and the selected algorithms are unchanged.
+
+Each Physical result has a record even when no consumer demands it. Positional
+projections folded into immutable selections are aliases: their rows and inclusive
+span come from their source. A source accessed through a fused positional predicate
+counts tested occurrences, after metadata pruning, and shares that predicate's span.
+Native ordered host reads and fused intersection members share their combined
+consumer's span; the profile does not invent exclusive timing for fused work.
+Input counts describe demanded streamed rows; indexed sides have separate build
+records. Index/keyset/filter insertion counts include duplicates; native keysets
+also report their distinct retained cardinality. ANSWER is the generated relational
+answer; QUERY additionally covers extension aggregation and typed result collection.
+
+Iterators count rows locally, publishing at exhaustion/drop. Predicates increment
+Cells. Stream timing uses Instant on first demand and exhaustion/drop, without
+read-ahead, materialization, per-row clocks, or changing short-circuit behavior.
+These cumulative pipeline spans include upstream and downstream work between
+requests; they are inclusive, overlap, and must not be added. Synchronous builds
+use one clock pair. Deferred HashIndex/KeySet initialization is timed when consumed;
+a never-demanded build has zero calls/time. QUERY is the independent top-level
+execution scope; its wall time includes all builds and final collection, excluding
+fixture loading, canonicalization/serialization, answer checking and answer drop.
+DuckDB's JSON operator timings are displayed as provided; they are not the same
+quantity as our inclusive pipeline spans.
+
+The runner warms both workers, checks every sample exactly against DuckDB, and
+reports the median of eleven executions and the measured overhead against a
+separate release worker without counters. It does not subtract estimated overhead
+or scale the operator times to make them agree with an uninstrumented measurement.
+The timing worker enables cq-storage/operator-timing, independently of counters,
+for operator clocks with the normal aHash algorithm and row/primitive counters
+disabled. A separate counters-only worker supplies operator rows and primitive
+counters; summed operator insertion counts must equal independent
+rows_copied/distinct_insertions (excluding runtime candidate-enumeration dedup
+attempts, recorded separately). The timing worker must reproduce exactly the same
+operator graph/labels and SQL answers. Its report combines those independently
+counted rows with measured clock spans. No per-row counting runs inside the timed
+phase; this avoids presenting counter overhead as operator execution cost.
+The legacy counters-only worker retains its historical DefaultHasher measurements.
+The timing worker uses the same HashState as ordinary execution; only the
+separate counting worker fixes seeds. Reported overhead includes operator clocks
+and bookkeeping. Primitive counters are never subtracted from timings.
+Shared-machine noise and random hash seeds can affect this ratio. Timing wrapper types can also perturb compiler code layout; a negative delta is not a query optimization result. No few-percent overhead claim follows from matching
+row counts or the top-level clock; consult the validation files for measured ratios.
+
+On Linux, CQ_PROFILE_CPU=N pins both worker variants and the validation worker
+to CPU N via taskset; compilation remains unpinned. The selected CPU is recorded
+in the validation JSON. This reduces scheduling variation without changing plans.

@@ -305,6 +305,45 @@ fn hypergraph_checker_requires_nested_filtered_reductions() {
     assert!(check_valuation(&source, &target, Planner::Hypergraph).is_err());
 }
 
+/// Transfer runs the forward pass into the stream (R), then the backward pass
+/// from it, and only from sides that carry a filter: with R and T filtered,
+/// S is reduced by T, R by S, then S by R and T by S, parents first.
+#[test]
+fn transfer_reduces_forward_into_the_stream_then_backward_from_filtered_sides() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Chain;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
+        answer(a,c) :- R(a,b), if *a > 0, S(b,c), T(c,7);
+    };
+    let target = compile_valuation(&source, Planner::Transfer).unwrap();
+    let reductions: Vec<String> = target
+        .valuation
+        .steps
+        .iter()
+        .filter(|step| matches!(step, vo::Step::Reduce(..)))
+        .map(|step| step.to_token_stream().to_string())
+        .collect();
+    assert_eq!(
+        reductions,
+        [
+            "reduce S @ 2 with T @ 3 (c , _) ;",
+            "reduce R @ 0 with S @ 2 (b , _) ;",
+            "reduce S @ 2 with R @ 0 (_ , b) ;",
+            "reduce T @ 3 with S @ 2 (_ , c) ;",
+        ]
+    );
+    check_valuation(&source, &target, Planner::Transfer).unwrap();
+    let mut missing = target.clone();
+    let last = missing
+        .valuation
+        .steps
+        .iter()
+        .rposition(|step| matches!(step, vo::Step::Reduce(..)))
+        .unwrap();
+    missing.valuation.steps.remove(last);
+    assert!(check_valuation(&source, &missing, Planner::Transfer).is_err());
+}
+
 #[test]
 fn every_scenario_through_every_planner() {
     let mut combinations = 0;
@@ -345,7 +384,7 @@ fn every_scenario_through_every_planner() {
             combinations += 1;
         }
     }
-    assert_eq!(combinations, 270);
+    assert_eq!(combinations, 300);
 }
 
 #[test]

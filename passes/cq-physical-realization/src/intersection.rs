@@ -44,7 +44,9 @@ impl Printer<'_> {
         let name = symbol_name(&second.name);
         self.register(&first_name);
         self.register(&name);
+        self.profile_time_alias(&first_name, &name);
         let outer = self.scan(&a.left)?;
+        let outer = self.profile_input(&first_name, outer);
         let left = symbol_name(&a.left);
         let pattern = self.pattern(&left);
         let variable_ident = self.ident(&first_name, &variable);
@@ -83,6 +85,8 @@ impl Printer<'_> {
         let test_a = test(&a.right)?;
         let test_b = test(&b.right)?;
         let branch = |choice: TokenStream, keys: TokenStream, test: TokenStream| {
+            let keys = self.profile_output(&first_name, keys);
+            let keys = self.profile_input(&name, keys);
             quote! {
                 ::core::iter::Iterator::flat_map(::core::iter::IntoIterator::into_iter(#choice), move |()| {
                     ::core::iter::Iterator::filter_map(#keys, move |__cq_v| {
@@ -105,12 +109,13 @@ impl Printer<'_> {
                 if second.canon.is_some() {
                     rows = self.distinct(&second.name, rows);
                 }
-                Repr::Pipe(Some(rows))
+                Repr::Pipe(Some(self.profile_stream(&name, rows)))
             }
             physical::ModeKind::Let | physical::ModeKind::Exists => {
                 if second.canon.is_some() {
                     rows = self.distinct(&second.name, rows);
                 }
+                let rows = self.profile_stream(&name, rows);
                 self.materialize(&name, rows)
             }
         };

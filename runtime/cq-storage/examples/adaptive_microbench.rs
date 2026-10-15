@@ -11,6 +11,18 @@ fn measure(label: &str, mut lookup: impl FnMut(i64) -> bool) {
     println!("{label}: {:?}; hits={hits}", start.elapsed());
 }
 fn main() {
+    let build_keys: Vec<i64> = (0..287_490).map(|k| k * 17).collect();
+    let start = Instant::now();
+    for _ in 0..20 {
+        black_box(AdaptiveKeySet::<_, _, 67_108_864>::from_keys(
+            build_keys.iter().copied(),
+            I64Codec,
+        ));
+    }
+    println!(
+        "dense construction (287490 keys, 20 builds): {:?}",
+        start.elapsed()
+    );
     let keys: Vec<_> = (0i64..4096).step_by(2).collect();
     let dense = AdaptiveKeySet::<_, _, 4096>::from_keys(keys.iter().copied(), I64Codec);
     let hash = AdaptiveKeySet::<_, _, 4096>::from_keys(keys.iter().copied(), NoDense);

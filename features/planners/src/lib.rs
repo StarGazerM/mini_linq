@@ -64,6 +64,7 @@
 //! | --- | --- |
 //! | Written | Written clause order; coarse uses full atoms, fine splits each atom in place |
 //! | Hypergraph | Written/coarse plus the full upward/downward Yannakakis reducer when acyclic |
+//! | Transfer | Written/coarse plus robust predicate transfer: forward then backward semijoins along the reduction tree rooted at the stream |
 //! | Prefix connected | Ready connected atoms before disconnected atoms, then written position |
 //! | Prefix greedy | Connected atoms, then smallest resulting heading width, then written position |
 //! | Elimination | Coarse ranks atoms by elimination variables; fine enumerates the reversed elimination order so connecting variables precede leaf products |
@@ -75,7 +76,7 @@
 //! stay on their base chain. These are deterministic heuristics without
 //! cardinality estimates or complexity claims.
 //!
-//! For library consumers, `Planner::ALL` lists the nine choices.
+//! For library consumers, `Planner::ALL` lists the ten choices.
 //! `compile_valuation(&cq, planner)` returns complete VO text and
 //! `compile(&cq, planner)` returns RA′. `check_valuation(&cq, &vo, planner)` checks
 //! coverage, granularity, written-order obligations and complete tree reductions.
@@ -92,7 +93,7 @@
 //! this denotation.
 //!
 //! Tests use only the public `cq-testkit` package. They cover all 30 published
-//! scenarios through all nine planners, authored answers and independent CQ/VO/RA′
+//! scenarios through all ten planners, authored answers and independent CQ/VO/RA′
 //! oracles, 54 pinned VO/RA′ texts, rejected mutations and admitted free rankings,
 //! named and explicit macro pipelines, and 200 deterministic partial Rust seeds
 //! (`0, 2, ..., 398`) executed under every planner against exact written-order

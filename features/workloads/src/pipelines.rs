@@ -3,19 +3,7 @@
 pub use cq_lang_physical as ir;
 pub use cq_planners_plan::Planner;
 use proc_macro2::TokenStream;
-use quote::quote;
-
-pub const PLAN_ARGUMENTS: [&str; 9] = [
-    "written, coarse",
-    "written, fine",
-    "hypergraph",
-    "prefix connected, coarse",
-    "prefix connected, fine",
-    "prefix greedy, coarse",
-    "prefix greedy, fine",
-    "elimination, coarse",
-    "elimination, fine",
-];
+use quote::{ToTokens, quote};
 
 /// Default selection explicitly refuses conflicting retained candidate layouts.
 pub const SMALLEST_LAYOUT_REJECTION: &str =
@@ -67,7 +55,7 @@ impl Pipeline {
     }
 
     pub fn configuration(self, source: &cq_lang_cq::Program) -> syn::Result<TokenStream> {
-        let arguments: TokenStream = PLAN_ARGUMENTS[self.plan].parse()?;
+        let arguments = Planner::ALL[self.plan].to_token_stream();
         let mut physical = Vec::new();
         if self.canon {
             physical.push(quote!(::cq_rewrites::canon_prefixes));

@@ -17,7 +17,6 @@ AND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'"#;
     candidate hypergraph;
     // The default reduction retains the scans, leaving no covered pipe scan.
     // Compare exact/approximate filters on the same explicit unreduced plan.
-    advise join_filter ::cq_join_filters::BloomFilter<16384>, plan(no_reduce);
     setup { let start = date("1995-01-01"); let end = date("1996-12-31"); }
     relations {
         relation Supplier => supplier(s_suppkey: i64, s_nationkey: i32);
@@ -27,8 +26,8 @@ AND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'"#;
         relation Nation => nation(n_nationkey: i32, n_name: String);
     }
     answer(order_key: i64, supplier_nation: i32, customer_nation: i32) :-
-        Supplier(supplier_key, supplier_nation),
         Lineitem(order_key, supplier_key, ship_date), if *ship_date >= start && *ship_date <= end,
+        Supplier(supplier_key, supplier_nation),
         Orders(order_key, customer_key), Customer(customer_key, customer_nation),
         Nation(supplier_nation, supplier_name), Nation(customer_nation, customer_name),
         if (supplier_name == "FRANCE" && customer_name == "GERMANY") ||

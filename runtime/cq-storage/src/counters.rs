@@ -16,6 +16,15 @@
 //! epoch; older allocations and allocations moved to another thread are excluded.
 //! Keyset staging peak is the largest distinct staging-set ownership estimate.
 //! Fixture construction and independent BTreeSet oracles are not query costs.
+mod operators;
+#[cfg(feature = "counters")]
+pub(crate) use operators::build_cardinality;
+pub(crate) use operators::{DeferredBuild, defer_build};
+pub use operators::{
+    OperatorInput, OperatorLabel, OperatorOutput, OperatorPredicate, OperatorProgram,
+    OperatorRecord, OperatorStream, operators, render_operators,
+};
+
 use std::cell::Cell;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -39,6 +48,9 @@ pub struct Snapshot {
     pub cursor_steps: u64,
     pub rows_enumerated: u64,
     pub distinct_insertions: u64,
+    /// Subset of distinct_insertions in runtime candidate enumeration, rather
+    /// than compiler-emitted dedup/keyset builds.
+    pub candidate_insertions: u64,
 }
 thread_local! {
     static EPOCH: Cell<u64> = const { Cell::new(0) };
@@ -56,20 +68,27 @@ thread_local! {
         bytes_retained_peak: 0,
         keyset_staging_bytes_peak: 0,
         hash_computations: 0, index_builds: 0, lookups: 0,
-        cursor_steps: 0, rows_enumerated: 0, distinct_insertions: 0,
+        cursor_steps: 0, rows_enumerated: 0, distinct_insertions: 0, candidate_insertions: 0,
     }) };
 }
 pub(crate) fn epoch() -> u64 {
     EPOCH.with(Cell::get)
 }
 pub fn reset() {
+    operators::reset_operators();
     EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
     COUNTS.with(|counts| counts.set(Snapshot::default()));
 }
 pub fn snapshot() -> Snapshot {
     COUNTS.with(Cell::get)
 }
+/// Primitive costs are validated separately when profiling wall time.
+pub const STORAGE_COUNTERS_ENABLED: bool = cfg!(feature = "counters");
+#[inline]
 pub(crate) fn record(update: impl FnOnce(&mut Snapshot)) {
+    #[cfg(not(feature = "counters"))]
+    let _ = update;
+    #[cfg(feature = "counters")]
     COUNTS.with(|cell| {
         let mut counts = cell.get();
         update(&mut counts);
@@ -78,9 +97,24 @@ pub(crate) fn record(update: impl FnOnce(&mut Snapshot)) {
 }
 
 /// Fixed keys eliminate RandomState's variation in collisions and table growth.
+/// Timing-only mode uses the ordinary runtime's aHash algorithm; enabling
+/// `counters` preserves the historical deterministic DefaultHasher measurements.
 /// These are measurement collections, not a replacement for untrusted host maps.
-#[derive(Default)]
-pub struct CountingHasher(std::collections::hash_map::DefaultHasher);
+#[cfg(feature = "counters")]
+type CountingInner = std::collections::hash_map::DefaultHasher;
+#[cfg(not(feature = "counters"))]
+type CountingInner = ahash::AHasher;
+
+pub struct CountingHasher(CountingInner);
+impl Default for CountingHasher {
+    fn default() -> Self {
+        #[cfg(feature = "counters")]
+        let inner = CountingInner::default();
+        #[cfg(not(feature = "counters"))]
+        let inner = std::hash::BuildHasher::build_hasher(&crate::HashState::default());
+        Self(inner)
+    }
+}
 impl Hasher for CountingHasher {
     fn write(&mut self, bytes: &[u8]) {
         self.0.write(bytes);

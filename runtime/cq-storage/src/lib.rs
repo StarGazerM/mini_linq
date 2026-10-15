@@ -38,6 +38,10 @@
 //! - `α(selection)` is the selected occurrence bag. Narrowing is intersection;
 //!   immutable snapshots and their projected builds preserve source order and
 //!   multiplicity. Selection does not confer OrderedRead.
+//! - `α(s.filter(c, p)) = { o ∈ α(s) | p(c(o)) }` ([`Filter`]): every read of
+//!   the result agrees with it, and filtering twice is filtering by the
+//!   conjunction. A semijoin is a filter by [`Membership`]. Filtered tuples
+//!   are unreadable by construction (a selection's bitmap or a compact build).
 //! - `α(ordered) = bag of (key, item)`, enumerated in key order from any
 //!   bound; [`merge`] is the one co-iteration primitive; [`sorted_by`]
 //!   presents an already key-ordered stream as such a cursor.
@@ -75,13 +79,13 @@ macro_rules! count {
 }
 pub(crate) use count;
 
-#[cfg(feature = "counters")]
+#[cfg(any(feature = "counters", feature = "operator-timing"))]
 pub mod counters;
 pub mod dispatch;
 mod hash_index;
 mod hash_state;
 mod join_filter;
-pub use join_filter::JoinFilterPredicate;
+pub use join_filter::{JoinFilterPredicate, selective_build};
 mod host;
 mod instrument;
 mod membership;
@@ -226,9 +230,25 @@ pub use positional::{
     ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
 };
 pub use selection::{Selection, SelectionRows, SelectionSummary};
+pub mod filter;
+pub use filter::Filter;
 
 #[cfg(doctest)]
 mod misuse;
 
 pub mod retention;
 pub use retention::{Retention, residual, retain_keys, retain_rows};
+
+/// Select printer output using the runtime's counters feature. The unselected
+/// tokens are discarded before type checking; the plain branch expands verbatim.
+#[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+#[macro_export]
+macro_rules! profile_select {
+    (plain { $($plain:tt)* } counters { $($profile:tt)* }) => { $($plain)* };
+}
+/// Select printer output using the runtime's counters feature.
+#[cfg(any(feature = "counters", feature = "operator-timing"))]
+#[macro_export]
+macro_rules! profile_select {
+    (plain { $($plain:tt)* } counters { $($profile:tt)* }) => { $($profile)* };
+}

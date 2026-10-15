@@ -91,6 +91,15 @@ pub trait ReadPredicate<K> {
         true
     }
 }
+impl<K, P: ReadPredicate<K> + ?Sized> ReadPredicate<K> for &P {
+    #[inline]
+    fn test(&self, key: &K) -> bool {
+        P::test(self, key)
+    }
+    fn any_in(&self, lo: &K, hi: &K) -> bool {
+        P::any_in(self, lo, hi)
+    }
+}
 pub trait BlockRead<C>: PositionalRows
 where
     C: Column<Self>,
@@ -99,32 +108,14 @@ where
     fn bounds(self, _column: C, _block: BlockId) -> Option<(C::Key, C::Key)> {
         None
     }
+    /// Pulled row by row, this loop keeps the predicate test inline; an
+    /// adapter chain (blocks, flatten, filter) measured twice as slow.
     fn read<P: ReadPredicate<C::Key>>(
         self,
         column: C,
         predicate: &P,
     ) -> impl Iterator<Item = RowId> {
-        self.blocks().flat_map(move |block| {
-            crate::count!(blocks_considered);
-            let keep = self
-                .bounds(column, block)
-                .is_none_or(|(lo, hi)| predicate.any_in(&lo, &hi));
-            if keep {
-                crate::count!(blocks_visited);
-            } else {
-                crate::count!(blocks_skipped);
-                crate::count!(blocks_skipped_metadata);
-            }
-            self.block_positions(block)
-                .take(if keep { usize::MAX } else { 0 })
-                .filter(move |&id| {
-                    if !keep {
-                        return false;
-                    }
-                    crate::count!(rows_tested);
-                    predicate.test(&column.key(self, id))
-                })
-        })
+        self.read_owned(column, predicate)
     }
     /// The same exact read, owning its predicate so a pipe can escape its
     /// construction scope without collecting rows or borrowing a local value.

@@ -12,7 +12,6 @@ JOIN orders o ON o.o_orderkey = l.l_orderkey
 JOIN nation n ON n.n_nationkey = s.s_nationkey
 WHERE p.p_name LIKE '%green%'"#;
     candidate generic_smallest;
-    advise join_filter ::cq_join_filters::BloomFilter<16384>;
     setup {}
     relations {
         relation Lineitem => lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);
@@ -23,7 +22,8 @@ WHERE p.p_name LIKE '%green%'"#;
         relation Nation => nation(n_nationkey: i32);
     }
     answer(order_key: i64, part_key: i64, supplier_key: i64) :-
+        Orders(order_key),
         Lineitem(order_key, part_key, supplier_key), PartSupp(part_key, supplier_key),
         Part(part_key, part_name), if part_name.contains("green"),
-        Supplier(supplier_key, nation_key), Orders(order_key), Nation(nation_key);
+        Supplier(supplier_key, nation_key), Nation(nation_key);
 }

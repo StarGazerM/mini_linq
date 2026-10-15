@@ -24,8 +24,8 @@ AND l.l_shipdate >= DATE '1995-01-01' AND l.l_shipdate <= DATE '1996-12-31'"#;
         relation Nation => nation(n_nationkey: i32, n_name: String);
     }
     answer(order_key: i64, supplier_nation: i32, customer_nation: i32) :-
-        Supplier(supplier_key, supplier_nation),
         Lineitem(order_key, supplier_key, ship_date), if *ship_date >= start && *ship_date <= end,
+        Supplier(supplier_key, supplier_nation),
         Orders(order_key, customer_key), Customer(customer_key, customer_nation),
         { Nation(supplier_nation, "FRANCE"), Nation(customer_nation, "GERMANY") }
         | { Nation(supplier_nation, "GERMANY"), Nation(customer_nation, "FRANCE") };

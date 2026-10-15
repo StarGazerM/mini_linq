@@ -73,12 +73,15 @@ impl<K: Eq + Hash, V, S: Default + std::hash::BuildHasher, I: Iterator<Item = (K
 {
     fn build(source: I) -> Self {
         crate::count!(index_builds);
-        source
+        let result: Self = source
             .map(|(key, _)| {
                 crate::count!(distinct_insertions);
                 key
             })
-            .collect()
+            .collect();
+        #[cfg(feature = "counters")]
+        crate::counters::build_cardinality(result.len());
+        result
     }
 }
 
@@ -100,6 +103,8 @@ pub struct HashIndex<'a, K, V> {
 type Source<'a, K, V> = Box<dyn Iterator<Item = (K, V)> + 'a>;
 
 struct State<'a, K, V> {
+    #[cfg(any(feature = "counters", feature = "operator-timing"))]
+    profile: Option<crate::counters::DeferredBuild>,
     /// Taken exactly once, by the initialization of `buckets`.
     #[cfg(feature = "counters")]
     allocation: RefCell<crate::counters_memory::Allocation>,
@@ -201,6 +206,8 @@ impl<'a, K: 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build<I> for Hash
     fn build(source: I) -> Self {
         Self {
             state: Rc::new(State {
+                #[cfg(any(feature = "counters", feature = "operator-timing"))]
+                profile: crate::counters::defer_build(),
                 #[cfg(feature = "counters")]
                 allocation: RefCell::new(crate::counters_memory::Allocation::default()),
                 source: RefCell::new(Some(Box::new(source))),
@@ -247,12 +254,21 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
 }
 
 impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
+    /// The number of distinct stored keys.
+    pub fn len(&self) -> usize {
+        self.buckets().index.table.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     /// Borrow distinct stored keys without copying them or cloning index handles.
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         crate::instrument::cursor!(self.buckets().index.table.iter().map(|(key, _)| key))
     }
     fn buckets(&self) -> &Buckets<K, V> {
         self.state.buckets.get_or_init(|| {
+            #[cfg(any(feature = "counters", feature = "operator-timing"))]
+            let _profile = self.state.profile.as_ref().map(|p| p.start());
             crate::count!(index_builds);
             let source = self
                 .state

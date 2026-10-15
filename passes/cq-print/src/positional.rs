@@ -3,21 +3,52 @@ use super::*;
 use structures::{KeyOwnership, MembershipSummary, ReadPredicate, Summary};
 
 impl Context<'_> {
-    pub fn join_filter_ident(&self, scan: &str) -> Ident {
+    pub fn join_filter_ident(&self, scan: &str, covering: &str, key: &str) -> Ident {
         format_ident!(
-            "__cq_{}_join_filter",
+            "__cq_{}_join_filter_{}_{}",
             scan,
+            covering,
+            key,
             span = proc_macro2::Span::mixed_site()
         )
     }
-    /// Formal rule IF-JoinFilter: Filter scan positions conservatively and retain the covering exact probe unchanged.
-    pub fn join_filter_ids(&self, name: &str) -> Option<TokenStream> {
+    /// The scan occurrence's filters as `(predicate, key marker)`, in decision order.
+    fn join_filters_of(&self, name: &str) -> Option<(String, Vec<(Ident, syn::Type)>)> {
         let origin = self.analysis.lineage.get(name)?;
-        let filter = self.analysis.join_filters.get(&origin.occurrence)?;
-        let id = self.join_filter_ident(&origin.occurrence);
-        let host = Self::positional_host(&origin.base);
-        let marker = &filter.marker;
-        Some(quote!(::cq_storage::BlockRead::read(#host, <#marker>::default(), #id)))
+        let filters = self.analysis.join_filters.get(&origin.occurrence)?;
+        let filters = filters
+            .iter()
+            .map(|f| {
+                let key = symbol_name(f.key.columns.first().expect("checked key"));
+                (
+                    self.join_filter_ident(&origin.occurrence, &symbol_name(&f.covering), &key),
+                    f.marker.clone(),
+                )
+            })
+            .collect();
+        Some((origin.base.clone(), filters))
+    }
+    /// Test every filter after the first on each surviving position.
+    fn remaining_join_filters(
+        host: &TokenStream,
+        ids: TokenStream,
+        rest: &[(Ident, syn::Type)],
+    ) -> TokenStream {
+        rest.iter().fold(ids, |ids, (id, marker)| {
+            quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| ::cq_storage::ReadPredicate::test(#id, &::cq_storage::Column::key(<#marker>::default(), #host, __cq_id))))
+        })
+    }
+    /// Formal rule IF-JoinFilter: Filter scan positions conservatively by every recorded filter and retain each covering exact operator unchanged.
+    pub fn join_filter_ids(&self, name: &str) -> Option<TokenStream> {
+        let (base, filters) = self.join_filters_of(name)?;
+        let host = Self::positional_host(&base);
+        let ((id, marker), rest) = filters.split_first()?;
+        let ids = quote!(::cq_storage::BlockRead::read(#host, <#marker>::default(), #id));
+        Some(Self::remaining_join_filters(
+            &host.to_token_stream(),
+            ids,
+            rest,
+        ))
     }
     fn combined_join_filter_ids(
         &self,
@@ -25,8 +56,7 @@ impl Context<'_> {
         input: &str,
         predicate: &Ident,
     ) -> Option<TokenStream> {
-        let origin = self.analysis.lineage.get(name)?;
-        let filter = self.analysis.join_filters.get(&origin.occurrence)?;
+        let (base, filters) = self.join_filters_of(name)?;
         // Replace only an unevaluated rename/project position stream. A prior
         // predicate remains authoritative and must not be scanned a second time.
         let mut current = input.to_owned();
@@ -37,13 +67,15 @@ impl Context<'_> {
                 _ => return None,
             }
         }
-        let id = self.join_filter_ident(&origin.occurrence);
-        let host = Self::positional_host(&origin.base);
+        let host = Self::positional_host(&base);
         let marker = &self.analysis.reads[name].marker;
-        let key_marker = &filter.marker;
-        Some(
-            quote!(::cq_storage::read_with_filter(#host, <#marker>::default(), #predicate, <#key_marker>::default(), #id)),
-        )
+        let ((id, key_marker), rest) = filters.split_first()?;
+        let ids = quote!(::cq_storage::read_with_filter(#host, <#marker>::default(), #predicate, <#key_marker>::default(), #id));
+        Some(Self::remaining_join_filters(
+            &host.to_token_stream(),
+            ids,
+            rest,
+        ))
     }
     pub fn keyset_ident(&self, name: &str, key: &[String]) -> Ident {
         format_ident!(
@@ -196,6 +228,7 @@ impl Context<'_> {
         );
         if self.physical_analysis.modes[name] != physical::ModeKind::Pipe {
             let predicate = self.read_predicate(name);
+            let predicate = self.profile_predicate(name, predicate);
             self.statements
                 .push(syn::parse_quote!(let #id = #predicate;));
         }
@@ -264,6 +297,7 @@ impl Context<'_> {
             // A retained union may replay this pipe for several index keys.
             // Each traversal must own its predicate, not move one shared value.
             let value = self.read_predicate(name);
+            let value = self.profile_predicate(name, value);
             Ok(quote!({ let #predicate = #value; #ids }))
         } else {
             Ok(ids)
@@ -304,10 +338,13 @@ impl Context<'_> {
             _ => return error(&self.physical[name].name, "unsupported selection spine"),
         };
         let predicate = self.read_predicate(name);
+        let predicate = self.profile_predicate(name, predicate);
         let mut input = input;
         while let Operator::Project(p) = &self.physical[&input].operator {
+            let previous = symbol_name(&p.input);
+            self.profile_alias(&input, &previous);
             self.take_positions(&input);
-            input = symbol_name(&p.input);
+            input = previous;
         }
         let previous = match self.reprs.get(&input) {
             Some(Repr::Selection { selection, .. }) => Some(selection.to_token_stream()),
@@ -328,6 +365,17 @@ impl Context<'_> {
         if name != root {
             self.take_positions(name);
         }
+        let result = if let Some(i) = self.profile_index(name) {
+            let profile = self.profile_handle();
+            quote!(#profile.build(#i, || {
+                let __cq_selection = #result;
+                let __cq_count = __cq_selection.profile_len();
+                #profile.rows(#i, 0, __cq_count, __cq_count);
+                __cq_selection
+            }))
+        } else {
+            result
+        };
         Ok(result)
     }
     pub fn take_positions(&mut self, name: &str) -> Option<TokenStream> {

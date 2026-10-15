@@ -10,7 +10,8 @@
 //! Positive semijoins may distribute into union arms and fallback positive arms.
 //! Negative operands stay original named branch results.
 //! Hypergraph uses a tree reducer only on acyclic scopes, but exact atom-to-block
-//! cuts on any scope. Each block branch is analyzed as its own scope.
+//! cuts on any scope. Masks reduces along the reduction tree on every scope.
+//! Each block branch is analyzed as its own scope.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
 //! answers; `{ B1 } else { B2 }` selects the first nonempty arm. F is the free
@@ -59,6 +60,152 @@ pub enum Reductions {
     /// Filter-supported tree reductions on acyclic scopes, plus exact
     /// atom-to-block cuts on any scope. Branches are independent scopes.
     Hypergraph,
+    /// Masks for a left-deep pipeline: the reduction tree is rooted at the
+    /// scope's first scheduled clause (the outer stream). Each inner clause is
+    /// reduced by its filtered child subtrees, children first, so every support
+    /// is complete before the stream starts. The outer is never reduced or a
+    /// support: its probes filter it in written order, and no reduced stream is
+    /// stored. Exact atom-to-block cuts reduce inner atoms sharing a Rust-free
+    /// block's columns. Branches are independent scopes.
+    Masks,
+}
+
+/// The first scheduled atom or Rust-free block of a scope: its outer stream.
+pub fn outer(steps: &[Step], graph: &valuation::cq::hypergraph::Analysis) -> Option<usize> {
+    steps.iter().find_map(|step| match step {
+        Step::Atom(a, _) if graph.clauses.contains_key(&a.clause()) => Some(a.clause()),
+        Step::Block(b, _) if graph.clauses.contains_key(&b.source.clause()) => {
+            Some(b.source.clause())
+        }
+        _ => None,
+    })
+}
+
+/// The reduction tree rerooted at `root`: each other reachable clause's parent.
+pub fn rooted(tree: &[(usize, Option<usize>)], root: usize) -> BTreeMap<usize, usize> {
+    let mut adjacent: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+    for &(child, parent) in tree {
+        if let Some(parent) = parent {
+            adjacent.entry(child).or_default().insert(parent);
+            adjacent.entry(parent).or_default().insert(child);
+        }
+    }
+    let mut parents = BTreeMap::new();
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        for &next in adjacent.get(&node).into_iter().flatten() {
+            if next != root && !parents.contains_key(&next) {
+                parents.insert(next, node);
+                pending.push(next);
+            }
+        }
+    }
+    parents
+}
+
+/// `(target, support)` mask edges, children first: each inner clause with each
+/// child whose subtree carries a relational filter or a block cut. Siblings run
+/// strongest first. Supports are always children and the outer (root) is
+/// neither a target nor a support.
+/// Formal rule R-Masks: Reduce each inner clause by its filtered child subtrees of the outer-rooted reduction tree.
+pub fn mask_edges(
+    graph: &valuation::cq::hypergraph::Analysis,
+    body: &cq::CommaList<valuation::cq::BodyItem>,
+    root: usize,
+) -> Vec<(usize, usize)> {
+    let parents = rooted(&graph.reduction_tree, root);
+    let mut children: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (&child, &parent) in &parents {
+        children.entry(parent).or_default().push(child);
+    }
+    let mut local = valuation::cq::hypergraph::filter_ranks(body, graph);
+    for (atom, _) in block_cuts(graph, body) {
+        local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
+    }
+    fn subtree(
+        node: usize,
+        children: &BTreeMap<usize, Vec<usize>>,
+        local: &BTreeMap<usize, u8>,
+        ranks: &mut BTreeMap<usize, u8>,
+    ) -> u8 {
+        let mut rank = local.get(&node).copied().unwrap_or(3);
+        for &child in children.get(&node).into_iter().flatten() {
+            rank = rank.min(subtree(child, children, local, ranks));
+        }
+        ranks.insert(node, rank);
+        rank
+    }
+    let mut ranks = BTreeMap::new();
+    subtree(root, &children, &local, &mut ranks);
+    for siblings in children.values_mut() {
+        siblings.sort_by_key(|c| (ranks[c], *c));
+    }
+    fn visit(
+        node: usize,
+        root: usize,
+        children: &BTreeMap<usize, Vec<usize>>,
+        ranks: &BTreeMap<usize, u8>,
+        edges: &mut Vec<(usize, usize)>,
+    ) {
+        for &child in children.get(&node).into_iter().flatten() {
+            visit(child, root, children, ranks, edges);
+            if node != root && ranks[&child] < 3 {
+                edges.push((node, child));
+            }
+        }
+    }
+    let mut edges = Vec::new();
+    visit(root, root, &children, &ranks, &mut edges);
+    edges
+}
+
+/// Exact atom-to-block cuts `(atom, block)` on shared columns.
+pub fn block_cuts(
+    graph: &valuation::cq::hypergraph::Analysis,
+    body: &cq::CommaList<valuation::cq::BodyItem>,
+) -> Vec<(usize, usize)> {
+    let mut cuts = Vec::new();
+    for (&block, _) in graph
+        .clauses
+        .iter()
+        .filter(|(c, _)| matches!(&body[**c], valuation::cq::BodyItem::Block(_)))
+    {
+        for (&clause, _) in graph
+            .clauses
+            .iter()
+            .filter(|(c, _)| body[**c].atom().is_some())
+        {
+            if !graph.shared(clause, block).is_empty() {
+                cuts.push((clause, block));
+            }
+        }
+    }
+    cuts
+}
+
+/// The Masks schedule of one scope: block cuts, then outer-rooted mask edges.
+fn mask_steps(
+    body: &cq::CommaList<valuation::cq::BodyItem>,
+    steps: &[Step],
+    analysis: &valuation::Analysis,
+    graph: &valuation::cq::hypergraph::Analysis,
+) -> Vec<Step> {
+    let Some(root) = outer(steps, graph) else {
+        return Vec::new();
+    };
+    let mut edges: Vec<_> = block_cuts(graph, body)
+        .into_iter()
+        .filter(|&(atom, _)| atom != root)
+        .collect();
+    for edge in mask_edges(graph, body, root) {
+        if body[edge.0].atom().is_some() && !edges.contains(&edge) {
+            edges.push(edge);
+        }
+    }
+    edges
+        .into_iter()
+        .map(|(target, support)| semijoin(analysis, graph, target, support))
+        .collect()
 }
 
 /// Insert the reductions `options` ask for, then check the VO contract.
@@ -124,6 +271,16 @@ fn compile_steps(
         };
         if let Some(first) = first_atom {
             before.entry(first).or_default().extend(reducer);
+        }
+    }
+    if options.semijoins == Reductions::Masks {
+        if let Some(first) = first_atom {
+            before.entry(first).or_default().extend(mask_steps(
+                body,
+                source_steps,
+                analysis,
+                graph,
+            ));
         }
     }
     if options.semijoins == Reductions::Hypergraph {
@@ -297,12 +454,7 @@ fn filtered_tree(
     analysis: &valuation::Analysis,
     body: &cq::CommaList<valuation::cq::BodyItem>,
 ) -> syn::Result<Vec<Step>> {
-    let Some(tree) = &graph.join_tree else {
-        return Err(syn::Error::new_spanned(
-            body,
-            "filtered tree reduction requires an acyclic query",
-        ));
-    };
+    let tree = &graph.reduction_tree;
     let mut children: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     let mut root = None;
     for &(node, parent) in tree {
@@ -396,8 +548,9 @@ fn filtered_tree(
 }
 
 /// `reduce target with support(shared)`: the support's columns that are
-/// variables of the target, `_` elsewhere.
-fn semijoin(
+/// variables of the target, `_` elsewhere. Clauses are scope-local; external
+/// planners use it to record their own reduction schedules.
+pub fn semijoin(
     analysis: &valuation::Analysis,
     hypergraph: &valuation::cq::hypergraph::Analysis,
     target: usize,

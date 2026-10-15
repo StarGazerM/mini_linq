@@ -63,8 +63,8 @@ macro_rules! query_body {
                 );
                 relation part(partkey: i64, brand: String, container: String, size: i32);
                 rows(group, orderkey, linenumber, amount) :-
-                    part(partkey, brand, container, size),
                     lineitem(partkey, orderkey, linenumber, quantity, price, discount, shipmode, shipinstruct),
+                    part(partkey, brand, container, size),
                     if *shipmode == "AIR" || *shipmode == "AIR REG",
                     if *shipinstruct == "DELIVER IN PERSON",
                     if (*brand == "Brand#12"

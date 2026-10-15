@@ -67,31 +67,42 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 #[derive(Default)]
 struct PlanOptions {
     no_reduce: bool,
-    advice: cq_physical_lowering::Advice,
+    /// `(target, support)` relation names to add, in advice order.
+    reduce: Vec<(syn::Ident, syn::Ident)>,
+    /// `(target, support)` relation names whose Masks reduction is dropped.
+    skip: Vec<(syn::Ident, syn::Ident)>,
 }
 impl Parse for PlanOptions {
-    /// `no_reduce` and/or `stream(Relation, ...)`, comma separated.
+    /// `no_reduce`, or any number of `reduce(Target with Support)` and
+    /// `skip(Target with Support)`, comma separated.
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
         while !input.is_empty() {
             let option: syn::Ident = input.parse()?;
-            if option == "no_reduce" && !options.no_reduce {
+            let advised = !options.reduce.is_empty() || !options.skip.is_empty();
+            if option == "no_reduce" && !options.no_reduce && !advised {
                 options.no_reduce = true;
-            } else if option == "stream" && options.advice.stream.is_empty() {
+            } else if (option == "reduce" || option == "skip") && !options.no_reduce {
                 let content;
                 syn::parenthesized!(content in input);
-                let names = content.parse_terminated(syn::Ident::parse, syn::Token![,])?;
-                if names.is_empty() {
-                    return Err(syn::Error::new_spanned(
-                        option,
-                        "stream advice names at least one relation",
-                    ));
+                let target: syn::Ident = content.parse()?;
+                let with: syn::Ident = content.parse()?;
+                if with != "with" {
+                    return Err(syn::Error::new_spanned(with, "expected `with`"));
                 }
-                options.advice.stream = names.iter().map(|n| n.to_string()).collect();
+                let support: syn::Ident = content.parse()?;
+                if !content.is_empty() {
+                    return Err(content.error("expected (Target with Support)"));
+                }
+                if option == "reduce" {
+                    options.reduce.push((target, support));
+                } else {
+                    options.skip.push((target, support));
+                }
             } else {
                 return Err(syn::Error::new_spanned(
                     option,
-                    "expected no_reduce or stream(Relation, ...), each at most once",
+                    "expected no_reduce, or reduce/skip(Target with Support), not both",
                 ));
             }
             if !input.is_empty() {
@@ -105,18 +116,42 @@ impl Parse for PlanOptions {
     }
 }
 
-/// CQ → RA′ with static filtered-connected ordering and checked reductions.
-/// `plan(no_reduce)` disables reductions, not static ordering. `plan(stream(R, ..))`
-/// advises streaming the join side that reads `R`; the choice is recorded in RA
-/// operand order and checked under the same advice.
-/// Formal rule Plan-Prefix: Normalize, order Filtered/Coarse, optionally reduce and absorb, then record static build orientation before IX.
+/// The written atom clause of the stream scope reading `relation`; advice must
+/// name a relation read exactly once there.
+fn advised_clause(
+    body: &cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
+    relation: &syn::Ident,
+) -> syn::Result<usize> {
+    let mut clauses = body
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.atom().is_some_and(|atom| atom.relation == *relation))
+        .map(|(clause, _)| clause);
+    match (clauses.next(), clauses.next()) {
+        (Some(clause), None) => Ok(clause),
+        _ => Err(syn::Error::new_spanned(
+            relation,
+            "reduce advice names a relation read by exactly one top-level atom",
+        )),
+    }
+}
+
+/// CQ → RA′: a left-deep plan in written order with checked reductions.
+/// The first clause of each scope is the outer stream; every other clause is
+/// reduced by its filtered subtrees of the outer-rooted reduction tree before
+/// the stream starts. `plan(no_reduce)` disables reductions, not the order.
+/// `plan(reduce(T with S))` additionally reduces the top-level atom reading `T`
+/// by the one reading `S` after the Masks reductions, before the stream;
+/// `plan(skip(T with S))` drops that Masks reduction. Both record the author's
+/// cardinality knowledge as VO reduce steps; dropping a reduction is sound.
+/// Formal rule Plan-Prefix: Normalize, order Written/Coarse, then optionally reduce by outer-rooted masks and advised reductions before IX.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input.into(), |source, args| {
         let args: PlanOptions = syn::parse2(args)?;
         let normal = cq_lang_cq::normal::normalize(source)?;
         let ordering = cq_order::Options {
-            heuristic: cq_order::Heuristic::Filtered,
+            heuristic: cq_order::Heuristic::Written,
             split: cq_order::Split::Coarse,
         };
         let plan = cq_order::compile(&normal, &ordering)?;
@@ -125,19 +160,67 @@ pub fn plan(input: TokenStream) -> TokenStream {
             semijoins: if args.no_reduce {
                 cq_reduce::Reductions::None
             } else {
-                cq_reduce::Reductions::Hypergraph
+                cq_reduce::Reductions::Masks
             },
         };
-        let reduced = cq_reduce::compile(&plan, &options)?;
+        let mut reduced = cq_reduce::compile(&plan, &options)?;
         cq_reduce::check(&plan, &reduced, &options)?;
+        if !args.reduce.is_empty() || !args.skip.is_empty() {
+            // Formal rule R-Advice: Advised semijoins of two top-level atoms sharing a variable run after the Masks reductions, before the stream; skipped ones are removed.
+            let analysis = cq_lang_vo::contract::check(&reduced)?;
+            let graph = cq_lang_cq::hypergraph::Analysis::of(&reduced.cq);
+            let body = &reduced.cq.query.body;
+            let pair = |target: &syn::Ident, support: &syn::Ident| -> syn::Result<(usize, usize)> {
+                let (t, s) = (
+                    advised_clause(body, target)?,
+                    advised_clause(body, support)?,
+                );
+                if t == s || graph.shared(t, s).is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        support,
+                        "reduce advice needs two atoms sharing a variable",
+                    ));
+                }
+                Ok((t, s))
+            };
+            let mut skipped = Vec::new();
+            for (target, support) in &args.skip {
+                let (t, s) = pair(target, support)?;
+                let step = cq_reduce::semijoin(&analysis, &graph, t, s);
+                if !reduced.valuation.steps.contains(&step) {
+                    return Err(syn::Error::new_spanned(
+                        target,
+                        "skip advice names no Masks reduction",
+                    ));
+                }
+                skipped.push(step);
+            }
+            reduced
+                .valuation
+                .steps
+                .retain(|step| !skipped.contains(step));
+            let mut steps = Vec::new();
+            for (target, support) in &args.reduce {
+                let (t, s) = pair(target, support)?;
+                steps.push(cq_reduce::semijoin(&analysis, &graph, t, s));
+            }
+            let first = reduced
+                .valuation
+                .steps
+                .iter()
+                .position(|step| {
+                    matches!(
+                        step,
+                        cq_lang_vo::Step::Atom(..) | cq_lang_vo::Step::Block(..)
+                    )
+                })
+                .unwrap_or(reduced.valuation.steps.len());
+            reduced.valuation.steps.splice(first..first, steps);
+            cq_lang_vo::contract::check(&reduced)?;
+        }
         let target = cq_elaborate::compile(&reduced)?;
         cq_elaborate::check(&reduced, &target)?;
-        let target = if args.no_reduce {
-            target
-        } else {
-            cq_elaborate::simplify_reductions(&target)?
-        };
-        cq_physical_lowering::orient_with(&target, &args.advice)
+        Ok(target)
     })
     .into()
 }
@@ -183,7 +266,11 @@ pub fn select(input: TokenStream) -> TokenStream {
 pub fn print_pull(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, args| {
         no_arguments(args)?;
-        cq_physical_realization::compile(source)
+        let plain = cq_physical_realization::compile(source)?;
+        let profile = cq_physical_realization::compile_profile(source)?;
+        Ok(syn::parse_quote!(
+            ::cq_storage::profile_select! { plain { #plain } counters { #profile } }
+        ))
     })
     .into()
 }

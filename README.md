@@ -45,12 +45,14 @@ Grammars and extension APIs live in crate `//!` documentation. See
 
 Select macro paths in named phases; omitted phases use the defaults. Pass
 arguments belong to the selected pass, and rewrite phases accept ordered lists.
-The default planner uses static Filtered/Coarse ordering, checked filter-supported
-Hypergraph semijoin reduction (tree edges only on acyclic scopes, exact
-atom-to-block cuts on any scope), and static build-side orientation. Each block
-branch is analyzed independently. Select
+The default planner is left-deep in written order: the first clause of each
+scope streams and later clauses are indexed and probed. Before the stream
+starts, each indexed clause is reduced by its filtered subtrees of the
+stream-rooted reduction tree (checked Masks semijoins, plus exact atom-to-block
+cuts), and each filtered build pushes an exact key set into the probe-side
+scan. Each block branch is analyzed independently. Select
 `plan = mini_linq::passes::plan(no_reduce);` to disable optional reductions while
-retaining static ordering and build orientation; other phases keep their defaults.
+retaining written order; other phases keep their defaults.
 
 ```rust
 let rows = [(1_i32,), (1,), (2,)];

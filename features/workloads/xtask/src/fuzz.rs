@@ -53,7 +53,7 @@ impl Config {
             (seed.next_u64() % n) as usize
         }
         Self {
-            planner: next(seed, 9),
+            planner: next(seed, cq_workloads::pipelines::Planner::ALL.len() as u64),
             merge: next(seed, 2) == 1,
             canon: next(seed, 2) == 1,
             smallest: next(seed, 2) == 1,

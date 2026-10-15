@@ -47,6 +47,12 @@ pub struct Analysis {
     /// `(clause, parent clause)` for every atom clause, ascending by clause;
     /// the one clause without a parent is the root. Present iff acyclic.
     pub join_tree: Option<Vec<(usize, Option<usize>)>>,
+    /// `(clause, parent clause)` for every atom clause: the join tree when
+    /// acyclic; otherwise the GYO ears plus a spanning tree of the cyclic core,
+    /// each core edge joining clauses that share a variable (most shared first,
+    /// then earliest clauses). Semijoins along it are sound reductions; only on
+    /// acyclic queries are they a full reducer.
+    pub reduction_tree: Vec<(usize, Option<usize>)>,
     /// Reversed maximum-cardinality search numbering of the primal graph.
     pub elimination_order: Vec<String>,
 }
@@ -263,6 +269,7 @@ impl Analysis {
     /// Formal rule G-Reject: Reject every other terminal residual.
     /// Formal rule H-JoinTree: Return the constructed GYO parent map exactly when acyclic.
     fn reduce(&mut self, mut residual: BTreeMap<usize, BTreeSet<String>>) {
+        let edges = residual.clone();
         let mut parent: BTreeMap<usize, Option<usize>> =
             residual.keys().map(|&clause| (clause, None)).collect();
         loop {
@@ -296,6 +303,31 @@ impl Analysis {
             });
         }
         self.acyclic = residual.len() <= 1 && residual.values().all(BTreeSet::is_empty);
+        // Formal rule H-SpanningCore: Connect the residual cyclic core by a
+        // spanning tree over shared variables, rooted at its earliest clause.
+        let mut core: Vec<usize> = residual.keys().copied().collect();
+        if let Some(root) = core.first().copied() {
+            core.remove(0);
+            let mut tree = vec![root];
+            while !core.is_empty() {
+                let (position, parent_clause) = core
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, &c)| tree.iter().map(move |&t| (i, c, t)))
+                    .max_by_key(|&(_, c, t)| {
+                        (
+                            edges[&c].intersection(&edges[&t]).count(),
+                            std::cmp::Reverse((c, t)),
+                        )
+                    })
+                    .map(|(i, _, t)| (i, t))
+                    .expect("a pending core clause");
+                let clause = core.remove(position);
+                parent.insert(clause, Some(parent_clause));
+                tree.push(clause);
+            }
+        }
+        self.reduction_tree = parent.iter().map(|(&c, &p)| (c, p)).collect();
         self.join_tree = self.acyclic.then(|| parent.into_iter().collect());
     }
 
