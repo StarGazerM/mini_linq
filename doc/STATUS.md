@@ -80,8 +80,7 @@ Before this work (1a6460c) the same defaults were 2.5–48× slower than DuckDB
    time unless handouts need browsable CSV; stop committing feature
    `Cargo.lock`s (ignored by `check_external.py`); drop or narrow API snapshots
    (filter `kw::*`/auto-trait/tuple-macro rows); shrink
-   `regression-targets.tsv` to rows `cargo test --workspace` does not cover;
-   cut the e2e 4×4,608 matrix to pairwise + one full kernel.
+   `regression-targets.tsv` to rows `cargo test --workspace` does not cover.
 6. **cq-load split.** Move `ColumnAt` and slice impls to cq-storage.
 
 ## Next step
@@ -89,32 +88,62 @@ Before this work (1a6460c) the same defaults were 2.5–48× slower than DuckDB
 After the runtime work is integrated: staged quotation for plan control, in
 [`QUOTATION.md`](QUOTATION.md).
 
-## Isolated incremental/Datalog work
+## Datalog (`codex/datalog-v2`)
 
-The design is in [`formal/incremental.tex`](formal/incremental.tex). It keeps
-the existing bottom-plus-Set refinement contract; total fixpoint equality
-does not establish equality of panic domains. Maintained representations
-must preserve protected cuts and coordinate publication of all indexes.
+Rule: features build on the unmodified core (`languages/`, `passes/`,
+`runtime/`, `facade/`, `testkit/`, root manifests). A needed core change is
+reported with evidence first. On this branch the core diff against
+`codex/all-answers` is empty.
 
-| Branch | Implementation commits | Isolated validation |
-|---|---|---|
-| `codex/datalog-lang` | `2292a6d` | Review clear; root 511 and workloads 14,357 passed |
-| `codex/maintained-structures` | `17cdd52`, `08427da` | Five review findings fixed; root 550 and workloads 14,357 passed |
-| `codex/d85-regression` | `46be507` | Root 508 and workloads 14,357 passed; full SF1 comparison exact |
+- `features/datalog`: `language` (AST, contract, `Language`), `schedule`
+  (strata, semi-naive with declared deltas, recorded insertion, negation keys
+  and index layouts), `fork` (ordinary CQ holes), `bridge` (`datalog!`,
+  `stratified!`, `seminaive!`; round loop), `oracle` (sequential Ascent,
+  naive evaluators, 104 Ascent-generated goldens). Negation is core
+  `!R(..)` over completed strata; aggregates and nested blocks are rejected.
+  `cq-ext-recursion` is unchanged.
+- Indexes: Datalog keeps its relations as grouped-map hosts in the layouts it
+  records, updates them after each round, and passes them to one-shot CQ
+  holes; the existing compiler probes host indexes natively. Reach chain at
+  n = 2,000/4,000/8,000: 0 core index builds, rows enumerated 3n + 1.
+- Single-thread vs sequential Ascent (`a7b4a7c`, one run): reach chain 4,096
+  0.71 vs 0.38 ms; reach random 5k 0.57 vs 0.40 ms; linear TC chain 4,096
+  618 vs 515 ms; nonlinear TC chain 512 91 vs 106 ms; same-generation 4,096
+  0.65 vs 0.25 ms.
+- Workload tests are plain case files (`features/workloads/src/queries`):
+  query once, input helpers, golden check; pairwise CQ matrix (329 pairs per
+  family, named configurations) plus a 2,400-configuration triangle kernel;
+  rejected pipelines are UI fixtures. Workload tests 14,357 → 2,982; cold
+  test build 874 → 169 s.
+- Validation: root 507, datalog 57, extensions 53, workloads 2,982 (on
+  `7695d00`), DuckDB goldens 151, public API, dependency, formal checks.
+- SF 1 (this branch, one run): Q19 22.5, D19 12.7, D27 16.3, D72 75.9, H08 17.9,
+  H09 106.7, H03 28.1, Q6 16.5, H05 35.6, H21 107.3, H07 44.2, D85 62.8,
+  H07_block 72.6 ms; all exact. The H08/D19 slowdown seen on the abandoned
+  `codex/datalog` branch is absent, so it came from its core changes.
 
-These branches remain isolated; their tests do not validate a merged tree.
-All three full workload suites completed with `CARGO_BUILD_JOBS=1` after
-overlapping builds exhausted physical memory and accumulated swap. No
-compiler nontermination was established. No validation builds remain running.
+Waiting on user decisions (core changes, not made):
 
-Remaining incremental work:
+1. Folder cleanup: move `course/hw4_optional.rs` and `teaching/ya/ya_schedule.rs`
+   into crate test directories (touches root `Cargo.toml`,
+   `passes/cq-reduce`, comments in `cq-lang-ra`).
+2. `cq-testkit` golden helpers are gated behind `duckdb`
+   (`testkit/cq-testkit/src/lib.rs:122-123`), so the Ascent oracle builds
+   bundled DuckDB.
+3. `cq-testkit::runtime_rustc` picks backend rlibs by recency and one API probe
+   (`lib.rs:154-197,219-222`); it fails when root and a feature with another
+   `hashbrown` share a target directory. Separate target directories avoid it.
+4. `codex/d85-regression` (`46be507`) changes `passes/cq-order`; D85
+   62 → 20 ms.
 
-1. Integrate staged calls/maintained state with Datalog-generated rounds;
-   the Datalog branch still rebuilds query-local indexes.
-2. Specify rule-local aggregate binding and dependency tracking; Datalog
-   currently rejects aggregate clauses and nested blocks.
-3. Establish the partial-Rust multi-round refinement argument and the
-   consumer-owned dedup contract. Structural checks are not those proofs.
-4. Check the combined tree and benchmark it before replacing the baseline
-   table above. For owned staged inputs, positional recovery is direct;
-   generic nonpositional `Rows` hosts may rescan by exact key.
+Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
+of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
+
+Remaining Datalog work: profile linear TC and same-generation gaps; rule-local
+aggregates; Ascent lattices and custom providers as explicit contracts;
+FlowLog comparison; partial-Rust multi-round refinement argument.
+
+The abandoned design (`codex/datalog`, `codex/datalog-lang`,
+`codex/maintained-structures`, `codex/datalog-*`, `codex/tests-reshape`,
+`codex/cleanup-folders`, `codex/testkit-backend-identity`) changed core and is
+kept only for reference.
