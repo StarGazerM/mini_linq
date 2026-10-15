@@ -694,35 +694,26 @@ dependencies = [
  "cq-planners",
  "cq-rewrites",
  "cq-storage",
- "cq-testkit",
- "cq-workload-e2e",
  "cq-workload-passes",
  "cq-workloads",
  "mini-linq",
  "own-push",
+ "proc-macro2",
+ "syn 2.0.119",
 ]
 
 [[package]]
 name = "cq-workload-e2e"
 version = "0.1.0"
 dependencies = [
- "cq-ext-aggregate",
- "cq-ext-correlated",
- "cq-ext-negation",
- "cq-ext-recursion",
- "cq-lang-cq",
  "cq-load",
  "cq-planners",
  "cq-rewrites",
  "cq-storage",
- "cq-testkit",
  "cq-workload-passes",
  "cq-workloads",
  "mini-linq",
  "own-push",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -738,6 +729,8 @@ dependencies = [
 name = "cq-workloads"
 version = "0.1.0"
 dependencies = [
+ "cq-ext-aggregate",
+ "cq-ext-correlated",
  "cq-ext-negation",
  "cq-ext-recursion",
  "cq-ext-support",

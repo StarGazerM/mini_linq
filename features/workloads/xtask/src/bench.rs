@@ -99,7 +99,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         }
     }
     println!(
-        "corpus CSV: {loaded_cases} cases, {loaded_rows} raw rows, {:.3} ms (generated tuple loading and manifest validation)",
+        "corpus CSV: {loaded_cases} cases, {loaded_rows} raw rows, {:.3} ms (integer CSV loading and manifest validation)",
         start.elapsed().as_secs_f64() * 1_000.0,
     );
     let observations: Vec<_> = [options.scale, options.scale * 2, options.scale * 4]

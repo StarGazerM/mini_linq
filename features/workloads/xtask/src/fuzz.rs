@@ -85,7 +85,7 @@ impl Config {
             ),
             ("host", ["slice", "hashmap", "btreemap"][self.host]),
             (
-                "structures/retype",
+                "structures/ordered_dedup",
                 if self.ordered_distinct {
                     "ordered-dedup"
                 } else {

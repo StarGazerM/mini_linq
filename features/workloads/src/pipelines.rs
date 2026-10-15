@@ -83,17 +83,7 @@ impl Pipeline {
         }
         let mut structures = Vec::new();
         if self.ordered_dedup {
-            let target = cq_structure_selection::compile(&self.physical(source)?)?;
-            if target.structures.entries.iter().any(|e| {
-                matches!(
-                    e.structure,
-                    cq_lang_structures::Structure::Dedup { .. }
-                        | cq_lang_structures::Structure::HeadDedup { .. }
-                )
-            }) {
-                structures
-                    .push(quote!(::cq_rewrites::retype(dedup => ::std::collections::BTreeSet<_>)));
-            }
+            structures.push(quote!(::cq_workload_passes::ordered_dedup));
         }
         if self.sorted_payload {
             structures.push(quote!(::cq_workload_passes::sorted_payload));

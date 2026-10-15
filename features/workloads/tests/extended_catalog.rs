@@ -4,39 +4,43 @@ use std::{
     path::Path,
 };
 
-use cq_workloads::{Scenario, extended::CASES};
+use cq_workloads::{Scenario, extended::CASES, schema::ColumnType};
 
 #[test]
-fn authored_callbacks_schemas_and_sql_cover_all_families() {
+fn authored_cases_schemas_and_sql_cover_all_families() {
     let mut counts = BTreeMap::new();
     let mut names = BTreeSet::new();
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for case in CASES {
         assert!(names.insert(case.name));
         *counts.entry(case.family).or_insert(0) += 1;
-        let file =
-            syn::parse_file(&fs::read_to_string(root.join(case.rust_path)).unwrap()).unwrap();
-        assert_eq!(file.items.len(), 1);
-        let syn::Item::Macro(invocation) = &file.items[0] else {
-            panic!("authored callback")
-        };
+        let schema = case.schema();
         assert_eq!(
-            invocation.mac.path,
-            syn::parse_quote!(crate::extended_query)
+            schema,
+            cq_workloads::authored::schema(case.rust_path).unwrap(),
+            "{} catalog schema differs from the literal query",
+            case.name,
         );
-        let Some(proc_macro2::TokenTree::Group(group)) =
-            invocation.mac.tokens.clone().into_iter().last()
-        else {
-            panic!("program block")
-        };
-        assert_eq!(
-            group.stream().to_string(),
-            case.source
-                .parse::<proc_macro2::TokenStream>()
-                .unwrap()
-                .to_string()
-        );
-        assert!(!case.schema().unwrap().is_empty());
+        assert!(!schema.is_empty());
+        assert_eq!(schema.len(), case.relations.len());
+        let mut relation_names = BTreeSet::new();
+        for (declaration, relation) in schema.iter().zip(case.relations) {
+            assert!(relation_names.insert(relation.name));
+            assert_eq!(declaration.name, relation.name);
+            assert!(!relation.columns.is_empty());
+            assert_eq!(declaration.arity(), relation.columns.len());
+            let mut column_names = BTreeSet::new();
+            for (column, (name, ty)) in declaration.columns.iter().zip(relation.columns) {
+                assert!(column_names.insert(name));
+                assert_eq!(column.name, *name);
+                assert!(matches!(ty, ColumnType::I32));
+                let syn::Type::Path(path) = &column.ty else {
+                    panic!("integer column type");
+                };
+                assert!(path.qself.is_none() && path.path.is_ident("i32"));
+            }
+        }
+        assert!(root.join(case.rust_path).is_file());
         assert_eq!(
             case.sql,
             fs::read_to_string(root.join("sql/extended").join(format!("{}.sql", case.name)))
@@ -84,6 +88,11 @@ fn tiny_fixtures_and_goldens_have_exact_provenance_and_shapes() {
         for scenario in Scenario::ALL {
             let tracked = case.load(scenario).unwrap();
             assert_eq!(tracked, case.generate(scenario).unwrap());
+            assert_eq!(tracked.relations.len(), case.relations.len());
+            for (data, relation) in tracked.relations.iter().zip(case.relations) {
+                assert_eq!(data.name, relation.name);
+                assert!(data.rows.iter().all(|row| row.len() == relation.columns.len()));
+            }
             let rows = cq_workloads::dataset::read_result_rows(
                 case.path("golden").join(scenario.as_str()).join("tiny.csv"),
                 case.arity,

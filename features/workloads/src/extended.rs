@@ -3,47 +3,27 @@
 use std::path::{Path, PathBuf};
 
 use cq_syntax::RelationDecl;
-use proc_macro2::{TokenStream, TokenTree};
 
 use crate::{
     GenerationConfig, Scale, Scenario, Suite,
     dataset::{Dataset, DatasetError, RelationData},
+    schema::{self, ColumnType::I32, Relation},
 };
 
-/// Export the authored token tree to real consumers, keeping host hygiene.
-#[macro_export]
-macro_rules! extended_query {
-    ($d:tt; $exported:ident; $case:literal; $family:ident; $arity:literal; parameters {$($params:tt)*}; {$($program:tt)*}) => {
-        #[doc(hidden)]
-        #[macro_export]
-        macro_rules! $exported {
-            ($d($d callback:ident)::+) => {
-                $d($d callback)::+! { [$case; $family; $arity; parameters {$($params)*}] $($program)* }
-            };
-        }
-        pub use $exported as with_query;
-        pub const SOURCE: &str = stringify!($($program)*);
-        pub const PARAMETERS: &str = stringify!($($params)*);
-        pub const FAMILY: &str = stringify!($family);
-        pub const ARITY: usize = $arity;
-        pub const RUST_PATH: &str = file!();
-    };
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Case {
     pub name: &'static str,
     pub family: &'static str,
-    pub source: &'static str,
-    pub parameters: &'static str,
+    pub relations: &'static [Relation],
     pub rust_path: &'static str,
     pub arity: usize,
     /// Independently authored SQL, using set-valued input CTEs.
     pub sql: &'static str,
 }
 impl Case {
-    pub fn schema(self) -> syn::Result<Vec<RelationDecl>> {
-        schema(self.source.parse()?)
+    pub fn schema(self) -> Vec<RelationDecl> {
+        schema::declarations(self.relations)
     }
     pub fn config(self, scenario: Scenario) -> GenerationConfig {
         GenerationConfig {
@@ -59,7 +39,7 @@ impl Case {
             .join(self.name)
     }
     pub fn generate(self, scenario: Scenario) -> Result<Dataset, DatasetError> {
-        let schema = self.schema().map_err(DatasetError::InvalidQuery)?;
+        let schema = self.schema();
         let mut rows = fixture(self.name, scenario);
         if scenario == Scenario::EmptyInput {
             rows[0].clear();
@@ -86,7 +66,7 @@ impl Case {
         )
     }
     pub fn load(self, scenario: Scenario) -> Result<Dataset, DatasetError> {
-        let schema = self.schema().map_err(DatasetError::InvalidQuery)?;
+        let schema = self.schema();
         let dataset = Dataset::read_schema(
             &schema,
             self.path("data").join(scenario.as_str()).join("tiny"),
@@ -99,6 +79,9 @@ impl Case {
             )));
         }
         Ok(dataset)
+    }
+    pub fn inputs(self, scenario: Scenario) -> schema::Inputs {
+        schema::Inputs::from_dataset(self.load(scenario).unwrap())
     }
     pub fn check(self, scenario: Scenario, mut actual: Vec<Vec<i32>>) {
         let expected = crate::dataset::read_result_rows(
@@ -120,62 +103,338 @@ impl Case {
     }
 }
 
-/// Parse only the CQ header. Aggregation has a fold prelude; union/recursion
-/// have additional rules. The extension's own parser checks those surfaces.
-pub fn schema(tokens: TokenStream) -> syn::Result<Vec<RelationDecl>> {
-    let tokens = tokens
-        .into_iter()
-        .skip_while(|token| !matches!(token, TokenTree::Ident(id) if id == "struct"))
-        .collect();
-    let rules: cq_ext_support::Rules = syn::parse2(tokens)?;
-    Ok(rules.first.inputs().cloned().collect())
-}
+const R_X_TAG: Relation = Relation {
+    name: "R",
+    columns: &[("x", I32), ("tag", I32)],
+};
+const R_TAG_X: Relation = Relation {
+    name: "R",
+    columns: &[("tag", I32), ("x", I32)],
+};
+const R_X_Y: Relation = Relation {
+    name: "R",
+    columns: &[("x", I32), ("y", I32)],
+};
+const R_X_Y_Z: Relation = Relation {
+    name: "R",
+    columns: &[("x", I32), ("y", I32), ("z", I32)],
+};
+const R_X_UNUSED: Relation = Relation {
+    name: "R",
+    columns: &[("x", I32), ("unused", I32)],
+};
+const S_Y: Relation = Relation {
+    name: "S",
+    columns: &[("y", I32)],
+};
+const A_X: Relation = Relation {
+    name: "A",
+    columns: &[("x", I32)],
+};
+const B_X: Relation = Relation {
+    name: "B",
+    columns: &[("x", I32)],
+};
+const C_X: Relation = Relation {
+    name: "C",
+    columns: &[("x", I32)],
+};
+const D_X: Relation = Relation {
+    name: "D",
+    columns: &[("x", I32)],
+};
+const A_X_Y: Relation = Relation {
+    name: "A",
+    columns: &[("x", I32), ("y", I32)],
+};
+const B_X_Y: Relation = Relation {
+    name: "B",
+    columns: &[("x", I32), ("y", I32)],
+};
+const A_X_PAYLOAD: Relation = Relation {
+    name: "A",
+    columns: &[("x", I32), ("payload", I32)],
+};
+const S_X_Y: Relation = Relation {
+    name: "S",
+    columns: &[("x", I32), ("y", I32)],
+};
+const C_X_Y: Relation = Relation {
+    name: "C",
+    columns: &[("x", I32), ("y", I32)],
+};
+const SALE_D_ID_A: Relation = Relation {
+    name: "Sale",
+    columns: &[("d", I32), ("id", I32), ("a", I32)],
+};
+const SALE_D_K_ID_A: Relation = Relation {
+    name: "Sale",
+    columns: &[("d", I32), ("k", I32), ("id", I32), ("a", I32)],
+};
+const ALLOWED_D: Relation = Relation {
+    name: "Allowed",
+    columns: &[("d", I32)],
+};
+const EDGE_X_Y: Relation = Relation {
+    name: "Edge",
+    columns: &[("x", I32), ("y", I32)],
+};
+const SEED_X: Relation = Relation {
+    name: "Seed",
+    columns: &[("x", I32)],
+};
+const GOAL_X: Relation = Relation {
+    name: "Goal",
+    columns: &[("x", I32)],
+};
+const S_X_Y_ID: Relation = Relation {
+    name: "S",
+    columns: &[("x", I32), ("y", I32), ("id", I32)],
+};
+const BLOCKED_X_Y: Relation = Relation {
+    name: "Blocked",
+    columns: &[("x", I32), ("y", I32)],
+};
+const HIDDEN_X_Y: Relation = Relation {
+    name: "Hidden",
+    columns: &[("x", I32), ("y", I32)],
+};
 
-macro_rules! case {
-    ($leaf:ident) => {{
-        use crate::queries::extended::$leaf as query;
-        Case {
-            name: stringify!($leaf),
-            family: query::FAMILY,
-            source: query::SOURCE,
-            parameters: query::PARAMETERS,
-            rust_path: query::RUST_PATH,
-            arity: query::ARITY,
-            sql: include_str!(concat!("../sql/extended/", stringify!($leaf), ".sql")),
-        }
-    }};
-}
 pub const CASES: &[Case] = &[
-    case!(surface_constant),
-    case!(surface_negative_constant),
-    case!(surface_repeat),
-    case!(surface_wildcards),
-    case!(surface_compare),
-    case!(surface_arithmetic_guard),
-    case!(surface_boolean_guard),
-    case!(surface_let_sum),
-    case!(surface_let_chain),
-    case!(surface_computed_head),
-    case!(surface_self_join),
-    case!(surface_disconnected),
-    case!(union_two),
-    case!(union_join),
-    case!(union_project),
-    case!(negation_key),
-    case!(negation_pair),
-    case!(negation_twice),
-    case!(aggregate_stats),
-    case!(aggregate_two_keys),
-    case!(aggregate_join),
-    case!(recursion_closure),
-    case!(recursion_reach),
-    case!(recursion_reverse),
-    case!(correlated_parameter),
-    case!(correlated_exists),
-    case!(correlated_scalar),
-    case!(stacked_antijoin),
-    case!(stacked_mixed),
+    Case {
+        name: "surface_constant",
+        family: "surface",
+        relations: &[R_X_TAG],
+        rust_path: "src/queries/extended/surface_constant.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/surface_constant.sql"),
+    },
+    Case {
+        name: "surface_negative_constant",
+        family: "surface",
+        relations: &[R_TAG_X],
+        rust_path: "src/queries/extended/surface_negative_constant.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/surface_negative_constant.sql"),
+    },
+    Case {
+        name: "surface_repeat",
+        family: "surface",
+        relations: &[R_X_Y],
+        rust_path: "src/queries/extended/surface_repeat.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/surface_repeat.sql"),
+    },
+    Case {
+        name: "surface_wildcards",
+        family: "surface",
+        relations: &[R_X_Y_Z],
+        rust_path: "src/queries/extended/surface_wildcards.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/surface_wildcards.sql"),
+    },
+    Case {
+        name: "surface_compare",
+        family: "surface",
+        relations: &[R_X_Y],
+        rust_path: "src/queries/extended/surface_compare.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/surface_compare.sql"),
+    },
+    Case {
+        name: "surface_arithmetic_guard",
+        family: "surface",
+        relations: &[R_X_Y],
+        rust_path: "src/queries/extended/surface_arithmetic_guard.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/surface_arithmetic_guard.sql"),
+    },
+    Case {
+        name: "surface_boolean_guard",
+        family: "surface",
+        relations: &[R_X_Y],
+        rust_path: "src/queries/extended/surface_boolean_guard.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/surface_boolean_guard.sql"),
+    },
+    Case {
+        name: "surface_let_sum",
+        family: "surface",
+        relations: &[R_X_Y],
+        rust_path: "src/queries/extended/surface_let_sum.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/surface_let_sum.sql"),
+    },
+    Case {
+        name: "surface_let_chain",
+        family: "surface",
+        relations: &[R_X_Y],
+        rust_path: "src/queries/extended/surface_let_chain.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/surface_let_chain.sql"),
+    },
+    Case {
+        name: "surface_computed_head",
+        family: "surface",
+        relations: &[R_X_Y],
+        rust_path: "src/queries/extended/surface_computed_head.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/surface_computed_head.sql"),
+    },
+    Case {
+        name: "surface_self_join",
+        family: "surface",
+        relations: &[R_X_Y],
+        rust_path: "src/queries/extended/surface_self_join.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/surface_self_join.sql"),
+    },
+    Case {
+        name: "surface_disconnected",
+        family: "surface",
+        relations: &[R_X_UNUSED, S_Y],
+        rust_path: "src/queries/extended/surface_disconnected.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/surface_disconnected.sql"),
+    },
+    Case {
+        name: "union_two",
+        family: "union",
+        relations: &[A_X, B_X],
+        rust_path: "src/queries/extended/union_two.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/union_two.sql"),
+    },
+    Case {
+        name: "union_join",
+        family: "union",
+        relations: &[A_X, B_X, C_X, D_X],
+        rust_path: "src/queries/extended/union_join.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/union_join.sql"),
+    },
+    Case {
+        name: "union_project",
+        family: "union",
+        relations: &[A_X_Y, B_X_Y],
+        rust_path: "src/queries/extended/union_project.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/union_project.sql"),
+    },
+    Case {
+        name: "negation_key",
+        family: "negation",
+        relations: &[A_X_PAYLOAD, S_X_Y],
+        rust_path: "src/queries/extended/negation_key.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/negation_key.sql"),
+    },
+    Case {
+        name: "negation_pair",
+        family: "negation",
+        relations: &[A_X_Y, S_X_Y],
+        rust_path: "src/queries/extended/negation_pair.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/negation_pair.sql"),
+    },
+    Case {
+        name: "negation_twice",
+        family: "negation",
+        relations: &[A_X, B_X_Y, C_X_Y],
+        rust_path: "src/queries/extended/negation_twice.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/negation_twice.sql"),
+    },
+    Case {
+        name: "aggregate_stats",
+        family: "aggregate",
+        relations: &[SALE_D_ID_A],
+        rust_path: "src/queries/extended/aggregate_stats.rs",
+        arity: 5,
+        sql: include_str!("../sql/extended/aggregate_stats.sql"),
+    },
+    Case {
+        name: "aggregate_two_keys",
+        family: "aggregate",
+        relations: &[SALE_D_K_ID_A],
+        rust_path: "src/queries/extended/aggregate_two_keys.rs",
+        arity: 4,
+        sql: include_str!("../sql/extended/aggregate_two_keys.sql"),
+    },
+    Case {
+        name: "aggregate_join",
+        family: "aggregate",
+        relations: &[SALE_D_ID_A, ALLOWED_D],
+        rust_path: "src/queries/extended/aggregate_join.rs",
+        arity: 3,
+        sql: include_str!("../sql/extended/aggregate_join.sql"),
+    },
+    Case {
+        name: "recursion_closure",
+        family: "recursion",
+        relations: &[EDGE_X_Y],
+        rust_path: "src/queries/extended/recursion_closure.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/recursion_closure.sql"),
+    },
+    Case {
+        name: "recursion_reach",
+        family: "recursion",
+        relations: &[SEED_X, EDGE_X_Y],
+        rust_path: "src/queries/extended/recursion_reach.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/recursion_reach.sql"),
+    },
+    Case {
+        name: "recursion_reverse",
+        family: "recursion",
+        relations: &[GOAL_X, EDGE_X_Y],
+        rust_path: "src/queries/extended/recursion_reverse.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/recursion_reverse.sql"),
+    },
+    Case {
+        name: "correlated_parameter",
+        family: "correlated",
+        relations: &[A_X_PAYLOAD],
+        rust_path: "src/queries/extended/correlated_parameter.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/correlated_parameter.sql"),
+    },
+    Case {
+        name: "correlated_exists",
+        family: "correlated",
+        relations: &[A_X, S_X_Y],
+        rust_path: "src/queries/extended/correlated_exists.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/correlated_exists.sql"),
+    },
+    Case {
+        name: "correlated_scalar",
+        family: "correlated",
+        relations: &[A_X, S_X_Y_ID],
+        rust_path: "src/queries/extended/correlated_scalar.rs",
+        arity: 2,
+        sql: include_str!("../sql/extended/correlated_scalar.sql"),
+    },
+    Case {
+        name: "stacked_antijoin",
+        family: "stacked",
+        relations: &[A_X, B_X, BLOCKED_X_Y],
+        rust_path: "src/queries/extended/stacked_antijoin.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/stacked_antijoin.sql"),
+    },
+    Case {
+        name: "stacked_mixed",
+        family: "stacked",
+        relations: &[A_X, B_X, BLOCKED_X_Y, HIDDEN_X_Y],
+        rust_path: "src/queries/extended/stacked_mixed.rs",
+        arity: 1,
+        sql: include_str!("../sql/extended/stacked_mixed.sql"),
+    },
 ];
+
 pub fn case(name: &str) -> Option<&'static Case> {
     CASES.iter().find(|case| case.name == name)
 }

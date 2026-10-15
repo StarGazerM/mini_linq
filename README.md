@@ -84,16 +84,21 @@ the repository against Cargo-packaged core crates.
 ## Gates
 
 Run from the repository root with the pinned Rust toolchain. Heavy external
-builds disable incremental compilation; workload corpus profiles omit debug
-data while retaining the full matrix. The workload alias enables its DuckDB
-oracle. The PDF build requires `latexmk` and the TeX packages in
-`doc/formal/common.tex`.
+builds disable incremental compilation. Workloads use visible typed cases and
+pairwise pipeline coverage per classic/retail family, plus a joining triangle
+kernel's full 2,400 supported configurations. Push excludes merge/smallest;
+native leading merge reads require ordered hosts. Named kernel targets split
+compilation by planner; their profiles omit debug data. UI fixtures cover
+unsupported choices and malformed retained layouts. The workload alias enables
+its DuckDB oracle. The PDF
+build requires `latexmk` and the TeX packages in `doc/formal/common.tex`.
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo test --manifest-path features/datalog/Cargo.toml --workspace --locked
+cargo test --manifest-path features/workloads/Cargo.toml --workspace --locked
 bash tools/test_regressions.sh
 python3 tools/check_dependencies.py --isolate --frontends --consumers
 python3 tools/check_external.py

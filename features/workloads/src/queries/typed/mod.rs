@@ -1,4 +1,4 @@
-//! Typed relation declarations shared by loader and query generation.
+//! Literal typed queries shared by the CSV and Parquet golden gates.
 
 pub mod typed_calendar_shipping;
 pub mod typed_customer_orders;

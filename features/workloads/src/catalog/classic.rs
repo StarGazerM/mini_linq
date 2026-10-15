@@ -1,7 +1,7 @@
-//! Classic workload order and teaching metadata. The authoritative query
-//! programs are ordinary Rust modules under [`crate::queries::classic`].
+//! Classic workload order and teaching metadata. Matrix tests compile the
+//! authoritative literal programs in `src/queries/classic` directly.
 
-use crate::{QueryCase, Suite, queries};
+use crate::{QueryCase, Suite};
 
 const COLORED_CQ_SCOPE: &str = "MiniLinq evaluates a set-valued colored conjunctive query (a homomorphism pattern), not induced-subgraph matching: no pairwise inequality or non-edge constraint is implied.";
 
@@ -9,18 +9,15 @@ const SPADE_SCOPE: &str = "`spade` is this course's alias for the triangle-with-
 
 macro_rules! classic_case {
     ($module:ident, $name:literal, $purpose:expr, $scope_note:expr $(,)?) => {{
-        mod loaded {
-            crate::queries::classic::$module::with_query!(crate::loading::capture);
-        }
         QueryCase {
             suite: Suite::Classic,
             name: $name,
-            rust_path: queries::classic::$module::RUST_PATH,
+            rust_path: concat!("src/queries/classic/", stringify!($module), ".rs"),
             purpose: $purpose,
             scope_note: $scope_note,
             sql: include_str!(concat!("../../sql/classic/", $name, ".sql")),
-            module: queries::classic::$module::module,
-            load: loaded::read_relations,
+            inputs: super::schemas::$module::INPUTS,
+            arity: super::schemas::$module::ARITY,
         }
     }};
 }

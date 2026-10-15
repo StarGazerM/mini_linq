@@ -2,6 +2,7 @@
 
 mod classic;
 mod retail;
+mod schemas;
 
 use crate::QueryCase;
 

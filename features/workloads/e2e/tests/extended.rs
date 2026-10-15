@@ -1,70 +1,204 @@
-#![recursion_limit = "512"]
-cq_workloads::queries::extended::union_two::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::union_join::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::union_project::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::negation_key::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::negation_pair::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::negation_twice::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::aggregate_stats::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::aggregate_two_keys::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::aggregate_join::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::recursion_closure::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::recursion_reach::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::recursion_reverse::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::correlated_parameter::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::correlated_exists::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::correlated_scalar::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::stacked_antijoin::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::stacked_mixed::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::surface_constant::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_negative_constant::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_repeat::with_query!(cq_workload_e2e::instantiate_extended);
-cq_workloads::queries::extended::surface_wildcards::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_compare::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_arithmetic_guard::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_boolean_guard::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_let_sum::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_let_chain::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_computed_head::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_self_join::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
-cq_workloads::queries::extended::surface_disconnected::with_query!(
-    cq_workload_e2e::instantiate_extended
-);
+use cq_workloads::{Scenario, queries::extended};
+
+#[test]
+fn aggregate_join() {
+    for scenario in Scenario::ALL {
+        extended::aggregate_join::check(scenario);
+    }
+}
+
+#[test]
+fn aggregate_stats() {
+    for scenario in Scenario::ALL {
+        extended::aggregate_stats::check(scenario);
+    }
+}
+
+#[test]
+fn aggregate_two_keys() {
+    for scenario in Scenario::ALL {
+        extended::aggregate_two_keys::check(scenario);
+    }
+}
+
+#[test]
+fn correlated_exists() {
+    for scenario in Scenario::ALL {
+        extended::correlated_exists::check(scenario);
+    }
+}
+
+#[test]
+fn correlated_parameter() {
+    for scenario in Scenario::ALL {
+        extended::correlated_parameter::check(scenario);
+    }
+}
+
+#[test]
+fn correlated_scalar() {
+    for scenario in Scenario::ALL {
+        extended::correlated_scalar::check(scenario);
+    }
+}
+
+#[test]
+fn negation_key() {
+    for scenario in Scenario::ALL {
+        extended::negation_key::check(scenario);
+    }
+}
+
+#[test]
+fn negation_pair() {
+    for scenario in Scenario::ALL {
+        extended::negation_pair::check(scenario);
+    }
+}
+
+#[test]
+fn negation_twice() {
+    for scenario in Scenario::ALL {
+        extended::negation_twice::check(scenario);
+    }
+}
+
+#[test]
+fn recursion_closure() {
+    for scenario in Scenario::ALL {
+        extended::recursion_closure::check(scenario);
+    }
+}
+
+#[test]
+fn recursion_reach() {
+    for scenario in Scenario::ALL {
+        extended::recursion_reach::check(scenario);
+    }
+}
+
+#[test]
+fn recursion_reverse() {
+    for scenario in Scenario::ALL {
+        extended::recursion_reverse::check(scenario);
+    }
+}
+
+#[test]
+fn stacked_antijoin() {
+    for scenario in Scenario::ALL {
+        extended::stacked_antijoin::check(scenario);
+    }
+}
+
+#[test]
+fn stacked_mixed() {
+    for scenario in Scenario::ALL {
+        extended::stacked_mixed::check(scenario);
+    }
+}
+
+#[test]
+fn surface_arithmetic_guard() {
+    for scenario in Scenario::ALL {
+        extended::surface_arithmetic_guard::check(scenario);
+    }
+}
+
+#[test]
+fn surface_boolean_guard() {
+    for scenario in Scenario::ALL {
+        extended::surface_boolean_guard::check(scenario);
+    }
+}
+
+#[test]
+fn surface_compare() {
+    for scenario in Scenario::ALL {
+        extended::surface_compare::check(scenario);
+    }
+}
+
+#[test]
+fn surface_computed_head() {
+    for scenario in Scenario::ALL {
+        extended::surface_computed_head::check(scenario);
+    }
+}
+
+#[test]
+fn surface_constant() {
+    for scenario in Scenario::ALL {
+        extended::surface_constant::check(scenario);
+    }
+}
+
+#[test]
+fn surface_disconnected() {
+    for scenario in Scenario::ALL {
+        extended::surface_disconnected::check(scenario);
+    }
+}
+
+#[test]
+fn surface_let_chain() {
+    for scenario in Scenario::ALL {
+        extended::surface_let_chain::check(scenario);
+    }
+}
+
+#[test]
+fn surface_let_sum() {
+    for scenario in Scenario::ALL {
+        extended::surface_let_sum::check(scenario);
+    }
+}
+
+#[test]
+fn surface_negative_constant() {
+    for scenario in Scenario::ALL {
+        extended::surface_negative_constant::check(scenario);
+    }
+}
+
+#[test]
+fn surface_repeat() {
+    for scenario in Scenario::ALL {
+        extended::surface_repeat::check(scenario);
+    }
+}
+
+#[test]
+fn surface_self_join() {
+    for scenario in Scenario::ALL {
+        extended::surface_self_join::check(scenario);
+    }
+}
+
+#[test]
+fn surface_wildcards() {
+    for scenario in Scenario::ALL {
+        extended::surface_wildcards::check(scenario);
+    }
+}
+
+#[test]
+fn union_join() {
+    for scenario in Scenario::ALL {
+        extended::union_join::check(scenario);
+    }
+}
+
+#[test]
+fn union_project() {
+    for scenario in Scenario::ALL {
+        extended::union_project::check(scenario);
+    }
+}
+
+#[test]
+fn union_two() {
+    for scenario in Scenario::ALL {
+        extended::union_two::check(scenario);
+    }
+}

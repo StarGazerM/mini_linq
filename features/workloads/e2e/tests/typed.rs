@@ -1,74 +1,13 @@
-//! Execute typed authored queries against CSV and DuckDB-produced Parquet.
+//! Run each authored typed query over CSV and Parquet fixtures.
+use cq_workloads::typed::Source;
 
-#[derive(Clone, Copy)]
-enum Source {
-    Csv,
-    #[cfg(feature = "parquet")]
-    Parquet,
-}
-
-macro_rules! execute_typed {
-    ($case:ident; [$($cq:tt)*]; [$($relations:ident),*]; relation $relation:ident ($($columns:tt)*) ; $($rest:tt)*) => {
-        execute_typed!($case; [$($cq)*]; [$($relations,)* $relation]; $($rest)*);
-    };
-    ($case:ident; [$($cq:tt)*]; [$($relation:ident),*]; $($query:tt)*) => {
-        #[allow(non_snake_case)]
-        fn run(source: super::Source) {
-            let case = cq_workloads::typed::case(stringify!($case)).unwrap();
-            $(
-                let $relation = match source {
-                    super::Source::Csv => <relation_loader!($relation)>::csv(
-                        case.path("data").join(concat!(stringify!($relation), ".csv")),
-                        cq_load::CsvOptions { headers: true, batch_size: 2, ..Default::default() },
-                    ).unwrap(),
-                    #[cfg(feature = "parquet")]
-                    super::Source::Parquet => <relation_loader!($relation)>::parquet(
-                        case.path("data").join(concat!(stringify!($relation), ".parquet")),
-                        cq_load::ParquetOptions { batch_size: 2 },
-                    ).unwrap(),
-                };
-                let $relation = $relation.as_slice();
-            )*
-            let rows = ::mini_linq::compile! {
-                pipeline { select = mini_linq::passes::select(positional($($relation),*)); }
-                $($cq)*
-            }
-                .map(|(a, b, c, d)| vec![a.to_string(), b.to_string(), c.to_string(), d.to_string()])
-                .collect();
-            cq_workloads::typed::check(stringify!($case), rows);
-        }
-    };
-}
-
-macro_rules! typed_case {
-    ($d:tt; $case:ident) => {
-        mod $case {
-            use cq_load::{Date, Decimal};
-
-            macro_rules! instantiate {
-                ($d vis:vis struct $d name:ident; $d($d tail:tt)*) => {
-                    ::mini_linq::relation_loaders! { $d vis struct $d name; $d($d tail)* }
-                    execute_typed!($case; [$d vis struct $d name; $d($d tail)*]; []; $d($d tail)*);
-                };
-            }
-            cq_workloads::queries::typed::$case::with_query!(instantiate);
-
-            #[test]
-            fn csv_matches_duckdb_golden() {
-                run(super::Source::Csv);
-            }
-
-            #[cfg(feature = "parquet")]
-            #[test]
-            fn parquet_matches_duckdb_golden() {
-                run(super::Source::Parquet);
-            }
-        }
-    };
-}
-
-typed_case!($; typed_line_filter);
-typed_case!($; typed_customer_orders);
-typed_case!($; typed_calendar_shipping);
-typed_case!($; typed_priced_products);
-typed_case!($; typed_tagged_products);
+#[path = "typed/typed_line_filter.rs"]
+mod typed_line_filter;
+#[path = "typed/typed_customer_orders.rs"]
+mod typed_customer_orders;
+#[path = "typed/typed_calendar_shipping.rs"]
+mod typed_calendar_shipping;
+#[path = "typed/typed_priced_products.rs"]
+mod typed_priced_products;
+#[path = "typed/typed_tagged_products.rs"]
+mod typed_tagged_products;

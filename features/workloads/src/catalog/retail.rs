@@ -1,22 +1,19 @@
-//! Retail-derived workload order and teaching metadata. The authoritative
-//! query programs are ordinary Rust modules under [`crate::queries::retail`].
+//! Retail-derived workload order and teaching metadata. Matrix tests compile
+//! the authoritative literal programs in `src/queries/retail` directly.
 
-use crate::{QueryCase, Suite, queries};
+use crate::{QueryCase, Suite};
 
 macro_rules! retail_case {
     ($module:ident, $name:literal, $purpose:expr, $scope_note:expr $(,)?) => {{
-        mod loaded {
-            crate::queries::retail::$module::with_query!(crate::loading::capture);
-        }
         QueryCase {
             suite: Suite::Retail,
             name: $name,
-            rust_path: queries::retail::$module::RUST_PATH,
+            rust_path: concat!("src/queries/retail/", stringify!($module), ".rs"),
             purpose: $purpose,
             scope_note: $scope_note,
             sql: include_str!(concat!("../../sql/retail/", $name, ".sql")),
-            module: queries::retail::$module::module,
-            load: loaded::read_relations,
+            inputs: super::schemas::$module::INPUTS,
+            arity: super::schemas::$module::ARITY,
         }
     }};
 }

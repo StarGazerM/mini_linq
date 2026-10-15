@@ -1,10 +1,22 @@
-crate::extended_query! {
-    $; __extended_surface_let_chain; "surface_let_chain"; surface; 2; parameters {};
-    {
-struct SurfaceLetChain;
-relation R(x: i32, y: i32);
-relation answer(c0: i32, c1: i32);
-answer(*sum, *shifted) :- R(x, y), let sum: i32 = *x + *y,
-    let shifted: i32 = *sum * 2 - 1, if *shifted > 0;
-    }
+use crate::Scenario;
+
+#[allow(non_snake_case)]
+pub fn check(scenario: Scenario) {
+    let case = crate::extended::case("surface_let_chain").unwrap();
+    let mut inputs = case.inputs(scenario);
+    let R = inputs.take::<(i32, i32)>("R");
+
+    let result = mini_linq::compile! {
+        pipeline {
+            surface = [];
+            select = mini_linq::passes::select(positional(R));
+        }
+        struct SurfaceLetChain;
+        relation R(x: i32, y: i32);
+        relation answer(c0: i32, c1: i32);
+        answer(*sum, *shifted) :- R(x, y), let sum: i32 = *x + *y,
+            let shifted: i32 = *sum * 2 - 1, if *shifted > 0;
+    };
+    let actual = result.map(|(column_0, column_1,)| vec![column_0, column_1]).collect();
+    case.check(scenario, actual);
 }

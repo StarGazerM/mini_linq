@@ -59,7 +59,7 @@ debug = false
 [profile.test.package.libduckdb-sys]
 debug = false
 
-# The generated pipeline matrix is large; keep every case without debug data.
+# The explicit kernel matrix is large; omit debug data from its test binaries.
 [profile.dev.package.cq-workload-corpus]
 debug = 0
 
@@ -84,6 +84,8 @@ proc-macro2.workspace = true
 quote.workspace = true
 cq-ext-negation.workspace = true
 cq-ext-recursion.workspace = true
+cq-ext-aggregate.workspace = true
+cq-ext-correlated.workspace = true
 cq-storage.workspace = true
 cq-planners-plan.workspace = true
 cq-rewrite-passes.workspace = true
@@ -101,6 +103,7 @@ cq-lang-structures.workspace = true
 [features]
 default = []
 counters = ["cq-storage/counters"]
+parquet = ["cq-load/parquet"]
 
 [[test]]
 name = "growth"

@@ -200,8 +200,6 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
     let repository_root = repository_root();
     let mut expected_paths = BTreeSet::from([
         PathBuf::from("workloads/src/queries/mod.rs"),
-        PathBuf::from("workloads/src/queries/classic/mod.rs"),
-        PathBuf::from("workloads/src/queries/retail/mod.rs"),
         PathBuf::from("workloads/src/queries/extended/mod.rs"),
         PathBuf::from("workloads/src/queries/typed/mod.rs"),
     ]);
@@ -221,13 +219,14 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
         );
     }
 
-    for (name, rust_path, module) in all_cases()
-        .map(|case| (case.name, case.rust_path, case.module().unwrap()))
-        .chain(
-            cq_workloads::typed::CASES
-                .iter()
-                .map(|case| (case.name, case.rust_path, case.module().unwrap())),
-        )
+    for case in all_cases() {
+        assert_eq!(case.module().unwrap().query.head.args.len(), case.arity,
+            "{} output arity metadata", case.name);
+    }
+    for (name, rust_path, schema) in all_cases()
+        .map(|case| (case.name, case.rust_path, cq_workloads::schema::declarations(case.inputs)))
+        .chain(cq_workloads::typed::CASES.iter()
+            .map(|case| (case.name, case.rust_path, case.inputs())))
     {
         let source_path = PathBuf::from(rust_path);
         let expected_path = if source_path.is_absolute() {
@@ -262,53 +261,12 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
                     expected_path.display()
                 )
             });
-        let rust_file = syn::parse_file(&checked_in).unwrap_or_else(|error| {
-            panic!(
-                "Rust query module `{}` did not parse: {error}",
-                expected_path.display()
-            )
+        syn::parse_file(&checked_in).unwrap_or_else(|error| {
+            panic!("Rust case `{}` did not parse: {error}", expected_path.display())
         });
         assert_eq!(
-            rust_file.items.len(),
-            1,
-            "Rust query module `{}` must contain exactly one item",
-            expected_path.display(),
-        );
-        let syn::Item::Macro(query) = &rust_file.items[0] else {
-            panic!(
-                "Rust query module `{}` must contain one mini_linq::workload_query! invocation",
-                expected_path.display()
-            );
-        };
-        assert!(
-            query.mac.path.leading_colon.is_some()
-                && query
-                    .mac
-                    .path
-                    .segments
-                    .iter()
-                    .map(|segment| segment.ident.to_string())
-                    .eq(["mini_linq", "workload_query"].map(str::to_owned)),
-            "Rust query module `{}` uses the wrong query macro",
-            expected_path.display(),
-        );
-        let direct: cq_lang_cq::Program =
-            syn::parse2(query.mac.tokens.clone()).unwrap_or_else(|error| {
-                panic!(
-                    "mini_linq::workload_query! body in `{}` is not a CQ module: {error}",
-                    expected_path.display()
-                )
-            });
-        cq_lang_cq::contract::check(&direct).unwrap_or_else(|error| {
-            panic!(
-                "mini_linq::workload_query! body in `{}` violates the CQ contract: {error}",
-                expected_path.display()
-            )
-        });
-        assert_eq!(
-            direct, module,
-            "catalog typed module for `{}` differs from its Rust query macro",
-            name,
+            cq_workloads::authored::schema(rust_path).unwrap(), schema,
+            "{name} loader metadata differs from its single literal compile! query",
         );
     }
 

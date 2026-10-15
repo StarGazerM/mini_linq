@@ -1,0 +1,152 @@
+//! Check the handwritten configuration witnesses without expanding any pipeline.
+//! Names are decoded independently; the complete matcher and expansion token trees
+//! must match their meaning, so missing, duplicate, or extra settings cannot hide.
+use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
+use std::collections::BTreeSet;
+
+// Numeric order is the ten-axis contract in matrix.rs, not macro-arm order.
+const AXES: [&[&str]; 10] = [
+    &[
+        "written_coarse",
+        "written_fine",
+        "hypergraph",
+        "prefix_connected_coarse",
+        "prefix_connected_fine",
+        "prefix_greedy_coarse",
+        "prefix_greedy_fine",
+        "elimination_coarse",
+        "elimination_fine",
+    ],
+    &["probe", "merge"],
+    &["keep", "canon"],
+    &["first", "smallest"],
+    &["slice", "hashmap", "btreemap"],
+    &["hash_dedup", "ordered_dedup"],
+    &["default", "sorted"],
+    &["eager", "lazy"],
+    &["pull", "push"],
+    &["unadvised", "positional"],
+];
+
+const PLANNERS: [&str; 9] = [
+    "written, coarse",
+    "written, fine",
+    "hypergraph",
+    "prefix connected, coarse",
+    "prefix connected, fine",
+    "prefix greedy, coarse",
+    "prefix greedy, fine",
+    "elimination, coarse",
+    "elimination, fine",
+];
+
+fn decode_name(name: &str) -> [usize; 10] {
+    let mut rest = name;
+    let mut row = [0; 10];
+    for (axis, values) in AXES.iter().enumerate() {
+        let (value, suffix) = values
+            .iter()
+            .enumerate()
+            .find_map(|(value, spelling)| {
+                let suffix = rest.strip_prefix(spelling)?;
+                if axis == 9 {
+                    suffix.is_empty().then_some((value, suffix))
+                } else {
+                    suffix.strip_prefix('_').map(|suffix| (value, suffix))
+                }
+            })
+            .unwrap_or_else(|| panic!("{name}: unknown or missing axis {axis} in {rest:?}"));
+        row[axis] = value;
+        rest = suffix;
+    }
+    assert!(
+        row[4] == 0 || row[9] == 0,
+        "{name}: positional advice is unsupported for maps"
+    );
+    row
+}
+
+fn group(token: Option<TokenTree>, delimiter: Delimiter, context: &str) -> Group {
+    match token {
+        Some(TokenTree::Group(group)) if group.delimiter() == delimiter => group,
+        other => panic!("{context}: expected {delimiter:?} group, got {other:?}"),
+    }
+}
+
+fn punctuation(token: Option<TokenTree>, expected: char, name: &str) {
+    assert!(
+        matches!(&token, Some(TokenTree::Punct(punct)) if punct.as_char() == expected),
+        "{name}: expected punctuation {expected:?}, got {token:?}"
+    );
+}
+
+fn assert_tokens(actual: TokenStream, expected: &str, name: &str, part: &str) {
+    let expected: TokenStream = expected.parse().expect("valid expected Rust tokens");
+    // Both sides are tokenized first: whitespace/comments are immaterial, but
+    // every identifier, literal, punctuation token and delimiter is retained.
+    assert_eq!(actual.to_string(), expected.to_string(), "{name}: {part} drift");
+}
+
+fn expected_expansion(row: [usize; 10]) -> String {
+    let planner = PLANNERS[row[0]];
+    let merge = ["", "cq_rewrites::merge_joins,"][row[1]];
+    let canon = ["", "cq_rewrites::canon_prefixes,"][row[2]];
+    let intersection = ["", "cq_rewrites::smallest_intersections,"][row[3]];
+    let host = ["[take] slice", "[take_hash] map", "[take_btree] map"][row[4]];
+    let dedup = ["", "cq_workload_passes::ordered_dedup,"][row[5]];
+    let payload = ["", "cq_workload_passes::sorted_payload,"][row[6]];
+    let membership = ["", "cq_rewrites::lazy_semijoins,"][row[7]];
+    let printer = ["mini_linq::passes::print_pull", "own_push::push"][row[8]];
+    let advice = ["", "positional"][row[9]];
+    format!(
+        "pub const CONFIG: [usize; 10] = {row:?};
+         pipeline_configuration! {{ $case, golden_scenarios;
+             planner: [{planner}];
+             merge: [{merge}];
+             canon: [{canon}];
+             intersection: [{intersection}];
+             host: {host} [{advice}];
+             dedup: [{dedup}];
+             payload: [{payload}];
+             membership: [{membership}];
+             printer: {printer};
+         }}"
+    )
+}
+
+#[test]
+fn configuration_names_rows_and_pipeline_tokens_agree() {
+    let source = syn::parse_file(include_str!("support/configurations.rs"))
+        .expect("configuration source must parse as Rust");
+    let definitions: Vec<_> = source
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            syn::Item::Macro(item) if item.ident.as_ref().is_some_and(|id| id == "configuration") => {
+                Some(item)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(definitions.len(), 1, "expected one configuration macro");
+    let definition = &definitions[0];
+    assert!(definition.mac.path.is_ident("macro_rules"));
+    let mut arms = definition.mac.tokens.clone().into_iter();
+    let mut names = BTreeSet::new();
+    while let Some(matcher) = arms.next() {
+        let matcher = group(Some(matcher), Delimiter::Parenthesis, "configuration arm");
+        let name = match matcher.stream().into_iter().next() {
+            Some(TokenTree::Ident(name)) => name.to_string(),
+            other => panic!("configuration arm: expected a configuration name, got {other:?}"),
+        };
+        assert!(names.insert(name.clone()), "{name}: duplicate configuration arm");
+        let row = decode_name(&name);
+        assert_tokens(matcher.stream(), &format!("{name}, $case:ident"), &name, "matcher");
+        punctuation(arms.next(), '=', &name);
+        punctuation(arms.next(), '>', &name);
+        let expansion = group(arms.next(), Delimiter::Brace, &name);
+        assert_tokens(expansion.stream(), &expected_expansion(row), &name, "CONFIG/pipeline");
+        punctuation(arms.next(), ';', &name);
+    }
+    assert_eq!(names.len(), 80, "expected all 80 configuration arms");
+}

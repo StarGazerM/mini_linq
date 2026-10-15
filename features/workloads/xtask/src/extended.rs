@@ -9,7 +9,7 @@ pub(super) fn check_scale(selection: Selection, scale: Scale) -> Result<()> {
 pub(super) fn generate(selection: Selection, scenarios: ScenarioSelection) -> Result<()> {
     for case in selection.extensions() {
         for scenario in scenarios.values() {
-            let schema = case.schema()?;
+            let schema = case.schema();
             let directory = case.path("data").join(scenario.as_str()).join("tiny");
             case.generate(scenario)?.write_schema(&schema, &directory)?;
             println!(

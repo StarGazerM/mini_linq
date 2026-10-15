@@ -78,19 +78,15 @@ pub(super) fn golden(
 
 fn load(case: &Case, write: bool) -> Result<Connection> {
     let connection = Connection::open_in_memory()?;
-    for relation in case.module()?.inputs() {
-        let name = quote_identifier(&relation.name.to_string());
+    for relation in case.schema {
+        let name = quote_identifier(relation.name);
         let columns = relation
             .columns
             .iter()
-            .map(|column| {
-                Ok(format!(
-                    "{} {} NOT NULL",
-                    quote_identifier(&column.name.to_string()),
-                    sql_type(&column.ty)?
-                ))
+            .map(|(name, ty)| {
+                format!("{} {} NOT NULL", quote_identifier(name), sql_type(*ty))
             })
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Vec<_>>()
             .join(", ");
         let csv = case.path("data").join(format!("{}.csv", relation.name));
         let parquet = csv.with_extension("parquet");
@@ -120,26 +116,15 @@ fn load(case: &Case, write: bool) -> Result<Connection> {
     Ok(connection)
 }
 
-fn sql_type(ty: &syn::Type) -> Result<&'static str> {
-    let syn::Type::Path(path) = ty else {
-        return Err("typed fixture SQL requires a named column type".into());
-    };
-    match path
-        .path
-        .segments
-        .last()
-        .expect("nonempty type path")
-        .ident
-        .to_string()
-        .as_str()
-    {
-        "i32" => Ok("INTEGER"),
-        "i64" => Ok("BIGINT"),
-        "String" => Ok("VARCHAR"),
-        "Date" => Ok("DATE"),
+fn sql_type(ty: cq_workloads::schema::ColumnType) -> &'static str {
+    use cq_workloads::schema::ColumnType;
+    match ty {
+        ColumnType::I32 => "INTEGER",
+        ColumnType::I64 => "BIGINT",
+        ColumnType::Text => "VARCHAR",
+        ColumnType::Date => "DATE",
         // A scaled i64 can use nineteen decimal digits, including i64::MIN.
-        "Decimal" => Ok("DECIMAL(19,2)"),
-        name => Err(format!("typed fixture SQL has no mapping for `{name}`").into()),
+        ColumnType::Decimal => "DECIMAL(19,2)",
     }
 }
 
