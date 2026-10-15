@@ -18,7 +18,7 @@ AND l.l_shipdate > DATE '1995-03-15'"#;
         relation Lineitem => lineitem(l_orderkey: i64, l_shipdate: Date);
     }
     answer(order_key: i64, customer_key: i64) :-
-        Customer(customer_key, segment), if segment == "BUILDING",
+        Customer(customer_key, "BUILDING"),
         Orders(order_key, customer_key, order_date), if *order_date < cutoff,
         Lineitem(order_key, ship_date), if *ship_date > cutoff;
 }

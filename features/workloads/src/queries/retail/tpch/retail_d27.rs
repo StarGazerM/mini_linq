@@ -26,7 +26,6 @@ AND p.p_brand = 'Brand#12' AND n.n_name = 'UNITED STATES'"#;
     answer(order_key: i64, part_key: i64, supplier_key: i64) :-
         Lineitem(order_key, part_key, supplier_key),
         Orders(order_key, order_date), if *order_date >= start && *order_date < end,
-        Part(part_key, brand), if brand == "Brand#12",
-        Supplier(supplier_key, nation_key), Nation(nation_key, nation_name),
-        if nation_name == "UNITED STATES";
+        Part(part_key, "Brand#12"),
+        Supplier(supplier_key, nation_key), Nation(nation_key, "UNITED STATES");
 }

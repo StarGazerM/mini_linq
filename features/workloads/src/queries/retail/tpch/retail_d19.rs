@@ -30,6 +30,6 @@ AND n.n_name = 'UNITED STATES'"#;
         Lineitem(order_key, part_key, supplier_key),
         Orders(order_key, customer_key, order_date), if *order_date >= start && *order_date < end,
         Part(part_key), Customer(customer_key, nation_key),
-        Nation(nation_key, nation_name), if nation_name == "UNITED STATES",
+        Nation(nation_key, "UNITED STATES"),
         Supplier(supplier_key);
 }

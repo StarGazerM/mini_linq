@@ -37,6 +37,6 @@ AND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0"#;
         Lineitem(order_key, part_key, supplier_key), PartSupp(part_key, supplier_key, available), if *available > 0,
         Part(part_key), Orders(order_key, customer_key, order_date), if *order_date >= start && *order_date < end,
         Customer(customer_key, customer_nation), Supplier(supplier_key, supplier_nation),
-        Nation(customer_nation, customer_name), if customer_name == "UNITED STATES",
+        Nation(customer_nation, "UNITED STATES"),
         Nation(supplier_nation, _supplier_name);
 }

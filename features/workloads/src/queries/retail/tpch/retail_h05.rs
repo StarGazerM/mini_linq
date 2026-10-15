@@ -28,5 +28,5 @@ AND o.o_orderdate < DATE '1995-01-01'"#;
         Customer(customer_key, nation_key),
         Orders(order_key, customer_key, order_date), if *order_date >= start && *order_date < end,
         Lineitem(order_key, supplier_key), Supplier(supplier_key, nation_key),
-        Nation(nation_key, region_key), Region(region_key, region_name), if region_name == "ASIA";
+        Nation(nation_key, region_key), Region(region_key, "ASIA");
 }
