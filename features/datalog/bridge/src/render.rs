@@ -124,10 +124,13 @@ fn insert_layout(layout: &cq_datalog_fork::Layout, borrowed_columns: bool) -> To
     quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)
 }
 
-/// Formal rule DL-InsertNew: One canonical all-column set probe admits each row once; delta stores rows only.
+/// Formal rule DL-InsertNew: Canonical all-column membership admits each row once; only fresh rows are cloned.
 fn insert_new(seen: &Ident, next: &Ident, invocation: &TokenStream) -> TokenStream {
     quote!(for row in #invocation {
-        if #seen.insert(::core::clone::Clone::clone(&row)) { #next.push(row); }
+        if !#seen.contains(&row) {
+            #seen.insert(::core::clone::Clone::clone(&row));
+            #next.push(row);
+        }
     })
 }
 

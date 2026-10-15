@@ -1,7 +1,7 @@
 //! Complete-answer differential tests against sequential Ascent.
 //! `datalog-oracle golden --write` is the only golden regeneration command.
-mod golden;
-pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+use cq_testkit::golden;
+pub use cq_testkit::Result;
 pub mod programs;
 pub mod strings;
 use std::collections::BTreeSet;
@@ -222,7 +222,21 @@ mod tests {
     #[test]
     fn golden_inventory() {
         let checked = goldens(false, false).unwrap();
-        assert_eq!(golden::inventory(&golden_root()).unwrap(), checked);
+        // Packaged external consumers have no Git repository. Walk all files,
+        // including ignored extras, rather than relying on the Git-only helper.
+        fn files(directory: &Path, found: &mut BTreeSet<PathBuf>) {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    files(&entry.path(), found);
+                } else {
+                    found.insert(entry.path());
+                }
+            }
+        }
+        let mut actual = BTreeSet::new();
+        files(&golden_root(), &mut actual);
+        assert_eq!(actual, checked);
     }
     #[test]
     fn owned_strings() {

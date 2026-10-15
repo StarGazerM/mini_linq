@@ -9,16 +9,13 @@
 //! Extensions, aggregates and nested blocks are rejected.
 //!
 //! ```text
-//! mini_linq::compile! {
-//!     pipeline { surface = [cq_datalog::datalog]; }
-//!     datalog! {
-//!         struct Closure;
-//!         relation Edge(x:i32,y:i32) = (edges);
-//!         relation Reach(x:i32,y:i32);
-//!         output Reach;
-//!         Reach(*x,*y) :- Edge(x,y);
-//!         Reach(*x,*z) :- Reach(x,y), Reach(y,z);
-//!     }
+//! cq_datalog::datalog! {
+//!     struct Closure;
+//!     relation Edge(x:i32,y:i32) = (edges);
+//!     relation Reach(x:i32,y:i32);
+//!     output Reach;
+//!     Reach(*x,*y) :- Edge(x,y);
+//!     Reach(*x,*z) :- Reach(x,y), Reach(y,z);
 //! }
 //! ```
 //!

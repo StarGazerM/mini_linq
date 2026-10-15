@@ -3,6 +3,20 @@
 use std::collections::BTreeSet;
 
 #[test]
+fn documented_language_entry_executes_without_a_surface_wrapper() {
+    let edges = [(1_i32, 2_i32), (2, 3)];
+    let answers: BTreeSet<_> = cq_datalog::datalog! {
+        struct Closure;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Reach(x:i32,y:i32);
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y);
+        Reach(*x,*z) :- Reach(x,y), Reach(y,z);
+    }.collect();
+    assert_eq!(answers, BTreeSet::from([(1, 2), (1, 3), (2, 3)]));
+}
+
+#[test]
 #[deny(non_snake_case)]
 fn source_stratified_and_seminaive_text_have_the_same_answer() {
     let edges = [(1, 2), (2, 3), (3, 4), (1, 2)];

@@ -187,7 +187,7 @@ nested blocks are rejected; arbitrary Rust captures cannot hide reads of
 evolving intensional state.
 \begin{mathpar}
 \Rule{DL-Strata}{G\text{ contains all signed dependency edges}\\
- \text{no negative or aggregate edge lies inside an SCC of }G}
+ \text{aggregates are rejected; no negative edge lies inside an SCC of }G}
  {\text{evaluate dependency SCCs in order, freezing lower-stratum inputs}}
 \end{mathpar}
 For the following set theorem all rule expressions are total and pure.

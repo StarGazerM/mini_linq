@@ -9,6 +9,12 @@ publish = false
 members = [".", "language", "schedule", "fork", "bridge", "oracle"]
 resolver = "3"
 
+# The frozen testkit exposes golden helpers only with bundled DuckDB.
+[profile.dev.package.libduckdb-sys]
+debug = false
+
+[profile.test.package.libduckdb-sys]
+debug = false
 
 [workspace.package]
 version = "0.0.0"

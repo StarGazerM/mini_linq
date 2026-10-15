@@ -11,3 +11,4 @@ ascent = { version = "0.8", default-features = false }
 cq-datalog = { path = ".." }
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-storage = { path = "../../../runtime/cq-storage", features = ["counters"] }
+cq-testkit = { version = "0.1.0", path = "../../../testkit/cq-testkit", features = ["duckdb"] }

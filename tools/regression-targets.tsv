@@ -67,6 +67,7 @@ cq-datalog	manifest-test	datalog	features/datalog/Cargo.toml
 cq-lang-datalog	manifest-test	contracts	features/datalog/language/Cargo.toml
 cq-datalog-schedule	manifest-test	correspondence	features/datalog/schedule/Cargo.toml
 cq-datalog-fork	manifest-test	correspondence	features/datalog/fork/Cargo.toml
+datalog-bridge	manifest-test	expansions	features/datalog/bridge/Cargo.toml
 datalog-oracle	manifest-test	oracles	features/datalog/oracle/Cargo.toml
 cq-workloads	scenario	growth	features/workloads/check_growth.py
 cq-xtask	manifest-test	restored	features/workloads/xtask/Cargo.toml

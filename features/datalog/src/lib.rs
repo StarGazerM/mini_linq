@@ -45,6 +45,9 @@
 //! The default golden command compares complete canonical CSV bytes; only the
 //! explicit `--write` flag replaces checked-in files. Correctness tests compare
 //! full answer sets against Ascent and a feature-local naive evaluator.
+//! Golden encoding and byte comparison use `cq-testkit`'s public helpers.
+//! The frozen testkit gates them behind `duckdb`, so oracle builds also compile
+//! bundled DuckDB even though the Datalog oracle itself uses sequential Ascent.
 //!
 //! Counters describe the ordinary CQ runtime: Datalog-owned standard-library
 //! maps and canonical-set writes are not counted as core index builds.
