@@ -38,6 +38,10 @@
 //! - `α(selection)` is the selected occurrence bag. Narrowing is intersection;
 //!   immutable snapshots and their projected builds preserve source order and
 //!   multiplicity. Selection does not confer OrderedRead.
+//! - `α(s.filter(c, p)) = { o ∈ α(s) | p(c(o)) }` ([`Filter`]): every read of
+//!   the result agrees with it, and filtering twice is filtering by the
+//!   conjunction. A semijoin is a filter by [`Membership`]. Filtered tuples
+//!   are unreadable by construction (a selection's bitmap or a compact build).
 //! - `α(ordered) = bag of (key, item)`, enumerated in key order from any
 //!   bound; [`merge`] is the one co-iteration primitive; [`sorted_by`]
 //!   presents an already key-ordered stream as such a cursor.
@@ -226,6 +230,8 @@ pub use positional::{
     ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
 };
 pub use selection::{Selection, SelectionRows, SelectionSummary};
+pub mod filter;
+pub use filter::Filter;
 
 #[cfg(doctest)]
 mod misuse;

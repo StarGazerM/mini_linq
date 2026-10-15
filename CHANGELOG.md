@@ -7,6 +7,18 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- `cq_storage::Filter`: filtering as a representation operation with the law
+  `α(s.filter(c, p)) = { o ∈ α(s) | p(c(o)) }`; every read agrees with it and
+  filtering twice is filtering by the conjunction. A semijoin is a filter by
+  `Membership`. Realizations make filtered tuples unreadable by construction:
+  positional hosts filter to a `Selection` bitmap (its only state; every read
+  consults it), selections narrow, and `Selection::build` compacts survivors.
+  Exhaustive law tests. The `filter_microbench` example (1.5M rows, 2M probes)
+  measured the compact rebuild faster than an all-row index whose lookups skip
+  cleared ids at every retained fraction, even with that index prebuilt (1%:
+  0.5 ms build + 6.5 ms probes vs 124.5 ms probes; 100%: 83.4 + 116.9 vs
+  220.8 ms); no masked index type is provided.
+
 - Exact dense key-set construction stages keys in one contiguous buffer, then
   sets bitmap bits directly; it no longer hashes and allocates a shared cell
   per distinct key before discarding that hash table. Sparse and partial-codec
