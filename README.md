@@ -93,6 +93,7 @@ oracle. The PDF build requires `latexmk` and the TeX packages in
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+cargo test --manifest-path features/datalog/Cargo.toml --workspace --locked
 bash tools/test_regressions.sh
 python3 tools/check_dependencies.py --isolate --frontends --consumers
 python3 tools/check_external.py

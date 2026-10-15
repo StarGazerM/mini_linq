@@ -171,11 +171,20 @@ work proportional to its update/merge algorithm; no universal
 $O(|\delta R_t|)$ round bound follows from these equations.
 
 \subsection{Datalog and the fixpoint boundary}
+The external \texttt{features/datalog} workspace implements this boundary above
+the unmodified compiler. Its language and schedule passes record and check
+source rules, dependency SCCs, declared delta relations, semi-naive variants,
+the all-column \texttt{insert\_new} policy, negation-key representation, and
+per-relation index layouts. Its fork emits ordinary CQ holes plus a round
+context; a separate bridge prints the round loop. Source, stratified, and
+semi-naive texts are independently checked and resumable.
+
 A program distinguishes fixed extensional hosts from intensional relations.
 The dependency graph includes every rule-visible reference. Safety requires
 head and negative variables to be bound by allowed positive clauses.
-Negative or aggregate dependencies must point to completed lower strata;
-arbitrary Rust captures cannot hide reads of evolving intensional state.
+Negative dependencies must point to completed lower strata. Aggregates and
+nested blocks are rejected; arbitrary Rust captures cannot hide reads of
+evolving intensional state.
 \begin{mathpar}
 \Rule{DL-Strata}{G\text{ contains all signed dependency edges}\\
  \text{no negative or aggregate edge lies inside an SCC of }G}
@@ -224,6 +233,25 @@ $R^t=R^{t-1}\cup\Delta^t$ and $F(R^{t-1})\subseteq R^t$.
 already present. \textsc{DL-InsertNew} removes only known head tuples.
 Thus the next union is $R^t\cup S\cup F(R^t)$, as required.
 \end{proof}
+
+\paragraph{Owned indexes, not a core incremental protocol.}
+The Datalog layer owns one canonical all-column set for each derived relation.
+After a round's CQ holes finish, successful \texttt{insert\_new} operations
+produce precisely the next delta, and those fresh tuples update every selected
+layout. Extensional layouts are built once per program. Each layout records a
+complete column permutation and a leading key prefix, chosen from join
+variables under delta-driven evaluation. Borrowed grouped map hosts expose
+their existing indexes through the public \texttt{Rows}/\texttt{IndexRead}
+interfaces. No compiler staging or maintained-storage extension is required.
+The caller's CQ pipeline is unchanged: if its chosen probe does not match a
+recorded layout, ordinary CQ fallback construction remains correct but may
+cost more work. Layout choice is therefore a checked Datalog decision, not a
+claim that every possible caller pipeline reuses every index.
+
+Core negation is lowered to a total membership guard over a key set built
+once at the consuming stratum boundary, after its negative inputs are complete.
+Wildcards are omitted from the key. These guards introduce no bindings and do
+not turn a negative dependency into a positive recursive edge.
 
 \paragraph{Partial Rust is a separate obligation.}
 Final-valuation coverage does not prove equality of panics: a guard may

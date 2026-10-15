@@ -1,0 +1,13 @@
+[package]
+name = "datalog-oracle"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Sequential Ascent differential oracle for feature-local Datalog"
+
+[dependencies]
+ascent = { version = "0.8", default-features = false }
+cq-datalog = { path = ".." }
+mini-linq = { path = "../../../facade/mini-linq" }
+cq-storage = { path = "../../../runtime/cq-storage", features = ["counters"] }

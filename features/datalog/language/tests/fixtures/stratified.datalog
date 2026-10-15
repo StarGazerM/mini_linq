@@ -1,0 +1,13 @@
+struct Paths;
+relation Edge(x:i32,y:i32) = (edges);
+relation Blocked(x:i32,y:i32) = (blocked);
+relation Reach(x:i32,y:i32);
+relation Result(x:i32,y:i32);
+output Result;
+Reach(*x,*y) :- Edge(x,y);
+Reach(*x,*z) :- Reach(x,y), Reach(y,z);
+Result(*x,*y) :- Reach(x,y), !Blocked(x,_);
+strata {
+    component [Reach];
+    component [Result];
+}

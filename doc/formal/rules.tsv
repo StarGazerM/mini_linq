@@ -146,6 +146,6 @@ INC-Adequacy	abstract	-	-	Planned; exhaustive operational observation refines bo
 INC-Supp	abstract	-	-	Planned; support commutes with total positive contexts; partial code and consumer boundaries need separate obligations.
 STR-Maintain	abstract	-	-	Planned; exact-once ordered insertion and merges that never cross protected cuts preserve Runs abstraction.
 CQ-Diff	abstract	-	-	Planned; multilinear expansion uses supplied increments, not subtraction on Boolean or Natural streams.
-DL-InsertNew	abstract	-	-	Planned; incremental distinct is an anti-join against the canonical entry.
-DL-Strata	abstract	-	-	Planned; stratified least model, no negative or aggregate edge inside an SCC.
-DL-Delta	abstract	-	-	Planned; variants erase to the rule and read delta once per changing position.
+DL-InsertNew	implementation	features/datalog/bridge/src/render.rs	/// Formal rule DL-InsertNew:	Datalog-owned canonical all-column insertion produces fresh deltas and updates each selected host layout.
+DL-Strata	implementation	features/datalog/language/src/lib.rs	/// Formal rule DL-Strata:	Checked signed dependencies and exact ordered SCCs freeze lower-stratum negative inputs.
+DL-Delta	implementation	features/datalog/language/src/lib.rs	/// Formal rule DL-Delta:	Checked variants erase to source rules and cover every changing positive position exactly once.

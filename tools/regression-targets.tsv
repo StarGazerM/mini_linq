@@ -63,6 +63,11 @@ mini-linq-inspection-examples	scenario	cq-inspection	features/inspection/cq-insp
 mini-linq-inspection-examples	scenario	free-variables	features/inspection/free-variables/check.py
 stacked-ir	manifest-test	conformance	features/stacked-ir/Cargo.toml
 stacked-ir	scenario	expansions	features/stacked-ir/check_expansions.py
+cq-datalog	manifest-test	datalog	features/datalog/Cargo.toml
+cq-lang-datalog	manifest-test	contracts	features/datalog/language/Cargo.toml
+cq-datalog-schedule	manifest-test	correspondence	features/datalog/schedule/Cargo.toml
+cq-datalog-fork	manifest-test	correspondence	features/datalog/fork/Cargo.toml
+datalog-oracle	manifest-test	oracles	features/datalog/oracle/Cargo.toml
 cq-workloads	scenario	growth	features/workloads/check_growth.py
 cq-xtask	manifest-test	restored	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle-test	oracle-unit	features/workloads/xtask/Cargo.toml
