@@ -218,10 +218,17 @@ impl<K: Eq + Hash + Ord, C: KeyCodec<K>, const B: usize> AdaptiveKeySet<K, C, B>
 impl<K: Eq + Hash + Ord, C: KeyCodec<K>, const B: usize> ExactMembership<K>
     for AdaptiveKeySet<K, C, B>
 {
+    /// The dense test inlines into scan loops; the hash form stays out of line
+    /// so it does not bloat them.
+    #[inline]
     fn contains(&self, key: &K) -> bool {
         crate::count!(lookups);
+        #[inline(never)]
+        fn hashed<K: Eq + Hash>(keys: &HashSet<Rc<K>>, key: &K) -> bool {
+            keys.contains(key)
+        }
         match &self.form {
-            Form::Hash { keys, .. } => keys.contains(key),
+            Form::Hash { keys, .. } => hashed(keys, key),
             Form::Dense { min, max, words } => self.codec.ordinal(key).is_some_and(|x| {
                 if x < *min || x > *max {
                     return false;

@@ -275,8 +275,9 @@ pub struct Analysis {
     pub keysets: BTreeMap<(String, Vec<String>), KeySet>,
     /// Positional access decisions attached to existing Physical readers.
     pub reads: BTreeMap<String, Read>,
-    /// Conservative scan filters with a verified exact covering probe.
-    pub join_filters: BTreeMap<String, JoinFilter>,
+    /// Conservative scan filters per scan, in decision order, each with a
+    /// verified exact covering probe or semijoin.
+    pub join_filters: BTreeMap<String, Vec<JoinFilter>>,
     pub physical: physical::Analysis,
     /// Declared column order of every host relation.
     pub host_layouts: BTreeMap<String, Vec<String>>,

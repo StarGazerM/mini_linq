@@ -14,7 +14,6 @@ JOIN region r ON r.r_regionkey = n.n_regionkey
 WHERE r.r_name = 'ASIA' AND o.o_orderdate >= DATE '1994-01-01'
 AND o.o_orderdate < DATE '1995-01-01'"#;
     candidate generic_smallest;
-    advise stream(Lineitem);
     setup { let start = date("1994-01-01"); let end = date("1995-01-01"); }
     relations {
         relation Customer => customer(c_custkey: i64, c_nationkey: i32);
@@ -25,8 +24,8 @@ AND o.o_orderdate < DATE '1995-01-01'"#;
         relation Region => region(r_regionkey: i32, r_name: String);
     }
     answer(order_key: i64, supplier_key: i64, nation_key: i32) :-
-        Customer(customer_key, nation_key),
+        Lineitem(order_key, supplier_key),
         Orders(order_key, customer_key, order_date), if *order_date >= start && *order_date < end,
-        Lineitem(order_key, supplier_key), Supplier(supplier_key, nation_key),
-        Nation(nation_key, region_key), Region(region_key, "ASIA");
+        Customer(customer_key, nation_key), Nation(nation_key, region_key), Region(region_key, "ASIA"),
+        Supplier(supplier_key, nation_key);
 }

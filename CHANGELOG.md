@@ -7,6 +7,37 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Default plan is left-deep in written order (Written/Coarse): the first
+  clause of each scope streams and no pass commutes join operands. Reductions
+  (`Reductions::Masks`, rules H-SpanningCore, R-Masks, CK-Masks) reduce each
+  indexed clause by its filtered subtrees of the stream-rooted reduction tree,
+  children first, before the stream starts, on acyclic and cyclic scopes; the
+  stream itself is never reduced or stored. Removed: static build orientation
+  (`orient`, L-Orient, CK-Orient), `plan(stream(..))` advice and its `advised`
+  kernel configuration, the unused join-filter advice configurations,
+  redundant-support absorption in the default chain, and `doc/QUOTATION.md`.
+  TPC-derived kernels are written fact-first (H03, H05, H07, H07-block, Q19
+  Lineitem; H21+ the other Lineitem; D85 PartSupp; H09, D72 Orders).
+- Join filters follow SQL Server's bitmap pushdown: every eager probe or
+  semijoin into a statically filtered hash build pushes an exact key set to the
+  scan its left spine reaches, through intermediate probes and semijoins, one
+  filter per `i64` key column (composite keys filter by each projected column);
+  a scan may carry several. A key bound only by an intermediate build is not a
+  scan column and is never filtered. Builds over unions qualify. Each covering
+  exact operator still runs. At runtime a build whose distinct keys exceed 35%
+  of its source occurrence's rows constructs no filter (the RPT+ creation
+  threshold); the abandoned filter passes every key.
+- `BlockRead::read` shares `read_owned`'s loop; the adapter chain it replaced
+  ran twice as slow when pulled row by row (6M rows: 18.9 → 10.7 ms). Dense
+  `AdaptiveKeySet` membership inlines into scan loops.
+- SF 1 bench (median of five, this machine) vs DuckDB 1 thread: 0.23–1.91×;
+  at or below DuckDB on Q19, D19, D27, D85, H05, H07-block, H07, H21+;
+  H09 1.03, H03 1.13, H08 1.38, Q06 1.48, D72 1.91. Against the old
+  Filtered/orientation default on the same machine: H05 52.8 → 33.7,
+  H07-block 106.9 → 35.5, H07 54.4 → 36.5, H21+ 156.2 → 92.5,
+  H09 182.3 → 168.8, D85 145.3 → 29.3; D72 141.0 → 205.7 regressed (see
+  `doc/STATUS.md`). All answers exact against DuckDB.
+
 - `cq_storage::Filter`: filtering as a representation operation with the law
   `α(s.filter(c, p)) = { o ∈ α(s) | p(c(o)) }`; every read agrees with it and
   filtering twice is filtering by the conjunction. A semijoin is a filter by

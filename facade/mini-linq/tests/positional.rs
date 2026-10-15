@@ -166,7 +166,18 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
         (3, 40),
         (i64::MAX, 50),
     ];
-    let right = vec![(1_i64, 2_i64), (1, 4), (1, 4), (2, 0), (i64::MAX, 4)];
+    // The build keeps 2 distinct keys of 8 source rows: selective enough to
+    // construct its filter (at most 35% kept).
+    let right = vec![
+        (1_i64, 2_i64),
+        (1, 4),
+        (1, 4),
+        (2, 0),
+        (i64::MAX, 4),
+        (5, 0),
+        (6, 0),
+        (7, 0),
+    ];
     let expected = BTreeSet::from([(1, 20, 2), (1, 20, 4), (i64::MAX, 50, 4)]);
     assert_eq!(
         filtered_join!(left,right,{b = let project s keep {x,z};}),
@@ -193,6 +204,15 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
     assert_eq!(cq_storage::counters::snapshot().join_filter_passed, 3);
     let empty: Vec<(i64, i64)> = Vec::new();
     assert!(filtered_join!(left,empty,{b = let project s keep {x,z};}).is_empty());
+    // A build keeping 2 distinct keys of 4 source rows (50%) is abandoned:
+    // no filter is constructed or tested, and the exact probe alone decides.
+    cq_storage::counters::reset();
+    let unselective = vec![(1_i64, 2_i64), (1, 4), (2, 0), (i64::MAX, 4)];
+    assert_eq!(
+        filtered_join!(left,unselective,{b = let project s keep {x,z};}),
+        expected
+    );
+    assert_eq!(cq_storage::counters::snapshot().join_filter_tested, 0);
 }
 
 cq_testkit::positional_cases!(mini_linq::passes::print_pull);

@@ -85,7 +85,7 @@ pub mod dispatch;
 mod hash_index;
 mod hash_state;
 mod join_filter;
-pub use join_filter::JoinFilterPredicate;
+pub use join_filter::{JoinFilterPredicate, selective_build};
 mod host;
 mod instrument;
 mod membership;

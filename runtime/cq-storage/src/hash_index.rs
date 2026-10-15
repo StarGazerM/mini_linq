@@ -254,6 +254,13 @@ impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
 }
 
 impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
+    /// The number of distinct stored keys.
+    pub fn len(&self) -> usize {
+        self.buckets().index.table.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     /// Borrow distinct stored keys without copying them or cloning index handles.
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         crate::instrument::cursor!(self.buckets().index.table.iter().map(|(key, _)| key))

@@ -34,8 +34,9 @@ fn advisory_insertion_and_retyping_preserve_every_other_decision() {
         let changed = retype(&added, args).unwrap();
         assert_eq!(changed.physical, before.physical);
         let facts = ir::contract::check(&changed).unwrap();
-        assert_eq!(facts.join_filters["l"].ty, syn::parse_quote!(FilterAlias));
-        assert_eq!(facts.join_filters["l"].covering, "j");
+        assert_eq!(facts.join_filters["l"].len(), 1);
+        assert_eq!(facts.join_filters["l"][0].ty, syn::parse_quote!(FilterAlias));
+        assert_eq!(facts.join_filters["l"][0].covering, "j");
         assert_eq!(
             syn::parse2::<ir::Program>(changed.to_token_stream()).unwrap(),
             changed

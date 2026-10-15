@@ -276,21 +276,19 @@ fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
             let source: cq_lang_cq::Program = syn::parse_quote! { $($query)* };
             let normal = cq_lang_cq::normal::normalize(&source).unwrap();
             let ordered = cq_order::compile(&normal, &cq_order::Options {
-                heuristic: cq_order::Heuristic::Filtered,
+                heuristic: cq_order::Heuristic::Written,
                 split: cq_order::Split::Coarse,
             }).unwrap();
             let options = cq_reduce::Options {
-
-                semijoins: cq_reduce::Reductions::Hypergraph,
+                semijoins: cq_reduce::Reductions::Masks,
             };
             let reduced = cq_reduce::compile(&ordered, &options).unwrap();
             cq_reduce::check(&ordered, &reduced, &options).unwrap();
             assert!(has_reduction(&reduced.valuation.steps));
             let expected = cq_elaborate::compile(&reduced).unwrap();
             cq_elaborate::check(&reduced, &expected).unwrap();
-            let expected = cq_elaborate::simplify_reductions(&expected).unwrap();
-            assert_eq!(default, cq_physical_lowering::orient(&expected).unwrap());
-            assert_eq!(opted_out, cq_physical_lowering::orient(&cq_elaborate::compile(&ordered).unwrap()).unwrap());
+            assert_eq!(default, expected);
+            assert_eq!(opted_out, cq_elaborate::compile(&ordered).unwrap());
             cq_lang_ra::check_rewrite(&opted_out, &default).unwrap();
         }};
     }

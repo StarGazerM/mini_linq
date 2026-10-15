@@ -108,6 +108,36 @@ pub fn index(i: usize) -> syn::Index {
     syn::Index::from(i)
 }
 
+/// Hosts bound positionally: bases of recorded reads, selections, key sets and
+/// join-filtered scans.
+pub fn positional_bases(
+    analysis: &cq_lang_structures::Analysis,
+) -> std::collections::BTreeSet<String> {
+    analysis
+        .reads
+        .values()
+        .map(|r| symbol_name(&r.origin.base))
+        .chain(
+            analysis
+                .selections
+                .values()
+                .map(|s| symbol_name(&s.origin.base)),
+        )
+        .chain(
+            analysis
+                .keysets
+                .values()
+                .map(|s| symbol_name(&s.origin.base)),
+        )
+        .chain(
+            analysis
+                .join_filters
+                .keys()
+                .map(|scan| analysis.lineage[scan].base.clone()),
+        )
+        .collect()
+}
+
 impl<'a> Context<'a> {
     /// The stable local name of a recorded positional host.
     pub fn positional_host(base: &str) -> Ident {
@@ -170,29 +200,7 @@ impl<'a> Context<'a> {
                 },
             );
         }
-        let positional_bases: std::collections::BTreeSet<_> = analysis
-            .reads
-            .values()
-            .map(|r| symbol_name(&r.origin.base))
-            .chain(
-                analysis
-                    .selections
-                    .values()
-                    .map(|s| symbol_name(&s.origin.base)),
-            )
-            .chain(
-                analysis
-                    .keysets
-                    .values()
-                    .map(|s| symbol_name(&s.origin.base)),
-            )
-            .chain(
-                analysis
-                    .join_filters
-                    .keys()
-                    .map(|scan| analysis.lineage[scan].base.clone()),
-            )
-            .collect();
+        let positional_bases = positional_bases(analysis);
         for base in positional_bases {
             let host = &hosts[&base].value;
             let id = Self::positional_host(&base);
@@ -583,19 +591,39 @@ impl<'a> Context<'a> {
             let build = self.profile_build(&build_name, build);
             statements.push(syn::parse_quote! { let #structure = &#build; });
             let join_filters = self.analysis.join_filters.clone();
-            for (scan, filter) in &join_filters {
-                if symbol_name(&filter.build) != name || sorted(&filter.key.columns) != columns {
+            for (scan, filter) in join_filters
+                .iter()
+                .flat_map(|(scan, filters)| filters.iter().map(move |f| (scan, f)))
+            {
+                let covering = symbol_name(&filter.covering);
+                let (Operator::Probe(_, k) | Operator::Semi(_, k)) =
+                    &self.physical[&covering].operator
+                else {
+                    unreachable!("checked covering operator")
+                };
+                let mut covered: Vec<_> = k.columns.iter().map(symbol_name).collect();
+                covered.sort();
+                let mut stored = columns.clone();
+                stored.sort();
+                if symbol_name(&filter.build) != name || covered != stored || levels.len() != 1 {
                     continue;
                 }
-                let id = self.join_filter_ident(scan);
+                let key = symbol_name(filter.key.columns.first().expect("checked key"));
+                let component = syn::Index::from(
+                    self.stored_key(name, &levels[0])
+                        .iter()
+                        .position(|c| *c == key)
+                        .expect("checked non-constant key"),
+                );
+                let id = self.join_filter_ident(scan, &covering, &key);
                 let pairs = quote!(::core::iter::Iterator::map(
-                    #structure.keys(), |__cq_key| (*__cq_key.0, ())
+                    #structure.keys(), |__cq_key| (*__cq_key.#component, ())
                 ));
-                let filter_name = format!("{name}.filter.{scan}");
+                let filter_name = format!("{name}.filter.{scan}.{key}");
                 self.profile_label(
                     &filter_name,
                     "JOIN_FILTER_BUILD",
-                    &columns.join(","),
+                    &key,
                     vec![build_name.clone()],
                 );
                 let pairs = self.profile_inserting(&filter_name, pairs);
@@ -608,11 +636,19 @@ impl<'a> Context<'a> {
                     quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
                 };
                 let value = self.profile_build(&filter_name, value);
-                statements.push(syn::parse_quote!(let #id = &#value;));
-                statements
-                    .push(syn::parse_quote!(::cq_storage::require::conservative::<i64, _>(#id);));
-                statements
-                    .push(syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#id);));
+                // Formal rule IF-JoinFilterAbandon: Construct no filter from a build keeping more than 35% of its source occurrence.
+                let population = match self.analysis.lineage.get(name) {
+                    Some(origin) if positional_bases(self.analysis).contains(&origin.base) => {
+                        let host = Self::positional_host(&origin.base);
+                        quote!(::core::option::Option::Some(::cq_storage::PositionalRows::len(#host)))
+                    }
+                    _ => quote!(::core::option::Option::None),
+                };
+                statements.push(syn::parse_quote!(let #id = ::cq_storage::selective_build(#structure.len(), #population).then(|| #value);));
+                statements.push(syn::parse_quote!(if let ::core::option::Option::Some(__cq_filter) = &#id { ::cq_storage::require::conservative::<i64, _>(__cq_filter); }));
+                statements.push(
+                    syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#id.as_ref());),
+                );
             }
             if *ty == syn::parse_quote!(::std::collections::HashSet<_>)
                 || *ty == syn::parse_quote!(::cq_storage::HashSet<_>)

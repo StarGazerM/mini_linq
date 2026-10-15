@@ -198,54 +198,64 @@ fn keyed_read(structure: &Structure, source: &ir::Program) -> bool {
     }
 }
 
-/// Add a covered scalar filter to the named scan occurrence. The default type
-/// is exact; a later `retype(scan join_filter => T)` chooses its representation.
-/// This is explicit positional-host advice, including when selection was not
-/// given positional hosts. The same Structures contract checks the result.
+/// Add every admissible covered scalar filter to the named scan occurrence
+/// that is not already recorded. The default type is exact; a later
+/// `retype(scan join_filter => T)` chooses its representation. This is
+/// explicit positional-host advice, including when selection was not given
+/// positional hosts. The same Structures contract checks the result.
 pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let scan: Ident = syn::parse2(arguments)?;
     let facts = ir::contract::check(source)?;
-    if facts.join_filters.contains_key(&symbol_name(&scan)) {
-        return Ok(source.clone());
-    }
-    let mut candidates = source.physical.program.definitions.iter().filter_map(|d| {
-        let (candidate, build, key, _) =
-            ir::join_filter_candidate(source, &facts, &symbol_name(&d.name))?;
-        (candidate == symbol_name(&scan)).then_some((&d.name, build, key))
-    });
-    let Some((covering, build, key)) = candidates.next() else {
-        return Err(syn::Error::new_spanned(
-            scan,
-            "scan has no admissible covering exact probe",
-        ));
-    };
-    if candidates.next().is_some() {
-        return Err(syn::Error::new_spanned(
-            scan,
-            "scan has ambiguous covering probes",
-        ));
-    }
-    let origin = &facts.lineage[&symbol_name(&scan)];
-    let index = syn::Index::from(
-        facts.host_layouts[&origin.base]
-            .iter()
-            .position(|c| c == &origin.columns[&key])
-            .expect("checked lineage"),
-    );
-    let key = &facts.physical.rows[&build].bindings[&key];
-    let build = source
+    let recorded = facts.join_filters.get(&symbol_name(&scan));
+    let candidates: Vec<_> = source
         .physical
         .program
         .definitions
         .iter()
-        .find(|d| symbol_name(&d.name) == build)
-        .map(|d| &d.name)
-        .expect("checked build");
+        .flat_map(|d| {
+            ir::join_filter_candidates(source, &facts, &symbol_name(&d.name))
+                .into_iter()
+                .map(move |c| (&d.name, c))
+        })
+        .filter(|(_, c)| c.scan == symbol_name(&scan))
+        .collect();
+    if candidates.is_empty() {
+        return Err(syn::Error::new_spanned(
+            scan,
+            "scan has no admissible covering exact probe or semijoin",
+        ));
+    }
+    let origin = &facts.lineage[&symbol_name(&scan)];
     let mut target = source.clone();
-    target.structures.entries.push(syn::parse_quote! {
-        #scan join_filter = ::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>
-            build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
-    });
+    for (covering, candidate) in candidates {
+        if recorded.is_some_and(|filters| {
+            filters.iter().any(|f| {
+                symbol_name(&f.covering) == symbol_name(covering)
+                    && f.key.columns.iter().map(symbol_name).eq([candidate.key.clone()])
+            })
+        }) {
+            continue;
+        }
+        let index = syn::Index::from(
+            facts.host_layouts[&origin.base]
+                .iter()
+                .position(|c| c == &origin.columns[&candidate.key])
+                .expect("checked lineage"),
+        );
+        let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
+        let build = source
+            .physical
+            .program
+            .definitions
+            .iter()
+            .find(|d| symbol_name(&d.name) == candidate.build)
+            .map(|d| &d.name)
+            .expect("checked build");
+        target.structures.entries.push(syn::parse_quote! {
+            #scan join_filter = ::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>
+                build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
+        });
+    }
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

@@ -60,9 +60,9 @@ fn check_steps(
         }
     }
     let graph = graph.clone();
-    let tree = if options.semijoins == Reductions::Tree
-        || options.semijoins == Reductions::Hypergraph && graph.acyclic
-    {
+    let tree = if options.semijoins == Reductions::Hypergraph && graph.acyclic {
+        Some(graph.reduction_tree.clone())
+    } else if options.semijoins == Reductions::Tree {
         Some(graph.clone().join_tree.ok_or_else(|| {
             syn::Error::new_spanned(
                 body,
@@ -99,6 +99,32 @@ fn check_steps(
                     .unwrap_or_default()
             ),
         ));
+    }
+    // Formal rule CK-Masks: Masks reductions equal the outer-rooted mask schedule recomputed from the source steps.
+    if options.semijoins == Reductions::Masks {
+        // Branch-scope occurrences carry their block path; the schedule is
+        // recomputed on scope-local clauses.
+        let local = |step: &Step| match step {
+            Step::Reduce(r, kind) => {
+                let mut r = r.clone();
+                r.clause = super::index(r.clause()).into();
+                let super::Reduction::With(_, support) = &mut r.reduction;
+                support.clause = super::index(support.clause()).into();
+                Some(Step::Reduce(r, *kind))
+            }
+            _ => None,
+        };
+        let expected: Vec<_> = super::mask_steps(body, source_steps, source_info, &graph)
+            .iter()
+            .filter_map(local)
+            .collect();
+        let actual: Vec<_> = target_steps.iter().filter_map(local).collect();
+        if actual != expected {
+            return Err(syn::Error::new_spanned(
+                body,
+                format!("query `{name}`: reductions differ from the outer-rooted mask schedule"),
+            ));
+        }
     }
     let mut edges = BTreeMap::new();
     let parents: BTreeMap<usize, usize> = tree
@@ -145,7 +171,12 @@ fn check_steps(
     let mut versions = local_ranks.clone();
     let mut previous_support: BTreeMap<usize, u8> = BTreeMap::new();
     let mut downward = false;
-    for (position, step) in target_steps.iter().enumerate() {
+    let scheduled: &[Step] = if options.semijoins == Reductions::Masks {
+        &[]
+    } else {
+        target_steps
+    };
+    for (position, step) in scheduled.iter().enumerate() {
         let Step::Reduce(r, _) = step else { continue };
         let clause = r.clause();
         let fail = |message: &str| {

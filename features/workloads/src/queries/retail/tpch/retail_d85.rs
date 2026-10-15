@@ -20,8 +20,6 @@ JOIN nation ns ON ns.n_nationkey = s.s_nationkey
 WHERE o.o_orderdate >= DATE '1995-01-01' AND o.o_orderdate < DATE '1995-04-01'
 AND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0"#;
     candidate generic_smallest;
-    advise stream(PartSupp, Part);
-    advise join_filter ::cq_join_filters::BloomFilter<16384>;
     extra hypergraph;
     setup { let start = date("1995-01-01"); let end = date("1995-04-01"); }
     relations {
@@ -34,9 +32,9 @@ AND nc.n_name = 'UNITED STATES' AND ps.ps_availqty > 0"#;
         relation Nation => nation(n_nationkey: i32, n_name: String);
     }
     answer(order_key: i64, part_key: i64, supplier_nation: i32) :-
-        Lineitem(order_key, part_key, supplier_key), PartSupp(part_key, supplier_key, available), if *available > 0,
-        Part(part_key), Orders(order_key, customer_key, order_date), if *order_date >= start && *order_date < end,
-        Customer(customer_key, customer_nation), Supplier(supplier_key, supplier_nation),
-        Nation(customer_nation, "UNITED STATES"),
-        Nation(supplier_nation, _supplier_name);
+        PartSupp(part_key, supplier_key, available), if *available > 0,
+        Lineitem(order_key, part_key, supplier_key),
+        Orders(order_key, customer_key, order_date), if *order_date >= start && *order_date < end,
+        Customer(customer_key, customer_nation), Nation(customer_nation, "UNITED STATES"),
+        Part(part_key), Supplier(supplier_key, supplier_nation), Nation(supplier_nation, _supplier_name);
 }

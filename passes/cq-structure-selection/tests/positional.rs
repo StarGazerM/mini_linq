@@ -162,8 +162,8 @@ fn join_filters_record_exact_type_and_covering_probe() {
     for branch in [false, true] {
         let selected = join_filter_plan(branch);
         let facts = ir::contract::check(&selected).unwrap();
-        assert_eq!(facts.join_filters.len(), 1);
-        let filter = &facts.join_filters["l"];
+        assert_eq!(facts.join_filters["l"].len(), 1);
+        let filter = &facts.join_filters["l"][0];
         assert_eq!(
             filter.ty,
             syn::parse_quote!(::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>)
@@ -210,4 +210,40 @@ fn join_filter_cannot_cross_an_opaque_guard() {
         k.left = syn::parse_quote!(g);
     }
     assert!(ir::contract::check(&selected).is_err());
+}
+
+/// A filter reaches the scan through an intermediate probe only on a key
+/// column the scan itself carries; a key bound by that probe's build is not
+/// a scan column, so filtering the scan by it would be unsound.
+#[test]
+fn join_filters_cross_probes_only_on_scan_key_columns() {
+    let plan = |key: proc_macro2::TokenStream| {
+        let source: physical::Program = syn::parse2(quote! { physical {
+            relation L(a:i64,b:i64); relation R(c:i64,d:i64); relation H(e:i64,f:i64);
+            l = pipe rename L@0 {a -> x,b -> y};
+            h = pipe rename H@2 {e -> y,f -> w};
+            m = let range select h if (w > 1);
+            p = pipe probe first [y] l,m;
+            r = pipe rename R@1 {c -> #key,d -> z};
+            s = pipe range select r if (z > 1);
+            b = let project s keep {#key,z};
+            j = pipe probe first [#key] p,b;
+            out = pipe canon project j keep {x,y,z}; return out as answer(x,y,z);
+        }})
+        .unwrap();
+        let selected =
+            cq_structure_selection::compile_with(&source, quote!(positional(L, R, H))).unwrap();
+        let facts = ir::contract::check(&selected).unwrap();
+        let mut found: Vec<_> = facts
+            .join_filters
+            .get("l")
+            .into_iter()
+            .flatten()
+            .map(|f| f.covering.to_string())
+            .collect();
+        found.sort();
+        found
+    };
+    assert!(plan(quote!(x)).contains(&"j".to_owned()));
+    assert!(!plan(quote!(w)).contains(&"j".to_owned()));
 }

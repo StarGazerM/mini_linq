@@ -23,6 +23,7 @@ pub trait ConservativeMembership<K: ?Sized> {
 /// Exact membership is always a lawful conservative filter. Interval pruning
 /// is optional; this blanket implementation conservatively retains blocks.
 impl<K: ?Sized, T: ExactMembership<K> + ?Sized> ConservativeMembership<K> for T {
+    #[inline]
     fn test(&self, key: &K) -> bool {
         self.contains(key)
     }

@@ -21,10 +21,10 @@ AND l1.l_receiptdate > l1.l_commitdate AND l2.l_suppkey <> l1.l_suppkey"#;
         relation Nation => nation(n_nationkey: i32, n_name: String);
     }
     answer(order_key: i64, waiting_supplier: i64, other_supplier: i64) :-
-        Supplier(waiting_supplier, nation_key),
-        Lineitem(order_key, waiting_supplier, receipt_date, commit_date), if receipt_date > commit_date,
-        Orders(order_key, "F"),
-        Nation(nation_key, "SAUDI ARABIA"),
         Lineitem(order_key, other_supplier, _other_receipt, _other_commit),
+        Lineitem(order_key, waiting_supplier, receipt_date, commit_date), if receipt_date > commit_date,
+        Supplier(waiting_supplier, nation_key),
+        Nation(nation_key, "SAUDI ARABIA"),
+        Orders(order_key, "F"),
         if waiting_supplier != other_supplier;
 }

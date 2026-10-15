@@ -67,56 +67,34 @@ fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
 #[derive(Default)]
 struct PlanOptions {
     no_reduce: bool,
-    advice: cq_physical_lowering::Advice,
 }
 impl Parse for PlanOptions {
-    /// `no_reduce` and/or `stream(Relation, ...)`, comma separated.
+    /// Optionally `no_reduce`.
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
-        while !input.is_empty() {
+        if !input.is_empty() {
             let option: syn::Ident = input.parse()?;
-            if option == "no_reduce" && !options.no_reduce {
-                options.no_reduce = true;
-            } else if option == "stream" && options.advice.stream.is_empty() {
-                let content;
-                syn::parenthesized!(content in input);
-                let names = content.parse_terminated(syn::Ident::parse, syn::Token![,])?;
-                if names.is_empty() {
-                    return Err(syn::Error::new_spanned(
-                        option,
-                        "stream advice names at least one relation",
-                    ));
-                }
-                options.advice.stream = names.iter().map(|n| n.to_string()).collect();
-            } else {
-                return Err(syn::Error::new_spanned(
-                    option,
-                    "expected no_reduce or stream(Relation, ...), each at most once",
-                ));
+            if option != "no_reduce" || !input.is_empty() {
+                return Err(syn::Error::new_spanned(option, "expected no_reduce"));
             }
-            if !input.is_empty() {
-                input.parse::<syn::Token![,]>()?;
-                if input.is_empty() {
-                    return Err(input.error("trailing comma after plan options"));
-                }
-            }
+            options.no_reduce = true;
         }
         Ok(options)
     }
 }
 
-/// CQ → RA′ with static filtered-connected ordering and checked reductions.
-/// `plan(no_reduce)` disables reductions, not static ordering. `plan(stream(R, ..))`
-/// advises streaming the join side that reads `R`; the choice is recorded in RA
-/// operand order and checked under the same advice.
-/// Formal rule Plan-Prefix: Normalize, order Filtered/Coarse, optionally reduce and absorb, then record static build orientation before IX.
+/// CQ → RA′: a left-deep plan in written order with checked reductions.
+/// The first clause of each scope is the outer stream; every other clause is
+/// reduced by its filtered subtrees of the outer-rooted reduction tree before
+/// the stream starts. `plan(no_reduce)` disables reductions, not the order.
+/// Formal rule Plan-Prefix: Normalize, order Written/Coarse, then optionally reduce by outer-rooted masks before IX.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input.into(), |source, args| {
         let args: PlanOptions = syn::parse2(args)?;
         let normal = cq_lang_cq::normal::normalize(source)?;
         let ordering = cq_order::Options {
-            heuristic: cq_order::Heuristic::Filtered,
+            heuristic: cq_order::Heuristic::Written,
             split: cq_order::Split::Coarse,
         };
         let plan = cq_order::compile(&normal, &ordering)?;
@@ -125,19 +103,14 @@ pub fn plan(input: TokenStream) -> TokenStream {
             semijoins: if args.no_reduce {
                 cq_reduce::Reductions::None
             } else {
-                cq_reduce::Reductions::Hypergraph
+                cq_reduce::Reductions::Masks
             },
         };
         let reduced = cq_reduce::compile(&plan, &options)?;
         cq_reduce::check(&plan, &reduced, &options)?;
         let target = cq_elaborate::compile(&reduced)?;
         cq_elaborate::check(&reduced, &target)?;
-        let target = if args.no_reduce {
-            target
-        } else {
-            cq_elaborate::simplify_reductions(&target)?
-        };
-        cq_physical_lowering::orient_with(&target, &args.advice)
+        Ok(target)
     })
     .into()
 }

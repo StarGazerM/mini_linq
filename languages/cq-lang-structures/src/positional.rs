@@ -166,9 +166,14 @@ pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> s
     let name = symbol_name(&entry.name);
     match &entry.structure {
         Structure::JoinFilter { filter, .. } => {
-            if facts.join_filters.insert(name, filter.clone()).is_some() {
+            let filters = facts.join_filters.entry(name).or_default();
+            if filters.iter().any(|f| {
+                symbol_name(&f.covering) == symbol_name(&filter.covering)
+                    && names(&f.key.columns) == names(&filter.key.columns)
+            }) {
                 return error(entry, "duplicate join filter decision");
             }
+            filters.push(filter.clone());
         }
         Structure::Selection {
             ty,
