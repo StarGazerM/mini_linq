@@ -33,13 +33,14 @@ stopping, retention, and the Rust ancestry tree. Rust `||` keeps its guard rules
 | `runtime/` | Borrowed access traits, storage, loaders, and distinct-state implementations |
 | `facade/` | `cq-stage` pass protocol and `mini-linq` macro entry points |
 | `testkit/` | Public corpus, semantic oracles, mutation and refinement helpers |
+| `tests/` | Optional homework acceptance tests for the root course package (`hw4` feature) |
 | `features/` | Standalone external consumers of the packaged public API |
 | `tools/` | Dependency, external-consumer, public-API, and regression gates |
 | `doc/` | Short design notes and the formal specification |
 
 Grammars and extension APIs live in crate `//!` documentation. See
 [the design](doc/DESIGN.md) and [the formal specification](doc/formal/README.md).
-`teaching/ya/` supplies the reduction pass's teaching acceptance fixtures.
+`passes/cq-reduce/tests/ya_schedule.rs` supplies the reduction pass's teaching acceptance tests.
 
 ## Compose a pipeline
 

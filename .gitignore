@@ -1,11 +1,6 @@
 /target/
-/xtask/target/
 **/*.duckdb
 **/*.tmp
-/workloads/data/**/medium/
-/workloads/data/**/large/
-/workloads/golden/**/medium.csv
-/workloads/golden/**/large.csv
 .DS_Store
 tmp
 .pi

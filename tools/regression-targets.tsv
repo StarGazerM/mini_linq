@@ -22,7 +22,7 @@ cq-physical-lowering	test	lowering	passes/cq-physical-lowering/tests/lowering.rs
 cq-physical-realization	test	realization	passes/cq-physical-realization/tests/realization.rs
 mini-linq	test	physical_query	facade/mini-linq/tests/physical_query.rs
 mini-linq-macros	lib	macro_inputs	facade/mini-linq-macros/src/lib.rs
-cq-reduce	test	ya_schedule	teaching/ya/ya_schedule.rs
+cq-reduce	test	ya_schedule	passes/cq-reduce/tests/ya_schedule.rs
 cq-print	test	expressions	passes/cq-print/tests/expressions.rs
 cq-lang-cq	test	program	languages/cq-lang-cq/tests/program.rs
 cq-lang-cq	test	normal	languages/cq-lang-cq/tests/normal.rs

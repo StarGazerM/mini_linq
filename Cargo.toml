@@ -88,5 +88,4 @@ hw4 = []
 
 [[test]]
 name = "hw4_optional"
-path = "course/hw4_optional.rs"
 required-features = ["hw4"]

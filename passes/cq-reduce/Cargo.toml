@@ -26,4 +26,3 @@ name = "reduce"
 
 [[test]]
 name = "ya_schedule"
-path = "../../teaching/ya/ya_schedule.rs"
