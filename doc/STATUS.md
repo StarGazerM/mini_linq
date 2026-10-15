@@ -88,10 +88,12 @@ the top-down pass.
 
 ## Left work
 
-1. **D72.** PartSupp (800k rows, non-selective filter) is indexed whole for a
-   composite probe. The transfer route's backward pass shrinks it (above), but
-   only per-edge: the default would need that one backward reduction, chosen
-   without statistics, without RPT's stream materialization.
+1. **D72.** Its decisive choice is data-dependent: `ps_availqty > 0` keeps
+   every PartSupp row. No written order avoids an unreduced large build
+   (PartSupp-first indexes all 1.5M Orders: 229–238 ms). The kernel's advice
+   `skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem)` gives
+   141–145 ms (`advised` configuration) vs 191–195 default and DuckDB 107.7.
+   Choosing this automatically needs statistics or a runtime check.
 2. **Scans.** Scalar row-at-a-time over 48-byte rows (Q6 2×); columnar scans.
 3. **Positional default.** Selections need the caller's `positional(..)` advice.
 4. **Zone maps.** Block min/max exists only in the `hypergraph_zone`
@@ -122,5 +124,5 @@ the top-down pass.
 
 ## Next step
 
-Decide whether a per-edge backward reduction (D72) belongs in the default, and
-how to choose it without statistics.
+Decide whether runtime adaptivity (abandon reductions whose builds keep over
+35% of their source) should choose such reductions without advice.

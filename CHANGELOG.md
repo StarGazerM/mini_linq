@@ -7,6 +7,15 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Plan advice (rule R-Advice): `plan(reduce(T with S), skip(T with S))`
+  records an author's cardinality knowledge as VO reduce steps on top-level
+  atoms sharing a variable: `reduce` adds `T ⋉ S` after the Masks reductions,
+  `skip` drops a Masks reduction (always sound). Kernels may declare
+  `advise plan(..)`, adding an `advised` configuration. D72 is advised
+  `skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem)`
+  (`ps_availqty > 0` keeps every row): 191–195 → 141–145 ms at SF 1
+  (PartSupp index 800k → 124,846 rows; DuckDB 1T 107.7 ms).
+
 - `cq_planners::order(transfer)`: robust predicate transfer (SIGMOD'25) as a
   diverging planner through the public pipeline (rules Plan-Transfer,
   CK-Transfer). On the written order it adds, to the Masks forward pass, the

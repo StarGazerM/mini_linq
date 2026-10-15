@@ -73,6 +73,7 @@ macro_rules! retail_kernel {
         name $name:literal;
         sql $sql:literal;
         candidate $candidate:ident;
+        $(advise plan($($advice:tt)*);)?
         $(extra $extra:ident;)?
         setup { $($setup:tt)* }
         relations {
@@ -84,7 +85,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "no-reduce", "transfer", stringify!($candidate) $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "no-reduce", "transfer", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -129,6 +130,19 @@ macro_rules! retail_kernel {
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
         });
+        // The default plan with the kernel author's recorded plan advice.
+        crate::tpch_runtime::advised_config!([$($($advice)*)?]; $d; positional($($relation),*);
+            #[allow(non_snake_case)]
+            pub(super) fn run(data: &Data) -> Vec<Answer> {
+                $(let $relation = data.$table.as_slice();)*
+                $($setup)*
+                query! {
+                    struct Query;
+                    $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    answer($($out),+) :- $($body)*
+                }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
+            }
+        );
         crate::tpch_runtime::candidate!($candidate; $d; positional($($relation),*);
             #[allow(non_snake_case)]
             pub(super) fn run(data: &Data) -> Vec<Answer> {
@@ -152,6 +166,7 @@ macro_rules! retail_kernel {
                 "no-reduce" => no_reduce::run(data),
                 "transfer" => transfer::run(data),
                 stringify!($candidate) => tuned::run(data),
+                $(crate::tpch_runtime::advised_name!($($advice)*) => advised::run(data),)?
                 _ => crate::tpch_runtime::extra_run!([$($extra)?]; data, config),
             }
         }
@@ -161,6 +176,25 @@ macro_rules! retail_kernel {
     };
 }
 pub(crate) use retail_kernel;
+
+/// Configuration name of a kernel's advised plan.
+macro_rules! advised_name {
+    ($($advice:tt)*) => {
+        "advised"
+    };
+}
+pub(crate) use advised_name;
+
+macro_rules! advised_config {
+    ([]; $d:tt; positional($($host:ident),*); $($body:tt)*) => {};
+    ([$($advice:tt)+]; $d:tt; positional($($host:ident),*); $($body:tt)*) => {
+        crate::tpch_runtime::configuration!(advised, $d, {
+            plan = ::mini_linq::passes::plan($($advice)+);
+            select = ::mini_linq::passes::select(positional($($host),*));
+        }, { $($body)* });
+    };
+}
+pub(crate) use advised_config;
 
 pub(crate) fn date(value: &str) -> cq_load::Date {
     <cq_load::Date as cq_load::Load>::load(value).expect("authored ISO date")

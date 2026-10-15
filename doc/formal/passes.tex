@@ -613,8 +613,14 @@ and $S$ checked redundant-support absorption:
 \begin{mathpar}
 \Rule{Plan-Prefix}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
  r=\text{None if \code{no_reduce}, otherwise Masks}\\
- w=R_{None,r}(v)\quad a=E(w)}
+ w=\mathsf{advise}(R_{None,r}(v))\quad a=E(w)}
  {\code{mini_linq::passes::plan}(q)=a}
+
+\Rule{R-Advice}{\mathsf{skip}(T,S)\Rightarrow\mathsf{red}(T,S)\in w\quad
+ \mathsf{reduce}(T,S)\ \text{or}\ \mathsf{skip}(T,S)\Rightarrow
+ T\ne S\ \text{top-level atoms},\ \mathsf{shared}(T,S)\ne\emptyset}
+ {\mathsf{advise}(w)=w\setminus\{\mathsf{red}(T,S)\mid\mathsf{skip}\}
+  \ ;\ \{\mathsf{red}(T,S)\mid\mathsf{reduce}\}\ \text{before the stream}}
 
 \Rule{Plan-Generic}{n=N(q)\quad v=O_{Written,Fine}(n)\quad a=E(v)}
  {\code{cq_planners::order(written, fine)}(q)=a}

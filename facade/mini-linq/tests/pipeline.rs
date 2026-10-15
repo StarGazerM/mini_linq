@@ -248,6 +248,57 @@ fn default_reduction_and_opt_out_agree_on_host_and_fallback_inputs() {
     check!(host);
 }
 
+/// Advice replaces the Masks reduction `S ⋉ T` by `T ⋉ S` as recorded RA
+/// semijoins, and both plans return the written answers.
+#[test]
+fn reduce_and_skip_advice_rewrite_reductions_and_preserve_answers() {
+    let default = mini_linq::passes::plan! {
+        pipeline { capture_plan };
+        struct Q;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
+        answer(a,c) :- R(a,b), S(b,c), T(c,7);
+    };
+    let advised = mini_linq::passes::plan! {
+        arguments { skip(S with T), reduce(T with S) };
+        pipeline { capture_plan };
+        struct Q;
+        relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
+        answer(a,c) :- R(a,b), S(b,c), T(c,7);
+    };
+    let semijoins = |plan: &str| {
+        let plan: cq_lang_ra::Program = syn::parse_str(plan).unwrap();
+        plan.plan
+            .definitions
+            .iter()
+            .filter(|d| matches!(d.operator, cq_lang_ra::Operator::Semijoin(..)))
+            .count()
+    };
+    assert_eq!(semijoins(default), 1);
+    assert_eq!(semijoins(advised), 1);
+    assert_ne!(default, advised);
+    let r = [(1, 10), (2, 20), (3, 30)];
+    let s = [(10, 100), (20, 200), (30, 300)];
+    let t = [(100, 7), (200, 8), (300, 7)];
+    let written: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
+        struct Q; relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(c:i32,d:i32);
+        answer(a,c) :- r(a,b), s(b,c), t(c,7);
+    }
+    .map(|(a, c)| (*a, *c))
+    .collect();
+    let advised: std::collections::BTreeSet<_> = mini_linq::compile! {
+        pipeline { plan = mini_linq::passes::plan(skip(s with t), reduce(t with s)); }
+        struct Q; relation r(a:i32,b:i32); relation s(b:i32,c:i32); relation t(c:i32,d:i32);
+        answer(a,c) :- r(a,b), s(b,c), t(c,7);
+    }
+    .map(|(a, c)| (*a, *c))
+    .collect();
+    assert_eq!(
+        written,
+        std::collections::BTreeSet::from([(1, 100), (3, 300)])
+    );
+    assert_eq!(advised, written);
+}
+
 #[test]
 fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
     fn has_reduction(steps: &[cq_lang_vo::Step]) -> bool {
