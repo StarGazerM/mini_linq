@@ -151,57 +151,9 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + S
 /// Rustc configured to link dependencies of the storage source in conformance
 /// fixtures. Call from a Cargo-built test executable so its dependency artifacts
 /// are available beside it. This does not link compiler passes into the fixture.
+/// Each backend must have the same Rust type identity as cq-testkit's linked
+/// dependency. Other builds in a shared target directory are not substitutes.
 pub fn runtime_rustc() -> std::process::Command {
-    fn artifact(dependencies: &std::path::Path, name: &str, api: &str) -> std::path::PathBuf {
-        let prefix = format!("lib{name}-");
-        let mut candidates: Vec<_> = std::fs::read_dir(dependencies)
-            .expect("Cargo dependency artifacts")
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".rlib"))
-            })
-            .collect();
-        candidates.sort_by_key(|path| {
-            std::cmp::Reverse(path.metadata().and_then(|meta| meta.modified()).ok())
-        });
-        // Cargo/rustdoc can leave rlibs whose proc-macro dependencies were
-        // replaced by another feature build. Recency alone does not establish
-        // that rustc can resolve an artifact's complete dependency graph.
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!("cq-hash-link-{stamp}"));
-        std::fs::create_dir_all(&directory).unwrap();
-        let source = directory.join("probe.rs");
-        std::fs::write(&source, api).unwrap();
-        let mut failures = String::new();
-        for candidate in candidates {
-            let output = std::process::Command::new(
-                std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
-            )
-            .args(["--edition=2024", "--crate-type=lib", "--emit=metadata"])
-            .arg(&source)
-            .arg("--out-dir")
-            .arg(&directory)
-            .arg("-L")
-            .arg(format!("dependency={}", dependencies.display()))
-            .arg("--extern")
-            .arg(format!("{name}={}", candidate.display()))
-            .output()
-            .expect("probe the raw-rustc dependency graph");
-            if output.status.success() {
-                std::fs::remove_dir_all(directory).unwrap();
-                return candidate;
-            }
-            failures.push_str(&String::from_utf8_lossy(&output.stderr));
-        }
-        std::fs::remove_dir_all(directory).unwrap();
-        panic!("no usable {name} rlib built by cq-testkit's dependency: {failures}");
-    }
     static ARTIFACTS: std::sync::LazyLock<(
         std::path::PathBuf,
         std::path::PathBuf,
@@ -212,16 +164,14 @@ pub fn runtime_rustc() -> std::process::Command {
             .parent()
             .expect("Cargo dependency directory")
             .to_path_buf();
-        let ahash = artifact(
-            &dependencies,
-            "ahash",
-            "pub type State = ahash::RandomState;",
-        );
-        let hashbrown = artifact(
-            &dependencies,
-            "hashbrown",
-            "pub type Table = hashbrown::HashTable<()>;",
-        );
+        let ahash = linked_runtime_backend(
+            &dependencies, "ahash", "ahash::RandomState",
+            &format!("{:?}", std::any::TypeId::of::<ahash::RandomState>()),
+        ).unwrap_or_else(|error| panic!("{error}"));
+        let hashbrown = linked_runtime_backend(
+            &dependencies, "hashbrown", "hashbrown::HashTable<()>",
+            &format!("{:?}", std::any::TypeId::of::<hashbrown::HashTable<()>>()),
+        ).unwrap_or_else(|error| panic!("{error}"));
         (dependencies, ahash, hashbrown)
     });
     let (dependencies, ahash, hashbrown) = &*ARTIFACTS;
@@ -235,4 +185,120 @@ pub fn runtime_rustc() -> std::process::Command {
         .arg("--extern")
         .arg(format!("hashbrown={}", hashbrown.display()));
     command
+}
+
+fn linked_runtime_backend(
+    dependencies: &std::path::Path,
+    name: &str,
+    typ: &str,
+    expected: &str,
+) -> std::result::Result<std::path::PathBuf, String> {
+    let prefix = format!("lib{name}-");
+    let mut candidates: Vec<_> = std::fs::read_dir(dependencies)
+        .expect("Cargo dependency artifacts")
+        .map(|entry| entry.expect("Cargo dependency entry").path())
+        .filter(|path| path.file_name().and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".rlib")))
+        .collect();
+    candidates.sort();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let directory = std::env::temp_dir()
+        .join(format!("cq-linked-backend-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("probe.rs");
+    let executable = directory.join("probe");
+    std::fs::write(&source, format!(
+        "fn main() {{ println!(\"{{:?}}\", std::any::TypeId::of::<{typ}>()); }}"
+    )).unwrap();
+    let mut matches = Vec::new();
+    let mut diagnostics = String::new();
+    for candidate in &candidates {
+        let output = std::process::Command::new(
+            std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
+        )
+        .args(["--edition=2024", "--crate-name", "cq_backend_identity"])
+        .arg(&source)
+        .arg("-o").arg(&executable)
+        .arg("-L").arg(format!("dependency={}", dependencies.display()))
+        .arg("--extern").arg(format!("{name}={}", candidate.display()))
+        .output().expect("compile the linked-backend identity probe");
+        if !output.status.success() {
+            diagnostics.push_str(&format!("{}: {}\n",
+                candidate.display(), String::from_utf8_lossy(&output.stderr)));
+            continue;
+        }
+        let output = std::process::Command::new(&executable)
+            .output().expect("run the linked-backend identity probe");
+        let actual = String::from_utf8_lossy(&output.stdout);
+        if output.status.success() && actual.trim() == expected {
+            matches.push(candidate.clone());
+        } else {
+            diagnostics.push_str(&format!("{}: identity {:?}, status {}, stderr {}\n",
+                candidate.display(), actual.trim(), output.status,
+                String::from_utf8_lossy(&output.stderr)));
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+    if matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one {name} backend with linked identity {expected}; \
+             matches: {matches:?}; candidates: {candidates:?}\n{diagnostics}"
+        ));
+    }
+    Ok(matches.pop().unwrap())
+}
+
+#[cfg(test)]
+mod runtime_backend_tests {
+    use super::linked_runtime_backend;
+
+    #[test]
+    fn backend_selection_distinguishes_identical_apis_by_linked_identity() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("cq-backend-identities-{stamp}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("backend.rs");
+        std::fs::write(&source, "pub struct Marker;").unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        // Both real rlibs have the same crate name and public API. Only their
+        // crate identities differ; the decoy is deliberately built last.
+        for identity in ["linked", "decoy"] {
+            let output = std::process::Command::new(&rustc)
+                .args(["--edition=2024", "--crate-name", "backend", "--crate-type", "rlib"])
+                .arg("-C").arg(format!("metadata={identity}"))
+                .arg("-C").arg(format!("extra-filename=-{identity}"))
+                .arg(&source).arg("--out-dir").arg(&directory)
+                .output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        }
+        let linked = directory.join("libbackend-linked.rlib");
+        let reference = directory.join("reference.rs");
+        std::fs::write(&reference,
+            "fn main() { println!(\"{:?}\", std::any::TypeId::of::<backend::Marker>()); }"
+        ).unwrap();
+        let executable = directory.join("reference");
+        let output = std::process::Command::new(&rustc)
+            .arg("--edition=2024").arg(&reference)
+            .arg("--extern").arg(format!("backend={}", linked.display()))
+            .arg("-o").arg(&executable).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let output = std::process::Command::new(&executable).output().unwrap();
+        assert!(output.status.success());
+        let expected = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(linked_runtime_backend(
+            &directory, "backend", "backend::Marker", expected.trim(),
+        ).unwrap(), linked);
+        let missing = linked_runtime_backend(
+            &directory, "backend", "backend::Marker", "not the linked identity",
+        ).unwrap_err();
+        assert!(missing.contains("matches: []") && missing.contains("libbackend-decoy"));
+        std::fs::copy(&linked, directory.join("libbackend-alias.rlib")).unwrap();
+        let ambiguous = linked_runtime_backend(
+            &directory, "backend", "backend::Marker", expected.trim(),
+        ).unwrap_err();
+        assert!(ambiguous.contains("libbackend-linked") && ambiguous.contains("libbackend-alias"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
