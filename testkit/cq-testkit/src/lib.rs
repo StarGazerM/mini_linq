@@ -52,14 +52,15 @@
 //!   cases carrying each feature, once per feature per observation. Total queries
 //!   have independently printable SQL. Partial Rust terms require executable
 //!   written-order refinement; their SQL text is an explanatory comment.
-//! * The optional `duckdb` feature enables `duckdb` (an in-memory integer SQL
-//!   oracle) and `golden` (strict, byte-for-byte canonical CSV comparison and Git
-//!   fixture inventory). SQL must select the desired set and ordering explicitly.
-//!   `evaluate_fuzz` rejects partial terms and checks DISTINCT. Golden encoding
-//!   requires sorted, distinct rows of the declared width; it rejects CRLF,
-//!   leading zeros, and missing final newlines. Git inventory needs the Git CLI.
-//!   Default builds do not build or link DuckDB. The bundled native engine can
-//!   make the first feature build substantially slower.
+//! * The optional std-only `golden` feature enables strict, byte-for-byte canonical
+//!   CSV comparison and Git fixture inventory. Golden encoding requires sorted,
+//!   distinct rows of the declared width; it rejects CRLF, leading zeros, and
+//!   missing final newlines. Git inventory needs the Git CLI.
+//! * The optional `duckdb` feature also enables `golden` and adds an in-memory
+//!   integer SQL oracle. SQL must select the desired set and ordering explicitly.
+//!   `evaluate_fuzz` rejects partial terms and checks DISTINCT. Default and
+//!   `golden`-only builds do not build or link DuckDB. The bundled native engine
+//!   can make the first `duckdb` feature build substantially slower.
 //!
 //! ```rust
 //! use cq_testkit::{CASES, cq_semantics};
@@ -119,7 +120,7 @@ pub mod databases;
 #[cfg(feature = "duckdb")]
 pub mod duckdb;
 pub mod fuzz;
-#[cfg(feature = "duckdb")]
+#[cfg(feature = "golden")]
 pub mod golden;
 pub mod harness;
 mod positional_cases;
