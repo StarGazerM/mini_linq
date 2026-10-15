@@ -7,6 +7,19 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Measurement: operator profiles drain each build's input before insertion
+  and report its exclusive construction time (`excl=`, `source_elapsed`,
+  `BUILD_EXCLUSIVE_TOTAL`), comparable to a DuckDB hash join's sink plus
+  finalize. The TPC bench adds `duckdb_1_execute_median_ms`: the statement is
+  prepared once untimed, then execution and Arrow materialization are timed
+  (MiniLinq plans at compile time). DuckDB join-phase numbers in
+  `doc/STATUS.md` come from a timer-patched DuckDB 1.5.5 built outside the
+  repository; its totals match stock DuckDB within run-to-run noise.
+- CI: free runner disk (preinstalled SDKs, docker images), 8 GB swap, no
+  debug info in dev/test builds, three build jobs, and removal of isolation
+  and feature build directories between steps; recent runs died of
+  `No space left on device` or a starved runner.
+
 - Plan advice (rule R-Advice): `plan(reduce(T with S), skip(T with S))`
   records an author's cardinality knowledge as VO reduce steps on top-level
   atoms sharing a variable: `reduce` adds `T ⋉ S` after the Masks reductions,

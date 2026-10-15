@@ -21,8 +21,8 @@ mod operators;
 pub(crate) use operators::build_cardinality;
 pub(crate) use operators::{DeferredBuild, defer_build};
 pub use operators::{
-    OperatorInput, OperatorLabel, OperatorOutput, OperatorPredicate, OperatorProgram,
-    OperatorRecord, OperatorStream, operators, render_operators,
+    OperatorDrained, OperatorInput, OperatorLabel, OperatorOutput, OperatorPredicate,
+    OperatorProgram, OperatorRecord, OperatorStream, operators, render_operators,
 };
 
 use std::cell::Cell;

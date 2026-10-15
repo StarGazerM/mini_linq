@@ -10,9 +10,27 @@ permissions:
 jobs:
   workspace:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     env:
       CARGO_INCREMENTAL: "0"
+      # Debug info dominates the size of the many test and isolation targets.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      # Macro-heavy test crates exhaust the runner's memory with full parallelism.
+      CARGO_BUILD_JOBS: "3"
     steps:
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/share/swift "$AGENT_TOOLSDIRECTORY"
+          sudo docker image prune --all --force || true
+          df -h /
+      - name: Add swap
+        run: |
+          sudo swapoff -a || true
+          sudo fallocate -l 8G /swapfile-ci && sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci && sudo swapon /swapfile-ci
+          free -h
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
@@ -22,10 +40,16 @@ jobs:
         run: cargo fetch --locked
       - name: Verify component dependency boundaries
         run: python3 tools/check_dependencies.py --isolate --frontends --consumers
+      - name: Drop isolation build artifacts
+        run: rm -rf target/component-isolation && df -h /
       - name: Test restored compiler regressions
         env:
           CARGO_BUILD_JOBS: 2
         run: bash tools/test_regressions.sh
+      - name: Drop feature build artifacts
+        run: |
+          find features -mindepth 2 -maxdepth 2 -name target -type d -not -path 'features/workloads/*' -exec rm -rf {} +
+          df -h /
       - name: Test packaged public API outside the checkout
         run: python3 tools/check_external.py
       - name: Check reviewed public API snapshots
