@@ -1,100 +1,80 @@
-# Next step: staged quotation for plan control
-
-Starts after the current runtime work (join filters, bushy branches, batched
-probes) is integrated, benchmarked and committed.
+# Next step: schedules for plan control
 
 ## Goal
 
-A query can control any lower IR level without changing the compiler stages it
-passes through, without a fixed nesting depth, and without any layer listing
-the layers below it. Every applied quote is checked by its level's checker, so
-quotes change cost, never answers:
-$[\![\mathrm{Rust}]\!] = [\![\mathrm{CQ}]\!]$ for every envelope.
+A query controls plan decisions (join order, branches, reductions, build side,
+structure types) through a **schedule** that names source entities and is
+consumed by the pass that owns each decision. Schedules change cost, never
+answers: $[\![\mathrm{Rust}]\!] = [\![\mathrm{CQ}]\!]$ for every schedule.
 
-## Feature categories
+## Rejected: positional quotes into lower IRs
 
-| Category | Current features | Destination |
-|---|---|---|
-| Meaning | CQ core, blocks, surface sugar, negation/aggregate/correlated/recursion extensions, `relation_loaders` | language; never quotes |
-| Assumptions | `#[total] if`, `select(positional(H))`, user types in `retype` | one `assume { … }` block / environment |
-| Choices with arguments | `cq_planners::order(...)`, `plan(no_reduce)`, `merge_joins`/`smallest` (`arguments { r2 }`), `retype`/`custom_indexes`/`ordered_dedup`, bushy branches, build side, join-filter kind, batch size | quotes and directives |
-| Choices without arguments | default `plan`, `smallest_intersections`, `canon_prefixes`, `lazy_semijoins`, selection heuristics | pipeline stages; quotes override their results |
-| Pipeline shape | `pipeline { … }`, planner choice, `push` vs `print_pull`, stacked-IR bridge, diverged-RA passes | pipeline configuration |
-| Tooling | `capture_*`, `corpus_*`, inspection, composition | unchanged; used as acceptance harnesses |
+An earlier draft spliced raw lower-IR text at positional anchors
+(`quote vo after <pass> @ 3 4 { … }`). Rejected because it:
 
-The parameterized rewrites are already quotes in disguise, but they are keyed by
-generated result names (`r2`). Stable provenance names are therefore the main
-prerequisite.
+- addresses the compiler's expansion by position: one-time, brittle references
+  (Exo 2's taxonomy) that break when the query or a pass changes;
+- edits a level's output instead of the input of the transformer that decides,
+  unlike multi-stage programming and towers of interpreters, where control is
+  static input to the generator or a modified interpreter;
+- exposes lower-IR syntax to users, which MSP macro systems encapsulate.
 
-## Syntax
+## Prior art adopted
 
-```text
-quote <lang-tag> [after <pass-path>] @ <occurrence> { <tokens> }
-```
+| Source | Taken |
+|---|---|
+| Halide; pg_hint_plan (`Leading(((l s) (o c)))`) | nominal, stable references to names the user wrote; separate schedule |
+| Scheduling-language taxonomy (Hall et al. 2024) | separate schedules allow several strategies per algorithm; pragmas allow one |
+| MetaML / Scala 3 quotes; hygiene (Flatt, POPL 2016) | references are hygienic bindings; users never see generated code |
+| Collapsing towers (Amin, Rompf, POPL 2018) | control a level by parameterizing its transformer; other levels pass through |
+| Origin tracking / resugaring (Pombrio, Krishnamurthi) | compiler-maintained mapping from lowered code to source, internal only |
+| Exo 2 (ASPLOS 2025) | checked primitives; compiler-forwarded references; later, user-defined schedule functions |
 
-- `<lang-tag>`: an open name owned by the target language.
-- `after`: selects a later producer when one language appears several times.
-- `@ <occurrence>`: a source-provenance anchor that `cq-stage` reads without
-  parsing the body.
-- Body: a raw token tree, parsed only by the target language; it may nest quotes.
+## Design
+
+1. **Names.** Atoms may bind an alias: `l: Lineitem(..)`. Aliases are hygienic
+   identifiers scoped to the query; an unaliased relation occurring once is
+   named by its relation. Ambiguous or unbound names are errors.
+2. **Schedule.** A separate `schedule { … }` beside the query, one per
+   configuration. Directives name aliases only:
+   - `join(<tree>)`: association, e.g. `join((l s d) (o (c ⋉ d)))`;
+   - `reduce(c by d)`: an extra semijoin;
+   - `build(o)` / `stream(l)`: build side (replaces `plan(stream(..))`);
+   - `type(<name>, Path)`, `join_filter(<name>, Path)`: structure choices
+     (replaces `retype`/`custom_indexes` keyed by `r2`).
+3. **Consumption.** Each directive is a static argument to its owning pass
+   (ordering, reduction, orientation, Structures rewrites). The pass decides
+   under the directive and records the decision in its output IR as today.
+   A directive no pass consumes fails compilation.
+4. **Checks.** The owning pass's contract and `check_rewrite` validate the
+   result; an unsatisfiable directive (e.g. `join` grouping atoms sharing no
+   column, or moving opaque Rust earlier) is a compile error naming it.
+5. **Forwarding.** Source names travel through every IR as checked provenance
+   on definitions, so directives consumed below VO resolve the same alias.
+   Provenance is internal; users never write IR coordinates.
 
 ## Steps
 
-1. **Q1 Envelope** (`facade/cq-stage`). Add an optional `quotes { … };` slot
-   to `Input`/`Pipeline::start`. `run` hides the envelope from passes, splices
-   the quotes whose tag and position match `Out`, re-enqueues nested quotes,
-   runs `check` and `check_rewrite`, forwards everything else byte-identical,
-   and rejects unconsumed quotes at the terminal stage. Add
-   `Language::tag()` and `Language::splice()`; the default `splice` rejects.
-2. **Q2 One input format.** `cq-ext-support::SurfaceInput` reuses
-   `cq_stage::Input`.
-3. **Q3 Fork routing.** Add `Pipeline::start_fork(hole, covered_occurrences)`.
-   The aggregate, negation, correlated and recursion extensions declare which
-   occurrences each hole covers. Each anchor must lie in exactly one hole;
-   quotes are routed only there.
-4. **Q4 Layer opacity.** Remove the aggregate extension's printer-path test
-   (`expansion.rs:242`); expose the needed fact through the language or
-   Structures. Turn `Configuration`'s named phases into sugar over `Pipeline`.
-5. **Q5 Provenance.** Record checked source-occurrence provenance in RA and
-   Physical definitions, preserved through printing. Splices resolve names by
-   provenance, not by `symbol_name` strings or generated names.
-6. **Q6 Migrations.**
-   1. Structures `splice`; migrate `retype`, `custom_indexes`, `ordered_dedup`.
-   2. Physical `splice`; migrate `merge_joins`, `smallest`.
-   3. Move `positional(H)` and `#[total]` facts into `assume { … }`.
-   4. VO `splice` for order, branches and reductions; RA `splice` for build side.
-7. **Q7 Directives.** A surface pass expands stable directives (`order`,
-   `branch`, `reduce`, `build`, `type`, `join_filter`) into quotes. Raw
-   `quote` remains the developer escape hatch.
-
-```mermaid
-flowchart LR
-  Q1 --> Q2
-  Q1 --> Q3
-  Q1 --> Q4
-  Q5 --> Q6
-  Q1 --> Q6
-  Q3 --> Q6
-  Q6 --> Q7
-```
+1. **S1 Names.** Aliases in CQ syntax and surface; carried on atoms in VO.
+2. **S2 Schedule slot.** Parse `schedule { … }`; split directives into
+   per-pass arguments; error on unconsumed directives.
+3. **S3 Order and reduce.** Ordering/reduction consume `join` and `reduce`;
+   H07-block is the acceptance kernel.
+4. **S4 Provenance.** Record alias provenance on RA/IX/Physical/Structures
+   definitions.
+5. **S5 Build and structures.** Orientation consumes `build`/`stream`;
+   Structures rewrites consume `type`/`join_filter`; remove `plan(stream(..))`
+   and `r2`-keyed arguments.
+6. **S6 Schedule functions** (later): user-defined directives composed from
+   checked primitives.
 
 ## Acceptance
 
 | Invariant | Evidence |
 |---|---|
-| No quotes means no change | every IR and the generated Rust byte-identical across the full corpus |
-| Passthrough | envelope tokens identical before and after each non-target stage |
-| Locality | pass functions have no envelope parameter |
-| Soundness | a splice that `check_rewrite` rejects fails compilation |
-| Openness | protocol code compares tags only through `Out::tag()` |
-| Fork completeness | an anchor in no hole or in two holes fails at the fork; an unconsumed quote fails at its branch terminal |
-| End to end | a nested quote passes untouched through CQ, VO, RA, IX and Physical, then splices at Structures, through a fork |
-| Migration | the existing `retype` and `merge_joins` tests pass using quotes instead of `arguments { r2 }` |
-
-## Risks
-
-- Q5 changes every IR below VO and needs the most review.
-- A forking extension that bypasses `start_fork` must not drop quotes: plain
-  `start` with a non-empty envelope is an error.
-- The envelope is re-emitted at every stage; measure its cost once directives
-  expand into many quotes.
+| No schedule means no change | every IR and the generated Rust byte-identical across the corpus |
+| Soundness | every directive-induced result passes its pass's checks; violations fail compilation |
+| Stability | renaming generated results or reordering unrelated clauses leaves schedules valid |
+| Completeness | an unconsumed or unresolved directive fails compilation |
+| Performance | H07-block with `join((l s d) (o (c ⋉ d)))` at or below DuckDB 1 thread; H05 and D85 via `stream`/`build` |
+| Migration | `retype`, `merge_joins` and `plan(stream(..))` users moved to schedules |
