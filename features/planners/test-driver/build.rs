@@ -1,5 +1,5 @@
 //! Generate compiled refinement consumers from the public testkit's model.
-//! All 200 seeds are partial; all nine planner invocations are compiled.
+//! All 200 seeds are partial; every planner invocation is compiled.
 use cq_planners_plan::{Planner, cq};
 use cq_testkit::fuzz::Case;
 use quote::ToTokens;

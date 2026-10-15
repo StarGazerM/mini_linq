@@ -7,6 +7,19 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- `cq_planners::order(transfer)`: robust predicate transfer (SIGMOD'25) as a
+  diverging planner through the public pipeline (rules Plan-Transfer,
+  CK-Transfer). On the written order it adds, to the Masks forward pass, the
+  stream's reductions by its filtered children and a backward pass from
+  filtered sides, parents first; blocks are never extra supports. Every
+  retail kernel gains a `transfer` configuration. Against the default it wins
+  on D72 (195 → 176 ms; PartSupp index 800k → 125k rows), D85, H08, D19 and
+  loses on H03, H05, H07, H07-block, H21+, D27, H09 (175 → 336 ms); see
+  `doc/STATUS.md`. Transfers follow join predicates only; scopes with opaque
+  Rust keep Masks, since the structural RA check rejects some sound transfer
+  schedules there (fuzz seeds 91, 97). `cq_reduce::semijoin` is public for
+  external schedules; e2e and fuzz index planners by name/`Planner::ALL`.
+
 - Default plan is left-deep in written order (Written/Coarse): the first
   clause of each scope streams and no pass commutes join operands. Reductions
   (`Reductions::Masks`, rules H-SpanningCore, R-Masks, CK-Masks) reduce each

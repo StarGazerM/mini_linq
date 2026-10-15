@@ -88,6 +88,8 @@ L-Retention	abstract	-	-	Leibniz identity and functional extensionality permit c
 Plan-Prefix	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule Plan-Prefix:	Normalize, order Written/Coarse, then optionally reduce by checked outer-rooted masks before IX.
 Plan-Generic	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Generic:	External Written/Fine planner records variable-at-a-time valuation steps.
 Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Graph:	Hypergraph uses tree reductions only in acyclic scopes and exact block cuts in any scope.
+Plan-Transfer	implementation	features/planners/plan/src/lib.rs	/// Formal rule Plan-Transfer:	Robust predicate transfer on the written order: Masks forward pass, the stream's forward reductions by filtered children, then the backward pass from filtered sides, parents first, all before the stream.
+CK-Transfer	implementation	features/planners/plan/src/lib.rs	// Formal rule CK-Transfer:	The transfer schedule equals the one recomputed from the erased plan.
 ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start surface expansion and the selected checked CQ pipeline.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
 ST-Terminal	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Terminal:	Print checked Structures to final Rust with an empty continuation.

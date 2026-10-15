@@ -57,12 +57,41 @@ probes unreduced builds. D72's one reduction (Lineitem ⋉ PartSupp on a
 non-selective `ps_availqty > 0`) costs 32 ms of composite probes into the
 800k-row PartSupp index and filters nothing.
 
+## Predicate transfer route (`cq_planners::order(transfer)`)
+
+Robust predicate transfer (RPT, SIGMOD'25) as a diverging planner through the
+same public pipeline: written order, the Masks forward pass plus the stream's
+reductions, then the backward pass from filtered sides, all before the join
+phase. `cargo xtask profile --tpch --sf 1 --config default|transfer`,
+uninstrumented medians (ms), same session:
+
+| Query | default | transfer |
+|---|---:|---:|
+| retail_d72_inner | 195.2 | 175.6 |
+| retail_d85 | 28.4 | 26.3 |
+| retail_h08 | 35.3 | 32.9 |
+| retail_d19 | 21.4 | 20.2 |
+| retail_h07_block | 39.5 | 46.8 |
+| retail_h05 | 33.5 | 43.0 |
+| retail_d27 | 18.4 | 27.8 |
+| retail_h03 | 39.2 | 51.2 |
+| retail_h07 | 35.2 | 54.8 |
+| retail_h21_positive | 90.2 | 127.0 |
+| retail_h09 | 174.8 | 336.1 |
+
+The backward pass pays off where a build is large and only filtered from the
+stream side: D72's PartSupp index shrinks from 800k to 124,846 rows (57 → 35
+ms). Elsewhere reducing and retaining the stream costs more than it saves:
+the default already filters the stream at its scan with the builds' key sets,
+and its probes then only hit, which is the SQL Server argument for omitting
+the top-down pass.
+
 ## Left work
 
 1. **D72.** PartSupp (800k rows, non-selective filter) is indexed whole for a
-   composite probe; a top-down (backward) reduction from the filtered Lineitem
-   would shrink it. That is predicate transfer's backward pass, to be compared
-   as an RPT route rather than added to the default.
+   composite probe. The transfer route's backward pass shrinks it (above), but
+   only per-edge: the default would need that one backward reduction, chosen
+   without statistics, without RPT's stream materialization.
 2. **Scans.** Scalar row-at-a-time over 48-byte rows (Q6 2×); columnar scans.
 3. **Positional default.** Selections need the caller's `positional(..)` advice.
 4. **Zone maps.** Block min/max exists only in the `hypergraph_zone`
@@ -93,6 +122,5 @@ non-selective `ps_availqty > 0`) costs 32 ms of composite probes into the
 
 ## Next step
 
-Compare predicate transfer (RPT: largest-root spanning tree, forward and
-backward key-filter passes) against this default as a diverging route through
-the public pipeline.
+Decide whether a per-edge backward reduction (D72) belongs in the default, and
+how to choose it without statistics.

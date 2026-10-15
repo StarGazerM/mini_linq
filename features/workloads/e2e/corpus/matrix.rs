@@ -138,9 +138,17 @@ pub fn covering() -> &'static [Config] {
     })
 }
 
+/// The `Planner::ALL` position of a matrix planner name.
+pub fn planner(c: Config) -> usize {
+    cq_workloads::pipelines::Planner::ALL
+        .iter()
+        .position(|p| p.name() == AXES[0][c[0]])
+        .expect("matrix planner names a Planner")
+}
+
 pub fn pipeline(c: Config) -> cq_workloads::pipelines::Pipeline {
     cq_workloads::pipelines::Pipeline {
-        plan: c[0],
+        plan: planner(c),
         merge: c[1] == 1,
         canon: c[2] == 1,
         smallest: c[3] == 1,

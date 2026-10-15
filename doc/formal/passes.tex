@@ -623,7 +623,31 @@ and $S$ checked redundant-support absorption:
  r=\text{Hypergraph if blocks; otherwise Tree if acyclic, else None}\\
  w=R_{None,r}(v)\quad a=S(E(w))}
  {\code{cq_planners::order(hypergraph)}(q)=a}
+
+\Rule{Plan-Transfer}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad w=R_{None,Masks}(v)\\
+ r=\mathsf{outer}(w)\quad T=\mathsf{reductionTree}(q)\ \text{rooted at}\ r\\
+ F=\{\mathsf{red}(r,c)\mid c\in\mathsf{children}(r),\ \mathsf{filteredSubtree}(c)\}\\
+ B=\{\mathsf{red}(c,p)\mid p=\mathsf{parent}(c),\ \exists\ \text{filter outside}\ \mathsf{subtree}(c)\}\ \text{parents first}}
+ {\code{cq_planners::order(transfer)}(q)=E(w;F;B)}
+
+\Rule{CK-Transfer}{\mathsf{erase}(t)=v\quad t=\mathsf{transfer}(R_{None,Masks}(v))}
+ {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
 \end{mathpar}
+\code{order(transfer)} is robust predicate transfer (Zhao et al., SIGMOD'25) on
+the written left-deep order, a diverging route through the same public
+pipeline. Its transfer graph is the reduction tree rooted at the stream: in
+fact-first written order that is the largest relation, RPT's LargestRoot, and
+the most-shared-first spanning core matches its maximum-spanning-tree weights.
+The forward pass is the Masks pass plus the stream's reductions by its filtered
+children; the backward pass then reduces each child atom by its already reduced
+parent. As in RPT, no transfer starts from a side without filters, transfers
+follow only edges whose clauses share a variable (a join predicate), and blocks
+are never transfer supports beyond the Masks atom-to-block cuts. Transfers are
+exact semijoins, not Bloom filters; they materialize reduced relations, as
+RPT's filter creators do, before the unchanged join phase. Scopes containing
+opaque Rust keep only their Masks reductions: there the structural RA
+correspondence check rejects some sound transfer schedules.
+
 \code{plan} is left-deep in written order and defaults to checked Masks
 reduction: every scope, acyclic or cyclic, reduces its inner clauses along the
 outer-rooted reduction tree (R-Masks) and by exact atom-to-block cuts; every

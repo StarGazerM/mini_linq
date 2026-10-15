@@ -28,7 +28,7 @@ use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token};
 
-/// The nine supported planning passes. Ranking selects written IR at compile
+/// The ten supported planning passes. Ranking selects written IR at compile
 /// time; it introduces no configuration carried into execution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Planner {
@@ -36,6 +36,10 @@ pub enum Planner {
     WrittenCoarse,
     WrittenFine,
     Hypergraph,
+    /// Robust predicate transfer (Zhao et al., SIGMOD'25) on the written
+    /// left-deep order: forward then backward semijoin transfer along the
+    /// reduction tree rooted at the outer stream, before the join phase.
+    Transfer,
     PrefixConnectedCoarse,
     PrefixConnectedFine,
     PrefixGreedyCoarse,
@@ -45,10 +49,11 @@ pub enum Planner {
 }
 
 impl Planner {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::WrittenCoarse,
         Self::WrittenFine,
         Self::Hypergraph,
+        Self::Transfer,
         Self::PrefixConnectedCoarse,
         Self::PrefixConnectedFine,
         Self::PrefixGreedyCoarse,
@@ -62,6 +67,7 @@ impl Planner {
             Self::WrittenCoarse => "written_coarse",
             Self::WrittenFine => "written_fine",
             Self::Hypergraph => "hypergraph",
+            Self::Transfer => "transfer",
             Self::PrefixConnectedCoarse => "prefix_connected_coarse",
             Self::PrefixConnectedFine => "prefix_connected_fine",
             Self::PrefixGreedyCoarse => "prefix_greedy_coarse",
@@ -74,7 +80,9 @@ impl Planner {
     fn ordering(self) -> Options {
         // Formal rule Plan-Generic: Written/Fine records variable-at-a-time valuation steps.
         let (heuristic, split) = match self {
-            Self::WrittenCoarse | Self::Hypergraph => (Heuristic::Written, Split::Coarse),
+            Self::WrittenCoarse | Self::Hypergraph | Self::Transfer => {
+                (Heuristic::Written, Split::Coarse)
+            }
             Self::WrittenFine => (Heuristic::Written, Split::Fine),
             Self::PrefixConnectedCoarse => (Heuristic::Prefix(Ranking::Connected), Split::Coarse),
             Self::PrefixConnectedFine => (Heuristic::Prefix(Ranking::Connected), Split::Fine),
@@ -99,6 +107,10 @@ impl Planner {
                 cq_reduce::Reductions::Hypergraph
             } else if self == Self::Hypergraph && cq::hypergraph::Analysis::of(source).acyclic {
                 cq_reduce::Reductions::Tree
+            } else if self == Self::Transfer {
+                // The forward pass into the stream and the backward pass are
+                // added to the stream scope by `transfer`.
+                cq_reduce::Reductions::Masks
             } else {
                 cq_reduce::Reductions::None
             },
@@ -114,6 +126,9 @@ impl Parse for Planner {
         let kind: Ident = input.parse()?;
         if kind == "hypergraph" {
             return Ok(Self::Hypergraph);
+        }
+        if kind == "transfer" {
+            return Ok(Self::Transfer);
         }
         let ranking = if kind == "prefix" {
             let ranking: Ident = input.parse()?;
@@ -132,7 +147,7 @@ impl Parse for Planner {
         } else {
             return Err(syn::Error::new_spanned(
                 kind,
-                "expected written, hypergraph, prefix, or elimination",
+                "expected written, hypergraph, transfer, prefix, or elimination",
             ));
         };
         input.parse::<Token![,]>()?;
@@ -162,6 +177,7 @@ impl ToTokens for Planner {
             Self::WrittenCoarse => quote!(written, coarse),
             Self::WrittenFine => quote!(written, fine),
             Self::Hypergraph => quote!(hypergraph),
+            Self::Transfer => quote!(transfer),
             Self::PrefixConnectedCoarse => quote!(prefix connected, coarse),
             Self::PrefixConnectedFine => quote!(prefix connected, fine),
             Self::PrefixGreedyCoarse => quote!(prefix greedy, coarse),
@@ -182,7 +198,93 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
     let reductions = planner.reductions(&normal);
     let reduced = cq_reduce::compile(&ordered, &reductions)?;
     cq_reduce::check(&ordered, &reduced, &reductions)?;
-    Ok(reduced)
+    if planner == Planner::Transfer {
+        transfer(&reduced)
+    } else {
+        Ok(reduced)
+    }
+}
+
+/// Robust predicate transfer on a Masks-reduced written plan. In the stream
+/// scope, along the reduction tree rooted at the stream (the largest relation
+/// in fact-first written order, RPT's LargestRoot): after the Masks forward
+/// pass into every other clause, the stream is reduced by each child whose
+/// subtree carries a filter or block cut, then the backward pass reduces every
+/// child atom, parents first, by its parent when a filter lies outside the
+/// child's subtree. As in RPT, no transfer starts from a side without filters.
+/// Inner block scopes keep their Masks reductions.
+/// Formal rule Plan-Transfer: Masks forward pass, then the stream's forward edges, then the backward pass, all before the stream.
+fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
+    let analysis = vo::contract::check(reduced)?;
+    let graph = cq::hypergraph::Analysis::of(&reduced.cq);
+    let body = &reduced.cq.query.body;
+    let steps = &reduced.valuation.steps;
+    // Scopes with opaque Rust keep Masks only. There, the structural RA
+    // correspondence check rejects some sound transfer schedules (a backward
+    // reduction by a support already reduced by its target, with split
+    // projected reads; fuzz seeds 91 and 97: "projection correlations differ").
+    let opaque = steps
+        .iter()
+        .any(|step| matches!(step, vo::Step::Guard(..) | vo::Step::Let(..)));
+    let Some(root) = cq_reduce::outer(steps, &graph).filter(|_| !opaque) else {
+        return Ok(reduced.clone());
+    };
+    let parents = cq_reduce::rooted(&graph.reduction_tree, root);
+    let mut children: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+    for (&child, &parent) in &parents {
+        children.entry(parent).or_default().push(child);
+    }
+    let mut filtered: std::collections::BTreeSet<usize> = cq::hypergraph::filter_ranks(body, &graph)
+        .into_iter()
+        .filter(|&(_, rank)| rank < 3)
+        .map(|(clause, _)| clause)
+        .collect();
+    filtered.extend(cq_reduce::block_cuts(&graph, body).into_iter().map(|(atom, _)| atom));
+    let subtree = |node: usize| {
+        let mut nodes = vec![node];
+        let mut pending = vec![node];
+        while let Some(next) = pending.pop() {
+            for &child in children.get(&next).into_iter().flatten() {
+                nodes.push(child);
+                pending.push(child);
+            }
+        }
+        nodes
+    };
+    let is_atom = |clause: usize| body[clause].atom().is_some();
+    // RPT transfers along join predicates only: an edge sharing no variable
+    // (a product) carries no key. Blocks may depend on context bound by
+    // earlier clauses; atom-to-block cuts are already Masks reductions, so
+    // transfers use atom supports only.
+    let edge = |target: usize, support: usize| {
+        is_atom(target) && is_atom(support) && !graph.shared(target, support).is_empty()
+    };
+    let mut extra = Vec::new();
+    for &child in children.get(&root).into_iter().flatten() {
+        if edge(root, child) && subtree(child).iter().any(|c| filtered.contains(c)) {
+            extra.push(cq_reduce::semijoin(&analysis, &graph, root, child));
+        }
+    }
+    let mut pending = vec![root];
+    while let Some(parent) = pending.pop() {
+        for &child in children.get(&parent).into_iter().flatten() {
+            let inside = subtree(child);
+            if edge(child, parent) && filtered.iter().any(|c| !inside.contains(c)) {
+                extra.push(cq_reduce::semijoin(&analysis, &graph, child, parent));
+            }
+        }
+        pending.extend(children.get(&parent).into_iter().flatten().rev());
+    }
+    let mut target = reduced.clone();
+    let first = target
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, vo::Step::Atom(..) | vo::Step::Block(..)))
+        .unwrap_or(target.valuation.steps.len());
+    target.valuation.steps.splice(first..first, extra);
+    vo::contract::check(&target)?;
+    Ok(target)
 }
 
 /// CQ→RA′ through the public order, reduce and elaborate APIs. Relational
@@ -225,6 +327,18 @@ pub fn check_valuation(
     }
     erase_reductions(&mut erased.valuation.steps);
     cq_order::check(&normal, &erased, &planner.ordering())?;
+    if planner == Planner::Transfer {
+        // Formal rule CK-Transfer: The transfer schedule equals the one recomputed from the erased plan.
+        let reductions = planner.reductions(&normal);
+        let expected = transfer(&cq_reduce::compile(&erased, &reductions)?)?;
+        if expected != *target {
+            return Err(syn::Error::new_spanned(
+                &target.valuation,
+                "reductions differ from the predicate-transfer schedule",
+            ));
+        }
+        return Ok(());
+    }
     cq_reduce::check(&erased, target, &planner.reductions(&normal))
 }
 

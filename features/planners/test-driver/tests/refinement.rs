@@ -8,7 +8,7 @@ type Executable = fn(&[Vec<Vec<i32>>]) -> Rows;
 struct ExecutableCase {
     seed: u64,
     reference: Executable,
-    targets: [Executable; 9],
+    targets: [Executable; Planner::ALL.len()],
 }
 
 trait Integer {
@@ -55,7 +55,7 @@ fn every_planner_refines_200_partial_seeds_in_compiled_rust() {
             comparisons += 1;
         }
     }
-    assert_eq!(comparisons, 1800);
+    assert_eq!(comparisons, 200 * Planner::ALL.len());
     assert_eq!(coverage.count("cases"), 200);
     assert_eq!(coverage.count("partial-term"), 200);
     for feature in [
@@ -78,7 +78,7 @@ fn every_planner_refines_200_partial_seeds_in_compiled_rust() {
     }
     assert!(returned > 0 && panicked > 0, "both outcomes required");
     eprintln!(
-        "200 partial seeds, 1800 planner comparisons: {returned} returning references, {panicked} bottom references; coverage {:?}",
+        "200 partial seeds, {comparisons} planner comparisons: {returned} returning references, {panicked} bottom references; coverage {:?}",
         coverage.counts()
     );
 }

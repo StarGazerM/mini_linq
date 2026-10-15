@@ -548,8 +548,9 @@ fn filtered_tree(
 }
 
 /// `reduce target with support(shared)`: the support's columns that are
-/// variables of the target, `_` elsewhere.
-fn semijoin(
+/// variables of the target, `_` elsewhere. Clauses are scope-local; external
+/// planners use it to record their own reduction schedules.
+pub fn semijoin(
     analysis: &valuation::Analysis,
     hypergraph: &valuation::cq::hypergraph::Analysis,
     target: usize,

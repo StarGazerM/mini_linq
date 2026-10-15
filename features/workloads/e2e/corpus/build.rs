@@ -33,7 +33,7 @@ fn main() {
                 let key = (case.name, c[0], c[1], c[3], c[4], c[8], c[9]);
                 let base = baseline.entry((case.name, c[0])).or_insert_with(|| {
                     cq_workloads::pipelines::Pipeline {
-                        plan: c[0],
+                        plan: matrix::planner(c),
                         ..Default::default()
                     }
                     .physical(&case.module().unwrap())
