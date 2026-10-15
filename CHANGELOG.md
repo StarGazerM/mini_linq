@@ -7,6 +7,11 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Exact dense key-set construction stages keys in one contiguous buffer, then
+  sets bitmap bits directly; it no longer hashes and allocates a shared cell
+  per distinct key before discarding that hash table. Sparse and partial-codec
+  inputs retain the exact hash/sorted-key fallback. The temporary buffer holds
+  input occurrences (including duplicates), and its capacity is accounted.
 - Default facade pass `mini_linq::passes::plan` (renamed from `plan_written`,
   no alias): static Filtered/Coarse ordering, checked Hypergraph reduction,
   redundant-support absorption (`cq_elaborate::simplify_reductions`), and

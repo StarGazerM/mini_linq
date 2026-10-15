@@ -1,8 +1,9 @@
 //! Exact adaptive membership. Dense contains is O(1), interval existence is
 //! O(1 + interval words). Hash contains is expected O(1); interval existence is
 //! O(log distinct keys), using a sorted array built once at finalization.
-//! Construction uses expected O(input keys) staging and O(distinct keys +
-//! bitmap words) dense finalization, or O(distinct keys log distinct keys)
+//! Total codecs first stage keys contiguously, without hashing or per-key allocation.
+//! Dense finalization costs O(input keys + bitmap words); fallback costs
+//! expected O(input keys) staging and O(distinct keys log distinct keys)
 //! hash-array sorting. Dense retained memory is 8 * ceil(span / 64) bytes;
 //! hash memory includes table capacity, shared key cells, and the sorted array.
 //! Hash keys are shared between the table and array without requiring Clone.
@@ -86,6 +87,68 @@ pub struct AdaptiveKeySet<K, C, const MAX_BITS: usize> {
 }
 impl<K: Eq + Hash + Ord, C: KeyCodec<K>, const B: usize> AdaptiveKeySet<K, C, B> {
     pub fn from_keys<I: IntoIterator<Item = K>>(keys: I, codec: C) -> Self {
+        if codec.total() && B > 0 {
+            let keys: Vec<K> = keys.into_iter().collect();
+            let stage_bytes = keys.capacity() * std::mem::size_of::<K>();
+            let mut allocation = crate::counters_memory::Allocation::new(stage_bytes);
+            #[cfg(feature = "counters")]
+            crate::counters::record(|c| {
+                c.keyset_staging_bytes_peak = c.keyset_staging_bytes_peak.max(stage_bytes as u64);
+            });
+            let mut range: Option<(u128, u128)> = None;
+            let mut encodable = true;
+            for key in &keys {
+                match codec.ordinal(key) {
+                    Some(value) => {
+                        range = Some(
+                            range.map_or((value, value), |(lo, hi)| (lo.min(value), hi.max(value))),
+                        );
+                    }
+                    None => {
+                        encodable = false;
+                        break;
+                    }
+                }
+            }
+            if let Some((min, max)) = range.filter(|(min, max)| {
+                encodable
+                    && max
+                        .checked_sub(*min)
+                        .and_then(|n| n.checked_add(1))
+                        .is_some_and(|n| n <= B as u128)
+            }) {
+                let mut words = vec![0u64; ((max - min + 1) as usize).div_ceil(64)];
+                for key in &keys {
+                    crate::count!(distinct_insertions);
+                    let offset = (codec.ordinal(key).expect("checked codec") - min) as usize;
+                    words[offset / 64] |= 1 << (offset % 64);
+                }
+                #[cfg(feature = "counters")]
+                {
+                    crate::counters::build_cardinality(
+                        words.iter().map(|word| word.count_ones() as usize).sum(),
+                    );
+                }
+                let bytes = words.capacity() * std::mem::size_of::<u64>();
+                allocation.grow(bytes);
+                drop(keys);
+                allocation.shrink(stage_bytes);
+                return Self {
+                    form: Form::Dense { min, max, words },
+                    codec,
+                    bytes,
+                    _allocation: allocation,
+                };
+            }
+            // Keep the staging allocation accounted while fallback consumes it.
+            let result = Self::from_staged_keys(keys, codec);
+            drop(allocation);
+            return result;
+        }
+        Self::from_staged_keys(keys, codec)
+    }
+
+    fn from_staged_keys<I: IntoIterator<Item = K>>(keys: I, codec: C) -> Self {
         let mut staging = HashSet::default();
         let mut range: Option<(u128, u128)> = None;
         let mut ordinal = true;
