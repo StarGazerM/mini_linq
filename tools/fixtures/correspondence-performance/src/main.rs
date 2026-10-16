@@ -1,6 +1,40 @@
 use cq_planners_plan::{Planner, cq};
+use proc_macro2::{TokenStream, TokenTree};
 use std::path::Path;
 use std::time::{Duration, Instant};
+
+/// The one literal `compile! { [pipeline {..}] <CQ> }` inside a case file
+/// (the same reader as `cq_workloads::authored`, which this fixture cannot
+/// depend on without its oracle).
+fn literal_query(source: &str) -> TokenStream {
+    fn visit(tokens: TokenStream, queries: &mut Vec<TokenStream>) {
+        let tokens: Vec<_> = tokens.into_iter().collect();
+        let mut i = 0;
+        while i < tokens.len() {
+            if let [TokenTree::Ident(name), TokenTree::Punct(bang), TokenTree::Group(body), ..] =
+                &tokens[i..]
+                && name == "compile"
+                && bang.as_char() == '!'
+            {
+                queries.push(body.stream());
+                i += 3;
+                continue;
+            }
+            if let TokenTree::Group(group) = &tokens[i] {
+                visit(group.stream(), queries);
+            }
+            i += 1;
+        }
+    }
+    let mut queries = Vec::new();
+    visit(source.parse().unwrap(), &mut queries);
+    assert_eq!(queries.len(), 1, "exactly one literal compile! query");
+    let mut tokens: Vec<_> = queries.remove(0).into_iter().collect();
+    if matches!(tokens.first(), Some(TokenTree::Ident(name)) if name == "pipeline") {
+        tokens.drain(..2);
+    }
+    tokens.into_iter().collect()
+}
 
 fn cases() -> Vec<(String, cq::Program)> {
     let queries =
@@ -12,19 +46,10 @@ fn cases() -> Vec<(String, cq::Program)> {
             if path.extension().is_none_or(|ext| ext != "rs") || path.ends_with("mod.rs") {
                 continue;
             }
-            let file = syn::parse_file(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            let macros: Vec<_> = file
-                .items
-                .iter()
-                .filter_map(|item| match item {
-                    syn::Item::Macro(item) => Some(item),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(macros.len(), 1, "{}", path.display());
+            let source = std::fs::read_to_string(&path).unwrap();
             cases.push((
                 path.file_stem().unwrap().to_str().unwrap().into(),
-                syn::parse2(macros[0].mac.tokens.clone()).unwrap(),
+                syn::parse2(literal_query(&source)).unwrap(),
             ));
         }
     }

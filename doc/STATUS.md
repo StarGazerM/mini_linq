@@ -26,6 +26,17 @@
 - Bushy branches: independent dimension branches recorded in VO, built once.
 - Probes: Swiss-table `HashIndex`; batched (128) prefetched probes on scan
   spines, scalar elsewhere; no per-row `Rc`.
+- Back end (`doc/formal/backend.tex`): three recorded layers over one
+  Physical program. R, representation: `r repr = tuples | positions {..}
+  owned [..]` (data refinement, α fetches columns by lineage). E, evaluation
+  unit: `r stage = batch N` (a ⊥-free segment from a `for` producer runs at
+  most N rows ahead; opaque Rust ends a stage; probe/merge cursors start
+  one). C, control: pull (unfold) or push (fold) of the same stream algebra,
+  an emitter choice. Default passes `represent` and `stage` record today's
+  decisions only (the probe lookahead is now `stage = batch 128` in text);
+  `represent(positions)` and `stage(batch(N))` opt in. Printers bind only
+  the columns an operator reads (`cq-print` column environment). Positions
+  stop at probes: carrying a `RowId` through an index payload is deferred.
 
 ## Gap to DuckDB (SF 1, single thread)
 
@@ -122,6 +133,11 @@ work is lower on H09 and D72.
    141–145 ms (`advised` configuration) vs 191–195 default and DuckDB 107.7.
    Choosing this automatically needs statistics or a runtime check.
 2. **Scans.** Scalar row-at-a-time over 48-byte rows (Q6 2×); columnar scans.
+   Staging alone does not close it: Q6 `staged` (`positions` +
+   `batch(1024)`, one fused selection pass per chunk) measures 29.8 ms
+   against `default` 29.8 and DuckDB 1T 19.5 on this machine; the remaining
+   cost is the row layout, so the next step is a columnar host behind the
+   same `Fetch`/`column_chunk` traits.
 3. **Positional default.** Selections need the caller's `positional(..)` advice.
 4. **Zone maps.** Block min/max exists only in the `hypergraph_zone`
    configuration; scan key sets skip blocks only there.

@@ -35,6 +35,8 @@ cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
 cq-index-policy = { version = "0.1.0", path = "../../passes/cq-index-policy" }
 cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-lowering" }
 cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
+cq-represent = { version = "0.1.0", path = "../../passes/cq-represent" }
+cq-staging = { version = "0.1.0", path = "../../passes/cq-staging" }
 cq-physical-realization = { version = "0.1.0", path = "../../passes/cq-physical-realization" }
 cq-planners = { path = "../planners" }
 cq-planners-plan = { path = "../planners/plan" }

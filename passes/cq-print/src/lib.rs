@@ -145,6 +145,16 @@ pub fn positional_bases(
                 .keys()
                 .map(|scan| analysis.lineage[scan].base.clone()),
         )
+        .chain(
+            analysis
+                .repr
+                .values()
+                .filter_map(|repr| match repr {
+                    structures::Repr::Positions { bases, .. } => Some(bases),
+                    structures::Repr::Tuples(_) => None,
+                })
+                .flat_map(|bases| bases.iter().map(|base| symbol_name(&base.base))),
+        )
         .collect()
 }
 

@@ -22,16 +22,20 @@ enum Stage {
     IndexRequirements,
     Physical,
     Structures,
+    Repr,
+    Stage,
     Rust,
 }
 
 impl Stage {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 8] = [
         Self::Cq,
         Self::RelationalPlan,
         Self::IndexRequirements,
         Self::Physical,
         Self::Structures,
+        Self::Repr,
+        Self::Stage,
         Self::Rust,
     ];
 
@@ -42,9 +46,11 @@ impl Stage {
             "index-requirements" => Ok(Self::IndexRequirements),
             "physical" => Ok(Self::Physical),
             "structures" => Ok(Self::Structures),
+            "represent" => Ok(Self::Repr),
+            "stage" => Ok(Self::Stage),
             "final-rust" => Ok(Self::Rust),
             _ => Err(format!(
-                "unknown explain stage `{value}`; expected cq, relational-plan, index-requirements, physical, structures, or final-rust"
+                "unknown explain stage `{value}`; expected cq, relational-plan, index-requirements, physical, structures, represent, stage, or final-rust"
             )
             .into()),
         }
@@ -57,6 +63,8 @@ impl Stage {
             Self::IndexRequirements => "index-requirements",
             Self::Physical => "physical",
             Self::Structures => "structures",
+            Self::Repr => "represent",
+            Self::Stage => "stage",
             Self::Rust => "final-rust",
         }
     }
@@ -68,7 +76,9 @@ impl Stage {
             Self::IndexRequirements => "03-index-requirements.tokens",
             Self::Physical => "04-physical.tokens",
             Self::Structures => "05-structures.tokens",
-            Self::Rust => "06-final-rust.tokens",
+            Self::Repr => "06-represent.tokens",
+            Self::Stage => "07-stage.tokens",
+            Self::Rust => "08-final-rust.tokens",
         }
     }
 
@@ -79,6 +89,8 @@ impl Stage {
             Self::IndexRequirements => "the logical plan plus named index demands",
             Self::Physical => "recorded execution decisions",
             Self::Structures => "recorded runtime representations and boundaries",
+            Self::Repr => "recorded result carriers",
+            Self::Stage => "recorded total batch boundaries",
             Self::Rust => "Rust realization of the recorded Structures program",
         }
     }
@@ -183,8 +195,19 @@ fn explain_case(case: &QueryCase, through: Stage, repository_root: &Path) -> Res
     if through == Stage::Structures {
         return artifacts.finish(through);
     }
+    let represented =
+        artifacts.attempt("Structures -> Repr", || cq_represent::compile(&structures))?;
+    artifacts.write_stage(Stage::Repr, &format!("{}\n", represented.to_token_stream()))?;
+    if through == Stage::Repr {
+        return artifacts.finish(through);
+    }
+    let staged = artifacts.attempt("Repr -> Stage", || cq_staging::compile(&represented))?;
+    artifacts.write_stage(Stage::Stage, &format!("{}\n", staged.to_token_stream()))?;
+    if through == Stage::Stage {
+        return artifacts.finish(through);
+    }
     let rust = artifacts.attempt("Structures -> Rust", || {
-        cq_physical_realization::compile(&structures)
+        cq_physical_realization::compile(&staged)
     })?;
     artifacts.write_stage(Stage::Rust, &format!("{}\n", rust.to_token_stream()))?;
     artifacts.finish(through)

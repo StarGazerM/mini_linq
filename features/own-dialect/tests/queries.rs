@@ -1,4 +1,31 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[test]
+#[allow(non_snake_case)]
+fn staged_selection_chain_pushes_only_survivors_into_partial_suffix() {
+    let R = [(0, 9, 90), (1, 7, 70), (2, 8, 80), (3, 7, 70), (4, 9, 90)];
+    let answers: BTreeSet<_> = own_push::push! {
+        pipeline {};
+        physical {
+            relation R(a:i32,b:i32,unused:i32);
+            r = pipe rename R@0 {a -> x,b -> y,unused -> unused};
+            s = pipe select r if (x > 0);
+            t = pipe select s if (y = 7);
+            p = pipe project t keep {x,y};
+            b = pipe bind p with z: i32 = (12 / *x);
+            out = pipe canon project b keep {y,z};
+            return out as answer(y,z);
+        }
+        structures {
+            r host scan = ::core::iter::Map<_,_> [];
+            p stage = batch 2;
+            out canon = ::std::collections::HashSet<_>;
+        }
+    }
+    .map(|(y, z)| (*y, z))
+    .collect();
+    assert_eq!(answers, BTreeSet::from([(7, 12), (7, 4)]));
+}
 
 #[test]
 #[allow(non_snake_case)]
@@ -495,4 +522,50 @@ fn unit_has_one_empty_answer() {
     .collect();
     assert_eq!(push, [()]);
     assert_eq!(push, pull);
+}
+
+/// A stage bounds lookahead from above; a second boundary inside the chain is
+/// not a plain selection spine, so push realizes it at the scalar bound.
+#[test]
+#[allow(non_snake_case)]
+fn nested_stage_boundaries_run_within_their_bound() {
+    let R = [(-1, 1), (0, 2), (3, 3), (5, 4)];
+    let answers: BTreeSet<_> = own_push::push! {
+        pipeline {};
+        physical {
+            relation R(a:i32,b:i32);
+            r = pipe rename R@0 {a -> x,b -> y};
+            s = pipe select r if (x >= 0);
+            out = pipe canon project s keep {x,y};
+            return out as answer(x,y);
+        }
+        structures {
+            r host scan = ::core::iter::Map<_,_> [];
+            out canon = ::std::collections::HashSet<_>;
+            r stage = batch 2;
+            s stage = batch 4;
+        }
+    }
+    .map(|(x, y)| (*x, *y))
+    .collect();
+    assert_eq!(answers, BTreeSet::from([(0, 2), (3, 3), (5, 4)]));
+}
+
+/// A literal point selection reads a column the result no longer carries: the
+/// shared host read yields the scan carrier and must be narrowed before the
+/// push loop binds the result's columns (fuzz seed 29).
+#[test]
+#[allow(non_snake_case)]
+fn literal_point_selection_narrows_the_scan_carrier() {
+    let r0: BTreeMap<(i32,), Vec<(i32,)>> =
+        BTreeMap::from([((-1,), vec![(-2,)]), ((0,), vec![(5,)])]);
+    let rows: Vec<_> = mini_linq::compile! {
+        pipeline { print = ::own_push::push; }
+        struct Seed29;
+        relation r0(c0: i32, c1: i32);
+        answer(v0) :- r0(v0, -2), if (*v0 == -1 || *v0 == 0);
+    }
+    .map(|row| *row.0)
+    .collect();
+    assert_eq!(rows, vec![-1]);
 }

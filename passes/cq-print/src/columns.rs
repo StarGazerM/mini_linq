@@ -142,8 +142,86 @@ pub(super) fn carried_columns(
 }
 
 impl Context<'_> {
+    /// Whether this result carries base-relative row IDs rather than values.
+    pub fn carries_positions(&self, result: &str) -> bool {
+        matches!(
+            self.analysis.repr.get(result),
+            Some(structures::Repr::Positions { .. })
+        )
+    }
+
+    pub(super) fn position_ident(&self, result: &str, index: usize) -> Ident {
+        let mut occurrence = result;
+        loop {
+            occurrence = match &self.physical[occurrence].operator {
+                Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
+                    self.physical
+                        .get_key_value(&symbol_name(&s.input))
+                        .unwrap()
+                        .0
+                }
+                Operator::Project(p) => {
+                    self.physical
+                        .get_key_value(&symbol_name(&p.input))
+                        .unwrap()
+                        .0
+                }
+                Operator::Semi(_, k) | Operator::Anti(_, k) => {
+                    self.physical
+                        .get_key_value(&symbol_name(&k.left))
+                        .unwrap()
+                        .0
+                }
+                _ => break,
+            };
+        }
+        format_ident!(
+            "__cq_position_{}_{}",
+            occurrence,
+            index,
+            span = proc_macro2::Span::mixed_site()
+        )
+    }
+
+    /// Bind fetched logical values for predicate templates that use lexical names.
+    pub fn position_aliases(&self, result: &str, columns: &[String]) -> Vec<TokenStream> {
+        if !self.carries_positions(result) {
+            return Vec::new();
+        }
+        columns
+            .iter()
+            .map(|column| {
+                let ident = self.ident(result, column);
+                let value = self.access(result, column);
+                quote!(#[allow(unused_variables)] let #ident = #value;)
+            })
+            .collect()
+    }
+
     /// Expression accessing one logical column in the current environment.
+    /// Positional carriers project the host's borrowed row so String and scalar
+    /// columns keep their exact `&T` type; key markers may normalize or copy keys.
     pub fn access(&self, result: &str, column: &str) -> TokenStream {
+        if let Some(structures::Repr::Positions { bases, .. }) = self.analysis.repr.get(result) {
+            for (i, base) in bases.iter().enumerate() {
+                if let Some(lineage) = base
+                    .columns
+                    .iter()
+                    .find(|lineage| symbol_name(&lineage.logical) == column)
+                {
+                    let base_name = symbol_name(&base.base);
+                    let host = Self::positional_host(&base_name);
+                    let column = symbol_name(&lineage.column);
+                    let index = self.analysis.host_layouts[&base_name]
+                        .iter()
+                        .position(|c| c == &column)
+                        .expect("checked lineage column");
+                    let id = self.position_ident(result, i);
+                    let index = crate::index(index);
+                    return quote!(::cq_storage::PositionalRows::row_at(#host, #id).expect("host-issued live ID").#index);
+                }
+            }
+        }
         self.ident(result, column).to_token_stream()
     }
 
@@ -155,6 +233,28 @@ impl Context<'_> {
     /// Bind selected columns of a tuple carrier; unread fields are wildcards.
     /// `borrowed` borrows owned computed values rather than moving them.
     pub fn bind_columns(&self, result: &str, columns: &[String], borrowed: bool) -> TokenStream {
+        if let Some(structures::Repr::Positions { bases, owned, .. }) =
+            self.analysis.repr.get(result)
+        {
+            let ids = (0..bases.len()).map(|i| self.position_ident(result, i));
+            let values = owned.columns.iter().map(|column| {
+                let column = symbol_name(column);
+                if !columns.contains(&column) {
+                    return quote!(_);
+                }
+                let id = self.ident(result, &column);
+                if borrowed {
+                    quote!(ref #id)
+                } else {
+                    quote!(#id)
+                }
+            });
+            return if borrowed {
+                quote!(&(#(#ids,)* #(#values,)*))
+            } else {
+                quote!((#(#ids,)* #(#values,)*))
+            };
+        }
         let fields = self.carried(result).iter().map(|c| {
             if !columns.contains(c) {
                 return quote!(_);
@@ -180,6 +280,10 @@ impl Context<'_> {
         expression: &Expr,
         environment: Option<&Environment>,
     ) -> TokenStream {
+        if self.carries_positions(result) {
+            let columns = columns_used_rust(expression, self.heading(result), environment);
+            return self.bind_columns(result, &columns.into_iter().collect::<Vec<_>>(), true);
+        }
         let used = columns_used_rust(expression, self.heading(result), environment);
         let fields = self.carried(result).iter().map(|c| {
             if !used.contains(c) {
@@ -218,13 +322,25 @@ impl Context<'_> {
 
     /// Build the selected adapter carrier from column expressions.
     pub fn carrier(&self, result: &str, expression: impl Fn(&str) -> TokenStream) -> TokenStream {
+        if let Some(structures::Repr::Positions { bases, owned, .. }) =
+            self.analysis.repr.get(result)
+        {
+            let ids = (0..bases.len()).map(|i| self.position_ident(result, i));
+            let values = owned
+                .columns
+                .iter()
+                .map(|column| expression(&symbol_name(column)));
+            return quote!((#(#ids,)* #(#values,)*));
+        }
         let fields = self.carried(result).iter().map(|c| expression(c));
         quote!((#(#fields,)*))
     }
 
     /// Forward a subset after a filtering adapter without retaining dead columns.
     pub fn forward(&self, result: &str, input: &str, rows: TokenStream) -> TokenStream {
-        if self.carried(result) == self.carried(input) {
+        if self.carried(result) == self.carried(input)
+            && self.carries_positions(result) == self.carries_positions(input)
+        {
             return rows;
         }
         let pattern = self.bind_columns(input, self.carried(result), false);

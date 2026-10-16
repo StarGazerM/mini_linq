@@ -10,7 +10,7 @@ pub const EXPORTS: &[(&str, &str)] = &[(
     "lineitem",
     "l_orderkey,l_linenumber,l_quantity,l_extendedprice,l_discount,l_shipdate",
 )];
-pub const CONFIGS: &[&str] = &["default", "no-reduce", "generic-smallest"];
+pub const CONFIGS: &[&str] = &["default", "no-reduce", "generic-smallest", "staged"];
 
 ::mini_linq::relation_loaders! {
     relation Lineitem(
@@ -76,9 +76,17 @@ crate::tpch_runtime::configuration!(generic_smallest, $,
     query_body!();
 });
 
+// Recorded representation and evaluation-unit decisions: the scan chain is
+// carried as positions and its total range predicates run 1,024 rows ahead.
+crate::tpch_runtime::configuration!(staged, $,
+    { represent = ::mini_linq::passes::represent(positions); stage = ::mini_linq::passes::stage(batch(1024)); }, {
+    query_body!();
+});
+
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::execute(data),
+        "staged" => staged::execute(data),
         "no-reduce" => no_reduce::execute(data),
         "generic-smallest" => generic_smallest::execute(data),
         _ => panic!("unknown Q6 configuration: {config}"),

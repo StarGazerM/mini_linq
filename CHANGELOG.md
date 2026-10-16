@@ -7,6 +7,27 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Back end split into three recorded, checked layers (`doc/formal/backend.tex`;
+  rules STR-Repr, ST-Total, ST-Stage, BK-Dual). Structures gains
+  `r repr = tuples | positions {H lineage {..}, ..} owned [..];` (data
+  refinement: positions carry one `RowId` per base occurrence, α fetches
+  columns through lineage) and `r stage = batch N;` (evaluation unit: a
+  ⊥-free segment from a `for` producer may run N rows ahead; `bind`/opaque
+  `guard` end a stage; probe/merge cursors start a new one). Two new default
+  passes, `represent` and `stage` (`plan, ix, lower, select, represent,
+  stage, print`): defaults record today's decisions only (the built-probe
+  lookahead becomes `stage = batch 128`); `represent(positions)` and
+  `stage(batch(N))` opt in. Pull/push are one control choice over the same
+  stream algebra, not an IR entry. Runtime: `Fetch<C>`,
+  `ReadPredicate::test_chunk`, `BlockRead::{column_chunk, read_chunked}`,
+  `stage::{for_chunks, Chunk, buffered}` with representation laws.
+  `cq-print` now has a column-level environment (`access`, `carried`,
+  `bind_columns`, `carrier`, `forward`): operator templates bind only the
+  columns they read, so carriers shrink after a column's last reader and
+  representation/staging no longer touch every template. The own-dialect
+  push printer is ported to it and refuses `positions` explicitly. Join
+  transport of positions (index payload = `RowId`) is deferred. Q6 gains a
+  `staged` configuration (`positions` + `batch(1024)`).
 - Merge upstream measurement, feature lockfile and CI fixes through `7e5c2c6`
   while retaining readable workload cases, pairwise configurations, the triangle
   kernel and UI fixtures. Drop generated-corpus sharding: its two commits add

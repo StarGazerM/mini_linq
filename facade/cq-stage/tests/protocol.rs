@@ -82,15 +82,37 @@ fn named_grammar_is_generic_and_rejects_duplicates() {
         syn::parse2(quote!(pipeline { plan = a(x); physical = [b, c(y)]; surface = [d]; }))
             .unwrap();
     let defaults: cq_stage::Configuration =
-        syn::parse2(quote!(pipeline { plan = w; ix = x; lower = y; select = z; print = p; }))
+        syn::parse2(quote!(pipeline { plan = w; ix = x; lower = y; select = z; represent = r; stage = s; print = p; }))
             .unwrap();
     let pipeline = config.resolve(defaults).unwrap();
     assert_eq!(
         pipeline.to_token_stream().to_string(),
-        quote!(pipeline { d, a(x), x, y, b, c(y), z, p }).to_string()
+        quote!(pipeline { d, a(x), x, y, b, c(y), z, r, s, p }).to_string()
     );
     assert!(
         syn::parse2::<cq_stage::Configuration>(quote!(pipeline { plan = a; plan = b; })).is_err()
     );
     assert!(syn::parse2::<cq_stage::Configuration>(quote!(pipeline { unknown = a; })).is_err());
+}
+
+#[test]
+fn representation_and_stage_overrides_keep_other_defaults() {
+    let config: cq_stage::Configuration = syn::parse2(quote!(pipeline {
+        represent = positional(positions);
+        stage = chunked(batch(64));
+    }))
+    .unwrap();
+    let defaults: cq_stage::Configuration = syn::parse2(quote!(pipeline {
+        plan = p; ix = i; lower = l; select = s;
+        represent = r; stage = b; print = out;
+    }))
+    .unwrap();
+    assert_eq!(
+        config
+            .resolve(defaults)
+            .unwrap()
+            .to_token_stream()
+            .to_string(),
+        quote!(pipeline { p, i, l, s, positional(positions), chunked(batch(64)), out }).to_string()
+    );
 }

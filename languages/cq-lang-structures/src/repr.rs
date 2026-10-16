@@ -33,7 +33,7 @@ pub struct ReprBase {
 /// Unlike a positional read, a representation can retain several occurrences
 /// and carry computed values alongside their positions. Do not relax `lineages`:
 /// selection/keyset/read still require its original single-base proof.
-fn bases(program: &Program, facts: &Analysis) -> BTreeMap<String, Vec<Lineage>> {
+pub fn representation_bases(program: &Program, facts: &Analysis) -> BTreeMap<String, Vec<Lineage>> {
     let mut result: BTreeMap<String, Vec<Lineage>> = BTreeMap::new();
     let scoped: BTreeSet<_> = facts
         .physical
@@ -90,7 +90,7 @@ fn bases(program: &Program, facts: &Analysis) -> BTreeMap<String, Vec<Lineage>> 
 }
 
 pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, Repr>> {
-    let origins = bases(program, facts);
+    let origins = representation_bases(program, facts);
     let mut result = BTreeMap::new();
     // STR-Repr: Each carried occurrence has truthful injective lineage; lineage
     // plus owned computed values covers the entire logical result heading.

@@ -131,6 +131,11 @@ impl Context<'_> {
         quote!(::core::iter::Iterator::map(#selection.rows(), move |#pattern| #row))
     }
     pub fn positional_rows(&self, name: &str, ids: TokenStream) -> TokenStream {
+        if self.carries_positions(name) {
+            let id = self.position_ident(name, 0);
+            let row = self.carrier(name, |column| self.access(name, column));
+            return quote!(::core::iter::Iterator::map(#ids, move |#id| #row));
+        }
         let host = Self::positional_host(&self.analysis.lineage[name].base);
         let pattern = self.positional_pattern(name);
         let row = self.carrier(name, |c| self.access(name, c));

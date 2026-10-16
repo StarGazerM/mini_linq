@@ -30,6 +30,8 @@ fn defaults() -> cq_stage::Configuration {
         ix = ::mini_linq::passes::index_demands;
         lower = ::mini_linq::passes::lower;
         select = ::mini_linq::passes::select;
+        represent = ::mini_linq::passes::represent;
+        stage = ::mini_linq::passes::stage;
         print = ::mini_linq::passes::print_pull;
     } }
 }
@@ -57,23 +59,37 @@ impl Parse for Input {
                 first.parse::<syn::Ident>().is_ok() && first.peek(Token![=])
             };
             if named {
-                input.parse::<cq_stage::Configuration>()?.resolve(defaults())?
+                input
+                    .parse::<cq_stage::Configuration>()?
+                    .resolve(defaults())?
             } else {
                 input.parse::<cq_stage::Pipeline>()?
             }
         } else {
             defaults().resolve(cq_stage::Configuration::default())?
         };
-        if input.peek(Token![;]) { input.parse::<Token![;]>()?; }
-        Ok(Self { pipeline, program: input.parse()? })
+        if input.peek(Token![;]) {
+            input.parse::<Token![;]>()?;
+        }
+        Ok(Self {
+            pipeline,
+            program: input.parse()?,
+        })
     }
 }
 
 #[derive(Clone, Copy)]
-enum Stage { Source, Stratified, Seminaive }
+enum Stage {
+    Source,
+    Stratified,
+    Seminaive,
+}
 
 fn expand(tokens: proc_macro2::TokenStream, stage: Stage) -> syn::Result<proc_macro2::TokenStream> {
-    let Input { pipeline, mut program } = syn::parse2(tokens)?;
+    let Input {
+        pipeline,
+        mut program,
+    } = syn::parse2(tokens)?;
     cq_lang_datalog::contract::check(&program)?;
     let valid = match stage {
         Stage::Source => program.strata.is_none() && program.variants.is_none(),
@@ -81,7 +97,10 @@ fn expand(tokens: proc_macro2::TokenStream, stage: Stage) -> syn::Result<proc_ma
         Stage::Seminaive => program.variants.is_some(),
     };
     if !valid {
-        return Err(syn::Error::new_spanned(&program, "Datalog entry does not match the authored stage"));
+        return Err(syn::Error::new_spanned(
+            &program,
+            "Datalog entry does not match the authored stage",
+        ));
     }
     if matches!(stage, Stage::Source) {
         program = cq_datalog_schedule::stratify::compile(&program)?;
@@ -89,25 +108,35 @@ fn expand(tokens: proc_macro2::TokenStream, stage: Stage) -> syn::Result<proc_ma
     if !matches!(stage, Stage::Seminaive) {
         program = cq_datalog_schedule::seminaive::compile(&program)?;
     }
-    let fork = cq_datalog_fork::fork(&program, |hole| pipeline.clone().start(hole.into_token_stream()))?;
+    let fork = cq_datalog_fork::fork(&program, |hole| {
+        pipeline.clone().start(hole.into_token_stream())
+    })?;
     Ok(render::render(fork))
 }
 
 fn entry(input: TokenStream, stage: Stage) -> TokenStream {
-    expand(input.into(), stage).unwrap_or_else(syn::Error::into_compile_error).into()
+    expand(input.into(), stage)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 /// Schedule source Datalog and expand each CQ hole through the caller pipeline.
 #[proc_macro]
-pub fn datalog(input: TokenStream) -> TokenStream { entry(input, Stage::Source) }
+pub fn datalog(input: TokenStream) -> TokenStream {
+    entry(input, Stage::Source)
+}
 
 /// Resume an authored stratification, select semi-naive layouts, then execute.
 #[proc_macro]
-pub fn stratified(input: TokenStream) -> TokenStream { entry(input, Stage::Stratified) }
+pub fn stratified(input: TokenStream) -> TokenStream {
+    entry(input, Stage::Stratified)
+}
 
 /// Resume an authored complete semi-naive schedule and its selected layouts.
 #[proc_macro]
-pub fn seminaive(input: TokenStream) -> TokenStream { entry(input, Stage::Seminaive) }
+pub fn seminaive(input: TokenStream) -> TokenStream {
+    entry(input, Stage::Seminaive)
+}
 
 #[cfg(test)]
 mod tests;

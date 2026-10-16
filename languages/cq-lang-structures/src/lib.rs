@@ -917,7 +917,7 @@ pub use positional::*;
 mod join_filter;
 pub use join_filter::*;
 mod repr;
-pub use repr::{Repr, ReprBase};
+pub use repr::{Repr, ReprBase, representation_bases};
 mod stage;
 
 mod filtered;

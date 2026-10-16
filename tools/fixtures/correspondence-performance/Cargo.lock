@@ -29,6 +29,7 @@ dependencies = [
  "cq-lang-ra",
  "cq-planners-plan",
  "cq-testkit",
+ "proc-macro2",
  "syn 2.0.119",
 ]
 

@@ -217,3 +217,28 @@ fn positional_advice_requires_a_positional_host() {
         );
     }
 }
+
+#[test]
+fn positions_representation_is_explicitly_refused() {
+    let compiler = Compiler::new();
+    failure(
+        compiler.compile(
+            "positions_representation",
+            r#"own_push::push! {
+                pipeline {};
+                physical {
+                    relation R(a:i32,b:i32);
+                    r = pipe rename R@0 {a -> x,b -> y};
+                    out = pipe canon project r keep {x,y};
+                    return out as answer(x,y);
+                }
+                structures {
+                    r host scan = ::core::iter::Map<_,_> [];
+                    out canon = ::std::collections::HashSet<_>;
+                    r repr = positions { R lineage {x -> a,y -> b} } owned [];
+                }
+            }"#,
+        ),
+        "own_push: `r repr = positions` is unsupported",
+    );
+}

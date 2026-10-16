@@ -75,6 +75,11 @@ impl<'a> Context<'a> {
         if let Some(ids) = self.join_filter_ids(result) {
             return self.positional_rows(result, ids);
         }
+        if self.carries_positions(result) {
+            let host = Self::positional_host(&self.physical_analysis.hosts[result]);
+            let ids = quote!(::cq_storage::PositionalRows::positions(#host));
+            return self.positional_rows(result, ids);
+        }
         let access = self.host_access(result, &[]);
         let value = &access.value;
         let row = self.carrier(result, |c| self.access(result, c));
@@ -144,7 +149,8 @@ impl<'a> Context<'a> {
                     .then_some(ty)
                 })
                 .expect("checked fallback");
-            let pairs = quote!(::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*), (#(#payload,)*))));
+            let capture = self.carries_positions(result).then(|| quote!(move));
+            let pairs = quote!(::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*), (#(#payload,)*))));
             let ty = ty.clone();
             let build_name = format!("{result}.fallback.{}", columns.join("_"));
             self.profile_label(
@@ -192,9 +198,10 @@ impl<'a> Context<'a> {
                     .iter()
                     .filter(|c| !columns.contains(c))
                     .map(|c| self.access(result, c));
+                let capture = self.carries_positions(result).then(|| quote!(move));
                 self.statements.push(syn::parse_quote! {
                     let #name = &<#ty as ::cq_storage::Build<_>>::build(
-                        ::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*),(#(#payload,)*)))
+                        ::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*),(#(#payload,)*)))
                     );
                 });
                 self.bound = true;

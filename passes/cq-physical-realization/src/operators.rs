@@ -206,9 +206,50 @@ impl<'a> Printer<'a> {
         name: &str,
         definition: &physical::Definition,
     ) -> syn::Result<TokenStream> {
+        if let Some(rows) = self.staged_rows(name) {
+            return Ok(rows);
+        }
         if self.analysis.reads.contains_key(name) {
             let ids = self.read_ids(name)?;
-            return Ok(self.positional_rows(name, ids));
+            return Ok(self.buffer_stage(name, self.positional_rows(name, ids)));
+        }
+        if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
+            &definition.operator
+        {
+            let input_name = symbol_name(&select.input);
+            if self.carries_positions(&input_name) {
+                let rows = self.scan(&select.input)?;
+                let columns = cq_print::columns_used(&select.condition)
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let pattern = self.bind_columns(&input_name, &columns, true);
+                let aliases = self.position_aliases(&input_name, &columns);
+                let condition = self.relational_condition(&select.condition);
+                let rows = quote!(::core::iter::Iterator::filter(#rows, move |#pattern| {
+                    #(#aliases)*
+                    ::cq_storage::residual(#condition)
+                }));
+                return Ok(self.forward(name, &input_name, rows));
+            }
+        }
+        if let Operator::Guard(guard) = &definition.operator {
+            let input_name = symbol_name(&guard.input);
+            if self.carries_positions(&input_name) {
+                let rows = self.scan(&guard.input)?;
+                let pattern = self.rust_borrowed_pattern(
+                    &input_name,
+                    &guard.condition,
+                    guard.environment.as_ref(),
+                );
+                let aliases =
+                    self.rust_aliases(&input_name, &guard.condition, guard.environment.as_ref());
+                let condition = &guard.condition;
+                let rows = quote!(::core::iter::Iterator::filter(#rows, move |#pattern| {
+                    #(#aliases)*
+                    ::cq_storage::residual(#condition)
+                }));
+                return Ok(self.forward(name, &input_name, rows));
+            }
         }
         let rows = match &definition.operator {
             Operator::Union(union) => self.union(name, union),
@@ -329,24 +370,16 @@ impl<'a> Printer<'a> {
             Operator::Semi(_, k) | Operator::Anti(_, k) => Some(&k.left),
             _ => None,
         };
-        Ok(match input {
+        let rows = match input {
             Some(input) => self.forward(name, &symbol_name(input), rows),
             None => rows,
-        })
+        };
+        Ok(self.buffer_stage(name, rows))
     }
 
-    /// Fixed lookahead only on a total scan spine, before any reduction or join.
-    /// Narrowed/joined streams use scalar demand, avoiding needless buffering.
-    /// Opaque guards also stay scalar: exists must not force an unvisited panic.
+    /// Lookahead is a checked Structures decision, never a printer policy.
     fn lookahead(&self, name: &str) -> usize {
-        match &self.physical[name].operator {
-            Operator::Rename(_) => 128,
-            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
-                self.lookahead(&symbol_name(&s.input))
-            }
-            Operator::Project(p) => self.lookahead(&symbol_name(&p.input)),
-            _ => 1,
-        }
+        self.analysis.stages.get(name).copied().unwrap_or(1)
     }
     /// For every outer row, enter the right side at the join key and append
     /// the payload of every match.
@@ -444,6 +477,15 @@ impl<'a> Printer<'a> {
                 let owned = self.owned_key(&right, &levels[0]);
                 let stored_key = self.stored_key(&right, &levels[0]);
                 let key = stored_key.iter().map(|c| self.key_field(&left, c, owned));
+                if self.carries_positions(&left) {
+                    let key_pattern = self.bind_columns(&left, &stored_key, true);
+                    return Ok(quote! {
+                        ::core::iter::Iterator::map(
+                            ::cq_storage::IndexRead::probe::<#batch, _, _>(#structure, #outer, move |#key_pattern| (#(#key,)*)),
+                            move |(#outer_pattern, __cq_v)| #row
+                        )
+                    });
+                }
                 let key_binders = self.carried(&left).iter().map(|c| {
                     if stored_key.contains(c) {
                         self.access(&left, c)
