@@ -12,19 +12,9 @@ fn cases() -> Vec<(String, cq::Program)> {
             if path.extension().is_none_or(|ext| ext != "rs") || path.ends_with("mod.rs") {
                 continue;
             }
-            let file = syn::parse_file(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            let macros: Vec<_> = file
-                .items
-                .iter()
-                .filter_map(|item| match item {
-                    syn::Item::Macro(item) => Some(item),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(macros.len(), 1, "{}", path.display());
             cases.push((
                 path.file_stem().unwrap().to_str().unwrap().into(),
-                syn::parse2(macros[0].mac.tokens.clone()).unwrap(),
+                cq_workload_authored::program(&path).unwrap(),
             ));
         }
     }

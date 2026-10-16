@@ -5,6 +5,8 @@ The local directory source contains Cargo-produced .crate archives plus locked
 third-party vendors. No core path dependency is available to feature builds.
 Every features/ workspace must pass; there are no migration exceptions.
 Mandatory positive and in-tree-only negative fixtures exercise the gate itself.
+The packaging workspace retains the root lock so already-locked yanked
+transitive releases remain resolvable during offline Cargo packaging.
 Use --feature to select a standalone workspace, including one outside the repo,
 and --out to place logs and build artifacts in another directory.
 """
@@ -188,6 +190,9 @@ def package_core(directory, log):
             dep.clear();dep.update({"path":str(candidates[0]),"version":tomllib.loads((candidates[0]/"Cargo.toml").read_text())["package"]["version"]})
             root["patch"]["crates-io"][name]={"path":str(candidates[0])}
     write_manifest(source/"Cargo.toml",root)
+    # Preserve locked yanked dependencies (notably DuckDB's zip 6.0.0).
+    # A newly resolved packaging workspace cannot select those releases offline.
+    shutil.copy2(ROOT / "Cargo.lock", source / "Cargo.lock")
     env=os.environ.copy();env.setdefault("RUSTUP_TOOLCHAIN", tomllib.loads((ROOT/"rust-toolchain.toml").read_text())["toolchain"]["channel"]);env["CARGO_TARGET_DIR"]=str(directory/"package-target")
     # This is actual Cargo packaging, never a source-tree copy presented as a package.
     run(["cargo","package","--workspace","--allow-dirty","--no-verify","--offline"],source,log,env)

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Attempt each recovered target even when other targets cannot compile.
+# Optional arguments select exact package/target pairs, e.g.
+# bash tools/test_regressions.sh correspondence-performance-fixture/hypergraph-proof
+# With no selectors the full mandatory regression inventory runs.
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
@@ -12,6 +15,13 @@ failed=0
 
 while IFS=$'\t' read -r package kind target source; do
     [[ -z "$package" || "$package" == \#* ]] && continue
+    if (( $# > 0 )); then
+        selected=0
+        for selector in "$@"; do
+            [[ "$package/$target" == "$selector" ]] && selected=1
+        done
+        (( selected == 0 )) && continue
+    fi
     # Target selectors may be Cargo globs (shard_*); artifact paths may not contain '*'.
     log="$logdir/$package-${target//\*/all}.log"
     printf 'RUN  %s/%s\n' "$package" "$target"

@@ -7,6 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
+cq-workload-authored = { path = "../../../features/workloads/authored" }
 cq-planners-plan = { path = "../../../features/planners/plan" }
 cq-lang-ra = { path = "../../../languages/cq-lang-ra" }
 cq-elaborate = { path = "../../../passes/cq-elaborate" }

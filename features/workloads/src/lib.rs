@@ -63,9 +63,8 @@
 #![recursion_limit = "512"]
 
 pub mod adversarial;
-pub mod authored;
-pub mod schema;
 pub mod pipelines;
+pub mod schema;
 mod sorted_index;
 pub use sorted_index::SortedIndex;
 pub mod catalog;
@@ -173,7 +172,9 @@ impl QueryCase {
     /// Read the authoritative literal query for generators and inspection tools.
     /// Executable cases use `inputs` metadata instead of parsing their source.
     pub fn module(self) -> syn::Result<cq::Program> {
-        authored::program(self.rust_path)
+        cq_workload_authored::program(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(self.rust_path),
+        )
     }
 
     /// Read and validate integer fixtures using the catalog's checked schema.

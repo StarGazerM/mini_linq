@@ -687,6 +687,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-workload-authored"
+version = "0.1.0"
+dependencies = [
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-syntax",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-workload-corpus"
 version = "0.1.0"
 dependencies = [
@@ -733,7 +744,6 @@ dependencies = [
  "cq-ext-correlated",
  "cq-ext-negation",
  "cq-ext-recursion",
- "cq-ext-support",
  "cq-index-policy",
  "cq-join-filters",
  "cq-lang-cq",
@@ -749,6 +759,7 @@ dependencies = [
  "cq-structure-selection",
  "cq-syntax",
  "cq-testkit",
+ "cq-workload-authored",
  "cq-workload-passes",
  "mini-linq",
  "proc-macro2",
@@ -1627,7 +1638,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.6",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -1713,9 +1724,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.6"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
+checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1729,7 +1740,7 @@ source = "git+https://github.com/StarGazerM/syn_derive?rev=97bbe5871ac5ca8e9ba64
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.6",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -1771,9 +1782,9 @@ checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "unicode-ident"
-version = "1.0.26"
+version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
+checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "unicode-segmentation"
@@ -1886,7 +1897,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 3.0.6",
+ "syn 3.0.3",
  "wasm-bindgen-shared",
 ]
 
