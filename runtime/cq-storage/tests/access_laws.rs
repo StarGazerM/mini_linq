@@ -30,6 +30,26 @@ fn exact_collections_and_borrowed_resources_preserve_membership() {
 }
 
 #[test]
+fn sorted_run_membership_is_exact_bucket_nonemptiness() {
+    use cq_storage::{Build, I64Codec, IndexRead, SortedRun};
+    for mask in 0..16 {
+        let source: Vec<_> = [-65i64, -1, 0, 65]
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| mask & (1 << i) != 0)
+            .flat_map(|(_, key)| [(key, 'a'), (key, 'a'), (key, 'b')])
+            .collect();
+        let run = SortedRun::<_, _, I64Codec>::build(source.iter().copied());
+        for key in -66..=66 {
+            let expected = source.iter().any(|(k, _)| *k == key);
+            assert_eq!(has(&run, &key), expected);
+            assert_eq!(has(&&run, &key), expected);
+            assert_eq!((&run).lookup(&key).next().is_some(), expected);
+        }
+    }
+}
+
+#[test]
 fn adaptive_membership_and_intervals_match_independent_ordered_sets() {
     use cq_storage::{AdaptiveKeySet, ExactIntervalMembership, I64Codec, NoDense};
     let universe = [-65i64, -64, -1, 0, 1, 63, 64, 65, 127];

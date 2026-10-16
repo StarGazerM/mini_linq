@@ -30,6 +30,9 @@
 //! - `α(index) = bag of (key, item)`; `build(I)` has `α = bag(I)` and
 //!   `lookup(k)` enumerates exactly the items paired with `k`, with
 //!   multiplicity and in source order.
+//!   [`SortedRun`] clusters that same bag by key using a stable sort; its
+//!   binary-search or presence-and-rank directory selects identical ranges.
+//!   Borrowed [`RunCursor`] snapshots are Copy and retain the run's lifetime.
 //! - `α(membership) = key set`; `contains(k) ⇔ k ∈ α`. Exact interval
 //!   membership requires an actual represented key in the closed interval.
 //! - `α(positional host)` is its ordered occurrence bag; stable base offsets
@@ -94,6 +97,7 @@ mod instrument;
 mod membership;
 mod ordered;
 pub mod rows;
+mod sorted_run;
 mod trie;
 
 pub use answers::{Answers, GroupedAnswers, SingleGroup};
@@ -104,6 +108,7 @@ pub use membership::{ConservativeMembership, ExactMembership};
 pub use ordered::{
     GroupedCursor, KeyCursor, Merge, OrderedCursor, OrderedRead, Sorted, merge, sorted_by,
 };
+pub use sorted_run::{RunCursor, SortedRun};
 pub use trie::Trie;
 
 mod point;

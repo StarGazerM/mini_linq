@@ -103,6 +103,25 @@ fn every_selector_has_a_pinned_ir_and_independent_mutation_checks() {
 }
 
 #[test]
+fn sorted_runs_preserves_the_observation_contract_and_records_only_eligible_types() {
+    let checked = PassCase {
+        source: source(),
+        expected_next: Some(fixture(include_str!("fixtures/sorted_runs.structures"))),
+        compile: Box::new(|p| cq_rewrite_passes::sorted_runs(p, quote!())),
+        check: Box::new(ir::check_rewrite),
+        mutations: vec![Box::new(missing_storage), Box::new(changed_physical)],
+        answers: None,
+    }
+    .run(None)
+    .unwrap();
+    assert_eq!(
+        cq_rewrite_passes::sorted_runs(&checked, quote!()).unwrap(),
+        checked
+    );
+    assert!(cq_rewrite_passes::sorted_runs(&source(), quote!(unexpected)).is_err());
+}
+
+#[test]
 fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
     let original = source();
     assert_eq!(

@@ -6,6 +6,19 @@
 //! Every macro runs `cq_stage::rewrite`, including the language's source, target,
 //! and correspondence checks.
 //!
+//! `sorted_runs` takes no arguments and retypes only explicitly built
+//! `::cq_storage::HashIndex` payload providers with one nonempty key level.
+//! Shared membership reads keep using the same exact payload provider. Host
+//! fallbacks, membership-only annotations, multi-level tries, and providers
+//! used as smallest-intersection candidates are unchanged. The replacement
+//! requires Ord + Copy keys and Copy items (Leibniz admissibility is a premise);
+//! rustc checks Build, IndexRead and ExactMembership at the existing guards.
+//! A single stored borrowed i32/i64 column records BorrowedI64TupleCodec;
+//! other keys record the default NoDense binary-search directory. Computed
+//! keys on either side are owned and use NoDense. Rank spans exceeding
+//! 1,048,576 bits also fall back to binary search. No default selection changes.
+//! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
+//!
 //! ```rust
 //! let rows = [(1, 10), (1, 11), (2, 20)];
 //! let answer: Vec<_> = mini_linq::compile! {
@@ -217,5 +230,12 @@ pub fn retype(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn join_filter(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::join_filter)
+        .into()
+}
+
+/// Retype eligible one-level payload builds to stable sorted runs.
+#[proc_macro]
+pub fn sorted_runs(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_runs)
         .into()
 }

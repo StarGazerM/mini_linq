@@ -2,7 +2,7 @@
 //! commutes with its operations. These tests state `α` through the public
 //! traits and check the squares exhaustively over small universes.
 
-use cq_storage::{Build, HashIndex, IndexRead};
+use cq_storage::{Build, HashIndex, IndexRead, SortedRun};
 use std::collections::BTreeMap;
 
 type Bag<T> = BTreeMap<T, usize>;
@@ -26,8 +26,10 @@ fn subsets<T: Copy>(universe: &[T]) -> impl Iterator<Item = Vec<T>> + '_ {
     })
 }
 
-#[test]
-fn index_abstraction_is_the_source_bag_and_lookup_is_exact_selection_in_order() {
+fn index_laws<T>(build: impl Fn(Vec<(i32, char)>) -> T)
+where
+    for<'a> &'a T: IndexRead<Key = i32, Item = char>,
+{
     let universe = [(0, 'a'), (0, 'b'), (1, 'a'), (1, 'c'), (2, 'a')];
     for pairs in subsets(&universe) {
         // Multiplicity: duplicate every second pair.
@@ -36,10 +38,10 @@ fn index_abstraction_is_the_source_bag_and_lookup_is_exact_selection_in_order() 
             .enumerate()
             .flat_map(|(i, &p)| std::iter::repeat_n(p, 1 + i % 2))
             .collect();
-        let index = HashIndex::build(source.iter().map(|&(k, v)| (k, v)));
+        let index = build(source.clone());
         let mut alpha = Bag::new();
         for key in -1..=3 {
-            let items: Vec<_> = index.lookup(&key).collect();
+            let items: Vec<_> = (&index).lookup(&key).collect();
             let expected: Vec<_> = source
                 .iter()
                 .filter(|(k, _)| *k == key)
@@ -55,6 +57,13 @@ fn index_abstraction_is_the_source_bag_and_lookup_is_exact_selection_in_order() 
         }
         assert_eq!(alpha, bag(source.iter().copied()));
     }
+}
+
+#[test]
+fn index_abstraction_is_the_source_bag_and_lookup_is_exact_selection_in_order() {
+    index_laws(|source| HashIndex::build(source.into_iter()));
+    index_laws(|source| SortedRun::<_, _>::build(source.into_iter()));
+    index_laws(|source| SortedRun::<_, _, cq_storage::I64Codec>::build(source.into_iter()));
 }
 
 #[derive(Clone, Copy)]
