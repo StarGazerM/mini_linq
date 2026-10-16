@@ -638,6 +638,19 @@ and $S$ checked redundant-support absorption:
 
 \Rule{CK-Transfer}{\mathsf{erase}(t)=v\quad t=\mathsf{transfer}(R_{None,Masks}(v))}
  {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
+
+\Rule{Plan-Le}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad w=R_{None,Masks}(v)\\
+ \text{for each inner occurrence }R\text{ in GYO ear order:}\\
+ \mathsf{lookup}(R)=R(\bar b,\_)\ \text{at the first point its bound key }\bar b\text{ is available}\\
+ \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{at the latest point before }
+ \mathsf{firstUse}(\bar y)\lor\mathsf{Before}\text{ boundary}\lor\text{scope exit}}
+ {\code{cq_planners::order(le)}(q)=E(\mathsf{le}(w))}
+
+\Rule{CK-Le}{\mathsf{erase}(t)=n\quad
+ \forall R.\ \mathsf{lookup}(R)<\mathsf{expand}(R)\ \text{exactly once each}\\
+ \mathsf{columnsOwned}(t)=\mathsf{columnsOwned}(n)\quad \mathsf{outer}(t)=\mathsf{outer}(w)\\
+ \text{WF-VO}(t)\quad \mathsf{check}^{Masks}(t)}
+ {\mathsf{check}^{Le}(q,t)\Downarrow\ok}
 \end{mathpar}
 \code{order(transfer)} is robust predicate transfer (Zhao et al., SIGMOD'25) on
 the written left-deep order, a diverging route through the same public
@@ -653,6 +666,16 @@ exact semijoins, not Bloom filters; they materialize reduced relations, as
 RPT's filter creators do, before the unchanged join phase. Scopes containing
 opaque Rust keep only their Masks reductions: there the structural RA
 correspondence check rejects some sound transfer schedules.
+
+\code{order(le)} is the Lookup \& Expand decomposition of Birler, Kemper and
+Neumann (VLDB'24) as a VO construction: a lookup is a partial subatom that
+introduces no names (a semijoin of the stream prefix), an expansion is the
+later full subatom of the same occurrence. Lookups are placed in GYO ear order
+as soon as their bound key is available, expansions as late as demand, Rust
+Before boundaries or scope exit permit, so acyclic scopes form two-phase plans.
+Expansions are coarse full rows under an explicit CK-Le obligation, not Fine
+subatoms. Whether a later probe reuses the lookup's cursor is a Structures
+representation decision, not part of this plan.
 
 \code{plan} is left-deep in written order and defaults to checked Masks
 reduction: every scope, acyclic or cyclic, reduces its inner clauses along the
