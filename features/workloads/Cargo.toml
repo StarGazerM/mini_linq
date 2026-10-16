@@ -6,8 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [workspace]
-members = [".", "e2e", "e2e/corpus", "xtask", "pipeline-passes"]
-default-members = [".", "e2e", "e2e/corpus", "xtask", "pipeline-passes"]
+members = [".", "authored", "e2e", "e2e/corpus", "xtask", "pipeline-passes"]
+default-members = [".", "authored", "e2e", "e2e/corpus", "xtask", "pipeline-passes"]
 resolver = "3"
 
 [workspace.package]
@@ -80,13 +80,13 @@ debug = 0
 debug = 0
 
 [dependencies]
+cq-workload-authored = { path = "authored" }
 cq-testkit.workspace = true
 cq-load.workspace = true
 cq-lang-cq.workspace = true
 cq-syntax.workspace = true
 mini-linq.workspace = true
 syn.workspace = true
-cq-ext-support.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 cq-ext-negation.workspace = true

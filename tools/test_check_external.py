@@ -2,6 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import check_external as gate
 
@@ -63,6 +64,38 @@ class FeatureClosureTests(unittest.TestCase):
                 "dependencies": {"escape": {"path": "../../outside", "optional": True}}})
             with self.assertRaisesRegex(RuntimeError, "escapes feature siblings"):
                 gate.copy_feature_closure(consumer, root / "copy", {})
+
+    def test_packaging_preserves_root_lock_before_offline_resolution(self):
+        class PackagingReached(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "checkout"
+            root.mkdir()
+            gate.write_manifest(root / "Cargo.toml", {
+                "workspace": {"package": {}, "dependencies": {}}})
+            gate.write_manifest(root / "rust-toolchain.toml", {
+                "toolchain": {"channel": "stable"}})
+            locked = 'version = 4\n\n[[package]]\nname = "zip"\nversion = "6.0.0"\n'
+            (root / "Cargo.lock").write_text(locked)
+            destination = Path(tmp) / "packaged"
+            destination.mkdir()
+
+            def run(command, cwd, log, env=None):
+                if command[1] == "vendor":
+                    Path(command[-1]).mkdir()
+                elif command[1] == "package":
+                    self.assertIn("--offline", command)
+                    self.assertEqual((cwd / "Cargo.lock").read_text(), locked)
+                    raise PackagingReached
+                else:
+                    self.fail(f"unexpected command: {command}")
+
+            with patch.object(gate, "ROOT", root), \
+                    patch.object(gate.subprocess, "check_output", return_value=b'{"packages": []}'), \
+                    patch.object(gate, "run", side_effect=run), \
+                    self.assertRaises(PackagingReached):
+                gate.package_core(destination, Path(tmp) / "package.log")
 
 
 if __name__ == "__main__":

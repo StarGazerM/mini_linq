@@ -17,7 +17,7 @@ fn authored_cases_schemas_and_sql_cover_all_families() {
         let schema = case.schema();
         assert_eq!(
             schema,
-            cq_workloads::authored::schema(case.rust_path).unwrap(),
+            cq_workload_authored::schema(root.join(case.rust_path)).unwrap(),
             "{} catalog schema differs from the literal query",
             case.name,
         );
@@ -91,7 +91,11 @@ fn tiny_fixtures_and_goldens_have_exact_provenance_and_shapes() {
             assert_eq!(tracked.relations.len(), case.relations.len());
             for (data, relation) in tracked.relations.iter().zip(case.relations) {
                 assert_eq!(data.name, relation.name);
-                assert!(data.rows.iter().all(|row| row.len() == relation.columns.len()));
+                assert!(
+                    data.rows
+                        .iter()
+                        .all(|row| row.len() == relation.columns.len())
+                );
             }
             let rows = cq_workloads::dataset::read_result_rows(
                 case.path("golden").join(scenario.as_str()).join("tiny.csv"),

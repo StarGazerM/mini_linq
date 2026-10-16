@@ -43,6 +43,10 @@ jobs:
       - name: Fetch locked dependencies for isolated and packaged gates
         run: |
           cargo fetch --locked
+          # Feature-only dependencies (for example Ascent) are not in the root lock.
+          for manifest in features/*/Cargo.toml; do
+            cargo fetch --locked --manifest-path "$manifest"
+          done
           # cargo package --offline resolves the packaged cq-syntax against the
           # crates.io index entry of syn_derive (the workspace uses a git pin).
           (cd "$RUNNER_TEMP" && cargo info --registry crates-io syn_derive@0.2.0 > /dev/null)

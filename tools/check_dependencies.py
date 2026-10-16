@@ -5,6 +5,10 @@ This inventory describes build ownership only. It is not compiler dispatch.
 Production isolation, macro resolution and semantic consumers are separate
 gates. Package counts and test-only dependencies are not proofs of compiler
 architecture.
+
+Feature locks must reuse root-fetched third-party versions. CI additionally
+fetches feature locks for feature-only dependencies (including Ascent's older
+hashbrown requirement); this check prevents accidental shared-version drift.
 """
 from __future__ import annotations
 
@@ -24,6 +28,35 @@ except ModuleNotFoundError:
     import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def check_feature_locks():
+    def third_party(path):
+        return [package for package in tomllib.loads(path.read_text())["package"]
+                if "source" in package]
+
+    root_versions = {}
+    for package in third_party(ROOT / "Cargo.lock"):
+        root_versions.setdefault(package["name"], set()).add(
+            (package["version"], package["source"]))
+    # Ascent 0.8 requires hashbrown ^0.14; no root dependency can provide it.
+    feature_only = {("datalog", "hashbrown", "0.14.5")}
+    errors = []
+    locks = sorted((ROOT / "features").glob("*/Cargo.lock"))
+    for lock in locks:
+        for package in third_party(lock):
+            name, version, source = (package[key] for key in ("name", "version", "source"))
+            if name not in root_versions:
+                continue
+            if (version, source) in root_versions[name]:
+                continue
+            if (lock.parent.name, name, version) in feature_only:
+                continue
+            errors.append(f"{lock.relative_to(ROOT)}: {name} {version} ({source}) "
+                          "is absent from root Cargo.lock")
+    if errors:
+        raise SystemExit("\n".join(errors))
+    print(f"Feature lock alignment: {len(locks)} passed")
 
 
 def inventory(folder):
@@ -255,6 +288,9 @@ def write_workspace(destination, selected):
               if not isinstance(v, dict) or "path" not in v or k in selected]
     (destination / "Cargo.toml").write_text("\n".join(lines) + "\n")
     shutil.copy2(ROOT / "rust-toolchain.toml", destination / "rust-toolchain.toml")
+    # Resolve third-party crates at the root's locked versions; a fresh offline
+    # resolution fails once a locked version is yanked (zip 6.0.0 for duckdb).
+    shutil.copy2(ROOT / "Cargo.lock", destination / "Cargo.lock")
 
 
 def copy_component(destination, name, selected, tested):
@@ -329,6 +365,7 @@ def main():
     parser.add_argument("--consumers", action="store_true")
     parser.add_argument("--only", action="append", default=[])
     args = parser.parse_args()
+    check_feature_locks()
     data = metadata(); packages = check(data)
     negative_dependency_checks(data); check_independent_relations(); check_feature_sources()
     if args.isolate: isolate(packages, args.only)

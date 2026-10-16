@@ -220,13 +220,26 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
     }
 
     for case in all_cases() {
-        assert_eq!(case.module().unwrap().query.head.args.len(), case.arity,
-            "{} output arity metadata", case.name);
+        assert_eq!(
+            case.module().unwrap().query.head.args.len(),
+            case.arity,
+            "{} output arity metadata",
+            case.name
+        );
     }
     for (name, rust_path, schema) in all_cases()
-        .map(|case| (case.name, case.rust_path, cq_workloads::schema::declarations(case.inputs)))
-        .chain(cq_workloads::typed::CASES.iter()
-            .map(|case| (case.name, case.rust_path, case.inputs())))
+        .map(|case| {
+            (
+                case.name,
+                case.rust_path,
+                cq_workloads::schema::declarations(case.inputs),
+            )
+        })
+        .chain(
+            cq_workloads::typed::CASES
+                .iter()
+                .map(|case| (case.name, case.rust_path, case.inputs())),
+        )
     {
         let source_path = PathBuf::from(rust_path);
         let expected_path = if source_path.is_absolute() {
@@ -262,10 +275,15 @@ fn rust_query_modules_are_exactly_the_catalog_and_own_the_typed_programs() {
                 )
             });
         syn::parse_file(&checked_in).unwrap_or_else(|error| {
-            panic!("Rust case `{}` did not parse: {error}", expected_path.display())
+            panic!(
+                "Rust case `{}` did not parse: {error}",
+                expected_path.display()
+            )
         });
         assert_eq!(
-            cq_workloads::authored::schema(rust_path).unwrap(), schema,
+            cq_workload_authored::schema(Path::new(env!("CARGO_MANIFEST_DIR")).join(rust_path),)
+                .unwrap(),
+            schema,
             "{name} loader metadata differs from its single literal compile! query",
         );
     }
