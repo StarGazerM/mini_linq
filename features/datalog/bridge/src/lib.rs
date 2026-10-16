@@ -6,8 +6,15 @@
 //! `seminaive!` resumes a complete schedule. Every CQ hole receives the same
 //! caller continuation, including unchanged opaque pass arguments. The bridge
 //! owns sets, grouped host layouts and rounds; it adds no planner options.
-//! Multiple outputs return a tuple of owned iterators in the written output
-//! order; the single-output iterator and its rendered expansion are unchanged.
+//! Every EDB is a set: before any layouts or rounds, its generic borrowed `Rows`
+//! host is scanned once into a hash set of borrowed column tuples. All layouts,
+//! negative-key projections, and EDB outputs reuse that canonical source; extra
+//! layouts never rescan or re-deduplicate the input. Canonicalization clones no
+//! column values. Owned grouped layouts and outputs clone only distinct tuples.
+//! All EDB columns therefore require `Eq + Hash`; negative-only columns need
+//! not implement `Clone`. This is mandatory input semantics, not a policy.
+//! Multiple outputs return a tuple of owned iterators in written output order;
+//! single outputs return one owned iterator, including EDB-only programs.
 
 use proc_macro::TokenStream;
 use quote::ToTokens;

@@ -41,6 +41,7 @@ pub fn check(data: &Data) {
         .collect();
     assert_eq!(mini, naive);
     check_constants(data);
+    check_canonical_inputs(data);
 }
 
 // Differential-only cases extend the scenario/random matrices without changing
@@ -182,12 +183,81 @@ fn check_constants(data: &Data) {
         literal.collect::<BTreeSet<_>>(),
         oracle.literal.into_iter().collect()
     );
-    assert_eq!(
-        method.collect::<BTreeSet<_>>(),
-        oracle.method.into_iter().collect()
-    );
-    assert_eq!(
-        modifier.collect::<BTreeSet<_>>(),
-        oracle.modifier.into_iter().collect()
+    assert_set(method, oracle.method);
+    assert_set(modifier, oracle.modifier);
+}
+
+fn assert_set<T: Ord + std::fmt::Debug>(
+    actual: impl Iterator<Item = T>,
+    expected: impl IntoIterator<Item = T>,
+) {
+    let actual: Vec<_> = actual.collect();
+    let expected: BTreeSet<_> = expected.into_iter().collect();
+    assert_eq!(actual.len(), expected.len(), "duplicate output tuples");
+    assert_eq!(actual.into_iter().collect::<BTreeSet<_>>(), expected);
+}
+
+// Every scenario (including empty and random graphs) exercises duplicate grouped
+// inputs, several EDB layouts, projected negation, recursion, and EDB outputs.
+fn check_canonical_inputs(data: &Data) {
+    let label = |x: i32| format!("node,{x}:λ");
+    let edge: Vec<_> = data
+        .edge
+        .iter()
+        .flat_map(|&(x, y)| std::iter::repeat_n((label(x), label(y)), 3))
+        .collect();
+    let nodes: Vec<_> = data
+        .nodes
+        .iter()
+        .flat_map(|&(x,)| std::iter::repeat_n((label(x),), 2))
+        .collect();
+    let mut grouped = std::collections::BTreeMap::<_, Vec<_>>::new();
+    for (x, y) in &edge {
+        grouped.entry((x.clone(),)).or_default().push((y.clone(),));
+    }
+    let oracle = ascent::ascent_run! {
+        relation edge(String,String) = edge;
+        relation node(String) = nodes.clone();
+        relation paths(String,String);
+        relation shared(String,String);
+        relation missing(String);
+        relation reach(String,String);
+        paths(x.clone(),z.clone()) <-- edge(x,y), edge(y,z);
+        shared(x.clone(),z.clone()) <-- edge(x,y), edge(z,y);
+        missing(x.clone()) <-- node(x), !edge(x,_);
+        reach(x.clone(),y.clone()) <-- edge(x,y);
+        reach(x.clone(),z.clone()) <-- reach(x,y), edge(y,z);
+    };
+    let (facts, domain, paths, shared, missing, reach) = cq_datalog::datalog! {
+        struct CanonicalInputs;
+        relation E(x:String,y:String) = (&grouped);
+        relation D(x:String) = (&nodes);
+        relation Paths(x:String,z:String);
+        relation Shared(x:String,z:String);
+        relation Missing(x:String);
+        relation Reach(x:String,y:String);
+        output E, D, Paths, Shared, Missing, Reach;
+        Paths((*x).clone(),(*z).clone()) :- E(x,y), E(y,z);
+        Shared((*x).clone(),(*z).clone()) :- E(x,y), E(z,y);
+        Missing((*x).clone()) :- D(x), !E(x,_);
+        Reach((*x).clone(),(*y).clone()) :- E(x,y);
+        Reach((*x).clone(),(*z).clone()) :- Reach(x,y), E(y,z);
+    };
+    assert_set(facts, oracle.edge);
+    assert_set(domain, oracle.node);
+    assert_set(paths, oracle.paths);
+    assert_set(shared, oracle.shared);
+    assert_set(missing, oracle.missing);
+    assert_set(reach, oracle.reach);
+    let single = cq_datalog::datalog! {
+        struct Facts;
+        relation E(x:String,y:String) = (&grouped);
+        output E;
+    };
+    assert_set(
+        single,
+        grouped
+            .into_iter()
+            .flat_map(|((x,), values)| values.into_iter().map(move |(y,)| (x.clone(), y))),
     );
 }

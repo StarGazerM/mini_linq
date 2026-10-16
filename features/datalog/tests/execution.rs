@@ -54,7 +54,7 @@ fn source_stratified_and_seminaive_text_have_the_same_answer() {
                 delta Reach = Recent;
                 layout Edge [0,1] key 0;
                 layout Reach [0,1] key 1;
-                layout Reach [1,0] key 1;
+                layout Reach [0,1] key 0;
                 variant 0 seed { Reach(*x,*y) :- Edge(x,y); }
                 variant 1 delta 0 { Reach(*x,*z) :- Recent(x,y), Reach(y,z); }
                 variant 1 delta 1 { Reach(*x,*z) :- Reach(x,y), Recent(y,z); }
@@ -497,5 +497,193 @@ fn owned_string_constants_filter_each_keyset_row_without_moving_captures() {
             .into_iter()
             .map(|(name,)| (name, String::from("java.lang.String")))
             .collect()
+    );
+}
+
+#[test]
+fn duplicate_grouped_inputs_are_scanned_once_for_all_layouts_keys_and_outputs() {
+    use cq_storage::rows::Rows;
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy)]
+    struct CountRows<'a, H> {
+        host: H,
+        scans: &'a Cell<usize>,
+        visits: &'a Cell<usize>,
+    }
+    impl<H: Rows> Rows for CountRows<'_, H> {
+        type Row = H::Row;
+        fn rows(self) -> impl Iterator<Item = Self::Row> {
+            self.scans.set(self.scans.get() + 1);
+            self.host
+                .rows()
+                .inspect(move |_| self.visits.set(self.visits.get() + 1))
+        }
+    }
+    fn counted(value: &str, calls: &Cell<usize>) -> String {
+        calls.set(calls.get() + 1);
+        value.to_owned()
+    }
+
+    let (facts, nodes, paths, shared_targets, missing, reach) = {
+        let edges = std::collections::BTreeMap::from([
+            (
+                (String::from("a"),),
+                vec![(String::from("b"),), (String::from("b"),)],
+            ),
+            (
+                (String::from("b"),),
+                vec![(String::from("c"),), (String::from("c"),)],
+            ),
+            (
+                (String::from("c"),),
+                vec![(String::from("d"),), (String::from("d"),)],
+            ),
+        ]);
+        let domain: Vec<_> = ["a", "a", "b", "b", "c", "c", "d", "d"]
+            .into_iter()
+            .map(|name| (name.to_owned(),))
+            .collect();
+        let edge_scans = Cell::new(0);
+        let edge_visits = Cell::new(0);
+        let domain_scans = Cell::new(0);
+        let domain_visits = Cell::new(0);
+        let candidates = &Cell::new(0);
+        let expressions = Cell::new(0);
+        let input = CountRows {
+            host: &edges,
+            scans: &edge_scans,
+            visits: &edge_visits,
+        };
+        let domain_input = CountRows {
+            host: &domain,
+            scans: &domain_scans,
+            visits: &domain_visits,
+        };
+        let answer = cq_datalog::datalog! {
+            observe = (|_, _| {
+                assert_eq!(edge_scans.get(), 1);
+                assert_eq!(domain_scans.get(), 1);
+            });
+            struct CanonicalInputs;
+            relation E(x:String,y:String) = ({ expressions.set(expressions.get() + 1); input });
+            relation D(x:String) = (domain_input);
+            relation Paths(x:String,z:String);
+            relation SharedTargets(x:String,z:String);
+            relation Missing(x:String);
+            relation Reach(x:String,y:String);
+            output E, D, Paths, SharedTargets, Missing, Reach;
+            Paths(counted(x,candidates),(*z).clone()) :- E(x,y), E(y,z);
+            SharedTargets(counted(x,candidates),(*z).clone()) :- E(x,y), E(z,y);
+            Missing((*x).clone()) :- D(x), !E(x,_);
+            Reach((*x).clone(),(*y).clone()) :- E(x,y);
+            Reach((*x).clone(),(*z).clone()) :- Reach(x,y), E(y,z);
+        };
+        assert_eq!(expressions.get(), 1);
+        assert_eq!((edge_scans.get(), edge_visits.get()), (1, 6));
+        assert_eq!((domain_scans.get(), domain_visits.get()), (1, 8));
+        // Observe candidates before IDB set insertion: final set equality alone
+        // would hide the duplicate Cartesian amplification in both joins.
+        assert_eq!(candidates.get(), 5);
+        assert_eq!(edges.len(), 3);
+        assert_eq!(domain.len(), 8);
+        answer
+    };
+    let facts: Vec<_> = facts.collect();
+    let nodes: Vec<_> = nodes.collect();
+    assert_eq!(facts.len(), 3);
+    assert_eq!(nodes.len(), 4);
+    assert_eq!(
+        facts.into_iter().collect::<BTreeSet<_>>(),
+        [("a", "b"), ("b", "c"), ("c", "d")]
+            .into_iter()
+            .map(|(x, y)| (x.to_owned(), y.to_owned()))
+            .collect()
+    );
+    assert_eq!(
+        paths.collect::<BTreeSet<_>>(),
+        [("a", "c"), ("b", "d")]
+            .into_iter()
+            .map(|(x, y)| (x.to_owned(), y.to_owned()))
+            .collect()
+    );
+    assert_eq!(
+        shared_targets.collect::<BTreeSet<_>>(),
+        ["a", "b", "c"]
+            .into_iter()
+            .map(|x| (x.to_owned(), x.to_owned()))
+            .collect()
+    );
+    assert_eq!(missing.collect::<Vec<_>>(), [(String::from("d"),)]);
+    assert_eq!(
+        reach.collect::<BTreeSet<_>>(),
+        [
+            ("a", "b"),
+            ("a", "c"),
+            ("a", "d"),
+            ("b", "c"),
+            ("b", "d"),
+            ("c", "d")
+        ]
+        .into_iter()
+        .map(|(x, y)| (x.to_owned(), y.to_owned()))
+        .collect()
+    );
+}
+
+#[test]
+fn canonical_negative_only_inputs_do_not_require_column_clones() {
+    #[derive(Debug, Eq, PartialEq, Hash)]
+    struct NoClone(String);
+    let blocked = [
+        (1, NoClone(String::from("reason"))),
+        (1, NoClone(String::from("reason"))),
+    ];
+    let domain = [(1,), (1,), (2,), (2,)];
+    let result = cq_datalog::datalog! {
+        struct BorrowOnly;
+        relation D(x:i32) = (&domain);
+        relation Blocked(x:i32,reason:NoClone) = (&blocked);
+        relation Out(x:i32);
+        output Out;
+        Out(*x) :- D(x), !Blocked(x,_);
+    };
+    assert_eq!(result.collect::<Vec<_>>(), [(2,)]);
+    assert_eq!(blocked[0].1.0, "reason");
+}
+
+#[test]
+fn later_delta_atoms_keep_written_bindings_guards_and_constant_probes() {
+    let alloc = [(10, 1), (10, 1), (20, 1), (30, 1)];
+    let assign = [(0, 1), (2, 1), (2, 1), (3, 2), (4, 3)];
+    let tags = [(10, 7), (10, 7), (20, 8), (30, 7)];
+    let closed = [(10, 3), (20, 3), (30, 4)];
+    let names = [
+        (10, String::from("ok")),
+        (20, String::from("ok")),
+        (30, String::from("ok")),
+    ];
+    let answer = cq_datalog::datalog! {
+        struct PointsTo;
+        relation Alloc(heap:i32,var:i32) = (&alloc);
+        relation Assign(to:i32,from:i32) = (&assign);
+        relation Tags(heap:i32,kind:i32) = (&tags);
+        relation Closed(heap:i32,kind:i32) = (&closed);
+        relation Names(heap:i32,name:String) = (&names);
+        relation VarPointsTo(heap:i32,var:i32);
+        output VarPointsTo;
+        VarPointsTo(*heap,*var) :- Alloc(heap,var);
+        VarPointsTo(*heap,*to) :-
+            VarPointsTo(other,from), VarPointsTo(heap,from), Assign(to,from),
+            if *to != 0, if 10 / *to > 0,
+            Tags(heap,7), Closed(heap,1 + 2), Names(heap,"ok");
+        VarPointsTo(*heap,*to) :-
+            Assign(to,from), if *to != 0, if 10 / *to > 0,
+            VarPointsTo(heap,from), VarPointsTo(heap,to),
+            Tags(heap,7), Closed(heap,1 + 2), Names(heap,"ok");
+    };
+    assert_eq!(
+        answer.collect::<BTreeSet<_>>(),
+        BTreeSet::from([(10, 1), (20, 1), (30, 1), (10, 2), (10, 3), (10, 4)])
     );
 }

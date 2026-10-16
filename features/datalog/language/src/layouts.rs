@@ -40,23 +40,20 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         };
         for driver in drivers {
             let mut bound = BTreeSet::new();
-            if let Some(position) = driver {
-                if let BodyItem::Positive { atom } = &query.body[position] {
-                    bound.extend(atom.variables().map(symbol_name));
-                }
-            }
             for (position, item) in query.body.iter().enumerate() {
-                if Some(position) == driver {
-                    continue;
-                }
                 let BodyItem::Positive { atom } = item else {
                     continue;
                 };
+                if Some(position) == driver {
+                    bound.extend(atom.variables().map(symbol_name));
+                    continue;
+                }
                 let is_bound: Vec<_> = atom
                     .args
                     .iter()
-                    .map(|arg| {
-                        rust::variable(arg).is_some_and(|name| bound.contains(&symbol_name(name)))
+                    .map(|arg| match rust::variable(arg) {
+                        Some(name) => bound.contains(&symbol_name(name)),
+                        None => !matches!(rust::unparen(arg), syn::Expr::Infer(_)),
                     })
                     .collect();
                 let mut columns: Vec<_> = (0..atom.args.len())
@@ -79,6 +76,6 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     ensure(
         program.layouts == expected,
         program,
-        "layouts must exactly match delta-first positive join choices in stable rule order",
+        "layouts must exactly match written-order positive join choices in stable rule order",
     )
 }

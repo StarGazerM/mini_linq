@@ -5,6 +5,9 @@
 //! each distinct projection and constant filter is built once per stratum.
 //! Key-hole correspondence compares complete parsed CQ programs, including
 //! CQ's schema-aware guard recognition, rather than raw isolated predicates.
+//! Full hosts use keys bound by earlier positive atoms plus constant arguments.
+//! Delta atoms add bindings only where written and remain ordinary delta hosts;
+//! no atom or partial Rust guard is moved to enable a layout.
 
 use cq_lang_cq::{BodyItem, Program as CqProgram};
 use cq_lang_datalog::{Program, contract};
@@ -172,17 +175,6 @@ fn inputs(context: &RoundContext) -> Vec<RelationDecl> {
 // Layouts change only positional host representation, never Rust-step order.
 fn use_layouts(query: &mut cq_lang_cq::Query, context: &RoundContext) -> syn::Result<()> {
     let mut bound = BTreeSet::new();
-    for item in &query.body {
-        if let BodyItem::Positive { atom } = item {
-            if context
-                .relations
-                .iter()
-                .any(|r| r.delta.as_ref() == Some(&atom.relation))
-            {
-                bound.extend(atom.variables().map(symbol_name));
-            }
-        }
-    }
     for item in &mut query.body {
         let BodyItem::Positive { atom } = item else {
             continue;
@@ -192,6 +184,7 @@ fn use_layouts(query: &mut cq_lang_cq::Query, context: &RoundContext) -> syn::Re
             .iter()
             .position(|r| r.declaration.name == atom.relation)
         else {
+            bound.extend(atom.variables().map(symbol_name));
             continue;
         };
         let keys: Vec<_> = atom
@@ -199,9 +192,11 @@ fn use_layouts(query: &mut cq_lang_cq::Query, context: &RoundContext) -> syn::Re
             .iter()
             .enumerate()
             .filter_map(|(i, arg)| {
-                rust::variable(arg)
-                    .filter(|id| bound.contains(&symbol_name(id)))
-                    .map(|_| i)
+                let is_key = match rust::variable(arg) {
+                    Some(id) => bound.contains(&symbol_name(id)),
+                    None => !matches!(rust::unparen(arg), Expr::Infer(_)),
+                };
+                is_key.then_some(i)
             })
             .collect();
         let key = keys.len();

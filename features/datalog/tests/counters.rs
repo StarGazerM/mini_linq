@@ -1,5 +1,6 @@
-//! Core counters exclude Datalog's own one-time map population and set inserts.
-//! They expose accidental per-hole fallback builds and repeated full scans.
+//! Core counters include the one-time raw EDB scan for canonicalization, but
+//! exclude Datalog's canonical borrowed-row traversal, map population, and set
+//! inserts. They expose per-hole fallback builds and repeated core full scans.
 //! Run from `features/datalog` with:
 //! `cargo test -p cq-datalog --features counters --test counters -- --nocapture`.
 #[test]
@@ -16,10 +17,14 @@ fn reach_reuses_indexes_across_every_round() {
             output Reach;
             Reach(*x) :- Seed(x);
             Reach(*y) :- Reach(x), Edge(x,y);
-        }.collect();
+        }
+        .collect();
         let cost = cq_storage::counters::snapshot();
         assert_eq!(rows, (0..n).map(|x| (x,)).collect());
         assert_eq!(cost.index_builds, 0);
+        // Each EDB has one layout here: moving its instrumented raw scan from
+        // layout population to canonicalization leaves this count unchanged.
+        // Raw inputs: n; grouped seed: 2; deltas: n; edge matches: n - 1.
         assert_eq!(cost.rows_enumerated, 3 * n as u64 + 1);
         println!("{n}\t{}\t{}", cost.index_builds, cost.rows_enumerated);
     }

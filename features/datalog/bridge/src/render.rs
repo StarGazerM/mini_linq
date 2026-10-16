@@ -21,7 +21,22 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             .collect();
         if let Some(value) = &declaration.value {
             let expression = &value.expression;
-            bindings.push(quote!(let #all = &(#expression);));
+            // Keep the original host alive, including temporary and grouped hosts.
+            // Rows already supplies Copy tuples of borrowed columns: hash those
+            // tuples once, without cloning values or adding another reference layer.
+            bindings.push(quote!(
+                let #all = &(#expression);
+                let #all = &{
+                    struct Canonical<R>(::cq_storage::HashSet<R>);
+                    impl<R: ::core::marker::Copy> ::cq_storage::rows::Rows for &Canonical<R> {
+                        type Row = R;
+                        fn rows(self) -> impl ::core::iter::Iterator<Item = R> {
+                            self.0.iter().copied()
+                        }
+                    }
+                    Canonical(::cq_storage::rows::Rows::rows(#all).collect())
+                };
+            ));
         } else {
             let seen = &relation.seen;
             bindings.push(quote!(
@@ -145,15 +160,13 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             let relation = &context.relations[index];
             let output = &relation.all;
             if relation.declaration.value.is_some() {
-                // EDB hosts remain borrowed during evaluation. Deduplicate borrowed
-                // rows first so only distinct output values need an owned clone.
+                // Layouts, negative projections, and outputs share the same
+                // canonical borrowed source. Clone only distinct output values.
                 let columns = (0..relation.declaration.arity()).map(|column| {
                     let column = syn::Index::from(column);
                     quote!(::core::clone::Clone::clone(row.#column))
                 });
                 quote!(::cq_storage::rows::Rows::rows(#output)
-                .collect::<::cq_storage::HashSet<_>>()
-                .into_iter()
                 .map(|row| (#(#columns,)*))
                 .collect::<::std::vec::Vec<_>>()
                 .into_iter())

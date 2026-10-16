@@ -34,8 +34,10 @@
 //! relations, not an exact bag-valued product rule.
 //! Full positive reads record `layout R [0,1] key 1;` after deltas and before
 //! variants. Columns form a complete permutation; the leading `key` columns
-//! are variables bound by preceding positive reads. Each variant reads its
-//! delta first, then other positives in written order. Identity/key-zero layouts
+//! are variables bound by earlier positive atoms plus constant expressions.
+//! Every variant retains written body order: a delta adds bindings only at its
+//! actual position and has no maintained full layout. Wildcards and variables
+//! first introduced in the current atom are not keys. Identity/key-zero layouts
 //! represent scans. Decisions are deduplicated in rule/changing-position order,
 //! independently of the written variant order; negation uses its separate policy.
 //! Optional `observe = (|round, delta_rows| ...);` before `struct` observes

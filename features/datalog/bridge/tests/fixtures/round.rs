@@ -1,5 +1,15 @@
 {
     let __cq_datalog_all_0 = &(input);
+    let __cq_datalog_all_0 = &{
+        struct Canonical<R>(::cq_storage::HashSet<R>);
+        impl<R: ::core::marker::Copy> ::cq_storage::rows::Rows for &Canonical<R> {
+            type Row = R;
+            fn rows(self) -> impl ::core::iter::Iterator<Item = R> {
+                self.0.iter().copied()
+            }
+        }
+        Canonical(::cq_storage::rows::Rows::rows(__cq_datalog_all_0).collect())
+    };
     let mut __cq_datalog_all_1: ::std::vec::Vec<(i32,)> = ::std::vec::Vec::new();
     let mut __cq_datalog_seen_1: ::cq_storage::HashSet<(i32,)> = ::core::default::Default::default();
     let mut __cq_datalog_delta_0: ::std::vec::Vec<(i32,)> = ::std::vec::Vec::new();

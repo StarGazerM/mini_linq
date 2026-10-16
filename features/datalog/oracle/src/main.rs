@@ -40,6 +40,8 @@ fn counters() {
         let cost = cq_storage::counters::snapshot();
         assert_eq!(actual, expected, "reach chain n={n}");
         assert_eq!(cost.index_builds, 0, "reach chain n={n}");
+        // Raw EDB canonicalization visits n rows once; its borrowed adapter
+        // adds no core cursor events. Grouped seed/delta/edge reads add 2*n+1.
         assert_eq!(cost.rows_enumerated, 3 * n as u64 + 1, "reach chain n={n}");
         println!(
             "reach\t{n}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",

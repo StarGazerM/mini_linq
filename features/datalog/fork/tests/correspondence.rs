@@ -383,3 +383,110 @@ fn literal_key_filter_correspondence_uses_complete_cq_recognition() {
     changed.holes[hole_index] = changed_hole;
     assert!(check(&source, &changed).is_err());
 }
+
+#[test]
+fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
+    let source: Program = syn::parse_str(include_str!(
+        "../../language/tests/fixtures/written_order.datalog"
+    ))
+    .unwrap();
+    let target = compile(&source).unwrap();
+    let context = &target.context;
+    let probe = &context.layouts[1];
+    assert_eq!(probe.columns, [1, 0]);
+    assert_eq!(probe.key, 1);
+    assert_eq!(context.layouts.len(), 6);
+    let probe_name = &probe.name;
+    let assign_scan = &context.layouts[4].name;
+    let steps = &context.strata[0].steps;
+    let earlier = &target.holes[steps.iter().find(|r| r.variant == 1).unwrap().hole];
+    let expected_probe: BodyItem = syn::parse_quote!(#probe_name(from,heap));
+    assert_eq!(earlier.query.body[1], expected_probe);
+
+    let index = steps.iter().find(|r| r.variant == 4).unwrap().hole;
+    let hole = &target.holes[index];
+    let name = &hole.name;
+    let declarations = &hole.declarations;
+    let expected: cq_lang_cq::Program = syn::parse2(quote! {
+        struct #name;
+        #(#declarations)*
+        #name(*heap,*to) :- #assign_scan(to,from),
+            if *to != 0, if 10 / *to > 0,
+            #probe_name(from,heap), RecentPointsTo(heap,to);
+    })
+    .unwrap();
+    assert_eq!(hole, &expected);
+    assert_eq!(hole.query.body[3], expected_probe);
+    check(&source, &target).unwrap();
+
+    let mut prebound = target.clone();
+    let all_bound = &context.layouts[5].name;
+    prebound.holes[index].query.body[3] = syn::parse_quote!(#all_bound(heap,from));
+    assert!(check(&source, &prebound).is_err());
+    let mut moved_guard = target.clone();
+    let guard = moved_guard.holes[index].query.body[1].clone();
+    moved_guard.holes[index].query.body[1] = moved_guard.holes[index].query.body[2].clone();
+    moved_guard.holes[index].query.body[2] = guard;
+    assert!(check(&source, &moved_guard).is_err());
+    let mut moved_delta = target.clone();
+    let atom = moved_delta.holes[index].query.body[3].clone();
+    moved_delta.holes[index].query.body[3] = moved_delta.holes[index].query.body[4].clone();
+    moved_delta.holes[index].query.body[4] = atom;
+    assert!(check(&source, &moved_delta).is_err());
+}
+
+#[test]
+fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
+    let source: Program = syn::parse_quote! {
+        struct Constants;
+        relation E(x:i32,y:i32,z:i32) = (e);
+        relation R(x:i32);
+        output R;
+        R(*x) :- E(x,x,7), E(_,x,(1 + 2));
+        R(*y) :- E(y,7,_), if *y != 0, R(x), E(x,x,7);
+        strata { component [R]; }
+        seminaive {
+            insert_new hash_set_all_columns;
+            negation_keys hash_set_borrowed;
+            delta R = D;
+            layout E [2,0,1] key 1;
+            layout E [1,2,0] key 2;
+            layout E [1,0,2] key 1;
+            layout E [0,1,2] key 3;
+            variant 0 seed { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
+            variant 1 delta 2 { R(*y) :- E(y,7,_), if *y != 0, D(x), E(x,x,7); }
+        }
+    };
+    let target = compile(&source).unwrap();
+    let layouts = &target.context.layouts;
+    let first = &layouts[0].name;
+    let second = &layouts[1].name;
+    let third = &layouts[2].name;
+    let fourth = &layouts[3].name;
+    let stratum = &target.context.strata[0];
+    for (index, body) in [
+        (
+            stratum.seeds[0].hole,
+            quote!(#first(7,x,x), #second(x,(1 + 2),_)),
+        ),
+        (
+            stratum.steps[0].hole,
+            quote!(#third(7,y,_), if *y != 0, D(x), #fourth(x,x,7)),
+        ),
+    ] {
+        let hole = &target.holes[index];
+        let name = &hole.name;
+        let declarations = &hole.declarations;
+        let head = &hole.query.head;
+        let expected: cq_lang_cq::Program = syn::parse2(quote! {
+            struct #name;
+            #(#declarations)*
+            #head :- #body;
+        })
+        .unwrap();
+        assert_eq!(hole, &expected);
+        let replay: cq_lang_cq::Program = syn::parse2(hole.to_token_stream()).unwrap();
+        assert_eq!(hole, &replay);
+    }
+    check(&source, &target).unwrap();
+}

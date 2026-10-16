@@ -1,4 +1,4 @@
-//! Record the Boolean semi-naive cover and maintained delta-first join layouts.
+//! Record the Boolean semi-naive cover and maintained written-order join layouts.
 
 use crate::ensure;
 use cq_lang_datalog::{BodyItem, Delta, Layout, Program, Variant, check_rewrite, contract};
@@ -90,23 +90,22 @@ fn choose_layouts(variants: &[Variant]) -> Vec<Layout> {
     let mut seen = BTreeSet::new();
     for variant in variants {
         let mut bound = BTreeSet::new();
-        if let Some(position) = variant.delta {
-            let BodyItem::Positive { atom } = &variant.query.body[position] else {
-                unreachable!("delta positions are positive")
-            };
-            bound.extend(atom.variables().map(symbol_name));
-        }
         for (position, item) in variant.query.body.iter().enumerate() {
-            if Some(position) == variant.delta {
-                continue;
-            }
             let BodyItem::Positive { atom } = item else {
                 continue;
             };
+            if Some(position) == variant.delta {
+                bound.extend(atom.variables().map(symbol_name));
+                continue;
+            }
             let mut keys = Vec::new();
             let mut payload = Vec::new();
             for (column, argument) in atom.args.iter().enumerate() {
-                if rust::variable(argument).is_some_and(|id| bound.contains(&symbol_name(id))) {
+                let is_key = match rust::variable(argument) {
+                    Some(id) => bound.contains(&symbol_name(id)),
+                    None => !matches!(rust::unparen(argument), syn::Expr::Infer(_)),
+                };
+                if is_key {
                     keys.push(column);
                 } else {
                     payload.push(column);
