@@ -213,9 +213,14 @@ Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json
 Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
 of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
 
-Remaining Datalog work: decide the duplicate-free host / consumer dedup
-tension above; rule-local aggregates; Ascent lattices and custom providers as
-explicit contracts; FlowLog comparison; partial-Rust multi-round refinement.
+Remaining Datalog work: rule-local aggregates; Ascent lattices and custom
+providers as explicit contracts; FlowLog comparison; partial-Rust multi-round
+refinement.
+
+Pending core fix (approved to record, not yet designed): let lowering know a
+host is duplicate-free, or let a consumer own a query's deduplication, so
+Datalog rule queries stop building a per-call `__cq_seen` set (see the core
+tension above). Expected to close the same-generation gap to Ascent.
 
 The abandoned design (`codex/datalog`, `codex/datalog-lang`,
 `codex/maintained-structures`, `codex/datalog-*`, `codex/tests-reshape`,
