@@ -396,12 +396,23 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
     assert_eq!(probe.columns, [1, 0]);
     assert_eq!(probe.key, 1);
     assert_eq!(context.layouts.len(), 6);
+    assert_eq!(context.delta_layouts.len(), 2);
+    let delta_probe = &context.delta_layouts[0];
+    assert_eq!(delta_probe.columns, [1, 0]);
+    assert_eq!(delta_probe.key, 1);
+    let delta_name = &delta_probe.name;
+    let all_delta = &context.delta_layouts[1].name;
     let probe_name = &probe.name;
     let assign_scan = &context.layouts[4].name;
     let steps = &context.strata[0].steps;
     let earlier = &target.holes[steps.iter().find(|r| r.variant == 1).unwrap().hole];
     let expected_probe: BodyItem = syn::parse_quote!(#probe_name(from,heap));
     assert_eq!(earlier.query.body[1], expected_probe);
+    let delta_expected: BodyItem = syn::parse_quote!(#delta_name(from,heap));
+    for (variant, position) in [(2, 1), (3, 3)] {
+        let hole = &target.holes[steps.iter().find(|r| r.variant == variant).unwrap().hole];
+        assert_eq!(hole.query.body[position], delta_expected);
+    }
 
     let index = steps.iter().find(|r| r.variant == 4).unwrap().hole;
     let hole = &target.holes[index];
@@ -412,7 +423,7 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
         #(#declarations)*
         #name(*heap,*to) :- #assign_scan(to,from),
             if *to != 0, if 10 / *to > 0,
-            #probe_name(from,heap), RecentPointsTo(heap,to);
+            #probe_name(from,heap), #all_delta(heap,to);
     })
     .unwrap();
     assert_eq!(hole, &expected);
@@ -453,6 +464,7 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
             layout E [1,2,0] key 2;
             layout E [1,0,2] key 1;
             layout E [0,1,2] key 3;
+            delta_layout R [0] key 0;
             variant 0 seed { R(*x) :- E(x,x,7), E(_,x,(1 + 2)); }
             variant 1 delta 2 { R(*y) :- E(y,7,_), if *y != 0, D(x), E(x,x,7); }
         }
@@ -463,6 +475,7 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
     let second = &layouts[1].name;
     let third = &layouts[2].name;
     let fourth = &layouts[3].name;
+    let delta = &target.context.delta_layouts[0].name;
     let stratum = &target.context.strata[0];
     for (index, body) in [
         (
@@ -471,7 +484,7 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
         ),
         (
             stratum.steps[0].hole,
-            quote!(#third(7,y,_), if *y != 0, D(x), #fourth(x,x,7)),
+            quote!(#third(7,y,_), if *y != 0, #delta(x), #fourth(x,x,7)),
         ),
     ] {
         let hole = &target.holes[index];
@@ -488,5 +501,121 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
         let replay: cq_lang_cq::Program = syn::parse2(hole.to_token_stream()).unwrap();
         assert_eq!(hole, &replay);
     }
+    check(&source, &target).unwrap();
+}
+
+#[test]
+fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
+    let source: Program = syn::parse_str(include_str!(
+        "../../language/tests/fixtures/delta_probes.datalog"
+    ))
+    .unwrap();
+    let target = compile(&source).unwrap();
+    let context = &target.context;
+    assert_eq!(context.delta_layouts.len(), 4);
+    assert_eq!(context.layouts.len(), 1);
+    let scan = &context.layouts[0].name;
+    let constant = &context.delta_layouts[0].name;
+    let keyed = &context.delta_layouts[1].name;
+    let zero = &context.delta_layouts[2].name;
+    let pair = &context.delta_layouts[3].name;
+    let expected_bodies = [
+        quote!(Recent(x, y, z)),
+        quote!(#constant(7,x,y)),
+        quote!(#scan(_,y,_), #keyed(y,x,z)),
+        quote!(#scan(_,y,_), if *y != 0, if 10 / *y > 0, #keyed(y,x,z)),
+        quote!(#scan(a,b,c), #zero(x,y,z)),
+        quote!(#scan(x,y,_), #pair(x,y,z)),
+        quote!(#constant(7,x,x)),
+    ];
+    for (step, body) in context.strata[0].steps.iter().zip(expected_bodies) {
+        let hole = &target.holes[step.hole];
+        let name = &hole.name;
+        let declarations = &hole.declarations;
+        let head = &hole.query.head;
+        let expected: cq_lang_cq::Program = syn::parse2(quote! {
+            struct #name;
+            #(#declarations)*
+            #head :- #body;
+        })
+        .unwrap();
+        assert_eq!(hole, &expected);
+        assert_eq!(
+            *hole,
+            syn::parse2::<cq_lang_cq::Program>(hole.to_token_stream()).unwrap()
+        );
+        cq_lang_cq::contract::check(hole).unwrap();
+    }
+    check(&source, &target).unwrap();
+    let mutations: &[fn(&mut Fork)] = &[
+        |f| f.context.delta_layouts.clear(),
+        |f| {
+            f.context.delta_layouts.pop();
+        },
+        |f| f.context.delta_layouts.reverse(),
+        |f| {
+            f.context
+                .delta_layouts
+                .push(f.context.delta_layouts[0].clone())
+        },
+        |f| f.context.delta_layouts[0].relation = 0,
+        |f| f.context.delta_layouts[0].relation = usize::MAX,
+        |f| f.context.delta_layouts[0].columns.swap(0, 1),
+        |f| f.context.delta_layouts[0].key = 0,
+        |f| f.context.delta_layouts[0].host = f.context.layouts[0].host.clone(),
+        |f| f.context.delta_layouts[0].name = syn::parse_quote!(Recent),
+        |f| {
+            let hole = f.context.strata[0].steps[2].hole;
+            f.holes[hole].query.body[1] = syn::parse_quote!(Recent(x, y, z));
+        },
+        |f| {
+            let hole = f.context.strata[0].steps[2].hole;
+            let name = &f.context.delta_layouts[1].name;
+            f.holes[hole].query.body[1] = syn::parse_quote!(#name(x,y,z));
+        },
+    ];
+    for (index, mutate) in mutations.iter().enumerate() {
+        let mut changed = target.clone();
+        mutate(&mut changed);
+        assert!(
+            check(&source, &changed).is_err(),
+            "delta fork mutation {index}"
+        );
+    }
+}
+
+#[test]
+fn delta_layout_reorders_heterogeneous_declaration_and_arguments_together() {
+    let source: Program = syn::parse_quote! {
+        struct ReverseDelta;
+        relation E(x:i32,y:String) = (edges);
+        relation R(x:i32,y:String);
+        output R;
+        R(*x,(*y).clone()) :- E(x,y);
+        R(*x,(*y).clone()) :- E(_,y), R(x,y);
+        strata { component [R]; }
+        seminaive {
+            insert_new hash_set_all_columns;
+            negation_keys hash_set_borrowed;
+            delta R = D;
+            layout E [0,1] key 0;
+            delta_layout R [1,0] key 1;
+            variant 0 seed { R(*x,(*y).clone()) :- E(x,y); }
+            variant 1 delta 1 { R(*x,(*y).clone()) :- E(_,y), D(x,y); }
+        }
+    };
+    let target = compile(&source).unwrap();
+    let layout = &target.context.delta_layouts[0];
+    let hole = &target.holes[target.context.strata[0].steps[0].hole];
+    let declaration = hole
+        .declarations
+        .iter()
+        .find(|d| d.name == layout.name)
+        .unwrap();
+    assert_eq!(declaration.columns[0].ty, syn::parse_quote!(String));
+    assert_eq!(declaration.columns[1].ty, syn::parse_quote!(i32));
+    let name = &layout.name;
+    let expected: BodyItem = syn::parse_quote!(#name(y,x));
+    assert_eq!(hole.query.body[1], expected);
     check(&source, &target).unwrap();
 }

@@ -55,6 +55,7 @@ fn source_stratified_and_seminaive_text_have_the_same_answer() {
                 layout Edge [0,1] key 0;
                 layout Reach [0,1] key 1;
                 layout Reach [0,1] key 0;
+                delta_layout Reach [0,1] key 1;
                 variant 0 seed { Reach(*x,*y) :- Edge(x,y); }
                 variant 1 delta 0 { Reach(*x,*z) :- Recent(x,y), Reach(y,z); }
                 variant 1 delta 1 { Reach(*x,*z) :- Reach(x,y), Recent(y,z); }
@@ -153,8 +154,8 @@ fn mutual_recursion_publishes_one_snapshot_per_round() {
             relation Odd(x:i32);
             output Odd;
             Even(*x) :- Seed(x);
-            Odd(*y) :- Even(x), Edge(x,y);
-            Even(*y) :- Odd(x), Edge(x,y);
+            Odd(*y) :- Edge(x,y), Even(x);
+            Even(*y) :- Edge(x,y), Odd(x);
     }
     .collect();
     assert_eq!(answer, BTreeSet::from([(2,), (4,)]));
@@ -686,4 +687,94 @@ fn later_delta_atoms_keep_written_bindings_guards_and_constant_probes() {
         answer.collect::<BTreeSet<_>>(),
         BTreeSet::from([(10, 1), (20, 1), (30, 1), (10, 2), (10, 3), (10, 4)])
     );
+}
+
+#[test]
+fn cyclic_closure_shares_delta_runs_across_holes_and_key_orders() {
+    let edges = [(1, 2), (2, 3), (3, 1), (3, 4), (1, 2), (3, 4)];
+    let rows: Vec<_> = cq_datalog::datalog! {
+        struct SharedDelta;
+        relation Edge(x:i32,y:i32) = (&edges);
+        relation Reach(x:i32,y:i32);
+        output Reach;
+        Reach(*x,*y) :- Edge(x,y);
+        Reach(*x,*z) :- Reach(x,y), Reach(y,z);
+        Reach(*x,*z) :- Edge(x,y), Reach(y,z);
+        Reach(*x,*z) :- Edge(y,z), Reach(x,y);
+        Reach(*x,*y) :- Edge(x,y), Reach(x,y);
+        Reach(*y,*z) :- Reach(1,y), Reach(y,z);
+    }
+    .collect();
+    assert_eq!(rows.len(), 12);
+    assert_eq!(
+        rows.into_iter().collect::<BTreeSet<_>>(),
+        (1..=3).flat_map(|x| (1..=4).map(move |y| (x, y))).collect()
+    );
+}
+
+#[test]
+fn empty_delta_replaces_the_old_run_while_another_member_advances() {
+    use std::cell::Cell;
+    fn record(probes: &Cell<usize>) -> bool {
+        probes.set(probes.get() + 1);
+        true
+    }
+    let probes = Cell::new(0);
+    let probes = &probes;
+    let edges = [(1, 2), (2, 3), (3, 4)];
+    let seed = [(1,), (1,)];
+    let (even, odd) = cq_datalog::datalog! {
+        struct Alternating;
+        relation Edge(x:i32,y:i32) = (&edges);
+        relation Seed(x:i32) = (&seed);
+        relation Even(x:i32);
+        relation Odd(x:i32);
+        output Even, Odd;
+        Even(*x) :- Seed(x);
+        Odd(*y) :- Edge(x,y), Even(x), if record(probes);
+        Even(*y) :- Edge(x,y), Odd(x), if record(probes);
+    };
+    assert_eq!(even.collect::<BTreeSet<_>>(), BTreeSet::from([(1,), (3,)]));
+    assert_eq!(odd.collect::<BTreeSet<_>>(), BTreeSet::from([(2,), (4,)]));
+    // Each matching delta fact is visited only in its own publication, not
+    // again while the other relation keeps this mutually recursive SCC alive.
+    assert_eq!(probes.get(), 3);
+}
+
+#[test]
+fn owned_delta_keys_and_later_zero_key_runs_preserve_guard_order() {
+    let (reach, flags) = {
+        let edges = [
+            (String::from("a"), String::from("b"), 0_i32),
+            (String::from("a"), String::from("b"), 1),
+            (String::from("b"), String::from("c"), 2),
+            (String::from("c"), String::from("a"), 1),
+            (String::from("a"), String::from("b"), 1),
+        ];
+        let seed = [(String::from("a"),), (String::from("a"),)];
+        let flag = [(7_i32,), (7,)];
+        cq_datalog::datalog! {
+            struct OwnedRuns;
+            relation Edge(x:String,y:String,divisor:i32) = (&edges);
+            relation Seed(x:String) = (&seed);
+            relation Flag(flag:i32) = (&flag);
+            relation Reach(x:String);
+            relation SeenFlag(flag:i32);
+            output Reach, SeenFlag;
+            Reach((*x).clone()) :- Seed(x);
+            Reach((*y).clone()) :- Edge(x,y,d), if *d != 0, if 8 / *d > 0, Reach(x);
+            Reach((*x).clone()) :- SeenFlag(f), if *f == 7, Reach(x);
+            SeenFlag(*f) :- Flag(f), Reach(x);
+        }
+    };
+    let reach: Vec<_> = reach.collect();
+    assert_eq!(reach.len(), 3);
+    assert_eq!(
+        reach.into_iter().collect::<BTreeSet<_>>(),
+        ["a", "b", "c"]
+            .into_iter()
+            .map(|x| (x.to_owned(),))
+            .collect()
+    );
+    assert_eq!(flags.collect::<Vec<_>>(), [(7,)]);
 }

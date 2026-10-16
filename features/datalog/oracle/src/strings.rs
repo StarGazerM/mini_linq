@@ -42,6 +42,7 @@ pub fn check(data: &Data) {
     assert_eq!(mini, naive);
     check_constants(data);
     check_canonical_inputs(data);
+    check_delta_runs(data);
 }
 
 // Differential-only cases extend the scenario/random matrices without changing
@@ -260,4 +261,48 @@ fn check_canonical_inputs(data: &Data) {
             .into_iter()
             .flat_map(|((x,), values)| values.into_iter().map(move |(y,)| (x.clone(), y))),
     );
+}
+
+// The same per-round String-keyed run serves nonlinear and linear holes,
+// alongside reversed keys and a later zero-key delta in a mutual SCC.
+fn check_delta_runs(data: &Data) {
+    let label = |x: i32| format!("delta,{x}:λ");
+    let edges: Vec<_> = data
+        .edge
+        .iter()
+        .flat_map(|&(x, y)| [0_i32, 1, 1].map(|divisor| (label(x), label(y), divisor)))
+        .collect();
+    let flags = vec![(7_i32,), (7,)];
+    let oracle = ascent::ascent_run! {
+        relation edge(String,String,i32) = edges.clone();
+        relation flag_input(i32) = flags.clone();
+        relation reach(String,String);
+        relation flag(i32);
+        reach(x.clone(),y.clone()) <-- edge(x,y,_divisor);
+        reach(x.clone(),z.clone()) <-- reach(x,y), reach(y,z);
+        reach(x.clone(),z.clone()) <-- edge(x,y,d), if *d != 0, if 8 / *d > 0, reach(y,z);
+        reach(x.clone(),z.clone()) <-- edge(y,z,d), if *d != 0, if 8 / *d > 0, reach(x,y);
+        reach(x.clone(),y.clone()) <-- edge(x,y,_divisor), reach(x,y);
+        reach(x.clone(),y.clone()) <-- flag(f), if *f == 7, reach(x,y);
+        flag(*f) <-- flag_input(f), reach(_x,_y);
+    };
+    let (reach, flags) = cq_datalog::datalog! {
+        struct DeltaRuns;
+        relation Edge(x:String,y:String,divisor:i32) = (&edges);
+        relation FlagInput(flag:i32) = (&flags);
+        relation Reach(x:String,y:String);
+        relation Flag(flag:i32);
+        output Reach, Flag;
+        Reach((*x).clone(),(*y).clone()) :- Edge(x,y,_);
+        Reach((*x).clone(),(*z).clone()) :- Reach(x,y), Reach(y,z);
+        Reach((*x).clone(),(*z).clone()) :-
+            Edge(x,y,d), if *d != 0, if 8 / *d > 0, Reach(y,z);
+        Reach((*x).clone(),(*z).clone()) :-
+            Edge(y,z,d), if *d != 0, if 8 / *d > 0, Reach(x,y);
+        Reach((*x).clone(),(*y).clone()) :- Edge(x,y,_), Reach(x,y);
+        Reach((*x).clone(),(*y).clone()) :- Flag(f), if *f == 7, Reach(x,y);
+        Flag(*f) :- FlagInput(f), Reach(x,y);
+    };
+    assert_set(reach, oracle.reach);
+    assert_set(flags, oracle.flag);
 }

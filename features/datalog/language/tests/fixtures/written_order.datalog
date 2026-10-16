@@ -17,6 +17,8 @@ seminaive {
     layout VarPointsTo [0,1] key 0;
     layout Assign [0,1] key 0;
     layout VarPointsTo [0,1] key 2;
+    delta_layout VarPointsTo [1,0] key 1;
+    delta_layout VarPointsTo [0,1] key 2;
     variant 0 seed { VarPointsTo(*heap,*var) :- Alloc(heap,var); }
     variant 1 delta 0 { VarPointsTo(*heap,*to) :- RecentPointsTo(other,from), VarPointsTo(heap,from), Assign(to,from); }
     variant 1 delta 1 { VarPointsTo(*heap,*to) :- VarPointsTo(other,from), RecentPointsTo(heap,from), Assign(to,from); }

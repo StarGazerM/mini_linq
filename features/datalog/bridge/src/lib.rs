@@ -6,6 +6,13 @@
 //! `seminaive!` resumes a complete schedule. Every CQ hole receives the same
 //! caller continuation, including unchanged opaque pass arguments. The bridge
 //! owns sets, grouped host layouts and rounds; it adds no planner options.
+//! Full layouts are maintained by inserting each newly admitted row at
+//! publication. Delta layouts are separate grouped `HashMap` hosts: seed
+//! publication and every later publication replace each demanded run once,
+//! including empty runs, before any hole in the next round can borrow it.
+//! All holes sharing a delta layout borrow the same immutable round snapshot.
+//! Keyed delta reads and later key-zero probes use those hosts; only an initial
+//! unkeyed delta atom scans its `Vec`. Written body and guard order is unchanged.
 //! Every EDB is a set: before any layouts or rounds, its generic borrowed `Rows`
 //! host is scanned once into a hash set of borrowed column tuples. All layouts,
 //! negative-key projections, and EDB outputs reuse that canonical source; extra

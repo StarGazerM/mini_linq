@@ -35,11 +35,13 @@
 //! Full positive reads record `layout R [0,1] key 1;` after deltas and before
 //! variants. Columns form a complete permutation; the leading `key` columns
 //! are variables bound by earlier positive atoms plus constant expressions.
-//! Every variant retains written body order: a delta adds bindings only at its
-//! actual position and has no maintained full layout. Wildcards and variables
-//! first introduced in the current atom are not keys. Identity/key-zero layouts
-//! represent scans. Decisions are deduplicated in rule/changing-position order,
-//! independently of the written variant order; negation uses its separate policy.
+//! Delta reads record separate `delta_layout R [1,0] key 1;` entries naming the
+//! base IDB, after full layouts and before variants. Every keyed delta read and
+//! every later key-zero probe has a layout; an initial unkeyed delta stays a Vec
+//! scan. Every variant retains written body order: a delta adds bindings only
+//! at its actual position. Wildcards and variables first introduced in the atom
+//! are not keys. Decisions are deduplicated in rule/changing-position order,
+//! independently of variant order; negation uses its separate policy.
 //! Optional `observe = (|round, delta_rows| ...);` before `struct` observes
 //! nonempty rounds; round numbering restarts for each component. Observation
 //! effects, like all evaluation counts, are outside the query denotation.
@@ -68,6 +70,7 @@ pub mod kw {
     syn::custom_keyword!(insert_new);
     syn::custom_keyword!(negation_keys);
     syn::custom_keyword!(layout);
+    syn::custom_keyword!(delta_layout);
     syn::custom_keyword!(key);
 }
 
@@ -82,6 +85,7 @@ pub struct Program {
     pub variants: Option<Vec<Variant>>,
     pub deltas: Vec<Delta>,
     pub layouts: Vec<Layout>,
+    pub delta_layouts: Vec<Layout>,
     pub insertion: Option<Ident>,
     pub negation_keys: Option<Ident>,
 }
@@ -97,7 +101,7 @@ pub struct Delta {
     pub relation: Ident,
     pub name: Ident,
 }
-/// A maintained full-relation grouping, with key columns preceding payload columns.
+/// A full or delta grouping, naming its base relation with keys before payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub relation: Ident,
@@ -157,76 +161,97 @@ impl Parse for Program {
         } else {
             None
         };
-        let (variants, insertion, negation_keys, deltas, layouts) = if input.peek(kw::seminaive) {
-            input.parse::<kw::seminaive>()?;
-            let body;
-            syn::braced!(body in input);
-            body.parse::<kw::insert_new>()?;
-            let insertion = body.parse()?;
-            body.parse::<Token![;]>()?;
-            body.parse::<kw::negation_keys>()?;
-            let negation_keys = body.parse()?;
-            body.parse::<Token![;]>()?;
-            let mut deltas = Vec::new();
-            while body.peek(kw::delta) {
-                body.parse::<kw::delta>()?;
-                let relation = body.parse()?;
-                body.parse::<Token![=]>()?;
-                let name = body.parse()?;
+        let (variants, insertion, negation_keys, deltas, layouts, delta_layouts) =
+            if input.peek(kw::seminaive) {
+                input.parse::<kw::seminaive>()?;
+                let body;
+                syn::braced!(body in input);
+                body.parse::<kw::insert_new>()?;
+                let insertion = body.parse()?;
                 body.parse::<Token![;]>()?;
-                deltas.push(Delta { relation, name });
-            }
-            let mut layouts = Vec::new();
-            while body.peek(kw::layout) {
-                body.parse::<kw::layout>()?;
-                let relation = body.parse()?;
-                let columns;
-                syn::bracketed!(columns in body);
-                let columns = columns
-                    .parse_terminated(number, Token![,])?
-                    .into_iter()
-                    .collect();
-                body.parse::<kw::key>()?;
-                let key = number(&body)?;
+                body.parse::<kw::negation_keys>()?;
+                let negation_keys = body.parse()?;
                 body.parse::<Token![;]>()?;
-                layouts.push(Layout {
-                    relation,
-                    columns,
-                    key,
-                });
-            }
-            let mut variants = Vec::new();
-            while !body.is_empty() {
-                body.parse::<kw::variant>()?;
-                let rule = number(&body)?;
-                let delta = if body.peek(kw::seed) {
-                    body.parse::<kw::seed>()?;
-                    None
-                } else {
+                let mut deltas = Vec::new();
+                while body.peek(kw::delta) {
                     body.parse::<kw::delta>()?;
-                    Some(number(&body)?)
-                };
-                let query;
-                syn::braced!(query in body);
-                variants.push(Variant {
-                    rule,
-                    delta,
-                    query: query.parse()?,
-                });
-                if !query.is_empty() {
-                    return Err(query.error("unexpected variant text"));
+                    let relation = body.parse()?;
+                    body.parse::<Token![=]>()?;
+                    let name = body.parse()?;
+                    body.parse::<Token![;]>()?;
+                    deltas.push(Delta { relation, name });
                 }
-            }
-            (
-                Some(variants),
-                Some(insertion),
-                Some(negation_keys),
-                deltas,
-                layouts,
-            )
-        } else {
-            (None, None, None, Vec::new(), Vec::new())
-        };
+                let mut layouts = Vec::new();
+                while body.peek(kw::layout) {
+                    body.parse::<kw::layout>()?;
+                    let relation = body.parse()?;
+                    let columns;
+                    syn::bracketed!(columns in body);
+                    let columns = columns
+                        .parse_terminated(number, Token![,])?
+                        .into_iter()
+                        .collect();
+                    body.parse::<kw::key>()?;
+                    let key = number(&body)?;
+                    body.parse::<Token![;]>()?;
+                    layouts.push(Layout {
+                        relation,
+                        columns,
+                        key,
+                    });
+                }
+                let mut delta_layouts = Vec::new();
+                while body.peek(kw::delta_layout) {
+                    body.parse::<kw::delta_layout>()?;
+                    let relation = body.parse()?;
+                    let columns;
+                    syn::bracketed!(columns in body);
+                    let columns = columns
+                        .parse_terminated(number, Token![,])?
+                        .into_iter()
+                        .collect();
+                    body.parse::<kw::key>()?;
+                    let key = number(&body)?;
+                    body.parse::<Token![;]>()?;
+                    delta_layouts.push(Layout {
+                        relation,
+                        columns,
+                        key,
+                    });
+                }
+                let mut variants = Vec::new();
+                while !body.is_empty() {
+                    body.parse::<kw::variant>()?;
+                    let rule = number(&body)?;
+                    let delta = if body.peek(kw::seed) {
+                        body.parse::<kw::seed>()?;
+                        None
+                    } else {
+                        body.parse::<kw::delta>()?;
+                        Some(number(&body)?)
+                    };
+                    let query;
+                    syn::braced!(query in body);
+                    variants.push(Variant {
+                        rule,
+                        delta,
+                        query: query.parse()?,
+                    });
+                    if !query.is_empty() {
+                        return Err(query.error("unexpected variant text"));
+                    }
+                }
+                (
+                    Some(variants),
+                    Some(insertion),
+                    Some(negation_keys),
+                    deltas,
+                    layouts,
+                    delta_layouts,
+                )
+            } else {
+                (None, None, None, Vec::new(), Vec::new(), Vec::new())
+            };
         Ok(Self {
             name,
             declarations,
@@ -237,6 +262,7 @@ impl Parse for Program {
             variants,
             deltas,
             layouts,
+            delta_layouts,
             insertion,
             negation_keys,
         })
@@ -254,6 +280,7 @@ impl ToTokens for Program {
             variants,
             deltas,
             layouts,
+            delta_layouts,
             insertion,
             negation_keys,
         } = self;
@@ -290,10 +317,16 @@ impl ToTokens for Program {
                 let key = syn::Index::from(layout.key);
                 quote!(layout #relation [#(#columns),*] key #key;)
             });
+            let delta_layouts = delta_layouts.iter().map(|layout| {
+                let relation = &layout.relation;
+                let columns = layout.columns.iter().copied().map(syn::Index::from);
+                let key = syn::Index::from(layout.key);
+                quote!(delta_layout #relation [#(#columns),*] key #key;)
+            });
             tokens.extend(quote!(seminaive {
                 insert_new #insertion;
                 negation_keys #negation_keys;
-                #(#deltas)* #(#layouts)* #(#variants)*
+                #(#deltas)* #(#layouts)* #(#delta_layouts)* #(#variants)*
             }));
         }
     }
@@ -498,7 +531,8 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
             p.insertion.is_none()
                 && p.negation_keys.is_none()
                 && p.deltas.is_empty()
-                && p.layouts.is_empty(),
+                && p.layouts.is_empty()
+                && p.delta_layouts.is_empty(),
             p,
             "insertion and negation key policies, deltas and layouts require seminaive variants",
         );
@@ -588,6 +622,7 @@ fn source_only(p: &Program) -> Program {
     p.negation_keys = None;
     p.deltas.clear();
     p.layouts.clear();
+    p.delta_layouts.clear();
     p
 }
 /// Facts established by the language contract, indexed in declaration/rule order.
@@ -731,6 +766,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
                 && source.deltas == target.deltas
                 && source.insertion == target.insertion
                 && source.layouts == target.layouts
+                && source.delta_layouts == target.delta_layouts
                 && source.negation_keys == target.negation_keys),
         target,
         "Datalog pass changed existing semi-naive decisions",

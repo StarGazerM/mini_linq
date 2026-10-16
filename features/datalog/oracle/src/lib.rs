@@ -2,7 +2,9 @@
 //! `datalog-oracle golden --write` is the only golden regeneration command.
 //! Owned-string differential matrices also compare each heterogeneous output
 //! against sequential Ascent: literal selections and heads, computed descriptors,
-//! renamed keyword variables, and constant-filtered stratified negation.
+//! renamed keyword variables, constant-filtered stratified negation, and shared
+//! delta runs with distinct key orders, later zero-key probes, nonlinear and
+//! mutual recursion, duplicate inputs, and guards before indexed delta reads.
 //! These cases do not alter the existing integer CSV golden corpus.
 //!
 //! Run from `features/datalog`:

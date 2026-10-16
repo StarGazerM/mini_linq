@@ -6,8 +6,8 @@
 //! Key-hole correspondence compares complete parsed CQ programs, including
 //! CQ's schema-aware guard recognition, rather than raw isolated predicates.
 //! Full hosts use keys bound by earlier positive atoms plus constant arguments.
-//! Delta atoms add bindings only where written and remain ordinary delta hosts;
-//! no atom or partial Rust guard is moved to enable a layout.
+//! Delta probes use separately recorded layouts; an initial unkeyed delta scans
+//! its ordinary host. No atom or partial Rust guard is moved to enable a layout.
 
 use cq_lang_cq::{BodyItem, Program as CqProgram};
 use cq_lang_datalog::{Program, contract};
@@ -29,7 +29,7 @@ pub struct Relation {
     pub delta_host: Option<Ident>,
 }
 
-/// A selected full-relation layout exposed as an ordinary borrowed CQ host.
+/// A selected full or delta layout exposed as an ordinary borrowed CQ host.
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub relation: usize,
@@ -79,6 +79,7 @@ pub struct Stratum {
 pub struct RoundContext {
     pub relations: Vec<Relation>,
     pub layouts: Vec<Layout>,
+    pub delta_layouts: Vec<Layout>,
     pub strata: Vec<Stratum>,
     pub outputs: Vec<usize>,
     pub observer: Option<Expr>,
@@ -157,7 +158,7 @@ fn inputs(context: &RoundContext) -> Vec<RelationDecl> {
             declarations.push(declaration);
         }
     }
-    for layout in &context.layouts {
+    for layout in context.layouts.iter().chain(&context.delta_layouts) {
         let mut declaration = context.relations[layout.relation].declaration.clone();
         declaration.name = layout.name.clone();
         declaration.columns = layout
@@ -175,18 +176,18 @@ fn inputs(context: &RoundContext) -> Vec<RelationDecl> {
 // Layouts change only positional host representation, never Rust-step order.
 fn use_layouts(query: &mut cq_lang_cq::Query, context: &RoundContext) -> syn::Result<()> {
     let mut bound = BTreeSet::new();
-    for item in &mut query.body {
+    for (position, item) in query.body.iter_mut().enumerate() {
         let BodyItem::Positive { atom } = item else {
             continue;
         };
-        let Some(relation) = context
+        let relation = context
             .relations
             .iter()
-            .position(|r| r.declaration.name == atom.relation)
-        else {
-            bound.extend(atom.variables().map(symbol_name));
-            continue;
-        };
+            .position(|r| {
+                r.declaration.name == atom.relation || r.delta.as_ref() == Some(&atom.relation)
+            })
+            .ok_or_else(|| syn::Error::new_spanned(&*atom, "undeclared positive host"))?;
+        let is_delta = context.relations[relation].delta.as_ref() == Some(&atom.relation);
         let keys: Vec<_> = atom
             .args
             .iter()
@@ -200,13 +201,21 @@ fn use_layouts(query: &mut cq_lang_cq::Query, context: &RoundContext) -> syn::Re
             })
             .collect();
         let key = keys.len();
+        if is_delta && key == 0 && position == 0 {
+            bound.extend(atom.variables().map(symbol_name));
+            continue;
+        }
         let columns: Vec<_> = keys
             .iter()
             .copied()
             .chain((0..atom.args.len()).filter(|i| !keys.contains(i)))
             .collect();
-        let layout = context
-            .layouts
+        let layouts = if is_delta {
+            &context.delta_layouts
+        } else {
+            &context.layouts
+        };
+        let layout = layouts
             .iter()
             .find(|layout| {
                 layout.relation == relation && layout.columns == columns && layout.key == key
@@ -297,6 +306,17 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
                 key: layout.key,
                 name: fresh.id("layout"),
                 host: fresh.id("host"),
+            })
+            .collect(),
+        delta_layouts: source
+            .delta_layouts
+            .iter()
+            .map(|layout| Layout {
+                relation: analysis.positions[&symbol_name(&layout.relation)],
+                columns: layout.columns.clone(),
+                key: layout.key,
+                name: fresh.id("delta_layout"),
+                host: fresh.id("delta_host"),
             })
             .collect(),
         strata: Vec::new(),
@@ -471,11 +491,17 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
         }
     }
     ensure(
-        context.layouts.len() == source.layouts.len(),
+        context.layouts.len() == source.layouts.len()
+            && context.delta_layouts.len() == source.delta_layouts.len(),
         source,
         "fork changed layout coverage",
     )?;
-    for (layout, expected) in context.layouts.iter().zip(&source.layouts) {
+    for (layout, expected) in context
+        .layouts
+        .iter()
+        .zip(&source.layouts)
+        .chain(context.delta_layouts.iter().zip(&source.delta_layouts))
+    {
         ensure(
             layout.relation == analysis.positions[&symbol_name(&expected.relation)]
                 && layout.columns == expected.columns

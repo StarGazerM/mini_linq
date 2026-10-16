@@ -14,7 +14,13 @@ fn scheduled() -> Program {
 
 #[test]
 fn authored_stages_check_and_round_trip_independently() {
-    for text in [SOURCE, STRATIFIED, SEMINAIVE] {
+    for text in [
+        SOURCE,
+        STRATIFIED,
+        SEMINAIVE,
+        include_str!("fixtures/written_order.datalog"),
+        include_str!("fixtures/delta_probes.datalog"),
+    ] {
         let program: Program = syn::parse_str(text).unwrap();
         contract::check(&program).unwrap();
         assert_eq!(

@@ -86,13 +86,16 @@ fn authored_round_expansion_matches_independent_fixture() {
     let source = source();
     let program: cq_lang_datalog::Program = syn::parse2(quote! {
         #source
+        R(*x) :- E(x), R(x);
         strata { component [R]; }
         seminaive {
             insert_new hash_set_all_columns;
             negation_keys hash_set_borrowed;
             delta R = Recent;
             layout E [0] key 0;
+            delta_layout R [0] key 1;
             variant 0 seed { R(*x) :- E(x); }
+            variant 1 delta 1 { R(*x) :- E(x), Recent(x); }
         }
     })
     .unwrap();
@@ -156,6 +159,7 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
             layout E [0,1] key 0;
             layout R [0,1] key 1;
             layout R [0,1] key 0;
+            delta_layout R [0,1] key 1;
             variant 0 seed { R((*x).clone(),(*y).clone()) :- E(x,y); }
             variant 1 delta 0 { R((*x).clone(),(*z).clone()) :- D(x,y), R(y,z); }
             variant 1 delta 1 { R((*x).clone(),(*z).clone()) :- R(x,y), D(y,z); }
@@ -186,6 +190,118 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
     assert_eq!(rendered.matches("Rows :: rows").count(), 2);
     let last_step = rendered.find("__cq_datalog_hole_2 ()").unwrap();
     assert!(rendered.rfind(&expected_updates).unwrap() > last_step);
+}
+
+#[test]
+fn delta_layout_runs_are_built_once_per_publication_outside_all_holes() {
+    let source: cq_lang_datalog::Program = syn::parse_quote! {
+        struct SharedRuns;
+        relation E(x:String,y:String) = (edges);
+        relation R(x:String,y:String);
+        output R;
+        R((*x).clone(),(*y).clone()) :- E(x,y);
+        R((*x).clone(),(*z).clone()) :- R(x,y), R(y,z);
+        R((*x).clone(),(*z).clone()) :- E(x,y), R(y,z);
+        R((*x).clone(),(*z).clone()) :- E(x,y), R(z,y);
+        R((*x).clone(),(*z).clone()) :- E(x,y), R(z,w);
+    };
+    let strata = cq_datalog_schedule::stratify::compile(&source).unwrap();
+    let program = cq_datalog_schedule::seminaive::compile(&strata).unwrap();
+    let fork = cq_datalog_fork::fork(&program, |hole| {
+        let name = hole.name;
+        Ok(quote!(#name()))
+    })
+    .unwrap();
+    assert_eq!(fork.context.delta_layouts.len(), 3);
+    let builds: Vec<_> = fork
+        .context
+        .delta_layouts
+        .iter()
+        .map(|layout| {
+            let host = &layout.host;
+            let delta = fork.context.relations[layout.relation]
+                .delta_host
+                .as_ref()
+                .unwrap();
+            let columns: Vec<_> = layout
+                .columns
+                .iter()
+                .map(|&column| {
+                    let column = syn::Index::from(column);
+                    quote!(::core::clone::Clone::clone(&row.#column))
+                })
+                .collect();
+            let (keys, values) = columns.split_at(layout.key);
+            let build: syn::Expr = syn::parse_quote!({
+                #host = ::core::default::Default::default();
+                for row in &#delta {
+                    #host.entry((#(#keys,)*))
+                        .or_default().push((#(#values,)*));
+                }
+            });
+            build
+        })
+        .collect();
+    let seed = fork.holes[fork.context.strata[0].seeds[0].hole].to_string();
+    let steps: Vec<_> = fork.context.strata[0]
+        .steps
+        .iter()
+        .map(|rule| fork.holes[rule.hole].to_string())
+        .collect();
+    let rendered: syn::ExprBlock = syn::parse2(render::render(fork)).unwrap();
+    let text = rendered.to_token_stream().to_string();
+    for build in &builds {
+        assert_eq!(
+            text.matches(&build.to_token_stream().to_string()).count(),
+            2,
+            "one seed build and one round build, with no per-hole copies"
+        );
+    }
+    let stratum = rendered
+        .block
+        .stmts
+        .iter()
+        .find_map(|stmt| match stmt {
+            syn::Stmt::Expr(syn::Expr::Block(block), _) => Some(&block.block),
+            _ => None,
+        })
+        .unwrap();
+    let round = stratum
+        .stmts
+        .iter()
+        .find_map(|stmt| match stmt {
+            syn::Stmt::Expr(syn::Expr::While(loop_), _) => Some(&loop_.body),
+            _ => None,
+        })
+        .unwrap();
+    for (block, holes) in [(stratum, vec![seed]), (round, steps)] {
+        let positions: Vec<_> = builds
+            .iter()
+            .map(|build| {
+                let positions: Vec<_> = block
+                    .stmts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, stmt)| match stmt {
+                        syn::Stmt::Expr(expr, _) if expr == build => Some(i),
+                        _ => None,
+                    })
+                    .collect();
+                // The complete replacement/build is a direct sibling after
+                // the holes, never nested in their candidate-row loops.
+                assert_eq!(positions.len(), 1);
+                positions[0]
+            })
+            .collect();
+        for hole in holes {
+            let position = block
+                .stmts
+                .iter()
+                .position(|stmt| stmt.to_token_stream().to_string().contains(&hole))
+                .unwrap();
+            assert!(positions.iter().all(|&build| build > position));
+        }
+    }
 }
 
 #[test]

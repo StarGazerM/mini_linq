@@ -28,6 +28,17 @@
 //! pipeline; its arguments are forwarded without additions. [`stratified!`]
 //! resumes text containing checked `strata` decisions, while [`seminaive!`]
 //! resumes text also containing explicit delta variants and index layouts.
+//! Full and delta layout decisions are distinct: for example,
+//! `delta_layout Reach [1,0] key 1;` names the base IDB `Reach`, orders its
+//! columns, and selects a one-column key for its current delta. These entries
+//! follow all `layout` entries and precede variants in a `seminaive` block.
+//! Full layouts receive per-admitted-row insertions. Each demanded delta
+//! layout is batch-built once at seed publication and once at every subsequent
+//! publication, replacing the previous run even when the new delta is empty.
+//! The next round's holes share that immutable grouped host rather than
+//! building private indexes. Keyed delta reads and later zero-key probes use
+//! these layouts; only a first-position unkeyed delta remains a `Vec` scan.
+//! Neither layout selection nor publication reorders written atoms or guards.
 //!
 //! `output A, B;` returns a tuple of owned `Vec::IntoIter`s in the written
 //! output order, even when dependency order differs. One output still returns
@@ -76,8 +87,10 @@
 //! bundled DuckDB even though the Datalog oracle itself uses sequential Ascent.
 //!
 //! Counters are opt-in; `bench` rejects counters-enabled builds. Counters describe
-//! the ordinary CQ runtime: Datalog-owned fast-hashed host maps and canonical-set
-//! writes are not counted as core index builds.
+//! the ordinary CQ runtime: Datalog-owned fast-hashed full-layout insertions,
+//! delta-run batch builds, and canonical-set writes are not counted as core
+//! index builds. Compatible borrowed keys probe both grouped host kinds
+//! natively; counter regressions require zero per-hole fallback builds.
 //! `layout_mismatch` measures native host probing versus a fallback for the
 //! other column, checking identical complete answers in both cases.
 //! Benchmarks use sequential Ascent and five-run medians; inputs are loaded

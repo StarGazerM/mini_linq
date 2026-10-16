@@ -8,7 +8,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     if program.variants.is_none() {
         return Ok(());
     }
-    for layout in &program.layouts {
+    for layout in program.layouts.iter().chain(&program.delta_layouts) {
         let index = analysis
             .positions
             .get(&symbol_name(&layout.relation))
@@ -30,7 +30,16 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             "layout key exceeds relation arity",
         )?;
     }
+    for layout in &program.delta_layouts {
+        let index = analysis.positions[&symbol_name(&layout.relation)];
+        ensure(
+            program.declarations[index].value.is_none(),
+            &layout.relation,
+            "delta layout must name a base IDB relation",
+        )?;
+    }
     let mut expected = Vec::new();
+    let mut expected_delta = Vec::new();
     for (rule, query) in program.rules.iter().enumerate() {
         let changing = &analysis.changing_positions[rule];
         let drivers: Vec<_> = if changing.is_empty() {
@@ -44,10 +53,6 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 let BodyItem::Positive { atom } = item else {
                     continue;
                 };
-                if Some(position) == driver {
-                    bound.extend(atom.variables().map(symbol_name));
-                    continue;
-                }
                 let is_bound: Vec<_> = atom
                     .args
                     .iter()
@@ -66,6 +71,15 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                     columns,
                     key,
                 };
+                let expected = if Some(position) == driver {
+                    if key == 0 && position == 0 {
+                        bound.extend(atom.variables().map(symbol_name));
+                        continue;
+                    }
+                    &mut expected_delta
+                } else {
+                    &mut expected
+                };
                 if !expected.contains(&layout) {
                     expected.push(layout);
                 }
@@ -77,5 +91,10 @@ pub(crate) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         program.layouts == expected,
         program,
         "layouts must exactly match written-order positive join choices in stable rule order",
+    )?;
+    ensure(
+        program.delta_layouts == expected_delta,
+        program,
+        "delta layouts must exactly match written-order delta probes in stable rule order",
     )
 }

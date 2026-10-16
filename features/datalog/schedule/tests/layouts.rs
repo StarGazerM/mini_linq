@@ -135,6 +135,7 @@ fn later_delta_reuses_the_existing_var_points_to_column_one_layout() {
     strata.variants = None;
     strata.deltas.clear();
     strata.layouts.clear();
+    strata.delta_layouts.clear();
     strata.insertion = None;
     strata.negation_keys = None;
     let target = seminaive::compile(&strata).unwrap();
@@ -154,6 +155,49 @@ fn later_delta_reuses_the_existing_var_points_to_column_one_layout() {
             ("VarPointsTo".into(), vec![0, 1], 2),
         ]
     );
+    let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
+    assert_eq!(target, replay);
+    seminaive::check(&strata, &replay).unwrap();
+}
+
+#[test]
+fn delta_demands_cover_constants_later_scans_and_shared_mixed_keys_exactly() {
+    let text = include_str!("../../language/tests/fixtures/delta_probes.datalog");
+    let authored: Program = syn::parse_str(text).unwrap();
+    let mut source = authored.clone();
+    source.strata = None;
+    source.variants = None;
+    source.deltas.clear();
+    source.layouts.clear();
+    source.delta_layouts.clear();
+    source.insertion = None;
+    source.negation_keys = None;
+    let (strata, target) = scheduled(source);
+    seminaive::check(&strata, &authored).unwrap();
+    let expected: Program =
+        syn::parse_str(&text.replace("Recent", &target.deltas[0].name.to_string())).unwrap();
+    assert_eq!(target, expected);
+    let decisions: Vec<_> = target
+        .delta_layouts
+        .iter()
+        .map(|layout| {
+            (
+                layout.relation.to_string(),
+                layout.columns.clone(),
+                layout.key,
+            )
+        })
+        .collect();
+    assert_eq!(
+        decisions,
+        vec![
+            ("R".into(), vec![2, 0, 1], 1),
+            ("R".into(), vec![1, 0, 2], 1),
+            ("R".into(), vec![0, 1, 2], 0),
+            ("R".into(), vec![0, 1, 2], 2),
+        ]
+    );
+    assert_eq!(choices(&target), vec![("E".into(), vec![0, 1, 2], 0)]);
     let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(target, replay);
     seminaive::check(&strata, &replay).unwrap();

@@ -50,7 +50,7 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             );
         }
     }
-    for layout in &context.layouts {
+    for layout in context.layouts.iter().chain(&context.delta_layouts) {
         let relation = &context.relations[layout.relation];
         let host = &layout.host;
         let types: Vec<_> = layout
@@ -63,6 +63,7 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             let mut #host: ::std::collections::HashMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>, ::cq_storage::HashState>
                 = ::core::default::Default::default();
         ));
+        // Delta layouts name IDBs, so both IDB host kinds start empty.
         if relation.declaration.value.is_some() {
             let all = &relation.all;
             let insert = insert_layout(layout, true);
@@ -119,12 +120,28 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
                     .filter(|layout| layout.relation == i)
                     .map(|layout| insert_layout(layout, false))
                     .collect();
+                // Keep admitted-row maintenance separate from delta-run builds.
                 let updates =
-                    (!updates.is_empty()).then(|| quote!(for row in &#next { #(#updates)* }));
+                    (!updates.is_empty()).then(|| quote!({ for row in &#next { #(#updates)* } }));
+                let delta_runs = context
+                    .delta_layouts
+                    .iter()
+                    .filter(|layout| layout.relation == i)
+                    .map(|layout| {
+                        let host = &layout.host;
+                        let insert = insert_layout(layout, false);
+                        // Replace even an empty run: another SCC member may
+                        // continue, but must never see this relation's old delta.
+                        quote!({
+                            #host = ::core::default::Default::default();
+                            for row in &#delta { #insert }
+                        })
+                    });
                 quote!(
                     #updates
                     #all.extend(#next.iter().cloned());
                     #delta = #next;
+                    #(#delta_runs)*
                 )
             })
             .collect();

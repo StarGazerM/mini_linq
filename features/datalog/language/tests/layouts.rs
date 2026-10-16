@@ -59,6 +59,8 @@ fn unscheduled_stages_cannot_hide_layout_decisions() {
             key: 0,
         });
         assert!(contract::check(&program).is_err());
+        program.delta_layouts = std::mem::take(&mut program.layouts);
+        assert!(contract::check(&program).is_err());
     }
 }
 
@@ -69,6 +71,8 @@ fn layout_syntax_has_one_unambiguous_position_and_round_trips() {
     assert_eq!(program.layouts[2].columns, vec![0, 1]);
     let restored: Program = syn::parse2(program.to_token_stream()).unwrap();
     assert_eq!(restored.layouts, program.layouts);
+    assert_eq!(restored.delta_layouts, program.delta_layouts);
+    assert_eq!(program.delta_layouts.len(), 1);
     for malformed in [
         SEMINAIVE.replace("layout Edge [0,1] key 0;", "layout Edge [0,1] 0;"),
         SEMINAIVE.replace("layout Edge [0,1] key 0;", "layout Edge [0,1] key -1;"),
@@ -82,6 +86,22 @@ fn layout_syntax_has_one_unambiguous_position_and_round_trips() {
                 "variant 1 delta 0",
                 "layout Edge [0,1] key 0; variant 1 delta 0",
             ),
+        SEMINAIVE.replace(
+            "delta_layout Reach [0,1] key 1;",
+            "delta_layout Reach [0,1] 1;",
+        ),
+        SEMINAIVE.replace(
+            "delta_layout Reach [0,1] key 1;",
+            "delta_layout Reach [0,1] key -1;",
+        ),
+        SEMINAIVE.replace(
+            "layout Edge [0,1] key 0;",
+            "delta_layout Reach [0,1] key 1; layout Edge [0,1] key 0;",
+        ),
+        SEMINAIVE.replace(
+            "variant 1 delta 0",
+            "delta_layout Reach [0,1] key 1; variant 1 delta 0",
+        ),
     ] {
         assert!(
             syn::parse_str::<Program>(&malformed).is_err(),
@@ -97,11 +117,13 @@ fn variant_order_does_not_redefine_layout_order_but_rewrites_preserve_both() {
     target.variants.as_mut().unwrap().reverse();
     contract::check(&target).unwrap();
     assert_eq!(source.layouts, target.layouts);
+    assert_eq!(source.delta_layouts, target.delta_layouts);
     assert!(check_rewrite(&source, &target).is_err());
     let mut erased = source.clone();
     erased.variants = None;
     erased.deltas.clear();
     erased.layouts.clear();
+    erased.delta_layouts.clear();
     erased.insertion = None;
     erased.negation_keys = None;
     contract::check(&erased).unwrap();
@@ -163,4 +185,45 @@ fn authored_constant_keys_do_not_bind_wildcards_or_repeated_new_variables() {
     let mut wildcard = source.clone();
     wildcard.layouts[1].key = 3;
     assert!(contract::check(&wildcard).is_err());
+}
+
+#[test]
+fn delta_layout_records_are_exact_ordered_idb_demands() {
+    let original: Program = syn::parse_str(include_str!("fixtures/written_order.datalog")).unwrap();
+    let mutations: &[fn(&mut Program)] = &[
+        |p| p.delta_layouts.clear(),
+        |p| {
+            p.delta_layouts.pop();
+        },
+        |p| p.delta_layouts.push(p.delta_layouts[0].clone()),
+        |p| p.delta_layouts.reverse(),
+        |p| p.delta_layouts[0].relation = syn::parse_quote!(Unknown),
+        |p| p.delta_layouts[0].relation = syn::parse_quote!(RecentPointsTo),
+        |p| p.delta_layouts[0].relation = syn::parse_quote!(Assign),
+        |p| p.delta_layouts[0].columns.clear(),
+        |p| p.delta_layouts[0].columns = vec![0],
+        |p| p.delta_layouts[0].columns = vec![0, 0],
+        |p| p.delta_layouts[0].columns = vec![0, 2],
+        |p| p.delta_layouts[0].columns = vec![0, 1, 2],
+        |p| p.delta_layouts[0].columns = vec![0, 1],
+        |p| p.delta_layouts[0].key = 0,
+        |p| p.delta_layouts[0].key = 2,
+        |p| p.delta_layouts[0].key = 3,
+        |p| {
+            p.delta_layouts.push(Layout {
+                relation: syn::parse_quote!(VarPointsTo),
+                columns: vec![0, 1],
+                key: 0,
+            })
+        },
+    ];
+    for (index, mutate) in mutations.iter().enumerate() {
+        let mut changed = original.clone();
+        mutate(&mut changed);
+        assert!(contract::check(&changed).is_err(), "delta mutation {index}");
+        assert!(
+            check_rewrite(&original, &changed).is_err(),
+            "delta rewrite {index}"
+        );
+    }
 }
