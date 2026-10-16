@@ -163,3 +163,136 @@ Toolchain limitations hit (details in `features/gpu/README.md` and
 3. The non-generic `load()` binds the first package-named bundle, so a
    library and its oracle binary cannot live in the same package.
 
+
+## Compiler divergence status (2026-10-16)
+
+Landed on `gpu` through the public pipeline, each a recorded decision with an
+independent check and no RA′/VO/Physical grammar change:
+
+| Piece | Home | Formal rule |
+|---|---|---|
+| `cq_planners::order(le)`: lookups as non-introducing partial subatoms in GYO ear order, coarse expansions delayed to first use / Rust Before boundary / scope exit | features/planners | Plan-Le, CK-Le |
+| `SortedRun<K,V,C>`: stable clustered payloads, CSR offsets, Copy `RunCursor`, bounded rank directory | runtime/cq-storage | STR-SortedRun |
+| `cq_rewrites::sorted_runs`: retypes one-level builds with an integral codec | features/rewrites | EXT-SortedRuns |
+| `p via cursor s;`: a probe expands the earlier semi's cursor, residual key columns filtered on payload; opt-in via `cq_rewrites::retained_lookups` | cq-lang-structures, realization | STR-RetainedCursor |
+
+SF1 CPU evidence is in `doc/STATUS.md` (`order(le)`): 16–22 % faster where a
+cursor is retained on an integral-key build (H03, H07, H07-block, H08), slower
+where it cannot be (host-fallback keysets, composite `HashIndex` whose cursor
+holds an `Rc`). The next CPU lever is a Copy cursor for `HashIndex`.
+
+## `cq-lang-device`: grammar and contract (draft for review)
+
+Shape: an external stacked language over the complete Structures program,
+exactly like `features/stacked-ir`'s Trace over Physical: text is
+`physical { … } structures { … } device { … }`; the local contract checks
+Structures and the annotation; `Structures → Device` is a `cq_stage::pass`
+with its own correspondence check; the GPU printer is the terminal
+`Device → syn::Expr`. The language crate is plain Rust (syn) and lives in
+`features/gpu`; only the printer's generated code needs the nightly pin. No
+core crate depends on cuda-oxide.
+
+```text
+Device    ::= "device" "{" Tile? Column* Run* Filter* Kernel* Store* "}"
+Tile      ::= "tile" Int "x" Int ";"                        // threads × items per thread (default 256 x 4)
+Column    ::= "column" Ident "." Ident "=" Layout ";"       // host column on device
+Layout    ::= "i32" | "i64" | "dict" Ident                  // strings are dictionary ids, dictionary named
+Run       ::= "run" Ident "=" "Run" "[" Ident,* "]" Directory Blocks? Build ";"
+Directory ::= "directory" ("rank" | "fences" | "none")
+Blocks    ::= "blocks" Int
+Build     ::= "build" ("counting" | "sort")                 // counting requires an integral codec in Structures
+Filter    ::= "filter" Ident "=" ("Bitmap" | "Bloom" | "DeviceSet") "[" Ident,* "]" ";"
+Kernel    ::= "kernel" Ident "=" "stream" Ident "{" Step* "}" Policy* ";"
+Step      ::= "scan" Ident
+            | "filter" Ident                                 // a Structures membership / join-filter read
+            | "guard" Ident                                  // a total Rust guard, lowered to a device expression
+            | "compact" Float                                // activity threshold θ
+            | "lookup" Ident "[" Ident,* "]" "expect" "1"    // Physical probe first / semi on a run
+            | "expand" Ident "[" Ident,* "]" ("from" Ident)? // Physical probe; `from` names the lookup whose descriptor it reuses (= via cursor)
+            | "merge" Ident "[" Ident,* "]"                  // ordered block merge on a clustered stream
+            | "intersect" Ident "," Ident "[" Ident "]"      // Physical probe smallest: merge-path on two ranges
+            | "segment"                                      // materialise the tile stream (register budget)
+            | "store" Ident                                  // the kernel's Physical result
+Policy    ::= "carry" "[" Ident,* "]" | "gather" "[" Ident,* "]"
+            | "frontier" Int                                 // K: spill descriptor when M > K·T; 0 = never
+            | "registers" Int                                // budget the check enforces per kernel
+Store     ::= "store" Ident "=" Capacity Dedup? ";"
+Capacity  ::= "capacity" ("bound" Ident | "grow")           // |scan| × Π expect-1 is a bound; grow = relaunch unfinished tiles
+Dedup     ::= "canon" "DeviceSet"                           // full-key compare; the Structures canon type is retyped
+```
+
+Contract (facts the check derives from Structures + annotation; each is a
+rejection, not a default):
+
+1. **Coverage.** Every Structures `let` build read by a kernel has a `run`;
+   every `Keyed` key level of that build is the run's key; `directory rank`
+   requires the build's recorded integral codec and `build counting` requires
+   `rank`; every membership / join-filter read has a `filter`; every host
+   relation scanned has `column` entries for each column the stream reads.
+2. **Kernel ↔ pipe.** `kernel K = stream l` names a Physical `pipe` scan; the
+   kernel's steps are the consumer chain of `l` in definition order, one step
+   per Physical definition: `select`/`guard` → `filter`/`guard`, `semi` →
+   `filter` or `lookup expect 1`, `probe first` → `lookup`, other `probe` →
+   `expand`, `probe smallest` → `intersect`, `merge` → `merge`, `project` →
+   `carry`/`gather`, the pipe's end → `store`. A Structures `p via cursor s`
+   must appear as `expand … from <lookup of s>`; an `expand from` without the
+   Structures entry is rejected (the decision is recorded once, in Structures).
+3. **Budget.** The live set of a kernel at any step is the carried columns
+   plus one `u32` per gathered column plus one descriptor per open expansion;
+   `Σ bytes × ipt / 4 ≤ registers` or a `segment` precedes the overflow.
+   `expand` and `intersect` require `directory ≠ none`; `merge` requires
+   `blocks`; `compact` only after a filtering step.
+4. **Output.** `capacity bound l` is admissible only when every expansion in
+   the kernel is `expect 1` or reads a run whose Structures build is a
+   projection of a functional (PK) key; otherwise `grow`. `canon DeviceSet`
+   is admissible only where Structures records a canon boundary.
+5. **Blocks, folds, recursion.** Union/fallback arms are separate kernels
+   with an `anti` filter per fallback step; aggregate and recursion contexts
+   stay external surface contexts (unchanged) — deferred, rejected for now.
+
+Correspondence (`Structures → Device` pass check): erasing the `device`
+block yields the source Structures program unchanged; every kernel's step
+list erases to its pipe's definition chain; every run/filter erases to its
+build/membership entry. Refinement: a kernel's stored set equals the Physical
+pipe's set under the core premises; the printer's obligations (`Copy`
+cursors, codec totality, dictionary completeness) are emitted as Rust trait
+obligations like `cq-print` does, so an ineligible program fails rustc.
+
+Authored fixture, retail_h05 Plan A (fact-first; Structures from
+`order(le)` + `sorted_runs` + `retained_lookups`), abbreviated:
+
+```text
+device {
+    tile 256 x 4;
+    column Lineitem.l_orderkey = i64; column Lineitem.l_suppkey = i64;
+    column Orders.o_orderkey = i64; column Orders.o_custkey = i64; column Orders.o_orderdate = i32;
+    column Region.r_name = dict r_name;
+    run orders_idx   = Run [order_key]    directory rank build counting;
+    run customer_idx = Run [customer_key] directory rank build counting;
+    run supplier_idx = Run [supplier_key] directory rank build counting;
+    filter region_asia = Bitmap [region_key];
+    kernel h05 = stream lineitem {
+        scan lineitem;
+        lookup orders_idx [order_key] expect 1;      guard order_date_window;
+        lookup customer_idx [customer_key] expect 1;
+        lookup nation_idx [nation_key] expect 1;      filter region_asia;
+        lookup supplier_idx [supplier_key] expect 1;  guard supplier_nation_eq;
+        store answer;
+    } carry [order_key, supplier_key, nation_key] registers 64 frontier 0;
+    store answer = capacity bound lineitem canon DeviceSet;
+}
+```
+
+Plan B differs only in Structures (customer stream under `order(le)` with
+`Orders`/`Lineitem` as expansions) and therefore in the kernel:
+`scan customer; filter region_asia; expand orders_by_cust [customer_key];
+guard …; expand lineitem_by_order [order_key]; lookup supplier_idx …` with
+`run orders_by_cust = Run [customer_key] directory rank blocks 2048 build
+counting;`, `frontier 4`, `capacity grow`.
+
+Open points to settle before code: (a) whether `guard` lowering of total
+Rust needs its own allowlist text in Device or reuses `cq-lang-cq`'s total
+recognition verbatim (reuse); (b) whether `frontier`/`registers` are per
+kernel or per program (per kernel); (c) whether `column … = dict` belongs in
+Device or in a load-time dictionary annotation shared with CPU positional
+hosts (shared, if `cq-load` gains dictionary columns).
