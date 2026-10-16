@@ -43,8 +43,6 @@ jobs:
       - name: Drop isolation build artifacts
         run: rm -rf target/component-isolation && df -h /
       - name: Test restored compiler regressions
-        env:
-          CARGO_BUILD_JOBS: 2
         run: bash tools/test_regressions.sh
       - name: Drop feature build artifacts
         run: |

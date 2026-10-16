@@ -20,3 +20,517 @@ cq-planners.workspace = true
 cq-rewrites.workspace = true
 cq-workload-passes.workspace = true
 own-push.workspace = true
+
+# Accepted configurations are dealt into small test crates (see build.rs).
+[[test]]
+name = "shard_000"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_001"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_002"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_003"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_004"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_005"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_006"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_007"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_008"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_009"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_010"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_011"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_012"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_013"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_014"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_015"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_016"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_017"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_018"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_019"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_020"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_021"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_022"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_023"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_024"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_025"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_026"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_027"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_028"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_029"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_030"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_031"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_032"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_033"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_034"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_035"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_036"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_037"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_038"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_039"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_040"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_041"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_042"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_043"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_044"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_045"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_046"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_047"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_048"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_049"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_050"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_051"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_052"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_053"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_054"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_055"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_056"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_057"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_058"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_059"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_060"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_061"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_062"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_063"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_064"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_065"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_066"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_067"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_068"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_069"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_070"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_071"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_072"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_073"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_074"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_075"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_076"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_077"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_078"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_079"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_080"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_081"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_082"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_083"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_084"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_085"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_086"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_087"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_088"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_089"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_090"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_091"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_092"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_093"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_094"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_095"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_096"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_097"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_098"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_099"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_100"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_101"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_102"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_103"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_104"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_105"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_106"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_107"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_108"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_109"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_110"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_111"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_112"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_113"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_114"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_115"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_116"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_117"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_118"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_119"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_120"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_121"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_122"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_123"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_124"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_125"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_126"
+path = "tests/shard.rs"
+
+[[test]]
+name = "shard_127"
+path = "tests/shard.rs"
+

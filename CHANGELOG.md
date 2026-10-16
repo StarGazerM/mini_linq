@@ -7,6 +7,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Corpus build: the 14k accepted e2e configurations are dealt into 128
+  `shard_NNN` test crates (about 110 queries each) instead of nine crates of
+  1,100–2,000; rustc's single-threaded front end peaked at 15 GB and 5.4 min
+  for `planner_8` alone, a shard needs about 1 GB, and Cargo compiles shards
+  in parallel (all shards: 12 min locally at 3 jobs). The workloads workspace
+  compiles build scripts and proc macros optimized (`planner_8` macro
+  expansion 82 → 23 s). The regression list runs `shard_*` in one invocation.
+
 - Measurement: operator profiles drain each build's input before insertion
   and report its exclusive construction time (`excl=`, `source_elapsed`,
   `BUILD_EXCLUSIVE_TOTAL`), comparable to a DuckDB hash join's sink plus

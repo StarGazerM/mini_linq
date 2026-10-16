@@ -53,6 +53,11 @@ quote = "1"
 syn = { version = "2", features = ["extra-traits", "full", "visit", "visit-mut"] }
 prettyplease = "0.2"
 
+# The query macros run the whole compiler per invocation; the corpus expands
+# them thousands of times (planner_8 macro expansion: 82 s unoptimized, 23 s).
+[profile.dev.build-override]
+opt-level = 3
+
 [profile.dev.package.libduckdb-sys]
 debug = false
 

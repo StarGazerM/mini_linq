@@ -73,15 +73,7 @@ cq-workload-corpus	manifest-target-test	census	features/workloads/e2e/corpus/Car
 cq-workload-e2e	manifest-target-test	provider_candidates	features/workloads/e2e/Cargo.toml
 cq-workload-corpus	manifest-target-test	compile_fail	features/workloads/e2e/corpus/Cargo.toml
 cq-workload-e2e	manifest-target-test	elimination_cost	features/workloads/e2e/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_0	features/workloads/e2e/corpus/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_1	features/workloads/e2e/corpus/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_2	features/workloads/e2e/corpus/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_3	features/workloads/e2e/corpus/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_4	features/workloads/e2e/corpus/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_5	features/workloads/e2e/corpus/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_6	features/workloads/e2e/corpus/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_7	features/workloads/e2e/corpus/Cargo.toml
-cq-workload-corpus	manifest-target-test	planner_8	features/workloads/e2e/corpus/Cargo.toml
+cq-workload-corpus	manifest-target-test	shard_*	features/workloads/e2e/corpus/Cargo.toml
 cq-workloads	manifest-target-test	extended_catalog	features/workloads/Cargo.toml
 cq-workload-e2e	manifest-target-test	extended	features/workloads/e2e/Cargo.toml
 cq-rewrites	manifest-target-test	generated	features/rewrites/Cargo.toml

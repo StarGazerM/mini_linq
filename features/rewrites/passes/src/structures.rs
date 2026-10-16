@@ -231,7 +231,11 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         if recorded.is_some_and(|filters| {
             filters.iter().any(|f| {
                 symbol_name(&f.covering) == symbol_name(covering)
-                    && f.key.columns.iter().map(symbol_name).eq([candidate.key.clone()])
+                    && f.key
+                        .columns
+                        .iter()
+                        .map(symbol_name)
+                        .eq([candidate.key.clone()])
             })
         }) {
             continue;

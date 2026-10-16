@@ -13,6 +13,7 @@ fn main() {
     let mut compile_fail = 0;
     let mut rejections = std::collections::BTreeMap::new();
     let mut baseline = std::collections::BTreeMap::new();
+    let mut accepted = Vec::new();
     for planner in 0..matrix::AXES[0].len() {
         let mut code = String::new();
         let mut negative = String::from("fn main() {}\n");
@@ -78,9 +79,27 @@ fn main() {
                     v.join(" "), case.name, case.suite.as_str()).unwrap();
             }
         }
-        std::fs::write(out.join(format!("planner_{planner}.rs")), code).unwrap();
+        accepted.extend(code.lines().map(str::to_owned));
         std::fs::write(out.join(format!("rejected_{planner}.rs")), negative).unwrap();
         std::fs::write(out.join(format!("rejected_{planner}.tsv")), expected).unwrap();
+    }
+    // Accepted invocations are dealt round-robin into SHARDS small test crates
+    // (Cargo's `shard_NNN` targets, all compiled from tests/shard.rs), so each
+    // rustc front end is small and Cargo can compile shards in parallel.
+    let manifest = std::fs::read_to_string("Cargo.toml").unwrap();
+    let declared = manifest.matches("name = \"shard_").count();
+    assert_eq!(
+        declared,
+        matrix::SHARDS,
+        "Cargo.toml must declare every shard target"
+    );
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    let mut shards = vec![String::new(); matrix::SHARDS];
+    for (index, line) in accepted.iter().enumerate() {
+        writeln!(shards[index % matrix::SHARDS], "{line}").unwrap();
+    }
+    for (index, code) in shards.iter().enumerate() {
+        std::fs::write(out.join(format!("shard_{index:03}.rs")), code).unwrap();
     }
     std::fs::write(out.join("cases.tsv"), census).unwrap();
     println!(

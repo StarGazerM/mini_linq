@@ -7,3 +7,7 @@
 //! shapes and ordered host capabilities remain explicit negative tests.
 //! The census forbids duplicate/unclassified rows and matches both generated
 //! execution/rejection totals; compile-fail tests pin diagnostic obligations.
+//! Accepted configurations are dealt round-robin into 128 `shard_NNN` test
+//! crates of about 110 queries each, so each rustc front end stays small
+//! (about 1 GB) and Cargo compiles shards in parallel; run them together with
+//! `cargo test --test 'shard_*'`.

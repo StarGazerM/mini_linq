@@ -229,7 +229,14 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     );
     println!(
         "{:24} {:20} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "query", "configuration", "rows", "load ms", "query ms", "DB 1 ms", "DB 1 ex ms", "DB def ms"
+        "query",
+        "configuration",
+        "rows",
+        "load ms",
+        "query ms",
+        "DB 1 ms",
+        "DB 1 ex ms",
+        "DB def ms"
     );
     let mut details = Vec::new();
     for query in &queries {

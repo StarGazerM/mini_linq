@@ -25,6 +25,8 @@ pub const AXES: [&[&str]; 10] = [
     &["unadvised", "positional"],
 ];
 pub const FULL: [&str; 4] = ["triangle", "oriented-chain", "claw", "retail_h03"];
+/// Test crates the accepted configurations are dealt into (about 100 each).
+pub const SHARDS: usize = 128;
 const PREVIOUS_COVERING: [[usize; 7]; 27] = [
     [0, 0, 0, 1, 0, 0, 0],
     [0, 1, 1, 0, 1, 1, 1],
