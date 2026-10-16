@@ -75,81 +75,6 @@
     "warmups": 1
   },
   {
-    "answer_count": 7242,
-    "bandwidth_model_gbps": 960,
-    "build_algorithm": "dense counting sort with stable provenance heapsort",
-    "build_ms": {
-      "median": 2.9370241165161133,
-      "min": 2.926624059677124
-    },
-    "dedup_algorithm": "exact packed-triple u64 CAS set",
-    "dedup_ms": {
-      "median": 0.315744012594223,
-      "min": 0.3096959888935089
-    },
-    "exact": true,
-    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
-    "frontier_spill_required": false,
-    "kernel_ms": {
-      "median": 0.08806400001049042,
-      "min": 0.08803199976682663
-    },
-    "max_expansion_rows": [
-      0,
-      0
-    ],
-    "max_m_over_t": 0.0,
-    "peak_mem_mib": 360.0,
-    "peak_mem_scope": "cuMemGetInfo sampled with build scratch live, after build and dedup",
-    "plan": "A",
-    "regs": 32,
-    "runs": 5,
-    "samples": {
-      "build_ms": [
-        3.056191921234131,
-        2.962208032608032,
-        2.926624059677124,
-        2.9340479373931885,
-        2.9370241165161133
-      ],
-      "dedup_ms": [
-        0.34463998675346375,
-        0.3202880024909973,
-        0.3113600015640259,
-        0.315744012594223,
-        0.3096959888935089
-      ],
-      "kernel_ms": [
-        0.08908800035715103,
-        0.08806400001049042,
-        0.08803199976682663,
-        0.08879999816417694,
-        0.08806400001049042
-      ],
-      "total_ms": [
-        3.489919900894165,
-        3.3705599308013916,
-        3.3260159492492676,
-        3.338592052459717,
-        3.334784030914306
-      ]
-    },
-    "scan_gbps": 1090.3370274863953,
-    "sf": 1,
-    "smem": 9216,
-    "spills": {
-      "loads_bytes": 0,
-      "stores_bytes": 0
-    },
-    "stack_bytes": 0,
-    "static_smem_bytes": 0,
-    "total_ms": {
-      "median": 3.338592052459717,
-      "min": 3.3260159492492676
-    },
-    "warmups": 1
-  },
-  {
     "answer_count": 579,
     "bandwidth_model_gbps": 960,
     "build_algorithm": "dense counting sort with stable provenance heapsort",
@@ -380,7 +305,7 @@
     "dedup_algorithm": "exact packed-triple u64 CAS set",
     "dedup_ms": {
       "median": 0.9202880263328552,
-      "min": 0.9121279716491699
+      "min": 0.91212797164917
     },
     "exact": true,
     "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
@@ -408,11 +333,11 @@
         22.6342716217041
       ],
       "dedup_ms": [
-        0.9184640049934387,
-        0.9244480133056641,
+        0.9184640049934388,
+        0.924448013305664,
         0.9202880263328552,
-        0.9339839816093445,
-        0.9121279716491699
+        0.9339839816093444,
+        0.91212797164917
       ],
       "kernel_ms": [
         0.3020800054073334,
@@ -422,11 +347,11 @@
         0.30316799879074097
       ],
       "total_ms": [
-        24.872928619384766,
+        24.87292861938477,
         24.83014488220215,
         24.79897689819336,
-        24.501056671142578,
-        23.849567413330078
+        24.501056671142575,
+        23.84956741333008
       ]
     },
     "scan_gbps": null,
@@ -435,7 +360,77 @@
     "spills": null,
     "total_ms": {
       "median": 24.79897689819336,
-      "min": 23.849567413330078
+      "min": 23.84956741333008
+    },
+    "warmups": 1
+  },
+  {
+    "answer_count": 7242,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "dense counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 2.927583932876587,
+      "min": 2.9164481163024902
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.31331199407577515,
+      "min": 0.3107199966907501
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.08883199840784073,
+      "min": 0.08787199854850769
+    },
+    "max_expansion_rows": [
+      0,
+      0
+    ],
+    "max_m_over_t": 0.0,
+    "peak_mem_mib": 360.0,
+    "peak_mem_scope": "cuMemGetInfo sampled with build scratch live, after build and dedup",
+    "plan": "A",
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        3.0216639041900635,
+        2.9366719722747803,
+        2.9164481163024902,
+        2.927583932876587,
+        2.9262399673461914
+      ],
+      "dedup_ms": [
+        0.3272640109062195,
+        0.3107199966907501,
+        0.31331199407577515,
+        0.3150720000267029,
+        0.3128960132598877
+      ],
+      "kernel_ms": [
+        0.08883199840784073,
+        0.08883199840784073,
+        0.08892799913883209,
+        0.08787199854850769,
+        0.08886399865150452
+      ],
+      "total_ms": [
+        3.4377601146698,
+        3.33622407913208,
+        3.318687915802002,
+        3.3305280208587646,
+        3.328000068664551
+      ]
+    },
+    "scan_gbps": 1080.9105020823765,
+    "sf": 1,
+    "smem": 9216,
+    "spills": null,
+    "total_ms": {
+      "median": 3.3305280208587646,
+      "min": 3.318687915802002
     },
     "warmups": 1
   }

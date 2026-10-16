@@ -45,6 +45,15 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   push printer is ported to it and refuses `positions` explicitly. Join
   transport of positions (index payload = `RowId`) is deferred. Q6 gains a
   `staged` configuration (`positions` + `batch(1024)`).
+- Add `cq_planners::order(le)`: early bound-key lookups in GYO ear order,
+  demand-delayed coarse full-row expansion, recursive block scheduling, and
+  the default Masks reducer. Independent CK-Le checks occurrence phases,
+  written column ownership, Rust Before obligations and normalized CQ
+  correspondence. Retail profiling accepts `--config le`.
+- Add payload-exact `SortedRun` storage with Copy borrowed lookup cursors,
+  stable key clustering and bounded integer rank directories. The external
+  `cq_rewrites::sorted_runs` Structures rewrite records eligible one-level
+  payload retyping without changing default representation selection.
 - Merge upstream measurement, feature lockfile and CI fixes through `7e5c2c6`
   while retaining readable workload cases, pairwise configurations, the triangle
   kernel and UI fixtures. Drop generated-corpus sharding: its two commits add
