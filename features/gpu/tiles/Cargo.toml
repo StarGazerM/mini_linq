@@ -1,0 +1,9 @@
+[package]
+name = "gpu-tiles"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
