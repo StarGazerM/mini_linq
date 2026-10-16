@@ -41,7 +41,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Fetch locked dependencies for isolated and packaged gates
-        run: cargo fetch --locked
+        run: |
+          cargo fetch --locked
+          # cargo package --offline resolves the packaged cq-syntax against the
+          # crates.io index entry of syn_derive (the workspace uses a git pin).
+          (cd "$RUNNER_TEMP" && cargo info --registry crates-io syn_derive@0.2.0 > /dev/null)
       - name: Verify component dependency boundaries
         run: python3 tools/check_dependencies.py --isolate --frontends --consumers
       - name: Drop isolation build artifacts
