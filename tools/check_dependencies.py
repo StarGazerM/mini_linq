@@ -255,6 +255,9 @@ def write_workspace(destination, selected):
               if not isinstance(v, dict) or "path" not in v or k in selected]
     (destination / "Cargo.toml").write_text("\n".join(lines) + "\n")
     shutil.copy2(ROOT / "rust-toolchain.toml", destination / "rust-toolchain.toml")
+    # Resolve third-party crates at the root's locked versions; a fresh offline
+    # resolution fails once a locked version is yanked (zip 6.0.0 for duckdb).
+    shutil.copy2(ROOT / "Cargo.lock", destination / "Cargo.lock")
 
 
 def copy_component(destination, name, selected, tested):
