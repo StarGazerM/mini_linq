@@ -7,6 +7,10 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Merge upstream measurement, feature lockfile and CI fixes through `7e5c2c6`
+  while retaining readable workload cases, pairwise configurations, the triangle
+  kernel and UI fixtures. Drop generated-corpus sharding: its two commits add
+  no queries, scenarios or non-sharding coverage assertions.
 - Datalog integration: moved HW4 and YA acceptance tests into their owning
   package test directories; split std-only `cq-testkit/golden` from DuckDB
   (which still enables it) and switched the Ascent oracle to `golden`; selected
@@ -16,6 +20,18 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   default runs measured 15.725 ms without and 16.159 ms with it; all 13 queries
   were exact in both runs. Written-order planning never invokes that
   Filtered/Coarse-only branch chooser.
+- Measurement: operator profiles drain each build's input before insertion
+  and report its exclusive construction time (`excl=`, `source_elapsed`,
+  `BUILD_EXCLUSIVE_TOTAL`), comparable to a DuckDB hash join's sink plus
+  finalize. The TPC bench adds `duckdb_1_execute_median_ms`: the statement is
+  prepared once untimed, then execution and Arrow materialization are timed
+  (MiniLinq plans at compile time). DuckDB join-phase numbers in
+  `doc/STATUS.md` come from a timer-patched DuckDB 1.5.5 built outside the
+  repository; its totals match stock DuckDB within run-to-run noise.
+- CI: free runner disk (preinstalled SDKs, docker images), 8 GB swap, no
+  debug info in dev/test builds, three build jobs, and removal of isolation
+  and feature build directories between steps; recent runs died of
+  `No space left on device` or a starved runner.
 
 - Plan advice (rule R-Advice): `plan(reduce(T with S), skip(T with S))`
   records an author's cardinality knowledge as VO reduce steps on top-level

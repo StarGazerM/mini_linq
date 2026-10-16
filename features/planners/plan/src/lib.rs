@@ -234,12 +234,17 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
     for (&child, &parent) in &parents {
         children.entry(parent).or_default().push(child);
     }
-    let mut filtered: std::collections::BTreeSet<usize> = cq::hypergraph::filter_ranks(body, &graph)
-        .into_iter()
-        .filter(|&(_, rank)| rank < 3)
-        .map(|(clause, _)| clause)
-        .collect();
-    filtered.extend(cq_reduce::block_cuts(&graph, body).into_iter().map(|(atom, _)| atom));
+    let mut filtered: std::collections::BTreeSet<usize> =
+        cq::hypergraph::filter_ranks(body, &graph)
+            .into_iter()
+            .filter(|&(_, rank)| rank < 3)
+            .map(|(clause, _)| clause)
+            .collect();
+    filtered.extend(
+        cq_reduce::block_cuts(&graph, body)
+            .into_iter()
+            .map(|(atom, _)| atom),
+    );
     let subtree = |node: usize| {
         let mut nodes = vec![node];
         let mut pending = vec![node];

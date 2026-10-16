@@ -53,6 +53,11 @@ quote = "1"
 syn = { version = "2", features = ["extra-traits", "full", "visit", "visit-mut"] }
 prettyplease = "0.2"
 
+# Query macros run the compiler per invocation; optimize the compiler even
+# with the readable pairwise cases rather than a generated full matrix.
+[profile.dev.build-override]
+opt-level = 3
+
 [profile.dev.package.libduckdb-sys]
 debug = false
 

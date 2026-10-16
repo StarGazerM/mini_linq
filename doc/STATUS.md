@@ -86,6 +86,33 @@ the default already filters the stream at its scan with the builds' key sets,
 and its probes then only hit, which is the SQL Server argument for omitting
 the top-down pass.
 
+## Index building vs join processing (SF 1, one thread, planning excluded)
+
+DuckDB 1.5.5 with timers in `PhysicalHashJoin` (sink, combine, pointer-table
+init, finalize, Bloom push = build; everything else = non-build), NDEBUG
+build, prepared once. MiniLinq: profiled run, exclusive construction of
+indexes, key sets and join filters (inputs drained first) = build. Same data;
+MiniLinq total is the uninstrumented median. Machine had background load, so
+treat differences under ~5% as noise.
+
+| Query | ML total | ML build | ML non-build | DB total | DB build | DB non-build |
+|---|---:|---:|---:|---:|---:|---:|
+| H03 | 39.9 | 19.1 | 27.4 | 39.0 | 8.9 | 30.2 |
+| H05 | 34.7 | 5.0 | 31.0 | 41.5 | 3.5 | 37.9 |
+| H07 | 35.1 | 11.3 | 30.0 | 44.0 | 9.7 | 34.4 |
+| H07-block | 35.1 | 11.2 | 29.8 | 45.6 | 11.0 | 34.5 |
+| H08 | 32.8 | 10.6 | 25.1 | 27.0 | 3.8 | 23.2 |
+| H09 | 169.8 | 37.3 | 165.5 | 199.9 | 100.5 | 99.0 |
+| H21+ | 91.0 | 14.3 | 80.8 | 94.7 | 7.9 | 86.7 |
+| D19 | 20.9 | 8.2 | 16.3 | 30.7 | 0.9 | 29.8 |
+| D27 | 18.3 | 1.2 | 17.5 | 23.9 | 0.7 | 23.2 |
+| D72 | 192.4 | 61.3 | 118.1 | 135.4 | 72.9 | 62.6 |
+| D85 | 29.4 | 11.4 | 20.8 | 37.6 | 1.1 | 36.5 |
+
+DuckDB builds far smaller tables (cost-chosen build sides); our written
+order indexes whole dimensions (D19 Part, D85 Customer). DuckDB's non-build
+work is lower on H09 and D72.
+
 ## Left work
 
 1. **D72.** Its decisive choice is data-dependent: `ps_availqty > 0` keeps

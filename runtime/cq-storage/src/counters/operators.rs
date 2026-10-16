@@ -27,6 +27,10 @@ pub struct OperatorRecord {
     pub rows_inserted: u64,
     pub elapsed: Duration,
     pub calls: u64,
+    /// Build time spent producing the build's input rows (timing builds only;
+    /// the input is drained before insertion). `elapsed - source_elapsed` is
+    /// the exclusive construction time, comparable to a hash join's build.
+    pub source_elapsed: Duration,
 }
 struct State {
     id: usize,
@@ -40,6 +44,7 @@ struct State {
     alias: Cell<Option<usize>>,
     stored_rows: Cell<Option<u64>>,
     time_source: Cell<Option<usize>>,
+    source_elapsed: Cell<Duration>,
 }
 type BuildContext = Option<(Rc<State>, Rc<Cell<bool>>)>;
 thread_local! {
@@ -73,6 +78,7 @@ pub fn operators() -> Vec<OperatorRecord> {
                     rows_inserted: s.inserted.get(),
                     elapsed: time.elapsed.get(),
                     calls: time.calls.get(),
+                    source_elapsed: time.source_elapsed.get(),
                 }
             })
             .collect()
@@ -101,6 +107,7 @@ impl OperatorProgram {
                         alias: Cell::new(None),
                         stored_rows: Cell::new(None),
                         time_source: Cell::new(None),
+                        source_elapsed: Cell::new(Duration::ZERO),
                     });
                     ops.push(state.clone());
                     state
@@ -158,9 +165,16 @@ impl OperatorProgram {
             count: 0,
         }
     }
+    /// Timing builds drain their input before insertion, so the input pipeline
+    /// is timed apart from construction; the drain happens on first demand,
+    /// preserving deferred initialization.
     #[cfg(not(feature = "counters"))]
-    pub fn inserting<I: Iterator>(&self, _index: usize, source: I) -> I {
-        source
+    pub fn inserting<I: Iterator>(&self, index: usize, source: I) -> OperatorDrained<I> {
+        OperatorDrained {
+            source: Some(source),
+            rows: Vec::new().into_iter(),
+            state: self.0[index].clone(),
+        }
     }
     #[cfg(feature = "counters")]
     pub fn inserting<I: Iterator>(&self, index: usize, source: I) -> OperatorInput<I> {
@@ -312,6 +326,28 @@ impl<I: Iterator> Iterator for OperatorInput<I> {
         self.source.as_ref().expect("live iterator").size_hint()
     }
 }
+/// A build input drained on first demand; the drain time is the build's
+/// source time, excluded from its exclusive construction time.
+pub struct OperatorDrained<I: Iterator> {
+    source: Option<I>,
+    rows: std::vec::IntoIter<I::Item>,
+    state: Rc<State>,
+}
+impl<I: Iterator> Iterator for OperatorDrained<I> {
+    type Item = I::Item;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(source) = self.source.take() {
+            let started = Instant::now();
+            let rows: Vec<_> = source.collect();
+            self.state
+                .source_elapsed
+                .set(self.state.source_elapsed.get() + started.elapsed());
+            self.rows = rows.into_iter();
+        }
+        self.rows.next()
+    }
+}
 /// Cumulative inclusive span; does not force a row the consumer did not request.
 pub struct OperatorStream<I> {
     source: Option<I>,
@@ -386,9 +422,17 @@ pub fn render_operators(records: &[OperatorRecord]) -> String {
     ) {
         let r = &records[index];
         let repeat = !seen.insert(r.id);
+        let exclusive = if r.label.kind.ends_with("_BUILD") {
+            format!(
+                " excl={:.3}ms",
+                r.elapsed.saturating_sub(r.source_elapsed).as_secs_f64() * 1000.
+            )
+        } else {
+            String::new()
+        };
         writeln!(
             out,
-            "{}{:<16} {} [{}] inputs={} rows={} in={} inserted={} t={:.3}ms{}",
+            "{}{:<16} {} [{}] inputs={} rows={} in={} inserted={} t={:.3}ms{exclusive}{}",
             "  ".repeat(depth),
             r.label.kind,
             r.label.result,
@@ -436,6 +480,17 @@ pub fn render_operators(records: &[OperatorRecord]) -> String {
             walk(&mut out, records, i, depth, &mut seen);
         }
     }
+    let exclusive: Duration = records
+        .iter()
+        .filter(|r| r.label.kind.ends_with("_BUILD"))
+        .map(|r| r.elapsed.saturating_sub(r.source_elapsed))
+        .sum();
+    writeln!(
+        out,
+        "BUILD_EXCLUSIVE_TOTAL t={:.3}ms",
+        exclusive.as_secs_f64() * 1000.
+    )
+    .unwrap();
     out
 }
 

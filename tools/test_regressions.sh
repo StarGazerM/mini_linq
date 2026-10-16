@@ -12,7 +12,8 @@ failed=0
 
 while IFS=$'\t' read -r package kind target source; do
     [[ -z "$package" || "$package" == \#* ]] && continue
-    log="$logdir/$package-$target.log"
+    # Target selectors may be Cargo globs (shard_*); artifact paths may not contain '*'.
+    log="$logdir/$package-${target//\*/all}.log"
     printf 'RUN  %s/%s\n' "$package" "$target"
     if [[ ! -f "$source" ]]; then
         printf 'Missing regression source: %s\n' "$source" > "$log"

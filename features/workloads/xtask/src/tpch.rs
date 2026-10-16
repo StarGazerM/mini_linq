@@ -221,15 +221,22 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let path = bench.join(format!("tpch-{}{suffix}.tsv", options.sf));
     let pending = path.with_extension("tsv.partial");
     let mut table = String::from(
-        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\tjoin_filter_tested\tjoin_filter_passed\n",
+        "suite\tsf\tquery\tconfiguration\truns\tanswer_rows\tload_ms\tquery_median_ms\tduckdb_load_ms\tduckdb_1_median_ms\tduckdb_default_median_ms\tduckdb_default_threads\tcompile_unit_ms\tpeak_rss_kib\tblocks_considered\tblocks_visited\tblocks_skipped\tblocks_skipped_metadata\tblocks_skipped_empty_selection\trows_tested\trows_copied\tbytes_retained_current\tbytes_retained_peak\tkeyset_staging_bytes_peak\thash_computations\tindex_builds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tcorrectness\tjoin_filter_tested\tjoin_filter_passed\tduckdb_1_execute_median_ms\n",
     );
     println!(
         "TPC-H-derived; SF {}; release; one warm run + median of {}; DuckDB {} default threads={}",
         options.sf, options.runs, database.version, database.default_threads
     );
     println!(
-        "{:24} {:20} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "query", "configuration", "rows", "load ms", "query ms", "DB 1 ms", "DB def ms"
+        "{:24} {:20} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "query",
+        "configuration",
+        "rows",
+        "load ms",
+        "query ms",
+        "DB 1 ms",
+        "DB 1 ex ms",
+        "DB def ms"
     );
     let mut details = Vec::new();
     for query in &queries {
@@ -238,6 +245,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         oracle.execute_batch("SET threads=1")?;
         let expected = answer_set(&oracle, &query.sql)?;
         let duck_one = duck_time(&oracle, &query.sql, options.runs)?;
+        let duck_one_execute = duck_execute_time(&oracle, &query.sql, options.runs)?;
         oracle.execute_batch(&format!("SET threads={}", database.default_threads))?;
         let default_expected = answer_set(&oracle, &query.sql)?;
         if default_expected != expected {
@@ -315,13 +323,14 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             let load = number(&measured, "load_ms")?;
             let median = number(&measured, "median_ms")?;
             println!(
-                "{:24} {:20} {:>10} {:>10.3} {:>10.3} {:>10.3} {:>10.3}",
+                "{:24} {:20} {:>10} {:>10.3} {:>10.3} {:>10.3} {:>10.3} {:>10.3}",
                 query.name,
                 config,
                 expected.rows.len(),
                 load,
                 median,
                 duck_one.0,
+                duck_one_execute.0,
                 duck_default.0
             );
             let counters = [
@@ -357,7 +366,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             let passed = measured["join_filter_passed"]
                 .as_u64()
                 .ok_or("missing join_filter_passed counter")?;
-            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{:.6}\t{counters}\tpass\t{tested}\t{passed}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, query.built.unit_ms));
+            table.push_str(&format!("TPC-H-derived\t{}\t{}\t{config}\t{}\t{}\t{load:.6}\t{median:.6}\t{duck_load_ms:.6}\t{:.6}\t{:.6}\t{}\t{:.6}\t{counters}\tpass\t{tested}\t{passed}\t{:.6}\n", options.sf, query.name, options.runs, expected.rows.len(), duck_one.0, duck_default.0, database.default_threads, query.built.unit_ms, duck_one_execute.0));
             std::fs::write(&pending, &table)?;
             configs.push(serde_json::json!({"configuration":config,"metrics":measured}));
         }
@@ -372,7 +381,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
             .map(|v| v["configuration"].clone());
         details.push(serde_json::json!({"query":query.name,"sql":query.sql,"exports":query.exports,
             "compile_unit_ms":query.built.unit_ms,"cargo_timing_report":query.built.timing_report,
-            "best_measured_configuration":best,"duckdb_load_ms":duck_load_ms,"duckdb_1_samples_ms":duck_one.1,"duckdb_default_samples_ms":duck_default.1,"configs":configs}));
+            "best_measured_configuration":best,"duckdb_load_ms":duck_load_ms,"duckdb_1_samples_ms":duck_one.1,"duckdb_1_execute_samples_ms":duck_one_execute.1,"duckdb_default_samples_ms":duck_default.1,"configs":configs}));
     }
     std::fs::rename(&pending, &path)?;
     let rustc = std::process::Command::new("rustc")
@@ -383,7 +392,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
         "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time",
-        "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop; DuckDB includes prepare/optimization and Arrow result materialization",
+        "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop; duckdb_1_median_ms includes prepare/optimization and Arrow result materialization; duckdb_1_execute_median_ms prepares once untimed and times execution plus Arrow result materialization (MiniLinq plans at compile time)",
         "sf_0_1_gate":"all freshly compiled query/configuration workers checked before timing either scale",
         "memory_method":"Linux /proc/self/status VmHWM per configuration worker process, includes load, warmup, answers and correctness; not incremental query-only memory; NA elsewhere",
         "counter_scope":"cq-storage instrumentation disabled in timed binary; counters collected in a separately compiled binary and untimed execution; extension aggregate folds and uninstrumented host work are not counted; DuckDB lacks equivalent instrumentation",
@@ -483,6 +492,26 @@ fn duck_time(connection: &Connection, sql: &str, runs: usize) -> Result<(f64, Ve
     for index in 0..=runs {
         let started = Instant::now();
         let mut statement = connection.prepare(sql)?;
+        let result: Vec<_> = statement.query_arrow([])?.collect();
+        let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+        std::hint::black_box(&result);
+        if index > 0 {
+            samples.push(elapsed);
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    Ok((samples[runs / 2], samples))
+}
+
+/// The same query boundary without parse, bind and optimization: the statement
+/// is prepared once outside the timer, then each sample executes it and
+/// materializes its Arrow result. This matches MiniLinq's boundary, whose
+/// planning happens at Rust compile time.
+fn duck_execute_time(connection: &Connection, sql: &str, runs: usize) -> Result<(f64, Vec<f64>)> {
+    let mut statement = connection.prepare(sql)?;
+    let mut samples = Vec::new();
+    for index in 0..=runs {
+        let started = Instant::now();
         let result: Vec<_> = statement.query_arrow([])?.collect();
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         std::hint::black_box(&result);

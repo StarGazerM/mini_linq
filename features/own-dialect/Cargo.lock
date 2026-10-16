@@ -306,6 +306,7 @@ dependencies = [
  "cq-lang-physical",
  "cq-lang-ra",
  "cq-lang-structures",
+ "cq-lang-vo",
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
