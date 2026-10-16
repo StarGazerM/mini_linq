@@ -295,8 +295,6 @@ def isolate(packages, only=()):
             write_workspace(destination, selected)
             for package in selected: copy_component(destination, package, selected, name)
             if name not in TESTKIT:
-                if "cq-reduce" in selected:
-                    shutil.copytree(ROOT / "teaching", destination / "teaching")
                 if "mini-linq" in selected:
                     shutil.copytree(ROOT / "tools/fixtures/pass-macros", destination / "tools/fixtures/pass-macros", ignore=shutil.ignore_patterns("target", "Cargo.lock"))
                 # Runtime source is a generated-code execution fixture, never a compiler dependency.
