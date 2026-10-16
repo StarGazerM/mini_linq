@@ -161,15 +161,18 @@ approval; this integration admits only the four decisions below.
 
 Approved core integration decisions:
 
-1. Move `course/hw4_optional.rs` and `teaching/ya/ya_schedule.rs` into their
-   owning package test directories.
-2. Give `cq-testkit` golden helpers a std-only `golden` feature and use it in
-   the Ascent oracle without bundled DuckDB.
-3. Match `runtime_rustc` backend rlibs to the running testkit's linked type
-   identities, rather than selecting by recency.
-4. Evaluate `codex/d85-regression` (`46be507`) with paired SF1 measurements;
-   integrate only if it still improves the new written-order default without
-   regressing the other queries.
+1. Completed folder cleanup: HW4 is `tests/hw4_optional.rs`; YA is
+   `passes/cq-reduce/tests/ya_schedule.rs`, with owning manifests and references.
+2. Completed std-only `cq-testkit/golden`; DuckDB still enables it, while the
+   Ascent oracle no longer enables bundled DuckDB.
+3. Completed `runtime_rustc` backend selection by linked type identity, with
+   zero/ambiguous-match diagnostics and regression coverage.
+4. Evaluated but omitted `codex/d85-regression` (`46be507`). Paired SF1
+   median-of-three default runs: D85 15.725 ms without vs 16.159 ms with;
+   all 13 queries exact in both runs. The changed branch chooser is used only
+   by Filtered/Coarse, not the new Written/Coarse default, so it cannot improve
+   that plan. Raw paired results are
+   `features/workloads/target/bench/tpch-1-{before,with}-d85.{tsv,json}`.
 
 Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
 of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.

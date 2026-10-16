@@ -7,6 +7,16 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog integration: moved HW4 and YA acceptance tests into their owning
+  package test directories; split std-only `cq-testkit/golden` from DuckDB
+  (which still enables it) and switched the Ascent oracle to `golden`; selected
+  raw-rustc backend rlibs by the running testkit's linked `TypeId`, with
+  zero/ambiguous-match diagnostics and regression coverage. Evaluated the
+  proposed D85 bushy-branch fix but left it out: paired SF1 median-of-three
+  default runs measured 15.725 ms without and 16.159 ms with it; all 13 queries
+  were exact in both runs. Written-order planning never invokes that
+  Filtered/Coarse-only branch chooser.
+
 - Plan advice (rule R-Advice): `plan(reduce(T with S), skip(T with S))`
   records an author's cardinality knowledge as VO reduce steps on top-level
   atoms sharing a variable: `reduce` adds `T ⋉ S` after the Masks reductions,
