@@ -384,7 +384,7 @@ fn every_scenario_through_every_planner() {
             combinations += 1;
         }
     }
-    assert_eq!(combinations, 300);
+    assert_eq!(combinations, 330);
 }
 
 #[test]
@@ -421,6 +421,61 @@ fn pinned_vo_and_ra_decisions_for_each_planner() {
             check(&source, &syn::parse_str(&expected_ra).unwrap()).unwrap();
         }
     }
+}
+
+#[test]
+fn le_retail_and_block_schedule_fixtures() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for fixture in ["retail_h05", "retail_h09", "retail_d72_inner", "block"] {
+        let stem = format!("le_{fixture}");
+        let source =
+            syn::parse_str(&std::fs::read_to_string(root.join(format!("{stem}.cq"))).unwrap())
+                .unwrap();
+        let valuation = compile_valuation(&source, Planner::Le).unwrap();
+        let algebra = compile(&source, Planner::Le).unwrap();
+        assert_eq!(
+            format!("{}\n", valuation.to_token_stream()),
+            std::fs::read_to_string(root.join(format!("{stem}.vo"))).unwrap(),
+            "{stem}"
+        );
+        assert_eq!(
+            format!("{}\n", algebra.to_token_stream()),
+            std::fs::read_to_string(root.join(format!("{stem}.ra"))).unwrap(),
+            "{stem}"
+        );
+        check_valuation(&source, &valuation, Planner::Le).unwrap();
+        check(&source, &algebra).unwrap();
+    }
+}
+
+#[test]
+fn le_checks_lookup_expansion_and_rust_before_independently() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32); relation S(a:i32,b:i32); relation T(a:i32,c:i32);
+        answer(a,b,c) :- R(a), S(a,b), T(a,c), if keep!(b,c);
+    };
+    let target = compile_valuation(&source, Planner::Le).unwrap();
+    let analysis = vo::contract::check(&target).unwrap();
+    let phases: Vec<_> = target
+        .valuation
+        .steps
+        .iter()
+        .enumerate()
+        .filter_map(|(i, step)| match step {
+            vo::Step::Atom(a, _) => Some((a.clause(), analysis.introduces[i].len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(phases, [(0, 1), (1, 0), (2, 0), (1, 1), (2, 1)]);
+    for position in [1, 3] {
+        let mut missing = target.clone();
+        missing.valuation.steps.remove(position);
+        assert!(check_valuation(&source, &missing, Planner::Le).is_err());
+    }
+    let mut late = target.clone();
+    let expansion = late.valuation.steps.remove(3);
+    late.valuation.steps.push(expansion);
+    assert!(check_valuation(&source, &late, Planner::Le).is_err());
 }
 
 #[test]

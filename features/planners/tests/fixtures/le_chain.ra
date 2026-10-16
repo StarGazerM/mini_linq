@@ -1,0 +1,1 @@
+relational { relation Edge (src : i32 , dst : i32) ; r0 = rename Edge @ 0 { src - > a , dst - > b } ; r1 = rename Edge @ 1 { src - > b , dst - > c } ; r2 = semijoin r0 with r1 ; r3 = natural_join r2 with r1 ; r4 = rename Edge @ 2 { src - > d , dst - > c } ; r5 = semijoin r3 with r4 ; r6 = natural_join r5 with r4 ; r7 = project r6 keep { a , d } ; output r7 as answer (a , d) ; }

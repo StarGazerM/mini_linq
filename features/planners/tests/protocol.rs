@@ -21,6 +21,7 @@ fn every_planner_runs_through_the_named_facade() {
     verify!(written, coarse);
     verify!(written, fine);
     verify!(hypergraph);
+    verify!(le);
     verify!(prefix connected, coarse);
     verify!(prefix connected, fine);
     verify!(prefix greedy, coarse);

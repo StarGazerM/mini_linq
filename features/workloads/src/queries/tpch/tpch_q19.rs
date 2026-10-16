@@ -14,7 +14,7 @@ pub const EXPORTS: &[(&str, &str)] = &[
     ),
     ("part", "p_partkey,p_brand,p_container,p_size"),
 ];
-pub const CONFIGS: &[&str] = &["default", "no-reduce", "generic-smallest"];
+pub const CONFIGS: &[&str] = &["default", "no-reduce", "generic-smallest", "transfer", "le"];
 
 ::mini_linq::relation_loaders! {
     relation Lineitem(
@@ -95,12 +95,20 @@ crate::tpch_runtime::configuration!(generic_smallest, $,
     { plan = ::cq_planners::order(written, fine); physical = [::cq_rewrites::canon_prefixes, ::cq_rewrites::smallest_intersections]; }, {
     query_body!();
 });
+crate::tpch_runtime::configuration!(transfer, $, { plan = ::cq_planners::order(transfer); }, {
+    query_body!();
+});
+crate::tpch_runtime::configuration!(le, $, { plan = ::cq_planners::order(le); }, {
+    query_body!();
+});
 
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {
         "default" => default::execute(data),
         "no-reduce" => no_reduce::execute(data),
         "generic-smallest" => generic_smallest::execute(data),
+        "transfer" => transfer::execute(data),
+        "le" => le::execute(data),
         _ => panic!("unknown Q19 configuration: {config}"),
     }
 }

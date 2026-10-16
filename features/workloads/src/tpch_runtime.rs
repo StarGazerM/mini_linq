@@ -85,7 +85,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "no-reduce", "transfer", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "no-reduce", "transfer", "le", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -117,6 +117,21 @@ macro_rules! retail_kernel {
         // with forward and backward semijoin transfer before the join phase.
         crate::tpch_runtime::configuration!(transfer, $d, {
             plan = ::cq_planners::order(transfer);
+            select = ::mini_linq::passes::select(positional($($relation),*));
+        }, {
+            #[allow(non_snake_case)]
+            pub(super) fn run(data: &Data) -> Vec<Answer> {
+                $(let $relation = data.$table.as_slice();)*
+                $($setup)*
+                query! {
+                    struct Query;
+                    $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    answer($($out),+) :- $($body)*
+                }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
+            }
+        });
+        crate::tpch_runtime::configuration!(le, $d, {
+            plan = ::cq_planners::order(le);
             select = ::mini_linq::passes::select(positional($($relation),*));
         }, {
             #[allow(non_snake_case)]
@@ -165,6 +180,7 @@ macro_rules! retail_kernel {
                 "default" => default::run(data),
                 "no-reduce" => no_reduce::run(data),
                 "transfer" => transfer::run(data),
+                "le" => le::run(data),
                 stringify!($candidate) => tuned::run(data),
                 $(crate::tpch_runtime::advised_name!($($advice)*) => advised::run(data),)?
                 _ => crate::tpch_runtime::extra_run!([$($extra)?]; data, config),

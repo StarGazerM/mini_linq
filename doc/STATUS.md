@@ -97,6 +97,86 @@ the default already filters the stream at its scan with the builds' key sets,
 and its probes then only hit, which is the SQL Server argument for omitting
 the top-down pass.
 
+## Lookup-expand route (`cq_planners::order(le)`)
+
+The external planner records existing VO subatoms: a no-new-name lookup on
+the currently bound join key, followed by one coarse full correlated row.
+Ready lookups follow the GYO ear order (then the Masks cyclic-core tree);
+the outer stream and Rust chain remain Written/Coarse. Expansions wait for
+column demand, a written Rust Before boundary, or scope exit. Opaque Rust
+retains its whole lexical environment through `FreeVariables::dependencies`.
+Blocks recurse without changing their interface or fallback ancestry.
+
+Coarse expansion is deliberate: CK-Le checks exactly one full expansion per
+non-stream occurrence, rather than claiming Fine's one-variable obligation.
+It independently checks the non-introducing lookup before that expansion and
+written column ownership; WF-VO checks first uses, complete rows and Rust
+boundaries, Masks checks reductions, and the final CQ→RA′ check remains active.
+No RA′, VO, Physical grammar, runtime feature, or core compiler dependency is
+added. `physical = [cq_rewrites::smallest_intersections]` remains the public
+intersection hook; this coarse planner does not manufacture Fine ranges or
+claim a worst-case-optimal join bound.
+
+The retail runtime registers `le`. The e2e corpus axes are intentionally
+unchanged: adding LE there requires extending the named planner axis and
+regenerating its pairwise configurations, then running the corpus gate.
+
+Measured 2026-10-16 with `cargo xtask profile --tpch --sf 1 --config
+default`, then `le`, then `transfer`: 11 timed runs after warm-up,
+uninstrumented medians in ms. All 13 queries/configurations matched the exact
+DuckDB oracle, including separate operator-count and operator-time workers.
+The original checkout's data directory was absent; the surviving DuckDB
+v1.5.5 SF1 database was copied from `/data/tpch-gpu/sf1/dbgen.duckdb` into
+the fork's `features/workloads/target/bench/data/tpch-1/`, with its matching
+manifest; xtask regenerated the per-query Parquet projections. Q06/Q19 also
+register `le` and `transfer` so the unqualified profile commands complete.
+
+| Query | default | le | transfer | LE/default |
+|---|---:|---:|---:|---:|
+| retail_h03 | 40.090 | 42.299 | 53.065 | +5.5% |
+| retail_h05 | 36.097 | 44.091 | 43.244 | +22.1% |
+| retail_h07 | 37.304 | 37.091 | 56.416 | -0.6% |
+| retail_h07_block | 35.079 | 40.832 | 43.738 | +16.4% |
+| retail_h08 | 32.892 | 34.225 | 31.561 | +4.1% |
+| retail_h09 | 209.331 | 221.236 | 323.508 | +5.7% |
+| retail_h21_positive | 96.850 | 104.401 | 127.468 | +7.8% |
+| retail_d19 | 21.620 | 21.556 | 19.931 | -0.3% |
+| retail_d27 | 18.340 | 18.365 | 28.358 | +0.1% |
+| retail_d72_inner | 205.796 | 208.472 | 188.922 | +1.3% |
+| retail_d85 | 28.764 | 28.810 | 27.081 | +0.2% |
+| tpch_q06 | 30.562 | 28.344 | 28.245 | -7.3% |
+| tpch_q19 | 35.848 | 35.018 | 34.713 | -2.3% |
+
+The two LE regressions above 10% were inspected using the operator profiles
+under `/data/codex/opprofile-evidence/` (`<query>.<config>.ours.txt` and
+`.validation.json`):
+
+- **H05:** all 184,082 surviving stream rows pass the additional order,
+  supplier, customer, nation and region semijoins; none avoids expansion.
+  The early supplier lookup adds a 10,000-key fallback set alongside the
+  existing composite supplier index. Order join-filter insertions double
+  from 46,008 to 92,016. Exclusive build time is 4.911 → 6.212 ms and the
+  inclusive answer span is 22.820 → 31.822 ms. The CPU path pays for the extra
+  membership probes without reducing the expanded rows.
+- **H07-block:** the added supplier/order/customer semijoins likewise retain
+  all 11,723 stream rows; order join-filter insertions double from 121,324
+  to 242,648 and supplier insertions from 798 to 1,596. The recursive union
+  arms also retain additional one-row projected indexes. This is extra work
+  without additional filtering. The instrumented totals are effectively
+  equal (43.199 vs 42.721 ms), however, and instrumentation overhead differs
+  (+23.15% vs +4.63%); those clocks do **not** establish a precise causal
+  decomposition of the 5.753 ms uninstrumented gap.
+
+Transfer's >10% regressions retain the earlier route's explanation: forward
+and backward filtering materializes/revisits the stream and adds key sets.
+The profiles expose retained-stream inputs of 30,519 rows (H03), 184,082
+(H05), 11,723 (H07 and H07-block), 75,871 (H21+) and 357 (D27), followed by
+backward builds and the final joins. H09 spends 134.631 ms reducing 6,001,215
+Lineitem rows before its 319,404-row order index and 148.136 ms answer span.
+These are inclusive spans, not additive exclusive costs. LE is an explicit
+schedule for lookup/expansion experimentation, not a demonstrated CPU speedup
+or a saved-descriptor GPU implementation.
+
 ## Index building vs join processing (SF 1, one thread, planning excluded)
 
 DuckDB 1.5.5 with timers in `PhysicalHashJoin` (sink, combine, pointer-table
