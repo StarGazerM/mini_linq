@@ -152,9 +152,13 @@ approval; this integration admits only the four decisions below.
   family, named configurations) plus a 2,400-configuration triangle kernel;
   rejected pipelines are UI fixtures. Workload tests 14,357 → 2,982; cold
   test build 874 → 169 s.
-- Validation: root 507, datalog 57, extensions 53, workloads 2,982 (on
-  `7695d00`), DuckDB goldens 151, public API, dependency, formal checks.
-- SF 1 (this branch, one run): Q19 22.5, D19 12.7, D27 16.3, D72 75.9, H08 17.9,
+- Integration validation (`codex/integrate-upstream`): root 517, Datalog 57,
+  extensions 53, workloads 2,982; 151 byte-exact DuckDB goldens; dependency
+  isolation/frontends/consumers; 21 unchanged public-API snapshots; packaged
+  external builds/tests for all 11 features and mandatory fixtures; formal
+  inventory 155 rules. Datalog needed no API adaptation. Cargo ran serially
+  with two build jobs and separate root/feature targets.
+- Pre-integration SF 1 (one run): Q19 22.5, D19 12.7, D27 16.3, D72 75.9, H08 17.9,
   H09 106.7, H03 28.1, Q6 16.5, H05 35.6, H21 107.3, H07 44.2, D85 62.8,
   H07_block 72.6 ms; all exact. The H08/D19 slowdown seen on the abandoned
   `codex/datalog` branch is absent, so it came from its core changes.
@@ -169,10 +173,32 @@ Approved core integration decisions:
    zero/ambiguous-match diagnostics and regression coverage.
 4. Evaluated but omitted `codex/d85-regression` (`46be507`). Paired SF1
    median-of-three default runs: D85 15.725 ms without vs 16.159 ms with;
-   all 13 queries exact in both runs. The changed branch chooser is used only
+   all 13 queries exact in both runs, with identical operator counters across
+   all 26 query/configuration pairs. The changed branch chooser is used only
    by Filtered/Coarse, not the new Written/Coarse default, so it cannot improve
    that plan. Raw paired results are
    `features/workloads/target/bench/tpch-1-{before,with}-d85.{tsv,json}`.
+
+Final integration SF1 comparison: release, one warm-up and median of five;
+all 13 queries exact against DuckDB in both default and no-reduce configurations,
+also checked at SF0.1. Times exclude MiniLinq loading. DuckDB 1T includes prepare.
+Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json}`.
+
+| Query | Rows | Default ms | No-reduce ms | DuckDB 1T ms |
+|---|---:|---:|---:|---:|
+| retail_h03 | 11,620 | 22.283 | 60.337 | 16.743 |
+| retail_h05 | 7,242 | 21.146 | 74.753 | 18.230 |
+| retail_h07 | 5,501 | 23.318 | 175.807 | 18.802 |
+| retail_h07_block | 5,501 | 21.208 | 181.382 | 18.752 |
+| retail_h08 | 2,603 | 19.034 | 39.450 | 12.769 |
+| retail_h09 | 319,402 | 83.516 | 794.141 | 75.880 |
+| retail_h21_positive | 302,284 | 48.979 | 505.158 | 48.532 |
+| retail_d19 | 8,962 | 13.708 | 36.431 | 14.288 |
+| retail_d27 | 357 | 11.902 | 10.416 | 13.187 |
+| retail_d72_inner | 5,344 | 93.692 | 67.177 | 53.664 |
+| retail_d85 | 8,962 | 15.529 | 1,225.156 | 19.103 |
+| tpch_q06 | 1 | 17.136 | 17.099 | 8.961 |
+| tpch_q19 | 1 | 12.828 | 12.804 | 108.081 |
 
 Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
 of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
