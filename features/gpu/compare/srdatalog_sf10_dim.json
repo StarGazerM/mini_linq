@@ -1,0 +1,39 @@
+{
+  "sf": 10,
+  "order": "dim",
+  "compile_s": 0.007164556009229273,
+  "load_s": [
+    2.328167694999138,
+    2.311556742992252,
+    2.3158182780025527,
+    2.4324454049929045,
+    4.6120288940146565
+  ],
+  "run_ms": [
+    58038.175997993676,
+    58041.99133699876,
+    58050.6692820054,
+    58156.74797000247,
+    58254.40595499822
+  ],
+  "median_ms": 58050.6692820054,
+  "min_ms": 58038.175997993676,
+  "answer_count": 72983,
+  "expected_count": 72983,
+  "exact": true,
+  "peak_vram_mib": 3248,
+  "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+  "requested_var_order": [
+    "r",
+    "n",
+    "c",
+    "o",
+    "d",
+    "s"
+  ],
+  "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Dim_DB_5817",
+  "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Dim_DB_5817/libH05Dim_DB_5817.so",
+  "phase": "complete",
+  "warmup_ms": 57474.238559021614,
+  "warmup_load_s": 2.303993031993741
+}

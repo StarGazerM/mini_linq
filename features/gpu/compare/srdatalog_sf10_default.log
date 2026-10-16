@@ -1,0 +1,27 @@
+compile_s=0.006587
+>> CUDA Device: NVIDIA RTX 6000 Ada Generation (Compute 8.9)
+[Step 0 (simple)] Relations: Answer completed in 637 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=default iteration=0 load_s=2.298941 run_ms=637.110486 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 634 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=default iteration=1 load_s=2.301293 run_ms=634.764542 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 631 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=default iteration=2 load_s=2.292775 run_ms=632.030895 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 633 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=default iteration=3 load_s=2.289090 run_ms=633.470092 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 633 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=default iteration=4 load_s=2.264870 run_ms=633.233889 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 634 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=default iteration=5 load_s=2.275868 run_ms=634.515865 Answer=72983
+{"sf": 10, "order": "default", "compile_s": 0.006586667994270101, "load_s": [2.301292650983669, 2.292774764006026, 2.289090195001336, 2.2648697050171904, 2.27586835497641], "run_ms": [634.764541988261, 632.0308950089384, 633.4700920269825, 633.2338890060782, 634.5158650074154], "median_ms": 633.4700920269825, "min_ms": 632.0308950089384, "answer_count": 72983, "expected_count": 72983, "exact": true, "peak_vram_mib": 3248, "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound", "requested_var_order": null, "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Default_DB_6917", "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Default_DB_6917/libH05Default_DB_6917.so", "phase": "complete", "warmup_ms": 637.1104860154446, "warmup_load_s": 2.298940935987048}

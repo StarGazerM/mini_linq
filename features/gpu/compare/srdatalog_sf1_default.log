@@ -1,0 +1,27 @@
+compile_s=37.982369
+>> CUDA Device: NVIDIA RTX 6000 Ada Generation (Compute 8.9)
+[Step 0 (simple)] Relations: Answer completed in 41 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 7242
+sf=1 order=default iteration=0 load_s=0.230130 run_ms=41.210598 Answer=7242
+[Step 0 (simple)] Relations: Answer completed in 38 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 7242
+sf=1 order=default iteration=1 load_s=0.215513 run_ms=38.441333 Answer=7242
+[Step 0 (simple)] Relations: Answer completed in 38 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 7242
+sf=1 order=default iteration=2 load_s=0.216555 run_ms=38.291066 Answer=7242
+[Step 0 (simple)] Relations: Answer completed in 38 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 7242
+sf=1 order=default iteration=3 load_s=0.222565 run_ms=38.100059 Answer=7242
+[Step 0 (simple)] Relations: Answer completed in 38 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 7242
+sf=1 order=default iteration=4 load_s=0.215535 run_ms=38.138113 Answer=7242
+[Step 0 (simple)] Relations: Answer completed in 38 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 7242
+sf=1 order=default iteration=5 load_s=0.217083 run_ms=38.396427 Answer=7242
+{"sf": 1, "order": "default", "compile_s": 37.98236949200509, "load_s": [0.21551329601788893, 0.21655505200033076, 0.222564866009634, 0.21553465799661353, 0.21708279399899766], "run_ms": [38.44133301754482, 38.29106601187959, 38.10005899867974, 38.13811301370151, 38.39642700040713], "median_ms": 38.29106601187959, "min_ms": 38.10005899867974, "answer_count": 7242, "expected_count": 7242, "exact": true, "peak_vram_mib": 2224, "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound", "requested_var_order": null, "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Default_DB_6917", "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Default_DB_6917/libH05Default_DB_6917.so", "phase": "complete", "warmup_ms": 41.21059802128002, "warmup_load_s": 0.23013046898995526, "tuple_exact": true}

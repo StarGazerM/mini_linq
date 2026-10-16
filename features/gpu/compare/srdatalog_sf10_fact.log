@@ -1,0 +1,27 @@
+compile_s=0.006613
+>> CUDA Device: NVIDIA RTX 6000 Ada Generation (Compute 8.9)
+[Step 0 (simple)] Relations: Answer completed in 586 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=fact iteration=0 load_s=2.269098 run_ms=586.271571 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 579 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=fact iteration=1 load_s=2.426063 run_ms=579.361063 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 582 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=fact iteration=2 load_s=2.317138 run_ms=582.553919 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 578 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=fact iteration=3 load_s=2.314637 run_ms=578.956868 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 588 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=fact iteration=4 load_s=2.261441 run_ms=588.369701 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 584 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=fact iteration=5 load_s=2.271433 run_ms=584.321255 Answer=72983
+{"sf": 10, "order": "fact", "compile_s": 0.006612908007809892, "load_s": [2.4260628249903675, 2.3171384849993046, 2.314636964001693, 2.2614411240210757, 2.2714332769974135], "run_ms": [579.3610630207695, 582.5539189972915, 578.9568680047523, 588.3697009994648, 584.3212550098542], "median_ms": 582.5539189972915, "min_ms": 578.9568680047523, "answer_count": 72983, "expected_count": 72983, "exact": true, "peak_vram_mib": 3248, "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound", "requested_var_order": ["o", "s", "c", "d", "n", "r"], "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Fact_DB_EC15", "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Fact_DB_EC15/libH05Fact_DB_EC15.so", "phase": "complete", "warmup_ms": 586.27157099545, "warmup_load_s": 2.269098352990113}

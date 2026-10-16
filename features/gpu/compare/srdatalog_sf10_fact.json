@@ -1,0 +1,39 @@
+{
+  "sf": 10,
+  "order": "fact",
+  "compile_s": 0.006612908007809892,
+  "load_s": [
+    2.4260628249903675,
+    2.3171384849993046,
+    2.314636964001693,
+    2.2614411240210757,
+    2.2714332769974135
+  ],
+  "run_ms": [
+    579.3610630207695,
+    582.5539189972915,
+    578.9568680047523,
+    588.3697009994648,
+    584.3212550098542
+  ],
+  "median_ms": 582.5539189972915,
+  "min_ms": 578.9568680047523,
+  "answer_count": 72983,
+  "expected_count": 72983,
+  "exact": true,
+  "peak_vram_mib": 3248,
+  "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+  "requested_var_order": [
+    "o",
+    "s",
+    "c",
+    "d",
+    "n",
+    "r"
+  ],
+  "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Fact_DB_EC15",
+  "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Fact_DB_EC15/libH05Fact_DB_EC15.so",
+  "phase": "complete",
+  "warmup_ms": 586.27157099545,
+  "warmup_load_s": 2.269098352990113
+}
