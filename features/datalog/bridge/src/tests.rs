@@ -14,11 +14,16 @@ fn source() -> proc_macro2::TokenStream {
 #[test]
 fn ordinary_queue_and_arguments_are_preserved_per_hole() {
     let source = source();
-    let expanded = expand(quote! {
-        arguments {};
-        pipeline { custom_surface(opaque(tokens)), planner(no_reduce), printer };
-        #source
-    }, Stage::Source).unwrap().to_string();
+    let expanded = expand(
+        quote! {
+            arguments {};
+            pipeline { custom_surface(opaque(tokens)), planner(no_reduce), printer };
+            #source
+        },
+        Stage::Source,
+    )
+    .unwrap()
+    .to_string();
     assert_eq!(expanded.matches("custom_surface !").count(), 1);
     assert!(expanded.contains("arguments { opaque (tokens) }"));
     assert!(expanded.contains("pipeline { planner (no_reduce) , printer }"));
@@ -43,12 +48,16 @@ fn named_configuration_preserves_every_phase_and_planner_argument() {
             structures = [structure(seven)]; print = custom_print(eight);
         }
         #source
-    }).unwrap();
+    })
+    .unwrap();
     let expected: cq_stage::Pipeline = syn::parse_quote!(pipeline {
         surface(one), custom_plan(two), custom_ix(three), custom_lower(four),
         physical_a(five), physical_b, custom_select(six), structure(seven), custom_print(eight)
     });
-    assert_eq!(input.pipeline.to_token_stream().to_string(), expected.to_token_stream().to_string());
+    assert_eq!(
+        input.pipeline.to_token_stream().to_string(),
+        expected.to_token_stream().to_string()
+    );
 }
 
 #[test]
@@ -85,7 +94,8 @@ fn authored_round_expansion_matches_independent_fixture() {
             layout E [0] key 0;
             variant 0 seed { R(*x) :- E(x); }
         }
-    }).unwrap();
+    })
+    .unwrap();
     let fork = cq_datalog_fork::fork(&program, |_| Ok(quote!(authored_rows()))).unwrap();
     let actual: syn::Expr = syn::parse2(render::render(fork)).unwrap();
     let expected: syn::Expr = syn::parse_str(include_str!("../tests/fixtures/round.rs")).unwrap();
@@ -120,7 +130,8 @@ fn lower_stratum_negation_builds_one_key_set_outside_rounds() {
         } else {
             Ok(quote!(candidate_rows()))
         }
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(fork.context.strata[1].keys.len(), 1);
     let expanded = render::render(fork).to_string();
     assert_eq!(expanded.matches("completed_keys ()").count(), 1);
@@ -153,7 +164,8 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
     let expanded = cq_datalog_fork::fork(&program, |hole| {
         let name = hole.name;
         Ok(quote!(#name()))
-    }).unwrap();
+    })
+    .unwrap();
     let next = &expanded.context.relations[1].next;
     let first_host = &expanded.context.layouts[1].host;
     let second_host = &expanded.context.layouts[2].host;
@@ -164,7 +176,8 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
             #second_host.entry((::core::clone::Clone::clone(&row.1),))
                 .or_default().push((::core::clone::Clone::clone(&row.0),));
         }
-    }.to_string();
+    }
+    .to_string();
     let rendered = render::render(expanded).to_string();
     // One publication after seeds and one after all recursive variants, not
     // one insertion into the full maps per rule or per rejected candidate.
@@ -172,4 +185,62 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
     assert_eq!(rendered.matches("Rows :: rows").count(), 1);
     let last_step = rendered.find("__cq_datalog_hole_2 ()").unwrap();
     assert!(rendered.rfind(&expected_updates).unwrap() > last_step);
+}
+
+#[test]
+fn multioutput_render_moves_each_relation_in_output_order() {
+    let source: cq_lang_datalog::Program = syn::parse_quote! {
+        struct Ordered;
+        relation E(x:i32) = (input);
+        relation A(x:i32); relation B(x:String);
+        output B, A;
+        A(*x) :- E(x);
+        B(x.to_string()) :- A(x);
+    };
+    let strata = cq_datalog_schedule::stratify::compile(&source).unwrap();
+    let program = cq_datalog_schedule::seminaive::compile(&strata).unwrap();
+    let fork = cq_datalog_fork::fork(&program, |_| Ok(quote!(rows()))).unwrap();
+    let a = &fork.context.relations[1].all;
+    let b = &fork.context.relations[2].all;
+    let expected: syn::Expr = syn::parse_quote!((#b.into_iter(), #a.into_iter(),));
+    let actual: syn::ExprBlock = syn::parse2(render::render(fork)).unwrap();
+    assert_eq!(
+        actual.block.stmts.last(),
+        Some(&syn::Stmt::Expr(expected, None))
+    );
+    for (stage, program) in [
+        (Stage::Source, source),
+        (Stage::Stratified, strata),
+        (Stage::Seminaive, program),
+    ] {
+        let replay = syn::parse2::<cq_lang_datalog::Program>(program.to_token_stream()).unwrap();
+        assert!(expand(replay.to_token_stream(), stage).is_ok());
+    }
+}
+
+#[test]
+fn constant_key_projection_is_built_once_before_recursive_rounds() {
+    let source: cq_lang_datalog::Program = syn::parse_quote! {
+        struct Filtered;
+        relation E(x:i32) = (input);
+        relation M(kind:String,x:i32) = (modifiers);
+        relation A(x:i32);
+        output A;
+        A(*x) :- E(x), !M("abstract",x);
+        A(*x) :- A(x), !M("abstract",x), !M("abstract",x);
+    };
+    let strata = cq_datalog_schedule::stratify::compile(&source).unwrap();
+    let program = cq_datalog_schedule::seminaive::compile(&strata).unwrap();
+    let fork = cq_datalog_fork::fork(&program, |hole| {
+        if hole.name.to_string().contains("key_hole") {
+            Ok(quote!(filtered_keys()))
+        } else {
+            Ok(quote!(candidate_rows()))
+        }
+    })
+    .unwrap();
+    assert_eq!(fork.context.strata[0].keys.len(), 1);
+    let rendered = render::render(fork).to_string();
+    assert_eq!(rendered.matches("filtered_keys ()").count(), 1);
+    assert!(rendered.find("filtered_keys ()").unwrap() < rendered.find("while").unwrap());
 }

@@ -1,11 +1,14 @@
 //! Finite, insert-only Boolean Datalog above CQ.
 //!
 //! Declare EDBs with host bindings, IDBs without bindings, and `output R;`.
+//! `output R, S;` returns owned iterators in the written output order.
 //! Schedule passes record dependency-ordered SCCs and one semi-naive variant
 //! per changing positive position. All stages parse, print and check alone.
 //! Recursive heads copy positive columns (`*x` or `(*x).clone()`). Opaque Rust
 //! clauses retain their written order. Native `!R(x,_)` negation reads completed
 //! lower strata and requires every named argument to be bound before the clause.
+//! Negative constants (including closed Rust expressions) filter a projected
+//! borrowed key set once per stratum; they cannot depend on rule-local bindings.
 //! Extensions, aggregates and nested blocks are rejected.
 //!
 //! ```text
@@ -70,7 +73,7 @@ pub mod kw {
 pub struct Program {
     pub name: Ident,
     pub declarations: Vec<RelationDecl>,
-    pub output: Ident,
+    pub outputs: Vec<Ident>,
     pub rules: Vec<Query>,
     pub observer: Option<Expr>,
     pub strata: Option<Vec<Vec<Ident>>>,
@@ -121,7 +124,11 @@ impl Parse for Program {
             declarations.push(input.parse()?);
         }
         input.parse::<kw::output>()?;
-        let output = input.parse()?;
+        let mut outputs = vec![input.parse()?];
+        while input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            outputs.push(input.parse()?);
+        }
         input.parse::<Token![;]>()?;
         let mut rules = Vec::new();
         while input.peek(Ident) && input.peek2(syn::token::Paren) {
@@ -173,12 +180,18 @@ impl Parse for Program {
                 let relation = body.parse()?;
                 let columns;
                 syn::bracketed!(columns in body);
-                let columns = columns.parse_terminated(number, Token![,])?
-                    .into_iter().collect();
+                let columns = columns
+                    .parse_terminated(number, Token![,])?
+                    .into_iter()
+                    .collect();
                 body.parse::<kw::key>()?;
                 let key = number(&body)?;
                 body.parse::<Token![;]>()?;
-                layouts.push(Layout { relation, columns, key });
+                layouts.push(Layout {
+                    relation,
+                    columns,
+                    key,
+                });
             }
             let mut variants = Vec::new();
             while !body.is_empty() {
@@ -202,14 +215,20 @@ impl Parse for Program {
                     return Err(query.error("unexpected variant text"));
                 }
             }
-            (Some(variants), Some(insertion), Some(negation_keys), deltas, layouts)
+            (
+                Some(variants),
+                Some(insertion),
+                Some(negation_keys),
+                deltas,
+                layouts,
+            )
         } else {
             (None, None, None, Vec::new(), Vec::new())
         };
         Ok(Self {
             name,
             declarations,
-            output,
+            outputs,
             rules,
             observer,
             strata,
@@ -226,7 +245,7 @@ impl ToTokens for Program {
         let Self {
             name,
             declarations,
-            output,
+            outputs,
             rules,
             observer,
             strata,
@@ -239,7 +258,7 @@ impl ToTokens for Program {
         if let Some(e) = observer {
             tokens.extend(quote!(observe = #e;));
         }
-        tokens.extend(quote!(struct #name; #(#declarations)* output #output; #(#rules)*));
+        tokens.extend(quote!(struct #name; #(#declarations)* output #(#outputs),*; #(#rules)*));
         if let Some(components) = strata {
             let components = components
                 .iter()
@@ -377,15 +396,24 @@ impl Graph {
 fn check_source(p: &Program) -> syn::Result<Graph> {
     let g = Graph::new(p)?;
     ensure(
-        !p.rules.is_empty(),
+        !p.rules.is_empty() || p.declarations.iter().all(|d| d.value.is_some()),
         &p.name,
-        "Datalog requires at least one rule",
+        "Datalog requires at least one rule when IDBs are declared",
     )?;
     ensure(
-        p.declarations[g.index(&p.output)?].value.is_none(),
-        &p.output,
-        "output must be an IDB",
+        !p.outputs.is_empty(),
+        &p.name,
+        "Datalog requires at least one output",
     )?;
+    let mut outputs = BTreeSet::new();
+    for output in &p.outputs {
+        ensure(
+            outputs.insert(symbol_name(output)),
+            output,
+            "duplicate output relation",
+        )?;
+        g.index(output)?;
+    }
     for q in &p.rules {
         let head = g.index(&q.head.relation)?;
         let columns: BTreeSet<_> = q
@@ -465,8 +493,10 @@ fn check_strata(p: &Program, g: &Graph) -> syn::Result<()> {
 fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
     let Some(variants) = &p.variants else {
         return ensure(
-            p.insertion.is_none() && p.negation_keys.is_none()
-                && p.deltas.is_empty() && p.layouts.is_empty(),
+            p.insertion.is_none()
+                && p.negation_keys.is_none()
+                && p.deltas.is_empty()
+                && p.layouts.is_empty(),
             p,
             "insertion and negation key policies, deltas and layouts require seminaive variants",
         );
@@ -489,7 +519,8 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
     let mut seen = BTreeSet::new();
     let mut declarations = p.declarations.clone();
     for delta in &p.deltas {
-        let mut declaration = p.declarations[analysis.positions[&symbol_name(&delta.relation)]].clone();
+        let mut declaration =
+            p.declarations[analysis.positions[&symbol_name(&delta.relation)]].clone();
         declaration.name = delta.name.clone();
         declarations.push(declaration);
     }
@@ -586,10 +617,23 @@ pub mod contract {
     pub fn check(program: &Program) -> syn::Result<Analysis> {
         let graph = check_source(program)?;
         check_strata(program, &graph)?;
-        let positions: BTreeMap<_, _> = graph.names.iter().cloned().enumerate()
-            .map(|(index, name)| (name, index)).collect();
-        let components: Vec<Vec<usize>> = program.strata.iter().flatten()
-            .map(|members| members.iter().map(|id| positions[&symbol_name(id)]).collect())
+        let positions: BTreeMap<_, _> = graph
+            .names
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, name)| (name, index))
+            .collect();
+        let components: Vec<Vec<usize>> = program
+            .strata
+            .iter()
+            .flatten()
+            .map(|members| {
+                members
+                    .iter()
+                    .map(|id| positions[&symbol_name(id)])
+                    .collect()
+            })
             .collect();
         let mut component = vec![None; program.declarations.len()];
         for (index, members) in components.iter().enumerate() {
@@ -597,38 +641,67 @@ pub mod contract {
                 component[member] = Some(index);
             }
         }
-        let changing_positions = program.rules.iter().map(|query| {
-            let head = positions[&symbol_name(&query.head.relation)];
-            query.body.iter().enumerate().filter_map(|(index, item)| {
-                if let BodyItem::Positive { atom } = item {
-                    let input = positions[&symbol_name(&atom.relation)];
-                    if component[head].is_some() && component[head] == component[input] {
-                        return Some(index);
-                    }
-                }
-                None
-            }).collect()
-        }).collect();
+        let changing_positions = program
+            .rules
+            .iter()
+            .map(|query| {
+                let head = positions[&symbol_name(&query.head.relation)];
+                query
+                    .body
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, item)| {
+                        if let BodyItem::Positive { atom } = item {
+                            let input = positions[&symbol_name(&atom.relation)];
+                            if component[head].is_some() && component[head] == component[input] {
+                                return Some(index);
+                            }
+                        }
+                        None
+                    })
+                    .collect()
+            })
+            .collect();
         let mut deltas = BTreeMap::new();
         let mut fresh = Fresh::new(source_only(program));
         for delta in &program.deltas {
             let index = graph.index(&delta.relation)?;
-            ensure(program.declarations[index].value.is_none(), &delta.relation,
-                "delta declarations must name IDB relations")?;
-            ensure(deltas.insert(symbol_name(&delta.relation), delta.name.clone()).is_none(),
-                &delta.relation, "duplicate delta declaration for relation")?;
-            ensure(fresh.used.insert(symbol_name(&delta.name)), &delta.name,
-                "delta relation name must be fresh in the complete source")?;
+            ensure(
+                program.declarations[index].value.is_none(),
+                &delta.relation,
+                "delta declarations must name IDB relations",
+            )?;
+            ensure(
+                deltas
+                    .insert(symbol_name(&delta.relation), delta.name.clone())
+                    .is_none(),
+                &delta.relation,
+                "duplicate delta declaration for relation",
+            )?;
+            ensure(
+                fresh.used.insert(symbol_name(&delta.name)),
+                &delta.name,
+                "delta relation name must be fresh in the complete source",
+            )?;
         }
         if program.variants.is_some() {
             for declaration in &program.declarations {
-                ensure(declaration.value.is_some() || deltas.contains_key(&symbol_name(&declaration.name)),
-                    declaration, "missing IDB delta declaration")?;
+                ensure(
+                    declaration.value.is_some()
+                        || deltas.contains_key(&symbol_name(&declaration.name)),
+                    declaration,
+                    "missing IDB delta declaration",
+                )?;
             }
         }
         let analysis = Analysis {
-            dependencies: graph.edges.clone(), graph, positions, components, component,
-            changing_positions, deltas,
+            dependencies: graph.edges.clone(),
+            graph,
+            positions,
+            components,
+            component,
+            changing_positions,
+            deltas,
         };
         check_variants(program, &analysis)?;
         layouts::check(program, &analysis)?;
@@ -640,16 +713,26 @@ pub mod contract {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    ensure(source_only(source) == source_only(target), target,
-        "Datalog pass changed source rules or declarations")?;
-    ensure(source.strata.is_none() || source.strata == target.strata, target,
-        "Datalog pass changed existing strata")?;
-    ensure(source.variants.is_none()
-        || (source.variants == target.variants && source.deltas == target.deltas
-            && source.insertion == target.insertion
-            && source.layouts == target.layouts
-            && source.negation_keys == target.negation_keys), target,
-        "Datalog pass changed existing semi-naive decisions")
+    ensure(
+        source_only(source) == source_only(target),
+        target,
+        "Datalog pass changed source rules or declarations",
+    )?;
+    ensure(
+        source.strata.is_none() || source.strata == target.strata,
+        target,
+        "Datalog pass changed existing strata",
+    )?;
+    ensure(
+        source.variants.is_none()
+            || (source.variants == target.variants
+                && source.deltas == target.deltas
+                && source.insertion == target.insertion
+                && source.layouts == target.layouts
+                && source.negation_keys == target.negation_keys),
+        target,
+        "Datalog pass changed existing semi-naive decisions",
+    )
 }
 
 impl Language for Program {
@@ -665,14 +748,23 @@ impl Language for Program {
 // its positive validation projection exercises CQ declaration, arity and scope
 // obligations. Rust types remain checked by rustc on the emitted CQ holes.
 fn check_query(p: &Program, q: &Query, declarations: &[RelationDecl]) -> syn::Result<()> {
-    let head = declarations.iter().find(|d| symbol_name(&d.name) == symbol_name(&q.head.relation))
+    let head = declarations
+        .iter()
+        .find(|d| symbol_name(&d.name) == symbol_name(&q.head.relation))
         .ok_or_else(|| syn::Error::new_spanned(&q.head, "undeclared rule head"))?;
-    ensure(q.head.args.len() == head.arity(), &q.head, "head arity mismatch")?;
+    ensure(
+        q.head.args.len() == head.arity(),
+        &q.head,
+        "head arity mismatch",
+    )?;
     let bound = cq_lang_cq::blocks::bound(&q.body);
     for arg in &q.head.args {
         if let Some(id) = active_column(arg).or_else(|| rust::variable(arg)) {
-            ensure(bound.contains_key(&symbol_name(id)), arg,
-                "head variable must be range restricted")?;
+            ensure(
+                bound.contains_key(&symbol_name(id)),
+                arg,
+                "head variable must be range restricted",
+            )?;
         }
     }
     let mut fresh = Fresh::new(p);
@@ -683,20 +775,33 @@ fn check_query(p: &Program, q: &Query, declarations: &[RelationDecl]) -> syn::Re
     let mut output = head.clone();
     output.name = name;
     declarations.push(output);
+    let locals = bound.keys().cloned().collect();
     let mut scope = BTreeSet::new();
     for item in &mut query.body {
         match item {
             BodyItem::Negation(negative) => {
                 for arg in &negative.atom.args {
-                    if matches!(arg, Expr::Infer(_)) {
+                    if matches!(rust::unparen(arg), Expr::Infer(_)) {
                         continue;
                     }
-                    let id = rust::variable(arg).ok_or_else(|| syn::Error::new_spanned(
-                        arg, "negation arguments must be bound variables or _"))?;
-                    ensure(scope.contains(&symbol_name(id)), arg,
-                        "negation variable must be bound by a positive atom before the clause")?;
+                    if let Some(id) = rust::variable(arg) {
+                        ensure(
+                            scope.contains(&symbol_name(id)),
+                            arg,
+                            "negation variable must be bound by a positive atom before the clause",
+                        )?;
+                    } else {
+                        let free = rust::free_variables(arg);
+                        ensure(
+                            !free.opaque && free.dependencies(&locals).is_empty(),
+                            arg,
+                            "negation constants must not depend on rule-local bindings",
+                        )?;
+                    }
                 }
-                *item = BodyItem::Positive { atom: negative.atom.clone() };
+                *item = BodyItem::Positive {
+                    atom: negative.atom.clone(),
+                };
             }
             BodyItem::Positive { atom } => scope.extend(atom.variables().map(symbol_name)),
             _ => {}

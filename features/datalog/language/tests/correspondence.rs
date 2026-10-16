@@ -2,6 +2,8 @@ use cq_lang_datalog::{BodyItem, Delta, Program, check_rewrite, contract};
 use cq_stage::Language;
 use quote::{ToTokens, quote};
 
+type Mutation = Box<dyn Fn(&mut Program)>;
+
 const SOURCE: &str = include_str!("fixtures/source.datalog");
 const STRATIFIED: &str = include_str!("fixtures/stratified.datalog");
 const SEMINAIVE: &str = include_str!("fixtures/seminaive.datalog");
@@ -17,7 +19,10 @@ fn authored_stages_check_and_round_trip_independently() {
         contract::check(&program).unwrap();
         assert_eq!(
             program.negation_keys.as_ref().map(ToString::to_string),
-            program.variants.as_ref().map(|_| "hash_set_borrowed".to_owned()),
+            program
+                .variants
+                .as_ref()
+                .map(|_| "hash_set_borrowed".to_owned()),
         );
         program.check().unwrap();
         let roundtrip: Program = syn::parse2(program.to_token_stream()).unwrap();
@@ -38,26 +43,52 @@ fn analysis_supplies_declared_graph_schedule_and_delta_facts() {
     assert_eq!(analysis.positions["Reach"], 2);
     assert_eq!(analysis.components, vec![vec![2], vec![3]]);
     assert_eq!(analysis.component, vec![None, None, Some(0), Some(1)]);
-    assert_eq!(analysis.changing_positions, vec![vec![], vec![0, 1], vec![]]);
+    assert_eq!(
+        analysis.changing_positions,
+        vec![vec![], vec![0, 1], vec![]]
+    );
     assert_eq!(analysis.deltas["Reach"], "ReachChanges");
     assert!(analysis.dependencies.contains(&(3, 1, true)));
     assert!(analysis.graph.reach[3][0]);
-    assert_eq!(contract::check(&syn::parse_str(SOURCE).unwrap()).unwrap().component,
-        vec![None; 4]);
+    assert_eq!(
+        contract::check(&syn::parse_str(SOURCE).unwrap())
+            .unwrap()
+            .component,
+        vec![None; 4]
+    );
 }
 
 #[test]
 fn schedule_partition_and_order_mutations_are_rejected() {
     let original = scheduled();
-    let mutations: Vec<Box<dyn Fn(&mut Program)>> = vec![
-        Box::new(|p| { p.strata = None; }),
-        Box::new(|p| { p.strata.as_mut().unwrap()[0].clear(); }),
-        Box::new(|p| { p.strata.as_mut().unwrap().pop(); }),
-        Box::new(|p| { p.strata.as_mut().unwrap().reverse(); }),
-        Box::new(|p| { p.strata.as_mut().unwrap()[0].push(syn::parse_quote!(Reach)); }),
-        Box::new(|p| { p.strata.as_mut().unwrap()[0].push(syn::parse_quote!(Edge)); }),
-        Box::new(|p| { p.strata.as_mut().unwrap()[0].push(syn::parse_quote!(Unknown)); }),
-        Box::new(|p| { p.strata = Some(vec![vec![syn::parse_quote!(Reach), syn::parse_quote!(Result)]]); }),
+    let mutations: Vec<Mutation> = vec![
+        Box::new(|p| {
+            p.strata = None;
+        }),
+        Box::new(|p| {
+            p.strata.as_mut().unwrap()[0].clear();
+        }),
+        Box::new(|p| {
+            p.strata.as_mut().unwrap().pop();
+        }),
+        Box::new(|p| {
+            p.strata.as_mut().unwrap().reverse();
+        }),
+        Box::new(|p| {
+            p.strata.as_mut().unwrap()[0].push(syn::parse_quote!(Reach));
+        }),
+        Box::new(|p| {
+            p.strata.as_mut().unwrap()[0].push(syn::parse_quote!(Edge));
+        }),
+        Box::new(|p| {
+            p.strata.as_mut().unwrap()[0].push(syn::parse_quote!(Unknown));
+        }),
+        Box::new(|p| {
+            p.strata = Some(vec![vec![
+                syn::parse_quote!(Reach),
+                syn::parse_quote!(Result),
+            ]]);
+        }),
     ];
     for (index, mutate) in mutations.into_iter().enumerate() {
         let mut program = original.clone();
@@ -69,19 +100,45 @@ fn schedule_partition_and_order_mutations_are_rejected() {
 #[test]
 fn delta_declarations_are_fresh_complete_unique_and_idb_only() {
     let original = scheduled();
-    let mutations: Vec<Box<dyn Fn(&mut Program)>> = vec![
-        Box::new(|p| { p.deltas.clear(); }),
-        Box::new(|p| { p.deltas.pop(); }),
-        Box::new(|p| { p.deltas.push(p.deltas[0].clone()); }),
-        Box::new(|p| { p.deltas[1].name = p.deltas[0].name.clone(); }),
-        Box::new(|p| { p.deltas[0].name = syn::parse_quote!(Edge); }),
-        Box::new(|p| { p.deltas[0].name = syn::parse_quote!(edges); }),
-        Box::new(|p| { p.deltas[0].name = syn::parse_quote!(x); }),
-        Box::new(|p| { p.deltas[0].relation = syn::parse_quote!(Unknown); }),
-        Box::new(|p| { p.deltas[0].relation = syn::parse_quote!(Edge); }),
-        Box::new(|p| { p.variants = None; p.insertion = None; p.negation_keys = None; }),
-        Box::new(|p| { p.insertion = None; }),
-        Box::new(|p| { p.insertion = Some(syn::parse_quote!(bag)); }),
+    let mutations: Vec<Mutation> = vec![
+        Box::new(|p| {
+            p.deltas.clear();
+        }),
+        Box::new(|p| {
+            p.deltas.pop();
+        }),
+        Box::new(|p| {
+            p.deltas.push(p.deltas[0].clone());
+        }),
+        Box::new(|p| {
+            p.deltas[1].name = p.deltas[0].name.clone();
+        }),
+        Box::new(|p| {
+            p.deltas[0].name = syn::parse_quote!(Edge);
+        }),
+        Box::new(|p| {
+            p.deltas[0].name = syn::parse_quote!(edges);
+        }),
+        Box::new(|p| {
+            p.deltas[0].name = syn::parse_quote!(x);
+        }),
+        Box::new(|p| {
+            p.deltas[0].relation = syn::parse_quote!(Unknown);
+        }),
+        Box::new(|p| {
+            p.deltas[0].relation = syn::parse_quote!(Edge);
+        }),
+        Box::new(|p| {
+            p.variants = None;
+            p.insertion = None;
+            p.negation_keys = None;
+        }),
+        Box::new(|p| {
+            p.insertion = None;
+        }),
+        Box::new(|p| {
+            p.insertion = Some(syn::parse_quote!(bag));
+        }),
     ];
     for (index, mutate) in mutations.into_iter().enumerate() {
         let mut program = original.clone();
@@ -89,7 +146,10 @@ fn delta_declarations_are_fresh_complete_unique_and_idb_only() {
         assert!(contract::check(&program).is_err(), "mutation {index}");
     }
     let mut source: Program = syn::parse_str(SOURCE).unwrap();
-    source.deltas.push(Delta { relation: syn::parse_quote!(Reach), name: syn::parse_quote!(Fresh) });
+    source.deltas.push(Delta {
+        relation: syn::parse_quote!(Reach),
+        name: syn::parse_quote!(Fresh),
+    });
     assert!(contract::check(&source).is_err());
 }
 
@@ -128,17 +188,40 @@ fn negation_key_policy_is_required_supported_and_seminaive_only() {
 #[test]
 fn variants_require_exact_coverage_and_erasure() {
     let original = scheduled();
-    let mutations: Vec<Box<dyn Fn(&mut Program)>> = vec![
-        Box::new(|p| { p.variants.as_mut().unwrap().pop(); }),
-        Box::new(|p| { let v = p.variants.as_ref().unwrap()[0].clone(); p.variants.as_mut().unwrap().push(v); }),
-        Box::new(|p| { p.variants.as_mut().unwrap()[0].rule = 100; }),
-        Box::new(|p| { p.variants.as_mut().unwrap()[1].delta = None; }),
-        Box::new(|p| { p.variants.as_mut().unwrap()[0].delta = Some(0); }),
-        Box::new(|p| { p.variants.as_mut().unwrap()[1].delta = Some(100); }),
-        Box::new(|p| { p.variants.as_mut().unwrap()[0].query.head.args[0] = syn::parse_quote!(*y); }),
-        Box::new(|p| { p.variants.as_mut().unwrap()[1].query = syn::parse_quote!(Reach(*x,*z) :- Reach(x,y), Reach(y,z);); }),
-        Box::new(|p| { p.variants.as_mut().unwrap()[1].query = syn::parse_quote!(Reach(*x,*z) :- ReachChanges(x,y), ReachChanges(y,z);); }),
-        Box::new(|p| { p.variants.as_mut().unwrap()[3].query = syn::parse_quote!(Result(*x,*y) :- Reach(x,y);); }),
+    let mutations: Vec<Mutation> = vec![
+        Box::new(|p| {
+            p.variants.as_mut().unwrap().pop();
+        }),
+        Box::new(|p| {
+            let v = p.variants.as_ref().unwrap()[0].clone();
+            p.variants.as_mut().unwrap().push(v);
+        }),
+        Box::new(|p| {
+            p.variants.as_mut().unwrap()[0].rule = 100;
+        }),
+        Box::new(|p| {
+            p.variants.as_mut().unwrap()[1].delta = None;
+        }),
+        Box::new(|p| {
+            p.variants.as_mut().unwrap()[0].delta = Some(0);
+        }),
+        Box::new(|p| {
+            p.variants.as_mut().unwrap()[1].delta = Some(100);
+        }),
+        Box::new(|p| {
+            p.variants.as_mut().unwrap()[0].query.head.args[0] = syn::parse_quote!(*y);
+        }),
+        Box::new(|p| {
+            p.variants.as_mut().unwrap()[1].query =
+                syn::parse_quote!(Reach(*x,*z) :- Reach(x,y), Reach(y,z););
+        }),
+        Box::new(|p| {
+            p.variants.as_mut().unwrap()[1].query =
+                syn::parse_quote!(Reach(*x,*z) :- ReachChanges(x,y), ReachChanges(y,z););
+        }),
+        Box::new(|p| {
+            p.variants.as_mut().unwrap()[3].query = syn::parse_quote!(Result(*x,*y) :- Reach(x,y););
+        }),
     ];
     for (index, mutate) in mutations.into_iter().enumerate() {
         let mut program = original.clone();
@@ -150,19 +233,40 @@ fn variants_require_exact_coverage_and_erasure() {
 #[test]
 fn malformed_variants_fail_standalone_cq_validation_before_erasure() {
     for (query, expected) in [
-        (quote!(Reach(*x,*z) :- ReachChanges(x), Reach(y,z);), "arity"),
+        (
+            quote!(Reach(*x,*z) :- ReachChanges(x), Reach(y,z);),
+            "arity",
+        ),
         (quote!(Reach(*x) :- ReachChanges(x,y), Reach(y,z);), "arity"),
-        (quote!(Reach(*missing,*z) :- ReachChanges(x,y), Reach(y,z);), "range restricted"),
-        (quote!(Reach(*x,*z) :- Missing(x,y), Reach(y,z);), "not declared"),
-        (quote!(Reach(*x,*z) :- if *x > 0, ReachChanges(x,y), Reach(y,z);), "before"),
-        (quote!(Reach(*x,*z) :- ReachChanges(x,y), !Blocked(z,_), Reach(y,z);), "before"),
-        (quote!(Reach(*x,*z) :- ReachChanges(x,y), Reach(y,z), !Blocked(x);), "arity"),
+        (
+            quote!(Reach(*missing,*z) :- ReachChanges(x,y), Reach(y,z);),
+            "range restricted",
+        ),
+        (
+            quote!(Reach(*x,*z) :- Missing(x,y), Reach(y,z);),
+            "not declared",
+        ),
+        (
+            quote!(Reach(*x,*z) :- if *x > 0, ReachChanges(x,y), Reach(y,z);),
+            "before",
+        ),
+        (
+            quote!(Reach(*x,*z) :- ReachChanges(x,y), !Blocked(z,_), Reach(y,z);),
+            "before",
+        ),
+        (
+            quote!(Reach(*x,*z) :- ReachChanges(x,y), Reach(y,z), !Blocked(x);),
+            "arity",
+        ),
     ] {
         let mut program = scheduled();
         program.variants.as_mut().unwrap()[1].query = syn::parse2(query).unwrap();
         let error = contract::check(&program).unwrap_err().to_string();
         assert!(error.contains(expected), "{error}");
-        assert!(!error.contains("erasure"), "standalone check must run first: {error}");
+        assert!(
+            !error.contains("erasure"),
+            "standalone check must run first: {error}"
+        );
     }
 }
 
@@ -172,8 +276,14 @@ fn negative_validation_projection_does_not_extend_core_cq() {
     contract::check(&program).unwrap();
     let declarations = &program.declarations;
     let query = &program.rules[2];
-    let cq: cq_lang_cq::Program = syn::parse2(quote!(struct Check; #(#declarations)* #query)).unwrap();
-    assert!(cq_lang_cq::contract::check(&cq).unwrap_err().to_string().contains("extended CQ"));
+    let cq: cq_lang_cq::Program =
+        syn::parse2(quote!(struct Check; #(#declarations)* #query)).unwrap();
+    assert!(
+        cq_lang_cq::contract::check(&cq)
+            .unwrap_err()
+            .to_string()
+            .contains("extended CQ")
+    );
     assert!(matches!(query.body[1], BodyItem::Negation(_)));
 }
 
@@ -194,9 +304,12 @@ fn unsafe_unstratified_modes_and_optional_syntax_are_rejected() {
         assert!(contract::check(&program).is_err(), "{source}");
     }
     // Frozen core has no relation modes; these fail during parsing, not checking.
-    assert!(syn::parse_str::<Program>(
-        "struct P; relation E(x:i32) parameter; relation A(x:i32); output A; A(*x) :- E(x);"
-    ).is_err());
+    assert!(
+        syn::parse_str::<Program>(
+            "struct P; relation E(x:i32) parameter; relation A(x:i32); output A; A(*x) :- E(x);"
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -209,7 +322,8 @@ fn negation_rejects_keys_bound_only_by_let() {
             relation Out(x:i32);
             output Out;
             Out(*x) :- D(x), #binding, !R(y);
-        }).unwrap();
+        })
+        .unwrap();
         let error = contract::check(&program).unwrap_err().to_string();
         assert!(error.contains("bound by a positive atom"), "{error}");
     }
@@ -222,7 +336,9 @@ fn rewrites_preserve_every_recorded_decision() {
     renamed.deltas[0].name = syn::parse_quote!(Alternative);
     for variant in renamed.variants.as_mut().unwrap() {
         if let Some(position) = variant.delta {
-            let BodyItem::Positive { atom } = &mut variant.query.body[position] else { unreachable!() };
+            let BodyItem::Positive { atom } = &mut variant.query.body[position] else {
+                unreachable!()
+            };
             atom.relation = syn::parse_quote!(Alternative);
         }
     }
@@ -266,9 +382,9 @@ fn mutual_sccs_cannot_be_split_and_independent_decisions_are_preserved() {
 #[test]
 fn rewrites_preserve_source_name_schemas_rules_output_and_observer() {
     let original: Program = syn::parse_str(SOURCE).unwrap();
-    let mutations: Vec<Box<dyn Fn(&mut Program)>> = vec![
+    let mutations: Vec<Mutation> = vec![
         Box::new(|p| p.name = syn::parse_quote!(Renamed)),
-        Box::new(|p| p.output = syn::parse_quote!(Reach)),
+        Box::new(|p| p.outputs = vec![syn::parse_quote!(Reach)]),
         Box::new(|p| p.observer = Some(syn::parse_quote!(observe_round))),
         Box::new(|p| p.declarations[0].columns[0].ty = syn::parse_quote!(i64)),
         Box::new(|p| p.rules.swap(0, 1)),
@@ -278,6 +394,9 @@ fn rewrites_preserve_source_name_schemas_rules_output_and_observer() {
         let mut changed = original.clone();
         mutate(&mut changed);
         contract::check(&changed).unwrap();
-        assert!(check_rewrite(&original, &changed).is_err(), "mutation {index}");
+        assert!(
+            check_rewrite(&original, &changed).is_err(),
+            "mutation {index}"
+        );
     }
 }

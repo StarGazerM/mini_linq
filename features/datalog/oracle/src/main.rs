@@ -3,9 +3,18 @@ use std::hint::black_box;
 
 fn main() -> datalog_oracle::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        ["golden"] => { goldens(false, false)?; }
-        ["golden", "--write"] => { goldens(true, false)?; }
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["golden"] => {
+            goldens(false, false)?;
+        }
+        ["golden", "--write"] => {
+            goldens(true, false)?;
+        }
         ["bench"] => bench()?,
         ["counters"] => {
             #[cfg(feature = "counters")]
@@ -20,7 +29,9 @@ fn main() -> datalog_oracle::Result<()> {
 
 #[cfg(feature = "counters")]
 fn counters() {
-    println!("program\tnodes\trows\thashes\tbuilds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tbytes_peak");
+    println!(
+        "program\tnodes\trows\thashes\tbuilds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tbytes_peak"
+    );
     for n in [2000, 4000, 8000] {
         let data = generate("chain", n, 0);
         let expected = datalog_oracle::programs::reach::oracle(&data).0;
@@ -30,21 +41,34 @@ fn counters() {
         assert_eq!(actual, expected, "reach chain n={n}");
         assert_eq!(cost.index_builds, 0, "reach chain n={n}");
         assert_eq!(cost.rows_enumerated, 3 * n as u64 + 1, "reach chain n={n}");
-        println!("reach\t{n}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", actual.len(),
-            cost.hash_computations, cost.index_builds, cost.lookups,
-            cost.cursor_steps, cost.rows_enumerated, cost.distinct_insertions,
-            cost.bytes_retained_peak);
+        println!(
+            "reach\t{n}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            actual.len(),
+            cost.hash_computations,
+            cost.index_builds,
+            cost.lookups,
+            cost.cursor_steps,
+            cost.rows_enumerated,
+            cost.distinct_insertions,
+            cost.bytes_retained_peak
+        );
     }
 }
 fn bench() -> datalog_oracle::Result<()> {
     if cq_storage::profile_select!(plain { false } counters { true }) {
         return Err("bench requires counters disabled; run cargo run --release -p datalog-oracle -- bench without enabling counters in any selected package".into());
     }
-    assert!(!cfg!(debug_assertions), "bench requires --release");
+    if cfg!(debug_assertions) {
+        return Err("bench requires --release".into());
+    }
     println!("program\tscenario\tnodes\tedges\trows\tmini_us\tascent_us");
     for name in ["reach", "tc_left", "tc_nonlinear", "same_generation"] {
         let c = CASES.iter().find(|c| c.name == name).unwrap();
-        let sizes = if name == "tc_nonlinear" { [128, 256, 512] } else { [256, 1024, 4096] };
+        let sizes = if name == "tc_nonlinear" {
+            [128, 256, 512]
+        } else {
+            [256, 1024, 4096]
+        };
         for n in sizes {
             measure(c, "chain", n, &generate("chain", n, 0));
         }
@@ -66,12 +90,19 @@ fn measure(c: &Case, scenario: &str, n: i32, d: &Data) {
     drop(expected);
     // Each evaluator clones/loads inputs before starting its timer,
     // times fixed-point evaluation, then canonicalizes after stopping.
-    let mut mini = Vec::new(); let mut ascent = Vec::new();
+    let mut mini = Vec::new();
+    let mut ascent = Vec::new();
     for _ in 0..5 {
         mini.push(black_box((c.mini)(black_box(d))).1);
         ascent.push(black_box((c.oracle)(black_box(d))).1);
     }
-    mini.sort(); ascent.sort();
-    println!("{}\t{scenario}\t{n}\t{}\t{rows}\t{:.3}\t{:.3}", c.name, d.edge.len(),
-        mini[2].as_secs_f64()*1e6, ascent[2].as_secs_f64()*1e6);
+    mini.sort();
+    ascent.sort();
+    println!(
+        "{}\t{scenario}\t{n}\t{}\t{rows}\t{:.3}\t{:.3}",
+        c.name,
+        d.edge.len(),
+        mini[2].as_secs_f64() * 1e6,
+        ascent[2].as_secs_f64() * 1e6
+    );
 }

@@ -10,8 +10,11 @@ use syn::Ident;
 
 pub fn compile(source: &Program) -> syn::Result<Program> {
     let analysis = contract::check(source)?;
-    ensure(source.strata.is_some() && source.variants.is_none(), source,
-        "seminaive requires strata and no variants")?;
+    ensure(
+        source.strata.is_some() && source.variants.is_none(),
+        source,
+        "seminaive requires strata and no variants",
+    )?;
     let mut used = BTreeSet::new();
     collect_names(source.to_token_stream(), &mut used);
     let mut next = 0;
@@ -26,13 +29,20 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
             }
         };
         names.insert(symbol_name(&declaration.name), name.clone());
-        deltas.push(Delta { relation: declaration.name.clone(), name });
+        deltas.push(Delta {
+            relation: declaration.name.clone(),
+            name,
+        });
     }
     let mut variants = Vec::new();
     for (rule, query) in source.rules.iter().enumerate() {
         let positions = &analysis.changing_positions[rule];
         if positions.is_empty() {
-            variants.push(Variant { rule, delta: None, query: query.clone() });
+            variants.push(Variant {
+                rule,
+                delta: None,
+                query: query.clone(),
+            });
         }
         for &position in positions {
             let mut query = query.clone();
@@ -40,7 +50,11 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
                 unreachable!("contract changing positions are positive atoms")
             };
             atom.relation = names[&symbol_name(&atom.relation)].clone();
-            variants.push(Variant { rule, delta: Some(position), query });
+            variants.push(Variant {
+                rule,
+                delta: Some(position),
+                query,
+            });
         }
     }
     let mut target = source.clone();
@@ -57,10 +71,16 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
 /// exact changing-position coverage, and preservation without regenerating names.
 pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
     check_rewrite(source, target)?;
-    ensure(source.strata.is_some() && source.variants.is_none(), source,
-        "seminaive requires strata and no source variants")?;
-    ensure(target.strata.is_some() && target.variants.is_some(), target,
-        "seminaive requires target variants")
+    ensure(
+        source.strata.is_some() && source.variants.is_none(),
+        source,
+        "seminaive requires strata and no source variants",
+    )?;
+    ensure(
+        target.strata.is_some() && target.variants.is_some(),
+        target,
+        "seminaive requires target variants",
+    )
 }
 
 // Called only on newly emitted variants, which are in rule/position order.
@@ -80,7 +100,9 @@ fn choose_layouts(variants: &[Variant]) -> Vec<Layout> {
             if Some(position) == variant.delta {
                 continue;
             }
-            let BodyItem::Positive { atom } = item else { continue };
+            let BodyItem::Positive { atom } = item else {
+                continue;
+            };
             let mut keys = Vec::new();
             let mut payload = Vec::new();
             for (column, argument) in atom.args.iter().enumerate() {
@@ -93,7 +115,11 @@ fn choose_layouts(variants: &[Variant]) -> Vec<Layout> {
             let key = keys.len();
             keys.extend(payload);
             if seen.insert((symbol_name(&atom.relation), keys.clone(), key)) {
-                layouts.push(Layout { relation: atom.relation.clone(), columns: keys, key });
+                layouts.push(Layout {
+                    relation: atom.relation.clone(),
+                    columns: keys,
+                    key,
+                });
             }
             bound.extend(atom.variables().map(symbol_name));
         }
@@ -104,7 +130,9 @@ fn choose_layouts(variants: &[Variant]) -> Vec<Layout> {
 fn collect_names(tokens: TokenStream, used: &mut BTreeSet<String>) {
     for token in tokens {
         match token {
-            TokenTree::Ident(id) => { used.insert(symbol_name(&id)); }
+            TokenTree::Ident(id) => {
+                used.insert(symbol_name(&id));
+            }
             TokenTree::Group(group) => collect_names(group.stream(), used),
             _ => {}
         }

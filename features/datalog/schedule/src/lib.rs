@@ -7,6 +7,8 @@
 //! certify the decisions, and correspondence preserves the source and existing
 //! decisions. Neither check reruns its compiler or requires canonical names or
 //! an arbitrary order between independent components.
+//! Ordered output lists and constant selections in negative atoms are source
+//! decisions: both passes preserve them verbatim through printing and replay.
 
 pub mod seminaive;
 pub mod stratify;
