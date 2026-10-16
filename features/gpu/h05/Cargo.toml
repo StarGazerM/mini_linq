@@ -9,6 +9,9 @@ cuda-device.workspace = true
 cuda-host.workspace = true
 gpu-tiles = { path = "../tiles" }
 gpu-blocked-run = { path = "../blocked-run" }
-rccl-thrust.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[[bin]]
+name = "blocked-run-oracle"
+path = "../blocked-run/src/bin/oracle.rs"

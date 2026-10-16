@@ -2,8 +2,13 @@
 name = "gpu-tiles"
 version = "0.1.0"
 edition.workspace = true
+autobins = false
 
 [dependencies]
 cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true
+
+[[bin]]
+name = "tiles-oracle"
+path = "src/bin/oracle.rs"
