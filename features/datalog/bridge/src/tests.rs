@@ -25,6 +25,10 @@ fn ordinary_queue_and_arguments_are_preserved_per_hole() {
     assert!(!expanded.contains("stream ("));
     assert!(expanded.contains("HashMap"));
     assert!(expanded.contains("HashSet"));
+    assert!(expanded.contains("cq_storage :: HashState"));
+    assert!(expanded.contains("cq_storage :: HashSet"));
+    assert!(expanded.contains("seen_1 . insert"));
+    assert!(!expanded.contains("seen_1 . contains"));
     assert!(expanded.contains("while"));
 }
 

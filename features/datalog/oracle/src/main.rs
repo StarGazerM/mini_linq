@@ -6,13 +6,19 @@ fn main() -> datalog_oracle::Result<()> {
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["golden"] => { goldens(false, false)?; }
         ["golden", "--write"] => { goldens(true, false)?; }
-        ["bench"] => bench(),
-        ["counters"] => counters(),
+        ["bench"] => bench()?,
+        ["counters"] => {
+            #[cfg(feature = "counters")]
+            counters();
+            #[cfg(not(feature = "counters"))]
+            return Err("counters requires --features counters; run cargo run --release -p datalog-oracle --features counters -- counters".into());
+        }
         _ => return Err("usage: datalog-oracle golden [--write] | counters | bench".into()),
     }
     Ok(())
 }
 
+#[cfg(feature = "counters")]
 fn counters() {
     println!("program\tnodes\trows\thashes\tbuilds\tlookups\tcursor_steps\trows_enumerated\tdistinct_insertions\tbytes_peak");
     for n in [2000, 4000, 8000] {
@@ -22,13 +28,18 @@ fn counters() {
         let actual = datalog_oracle::programs::reach::mini(&data).0;
         let cost = cq_storage::counters::snapshot();
         assert_eq!(actual, expected, "reach chain n={n}");
+        assert_eq!(cost.index_builds, 0, "reach chain n={n}");
+        assert_eq!(cost.rows_enumerated, 3 * n as u64 + 1, "reach chain n={n}");
         println!("reach\t{n}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", actual.len(),
             cost.hash_computations, cost.index_builds, cost.lookups,
             cost.cursor_steps, cost.rows_enumerated, cost.distinct_insertions,
             cost.bytes_retained_peak);
     }
 }
-fn bench() {
+fn bench() -> datalog_oracle::Result<()> {
+    if cq_storage::profile_select!(plain { false } counters { true }) {
+        return Err("bench requires counters disabled; run cargo run --release -p datalog-oracle -- bench without enabling counters in any selected package".into());
+    }
     assert!(!cfg!(debug_assertions), "bench requires --release");
     println!("program\tscenario\tnodes\tedges\trows\tmini_us\tascent_us");
     for name in ["reach", "tc_left", "tc_nonlinear", "same_generation"] {
@@ -45,6 +56,7 @@ fn bench() {
         data.seed = (0..16).map(|x| (x,)).collect();
         measure(reach, "random_degree2_seed16", n, &data);
     }
+    Ok(())
 }
 
 fn measure(c: &Case, scenario: &str, n: i32, d: &Data) {

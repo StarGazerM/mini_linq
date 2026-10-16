@@ -1,5 +1,7 @@
 //! Core counters exclude Datalog's own one-time map population and set inserts.
 //! They expose accidental per-hole fallback builds and repeated full scans.
+//! Run from `features/datalog` with:
+//! `cargo test -p cq-datalog --features counters --test counters -- --nocapture`.
 #[test]
 fn reach_reuses_indexes_across_every_round() {
     for n in [2000_i32, 4000, 8000] {

@@ -1,5 +1,13 @@
 //! Complete-answer differential tests against sequential Ascent.
 //! `datalog-oracle golden --write` is the only golden regeneration command.
+//!
+//! Run from `features/datalog`:
+//! - Exactness (no counters): `cargo test -p datalog-oracle`.
+//! - Uninstrumented timing: `cargo run --release -p datalog-oracle -- bench`.
+//! - Counter assertions: `cargo run --release -p datalog-oracle --features counters -- counters`.
+//!
+//! `counters` requires the explicit feature. `bench` refuses storage counters,
+//! including when another selected package enables them through feature unification.
 use cq_testkit::golden;
 pub use cq_testkit::Result;
 pub mod programs;

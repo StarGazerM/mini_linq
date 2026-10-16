@@ -36,6 +36,10 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }
 
+[features]
+default = []
+counters = ["cq-storage/counters"]
+
 [dependencies]
 cq-lang-datalog.workspace = true
 cq-datalog-schedule.workspace = true
@@ -44,8 +48,16 @@ datalog-bridge.workspace = true
 
 [dev-dependencies]
 mini-linq.workspace = true
-cq-storage = { workspace = true, features = ["counters"] }
+cq-storage.workspace = true
 cq-stage.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
+
+[[test]]
+name = "counters"
+required-features = ["counters"]
+
+[[example]]
+name = "layout_mismatch"
+required-features = ["counters"]

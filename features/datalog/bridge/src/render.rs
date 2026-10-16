@@ -22,7 +22,7 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             let seen = &relation.seen;
             bindings.push(quote!(
                 let mut #all: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();
-                let mut #seen: ::std::collections::HashSet<(#(#types,)*)> = ::std::collections::HashSet::new();
+                let mut #seen: ::cq_storage::HashSet<(#(#types,)*)> = ::core::default::Default::default();
             ));
         }
         if let Some(delta) = delta {
@@ -35,8 +35,8 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
         let types: Vec<_> = layout.columns.iter().map(|&i| &relation.declaration.columns[i].ty).collect();
         let (keys, values) = types.split_at(layout.key);
         bindings.push(quote!(
-            let mut #host: ::std::collections::HashMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>>
-                = ::std::collections::HashMap::new();
+            let mut #host: ::std::collections::HashMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>, ::cq_storage::HashState>
+                = ::core::default::Default::default();
         ));
         if relation.declaration.value.is_some() {
             let all = &relation.all;
@@ -56,7 +56,7 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             let name = &key.name;
             let invocation = &holes[key.hole];
             match key.representation {
-                KeyRepresentation::HashSetBorrowed => quote!(let #name = &(#invocation).collect::<::std::collections::HashSet<_>>();),
+                KeyRepresentation::HashSetBorrowed => quote!(let #name = &(#invocation).collect::<::cq_storage::HashSet<_>>();),
             }
         });
         let emit = |rule: &cq_datalog_fork::RuleHole| {
@@ -124,11 +124,10 @@ fn insert_layout(layout: &cq_datalog_fork::Layout, borrowed_columns: bool) -> To
     quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)
 }
 
-/// Formal rule DL-InsertNew: Canonical all-column membership admits each row once; only fresh rows are cloned.
+/// Formal rule DL-InsertNew: Canonical all-column membership admits each row with one insertion lookup.
 fn insert_new(seen: &Ident, next: &Ident, invocation: &TokenStream) -> TokenStream {
     quote!(for row in #invocation {
-        if !#seen.contains(&row) {
-            #seen.insert(::core::clone::Clone::clone(&row));
+        if #seen.insert(::core::clone::Clone::clone(&row)) {
             #next.push(row);
         }
     })
