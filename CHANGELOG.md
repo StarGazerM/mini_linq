@@ -45,6 +45,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   push printer is ported to it and refuses `positions` explicitly. Join
   transport of positions (index payload = `RowId`) is deferred. Q6 gains a
   `staged` configuration (`positions` + `batch(1024)`).
+- Join filters admit `SortedRun` payload builds: both exact payload providers
+  enumerate the same distinct keys, so `sorted_runs` keeps existing join
+  filters. Generated TPC-H measurement workers use the workload crate's
+  recursion allowance so counter/timing wrappers can represent the full
+  iterator chain. Sorted-run payload construction counts copied occurrences,
+  not set-insertion attempts, matching HashIndex and the independent
+  operator-profile checks. All thirteen TPC-H-derived queries register
+  `le_runs` (`order(le)` with `sorted_runs`).
 - Add `cq_planners::order(le)`: early bound-key lookups in GYO ear order,
   demand-delayed coarse full-row expansion, recursive block scheduling, and
   the default Masks reducer. Independent CK-Le checks occurrence phases,

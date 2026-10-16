@@ -46,7 +46,6 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> SortedRun<K, V, C> {
             if keys.last() != Some(&key) {
                 keys.push(key);
                 offsets.push(items.len());
-                crate::count!(distinct_insertions);
             }
             items.push(item);
             crate::count!(rows_copied);
@@ -205,6 +204,20 @@ impl<K: Copy, V: Copy, C> Rows for &SortedRun<K, V, C> {
 mod tests {
     use super::*;
     use crate::I64Codec;
+
+    #[cfg(feature = "counters")]
+    #[test]
+    fn payload_build_counts_occurrences_not_set_insertions() {
+        crate::counters::reset();
+        let run = SortedRun::<_, _>::build([(1, 10), (1, 10), (2, 20)].into_iter());
+        let counts = crate::counters::snapshot();
+        assert_eq!(run.len(), 2);
+        assert_eq!(counts.index_builds, 1);
+        assert_eq!(counts.rows_copied, 3);
+        // Like HashIndex, grouping payloads creates no set/dedup insertion
+        // attempts. Distinct key cardinality belongs to build_cardinality.
+        assert_eq!(counts.distinct_insertions, 0);
+    }
 
     #[test]
     fn rank_boundaries_holes_and_budget() {

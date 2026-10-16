@@ -18,9 +18,16 @@ macro_rules! configuration {
         }, { $($body)* });
     };
     ($module:ident, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
-        crate::tpch_runtime::configuration!(@named $module, $d, { $($stages)* }, { $($body)* });
+        crate::tpch_runtime::configuration!(@named $module, $d, { $($stages)* }, [], { $($body)* });
+    };
+    ($module:ident, $d:tt, { $($stages:tt)* }, [ $($extra:path),* ], { $($body:tt)* }) => {
+        crate::tpch_runtime::configuration!(@named $module, $d, { $($stages)* }, [ $($extra),* ], { $($body)* });
     };
     (@named $module:ident, $d:tt, { $($stages:tt)* }, { $($body:tt)* }) => {
+        crate::tpch_runtime::configuration!(@named $module, $d, { $($stages)* }, [], { $($body)* });
+    };
+    // Extra Structures rewrites run before the dedup retype shared by every configuration.
+    (@named $module:ident, $d:tt, { $($stages:tt)* }, [ $($extra:path),* ], { $($body:tt)* }) => {
         mod $module {
             use super::*;
             #[allow(unused_macros)]
@@ -29,7 +36,7 @@ macro_rules! configuration {
                     pipeline {
                         $($stages)*
                         select = ::mini_linq::passes::select(positional($d($d host),*));
-                        structures = [::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                        structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
                         surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
                             ::cq_ext_negation::negation];
                     }
@@ -38,7 +45,7 @@ macro_rules! configuration {
                 ($d($d tokens:tt)*) => { ::mini_linq::compile! {
                     pipeline {
                         $($stages)*
-                        structures = [::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
+                        structures = [$($extra,)* ::cq_rewrites::retype(dedup => crate::tpch_runtime::Dedup<_>)];
                         surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
                             ::cq_ext_negation::negation];
                     }
@@ -85,7 +92,7 @@ macro_rules! retail_kernel {
     ) => {
         pub const NAME: &str = $name;
         pub const SQL: &str = $sql;
-        pub const CONFIGS: &[&str] = &["default", "no-reduce", "transfer", "le", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
+        pub const CONFIGS: &[&str] = &["default", "no-reduce", "transfer", "le", "le_runs", stringify!($candidate) $(, crate::tpch_runtime::advised_name!($($advice)*))? $(, stringify!($extra), concat!(stringify!($extra), "_zone"))?];
         pub const EXPORTS: &[(&str, &str)] = &[$(
             (stringify!($table), concat!(stringify!($first) $(, ",", stringify!($column))*)),
         )*];
@@ -145,6 +152,23 @@ macro_rules! retail_kernel {
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
         });
+        // Lookup & Expand with sorted runs: integral-key builds become sorted
+        // clustered runs with rank directories (no cursor retention yet).
+        crate::tpch_runtime::configuration!(le_runs, $d, {
+            plan = ::cq_planners::order(le);
+            select = ::mini_linq::passes::select(positional($($relation),*));
+        }, [::cq_rewrites::sorted_runs], {
+            #[allow(non_snake_case)]
+            pub(super) fn run(data: &Data) -> Vec<Answer> {
+                $(let $relation = data.$table.as_slice();)*
+                $($setup)*
+                query! {
+                    struct Query;
+                    $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
+                    answer($($out),+) :- $($body)*
+                }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
+            }
+        });
         // The default plan with the kernel author's recorded plan advice.
         crate::tpch_runtime::advised_config!([$($($advice)*)?]; $d; positional($($relation),*);
             #[allow(non_snake_case)]
@@ -181,6 +205,7 @@ macro_rules! retail_kernel {
                 "no-reduce" => no_reduce::run(data),
                 "transfer" => transfer::run(data),
                 "le" => le::run(data),
+                "le_runs" => le_runs::run(data),
                 stringify!($candidate) => tuned::run(data),
                 $(crate::tpch_runtime::advised_name!($($advice)*) => advised::run(data),)?
                 _ => crate::tpch_runtime::extra_run!([$($extra)?]; data, config),

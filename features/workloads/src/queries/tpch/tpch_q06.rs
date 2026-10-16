@@ -10,7 +10,15 @@ pub const EXPORTS: &[(&str, &str)] = &[(
     "lineitem",
     "l_orderkey,l_linenumber,l_quantity,l_extendedprice,l_discount,l_shipdate",
 )];
-pub const CONFIGS: &[&str] = &["default", "no-reduce", "generic-smallest", "staged", "transfer", "le"];
+pub const CONFIGS: &[&str] = &[
+    "default",
+    "no-reduce",
+    "generic-smallest",
+    "staged",
+    "transfer",
+    "le",
+    "le_runs",
+];
 
 ::mini_linq::relation_loaders! {
     relation Lineitem(
@@ -81,6 +89,11 @@ crate::tpch_runtime::configuration!(transfer, $, { plan = ::cq_planners::order(t
 crate::tpch_runtime::configuration!(le, $, { plan = ::cq_planners::order(le); }, {
     query_body!();
 });
+crate::tpch_runtime::configuration!(le_runs, $, {
+    plan = ::cq_planners::order(le);
+}, [::cq_rewrites::sorted_runs], {
+    query_body!();
+});
 
 // Recorded representation and evaluation-unit decisions: the scan chain is
 // carried as positions and its total range predicates run 1,024 rows ahead.
@@ -97,6 +110,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
         "generic-smallest" => generic_smallest::execute(data),
         "transfer" => transfer::execute(data),
         "le" => le::execute(data),
+        "le_runs" => le_runs::execute(data),
         _ => panic!("unknown Q6 configuration: {config}"),
     }
 }
