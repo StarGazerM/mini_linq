@@ -1,0 +1,20 @@
+[workspace]
+members = ["tiles", "blocked-run", "h05"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+cuda-core = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
+cuda-device = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
+cuda-host = { git = "https://github.com/StarGazerM/cuda-oxide.git", rev = "5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3" }
+rccl-thrust = { path = "/data/rccl/rccl-thrust" }
+rccl-cub = { path = "/data/rccl/rccl-cub" }
+rccl-memory = { path = "/data/rccl/rccl-memory" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = false
+codegen-units = 1
