@@ -143,10 +143,20 @@ approval; this integration admits only the four decisions below.
   records, updates them after each round, and passes them to one-shot CQ
   holes; the existing compiler probes host indexes natively. Reach chain at
   n = 2,000/4,000/8,000: 0 core index builds, rows enumerated 3n + 1.
-- Single-thread vs sequential Ascent (`a7b4a7c`, one run): reach chain 4,096
-  0.71 vs 0.38 ms; reach random 5k 0.57 vs 0.40 ms; linear TC chain 4,096
-  618 vs 515 ms; nonlinear TC chain 512 91 vs 106 ms; same-generation 4,096
-  0.65 vs 0.25 ms.
+- Single-thread vs sequential Ascent, uninstrumented (`e981103`, two runs):
+  linear TC chain 1,024 18.7 vs 18.9 ms, chain 4,096 341–344 vs 497–521 ms;
+  nonlinear TC chain 512 78.5 vs 108 ms; reach chain 4,096 0.37 vs 0.27 ms;
+  reach random 5k 0.41–0.43 vs 0.37–0.41 ms; same-generation chain 4,096
+  0.40–0.43 vs 0.25–0.27 ms. Earlier numbers were built with `counters`,
+  which selects the per-operator profiled code.
+- Core tension (reported, not changed): each rule query deduplicates its own
+  answer per call (`__cq_seen`) although Datalog deduplicates again. Even
+  with a head returning every body variable, lowering marks the returned
+  join canonical because a host read (`Op::Rename`) is never known unique
+  (`passes/cq-physical-lowering/src/lib.rs:74-76,315-326`;
+  `languages/cq-lang-structures/src/lib.rs:809-816`). Removing it needs a core
+  way to declare a host duplicate-free or to hand deduplication to the
+  consumer. This is the remaining same-generation gap.
 - Workload tests are plain case files (`features/workloads/src/queries`):
   query once, input helpers, golden check; pairwise CQ matrix (329 pairs per
   family, named configurations) plus a 2,400-configuration triangle kernel;
@@ -203,9 +213,9 @@ Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json
 Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
 of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
 
-Remaining Datalog work: profile linear TC and same-generation gaps; rule-local
-aggregates; Ascent lattices and custom providers as explicit contracts;
-FlowLog comparison; partial-Rust multi-round refinement argument.
+Remaining Datalog work: decide the duplicate-free host / consumer dedup
+tension above; rule-local aggregates; Ascent lattices and custom providers as
+explicit contracts; FlowLog comparison; partial-Rust multi-round refinement.
 
 The abandoned design (`codex/datalog`, `codex/datalog-lang`,
 `codex/maintained-structures`, `codex/datalog-*`, `codex/tests-reshape`,
