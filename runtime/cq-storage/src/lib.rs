@@ -35,6 +35,9 @@
 //! - `α(positional host)` is its ordered occurrence bag; stable base offsets
 //!   distinguish duplicates. Block bounds enclose all keys, and absent bounds
 //!   retain the block. Reads preserve base order and exact predicate results.
+//!   [`Fetch`] reconstructs a named column from the same live occurrence.
+//!   Chunked reads AND exact predicate masks and preserve scalar-read order;
+//!   [`stage`] selections expose survivors before a partial operation executes.
 //! - `α(selection)` is the selected occurrence bag. Narrowing is intersection;
 //!   immutable snapshots and their projected builds preserve source order and
 //!   multiplicity. Selection does not confer OrderedRead.
@@ -222,14 +225,18 @@ pub use exists::Exists;
 
 pub mod adaptive;
 mod counters_memory;
+pub mod fetch;
 pub mod positional;
 pub mod selection;
+pub mod stage;
 pub use adaptive::{AdaptiveKeySet, BorrowedI64TupleCodec, I64Codec, KeyCodec, NoDense};
+pub use fetch::Fetch;
 pub use positional::{
     BlockId, BlockRead, Column, ExactIntervalMembership, Membership, Point, PositionalRows,
     ReadPredicate, RowId, RowPredicate, Window, read_with_filter,
 };
 pub use selection::{Selection, SelectionRows, SelectionSummary};
+pub use stage::{Chunk, for_chunks};
 pub mod filter;
 pub use filter::Filter;
 

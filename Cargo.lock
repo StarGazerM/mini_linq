@@ -559,6 +559,7 @@ name = "cq-storage"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "cq-load",
  "hashbrown 0.15.5",
 ]
 

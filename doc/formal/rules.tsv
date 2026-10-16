@@ -154,3 +154,7 @@ CQ-Diff	abstract	-	-	Planned; multilinear expansion uses supplied increments, no
 DL-InsertNew	implementation	features/datalog/bridge/src/render.rs	/// Formal rule DL-InsertNew:	Datalog-owned canonical all-column insertion produces fresh deltas and updates each selected host layout.
 DL-Strata	implementation	features/datalog/language/src/lib.rs	/// Formal rule DL-Strata:	Checked signed dependencies and exact ordered SCCs freeze lower-stratum negative inputs.
 DL-Delta	implementation	features/datalog/language/src/lib.rs	/// Formal rule DL-Delta:	Checked variants erase to source rules and cover every changing positive position exactly once.
+STR-Repr	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Repr:	Check per-result representation lineage and owned-column coverage; storage forward simulation remains a semantic premise.
+ST-Total	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Total:	Derive total stage steps without crossing opaque Rust or cursor-producing probe and merge operators.
+ST-Stage	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Stage:	Require an indexable for producer, positive batch size and a boundary before partial evaluation.
+BK-Dual	abstract	-	-	Fold and unfold realize one stream algebra; lawful early stop preserves answers and may only remove panics.

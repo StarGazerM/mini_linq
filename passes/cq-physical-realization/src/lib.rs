@@ -314,7 +314,7 @@ impl Printer<'_> {
     pub(crate) fn distinct(&mut self, operator: &Ident, rows: TokenStream) -> TokenStream {
         let name = symbol_name(operator);
         let ty = self.analysis.dedup[&name].clone();
-        self.distinct_width(&name, &ty, rows, self.heading(&name).len())
+        self.distinct_width(&name, &ty, rows, self.carried(&name).len())
     }
 
     fn distinct_width(
@@ -366,7 +366,7 @@ impl Printer<'_> {
                 vec![result.into()],
             );
         }
-        let heading = self.heading(result);
+        let heading = self.carried(result);
         let variables: Vec<Option<&Ident>> = head.args.iter().map(cq::rust::variable).collect();
         let identity = variables.len() == heading.len()
             && variables

@@ -9,6 +9,9 @@ license.workspace = true
 ahash = "=0.8.12"
 hashbrown = { version = "=0.15.5", default-features = false, features = ["inline-more"] }
 
+[dev-dependencies]
+cq-load = { path = "../cq-load", default-features = false }
+
 [features]
 default = []
 counters = []

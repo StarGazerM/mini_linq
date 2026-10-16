@@ -48,9 +48,9 @@ impl Printer<'_> {
         let outer = self.scan(&a.left)?;
         let outer = self.profile_input(&first_name, outer);
         let left = symbol_name(&a.left);
-        let pattern = self.pattern(&left);
-        let variable_ident = self.ident(&first_name, &variable);
-        let row = self.pattern(&name);
+        let pattern = self.bind_columns(&left, self.carried(&left), false);
+        let variable_ident = self.access(&first_name, &variable);
+        let row = self.carrier(&name, |c| self.access(&name, c));
         let candidate = |result: &Ident, prefix: &[String], levels: Option<&Vec<Vec<String>>>| {
             let name = symbol_name(result);
             if self.analysis.host_read(&name) {

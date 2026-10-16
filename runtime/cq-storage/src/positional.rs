@@ -86,6 +86,14 @@ pub trait Column<H: PositionalRows>: Copy {
 }
 pub trait ReadPredicate<K> {
     fn test(&self, key: &K) -> bool;
+    /// AND each exact row test into a same-length selection mask. Existing
+    /// false entries stay false, so successive predicates compose by intersection.
+    fn test_chunk(&self, keys: &[K], mask: &mut [bool]) {
+        assert_eq!(keys.len(), mask.len(), "chunk keys and mask lengths differ");
+        for (key, selected) in keys.iter().zip(mask) {
+            *selected &= self.test(key);
+        }
+    }
     /// False proves no satisfying key in the closed interval; true is conservative.
     fn any_in(&self, _lo: &K, _hi: &K) -> bool {
         true
@@ -95,6 +103,9 @@ impl<K, P: ReadPredicate<K> + ?Sized> ReadPredicate<K> for &P {
     #[inline]
     fn test(&self, key: &K) -> bool {
         P::test(self, key)
+    }
+    fn test_chunk(&self, keys: &[K], mask: &mut [bool]) {
+        P::test_chunk(self, keys, mask);
     }
     fn any_in(&self, lo: &K, hi: &K) -> bool {
         P::any_in(self, lo, hi)
@@ -107,6 +118,14 @@ where
     /// Bounds enclose every key in the block. None retains the block.
     fn bounds(self, _column: C, _block: BlockId) -> Option<(C::Key, C::Key)> {
         None
+    }
+    /// The block's keys in base occurrence order, borrowing where the marker
+    /// permits it. Layout-specific hosts may override this without materializing.
+    fn column_chunk(self, column: C, block: BlockId) -> impl ExactSizeIterator<Item = C::Key> {
+        let size = self.block_size().get();
+        let start = block.0.saturating_mul(size).min(self.len());
+        let end = start.saturating_add(size).min(self.len());
+        (start..end).map(move |offset| column.key(self, RowId(offset)))
     }
     /// Pulled row by row, this loop keeps the predicate test inline; an
     /// adapter chain (blocks, flatten, filter) measured twice as slow.
@@ -147,6 +166,51 @@ where
                 }
                 crate::count!(blocks_visited);
                 positions = Some(self.block_positions(block));
+            }
+        })
+    }
+    /// Evaluate each admitted block into a mask before yielding its survivors.
+    /// Bounds and order match `read_owned`; only predicate lookahead differs.
+    /// Key and mask buffers are reused across blocks.
+    fn read_chunked<P: ReadPredicate<C::Key>>(
+        self,
+        column: C,
+        predicate: P,
+    ) -> impl Iterator<Item = RowId> {
+        let mut blocks = self.blocks().fuse();
+        let mut positions = None;
+        let mut keys = Vec::new();
+        let mut mask = Vec::new();
+        let mut offset = 0;
+        std::iter::from_fn(move || {
+            loop {
+                while let Some(id) = positions.as_mut().and_then(Iterator::next) {
+                    let selected = mask[offset];
+                    offset += 1;
+                    if selected {
+                        return Some(id);
+                    }
+                }
+                let block = blocks.next()?;
+                crate::count!(blocks_considered);
+                if self
+                    .bounds(column, block)
+                    .is_some_and(|(lo, hi)| !predicate.any_in(&lo, &hi))
+                {
+                    crate::count!(blocks_skipped);
+                    crate::count!(blocks_skipped_metadata);
+                    continue;
+                }
+                crate::count!(blocks_visited);
+                keys.clear();
+                keys.extend(self.column_chunk(column, block).inspect(|_| {
+                    crate::count!(rows_tested);
+                }));
+                mask.clear();
+                mask.resize(keys.len(), true);
+                predicate.test_chunk(&keys, &mut mask);
+                positions = Some(self.block_positions(block));
+                offset = 0;
             }
         })
     }

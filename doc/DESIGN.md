@@ -70,6 +70,18 @@ these choices, borrows host/built fields, and emits runtime trait obligations.
 A runtime representation has an abstraction function α; its reads and builds
 must commute with α. Storage-law tests exercise these premises.
 
+The back end separates representation **R**, evaluation unit **E**, and control
+**C** ([formal model](formal/backend.tex)). R records tuples or base-occurrence
+positions with owned computed columns; its contract checks lineage coverage,
+while storage laws require every operation to commute with its bag abstraction.
+E records scalar or batched demand on total, indexable pipe segments, with a
+selection boundary before partial Rust. Absent R/E entries mean tuples/scalar;
+the default staging pass records the former fixed 128-row probe lookahead.
+C is the emitter's pull/unfold or push/fold realization of one stream algebra:
+exhaustion preserves the bag and lawful early stopping may only remove panics.
+Canonical boundaries still establish sets, and pinned Rust Before sets remain
+obligations in all three layers.
+
 A point or range `let` used only by keyed probes and semijoins on one shared
 key records one index, for example `filtered = HashIndex [b] payload [b,c]
 constants {a = "a"};`. The payload annotation is the projected row schema:

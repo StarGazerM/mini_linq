@@ -16,7 +16,10 @@ impl Context<'_> {
         }
         let keys = select.condition.constant_keys();
         let condition = self.relational_condition(&select.condition);
-        let pattern = self.borrowed_pattern(&input_name);
+        let columns = crate::columns_used(&select.condition)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let pattern = self.bind_columns(&input_name, &columns, true);
         let rows = self.profile_stream(&input_name, self.host_scan(&input_name));
         let rows = self.profile_input(name, rows);
         let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition)));
@@ -37,12 +40,14 @@ impl Context<'_> {
         let fallback_ty = self.fallback_type(&input_name, name, &access.key);
         let types = access.key.iter().map(|c| &self.infos[&input_name].types[c]);
         let values = access.key.iter().map(|c| &keys[c]);
-        let fields = access
-            .key
-            .iter()
-            .chain(&access.payload)
-            .map(|c| self.ident(&input_name, c));
-        let row = self.pattern(name);
+        let fields = access.key.iter().chain(&access.payload).map(|c| {
+            if self.carried(&input_name).contains(c) {
+                self.access(&input_name, c)
+            } else {
+                quote!(_)
+            }
+        });
+        let row = self.carrier(&input_name, |c| self.access(&input_name, c));
         let looked_up = quote!({
             use ::cq_storage::dispatch::PointRead as _;
             ::core::iter::Iterator::map(

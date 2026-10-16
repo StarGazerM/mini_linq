@@ -192,3 +192,182 @@ fn every_built_key_level_requires_the_leibniz_premise() {
         "{error}"
     );
 }
+
+#[test]
+fn representation_and_stage_entries_round_trip() {
+    for text in [
+        "r repr = tuples;",
+        "r repr = positions { H lineage { a -> c }, J lineage { b -> d } } owned [x, y];",
+        "r stage = batch 128;",
+    ] {
+        let entry: structures::Entry = syn::parse_str(text).unwrap();
+        assert_eq!(
+            syn::parse2::<structures::Entry>(entry.to_token_stream()).unwrap(),
+            entry
+        );
+    }
+}
+
+fn represented_program() -> structures::Program {
+    syn::parse_quote! { physical {
+        relation R(a:i32,b:i32);
+        r = pipe rename R@0 {a -> x,b -> y};
+        s = pipe select r if (x >= 0);
+        b = pipe bind s with z: i32 = (x + y);
+        out = pipe canon project b keep {x,y,z};
+        return out as answer(x,y,z);
+    } structures {
+        r host scan = ::core::iter::Map<_, _> [];
+        out canon = ::std::collections::HashSet<_>;
+    } }
+}
+
+#[test]
+fn representation_and_staging_are_checked_additive_rewrites() {
+    let source = represented_program();
+    let defaults = structures::contract::check(&source).unwrap();
+    assert!(defaults.repr.is_empty());
+    assert!(defaults.stages.is_empty());
+    let mut target = source.clone();
+    target.structures.entries.extend([
+        syn::parse_quote!(r repr = tuples;),
+        syn::parse_quote!(out repr = positions { R lineage { x -> a, y -> b } } owned [z];),
+        syn::parse_quote!(s stage = batch 128;),
+    ]);
+    structures::check_rewrite(&source, &target).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    assert!(matches!(
+        facts.repr["out"],
+        structures::Repr::Positions { .. }
+    ));
+    assert_eq!(facts.stages["s"], 128);
+}
+
+#[test]
+fn representation_rejects_uncovered_noncomputed_and_forged_columns() {
+    for (entry, expected) in [
+        (
+            "out repr = positions { R lineage { x -> a } } owned [z];",
+            "uncovered",
+        ),
+        (
+            "out repr = positions { R lineage { x -> a, y -> b } } owned [x,z];",
+            "computed",
+        ),
+        (
+            "out repr = positions { R lineage { x -> a, y -> a } } owned [z];",
+            "injective",
+        ),
+        (
+            "out repr = positions { R lineage { x -> b, y -> a } } owned [z];",
+            "declared host",
+        ),
+        (
+            "out repr = positions { Missing lineage { x -> a, y -> b } } owned [z];",
+            "declared host",
+        ),
+    ] {
+        let mut program = represented_program();
+        program
+            .structures
+            .entries
+            .push(syn::parse_str(entry).unwrap());
+        let error = structures::contract::check(&program)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{entry}: {error}");
+    }
+}
+
+#[test]
+fn stages_reject_partial_steps_cursor_producers_and_zero_batches() {
+    for entry in [
+        syn::parse_quote!(b stage = batch 16;),
+        syn::parse_quote!(out stage = batch 16;),
+        syn::parse_quote!(r stage = batch 0;),
+    ] {
+        let mut program = represented_program();
+        program.structures.entries.push(entry);
+        let error = structures::contract::check(&program)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("partial") || error.contains("positive"),
+            "{error}"
+        );
+    }
+    let mut cursor = program();
+    cursor
+        .structures
+        .entries
+        .push(syn::parse_quote!(j stage = batch 16;));
+    let error = structures::contract::check(&cursor)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cursor"), "{error}");
+
+    let mut guard = represented_program();
+    guard.physical.program.definitions[1] = syn::parse_quote!(s = pipe guard r if (*x >= 0););
+    guard
+        .structures
+        .entries
+        .push(syn::parse_quote!(s stage = batch 16;));
+    let error = structures::contract::check(&guard).unwrap_err().to_string();
+    assert!(error.contains("partial"), "{error}");
+}
+
+#[test]
+fn representation_and_stage_decisions_are_unique_per_result() {
+    for entries in [
+        vec![
+            syn::parse_quote!(r repr = tuples;),
+            syn::parse_quote!(r repr = tuples;),
+        ],
+        vec![
+            syn::parse_quote!(s stage = batch 16;),
+            syn::parse_quote!(s stage = batch 32;),
+        ],
+    ] {
+        let mut program = represented_program();
+        program.structures.entries.extend(entries);
+        let error = structures::contract::check(&program)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("duplicate"), "{error}");
+    }
+}
+
+#[test]
+fn joined_representations_carry_both_bases_without_relaxing_read_lineage() {
+    let mut program = program();
+    program.structures.entries.push(syn::parse_quote!(
+        j repr = positions { L lineage {x -> a}, R lineage {y -> b} } owned [];
+    ));
+    let facts = structures::contract::check(&program).unwrap();
+    assert!(facts.repr.contains_key("j"));
+    assert!(!facts.lineage.contains_key("j"));
+}
+
+#[test]
+fn stages_accept_total_constraints_multiple_boundaries_and_retained_producers() {
+    let mut program = represented_program();
+    program.physical.program.definitions[1] = syn::parse_quote!(
+        s = pipe select r if (#[total] {x = x} (*x >= 0));
+    );
+    program.structures.entries.extend([
+        syn::parse_quote!(r stage = batch 8;),
+        syn::parse_quote!(s stage = batch 16;),
+    ]);
+    structures::contract::check(&program).unwrap();
+
+    program
+        .structures
+        .entries
+        .retain(|entry| !matches!(entry.structure, structures::Structure::Stage { .. }));
+    program.physical.program.definitions[2].mode = syn::parse_quote!(let);
+    program.structures.entries.extend([
+        syn::parse_quote!(b rows = ::std::vec::Vec<_>;),
+        syn::parse_quote!(out stage = batch 16;),
+    ]);
+    structures::contract::check(&program).unwrap();
+}

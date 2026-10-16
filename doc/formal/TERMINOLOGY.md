@@ -68,6 +68,27 @@ printed pages.
   Ordered-read traits specify a separate enumeration property. The implemented hash representations promise no such row order.
 - The computed-attribute subset in RA typing records field origin for Rust
   representation; it is not an AHV definition.
+- **Representation (R)** assigns each Physical result an abstraction function
+  α into a bag: heading tuples use identity; positions fetch base columns via
+  checked occurrence lineage and carry computed columns by value. The
+  forward-simulation obligation follows [Hoare's data refinement (1972)](https://www.cs.ox.ac.uk/people/publications/type/Tony.Hoare.html);
+  occurrence-ID representations relate to [Valduriez's join indices (1987)](https://doi.org/10.1145/22952.22955).
+  Structural lineage coverage is checked; storage laws remain premises.
+  `canon`, not representation choice, re-establishes sets.
+- **Evaluation unit (E)** records scalar or chunk demand. A **stage** is a
+  maximal bottom-free pipe segment, ending before partial Rust. Total
+  predicate masks may be ANDed before materializing surviving positions.
+  **For producer** means finite, known-length, indexable input; **unfold
+  producer** means state-dependent cursor advancement. This distinction follows
+  [Kiselyov et al., *Stream Fusion, to Completeness* (POPL 2017)](https://doi.org/10.1145/3009837.3009880).
+  Our stage is a strictness boundary, not that paper's general notion of
+  multi-stage programming; it is also distinct from the pass invocation
+  protocol named `cq-stage`.
+- **Control (C)** is pull/unfold versus push/fold of the same stream algebra,
+  following [Shaikhha, Dashti and Koch (JFP 2018)](https://doi.org/10.1017/S0956796818000102).
+  Exhaustion preserves the bag. Answer-determined early stopping can omit
+  evaluations and remove panics, but cannot change successful answers.
+  R and E have Structures entries; C is an emitter choice, not another IR.
 
 These correspondences establish which definitions and adaptations are being
 used. They do not discharge the implementation and host-language proof

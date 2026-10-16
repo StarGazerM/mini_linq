@@ -92,7 +92,7 @@ impl Context<'_> {
         let tests: Vec<_> = filtered.constants.iter().filter_map(|binding| {
             let column = symbol_name(&binding.column);
             if !columns.contains(&column) { return None; }
-            let value = self.ident(left, &column);
+            let value = self.access(left, &column);
             let value = if self.infos[left].computed.contains(&column) { quote!(&#value) } else { quote!(#value) };
             let constant = expressions::term_reference(&binding.value, &self.parameters);
             Some(if matches!(&binding.value, Term::Literal(l) if matches!(l.as_ref(), Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(_), .. }))) {
