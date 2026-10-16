@@ -121,61 +121,109 @@ The retail runtime registers `le`. The e2e corpus axes are intentionally
 unchanged: adding LE there requires extending the named planner axis and
 regenerating its pairwise configurations, then running the corpus gate.
 
-Measured 2026-10-16 with `cargo xtask profile --tpch --sf 1 --config
-default`, then `le`, then `transfer`: 11 timed runs after warm-up,
-uninstrumented medians in ms. All 13 queries/configurations matched the exact
-DuckDB oracle, including separate operator-count and operator-time workers.
-The original checkout's data directory was absent; the surviving DuckDB
-v1.5.5 SF1 database was copied from `/data/tpch-gpu/sf1/dbgen.duckdb` into
-the fork's `features/workloads/target/bench/data/tpch-1/`, with its matching
-manifest; xtask regenerated the per-query Parquet projections. Q06/Q19 also
-register `le` and `transfer` so the unqualified profile commands complete.
+`le_runs` explicitly applies `sorted_runs` and then `retained_lookups`; core
+default selection is unchanged. Sorted-run retyping is limited to one-level
+HashIndex payload builds with a single stored borrowed i32/i64 key, selecting
+the integral codec eligible for the rank directory. Multi-column,
+non-integral and computed/owned keys stay hashed; the rewrite no longer
+selects NoDense binary-search runs. An integral key with an over-budget span
+can still fall back to binary search at runtime.
 
-| Query | default | le | transfer | LE/default |
+A retained cursor may serve a later probe with a larger key. Its residual
+key columns must be payload columns of the build's recorded level and bound
+at the probe input, not necessarily at the earlier semijoin. Realization
+expands the saved cursor and compares the residual payload fields with
+Leibniz `==` in plain-probe order, without a second lookup. The independent
+Structures check still requires an exclusive lookup-key-preserving pipe
+spine and one lifetime-bound, complete single-level payload provider.
+Host fallbacks, key-only membership providers and multi-level builds remain
+ineligible; a Supplier host fallback is not silently converted to a built
+lookup-key index.
+
+Re-measured 2026-10-16 from `features/workloads`, sequentially with
+`cargo xtask profile --tpch --sf 1 --config default` then
+`cargo xtask profile --tpch --sf 1 --config le_runs`, with no concurrent
+checks or benchmark jobs. These are uninstrumented medians of 11 timed runs
+after warm-up, in ms; ratios are `le_runs/default` (lower is better).
+All 13 kernels were exact against DuckDB in both configurations, including
+the separate counter and timing workers; all independent build-count checks
+passed. The existing SF1 database and Parquet projections were reused.
+
+| Query | default | le_runs | Ratio | Change |
 |---|---:|---:|---:|---:|
-| retail_h03 | 40.090 | 42.299 | 53.065 | +5.5% |
-| retail_h05 | 36.097 | 44.091 | 43.244 | +22.1% |
-| retail_h07 | 37.304 | 37.091 | 56.416 | -0.6% |
-| retail_h07_block | 35.079 | 40.832 | 43.738 | +16.4% |
-| retail_h08 | 32.892 | 34.225 | 31.561 | +4.1% |
-| retail_h09 | 209.331 | 221.236 | 323.508 | +5.7% |
-| retail_h21_positive | 96.850 | 104.401 | 127.468 | +7.8% |
-| retail_d19 | 21.620 | 21.556 | 19.931 | -0.3% |
-| retail_d27 | 18.340 | 18.365 | 28.358 | +0.1% |
-| retail_d72_inner | 205.796 | 208.472 | 188.922 | +1.3% |
-| retail_d85 | 28.764 | 28.810 | 27.081 | +0.2% |
-| tpch_q06 | 30.562 | 28.344 | 28.245 | -7.3% |
-| tpch_q19 | 35.848 | 35.018 | 34.713 | -2.3% |
+| retail_h03 | 39.813 | 31.195 | 0.784x | -21.6% |
+| retail_h05 | 33.053 | 42.664 | 1.291x | +29.1% |
+| retail_h07 | 36.098 | 30.200 | 0.837x | -16.3% |
+| retail_h07_block | 37.248 | 28.932 | 0.777x | -22.3% |
+| retail_h08 | 33.269 | 27.913 | 0.839x | -16.1% |
+| retail_h09 | 164.862 | 189.177 | 1.147x | +14.7% |
+| retail_h21_positive | 92.148 | 113.095 | 1.227x | +22.7% |
+| retail_d19 | 20.684 | 21.471 | 1.038x | +3.8% |
+| retail_d27 | 17.980 | 18.158 | 1.010x | +1.0% |
+| retail_d72_inner | 193.369 | 177.665 | 0.919x | -8.1% |
+| retail_d85 | 27.023 | 30.283 | 1.121x | +12.1% |
+| tpch_q06 | 28.419 | 31.262 | 1.100x | +10.0% |
+| tpch_q19 | 35.758 | 35.991 | 1.007x | +0.7% |
 
-The two LE regressions above 10% were inspected using the operator profiles
-under `/data/codex/opprofile-evidence/` (`<query>.<config>.ours.txt` and
-`.validation.json`):
+The earlier NoDense runs measured H09 at 326.040 ms and D72-inner at
+329.832 ms. Their composite PartSupp keys now stay HashIndex. The H09
+profile actually builds 42,656 filtered PartSupp rows, not 800,000;
+D72-inner builds all 800,000. This fixes the unintended binary-search
+replacement, but does not make every LE schedule faster than default.
 
-- **H05:** all 184,082 surviving stream rows pass the additional order,
-  supplier, customer, nation and region semijoins; none avoids expansion.
-  The early supplier lookup adds a 10,000-key fallback set alongside the
-  existing composite supplier index. Order join-filter insertions double
-  from 46,008 to 92,016. Exclusive build time is 4.911 → 6.212 ms and the
-  inclusive answer span is 22.820 → 31.822 ms. The CPU path pays for the extra
-  membership probes without reducing the expanded rows.
-- **H07-block:** the added supplier/order/customer semijoins likewise retain
-  all 11,723 stream rows; order join-filter insertions double from 121,324
-  to 242,648 and supplier insertions from 798 to 1,596. The recursive union
-  arms also retain additional one-row projected indexes. This is extra work
-  without additional filtering. The instrumented totals are effectively
-  equal (43.199 vs 42.721 ms), however, and instrumentation overhead differs
-  (+23.15% vs +4.63%); those clocks do **not** establish a precise causal
-  decomposition of the 5.753 ms uninstrumented gap.
+Every remaining regression above 10% was inspected in
+`/data/codex/opprofile-evidence/<query>.{default,le_runs}.ours.txt` and the
+matching `.validation.json`:
 
-Transfer's >10% regressions retain the earlier route's explanation: forward
-and backward filtering materializes/revisits the stream and adds key sets.
-The profiles expose retained-stream inputs of 30,519 rows (H03), 184,082
-(H05), 11,723 (H07 and H07-block), 75,871 (H21+) and 357 (D27), followed by
-backward builds and the final joins. H09 spends 134.631 ms reducing 6,001,215
-Lineitem rows before its 319,404-row order index and 148.136 ms answer span.
-These are inclusive spans, not additive exclusive costs. LE is an explicit
-schedule for lookup/expansion experimentation, not a demonstrated CPU speedup
-or a saved-descriptor GPU implementation.
+- **H05 (+29.1%):** Supplier is a host fallback, not an eligible retained
+  build: `r12` still tests the 10,000-key HashSet
+  `r11.fallback.supplier_key`, and `r20` probes the separate composite
+  HashIndex `r11.fallback.nation_key_supplier_key`. All 184,082 rows pass
+  the added supplier/order/customer/nation/region semijoins before the final
+  supplier probe retains 7,243. Residual-key support therefore does not remove
+  this particular second lookup. Order/customer built payload indexes use
+  integral-codec SortedRuns; order join-filter insertions still double from
+  46,008 to 92,016. The answer span grows 23.424 → 36.154 ms despite exclusive
+  build time falling 5.851 → 3.011 ms.
+- **H09 (+14.7%):** `r10` and `r17` both probe
+  `r3.index.part_key_supplier_key`, now a HashIndex rather than a NoDense
+  SortedRun. Both emit all 319,404 rows; default has one such expansion.
+  Supplier's host HashIndex still has an added non-filtering semi, and
+  Nation is read twice. The order-key payload build `r5` remains an
+  integral-codec SortedRun; its join-filter insertions double
+  287,490 → 574,980. The answer span is 120.231 → 153.650 ms. Instrumented
+  totals are nevertheless 207.327 → 203.368 ms because default instrumentation
+  overhead is +25.76%, versus +7.50%; these clocks cannot precisely apportion
+  the uninstrumented 24.315 ms regression.
+- **H21-positive (+22.7%):** `r9.index.order_key` is an integral-codec
+  SortedRun rather than default's HashIndex, while `r8.index.order_key`
+  remains the 729,413-key membership provider. Added `r11/r12` order semis
+  preserve all 356,794 outer rows, and `r14/r16` supplier/nation semis
+  preserve all 378,274 expanded rows. The `r9` join-filter insertions double
+  72,110 → 144,220. Exclusive build time falls 14.630 → 8.588 ms, but the
+  answer span grows 50.182 → 76.703 ms: saved build work does not pay for
+  the lookup/expansion schedule. Integral-codec eligibility alone does not
+  guarantee that a runtime key span fits the rank directory.
+- **D85 (+12.1%):** the composite Lineitem build
+  `r8.index.part_key_supplier_key` remains HashIndex. `r13` tests it before
+  `r16` expands it; the hash provider cannot retain a Copy run cursor.
+  `r12` and `r26` also access the 200,000-row Part host HashIndex twice,
+  versus one Part probe in default; early `r12` touches 24,238 rows before
+  composite-key filtering leaves 8,913. Both composite join filters double
+  insertions 8,913 → 17,826. Part's fallback build costs 8.372 ms exclusive
+  (default 7.807); the answer span grows 13.773 → 16.761 ms.
+- **Q06 (+10.0017%, rounded to +10.0% above):** there is no keyed provider
+  to retype or cursor to retain. Both profiles have the same three range
+  scans (6,001,215 → 909,455 → 248,078 → 114,160 rows), binds, and HashSet
+  dedup. The scan/bind span is 20.551 → 20.626 ms and the answer/dedup span
+  28.828 → 29.694 ms; instrumented totals differ only +3.0%.
+  [INFERENCE] The larger plain-run difference is measurement/code-layout
+  variability, not an observed representation regression; the operator
+  evidence does not establish its exact cause.
+
+Operator stream spans are inclusive and overlap; they are not additive
+exclusive costs. LE plus sorted runs remains an explicit CPU experiment,
+not a universal speedup or a saved-descriptor GPU implementation.
 
 ## Index building vs join processing (SF 1, one thread, planning excluded)
 
