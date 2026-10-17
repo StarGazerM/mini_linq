@@ -50,3 +50,25 @@ For the codegen session that landed backend.tex / repr / stage / column-level pr
 Evidence on `gpu`: doc/GPU-DESIGN.md (H05 SF10: hand-written GPU 14.6 ms vs srdatalog 583 ms vs DuckDB
 24T 154 ms; dimension-first expansion 23.6 ms vs srdatalog 58 s), doc/STATUS.md `order(le)` (SF1:
 le_runs 0.78–0.84× default where a cursor is retained on an integral-key build).
+
+## PL framing (what "range-carrying" is)
+
+1. Semantics. In the Kleisli category of `T X = ⊥ + Set X`, a probe is `bind` fused with `μ`.
+   The L&E state `R -> S` is the unflattened value of type `T(Row × T B)`; Expand is `μ ∘ st`.
+   Lookup/Expand reordering is associativity and commutativity of `bind` for the commutative
+   strong monad Set. Every L&E plan is a re-bracketing of the existing Kleisli composition;
+   Physical merely writes only the fused bracketing (flat headings). No semantic change.
+2. Evaluation. Retaining the lookup is call-by-need for the pure computation `lookup b k`
+   (hosts immutable for a run): one evaluation shared by the semi (whnf test) and the probe
+   (force), versus call-by-name re-evaluation. Same meaning, different evaluation count — an
+   **E** decision. The shared value is the seed of an unfold producer (data when the
+   structure is immutable), so its memo slot is an **R** decision with coupling invariant
+   `memo = lookup b k`, discharged by the IndexRead law and immutability.
+3. Vectorization. A chunk of N rows each holding a `T B` is a nested sequence; `(begin,count)`
+   per row plus their exclusive scan is a segment descriptor (Blelloch flattening). Expand on
+   the chunk is segmented flatten, total and length-known, so ST-Stage may span a probe whose
+   output is segment-represented. The tile kernel is **C**: cooperative segmented flatten.
+
+Reduced asks: (E) a sharing entry for keyed reads; (R) a seed/segment-descriptor
+representation for the shared value, the memo as a derived carrier column pruned at its
+forcing read; (E′) ST-Stage extension for segment-represented probe outputs.
