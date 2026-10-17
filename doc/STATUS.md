@@ -121,24 +121,23 @@ The retail runtime registers `le`. The e2e corpus axes are intentionally
 unchanged: adding LE there requires extending the named planner axis and
 regenerating its pairwise configurations, then running the corpus gate.
 
-`le_runs` explicitly applies `sorted_runs` and then `retained_lookups`; core
-default selection is unchanged. Sorted-run retyping is limited to one-level
-HashIndex payload builds with a single stored borrowed i32/i64 key, selecting
-the integral codec eligible for the rank directory. Multi-column,
-non-integral and computed/owned keys stay hashed; the rewrite no longer
-selects NoDense binary-search runs. An integral key with an over-budget span
-can still fall back to binary search at runtime.
+`le_runs` explicitly applies `sorted_runs`; core default selection is
+unchanged. Sorted-run retyping is limited to one-level HashIndex payload
+builds with a single stored borrowed i32/i64 key, selecting the integral
+codec eligible for the rank directory. Multi-column, non-integral and
+computed/owned keys stay hashed; the rewrite never selects NoDense
+binary-search runs. An integral key with an over-budget span can still fall
+back to binary search at runtime.
 
-A retained cursor may serve a later probe with a larger key. Its residual
-key columns must be payload columns of the build's recorded level and bound
-at the probe input, not necessarily at the earlier semijoin. Realization
-expands the saved cursor and compares the residual payload fields with
-Leibniz `==` in plain-probe order, without a second lookup. The independent
-Structures check still requires an exclusive lookup-key-preserving pipe
-spine and one lifetime-bound, complete single-level payload provider.
-Host fallbacks, key-only membership providers and multi-level builds remain
-ineligible; a Supplier host fallback is not silently converted to a built
-lookup-key index.
+Cursor retention (`p via cursor s;`, `cq_rewrites::retained_lookups`) was
+implemented on this branch and **dropped at the rebase onto the back-end
+layering (`ad9727b`)**: its hidden row fields and per-operator threading
+duplicated the new column environment. It is to be re-expressed as a
+representation decision (`repr`: the semi's result carries an unexpanded
+RowId range for the build occurrence; see `doc/GPU-LE-BACKEND-CODESIGN.md`).
+The table below was measured with that implementation present and is kept
+as evidence of what cursor reuse is worth; `le_runs` today measures
+`order(le)` with sorted runs only.
 
 Re-measured 2026-10-16 from `features/workloads`, sequentially with
 `cargo xtask profile --tpch --sf 1 --config default` then

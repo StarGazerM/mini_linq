@@ -274,7 +274,7 @@ outlives the \code{\&self} borrow, so a later read may reuse it.
 
 \Rule{EXT-SortedRuns}{s=\code{HashIndex}[K]\ \mathsf{payload}\ P\quad |\mathsf{levels}(s)|=1\\
  \neg\mathsf{membershipOnly}(s)\quad \neg\mathsf{candidateUse}(s)\quad
- C=\text{integral codec if }K\text{ is one borrowed \code{i32}/\code{i64}, else NoDense}}
+ K\text{ is one borrowed \code{i32}/\code{i64}}\quad C=\text{its integral codec}}
  {\mathsf{retype}(s\Rightarrow\code{SortedRun<\_,\_,C>})\ \text{preserves the observation contract}}
 \end{mathpar}
 The rank directory tests presence before mapping a key to its range; holes in
