@@ -188,9 +188,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let descending: Vec<_> = (-4096i64..=4096).rev().collect();
     check(&ctx, &stream, "all-unique-descending", descending, 1)?;
-    // Cross the scan block and recursive block-total boundaries with holes:
-    // the last case needs three levels for bins and two for bitmap prefixes.
-    for domain in [255i64, 256, 257, 65535, 65536, 65537] {
+    // Cross bitmap words, warp groups, scan blocks and recursive word-total
+    // boundaries. Sparse words test row totals separately from popcounts.
+    for domain in [63i64, 64, 65, 255, 256, 257, 16383, 16384, 16385,
+                   65535, 65536, 65537, 4194303, 4194304, 4194305] {
         check(&ctx, &stream, &format!("scan-domain-{domain}"),
             vec![domain - 1, 0, domain / 2, 0, domain - 1, 1], 2)?;
     }

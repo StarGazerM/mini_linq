@@ -37,13 +37,13 @@ fn run_pool_bytes(rows:usize,(min,max):(i64,i64))->Result<u128,Error>{
     let span=max as i128-min as i128+1;
     if span>gpu_blocked_run::MAX_DOMAIN_KEYS as i128{return Err("dense rank domain exceeds 2^32 key positions".into());}
     let domain=usize::try_from(span)?;let words=domain.div_ceil(64);let unique=rows.min(domain);
-    // Device stats, bins, bitmap/prefix, CSR, unique keys, permutation,
-    // cursors, sorted keys, fences and one clustered payload.
-    let mut bytes=[(1,std::mem::size_of::<RunStats>()),(domain,4),(words,8),(words,4),
+    // Device stats, bins, bitmap/prefix, word row offsets, CSR, unique keys,
+    // permutation, cursors, sorted keys, fences and one clustered payload.
+    let mut bytes=[(1,std::mem::size_of::<RunStats>()),(domain,4),(words,8),(words,4),(words,4),
         (unique+1,4),(unique,8),(rows,4),(domain,4),(rows,8),
         (rows.div_ceil(gpu_blocked_run::BLOCK_ROWS),8),(rows,8)]
         .into_iter().map(|(n,w)|padded_bytes(n,w)).sum::<u128>();
-    for mut length in [domain,words] {
+    for mut length in [words,words] {
         loop {length=length.div_ceil(256);bytes+=padded_bytes(length,4);if length==1{break;}}
     }
     Ok(bytes)
@@ -185,7 +185,7 @@ fn main()->Result<(),Error>{
             "max_m_over_t":max_fanout.iter().max().copied().unwrap_or(0) as f64/1024.0,
             "frontier_spill_required":false,
             "expansion_policy":"fixed-depth in-tile loop; no cross-block stealing",
-            "build_algorithm":"dense counting sort with stable provenance heapsort",
+            "build_algorithm":"bitmap-word prefix counting sort with stable provenance heapsort",
             "dedup_algorithm":"exact packed-triple u64 CAS set",
             "warmups":1,"runs":5,
             "samples":{"build_ms":build_samples,"kernel_ms":kernel_samples,

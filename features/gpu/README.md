@@ -142,6 +142,17 @@ The query output count is read once to size the dedup table, whose kernel reads
 the device counter. Dedup status and exact-answer downloads happen after the
 final timing event. No extrema or per-stage total readback remains in a build.
 
+The histogram sets a presence bit only on the atomic count's 0→1 transition.
+A coalesced warp per 64-key word computes local bin offsets, its row total,
+its bitmap popcount and its maximum multiplicity. Only the two word-sized
+arrays (row totals and popcounts) are globally scanned. A bin's final row
+offset is its local offset plus the word's row prefix; its CSR rank is the
+word's popcount prefix plus the lower bits' popcount. Row totals are necessary
+in addition to popcounts because duplicate keys contribute multiple rows.
+This removes the full-domain multi-level scan and the old serial directory
+kernel. Oracles cover partial words and recursive word-prefix boundaries
+through a 4,194,305-position sparse domain, with stable duplicate payloads.
+
 ## RCCL compiler bug and approved workaround
 
 The initial RCCL-based blocked-run oracle built and passed its two empty-input

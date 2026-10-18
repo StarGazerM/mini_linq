@@ -1,6 +1,6 @@
 //! GPU-built sorted, clustered runs with a dense rank directory.
 //!
-//! Construction uses dense counting sort and hierarchical GPU scans.
+//! Construction scans only per-bitmap-word row totals and presence popcounts.
 //! Atomic scatter is made stable by sorting original row IDs within each bin.
 //! Bounds are supplied from input metadata; active row counts and all stage
 //! totals stay on device. `read_stats` is the single build-completion readback.
@@ -183,17 +183,20 @@ impl<'a> Run<'a> {
             Ok(levels)
         };
         let bins = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, domain)?;
+        let bits = DeviceBuffer::zeroed_in(memory, stream, words)?;
         let histogram = module.prepare_histogram(config(n))?;
         unsafe {
-            module.histogram(stream, &histogram, &Input(keys), min_key, domain, ptr(&stats), ptr(&bins))?;
+            module.histogram(stream, &histogram, &Input(keys), min_key, domain,
+                ptr(&stats), ptr(&bins), ptr(&bits))?;
         }
-        let _bin_scan = exclusive_scan(&bins)?;
-        let bits = allocate::<u64>(memory, stream, words)?;
         let prefix = allocate::<u32>(memory, stream, words)?;
-        let directory = module.prepare_directory(config(words))?;
+        let word_rows = allocate::<u32>(memory, stream, words)?;
+        let word_offsets = module.prepare_word_offsets(config(words * 32))?;
         unsafe {
-            module.directory(stream, &directory, &bins, ptr(&stats), ptr(&bits), ptr(&prefix))?;
+            module.word_offsets(stream, &word_offsets, ptr(&bins), domain, ptr(&stats),
+                &bits, ptr(&prefix), ptr(&word_rows))?;
         }
+        let _row_scan = exclusive_scan(&word_rows)?;
         let prefix_scan = exclusive_scan(&prefix)?;
         let offsets = DeviceBuffer::zeroed_in(memory, stream, unique_capacity + 1)?;
         let unique_keys = DeviceBuffer::zeroed_in(memory, stream, unique_capacity)?;
@@ -206,12 +209,12 @@ impl<'a> Run<'a> {
         let cursors = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, domain)?;
         let scatter = module.prepare_scatter(config(n))?;
         unsafe {
-            module.scatter(stream, &scatter, &Input(keys), min_key, &bins, ptr(&stats),
+            module.scatter(stream, &scatter, &Input(keys), min_key, &bins, &word_rows, ptr(&stats),
                 ptr(&cursors), ptr(&permutation))?;
         }
         let order = module.prepare_order_bins(config(domain))?;
         unsafe {
-            module.order_bins(stream, &order, &bins, ptr(&stats), min_key, &bits, &prefix,
+            module.order_bins(stream, &order, &bins, &word_rows, ptr(&stats), min_key, &bits, &prefix,
                 ptr(&permutation), ptr(&offsets), ptr(&unique_keys))?;
         }
         let sorted = allocate::<i64>(memory, stream, n)?;
@@ -290,8 +293,8 @@ fn allocate<'a, T: DeviceCopy>(
 
 #[cuda_device::cuda_module]
 mod kernels {
-    use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, DynamicSharedArray};
-    use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
+    use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, warp, DynamicSharedArray};
+    use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
     use super::RunStats;
 
     #[kernel]
@@ -325,6 +328,7 @@ mod kernels {
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn histogram(
         keys: &[i64], min_key: i64, domain: usize, stats: *mut RunStats, counts: *mut u32,
+        bits: *mut u64,
     ) {
         let i = thread::index_1d().get();
         if i < unsafe { (*stats).rows } as usize {
@@ -335,7 +339,12 @@ mod kernels {
                 return;
             }
             unsafe {
-                DeviceAtomicU32::from_ptr(counts.add(bin)).fetch_add(1, AtomicOrdering::Relaxed);
+                let previous = DeviceAtomicU32::from_ptr(counts.add(bin))
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+                if previous == 0 {
+                    DeviceAtomicU64::from_ptr(bits.add(bin >> 6))
+                        .fetch_or(1u64 << (bin & 63), AtomicOrdering::Relaxed);
+                }
             }
         }
     }
@@ -372,29 +381,42 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn directory(
-        bins: &[u32], stats: *mut RunStats, bits: *mut u64, prefix: *mut u32,
+    pub unsafe fn word_offsets(
+        bins: *mut u32, domain: usize, stats: *mut RunStats, bits: &[u64],
+        prefix: *mut u32, word_rows: *mut u32,
     ) {
-        let word = thread::index_1d().get();
-        if word < (bins.len() + 63) / 64 {
-            let mut bits_in_word = 0u64;
-            let mut max_count = 0;
-            let mut bit = 0;
-            while unsafe { (*stats).invalid } == 0 && bit < 64 && word * 64 + bit < bins.len() {
-                let bin = word * 64 + bit;
-                let end = if bin + 1 < bins.len() { bins[bin + 1] } else { unsafe { (*stats).rows } };
-                let count = end - bins[bin];
-                if count != 0 {
-                    bits_in_word |= 1u64 << bit;
-                    max_count = max_count.max(count);
-                }
-                bit += 1;
+        // One converged warp handles a bitmap word. Both 32-bin halves are
+        // coalesced; only the 64x smaller word totals need a global scan.
+        let word = thread::index_1d().get() / 32;
+        let lane = warp::lane_id();
+        let first = word * 64 + lane as usize;
+        let second = first + 32;
+        let a = if first < domain { unsafe { bins.add(first).read() } } else { 0 };
+        let b = if second < domain { unsafe { bins.add(second).read() } } else { 0 };
+        let mut sum_a = a;
+        let mut sum_b = b;
+        let mut maximum = a.max(b);
+        let mut distance = 1;
+        while distance < 32 {
+            let left_a = warp::shuffle_up(sum_a, distance);
+            let left_b = warp::shuffle_up(sum_b, distance);
+            let left_max = warp::shuffle_up(maximum, distance);
+            if lane >= distance {
+                sum_a += left_a;
+                sum_b += left_b;
+                maximum = maximum.max(left_max);
             }
-            unsafe {
-                bits.add(word).write(bits_in_word);
-                prefix.add(word).write(bits_in_word.count_ones());
+            distance <<= 1;
+        }
+        let first_total = warp::shuffle_down_sync(u32::MAX, sum_a, 31 - lane);
+        unsafe {
+            if first < domain { bins.add(first).write(sum_a - a); }
+            if second < domain { bins.add(second).write(first_total + sum_b - b); }
+            if lane == 31 && word < bits.len() {
+                word_rows.add(word).write(first_total + sum_b);
+                prefix.add(word).write(bits[word].count_ones());
                 DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).max_count))
-                    .fetch_max(max_count, AtomicOrdering::Relaxed);
+                    .fetch_max(maximum, AtomicOrdering::Relaxed);
             }
         }
     }
@@ -403,7 +425,7 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn scatter(
-        keys: &[i64], min_key: i64, bins: &[u32], stats: *const RunStats,
+        keys: &[i64], min_key: i64, bins: &[u32], word_rows: &[u32], stats: *const RunStats,
         cursors: *mut u32, permutation: *mut u32,
     ) {
         let i = thread::index_1d().get();
@@ -412,7 +434,7 @@ mod kernels {
             unsafe {
                 let slot = DeviceAtomicU32::from_ptr(cursors.add(bin))
                     .fetch_add(1, AtomicOrdering::Relaxed);
-                permutation.add((bins[bin] + slot) as usize).write(i as u32);
+                permutation.add((word_rows[bin >> 6] + bins[bin] + slot) as usize).write(i as u32);
             }
         }
     }
@@ -446,13 +468,16 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn order_bins(
-        bins: &[u32], stats: *const RunStats, min_key: i64, bits: &[u64], prefix: &[u32],
+        bins: &[u32], word_rows: &[u32], stats: *const RunStats, min_key: i64,
+        bits: &[u64], prefix: &[u32],
         permutation: *mut u32, offsets: *mut u32, unique: *mut i64,
     ) {
         let bin = thread::index_1d().get();
         if bin < bins.len() && unsafe { (*stats).invalid } == 0 {
-            let begin = bins[bin];
-            let end = if bin + 1 < bins.len() { bins[bin + 1] } else { unsafe { (*stats).rows } };
+            let begin = word_rows[bin >> 6] + bins[bin];
+            let end = if bin + 1 < bins.len() {
+                word_rows[(bin + 1) >> 6] + bins[bin + 1]
+            } else { unsafe { (*stats).rows } };
             if begin != end {
                 let mask = 1u64 << (bin & 63);
                 let rank = prefix[bin >> 6] + (bits[bin >> 6] & (mask - 1)).count_ones();
