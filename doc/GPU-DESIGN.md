@@ -122,14 +122,21 @@ DuckDB is the full `SELECT DISTINCT` on the dbgen tables.
 
 | System (H05) | SF1 ms | SF10 ms |
 |---|---:|---:|
-| GPU Plan A, fact-first (build / kernel / dedup = 12.3 / 0.91 / 1.38 at SF10) | 3.3 | 14.6 |
-| GPU Plan B, dimension-first expand (22.3 / 0.30 / 0.93) | 5.3 | 23.6 |
-| srdatalog-python, fact-first order | 38.1 | 582.6 |
+| GPU Plan A, fact-first (build / kernel / dedup = 4.9 / 0.94 / 0.35 at SF10, rccl-memory pool, bitmap-word scans) | 1.9 | 6.2 |
+| GPU Plan B, dimension-first expand (9.5 / 0.30 / 0.35) | 2.6 | 10.1 |
+| srdatalog-python, **best of 14 orders** (`c,n,o,d,s`, clause order 3,4,1,2,0,5, Region/Nation as derived unary filters) | 5.2 | 176.8 |
+| srdatalog-python, fact-first order (`o,s,c,d,n,r`, first baseline) | 38.1 | 574–583 |
 | srdatalog-python, default plan | 38.3 | 633.5 |
-| srdatalog-python, dimension-first order | 2,872 | 58,051 |
+| srdatalog-python, dimension-first order (`r,n,c,o,d,s`) | 2,872 | 58,051 |
 | DuckDB 1 thread | 55 | 618 |
 | DuckDB 24 threads | 21 | 154 |
 | CPU MiniLinq default (doc/STATUS.md, other machine) | 33.7 | — |
+
+srdatalog's sensitivity to variable order is itself a finding: 14 orders at
+SF1 span 5.2 ms to 2.9 s, and four accepted orders (`o,d,c,n,r,s`,
+`o,d,s,c,n,r`, `s,n,r,o,d,c`, `d,o,c,n,r,s`) compile but return wrong counts
+(125 or 0 instead of 7,242) — recorded as rejected in
+`features/gpu/compare/srdatalog_h05.sweep.json`, not used.
 
 Findings:
 
