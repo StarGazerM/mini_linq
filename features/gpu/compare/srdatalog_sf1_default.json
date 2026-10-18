@@ -1,33 +1,79 @@
 {
   "sf": 1,
   "order": "default",
-  "compile_s": 37.98236949200509,
+  "compile_s": 45.629316159989685,
   "load_s": [
-    0.21551329601788893,
-    0.21655505200033076,
-    0.222564866009634,
-    0.21553465799661353,
-    0.21708279399899766
+    0.23544495203532279,
+    0.22876800800440833,
+    0.33509698003763333,
+    0.3847317289910279,
+    0.23531965201254934
   ],
   "run_ms": [
-    38.44133301754482,
-    38.29106601187959,
-    38.10005899867974,
-    38.13811301370151,
-    38.39642700040713
+    37.965507013723254,
+    37.97420300543308,
+    38.10704796342179,
+    38.01476099761203,
+    37.89494198281318
   ],
-  "median_ms": 38.29106601187959,
-  "min_ms": 38.10005899867974,
+  "median_ms": 37.97420300543308,
+  "min_ms": 37.89494198281318,
   "answer_count": 7242,
   "expected_count": 7242,
   "exact": true,
-  "peak_vram_mib": 2224,
+  "peak_vram_mib": 2206,
   "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+  "chosen_plans": [
+    {
+      "rule": "H05",
+      "var_order": [
+        "o",
+        "s",
+        "c",
+        "n",
+        "r",
+        "d",
+        "_c0"
+      ],
+      "clause_order": [
+        0,
+        1,
+        2,
+        3,
+        7,
+        4,
+        5,
+        6
+      ],
+      "join_vars": [
+        "c",
+        "n",
+        "o",
+        "r",
+        "s"
+      ],
+      "semijoin_patterns": "[]",
+      "body": [
+        "Atom(rel='Lineitem', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='o', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='s', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Atom(rel='Orders', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='o', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='d', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Filter(vars=('d',), code='return d >= 8766 && d < 9131;')",
+        "Atom(rel='Customer', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='n', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Atom(rel='Nation', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='n', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='r', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Atom(rel='Region', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='r', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='_c0', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Filter(vars=('_c0',), code='return _c0 == 2;')",
+        "Atom(rel='Supplier', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='s', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='n', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+      ]
+    }
+  ],
   "requested_var_order": null,
-  "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Default_DB_6917",
-  "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Default_DB_6917/libH05Default_DB_6917.so",
+  "requested_clause_order": null,
+  "semi_join": false,
+  "dimension_filters": false,
+  "mir_file": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_default.mir.txt",
+  "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05default_DB_3602",
+  "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05default_DB_3602/libH05default_DB_3602.so",
   "phase": "complete",
-  "warmup_ms": 41.21059802128002,
-  "warmup_load_s": 0.23013046898995526,
+  "warmup_ms": 40.9739269525744,
+  "warmup_load_s": 0.24347318202489987,
   "tuple_exact": true
 }

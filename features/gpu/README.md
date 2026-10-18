@@ -382,3 +382,103 @@ oracle (24 data cases plus invalid-input checks, including 131,073-row skew and
 recursive scan boundaries); dedup oracle (12 cases including all-zero and
 maximum encodings); complete synthetic/SF1/SF10 results for both plans.
 No compute-sanitizer result is claimed.
+
+## SRDatalog variable/clause-order sweep (2026-10-18)
+
+SRDatalog is a variable-order/WCOJ-style engine, not a fixed binary-join
+baseline. On RTX 6000 Ada, driver 580.178.04, engine revision
+`fab849f672d43af2a6a1e8a1727ec065201e3720`, the **best exact measured**
+configuration is `cnrods_clauses341205_filters`: **5.169698 ms at SF1,
+176.812205 ms at SF10**, versus rerun `fact` medians of 38.139930 and
+574.001685 ms. This is a bounded sweep, not a claim of global optimality.
+
+Each variant compiles once (SF10 reuses the SF1 native build cache), then
+uses a fresh initialized/loaded/prepared DB for one warmup and five timed
+runs. Load and prepare are excluded; `run(0)` plus synchronization is timed.
+Dimension-filter derivation and any materialized semijoins are **inside**
+the timed query, not precomputed on the CPU. Whole-device VRAM is sampled
+at 1 Hz: these peaks are lower bounds, not allocator high-water marks.
+Clocks were not locked and exclusive device ownership was not established.
+
+| SF1 requested order / variant | Median ms | Exactness |
+|---|---:|---|
+| `o,d,c,n,r,s` | rejected | 125 rows, expected 7,242 |
+| `o,c,d,n,r,s` | 19.387561 | count + tuple diff |
+| `o,d,s,c,n,r` | rejected | 125 rows |
+| `d,o,c,n,r,s` | rejected | 0 rows |
+| `c,n,r,o,d,s` | 11.226063 | count + tuple diff |
+| `n,r,c,o,d,s` | 697.755019 | count + tuple diff |
+| `s,n,r,o,d,c` | rejected | 125 rows |
+| engine default | 37.974203 | count + tuple diff |
+| `fact`: `o,s,c,d,n,r` | 38.139930 | count + tuple diff |
+| `c,n,r,o,d,s` + `.with_semi_join()` | 11.279425 | count + tuple diff |
+| `c,n,r,o,d,s` + clauses `3,4,5,6,1,2,0,7` | 10.552553 | count + tuple diff |
+| `c,n,r,o,d,s` + dimension filters | 5.490582 | count + tuple diff |
+| `c,n,r,o,d,s` + dimension filters + semijoin rewrite | 5.221426 | count + tuple diff |
+| **`c,n,r,o,d,s` + dimension filters + clauses `3,4,1,2,0,5`** | **5.169698** | **count + tuple diff** |
+
+All accepted SF1 variants return 7,242 rows in all six runs and match the
+complete reference tuple set in the warmup export. **Not all attempted
+orders are correct:** four requested orders compile but fail the first
+count check, so their timed medians are null and they are excluded from
+ranking. In particular, the planner accepts filtered-only `d` first but
+the resulting query returns zero rows. No engine patch or count-check
+suppression was used. The “all variants exact” criterion therefore remains
+unmet for these rejected engine configurations.
+
+The planner's own default chooses `o,s,c,n,r,d,_c0` (the last variable is
+introduced for the ASIA constant); its heuristic is structural, not
+cardinality/cost-based. Chosen HIR plans and emitted MIR are retained.
+The plain-rule semijoin opt-in leaves its plan unchanged; unary dimension
+filters create bound-key membership probes, while adding `.with_semi_join()`
+also materializes filtered Customer/Supplier relations. Further exploration
+of families exceeding 3× the best was stopped; the historically slow `dim`
+order was not rerun. `fact` was retained as the required SF10 control.
+
+The three fastest exact SF1 variants and `fact` were run at SF10:
+
+| SF10 variant | Median ms | Min ms | Sampled peak MiB | Exact count, all six runs |
+|---|---:|---:|---:|---:|
+| **dimension filters + clauses `3,4,1,2,0,5` (best)** | **176.812205** | **176.762880** | **3,230** | **72,983** |
+| dimension filters + semijoin rewrite | 192.410878 | 192.069845 | 3,230 | 72,983 |
+| dimension filters, derived clause order | 198.356330 | 198.161938 | 3,230 | 72,983 |
+| `fact` | 574.001685 | 573.087575 | 3,230 | 72,983 |
+
+SF1 accepted variants all sampled 2,206 MiB. SF10 correctness here is a
+count check, **not** a full tuple comparison. The winning DSL is below
+(using the runner's input declarations and unary `AsiaRegion`/`AsiaNation`
+relations). Removing dimension joins from H05 removes `r` from its actual
+variable order; the CLI's six-variable order is explicitly projected to
+`c,n,o,d,s`. No materialized semijoin opt-in is enabled for the winner.
+
+```python
+Program(rules=[
+    (AsiaRegion(r) <= Region(r, 2)).named('AsiaRegion'),
+    (AsiaNation(n) <= Nation(n, r) & AsiaRegion(r)).named('AsiaNation'),
+    (Answer(o, s, n) <= Lineitem(o, s) & Orders(o, c, d)
+     & Filter(('d',), 'return d >= 8766 && d < 9131;')
+     & Customer(c, n) & AsiaNation(n) & Supplier(s, n))
+    .named('H05')
+    .with_plan(var_order=['c', 'n', 'o', 'd', 's'],
+               clause_order=[3, 4, 1, 2, 0, 5]),
+])
+```
+
+Reproduce the winner from this fork's root:
+
+```sh
+uv run --project /home/stargazermiao/workspace/srdatalog-python python -u \
+  features/gpu/compare/srdatalog_h05.py --sf 1 10 \
+  --var-order c,n,r,o,d,s --dimension-filters --clause-order 3,4,1,2,0,5 \
+  --output features/gpu/compare/srdatalog_h05.winner-rerun.json
+```
+
+`--var-order` is repeatable and can be combined with named `--order`
+variants. Clause indices address the body after constant rewriting:
+ordinary H05 uses eight clauses (`0` Lineitem, `1` Orders, `2` date filter,
+`3` Customer, `4` Nation, `5` Region, `6` ASIA filter, `7` Supplier);
+dimension-filter H05 uses six (`4` AsiaNation, `5` Supplier).
+`compare/srdatalog_h05.sweep.json` retains all 18 measured/attempted entries,
+including errors, requested/chosen plans, five samples for each accepted
+variant, counts, and paths to logs/MIR. `srdatalog_h05.results.json` labels
+the winners `best` and retains the named historical baselines.
