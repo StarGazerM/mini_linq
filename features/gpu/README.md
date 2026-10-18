@@ -45,10 +45,11 @@ device-deduplicated key set and the fully materialized three-column result.
 
 One warmup and five measured runs rebuild all runs, execute the fused kernel,
 and deduplicate. Inputs upload once, before timing. CUDA events delimit build,
-kernel, dedup and total. Build includes allocation, GPU filtering, sorting,
-clustering, rank construction and scalar readbacks. Dedup includes the output
-count readback, allocation and exact GPU hash insertion. Event intervals include GPU idle
-time caused by these host synchronization/allocation boundaries. Final answer
+kernel, dedup and total. Build includes pool suballocation, GPU filtering,
+construction, clustering and one batched metadata readback. Dedup includes the
+output-count readback, pool suballocation and exact GPU hash insertion.
+Event intervals include GPU idle time caused by host synchronization and launch
+boundaries. Final answer
 transfers and CPU comparison are outside timing. The runner updates matching
 SF/plan entries in `compare/gpu_h05.results.json`; `audit.py` fills resource fields
 from actual `ptxas -v -arch=sm_89` output and saves that output verbatim.
@@ -60,9 +61,10 @@ from actual `ptxas -v -arch=sm_89` output and saves that output verbatim.
   up to 1024 u32 keys, and stable merge-path partition. Oracle kernels invoke
   the library across a crate boundary, including repeated offsets, empty inputs,
   partial tiles, random masks, MAX keys and every merge diagonal.
-- `blocked-run`: GPU dense counting sort with histogram, hierarchical exclusive
-  scan, atomic provenance scatter and per-bin provenance heapsort for stability.
-  Payloads are gathered in that stable order. Runs expose CSR offsets, unique
+- `blocked-run`: a device sortedness test selects adjacent-difference
+  construction or dense counting sort with bitmap-word prefix scans, atomic
+  provenance scatter and per-bin heapsort for stable duplicates.
+  Payloads are gathered in stable input-row order. Runs expose CSR offsets, unique
   keys, 2048-row fences, a dense-domain u64 bitmap and u32 popcount prefixes.
   `point` returns a half-open `(begin,end)` range.
 - Plan A: dynamically scheduled 1024-row lineitem tiles (256 threads, four
@@ -153,6 +155,18 @@ This removes the full-domain multi-level scan and the old serial directory
 kernel. Oracles cover partial words and recursive word-prefix boundaries
 through a 4,194,305-position sparse domain, with stable duplicate payloads.
 
+A one-pass adjacent-key check records sortedness on device (warp ballots reduce
+flag updates). Nondecreasing keys use adjacent run starts/ends to build the
+bitmap, CSR offsets, unique keys and maximum multiplicity; copying the already
+ordered columns yields fences directly. Histogram initialization, counting,
+scatter and provenance heapsort return without work on this path. Their
+device-gated launches remain, avoiding an extra sortedness readback.
+SF10 takes this path for **customer and supplier in both plans, plus lineitem
+in Plan B**, in warmup and all measured iterations. Filtered orders do **not**
+take it: the original orders column is ordered, but the date filter's atomic
+block reservations do not preserve block order; Plan B's customer-key ordering
+is also unsorted. The optimization does not assume dbgen ordering.
+
 ## RCCL compiler bug and approved workaround
 
 The initial RCCL-based blocked-run oracle built and passed its two empty-input
@@ -186,7 +200,7 @@ from the device dependency graph rather than silently patched, and the original
 diagnostic is retained in `compare/rccl-ptx-collision.txt`. Consequently the
 results measure the fused execution design, **not RCCL sort/scan performance**.
 
-## Measured results (2026-10-16)
+## Historical original measurements (2026-10-16)
 
 GPU: NVIDIA RTX 6000 Ada Generation, sm_89, driver 580.178.04, 49140 MiB
 reported device memory. Clocks were not locked and exclusive-GPU ownership was
@@ -202,8 +216,8 @@ bandwidth study. Upload and final downloads are excluded as described above.
 
 Both plans matched the complete DuckDB answer set at SF1 **and SF10**, in the
 warmup and all five measured runs. Synthetic input produced 579 exact triples
-for both plans. All component samples and per-component minima are retained in
-`compare/gpu_h05.results.json`; medians are calculated independently.
+for both plans. The table and discussion below describe the original allocator
+and full-domain scan; current samples are in `compare/gpu_h05.results.json`.
 
 The SF10 Plan A stream is below the 10 ms design gate. Plan B is 0.334 times
 Plan A's stream time and 1.612 times its build+stream+dedup time. Plan B has no

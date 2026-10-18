@@ -96,6 +96,7 @@ fn check(
     let max_count = offsets.windows(2).map(|pair| pair[1] - pair[0]).max().unwrap_or(0);
     assert_eq!(stats, RunStats {
         rows: sorted.len() as u32, unique: unique.len() as u32, max_count, invalid: 0,
+        sorted: input.windows(2).all(|pair| pair[0] <= pair[1]) as u32,
     }, "{name}: stats");
     assert_eq!(&run.offsets.to_host_vec()?[..offsets.len()], offsets, "{name}: CSR offsets and sentinel");
     assert_eq!(&run.unique_keys.to_host_vec()?[..unique.len()], unique, "{name}: unique keys");
@@ -188,6 +189,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let descending: Vec<_> = (-4096i64..=4096).rev().collect();
     check(&ctx, &stream, "all-unique-descending", descending, 1)?;
+    check(&ctx, &stream, "all-unique-ascending", (-4096i64..=4096).collect(), 3)?;
+    let mut sorted_duplicates = random_keys(65537, 812);
+    sorted_duplicates.sort_unstable();
+    check(&ctx, &stream, "sorted-duplicates-with-holes", sorted_duplicates, 3)?;
+    for inversion in [31usize, 255, 256, 2048, 65535] {
+        let mut keys: Vec<_> = (0..65537i64).collect();
+        keys.swap(inversion - 1, inversion);
+        check(&ctx, &stream, &format!("single-inversion-{inversion}"), keys, 2)?;
+    }
     // Cross bitmap words, warp groups, scan blocks and recursive word-total
     // boundaries. Sparse words test row totals separately from popcounts.
     for domain in [63i64, 64, 65, 255, 256, 257, 16383, 16384, 16385,

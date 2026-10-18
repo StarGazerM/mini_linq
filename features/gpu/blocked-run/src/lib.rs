@@ -44,6 +44,8 @@ pub struct RunStats {
     pub unique: u32,
     pub max_count: u32,
     pub invalid: u32,
+    /// One when active keys are nondecreasing, including empty runs.
+    pub sorted: u32,
 }
 // SAFETY: this C-layout record consists only of u32 scalars.
 unsafe impl DeviceCopy for RunStats {}
@@ -182,11 +184,26 @@ impl<'a> Run<'a> {
             }
             Ok(levels)
         };
-        let bins = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, domain)?;
+        let check = module.prepare_sorted_check(config(n))?;
+        unsafe {
+            module.sorted_check(stream, &check, &Input(keys), min_key, domain, ptr(&stats))?;
+        }
+        let bins = allocate::<u32>(memory, stream, domain)?;
+        let cursors = allocate::<u32>(memory, stream, domain)?;
+        let clear = module.prepare_clear_histogram(
+            LaunchConfig1D::new(domain.div_ceil(256).clamp(1, 568) as u32, THREADS, 0))?;
+        unsafe {
+            module.clear_histogram(stream, &clear, domain, ptr(&stats), ptr(&bins), ptr(&cursors))?;
+        }
         let bits = DeviceBuffer::zeroed_in(memory, stream, words)?;
+        let adjacent = module.prepare_sorted_starts(config(n))?;
+        unsafe {
+            module.sorted_starts(stream, &adjacent, &Input(keys), min_key, ptr(&stats),
+                ptr(&bins), ptr(&bits))?;
+        }
         let histogram = module.prepare_histogram(config(n))?;
         unsafe {
-            module.histogram(stream, &histogram, &Input(keys), min_key, domain,
+            module.histogram(stream, &histogram, &Input(keys), min_key,
                 ptr(&stats), ptr(&bins), ptr(&bits))?;
         }
         let prefix = allocate::<u32>(memory, stream, words)?;
@@ -206,7 +223,6 @@ impl<'a> Run<'a> {
                 ptr(&stats), ptr(&offsets))?;
         }
         let permutation = allocate::<u32>(memory, stream, n)?;
-        let cursors = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, domain)?;
         let scatter = module.prepare_scatter(config(n))?;
         unsafe {
             module.scatter(stream, &scatter, &Input(keys), min_key, &bins, &word_rows, ptr(&stats),
@@ -216,6 +232,11 @@ impl<'a> Run<'a> {
         unsafe {
             module.order_bins(stream, &order, &bins, &word_rows, ptr(&stats), min_key, &bits, &prefix,
                 ptr(&permutation), ptr(&offsets), ptr(&unique_keys))?;
+        }
+        let sorted_directory = module.prepare_sorted_directory(config(n))?;
+        unsafe {
+            module.sorted_directory(stream, &sorted_directory, &Input(keys), min_key, ptr(&stats),
+                &bins, &bits, &prefix, ptr(&offsets), ptr(&unique_keys))?;
         }
         let sorted = allocate::<i64>(memory, stream, n)?;
         let gather = module.prepare_gather(config(n))?;
@@ -306,6 +327,7 @@ mod kernels {
             unsafe {
                 (*stats).rows = rows.min(capacity);
                 (*stats).invalid = (rows > capacity) as u32;
+                (*stats).sorted = 1;
             }
         }
     }
@@ -326,18 +348,109 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn sorted_check(
+        keys: &[i64], min_key: i64, domain: usize, stats: *mut RunStats,
+    ) {
+        let i = thread::index_1d().get();
+        let active = i < unsafe { (*stats).rows } as usize;
+        let invalid = active && (keys[i] as u64).wrapping_sub(min_key as u64) >= domain as u64;
+        let inversion = active && i != 0 && keys[i - 1] > keys[i];
+        let invalid_lanes = warp::ballot_sync(u32::MAX, invalid);
+        let inverted_lanes = warp::ballot_sync(u32::MAX, inversion);
+        if warp::lane_id() == 0 {
+            unsafe {
+                if invalid_lanes != 0 {
+                    DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).invalid))
+                        .store(1, AtomicOrdering::Relaxed);
+                }
+                if inverted_lanes != 0 {
+                    DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).sorted))
+                        .store(0, AtomicOrdering::Relaxed);
+                }
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn clear_histogram(domain: usize, stats: *const RunStats, bins: *mut u32, cursors: *mut u32) {
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
+        let mut bin = thread::index_1d().get();
+        let stride = thread::gridDim_x() as usize * 256;
+        while bin < domain {
+            unsafe { bins.add(bin).write(0); cursors.add(bin).write(0); }
+            bin += stride;
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn sorted_starts(
+        keys: &[i64], min_key: i64, stats: *const RunStats, bins: *mut u32, bits: *mut u64,
+    ) {
+        if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } { return; }
+        let i = thread::index_1d().get();
+        if i < unsafe { (*stats).rows } as usize && (i == 0 || keys[i - 1] != keys[i]) {
+            let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
+            unsafe {
+                bins.add(bin).write(i as u32);
+                DeviceAtomicU64::from_ptr(bits.add(bin >> 6))
+                    .fetch_or(1u64 << (bin & 63), AtomicOrdering::Relaxed);
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn sorted_directory(
+        keys: &[i64], min_key: i64, stats: *mut RunStats, bins: &[u32],
+        bits: &[u64], prefix: &[u32], offsets: *mut u32, unique: *mut i64,
+    ) {
+        if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } { return; }
+        let i = thread::index_1d().get();
+        let rows = unsafe { (*stats).rows } as usize;
+        let mut maximum = 0;
+        if i < rows {
+            let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
+            if i == 0 || keys[i - 1] != keys[i] {
+                let mask = 1u64 << (bin & 63);
+                let rank = prefix[bin >> 6] + (bits[bin >> 6] & (mask - 1)).count_ones();
+                unsafe {
+                    offsets.add(rank as usize).write(i as u32);
+                    unique.add(rank as usize).write(keys[i]);
+                }
+            }
+            if i + 1 == rows || keys[i + 1] != keys[i] {
+                maximum = i as u32 + 1 - bins[bin];
+            }
+        }
+        let lane = warp::lane_id();
+        let mut distance = 1;
+        while distance < 32 {
+            let left = warp::shuffle_up(maximum, distance);
+            if lane >= distance { maximum = maximum.max(left); }
+            distance <<= 1;
+        }
+        if lane == 31 && maximum != 0 {
+            unsafe { DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).max_count))
+                .fetch_max(maximum, AtomicOrdering::Relaxed); }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn histogram(
-        keys: &[i64], min_key: i64, domain: usize, stats: *mut RunStats, counts: *mut u32,
+        keys: &[i64], min_key: i64, stats: *const RunStats, counts: *mut u32,
         bits: *mut u64,
     ) {
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
         let i = thread::index_1d().get();
         if i < unsafe { (*stats).rows } as usize {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
-            if bin >= domain {
-                unsafe { DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).invalid))
-                    .store(1, AtomicOrdering::Relaxed); }
-                return;
-            }
             unsafe {
                 let previous = DeviceAtomicU32::from_ptr(counts.add(bin))
                     .fetch_add(1, AtomicOrdering::Relaxed);
@@ -389,6 +502,15 @@ mod kernels {
         // coalesced; only the 64x smaller word totals need a global scan.
         let word = thread::index_1d().get() / 32;
         let lane = warp::lane_id();
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
+            if lane == 31 && word < bits.len() {
+                unsafe {
+                    word_rows.add(word).write(0);
+                    prefix.add(word).write(bits[word].count_ones());
+                }
+            }
+            return;
+        }
         let first = word * 64 + lane as usize;
         let second = first + 32;
         let a = if first < domain { unsafe { bins.add(first).read() } } else { 0 };
@@ -428,6 +550,7 @@ mod kernels {
         keys: &[i64], min_key: i64, bins: &[u32], word_rows: &[u32], stats: *const RunStats,
         cursors: *mut u32, permutation: *mut u32,
     ) {
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
         let i = thread::index_1d().get();
         if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0 {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
@@ -472,6 +595,7 @@ mod kernels {
         bits: &[u64], prefix: &[u32],
         permutation: *mut u32, offsets: *mut u32, unique: *mut i64,
     ) {
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
         let bin = thread::index_1d().get();
         if bin < bins.len() && unsafe { (*stats).invalid } == 0 {
             let begin = word_rows[bin >> 6] + bins[bin];
@@ -511,7 +635,7 @@ mod kernels {
         let i = thread::index_1d().get();
         if i < permutation.len() {
             let value = if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0 {
-                input[permutation[i] as usize]
+                if unsafe { (*stats).sorted } != 0 { input[i] } else { input[permutation[i] as usize] }
             } else { 0 };
             unsafe { output.add(i).write(value); }
         }

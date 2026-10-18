@@ -107,11 +107,12 @@ fn main()->Result<(),Error>{
         if plan!="both" && plan!=which{continue;}
         let mut build_samples=vec![];let mut kernel_samples=vec![];let mut dedup_samples=vec![];let mut total_samples=vec![];
         let mut allocation_samples=vec![];let mut peak_bytes_samples=vec![];
+        let mut sorted_build_samples=vec![];
         let mut peak_mem=memory_used()?;let mut max_fanout=[0u32;2];let mut answer_count=0;
         for iteration in 0..6 {
             stream.synchronize()?;
             let persistent_bytes=memory.push_counters().bytes.value;
-            let (b,k,u,total)={
+            let (b,k,u,total,build_stats)={
             let start=stream.record_event(timing)?;
             let order_count=data.col("orders.o_orderkey").len();
             let mut filter_keys=Buffer::<i64>::zeroed_in(&memory,&stream,order_count)?;
@@ -125,11 +126,11 @@ fn main()->Result<(),Error>{
             let lines=if which=="B" {Some(Run::build(&ctx,&stream,&memory,dcol("lineitem.l_orderkey"),&[dcol("lineitem.l_suppkey") as &dyn ContiguousDeviceRange<i64>],line_domain,None)?)}else{None};
             // One combined metadata readback also rejects invalid device row
             // counts/domains before any plan consumes the constructed runs.
-            if let Some(lines)=&lines {
-                read_stats(&memory,&stream,&[&customers,&suppliers,&orders,lines])?;
+            let build_stats=if let Some(lines)=&lines {
+                read_stats(&memory,&stream,&[&customers,&suppliers,&orders,lines])?
             }else{
-                read_stats(&memory,&stream,&[&customers,&suppliers,&orders])?;
-            }
+                read_stats(&memory,&stream,&[&customers,&suppliers,&orders])?
+            };
             peak_mem=peak_mem.max(memory_used()?);
             unsafe{cuda_core::memory::memset_d8_async(counters.cu_deviceptr(),0,counters.num_bytes(),stream.cu_stream())?;}
             let dims=Dimensions{orders:orders.view(),customer:customers.view(),supplier:suppliers.view(),order_customer:ptr(&orders.payloads[0]),customer_nation:ptr(&customers.payloads[0]),supplier_nation:ptr(&suppliers.payloads[0]),nation_region:ptr(&nation_region),nation_len:nr.len() as u32,asia_regions};
@@ -163,13 +164,18 @@ fn main()->Result<(),Error>{
             let en=copy_prefix(&stream,&memory,&output_nations,emitted)?.to_host_vec()?;
             let mut triples=eo.into_iter().zip(es).zip(en).map(|((o,s),n)|(o,s,n)).collect::<Vec<_>>();triples.sort_unstable();triples.dedup();
             if triples!=data.answer{return Err("materialized nation mismatch".into());}
-            (b,k,u,total)
+            (b,k,u,total,build_stats)
             }; // Drop every iteration-local buffer before closing its counters.
             let allocations=memory.pop_counters()?;
             let allocation_count=allocations.allocations.total;
             let peak_bytes=persistent_bytes+allocations.bytes.peak;
-            println!("sf={} plan={} iteration={} build_ms={b:.6} kernel_ms={k:.6} dedup_ms={u:.6} total_ms={total:.6} answer_count={answer_count} exact=true allocation_count={allocation_count} peak_bytes={peak_bytes}",data.sf,which,iteration);
-            if iteration>0 {build_samples.push(b);kernel_samples.push(k);dedup_samples.push(u);total_samples.push(total);allocation_samples.push(allocation_count);peak_bytes_samples.push(peak_bytes);}
+            // Report the device's decision, including empty sorted runs; do
+            // not infer this fast path from host input order or column names.
+            let build_names=["customer","supplier",if which=="A" {"orders_by_order"}else{"orders_by_customer"},"lineitem"];
+            let sorted_builds=build_names.into_iter().zip(&build_stats)
+                .filter_map(|(name,stats)|(stats.sorted==1).then_some(name)).collect::<Vec<_>>();
+            println!("sf={} plan={} iteration={} build_ms={b:.6} kernel_ms={k:.6} dedup_ms={u:.6} total_ms={total:.6} answer_count={answer_count} exact=true allocation_count={allocation_count} peak_bytes={peak_bytes} sorted_builds={sorted_builds:?}",data.sf,which,iteration);
+            if iteration>0 {build_samples.push(b);kernel_samples.push(k);dedup_samples.push(u);total_samples.push(total);allocation_samples.push(allocation_count);peak_bytes_samples.push(peak_bytes);sorted_build_samples.push(sorted_builds);}
         }
         let scan_gbps=if which=="A" {Some(line_count as f64*16.0/(median(&kernel_samples) as f64*1e6))}else{None};
         results.push(json!({
@@ -185,12 +191,14 @@ fn main()->Result<(),Error>{
             "max_m_over_t":max_fanout.iter().max().copied().unwrap_or(0) as f64/1024.0,
             "frontier_spill_required":false,
             "expansion_policy":"fixed-depth in-tile loop; no cross-block stealing",
-            "build_algorithm":"bitmap-word prefix counting sort with stable provenance heapsort",
+            "build_algorithm":"device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+            "sorted_path":"GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
             "dedup_algorithm":"exact packed-triple u64 CAS set",
             "warmups":1,"runs":5,
             "samples":{"build_ms":build_samples,"kernel_ms":kernel_samples,
                        "dedup_ms":dedup_samples,"total_ms":total_samples,
-                       "allocation_count":allocation_samples,"peak_bytes":peak_bytes_samples}
+                       "allocation_count":allocation_samples,"peak_bytes":peak_bytes_samples,
+                       "sorted_builds":sorted_build_samples}
         }));
     }
     let path=Path::new(result_path);if let Some(parent)=path.parent(){fs::create_dir_all(parent)?;}
