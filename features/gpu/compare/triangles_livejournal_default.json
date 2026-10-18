@@ -1,0 +1,109 @@
+{
+  "dataset": "livejournal",
+  "order": "default",
+  "requested_var_order": null,
+  "status": "ok",
+  "phase": "complete",
+  "compile_s": 0.00558654498308897,
+  "load_s": [
+    2.122567020007409,
+    2.1891671890043654,
+    2.119418082991615,
+    2.1217942999792285,
+    2.3435203029657714
+  ],
+  "prepare_ms": [
+    306.55064003076404,
+    312.5626069959253,
+    310.3835469810292,
+    311.030954006128,
+    321.1280379910022
+  ],
+  "run_ms": [
+    2497.37841199385,
+    2576.5239659813233,
+    2577.8759450186044,
+    2520.6289750058204,
+    2582.277763984166
+  ],
+  "counts": [
+    946400853,
+    946400853,
+    946400853,
+    946400853,
+    946400853,
+    946400853
+  ],
+  "expected_count": 946400853,
+  "answer_count": 946400853,
+  "count_exact": true,
+  "peak_vram_mib": 5278,
+  "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+  "chosen_plans": [
+    {
+      "rule": "KnowsLoad",
+      "var_order": [
+        "x",
+        "y"
+      ],
+      "clause_order": [
+        0
+      ],
+      "join_vars": [],
+      "body": [
+        "Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+      ]
+    },
+    {
+      "rule": "TriangleJoin",
+      "var_order": [
+        "a",
+        "b",
+        "c"
+      ],
+      "clause_order": [
+        0,
+        1,
+        2
+      ],
+      "join_vars": [
+        "a",
+        "b",
+        "c"
+      ],
+      "body": [
+        "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+      ]
+    }
+  ],
+  "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesdefault_DB_E844",
+  "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesdefault_DB_E844/libTrianglesdefault_DB_E844.so",
+  "warmup_ms": 2578.650683979504,
+  "warmup_load_s": 2.2184999029850587,
+  "warmup_prepare_ms": 318.43278399901465,
+  "median_ms": 2576.5239659813233,
+  "min_ms": 2497.37841199385,
+  "returncode": 0,
+  "command": [
+    "/home/stargazermiao/workspace/srdatalog-python/.venv/bin/python3",
+    "-u",
+    "/data/mini_linq-gpu/features/gpu/compare/srdatalog_triangles.py",
+    "--dataset",
+    "livejournal",
+    "--order",
+    "default",
+    "--srdatalog",
+    "/home/stargazermiao/workspace/srdatalog-python",
+    "--data-root",
+    "/tmp/triangles-reference-data",
+    "--jobs",
+    "8",
+    "--child-result",
+    "/data/mini_linq-gpu/features/gpu/compare/triangles_livejournal_default.json",
+    "--expected-count",
+    "946400853"
+  ],
+  "console_log": "triangles_livejournal_default.log"
+}
