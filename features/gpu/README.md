@@ -203,6 +203,122 @@ from the device dependency graph rather than silently patched, and the original
 diagnostic is retained in `compare/rccl-ptx-collision.txt`. Consequently the
 results measure the fused execution design, **not RCCL sort/scan performance**.
 
+## Allocation and build optimization measurements (2026-10-18)
+
+Measured on the same RTX 6000 Ada / sm_89 machine with the pinned toolchain.
+`rccl-memory` built unchanged against the pin; no RCCL or cuda-oxide source
+was modified. All four stages were applied and measured in order. At every
+stage, SF1 and SF10, both plans, the warmup and all five measured iterations
+reported `exact=true` (7,242 and 72,983 distinct triples respectively).
+The final implementation is `bf34e9f`; the staged commits and complete samples
+are retained in `compare/gpu_h05.results.json` under `optimization_history`.
+
+### Before / after
+
+Build time is the median unprofiled CUDA-event interval, including host-caused
+idle time. Kernel sum is the median **build-only** sum from a separate nsys
+capture, including filtering but excluding query and dedup kernels. It is not
+the existing `kernel_ms` field, which measures the fused query alone.
+All arrows compare the fresh original-build baseline to the final code.
+
+| SF | Plan | Build ms | Build kernel sum ms | cuMemAlloc / cuMemFree per iteration | DtoH timed / whole iteration | Scan-pipeline DRAM MB |
+|---:|:---:|---:|---:|---:|---:|---:|
+| 1 | A | 3.044064 → 1.426496 | 0.242370 → 0.287329 | 60/60 → 0/0 | 12/17 → 2/7 | 50.440 → 26.416 |
+| 1 | B | 4.937056 → 2.199872 | 1.088487 → 0.674179 | 77/77 → 0/0 | 15/20 → 2/7 | 51.687 → 3.084 |
+| 10 | A | 13.001888 → 4.884064 | 3.683762 → 3.567031 | 63/63 → 0/0 | 12/17 → 2/7 | 864.474 → 460.751 |
+| 10 | B | 22.511841 → 9.477088 | 12.061921 → 7.181522 | 80/80 → 0/0 | 15/20 → 2/7 | 876.934 → 29.904 |
+
+Allocation/free counts include iteration-local verification and teardown, but
+exclude process startup/shutdown. The final **timed** counts are also 0/0 for
+every measured run. The final whole-process SF10 `both` trace has 15 allocations
+and 15 frees: fourteen input uploads plus one pre-warmup pool reservation, not
+timed rebuilding. The original process had eighteen persistent allocations;
+its fresh SF10 A iteration count is 63, rather than the earlier reported 66.
+The scope here explicitly excludes startup allocations; whole-process totals
+must not be presented as timed per-run counts.
+
+Build DtoH calls decrease from **10 (A) / 13 (B) to one**, independent of scale.
+One additional timed readback obtains the query output count. The five other
+DtoH transfers validate dedup metadata, the hash table and three materialized
+columns **after** the final event: seven whole-iteration readbacks, not seven
+build synchronizations. The final SF10 `both` trace has 84 DtoH calls for twelve
+iterations. These counts come from nsys CUDA API records, not source estimates.
+
+Scan traffic is ncu `dram__bytes.sum`, summed over the first complete build
+iteration under kernel replay, in decimal MB. Before includes `scan_blocks`
+and `add_prefix`; after additionally includes the necessary `word_offsets`
+local-bin/directory pass, rather than hiding that traffic. Histogram and sorted
+adjacency passes are not part of this scan metric. Exact byte counts are in
+the JSON. On this SF10 dataset, sparse order keys span approximately **60 M
+positions** despite having 15 M order rows; the dense u32 array is approximately
+240 MB, not a 15 M-position array.
+
+### Measurement after each change
+
+| SF | Plan | Original build ms | 1: pool | 2: device sizes | 3: word scan | 4: sorted path |
+|---:|:---:|---:|---:|---:|---:|---:|
+| 1 | A | 3.044064 | 1.409280 | 1.291168 | 1.193888 | 1.426496 |
+| 1 | B | 4.937056 | 2.595488 | 2.342464 | 2.247040 | 2.199872 |
+| 10 | A | 13.001888 | 5.557216 | 5.486016 | 4.233536 | 4.884064 |
+| 10 | B | 22.511841 | 14.608064 | 13.343232 | 12.388096 | 9.477088 |
+
+The sortedness check is not free: it regresses Plan A relative to step 3
+because filtered orders are not ordered. It improves SF10 B by bypassing the
+lineitem histogram/scatter/provenance sort. This is measured behavior, not an
+assumption that all dbgen-derived columns remain sorted after compaction.
+
+Before enabling the sorted path, step 3 alone reduced SF10 scan-pipeline
+traffic from 864,474,496 to 466,995,072 bytes (A), and from 876,934,144 to
+473,732,224 bytes (B). Of those after totals, the global word scans moved only
+15,568,128 / 15,977,472 bytes; the remainder is the fused local-offset pass.
+Thus the reduction does not depend on sorted input.
+
+| SF | Plan | Logical allocations per run | Peak live requested bytes |
+|---:|:---:|---:|---:|
+| 1 | A | 57 | 270,048,720 |
+| 1 | B | 73 | 439,924,608 |
+| 10 | A | 59 | 2,699,859,640 |
+| 10 | B | 75 | 4,397,928,900 |
+
+These `StatisticsMemoryResource` counters include iteration-local exactness
+copies; peaks include persistent outputs but exclude uploaded inputs. The
+fixed pools reserve 926,003,712 bytes at SF1 and 8,721,138,688 bytes at SF10.
+Logical suballocation is still performed; **CUDA allocation/free is absent
+from the timed region**. No allocator-growth fallback is allowed.
+
+### Profiling and correctness evidence
+
+Run unprofiled timings separately from profiling:
+
+```sh
+./target/release/gpu-h05 /data/tpch-gpu/sf10 both /tmp/h05-timings.json
+nsys profile -o /tmp/h05 --force-overwrite true \
+  ./target/release/gpu-h05 /data/tpch-gpu/sf10 both /tmp/h05-nsys.json
+nsys stats --report cuda_api_sum,cuda_gpu_kern_sum /tmp/h05.nsys-rep
+nsys export --type sqlite --force-overwrite true -o /tmp/h05.sqlite /tmp/h05.nsys-rep
+ncu --kernel-name 'regex:word_offsets|scan_blocks|add_prefix' --launch-count 48 \
+  --metrics dram__bytes.sum --csv --log-file /tmp/h05-ncu.csv \
+  ./target/release/gpu-h05 /data/tpch-gpu/sf10 A /tmp/h05-ncu.json
+```
+
+Repeat for SF1 and Plan B. For the original scan, omit `word_offsets` from the
+kernel regex. Use CPU launch timestamps/correlation IDs to identify iterations
+at `filter_orders`, the build end at `plan_a`/`plan_b`, and the final timing
+event after `dedup_insert`; do not confuse pool free-range events with timing
+events. The ncu first-iteration scan launch counts are 22/30 (SF1 A/B) and
+28/36 (SF10 A/B) before, and 21/28 and 25/32 after. Extra sampled iterations
+are excluded. Captures are `/tmp/gpu-h05-before-*`, `/tmp/gpu-h05-after-*` and
+the intermediate `pool`, `device-sizes`, `word-scan` variants on this host.
+Persisted JSON includes the capture paths and metric scopes.
+
+Executed final checks: pinned release build of all h05 binaries; blocked-run
+oracle (40 data cases plus invalid-input checks); dedup oracle (12 cases);
+all SF1/SF10 A/B iterations, including under nsys/ncu. New-kernel coverage
+includes device-count tails and zero active rows, invalid counts/domains,
+word and recursive prefix boundaries, sorted duplicates and provenance,
+and single inversions at warp/block/large-domain boundaries. No
+compute-sanitizer result is claimed.
+
 ## Historical original measurements (2026-10-16)
 
 GPU: NVIDIA RTX 6000 Ada Generation, sm_89, driver 580.178.04, 49140 MiB
