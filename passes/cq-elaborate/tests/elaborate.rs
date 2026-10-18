@@ -36,6 +36,7 @@ fn coarse(source: &cq::Program) -> valuation::Program {
             }
             cq::BodyItem::Filter(filter) => quote!(#filter;),
             cq::BodyItem::Let(binding) => quote!(#binding;),
+            cq::BodyItem::For(binding) => quote!(#binding;),
             cq::BodyItem::Equality(equality) => quote!(#equality;),
             cq::BodyItem::Constraint(c) => quote!(#c;),
             _ => unreachable!("normal form"),
@@ -1207,4 +1208,36 @@ fn dimension_subtrees_build_before_their_parent_without_cartesian_children() {
             );
         }
     }
+}
+
+#[test]
+fn generator_elaboration_round_trips_and_certifies_set_valued_binding() {
+    let source = coarse(&cq(quote! {
+        struct Q; relation R(a: i32); relation answer(b: i32);
+        answer(b) :- R(a), for b in 0..a, let c = b;
+    }));
+    let target = compile(&source).unwrap();
+    cq_elaborate::compile_written(&source).unwrap();
+    assert_eq!(
+        syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
+        target
+    );
+    let generator = target
+        .plan
+        .definitions
+        .iter()
+        .position(|d| matches!(&d.operator, ra::Operator::Bind(b) if b.for_token.is_some()))
+        .unwrap();
+    let mut changed = target.clone();
+    let ra::Operator::Bind(binding) = &mut changed.plan.definitions[generator].operator else {
+        unreachable!()
+    };
+    binding.for_token = None;
+    assert!(check(&source, &changed).is_err());
+    let mut changed = target.clone();
+    let ra::Operator::Bind(binding) = &mut changed.plan.definitions[generator].operator else {
+        unreachable!()
+    };
+    binding.expression = syn::parse_quote!(0..100);
+    assert!(check(&source, &changed).is_err());
 }

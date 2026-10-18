@@ -26,8 +26,10 @@
 //!   positive variable-only atoms, relational integer constraints, and total
 //!   integer comparison guards. VO additionally assumes distinct variables within
 //!   each base atom; repeated positions must be desugared before using that oracle.
-//!   Literals/wildcards/expressions in atom arguments, computed bindings, negation,
-//!   aggregation, arbitrary Rust, and extension clauses are outside this fragment.
+//!   Literals/wildcards/expressions in atom arguments, computed bindings, Rust
+//!   generators (`for`), negation, aggregation, arbitrary Rust, and extension
+//!   clauses are outside this fragment. Generators use compiled Rust references,
+//!   including iterator-advancement panics; no interpreter evaluates arbitrary Rust.
 //!   Unsupported expressions or malformed inputs may panic. Constraint parameters,
 //!   when interpreting individual constraints, belong in the external binding map.
 //! * `databases` supplies deterministic binary-domain tables by seed. Its empty
@@ -49,16 +51,17 @@
 //! * `fuzz` generates bounded abstract queries/data deterministically by seed
 //!   using SplitMix64. Its MiniLinq and SQL printers consume that model separately;
 //!   neither printer parses the other or invokes compilation. `Coverage` counts
-//!   cases carrying each feature, once per feature per observation. Total queries
-//!   have independently printable SQL. Partial Rust terms require executable
-//!   written-order refinement; their SQL text is an explanatory comment.
+//!   cases carrying each feature, once per feature per observation. Total scalar
+//!   queries have independently printable SQL. Partial Rust terms and all finite
+//!   generators require executable written-order refinement; their SQL text is
+//!   an explanatory comment, even when a generator's expression is total.
 //! * The optional std-only `golden` feature enables strict, byte-for-byte canonical
 //!   CSV comparison and Git fixture inventory. Golden encoding requires sorted,
 //!   distinct rows of the declared width; it rejects CRLF, leading zeros, and
 //!   missing final newlines. Git inventory needs the Git CLI.
 //! * The optional `duckdb` feature also enables `golden` and adds an in-memory
 //!   integer SQL oracle. SQL must select the desired set and ordering explicitly.
-//!   `evaluate_fuzz` rejects partial terms and checks DISTINCT. Default and
+//!   `evaluate_fuzz` rejects partial terms and generators and checks DISTINCT. Default and
 //!   `golden`-only builds do not build or link DuckDB. The bundled native engine
 //!   can make the first `duckdb` feature build substantially slower.
 //!

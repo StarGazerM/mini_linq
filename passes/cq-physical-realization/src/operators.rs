@@ -201,6 +201,7 @@ impl<'a> Printer<'a> {
         Ok(quote!(::core::iter::Iterator::flat_map(#outer,move |#pattern| { #rows })))
     }
     /// The rows of one physical operator, in the result's heading order.
+    /// Formal rule P-For: Fan out generator Bind through its finite iterator, retaining prefix values.
     pub(super) fn produce(
         &mut self,
         name: &str,
@@ -330,21 +331,53 @@ impl<'a> Printer<'a> {
                     self.rust_aliases(&input_name, &bind.expression, bind.environment.as_ref());
                 let binding = &bind.pattern;
                 let annotation = &bind.annotation;
-                let value = &bind.expression;
+                let value = self
+                    .generator_expressions
+                    .get(name)
+                    .unwrap_or(&bind.expression);
+                // Fan out each prefix through its finite iterator,
+                // moving generated values and retaining the prefix for subsequent items.
+                let generator = bind.for_token.is_some();
                 let row = self.carrier(name, |column| {
                     if self.heading(&input_name).contains(&column.to_owned()) {
-                        self.access(&input_name, column)
+                        let value = self.access(&input_name, column);
+                        if generator && self.infos[&input_name].computed.contains(column) {
+                            quote!(::core::clone::Clone::clone(&#value))
+                        } else {
+                            value
+                        }
                     } else {
                         self.access(name, column)
                     }
                 });
-                let result = quote! {
-                    ::core::iter::Iterator::map(#input, move |#pattern| {
-                        // A dead output still evaluates its potentially partial Rust expression.
-                        #[allow(unused_variables)]
-                        let #binding #annotation = { #(#shadows)* #value };
-                        #row
-                    })
+                let result = if generator {
+                    let item = format_ident!(
+                        "__cq_generated_item",
+                        span = proc_macro2::Span::mixed_site()
+                    );
+                    // Prepared captures are shared references, including when
+                    // this adapter is nested inside a fused arm's move closure.
+                    quote! {
+                        ::core::iter::Iterator::flat_map(#input, move |#pattern| {
+                            ::core::iter::Iterator::map(
+                                ::core::iter::IntoIterator::into_iter({ #(#shadows)* #value }),
+                                move |#item| {
+                                    #[allow(unused_variables)]
+                                    let #binding #annotation = #item;
+                                    #row
+                                }
+                            )
+                        })
+                    }
+                } else {
+                    quote! {
+                        ::core::iter::Iterator::map(#input, move |#pattern| {
+                            // A dead output still evaluates its potentially partial Rust expression.
+                            #[allow(unused_variables)]
+                            let #binding #annotation = { #(#shadows)* #value };
+                            #row
+                        })
+                    }
                 };
                 self.idents.insert(input_name, previous);
                 Ok(result)

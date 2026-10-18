@@ -300,6 +300,7 @@ impl Body<'_, '_> {
         &mut self,
         guard: Option<&cq_syntax::Filter>,
         binding: Option<&cq_syntax::Let>,
+        generator: Option<&cq_syntax::For>,
     ) -> ra::Environment {
         let clause = self
             .body
@@ -310,6 +311,7 @@ impl Body<'_, '_> {
                     && match item {
                         cq::BodyItem::Filter(value) => guard == Some(value),
                         cq::BodyItem::Let(value) => binding == Some(&**value),
+                        cq::BodyItem::For(value) => generator == Some(&**value),
                         _ => false,
                     }
             })
@@ -364,13 +366,20 @@ impl Body<'_, '_> {
                 }
                 vo::Step::Guard(g, _) => {
                     let input = self.seed();
-                    let environment = self.environment(Some(g), None);
+                    let environment = self.environment(Some(g), None, None);
                     self.prefix = Some(self.schedule.guard_in(input, g, Some(&environment)));
                 }
                 vo::Step::Let(b, _) => {
                     let input = self.seed();
-                    let environment = self.environment(None, Some(b));
+                    let environment = self.environment(None, Some(b), None);
                     self.prefix = Some(self.schedule.bind_in(input, b, Some(&environment)));
+                    self.heading
+                        .extend(cq::rust::bindings(&b.pattern).iter().map(symbol_name));
+                }
+                vo::Step::For(b, _) => {
+                    let input = self.seed();
+                    let environment = self.environment(None, None, Some(b));
+                    self.prefix = Some(self.schedule.for_in(input, b, Some(&environment)));
                     self.heading
                         .extend(cq::rust::bindings(&b.pattern).iter().map(symbol_name));
                 }

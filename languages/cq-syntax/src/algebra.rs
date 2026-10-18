@@ -474,11 +474,14 @@ pub struct Select {
 /// Opaque partial Rust computation at its position in the ancestry chain.
 /// Its meaning is a function of free variables to a value or whole-query abort.
 /// I/O, mutation and evaluation counts are outside this meaning.
+/// With `for`, unnest a finite pure iterator instead of binding one scalar.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Bind {
     pub bind_token: kw::bind,
     pub input: Ident,
     pub with_token: kw::with,
+    #[syn(optional, peek = Token![for])]
+    pub for_token: Option<Token![for]>,
     #[parse(syn::Pat::parse_single)]
     pub pattern: syn::Pat,
     #[syn(optional, peek = Token![:])]
@@ -684,7 +687,9 @@ pub fn disjoint_unions<'a>(
             }
             LiteralStep::Bind(bind) => {
                 let mut values = of(&bind.input);
-                if let syn::Pat::Ident(pattern) = &bind.pattern {
+                if let syn::Pat::Ident(pattern) = &bind.pattern
+                    && bind.for_token.is_none()
+                {
                     if let Some(value) = literal_value(&bind.expression) {
                         values.insert(crate::symbol_name(&pattern.ident), value);
                     }

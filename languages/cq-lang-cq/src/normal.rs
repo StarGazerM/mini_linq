@@ -32,7 +32,7 @@ pub fn check(module: &Program) -> syn::Result<()> {
             }
             BodyItem::Equality(equality) => equality.check()?,
             BodyItem::Constraint(constraint) => constraint.check()?,
-            BodyItem::Filter(_) | BodyItem::Let(_) | BodyItem::Block(_) => {}
+            BodyItem::Filter(_) | BodyItem::Let(_) | BodyItem::For(_) | BodyItem::Block(_) => {}
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
@@ -186,6 +186,10 @@ fn normalize_body(
                 bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
                 body.push(item.clone());
             }
+            BodyItem::For(binding) => {
+                bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
+                body.push(item.clone());
+            }
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 return Err(syn::Error::new_spanned(
                     item,
@@ -253,6 +257,9 @@ fn check_leibniz_types(module: &Program) -> syn::Result<()> {
                 required.extend(constraint.variables().map(symbol_name))
             }
             BodyItem::Let(binding) => {
+                let_bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+            }
+            BodyItem::For(binding) => {
                 let_bound.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
             _ => {}

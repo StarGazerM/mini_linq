@@ -915,3 +915,59 @@ fn reducer_column_matches_do_not_replace_a_before_generator_equality() {
             .contains("source-before")
     );
 }
+
+#[test]
+fn generator_bind_round_trip_freshness_and_structural_mode() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        u = unit;
+        g = bind u with for x = ([1, 1, 2]);
+        output g as answer(x);
+    } };
+    let facts = ra::contract::check(&source).unwrap();
+    assert!(facts["g"].computed.contains("x"));
+    assert_eq!(
+        syn::parse2::<ra::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    let mut scalar = source.clone();
+    let ra::Operator::Bind(bind) = &mut scalar.plan.definitions[1].operator else {
+        panic!()
+    };
+    bind.for_token = None;
+    ra::contract::check(&scalar).unwrap();
+    assert!(ra::check_rewrite(&source, &scalar).is_err());
+    for replacement in [
+        "bind u with for x = ([*x])",
+        "bind absent with for x = ([1])",
+    ] {
+        let mut invalid = source.clone();
+        invalid.plan.definitions[1].operator = syn::parse_str(replacement).unwrap();
+        assert!(ra::contract::check(&invalid).is_err());
+    }
+    let duplicate: ra::Program = syn::parse_quote! { relational {
+        u = unit;
+        a = bind u with x = (1);
+        g = bind a with for x = ([1]);
+        output g as answer(x);
+    } };
+    assert!(ra::contract::check(&duplicate).is_err());
+}
+
+#[test]
+fn generator_before_facts_are_structural() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32);
+        r = rename R@0 {a -> x};
+        s = select r if (x = 1);
+        g = bind s with for y = ([*x]);
+        output g as answer(x,y);
+    } };
+    let moved: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32);
+        r = rename R@0 {a -> x};
+        g = bind r with for y = ([*x]);
+        s = select g if (x = 1);
+        output s as answer(x,y);
+    } };
+    assert!(ra::check_rewrite(&source, &moved).is_err());
+}

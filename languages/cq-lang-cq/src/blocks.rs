@@ -178,6 +178,11 @@ pub fn bound(body: &CommaList<BodyItem>) -> BTreeMap<String, Ident> {
                     .into_iter()
                     .map(|id| (symbol_name(&id), id)),
             ),
+            BodyItem::For(binding) => names.extend(
+                rust::bindings(&binding.pattern)
+                    .into_iter()
+                    .map(|id| (symbol_name(&id), id)),
+            ),
             BodyItem::Block(block) => {
                 names.extend(block.analyze(&names.keys().cloned().collect()).interface)
             }
@@ -198,6 +203,9 @@ pub fn bound_before(
         match item {
             BodyItem::Positive { atom } => names.extend(atom.variables().map(symbol_name)),
             BodyItem::Let(binding) => {
+                names.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+            }
+            BodyItem::For(binding) => {
                 names.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
             BodyItem::Block(block) => names.extend(block.analyze(&names).interface.into_keys()),
@@ -242,6 +250,9 @@ pub(crate) fn split_guards(body: &mut CommaList<BodyItem>, logical: &BTreeSet<St
             }
             BodyItem::Positive { atom } => prefix.extend(atom.variables().map(symbol_name)),
             BodyItem::Let(binding) => {
+                prefix.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
+            }
+            BodyItem::For(binding) => {
                 prefix.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
             BodyItem::Filter(filter) => {
@@ -297,6 +308,13 @@ pub fn types(
             }
             BodyItem::Let(binding) => result.extend(
                 binding
+                    .binding_types()
+                    .into_iter()
+                    .map(|(id, ty)| (symbol_name(&id), ty)),
+            ),
+            BodyItem::For(binding) => result.extend(
+                binding
+                    .binding()
                     .binding_types()
                     .into_iter()
                     .map(|(id, ty)| (symbol_name(&id), ty)),

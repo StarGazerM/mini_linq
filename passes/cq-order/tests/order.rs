@@ -66,6 +66,7 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
             .unwrap()
     };
     let (mut guards, mut lets, mut equalities, mut constraints) = (0, 0, 0, 0);
+    let mut generators = 0;
     plan.valuation
         .steps
         .iter()
@@ -88,6 +89,10 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
             valuation::Step::Let(..) => {
                 lets += 1;
                 nth(lets - 1, |item| matches!(item, BodyItem::Let(_)))
+            }
+            valuation::Step::For(..) => {
+                generators += 1;
+                nth(generators - 1, |item| matches!(item, BodyItem::For(_)))
             }
             valuation::Step::Block(b, _) => b.source.clause(),
             valuation::Step::Reduce(..) => unreachable!("order emits no reductions"),
@@ -958,4 +963,37 @@ fn filtered_dimension_branch_precedes_a_weaker_fact_neighbor() {
         })
         .collect();
     assert!(atom_order.iter().position(|r| r == "S") < atom_order.iter().position(|r| r == "O"));
+}
+
+#[test]
+fn generator_planners_preserve_chain_dependencies_and_before() {
+    let source = normal(quote! {
+        struct Q; relation R(a: i32); relation S(b: i32); relation answer(b: i32);
+        answer(b) :- R(a), for b in 0..a, S(b), if { b > 0 };
+    });
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::Filtered,
+        Heuristic::Prefix(Ranking::Connected),
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            let planned = plan(&source, heuristic, split);
+            assert_eq!(
+                syn::parse2::<valuation::Program>(planned.to_token_stream()).unwrap(),
+                planned
+            );
+            let generator = planned
+                .valuation
+                .steps
+                .iter()
+                .position(|s| matches!(s, valuation::Step::For(..)))
+                .unwrap();
+            assert!(generator > 0);
+            let mut changed = planned.clone();
+            changed.valuation.steps.swap(0, generator);
+            assert!(cq_order::check(&source, &changed, &Options { heuristic, split }).is_err());
+        }
+    }
 }

@@ -405,3 +405,58 @@ fn rewrites_preserve_source_name_schemas_rules_output_and_observer() {
         );
     }
 }
+
+#[test]
+fn generators_round_trip_and_survive_schedule_correspondence() {
+    let source: Program = syn::parse_quote! {
+        struct Generated;
+        relation Seed(x:i32) = (seeds);
+        relation Reach(x:i32);
+        output Reach;
+        Reach(y) :- Seed(x), for (y, _) in [(*x, ())];
+        Reach(y) :- Reach(x), if *x < 3, for y in [*x + 1, *x + 1];
+    };
+    let stratified: Program = syn::parse2(quote! {
+        #source
+        strata { component [Reach]; }
+    })
+    .unwrap();
+    let scheduled: Program = syn::parse2(quote! {
+        #stratified
+        seminaive {
+            insert_new hash_set_all_columns;
+            negation_keys hash_set_borrowed;
+            delta Reach = Recent;
+            layout Seed [0] key 0;
+            variant 0 seed { Reach(y) :- Seed(x), for (y, _) in [(*x, ())]; }
+            variant 1 delta 0 {
+                Reach(y) :- Recent(x), if *x < 3, for y in [*x + 1, *x + 1];
+            }
+        }
+    })
+    .unwrap();
+    for program in [&source, &stratified, &scheduled] {
+        contract::check(program).unwrap();
+        let reparsed: Program = syn::parse2(program.to_token_stream()).unwrap();
+        assert_eq!(*program, reparsed);
+    }
+    check_rewrite(&source, &stratified).unwrap();
+    check_rewrite(&stratified, &scheduled).unwrap();
+    let mut changed = scheduled.clone();
+    changed.variants.as_mut().unwrap()[1].query.body[2] = syn::parse_quote!(for y in [*x + 2]);
+    assert!(check_rewrite(&scheduled, &changed).is_err());
+}
+
+#[test]
+fn generated_bindings_follow_let_negation_scope_restrictions() {
+    let program: Program = syn::parse_quote! {
+        struct GeneratedKey;
+        relation D(x:i32) = (domain);
+        relation R(x:i32) = (blocked);
+        relation Out(x:i32);
+        output Out;
+        Out(y) :- D(x), for y in [*x], !R(y);
+    };
+    let error = contract::check(&program).unwrap_err().to_string();
+    assert!(error.contains("bound by a positive atom"), "{error}");
+}

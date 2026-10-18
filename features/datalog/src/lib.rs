@@ -51,9 +51,17 @@
 //! `Path(*x, *z, *length + 1)` with a preceding `if *length < 10` guard).
 //! A `String` head constant is written `"java.lang.String".to_owned()`, while
 //! an `&'static str` column can return a literal directly.
+//! Bodies also accept `for pattern in expression`, using an irrefutable Rust
+//! pattern and a pure finite `IntoIterator`, for example
+//! `Reach(next) :- Reach(x), if *x < 4, for next in [*x + 1, *x + 1];`.
+//! Generated bindings are available to later clauses and heads, as with `let`;
+//! duplicates collapse at Boolean insertion. Generator clauses preserve the
+//! written opaque Rust clause order. A panic while constructing or advancing
+//! an iterator produces no denoted result.
 //! Termination is the caller's responsibility: copying positive-atom columns
 //! preserves a finite domain, but computed recursive values can grow without
-//! bound. Evaluation runs until no new tuples are admitted; a divergent run
+//! bound even when every individual generator is finite. Evaluation runs until
+//! no new tuples are admitted; a divergent run
 //! does not produce a denoted result. Rust expressions must be total and pure
 //! for the least-fixpoint interpretation to apply.
 //! Rust keywords used as logical names must be renamed (`type_`, `super_`,

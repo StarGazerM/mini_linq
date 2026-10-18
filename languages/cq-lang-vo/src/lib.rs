@@ -78,6 +78,7 @@ pub enum Step {
     Constraint(cq::Constraint, Token![;]),
     Guard(cq_syntax::Filter, Token![;]),
     Let(Box<cq_syntax::Let>, Token![;]),
+    For(Box<cq_syntax::For>, Token![;]),
     Reduce(Reduce, Token![;]),
     Atom(Subatom, Token![;]),
 }
@@ -90,6 +91,8 @@ impl syn::parse::Parse for Step {
             Self::Guard(input.parse()?, input.parse()?)
         } else if input.peek(Token![let]) {
             Self::Let(input.parse()?, input.parse()?)
+        } else if input.peek(Token![for]) {
+            Self::For(input.parse()?, input.parse()?)
         } else if input.peek(kw::reduce) {
             Self::Reduce(input.parse()?, input.parse()?)
         } else if input.peek(Ident) && input.peek2(Token![@]) {
@@ -290,7 +293,7 @@ fn analyze_steps(
             cq::BodyItem::Constraint(c) => {
                 constraints.insert(clause, c);
             }
-            cq::BodyItem::Filter(_) | cq::BodyItem::Let(_) => {
+            cq::BodyItem::Filter(_) | cq::BodyItem::Let(_) | cq::BodyItem::For(_) => {
                 let step = item.rust_step().expect("Rust step");
                 dependencies.insert(clause, step.free_variables.dependencies(&written_bound));
                 written_bound.extend(step.bindings.iter().map(symbol_name));
@@ -536,19 +539,20 @@ fn analyze_steps(
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
-            Step::Guard(_, _) | Step::Let(_, _) => {
+            Step::Guard(_, _) | Step::Let(_, _) | Step::For(_, _) => {
                 let Some(&clause) = rust_chain.get(next_rust) else {
                     return error(step, "more Rust steps than the query has");
                 };
                 let identical = match (step, &body[clause]) {
                     (Step::Guard(a, _), cq::BodyItem::Filter(b)) => a == b,
                     (Step::Let(a, _), cq::BodyItem::Let(b)) => a == b,
+                    (Step::For(a, _), cq::BodyItem::For(b)) => a == b,
                     _ => false,
                 };
                 if !identical {
                     return error(
                         step,
-                        "Rust lets and guards must keep their written relative order (chain)",
+                        "Rust lets, generators and guards must keep their written relative order (chain)",
                     );
                 }
                 if let Some(missing) = dependencies[&clause].iter().find(|v| !bound.contains(*v)) {

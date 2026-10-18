@@ -164,6 +164,11 @@ impl Analysis {
                         .iter()
                         .map(symbol_name),
                 ),
+                BodyItem::For(binding) => prefix.extend(
+                    super::rust::bindings(&binding.pattern)
+                        .iter()
+                        .map(symbol_name),
+                ),
                 _ => (),
             }
         }

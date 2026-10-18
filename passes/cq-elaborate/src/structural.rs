@@ -190,6 +190,10 @@ pub(super) fn check(
                 let input = prefix.unwrap_or_else(|| schedule.unit());
                 prefix = Some(schedule.bind(input, binding));
             }
+            vo::Step::For(binding, _) => {
+                let input = prefix.unwrap_or_else(|| schedule.unit());
+                prefix = Some(schedule.for_bind(input, binding));
+            }
         }
         heading.extend(introduces.iter().cloned());
     }

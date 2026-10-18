@@ -327,7 +327,8 @@ fn canonical(
             },
             Op::Semijoin(j) => unique.get(&symbol_name(&j.left)).cloned(),
             Op::Select(s) => unique.get(&symbol_name(&s.input)).cloned(),
-            Op::Bind(b) => unique.get(&symbol_name(&b.input)).cloned(),
+            Op::Bind(b) if b.for_token.is_none() => unique.get(&symbol_name(&b.input)).cloned(),
+            Op::Bind(_) => None,
             Op::Guard(g) => unique.get(&symbol_name(&g.input)).cloned(),
             Op::Project(p) => unique
                 .get(&symbol_name(&p.input))

@@ -94,6 +94,7 @@ fn check_steps(
                         Step::Constraint(_, _) => "relational constraint".into(),
                         Step::Guard(_, _) => "guard clause".into(),
                         Step::Let(_, _) => "binding clause".into(),
+                        Step::For(_, _) => "generator clause".into(),
                         Step::Reduce(r, _) => format!("reduction of clause #{}", r.clause()),
                     })
                     .unwrap_or_default()

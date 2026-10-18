@@ -70,6 +70,15 @@ fn inspect(body: &cq::CommaList<BodyItem>, mut bound: std::collections::BTreeSet
                         .map(cq::symbol_name),
                 );
             }
+            BodyItem::For(generator) => {
+                report("for iterator", &generator.expression);
+                println!("for outputs: {:?}", cq::rust::bindings(&generator.pattern));
+                bound.extend(
+                    cq::rust::bindings(&generator.pattern)
+                        .iter()
+                        .map(cq::symbol_name),
+                );
+            }
             BodyItem::Negation(negation) => {
                 for expression in &negation.atom.args {
                     report("negated atom", expression);

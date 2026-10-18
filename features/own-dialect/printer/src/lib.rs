@@ -409,18 +409,38 @@ impl Push<'_> {
                 let expression = &bind.expression;
                 let input = symbol_name(&bind.input);
                 let shadows = self.rust_aliases(&input, expression, bind.environment.as_ref());
+                let expression = self.generator_expressions.get(result).unwrap_or(expression);
                 self.emit(
                     &input,
                     {
                         let row = self.carrier(result, |column| {
                             if self.heading(&input).iter().any(|c| c == column) {
-                                self.access(&input, column)
+                                let value = self.access(&input, column);
+                                if bind.for_token.is_some()
+                                    && self.infos[&input].computed.contains(column)
+                                {
+                                    quote!(::core::clone::Clone::clone(&#value))
+                                } else {
+                                    value
+                                }
                             } else {
                                 self.infos[result].bindings[column].to_token_stream()
                             }
                         });
                         let output = self.bind_columns(result, self.carried(result), false);
-                        quote! { let #pattern #annotation = { #(#shadows)* #expression }; let #output = #row; #sink }
+                        if bind.for_token.is_some() {
+                            let item = temporary("generated", result);
+                            quote! {
+                                for #item in { #(#shadows)* #expression } {
+                                    #[allow(unused_variables)]
+                                    let #pattern #annotation = #item;
+                                    let #output = #row;
+                                    #sink
+                                }
+                            }
+                        } else {
+                            quote! { let #pattern #annotation = { #(#shadows)* #expression }; let #output = #row; #sink }
+                        }
                     },
                 )
             }

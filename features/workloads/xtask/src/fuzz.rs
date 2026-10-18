@@ -1,5 +1,6 @@
-//! Total queries use independently printed DuckDB SQL. Opaque partial terms
-//! use a second compiled query in written order with reordering disabled.
+//! Total scalar queries use independently printed DuckDB SQL. Opaque partial
+//! terms and all Rust generators use a second compiled query in written order
+//! with reordering disabled, including panics during iterator advancement.
 //! The denotation is `bottom + Set`: a target must return the same set without
 //! panic whenever the written reference succeeds; a reference panic permits
 //! either outcome. I/O, mutation and evaluation count are outside this meaning.
@@ -404,7 +405,9 @@ pub fn run(arguments: Vec<String>, root: &Path) -> Result<()> {
 
 fn reference(case: &Case) -> Result<Vec<Vec<i32>>> {
     if case.has_partial_terms() {
-        return Err("partial terms require the compiled written-order reference".into());
+        return Err(
+            "partial terms and generators require the compiled written-order reference".into(),
+        );
     }
     cq_testkit::duckdb::evaluate_fuzz(case).map_err(crate::testkit_error)
 }
@@ -806,6 +809,53 @@ mod tests {
                 .to_string()
                 .contains("written-order")
         );
+    }
+
+    #[test]
+    fn total_generator_still_uses_compiled_reference_not_duckdb() {
+        let mut case = model::generate(60);
+        assert!(case.query.bindings[0].generator.is_some());
+        case.query.bindings[0].expression = model::Expr::Constant(2);
+        assert!(case.has_partial_terms());
+        assert!(
+            reference(&case)
+                .unwrap_err()
+                .to_string()
+                .contains("generators")
+        );
+        let source = consumer_case(BATCH, &case, Config::written_reference());
+        assert!(source.contains("cq_fuzz_planner::written_reference"));
+        assert!(source.contains("for v3 in"));
+        let query = syn::parse_str(&case.written_cq()).unwrap();
+        let reference = compiler::written(&query).unwrap();
+        assert!(reference.plan.definitions.iter().any(|definition| {
+            matches!(&definition.operator, cq_lang_ra::Operator::Bind(binding)
+                if binding.for_token.is_some())
+        }));
+    }
+
+    #[test]
+    fn written_reference_preserves_scalar_and_nested_generator_markers() {
+        let source = syn::parse_quote! {
+            struct Fuzz;
+            relation R(x: i32);
+            relation S(y: i32);
+            relation answer(x: i32, y: i32, z: i32);
+            answer(x, y, z) :- R(x), let end: i32 = x.to_owned(),
+                for y in 0i32..end.to_owned(), S(y),
+                for z in vec![y.to_owned(), y.to_owned()];
+        };
+        let reference = compiler::written(&source).unwrap();
+        let markers = reference
+            .plan
+            .definitions
+            .iter()
+            .filter_map(|definition| match &definition.operator {
+                cq_lang_ra::Operator::Bind(binding) => Some(binding.for_token.is_some()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(markers, [false, true, true]);
     }
 
     #[test]

@@ -117,6 +117,9 @@ pub fn body(
                 }
                 prefix = result;
             }
+            cq::BodyItem::Let(_) | cq::BodyItem::For(_) => {
+                panic!("computed columns and generators use compiled written-order Rust")
+            }
             _ => panic!("integer oracle excludes computed bindings and extensions"),
         }
     }

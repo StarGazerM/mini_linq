@@ -1,5 +1,5 @@
 //! Schedule `T X = bottom + Set X` comprehensions into valuations.
-//! Rust lets and guards are opaque partial functions and keep written relative
+//! Rust lets, finite set-valued generators and guards are opaque partial functions and keep written relative
 //! order, their free-variable binders, and all their written relational
 //! predecessors. Relational steps alone commute and may move earlier across
 //! the Rust chain. This sufficient refinement condition permits no new panic
@@ -94,12 +94,21 @@ impl Clause<'_> {
 /// Formal rule D-Atom: Atom provides its columns and requires let-supplied columns.
 /// Formal rule D-Guard: Guard requires dependencies on the written prefix.
 /// Formal rule D-Bind: Binding provides pattern names and requires RHS prefix dependencies.
+/// Formal rule D-For: Generator provides pattern names and requires RHS prefix dependencies.
 fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) -> Vec<Clause<'a>> {
     let mut let_bound = BTreeSet::new();
     let mut written = context.clone();
     for item in body {
         match item {
             BodyItem::Let(binding) => {
+                let names = rust::bindings(&binding.pattern)
+                    .iter()
+                    .map(symbol_name)
+                    .collect::<Vec<_>>();
+                let_bound.extend(names.iter().cloned());
+                written.extend(names);
+            }
+            BodyItem::For(binding) => {
                 let names = rust::bindings(&binding.pattern)
                     .iter()
                     .map(symbol_name)
@@ -161,6 +170,13 @@ fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) ->
                     rust::free_variables(&filter.condition).dependencies(&prefix),
                 ),
                 BodyItem::Let(binding) => (
+                    rust::bindings(&binding.pattern)
+                        .iter()
+                        .map(symbol_name)
+                        .collect(),
+                    rust::free_variables(&binding.expression).dependencies(&prefix),
+                ),
+                BodyItem::For(binding) => (
                     rust::bindings(&binding.pattern)
                         .iter()
                         .map(symbol_name)
@@ -395,6 +411,7 @@ fn coarse(clauses: &[Clause<'_>], sequence: &[usize]) -> Vec<valuation::Step> {
             BodyItem::Constraint(c) => valuation::Step::Constraint(c.clone(), Default::default()),
             BodyItem::Filter(filter) => valuation::Step::Guard(filter.clone(), Default::default()),
             BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
+            BodyItem::For(binding) => valuation::Step::For(binding.clone(), Default::default()),
             BodyItem::Negation(_) | BodyItem::Aggregate(_) | BodyItem::Extension { .. } => {
                 unreachable!("normal form")
             }
@@ -450,6 +467,7 @@ impl Fine<'_> {
                     valuation::Step::Guard(filter.clone(), Default::default())
                 }
                 BodyItem::Let(binding) => valuation::Step::Let(binding.clone(), Default::default()),
+                BodyItem::For(binding) => valuation::Step::For(binding.clone(), Default::default()),
                 BodyItem::Block(_) => subatom(
                     clause,
                     self.clauses[clause].atom.as_ref().expect("block heading"),
@@ -842,6 +860,19 @@ fn check_steps(
                     written.push(position);
                     previous_atom = None;
                 }
+                valuation::Step::For(binding, _) => {
+                    let position = body
+                        .iter()
+                        .enumerate()
+                        .find(|(i, item)| {
+                            !written.contains(i)
+                                && matches!(item, BodyItem::For(expected) if expected == binding)
+                        })
+                        .map(|(i, _)| i)
+                        .expect("VO generator correspondence");
+                    written.push(position);
+                    previous_atom = None;
+                }
                 valuation::Step::Reduce(..) => {}
             }
         }
@@ -970,7 +1001,8 @@ fn check_steps(
             valuation::Step::Equality(..)
             | valuation::Step::Constraint(..)
             | valuation::Step::Guard(..)
-            | valuation::Step::Let(..) => {}
+            | valuation::Step::Let(..)
+            | valuation::Step::For(..) => {}
         }
     }
     // The VO variable-coverage check alone is vacuous for nullary atoms.

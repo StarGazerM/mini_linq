@@ -223,9 +223,12 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
     // correspondence check rejects some sound transfer schedules (a backward
     // reduction by a support already reduced by its target, with split
     // projected reads; fuzz seeds 91 and 97: "projection correlations differ").
-    let opaque = steps
-        .iter()
-        .any(|step| matches!(step, vo::Step::Guard(..) | vo::Step::Let(..)));
+    let opaque = steps.iter().any(|step| {
+        matches!(
+            step,
+            vo::Step::Guard(..) | vo::Step::Let(..) | vo::Step::For(..)
+        )
+    });
     let Some(root) = cq_reduce::outer(steps, &graph).filter(|_| !opaque) else {
         return Ok(reduced.clone());
     };
@@ -448,6 +451,14 @@ fn written_steps(
             cq::BodyItem::Let(b) => {
                 bound.extend(cq::rust::bindings(&b.pattern).iter().map(cq::symbol_name));
                 vo::Step::Let(b.clone(), Default::default())
+            }
+            cq::BodyItem::For(generator) => {
+                bound.extend(
+                    cq::rust::bindings(&generator.pattern)
+                        .iter()
+                        .map(cq::symbol_name),
+                );
+                vo::Step::For(generator.clone(), Default::default())
             }
             _ => unreachable!("checked CQ normal form"),
         });

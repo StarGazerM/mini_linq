@@ -4,10 +4,13 @@
 //! `output R, S;` returns owned iterators in the written output order.
 //! Schedule passes record dependency-ordered SCCs and one semi-naive variant
 //! per changing positive position. All stages parse, print and check alone.
-//! Recursive heads accept arbitrary Rust expressions and body `let` bindings.
-//! Copying positive columns preserves a finite domain; value-generating heads
-//! may diverge, so termination is the caller's responsibility. Opaque Rust
-//! clauses retain their written order. Native `!R(x,_)` negation reads completed
+//! Recursive heads accept arbitrary Rust expressions, body `let` bindings, and
+//! `for pattern in expression` generators with irrefutable Rust patterns.
+//! Generators must be pure finite `IntoIterator` values; duplicate generated
+//! facts are collapsed by Boolean insertion. Finiteness of each generator does
+//! not guarantee recursive convergence: as with computed heads, termination is
+//! the caller's responsibility. Opaque Rust clauses retain their written order.
+//! Native `!R(x,_)` negation reads completed
 //! lower strata and requires every named argument to be bound before the clause.
 //! Negative constants (including closed Rust expressions) filter a projected
 //! borrowed key set once per stratum; they cannot depend on rule-local bindings.
@@ -391,6 +394,7 @@ impl Graph {
                     BodyItem::Positive { atom } => Some((atom, false)),
                     BodyItem::Filter(_)
                     | BodyItem::Let(_)
+                    | BodyItem::For(_)
                     | BodyItem::Equality(_)
                     | BodyItem::Constraint(_) => None,
                     BodyItem::Negation(negation) => Some((&negation.atom, true)),

@@ -200,3 +200,41 @@ fn rewrite_preserves_selection_and_rust_payload_without_an_ra_dependency() {
         assert!(physical::check_rewrite(&source, &target).is_err());
     }
 }
+
+#[test]
+fn generator_bind_round_trip_checks_and_key_transfer() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        u = pipe unit;
+        g = pipe bind u with for x = ([1, 1, 2]);
+        return canon g as answer(x);
+    } };
+    let facts = physical::contract::check(&source).unwrap();
+    assert!(facts.rows["g"].computed.contains("x"));
+    assert_eq!(
+        syn::parse2::<physical::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    let op = &source.program.definitions[1].operator;
+    assert!(physical::inherited_key(op, &facts.headings["g"], |_| Some(Vec::new())).is_none());
+    for replacement in [
+        "bind u with for x = ([*x])",
+        "bind absent with for x = ([1])",
+    ] {
+        let mut invalid = source.clone();
+        invalid.program.definitions[1].operator = syn::parse_str(replacement).unwrap();
+        assert!(physical::contract::check(&invalid).is_err());
+    }
+    let mut scalar = source;
+    let physical::Operator::Bind(bind) = &mut scalar.program.definitions[1].operator else {
+        panic!()
+    };
+    bind.for_token = None;
+    assert_eq!(
+        physical::inherited_key(
+            &scalar.program.definitions[1].operator,
+            &["x".into()],
+            |_| Some(Vec::new())
+        ),
+        Some(Vec::new())
+    );
+}

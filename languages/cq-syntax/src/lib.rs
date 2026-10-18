@@ -17,6 +17,9 @@
 //!    a function of the values of its free variables; equal (Leibniz) inputs give
 //!    equal results. Interior mutability, globals and I/O are outside the meaning,
 //!    as already documented (evaluation count is not preserved).
+//! 3. A `for p in e` generator evaluates a finite pure `IntoIterator` at its
+//!    written opaque position. It denotes set-valued unnesting: iterator order
+//!    and duplicate multiplicity are unobservable, and panic aborts the query.
 //!
 //! Any surviving representative of `==`-equal values IS the value. Dedup,
 //! canonical projection, and projecting away variables before an opaque Rust step
@@ -204,6 +207,30 @@ impl syn::parse::Parse for Filter {
             if_token: input.parse()?,
             condition: input.parse()?,
         })
+    }
+}
+
+/// Finite pure `IntoIterator` generation. Iterator order and duplicates are
+/// unobservable; evaluation is an opaque step, like a scalar `let` binding.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct For {
+    pub for_token: Token![for],
+    #[parse(syn::Pat::parse_single)]
+    pub pattern: syn::Pat,
+    pub in_token: Token![in],
+    pub expression: syn::Expr,
+}
+
+impl For {
+    /// Scalar-shaped syntax for binding/scope analysis, not scalar semantics.
+    pub fn binding(&self) -> Let {
+        Let {
+            let_token: Default::default(),
+            pattern: self.pattern.clone(),
+            annotation: None,
+            eq_token: Default::default(),
+            expression: self.expression.clone(),
+        }
     }
 }
 

@@ -91,3 +91,32 @@ fn contract_rejects_late_misaligned_and_foreign_reductions() {
         "R",
     );
 }
+
+#[test]
+fn generators_round_trip_and_retain_chain_and_before() {
+    let source: valuation::Program = syn::parse2(quote! {
+        struct Q; relation R(a: i32); relation answer(b: i32);
+        answer(b) :- R(a), for b in 0..a, let c = b;
+        valuation { R@0(a); for b in 0..a; let c = b; }
+    })
+    .unwrap();
+    valuation::contract::check(&source).unwrap();
+    assert_eq!(
+        syn::parse2::<valuation::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    for index in [0, 2] {
+        let mut changed = source.clone();
+        changed.valuation.steps.swap(1, index);
+        assert!(valuation::contract::check(&changed).is_err());
+    }
+    let mut changed = source.clone();
+    changed.valuation.steps[1] = syn::parse2(quote!(let b = 0..a;)).unwrap();
+    assert!(valuation::contract::check(&changed).is_err());
+    let mut changed = source.clone();
+    changed
+        .valuation
+        .steps
+        .insert(0, syn::parse2(quote!(reduce R@0 with R@1(a);)).unwrap());
+    assert!(valuation::contract::check(&changed).is_err());
+}

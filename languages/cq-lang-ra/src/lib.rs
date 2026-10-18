@@ -147,6 +147,8 @@ pub enum Operator {
     Semijoin(Box<Semijoin>),
     #[parse(peek = kw::select)]
     Select(Box<Select>),
+    /// Formal rule RA-For: Generator binds extend rows with fresh iterator
+    /// bindings and retain the opaque Rust ancestry chain.
     #[parse(peek = kw::bind)]
     Bind(Box<Bind>),
     #[parse(peek = kw::guard)]

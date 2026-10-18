@@ -181,3 +181,35 @@ fn stream_and_const_supply_are_distinct_demand_identities() {
             .contains("duplicate")
     );
 }
+
+#[test]
+fn generator_bind_round_trip_and_checker_mutations() {
+    let source: ix::Program = syn::parse_quote! { relational {
+        u = unit;
+        g = bind u with for x = ([1, 1, 2]);
+        output g as answer(x);
+    } indexes {} };
+    ix::contract::check(&source).unwrap();
+    assert_eq!(
+        syn::parse2::<ix::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    for replacement in [
+        "bind u with for x = ([*x])",
+        "bind absent with for x = ([1])",
+    ] {
+        let mut invalid = source.clone();
+        invalid.ra.plan.definitions[1].operator = syn::parse_str(replacement).unwrap();
+        assert!(ix::contract::check(&invalid).is_err());
+    }
+    let mut scalar = source;
+    let ix::ra::Operator::Bind(bind) = &mut scalar.ra.plan.definitions[1].operator else {
+        panic!()
+    };
+    bind.for_token = None;
+    ix::contract::check(&scalar).unwrap();
+    assert_eq!(
+        syn::parse2::<ix::Program>(scalar.to_token_stream()).unwrap(),
+        scalar
+    );
+}
