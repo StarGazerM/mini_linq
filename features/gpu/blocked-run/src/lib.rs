@@ -188,29 +188,33 @@ impl<'a> Run<'a> {
         unsafe {
             module.sorted_check(stream, &check, &Input(keys), min_key, domain, ptr(&stats))?;
         }
-        let bins = allocate::<u32>(memory, stream, domain)?;
-        let cursors = allocate::<u32>(memory, stream, domain)?;
+        // These scratch ranges are only partially initialized on the sorted
+        // path. Keep uninitialized ownership and expose raw pointers only.
+        let bins = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, domain)?;
+        let cursors = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, domain)?;
+        let bins_ptr = bins.cu_deviceptr() as *mut u32;
+        let cursors_ptr = cursors.cu_deviceptr() as *mut u32;
         let clear = module.prepare_clear_histogram(
             LaunchConfig1D::new(domain.div_ceil(256).clamp(1, 568) as u32, THREADS, 0))?;
         unsafe {
-            module.clear_histogram(stream, &clear, domain, ptr(&stats), ptr(&bins), ptr(&cursors))?;
+            module.clear_histogram(stream, &clear, domain, ptr(&stats), bins_ptr, cursors_ptr)?;
         }
         let bits = DeviceBuffer::zeroed_in(memory, stream, words)?;
         let adjacent = module.prepare_sorted_starts(config(n))?;
         unsafe {
             module.sorted_starts(stream, &adjacent, &Input(keys), min_key, ptr(&stats),
-                ptr(&bins), ptr(&bits))?;
+                bins_ptr, ptr(&bits))?;
         }
         let histogram = module.prepare_histogram(config(n))?;
         unsafe {
             module.histogram(stream, &histogram, &Input(keys), min_key,
-                ptr(&stats), ptr(&bins), ptr(&bits))?;
+                ptr(&stats), bins_ptr, ptr(&bits))?;
         }
         let prefix = allocate::<u32>(memory, stream, words)?;
         let word_rows = allocate::<u32>(memory, stream, words)?;
         let word_offsets = module.prepare_word_offsets(config(words * 32))?;
         unsafe {
-            module.word_offsets(stream, &word_offsets, ptr(&bins), domain, ptr(&stats),
+            module.word_offsets(stream, &word_offsets, bins_ptr, domain, ptr(&stats),
                 &bits, ptr(&prefix), ptr(&word_rows))?;
         }
         let _row_scan = exclusive_scan(&word_rows)?;
@@ -222,32 +226,33 @@ impl<'a> Run<'a> {
             module.complete_stats(stream, &complete, ptr(prefix_scan.last().unwrap()),
                 ptr(&stats), ptr(&offsets))?;
         }
-        let permutation = allocate::<u32>(memory, stream, n)?;
+        let permutation = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, n)?;
+        let permutation_ptr = permutation.cu_deviceptr() as *mut u32;
         let scatter = module.prepare_scatter(config(n))?;
         unsafe {
-            module.scatter(stream, &scatter, &Input(keys), min_key, &bins, &word_rows, ptr(&stats),
-                ptr(&cursors), ptr(&permutation))?;
+            module.scatter(stream, &scatter, &Input(keys), min_key, bins_ptr, &word_rows, ptr(&stats),
+                cursors_ptr, permutation_ptr)?;
         }
         let order = module.prepare_order_bins(config(domain))?;
         unsafe {
-            module.order_bins(stream, &order, &bins, &word_rows, ptr(&stats), min_key, &bits, &prefix,
-                ptr(&permutation), ptr(&offsets), ptr(&unique_keys))?;
+            module.order_bins(stream, &order, bins_ptr, domain, &word_rows, ptr(&stats), min_key, &bits, &prefix,
+                permutation_ptr, ptr(&offsets), ptr(&unique_keys))?;
         }
         let sorted_directory = module.prepare_sorted_directory(config(n))?;
         unsafe {
             module.sorted_directory(stream, &sorted_directory, &Input(keys), min_key, ptr(&stats),
-                &bins, &bits, &prefix, ptr(&offsets), ptr(&unique_keys))?;
+                bins_ptr, &bits, &prefix, ptr(&offsets), ptr(&unique_keys))?;
         }
         let sorted = allocate::<i64>(memory, stream, n)?;
         let gather = module.prepare_gather(config(n))?;
-        unsafe { module.gather(stream, &gather, &Input(keys), &permutation, ptr(&stats), ptr(&sorted))?; }
+        unsafe { module.gather(stream, &gather, &Input(keys), permutation_ptr, ptr(&stats), ptr(&sorted))?; }
         let fences = allocate::<i64>(memory, stream, n.div_ceil(BLOCK_ROWS))?;
         let fence_launch = module.prepare_fences(config(fences.len()))?;
         unsafe { module.fences(stream, &fence_launch, &sorted, ptr(&stats), ptr(&fences))?; }
         let mut clustered = Vec::with_capacity(payloads.len());
         for payload in payloads {
             let output = allocate::<i64>(memory, stream, n)?;
-            unsafe { module.gather(stream, &gather, &Input(*payload), &permutation, ptr(&stats), ptr(&output))?; }
+            unsafe { module.gather(stream, &gather, &Input(*payload), permutation_ptr, ptr(&stats), ptr(&output))?; }
             clustered.push(output);
         }
         Ok(Self {
@@ -406,7 +411,7 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn sorted_directory(
-        keys: &[i64], min_key: i64, stats: *mut RunStats, bins: &[u32],
+        keys: &[i64], min_key: i64, stats: *mut RunStats, bins: *const u32,
         bits: &[u64], prefix: &[u32], offsets: *mut u32, unique: *mut i64,
     ) {
         if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } { return; }
@@ -424,7 +429,7 @@ mod kernels {
                 }
             }
             if i + 1 == rows || keys[i + 1] != keys[i] {
-                maximum = i as u32 + 1 - bins[bin];
+                maximum = i as u32 + 1 - unsafe { bins.add(bin).read() };
             }
         }
         let lane = warp::lane_id();
@@ -547,7 +552,7 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn scatter(
-        keys: &[i64], min_key: i64, bins: &[u32], word_rows: &[u32], stats: *const RunStats,
+        keys: &[i64], min_key: i64, bins: *const u32, word_rows: &[u32], stats: *const RunStats,
         cursors: *mut u32, permutation: *mut u32,
     ) {
         if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
@@ -557,7 +562,7 @@ mod kernels {
             unsafe {
                 let slot = DeviceAtomicU32::from_ptr(cursors.add(bin))
                     .fetch_add(1, AtomicOrdering::Relaxed);
-                permutation.add((word_rows[bin >> 6] + bins[bin] + slot) as usize).write(i as u32);
+                permutation.add((word_rows[bin >> 6] + bins.add(bin).read() + slot) as usize).write(i as u32);
             }
         }
     }
@@ -591,16 +596,16 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn order_bins(
-        bins: &[u32], word_rows: &[u32], stats: *const RunStats, min_key: i64,
+        bins: *const u32, domain: usize, word_rows: &[u32], stats: *const RunStats, min_key: i64,
         bits: &[u64], prefix: &[u32],
         permutation: *mut u32, offsets: *mut u32, unique: *mut i64,
     ) {
         if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
         let bin = thread::index_1d().get();
-        if bin < bins.len() && unsafe { (*stats).invalid } == 0 {
-            let begin = word_rows[bin >> 6] + bins[bin];
-            let end = if bin + 1 < bins.len() {
-                word_rows[(bin + 1) >> 6] + bins[bin + 1]
+        if bin < domain && unsafe { (*stats).invalid } == 0 {
+            let begin = word_rows[bin >> 6] + unsafe { bins.add(bin).read() };
+            let end = if bin + 1 < domain {
+                word_rows[(bin + 1) >> 6] + unsafe { bins.add(bin + 1).read() }
             } else { unsafe { (*stats).rows } };
             if begin != end {
                 let mask = 1u64 << (bin & 63);
@@ -631,11 +636,11 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn gather(input: &[i64], permutation: &[u32], stats: *const RunStats, output: *mut i64) {
+    pub unsafe fn gather(input: &[i64], permutation: *const u32, stats: *const RunStats, output: *mut i64) {
         let i = thread::index_1d().get();
-        if i < permutation.len() {
+        if i < input.len() {
             let value = if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0 {
-                if unsafe { (*stats).sorted } != 0 { input[i] } else { input[permutation[i] as usize] }
+                if unsafe { (*stats).sorted } != 0 { input[i] } else { input[unsafe { permutation.add(i).read() } as usize] }
             } else { 0 };
             unsafe { output.add(i).write(value); }
         }

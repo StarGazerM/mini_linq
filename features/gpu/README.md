@@ -135,6 +135,9 @@ stream-ordered suballocation and return never invoke synchronous device free.
 Only one-time input uploads remain on `cuda_core::DeviceBuffer`. Per-iteration
 allocation counts are logical suballocations, not CUDA allocation calls, and
 peak bytes count live requested bytes rather than reserved pool capacity.
+Partially initialized histogram, cursor and permutation scratch retains
+`DeviceUninitBuffer` ownership; kernels receive raw pointers to only the regions
+they initialize and consume, rather than claiming the entire capacity is valid.
 
 Key-domain bounds are prepared once from manifest-validated input columns.
 Filtered cardinalities, scan totals and run metadata remain on device; run
