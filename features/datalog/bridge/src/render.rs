@@ -14,10 +14,29 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
         let declaration = &relation.declaration;
         let all = &relation.all;
         let delta = &relation.delta_host;
-        let types: Vec<_> = declaration.columns.iter().map(|column| &column.ty).collect();
+        let types: Vec<_> = declaration
+            .columns
+            .iter()
+            .map(|column| &column.ty)
+            .collect();
         if let Some(value) = &declaration.value {
             let expression = &value.expression;
-            bindings.push(quote!(let #all = &(#expression);));
+            // Keep the original host alive, including temporary and grouped hosts.
+            // Rows already supplies Copy tuples of borrowed columns: hash those
+            // tuples once, without cloning values or adding another reference layer.
+            bindings.push(quote!(
+                let #all = &(#expression);
+                let #all = &{
+                    struct Canonical<R>(::cq_storage::HashSet<R>);
+                    impl<R: ::core::marker::Copy> ::cq_storage::rows::Rows for &Canonical<R> {
+                        type Row = R;
+                        fn rows(self) -> impl ::core::iter::Iterator<Item = R> {
+                            self.0.iter().copied()
+                        }
+                    }
+                    Canonical(::cq_storage::rows::Rows::rows(#all).collect())
+                };
+            ));
         } else {
             let seen = &relation.seen;
             bindings.push(quote!(
@@ -26,18 +45,25 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             ));
         }
         if let Some(delta) = delta {
-            bindings.push(quote!(let mut #delta: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();));
+            bindings.push(
+                quote!(let mut #delta: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();),
+            );
         }
     }
-    for layout in &context.layouts {
+    for layout in context.layouts.iter().chain(&context.delta_layouts) {
         let relation = &context.relations[layout.relation];
         let host = &layout.host;
-        let types: Vec<_> = layout.columns.iter().map(|&i| &relation.declaration.columns[i].ty).collect();
+        let types: Vec<_> = layout
+            .columns
+            .iter()
+            .map(|&i| &relation.declaration.columns[i].ty)
+            .collect();
         let (keys, values) = types.split_at(layout.key);
         bindings.push(quote!(
             let mut #host: ::std::collections::HashMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>, ::cq_storage::HashState>
                 = ::core::default::Default::default();
         ));
+        // Delta layouts name IDBs, so both IDB host kinds start empty.
         if relation.declaration.value.is_some() {
             let all = &relation.all;
             let insert = insert_layout(layout, true);
@@ -56,7 +82,9 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             let name = &key.name;
             let invocation = &holes[key.hole];
             match key.representation {
-                KeyRepresentation::HashSetBorrowed => quote!(let #name = &(#invocation).collect::<::cq_storage::HashSet<_>>();),
+                KeyRepresentation::HashSetBorrowed => {
+                    quote!(let #name = &(#invocation).collect::<::cq_storage::HashSet<_>>();)
+                }
             }
         });
         let emit = |rule: &cq_datalog_fork::RuleHole| {
@@ -65,32 +93,70 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
         };
         let seeds: Vec<_> = stratum.seeds.iter().map(emit).collect();
         let steps: Vec<_> = stratum.steps.iter().map(emit).collect();
-        let allocate: Vec<_> = stratum.members.iter().map(|&i| {
-            let relation = &context.relations[i];
-            let next = &relation.next;
-            let types = relation.declaration.columns.iter().map(|column| &column.ty);
-            quote!(let mut #next: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();)
-        }).collect();
-        let publish: Vec<_> = stratum.members.iter().map(|&i| {
-            let relation = &context.relations[i];
-            let all = &relation.all;
-            let next = &relation.next;
-            let delta = relation.delta_host.as_ref().expect("checked IDB delta host");
-            let updates: Vec<_> = context.layouts.iter().filter(|layout| layout.relation == i)
-                .map(|layout| insert_layout(layout, false)).collect();
-            let updates = (!updates.is_empty()).then(|| quote!(for row in &#next { #(#updates)* }));
-            quote!(
-                #updates
-                #all.extend(#next.iter().cloned());
-                #delta = #next;
-            )
-        }).collect();
+        let allocate: Vec<_> = stratum
+            .members
+            .iter()
+            .map(|&i| {
+                let relation = &context.relations[i];
+                let next = &relation.next;
+                let types = relation.declaration.columns.iter().map(|column| &column.ty);
+                quote!(let mut #next: ::std::vec::Vec<(#(#types,)*)> = ::std::vec::Vec::new();)
+            })
+            .collect();
+        let publish: Vec<_> = stratum
+            .members
+            .iter()
+            .map(|&i| {
+                let relation = &context.relations[i];
+                let all = &relation.all;
+                let next = &relation.next;
+                let delta = relation
+                    .delta_host
+                    .as_ref()
+                    .expect("checked IDB delta host");
+                let updates: Vec<_> = context
+                    .layouts
+                    .iter()
+                    .filter(|layout| layout.relation == i)
+                    .map(|layout| insert_layout(layout, false))
+                    .collect();
+                // Keep admitted-row maintenance separate from delta-run builds.
+                let updates =
+                    (!updates.is_empty()).then(|| quote!({ for row in &#next { #(#updates)* } }));
+                let delta_runs = context
+                    .delta_layouts
+                    .iter()
+                    .filter(|layout| layout.relation == i)
+                    .map(|layout| {
+                        let host = &layout.host;
+                        let insert = insert_layout(layout, false);
+                        // Replace even an empty run: another SCC member may
+                        // continue, but must never see this relation's old delta.
+                        quote!({
+                            #host = ::core::default::Default::default();
+                            for row in &#delta { #insert }
+                        })
+                    });
+                quote!(
+                    #updates
+                    #all.extend(#next.iter().cloned());
+                    #delta = #next;
+                    #(#delta_runs)*
+                )
+            })
+            .collect();
         let lengths = stratum.members.iter().map(|&i| {
-            let delta = context.relations[i].delta_host.as_ref().expect("checked IDB delta host");
+            let delta = context.relations[i]
+                .delta_host
+                .as_ref()
+                .expect("checked IDB delta host");
             quote!(#delta.len())
         });
         let nonempty = quote!(0usize #(+ #lengths)*);
-        let observe = context.observer.as_ref().map(|_| quote!((#observer)(#round, #nonempty);));
+        let observe = context
+            .observer
+            .as_ref()
+            .map(|_| quote!((#observer)(#round, #nonempty);));
         // Keep borrowed lower-stratum key sets local: they cannot outlive this
         // component or delay moving the final output relation into its iterator.
         strata.push(quote!({
@@ -104,22 +170,52 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             }
         }));
     }
-    let output = &context.relations[context.output].all;
-    quote!({ #(#bindings)* #bind_observer #(#strata)* #output.into_iter() })
+    let outputs: Vec<_> = context
+        .outputs
+        .iter()
+        .map(|&index| {
+            let relation = &context.relations[index];
+            let output = &relation.all;
+            if relation.declaration.value.is_some() {
+                // Layouts, negative projections, and outputs share the same
+                // canonical borrowed source. Clone only distinct output values.
+                let columns = (0..relation.declaration.arity()).map(|column| {
+                    let column = syn::Index::from(column);
+                    quote!(::core::clone::Clone::clone(row.#column))
+                });
+                quote!(::cq_storage::rows::Rows::rows(#output)
+                .map(|row| (#(#columns,)*))
+                .collect::<::std::vec::Vec<_>>()
+                .into_iter())
+            } else {
+                quote!(#output.into_iter())
+            }
+        })
+        .collect();
+    let result = if outputs.len() == 1 {
+        outputs[0].clone()
+    } else {
+        quote!((#(#outputs,)*))
+    };
+    quote!({ #(#bindings)* #bind_observer #(#strata)* #result })
 }
 
 // Every full layout is immutable while the round's holes run. Only admitted
 // rows reach publication, so no repeated whole-IDB scans or rebuilds occur.
 fn insert_layout(layout: &cq_datalog_fork::Layout, borrowed_columns: bool) -> TokenStream {
     let host = &layout.host;
-    let columns: Vec<_> = layout.columns.iter().map(|&i| {
-        let index = syn::Index::from(i);
-        if borrowed_columns {
-            quote!(::core::clone::Clone::clone(row.#index))
-        } else {
-            quote!(::core::clone::Clone::clone(&row.#index))
-        }
-    }).collect();
+    let columns: Vec<_> = layout
+        .columns
+        .iter()
+        .map(|&i| {
+            let index = syn::Index::from(i);
+            if borrowed_columns {
+                quote!(::core::clone::Clone::clone(row.#index))
+            } else {
+                quote!(::core::clone::Clone::clone(&row.#index))
+            }
+        })
+        .collect();
     let (keys, values) = columns.split_at(layout.key);
     quote!(#host.entry((#(#keys,)*)).or_default().push((#(#values,)*));)
 }
@@ -132,4 +228,3 @@ fn insert_new(seen: &Ident, next: &Ident, invocation: &TokenStream) -> TokenStre
         }
     })
 }
-

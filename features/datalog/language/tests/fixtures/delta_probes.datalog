@@ -1,0 +1,31 @@
+struct DeltaProbes;
+relation E(x:i32,y:i32,z:i32) = (edges);
+relation R(x:i32,y:i32,z:i32);
+output R;
+R(*x,*y,*z) :- E(x,y,z);
+R(*x,*y,*z) :- R(x,y,z);
+R(*x,*y,*x) :- R(x,y,7);
+R(*x,*y,*z) :- E(_,y,_), R(x,y,z);
+R(*x,*y,*z) :- E(_,y,_), if *y != 0, if 10 / *y > 0, R(x,y,z);
+R(*x,*y,*z) :- E(a,b,c), R(x,y,z);
+R(*x,*y,*z) :- E(x,y,_), R(x,y,z);
+R(*x,*x,*x) :- R(x,x,7);
+strata { component [R]; }
+seminaive {
+    insert_new hash_set_all_columns;
+    negation_keys hash_set_borrowed;
+    delta R = Recent;
+    layout E [0,1,2] key 0;
+    delta_layout R [2,0,1] key 1;
+    delta_layout R [1,0,2] key 1;
+    delta_layout R [0,1,2] key 0;
+    delta_layout R [0,1,2] key 2;
+    variant 0 seed { R(*x,*y,*z) :- E(x,y,z); }
+    variant 1 delta 0 { R(*x,*y,*z) :- Recent(x,y,z); }
+    variant 2 delta 0 { R(*x,*y,*x) :- Recent(x,y,7); }
+    variant 3 delta 1 { R(*x,*y,*z) :- E(_,y,_), Recent(x,y,z); }
+    variant 4 delta 3 { R(*x,*y,*z) :- E(_,y,_), if *y != 0, if 10 / *y > 0, Recent(x,y,z); }
+    variant 5 delta 1 { R(*x,*y,*z) :- E(a,b,c), Recent(x,y,z); }
+    variant 6 delta 1 { R(*x,*y,*z) :- E(x,y,_), Recent(x,y,z); }
+    variant 7 delta 0 { R(*x,*x,*x) :- Recent(x,x,7); }
+}

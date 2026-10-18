@@ -348,6 +348,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "datalog-doop"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "ascent",
+ "cq-datalog",
+ "cq-storage",
+ "libc",
+ "mini-linq",
+]
+
+[[package]]
 name = "datalog-oracle"
 version = "0.1.0"
 dependencies = [

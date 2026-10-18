@@ -1,0 +1,19 @@
+[package]
+name = "datalog-doop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "doop"
+path = "src/main.rs"
+
+[dependencies]
+ascent = { version = "0.8", default-features = false }
+ahash = "0.8"
+cq-datalog.workspace = true
+mini-linq.workspace = true
+cq-storage.workspace = true
+libc = "0.2"
