@@ -280,3 +280,25 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
     .unwrap();
     ir::check_rewrite(&source, &row_only).unwrap();
 }
+
+#[test]
+fn sorted_runs_keeps_two_column_payload_keys_hashed() {
+    let physical = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = let rename R@1 {a -> x,b -> y,c -> z};
+        p = pipe canon probe first [x,y] l,r;
+        return p as answer(x,y,z);
+    }};
+    let source = cq_structure_selection::compile(&physical).unwrap();
+    assert!(source.structures.entries.iter().any(|entry| {
+        entry.name == "r"
+            && matches!(&entry.structure, Structure::Built { keyed, .. }
+                if keyed.level_names() == [vec!["x".to_owned(), "y".to_owned()]]
+                    && keyed.ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>))
+    }));
+    let target = cq_rewrite_passes::sorted_runs(&source, quote!()).unwrap();
+    assert_eq!(target, source);
+    ir::check_rewrite(&source, &target).unwrap();
+}
+

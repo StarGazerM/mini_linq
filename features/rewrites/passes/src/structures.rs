@@ -267,7 +267,7 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
 }
 
 /// Formal rule EXT-SortedRuns:
-/// Retype one-level HashIndex payload builds, preserving every observation.
+/// Retype one-level HashIndex payload builds with one borrowed integral key.
 /// Host fallbacks and smallest-intersection candidates retain their providers.
 pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -342,15 +342,13 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                             }
                         })
                 });
-        keyed.ty = if stored.len() == 1
+        if stored.len() == 1
             && !owned
             && matches!(ir::ungroup_type(&analysis.physical.rows[&name].types[stored[0]]),
                 Type::Path(p) if p.path.is_ident("i32") || p.path.is_ident("i64"))
         {
-            syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>)
-        } else {
-            syn::parse_quote!(::cq_storage::SortedRun<_, _>)
-        };
+            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>);
+        }
     }
     ir::check_rewrite(source, &target)?;
     Ok(target)

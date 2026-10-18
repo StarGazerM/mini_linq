@@ -13,10 +13,11 @@
 //! used as smallest-intersection candidates are unchanged. The replacement
 //! requires Ord + Copy keys and Copy items (Leibniz admissibility is a premise);
 //! rustc checks Build, IndexRead and ExactMembership at the existing guards.
-//! A single stored borrowed i32/i64 column records BorrowedI64TupleCodec;
-//! other keys record the default NoDense binary-search directory. Computed
-//! keys on either side are owned and use NoDense. Rank spans exceeding
-//! 1,048,576 bits also fall back to binary search. No default selection changes.
+//! Only a single stored borrowed i32/i64 column is eligible, recording
+//! BorrowedI64TupleCodec for the rank directory. Multi-column, non-integral,
+//! and computed/owned keys remain HashIndex rather than selecting NoDense.
+//! Eligible rank spans exceeding 1,048,576 bits still fall back to binary
+//! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
 //!
 //! ```rust
