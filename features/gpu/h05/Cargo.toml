@@ -11,6 +11,7 @@ gpu-tiles = { path = "../tiles" }
 gpu-blocked-run = { path = "../blocked-run" }
 serde.workspace = true
 serde_json.workspace = true
+rccl-memory = { path = "/data/rccl/rccl-memory" }
 
 [[bin]]
 name = "blocked-run-oracle"

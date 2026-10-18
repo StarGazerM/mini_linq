@@ -3,9 +3,10 @@
 This standalone workspace implements the de-risk experiment in
 `../../doc/GPU-DESIGN.md`. It does not change MiniLinq's compiler pipeline.
 All kernels are Rust compiled by cuda-oxide. The approved de-risk workaround
-uses dense counting-sort builds and exact atomic-CAS dedup instead of RCCL,
-whose merged PTX hit the compiler bug documented below. No CUDA C, NVRTC,
-OptiX or CPU join is in the measured path.
+uses dense counting-sort builds and exact atomic-CAS dedup instead of RCCL's
+device algorithms, whose merged PTX hit the compiler bug documented below.
+RCCL's host-only `rccl-memory` allocator is used without a device bundle.
+No CUDA C, NVRTC, OptiX or CPU join is in the measured path.
 
 ## Reproduce
 
@@ -89,8 +90,10 @@ from actual `ptxas -v -arch=sm_89` output and saves that output verbatim.
 
 The toolchain is pinned to nightly-2026-08-28 and cuda-oxide commit
 `5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3`. CUDA defaults come from RCCL's
-configuration; no RCCL crate is required by the executable. Device artifacts
-are workspace-local under `target/oxide-ir`. The release profile disables LTO.
+configuration. `rccl-memory` is a path dependency at `/data/rccl/rccl-memory`;
+it uses the same pinned cuda-oxide revision and does not introduce device PTX.
+Device artifacts are workspace-local under `target/oxide-ir`.
+The release profile disables LTO.
 
 The first tile build failed MIR verification when passing the pointer returned
 by `DynamicSharedArray::<u32>::get()` into a helper: the call carried address
@@ -122,6 +125,14 @@ construction scratch is live, after build, and after dedup against a pre-upload
 baseline. It includes persistent inputs/outputs, run data, and sampled build
 scratch. This is sampled device usage, not a hardware allocator high-water mark.
 Tiny nation/region representations are prepared once outside timed rebuilds.
+
+Scratch, run columns and output buffers use one `rccl-memory`
+`PoolMemoryResource<CudaMemoryResource>` wrapped in `StatisticsMemoryResource`.
+The fixed-capacity pool is primed from input cardinalities before warmup;
+stream-ordered suballocation and return never invoke synchronous device free.
+Only one-time input uploads remain on `cuda_core::DeviceBuffer`. Per-iteration
+allocation counts are logical suballocations, not CUDA allocation calls, and
+peak bytes count live requested bytes rather than reserved pool capacity.
 
 ## RCCL compiler bug and approved workaround
 

@@ -4,7 +4,8 @@ mod dedup;
 use data::{Data,Error};
 use kernels::{Dimensions,Output};
 use cuda_core::{CudaContext,CudaStream,DeviceBuffer,LaunchConfig1D};
-use gpu_blocked_run::Run;
+use gpu_blocked_run::{Buffer,MemoryResource,Run};
+use rccl_memory::{ContiguousDeviceRange,CudaMemoryResource,PoolMemoryResource,StatisticsMemoryResource};
 use serde_json::{json,Value};
 use std::{collections::BTreeMap,fs,path::Path};
 fn memory_used()->Result<usize,Error>{
@@ -12,15 +13,50 @@ fn memory_used()->Result<usize,Error>{
     let status=unsafe{cuda_core::sys::cuMemGetInfo_v2(&mut free,&mut total)};
     if status!=0{return Err(format!("cuMemGetInfo: {status}").into());}Ok(total-free)
 }
-fn ptr<T:cuda_core::DeviceCopy>(b:&DeviceBuffer<T>)->*const T{b.cu_deviceptr() as *const T}
-fn mut_ptr<T:cuda_core::DeviceCopy>(b:&mut DeviceBuffer<T>)->*mut T{b.cu_deviceptr() as *mut T}
+fn ptr<T:cuda_core::DeviceCopy>(b:&impl ContiguousDeviceRange<T>)->*const T{b.cu_deviceptr() as *const T}
+fn mut_ptr<T:cuda_core::DeviceCopy>(b:&mut Buffer<'_,T>)->*mut T{b.cu_deviceptr() as *mut T}
 fn median(values:&[f32])->f32{let mut v=values.to_vec();v.sort_by(f32::total_cmp);v[v.len()/2]}
 fn minimum(values:&[f32])->f32{values.iter().copied().fold(f32::INFINITY,f32::min)}
 fn metric(v:&[f32])->Value{json!({"median":median(v),"min":minimum(v)})}
-fn copy_prefix<T:cuda_core::DeviceCopy>(stream:&CudaStream,input:&DeviceBuffer<T>,n:usize)->Result<DeviceBuffer<T>,Error>{
-    let out=DeviceBuffer::<T>::zeroed(stream,n)?;
+fn copy_prefix<'a,T:cuda_core::DeviceCopy>(stream:&'a CudaStream,memory:&'a MemoryResource,input:&Buffer<'_,T>,n:usize)->Result<Buffer<'a,T>,Error>{
+    let out=Buffer::<T>::zeroed_in(memory,stream,n)?;
     if n>0 {unsafe{cuda_core::memory::memcpy_dtod_async(out.cu_deviceptr(),input.cu_deviceptr(),n*std::mem::size_of::<T>(),stream.cu_stream())?;}}
     Ok(out)
+}
+// Reserve the sum of every allocation in the larger plan, rather than just
+// simultaneous live bytes. Each request includes the pool's 256-byte rounding;
+// this also covers fragmentation until all iteration-local buffers are dropped.
+// Column lengths were checked against manifest row counts by Data::load.
+fn padded_bytes(rows:usize,width:usize)->u128{(rows as u128*width as u128).div_ceil(256)*256}
+fn run_pool_bytes(keys:&[i64])->Result<u128,Error>{
+    if keys.is_empty(){return Ok(256);}
+    let min=*keys.iter().min().unwrap();let max=*keys.iter().max().unwrap();
+    let span=max as i128-min as i128+1;
+    if span>gpu_blocked_run::MAX_DOMAIN_KEYS as i128{return Err("dense rank domain exceeds 2^32 key positions".into());}
+    let domain=usize::try_from(span)?;let rows=keys.len();let words=domain.div_ceil(64);let unique=rows.min(domain);
+    // Extrema, bins, bitmap/prefix, maximum, CSR, unique keys, permutation,
+    // cursors, sorted keys, fences and one clustered payload.
+    let mut bytes=[(2,8),(domain,4),(words,8),(words,4),(1,4),
+        (unique+1,4),(unique,8),(rows,4),(domain,4),(rows,8),
+        (rows.div_ceil(gpu_blocked_run::BLOCK_ROWS),8),(rows,8)]
+        .into_iter().map(|(n,w)|padded_bytes(n,w)).sum::<u128>();
+    for mut length in [domain,words] {
+        loop {length=length.div_ceil(256);bytes+=padded_bytes(length,4);if length==1{break;}}
+    }
+    Ok(bytes)
+}
+fn pool_bytes(data:&Data)->Result<usize,Error>{
+    let lines=data.col("lineitem.l_orderkey").len();let orders=data.col("orders.o_orderkey").len();
+    let capacity=lines.max(1).checked_mul(4).and_then(usize::checked_next_power_of_two).ok_or("dedup capacity overflow")?;
+    // Three persistent outputs plus three exactness-readback copies; two
+    // filter columns plus their compacted copies; counters and dedup metadata.
+    let bytes=6*padded_bytes(lines,8)+4*padded_bytes(orders,8)
+        +padded_bytes(4,4)+padded_bytes(1,4)+padded_bytes(2,4)+padded_bytes(capacity,8)
+        +run_pool_bytes(data.col("customer.c_custkey"))?
+        +run_pool_bytes(data.col("supplier.s_suppkey"))?
+        +run_pool_bytes(data.col("orders.o_orderkey"))?.max(run_pool_bytes(data.col("orders.o_custkey"))?)
+        +run_pool_bytes(data.col("lineitem.l_orderkey"))?;
+    Ok(usize::try_from(bytes)?)
 }
 fn main()->Result<(),Error>{
     let args=std::env::args().skip(1).collect::<Vec<_>>();
@@ -44,11 +80,15 @@ fn main()->Result<(),Error>{
     let mut asia_regions=0u64;
     for (&r,&name) in data.col("region.r_regionkey").iter().zip(data.col("region.r_name")){if r<0 || r>=64{return Err("region bitmap domain unsupported".into());}if name==data.asia{asia_regions|=1u64<<r;}}
     let line_count=data.col("lineitem.l_orderkey").len();
+    let pool_size=pool_bytes(&data)?;
+    // Equal initial/maximum sizes forbid upstream CUDA allocations in warmup
+    // and timed iterations. Only input uploads remain cuda_core-owned.
+    let memory:MemoryResource=StatisticsMemoryResource::new(PoolMemoryResource::new(CudaMemoryResource::new(ctx.clone()),pool_size,pool_size)?);
     // Each lineitem has one PK/FK join path, so this is a strict output bound.
-    let mut output_orders=DeviceBuffer::<i64>::zeroed(&stream,line_count)?;
-    let mut output_suppliers=DeviceBuffer::<i64>::zeroed(&stream,line_count)?;
-    let mut output_nations=DeviceBuffer::<i64>::zeroed(&stream,line_count)?;
-    let mut counters=DeviceBuffer::<u32>::zeroed(&stream,4)?;
+    let mut output_orders=Buffer::<i64>::zeroed_in(&memory,&stream,line_count)?;
+    let mut output_suppliers=Buffer::<i64>::zeroed_in(&memory,&stream,line_count)?;
+    let mut output_nations=Buffer::<i64>::zeroed_in(&memory,&stream,line_count)?;
+    let mut counters=Buffer::<u32>::zeroed_in(&memory,&stream,4)?;
     let output=Output{orders:mut_ptr(&mut output_orders),suppliers:mut_ptr(&mut output_suppliers),nations:mut_ptr(&mut output_nations),counters:mut_ptr(&mut counters)};
     let timing=Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT);
     let mut results=vec![];
@@ -57,23 +97,26 @@ fn main()->Result<(),Error>{
     for which in ["A","B"] {
         if plan!="both" && plan!=which{continue;}
         let mut build_samples=vec![];let mut kernel_samples=vec![];let mut dedup_samples=vec![];let mut total_samples=vec![];
+        let mut allocation_samples=vec![];let mut peak_bytes_samples=vec![];
         let mut peak_mem=memory_used()?;let mut max_fanout=[0u32;2];let mut answer_count=0;
         for iteration in 0..6 {
             stream.synchronize()?;
+            let persistent_bytes=memory.push_counters().bytes.value;
+            let (b,k,u,total)={
             let start=stream.record_event(timing)?;
             let order_count=data.col("orders.o_orderkey").len();
-            let mut filter_keys=DeviceBuffer::<i64>::zeroed(&stream,order_count)?;
-            let mut filter_customers=DeviceBuffer::<i64>::zeroed(&stream,order_count)?;
-            let mut selected=DeviceBuffer::<u32>::zeroed(&stream,1)?;
+            let mut filter_keys=Buffer::<i64>::zeroed_in(&memory,&stream,order_count)?;
+            let mut filter_customers=Buffer::<i64>::zeroed_in(&memory,&stream,order_count)?;
+            let mut selected=Buffer::<u32>::zeroed_in(&memory,&stream,1)?;
             let filter_launch=module.prepare_filter_orders(LaunchConfig1D::new(order_count.div_ceil(256).max(1) as u32,256,64))?;
             module.filter_orders(&stream,&filter_launch,dcol("orders.o_orderkey"),dcol("orders.o_custkey"),dcol("orders.o_orderdate"),data.start,data.end,mut_ptr(&mut filter_keys),mut_ptr(&mut filter_customers),mut_ptr(&mut selected))?;
-            let count=selected.to_host_vec(&stream)?[0] as usize;
-            let filtered_keys=copy_prefix(&stream,&filter_keys,count)?;
-            let filtered_customers=copy_prefix(&stream,&filter_customers,count)?;
-            let customers=Run::build(&ctx,&stream,dcol("customer.c_custkey"),&[dcol("customer.c_nationkey")])?;
-            let suppliers=Run::build(&ctx,&stream,dcol("supplier.s_suppkey"),&[dcol("supplier.s_nationkey")])?;
-            let orders=if which=="A" {Run::build(&ctx,&stream,&filtered_keys,&[&filtered_customers])?}else{Run::build(&ctx,&stream,&filtered_customers,&[&filtered_keys])?};
-            let lines=if which=="B" {Some(Run::build(&ctx,&stream,dcol("lineitem.l_orderkey"),&[dcol("lineitem.l_suppkey")])?)}else{None};
+            let count=selected.to_host_vec()?[0] as usize;
+            let filtered_keys=copy_prefix(&stream,&memory,&filter_keys,count)?;
+            let filtered_customers=copy_prefix(&stream,&memory,&filter_customers,count)?;
+            let customers=Run::build(&ctx,&stream,&memory,dcol("customer.c_custkey"),&[dcol("customer.c_nationkey") as &dyn ContiguousDeviceRange<i64>])?;
+            let suppliers=Run::build(&ctx,&stream,&memory,dcol("supplier.s_suppkey"),&[dcol("supplier.s_nationkey") as &dyn ContiguousDeviceRange<i64>])?;
+            let orders=if which=="A" {Run::build(&ctx,&stream,&memory,&filtered_keys,&[&filtered_customers as &dyn ContiguousDeviceRange<i64>])?}else{Run::build(&ctx,&stream,&memory,&filtered_customers,&[&filtered_keys as &dyn ContiguousDeviceRange<i64>])?};
+            let lines=if which=="B" {Some(Run::build(&ctx,&stream,&memory,dcol("lineitem.l_orderkey"),&[dcol("lineitem.l_suppkey") as &dyn ContiguousDeviceRange<i64>])?)}else{None};
             peak_mem=peak_mem.max(memory_used()?);
             peak_mem=peak_mem.max(customers.build_peak_mem_used).max(suppliers.build_peak_mem_used).max(orders.build_peak_mem_used);
             if let Some(lines)=&lines {peak_mem=peak_mem.max(lines.build_peak_mem_used);}
@@ -87,28 +130,33 @@ fn main()->Result<(),Error>{
                 module.plan_b(&stream,&launch_b,&customers.keys,&customers.payloads[0],dims,orders.view(),ptr(&orders.payloads[0]),lines.view(),ptr(&lines.keys),ptr(&lines.payloads[0]),output)?;
             }
             let executed=stream.record_event(timing)?;
-            let counts=counters.to_host_vec(&stream)?;let emitted=counts[0] as usize;
+            let counts=counters.to_host_vec()?;let emitted=counts[0] as usize;
             if emitted>line_count{return Err("output capacity invariant violated".into());}
             max_fanout[0]=max_fanout[0].max(counts[2]);max_fanout[1]=max_fanout[1].max(counts[3]);
             let capacity=emitted.max(1).checked_mul(4).and_then(usize::checked_next_power_of_two).ok_or("dedup capacity overflow")?;
-            let (unique,unique_count)=dedup::dedup(&ctx,&stream,&output_orders,&output_suppliers,&output_nations,emitted,capacity)?;
+            let (unique,unique_count)=dedup::dedup(&ctx,&stream,&memory,&output_orders,&output_suppliers,&output_nations,emitted,capacity)?;
             peak_mem=peak_mem.max(memory_used()?);
             let finished=stream.record_event(timing)?;finished.synchronize()?;
             let b=start.elapsed_ms(&built)?;let k=built.elapsed_ms(&executed)?;let u=executed.elapsed_ms(&finished)?;let total=start.elapsed_ms(&finished)?;
-            answer_count=unique_count.to_host_vec(&stream)?[0] as usize;
-            let answer=unique.to_host_vec(&stream)?;
+            answer_count=unique_count.to_host_vec()?[0] as usize;
+            let answer=unique.to_host_vec()?;
             let mut actual=answer.into_iter().filter(|&v|v!=0).map(dedup::decode).collect::<Vec<_>>();
             actual.sort_unstable();
             if actual.len()!=answer_count{return Err("hash table/count disagreement".into());}
             if actual!=data.answer {return Err(format!("Plan {which} exact mismatch: {} vs {} rows; first {:?} / {:?}",actual.len(),data.answer.len(),actual.iter().zip(&data.answer).find(|(a,b)|a!=b),data.answer.first()).into());}
             // Also check the materialized nation column, not only packed keys.
-            let eo=copy_prefix(&stream,&output_orders,emitted)?.to_host_vec(&stream)?;
-            let es=copy_prefix(&stream,&output_suppliers,emitted)?.to_host_vec(&stream)?;
-            let en=copy_prefix(&stream,&output_nations,emitted)?.to_host_vec(&stream)?;
+            let eo=copy_prefix(&stream,&memory,&output_orders,emitted)?.to_host_vec()?;
+            let es=copy_prefix(&stream,&memory,&output_suppliers,emitted)?.to_host_vec()?;
+            let en=copy_prefix(&stream,&memory,&output_nations,emitted)?.to_host_vec()?;
             let mut triples=eo.into_iter().zip(es).zip(en).map(|((o,s),n)|(o,s,n)).collect::<Vec<_>>();triples.sort_unstable();triples.dedup();
             if triples!=data.answer{return Err("materialized nation mismatch".into());}
-            println!("sf={} plan={} iteration={} build_ms={b:.6} kernel_ms={k:.6} dedup_ms={u:.6} total_ms={total:.6} answer_count={answer_count} exact=true",data.sf,which,iteration);
-            if iteration>0 {build_samples.push(b);kernel_samples.push(k);dedup_samples.push(u);total_samples.push(total);}
+            (b,k,u,total)
+            }; // Drop every iteration-local buffer before closing its counters.
+            let allocations=memory.pop_counters()?;
+            let allocation_count=allocations.allocations.total;
+            let peak_bytes=persistent_bytes+allocations.bytes.peak;
+            println!("sf={} plan={} iteration={} build_ms={b:.6} kernel_ms={k:.6} dedup_ms={u:.6} total_ms={total:.6} answer_count={answer_count} exact=true allocation_count={allocation_count} peak_bytes={peak_bytes}",data.sf,which,iteration);
+            if iteration>0 {build_samples.push(b);kernel_samples.push(k);dedup_samples.push(u);total_samples.push(total);allocation_samples.push(allocation_count);peak_bytes_samples.push(peak_bytes);}
         }
         let scan_gbps=if which=="A" {Some(line_count as f64*16.0/(median(&kernel_samples) as f64*1e6))}else{None};
         results.push(json!({
@@ -118,6 +166,7 @@ fn main()->Result<(),Error>{
             "regs":null,"spills":null,"smem":if which=="A"{9216}else{33808},
             "peak_mem_mib":peak_mem.saturating_sub(baseline_mem) as f64/1048576.0,
             "peak_mem_scope":"cuMemGetInfo sampled with build scratch live, after build and dedup",
+            "pool_bytes":pool_size,"allocation_scope":"iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
             "scan_gbps":scan_gbps,"bandwidth_model_gbps":960,
             "max_expansion_rows":max_fanout,
             "max_m_over_t":max_fanout.iter().max().copied().unwrap_or(0) as f64/1024.0,
@@ -127,7 +176,8 @@ fn main()->Result<(),Error>{
             "dedup_algorithm":"exact packed-triple u64 CAS set",
             "warmups":1,"runs":5,
             "samples":{"build_ms":build_samples,"kernel_ms":kernel_samples,
-                       "dedup_ms":dedup_samples,"total_ms":total_samples}
+                       "dedup_ms":dedup_samples,"total_ms":total_samples,
+                       "allocation_count":allocation_samples,"peak_bytes":peak_bytes_samples}
         }));
     }
     let path=Path::new(result_path);if let Some(parent)=path.parent(){fs::create_dir_all(parent)?;}

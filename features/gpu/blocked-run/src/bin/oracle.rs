@@ -5,7 +5,8 @@
 //! answers; the production builder never downloads keys or sorts on CPU.
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D};
-use gpu_blocked_run::{Run, RunStats, RankView, BLOCK_ROWS};
+use gpu_blocked_run::{MemoryResource, Run, RunStats, RankView, BLOCK_ROWS};
+use rccl_memory::{ContiguousDeviceRange, CudaMemoryResource, PoolMemoryResource};
 use std::error::Error;
 
 #[cuda_device::cuda_module]
@@ -52,17 +53,20 @@ fn check(
     let device_payloads: Vec<DeviceBuffer<i64>> = payloads.iter()
         .map(|column| DeviceBuffer::from_host(stream, column))
         .collect::<Result<_, _>>()?;
-    let refs: Vec<_> = device_payloads.iter().collect();
-    let run = Run::build(ctx, stream, &device_keys, &refs)?;
+    let refs: Vec<&dyn ContiguousDeviceRange<i64>> = device_payloads.iter()
+        .map(|p| p as &dyn ContiguousDeviceRange<i64>).collect();
+    let memory = MemoryResource::new(PoolMemoryResource::new(
+        CudaMemoryResource::new(stream.context().clone()), 32 << 20, 0)?);
+    let run = Run::build(ctx, stream, &memory, &device_keys, &refs)?;
 
     let mut order: Vec<usize> = (0..input.len()).collect();
     order.sort_by_key(|&row| input[row]);
     let sorted: Vec<i64> = order.iter().map(|&row| input[row]).collect();
-    assert_eq!(run.keys.to_host_vec(stream)?, sorted, "{name}: sorted keys");
+    assert_eq!(run.keys.to_host_vec()?, sorted, "{name}: sorted keys");
     assert_eq!(run.payloads.len(), payload_columns, "{name}: payload count");
     for (column, payload) in payloads.iter().enumerate() {
         let expected: Vec<_> = order.iter().map(|&row| payload[row]).collect();
-        assert_eq!(run.payloads[column].to_host_vec(stream)?, expected,
+        assert_eq!(run.payloads[column].to_host_vec()?, expected,
             "{name}: payload column {column} / stable duplicate ordering");
         assert_eq!(device_payloads[column].to_host_vec(stream)?, *payload,
             "{name}: input payload unchanged");
@@ -82,10 +86,10 @@ fn check(
     assert_eq!(run.stats, RunStats {
         rows: sorted.len() as u32, unique: unique.len() as u32, max_count,
     }, "{name}: stats");
-    assert_eq!(run.offsets.to_host_vec(stream)?, offsets, "{name}: CSR offsets and sentinel");
-    assert_eq!(run.unique_keys.to_host_vec(stream)?, unique, "{name}: unique keys");
+    assert_eq!(run.offsets.to_host_vec()?, offsets, "{name}: CSR offsets and sentinel");
+    assert_eq!(run.unique_keys.to_host_vec()?, unique, "{name}: unique keys");
     let fences: Vec<i64> = sorted.chunks(BLOCK_ROWS).map(|block| block[0]).collect();
-    assert_eq!(run.fences.to_host_vec(stream)?, fences, "{name}: every 2048-row fence");
+    assert_eq!(run.fences.to_host_vec()?, fences, "{name}: every 2048-row fence");
 
     let mut queries = vec![i64::MIN, i64::MAX, -1, 0, 1];
     if let (Some(&min), Some(&max)) = (sorted.first(), sorted.last()) {
@@ -102,8 +106,8 @@ fn check(
             count += word.count_ones();
             previous
         }).collect();
-        assert_eq!(run.bits.to_host_vec(stream)?, bits, "{name}: bitmap");
-        assert_eq!(run.prefix.to_host_vec(stream)?, prefix, "{name}: popcount prefix");
+        assert_eq!(run.bits.to_host_vec()?, bits, "{name}: bitmap");
+        assert_eq!(run.prefix.to_host_vec()?, prefix, "{name}: popcount prefix");
         // Exhaust the complete dense domain, including missing positions at
         // every 64-bit word boundary and holes within the first/last word.
         queries.extend((0..span).map(|position| (min as i128 + position as i128) as i64));
@@ -111,8 +115,8 @@ fn check(
         if let Some(key) = max.checked_add(1) { queries.push(key); }
     } else {
         assert!(run.min_key > run.max_key, "{name}: empty domain");
-        assert!(run.bits.to_host_vec(stream)?.is_empty(), "{name}: empty bitmap");
-        assert!(run.prefix.to_host_vec(stream)?.is_empty(), "{name}: empty prefix");
+        assert!(run.bits.to_host_vec()?.is_empty(), "{name}: empty bitmap");
+        assert!(run.prefix.to_host_vec()?.is_empty(), "{name}: empty prefix");
     }
     queries.sort_unstable();
     queries.dedup();
@@ -155,6 +159,8 @@ fn random_keys(n: usize, mut state: u64) -> Vec<i64> {
 fn main() -> Result<(), Box<dyn Error>> {
     let ctx = CudaContext::new(0)?;
     let stream = ctx.default_stream();
+    let memory = MemoryResource::new(PoolMemoryResource::new(
+        CudaMemoryResource::new(ctx.clone()), 32 << 20, 0)?);
     check(&ctx, &stream, "empty", Vec::new(), 0)?;
     check(&ctx, &stream, "empty-payload-columns", Vec::new(), 3)?;
     check(&ctx, &stream, "singleton-negative", vec![-17], 2)?;
@@ -186,12 +192,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let keys = DeviceBuffer::from_host(&stream, &[1i64, 2])?;
     let short = DeviceBuffer::from_host(&stream, &[9i64])?;
-    assert!(Run::build(&ctx, &stream, &keys, &[&short]).is_err(), "reject mismatched payload rows");
+    assert!(Run::build(&ctx, &stream, &memory, &keys, &[&short]).is_err(), "reject mismatched payload rows");
     let empty = DeviceBuffer::<i64>::zeroed(&stream, 0)?;
-    assert!(Run::build(&ctx, &stream, &empty, &[&short]).is_err(), "validate empty payload rows");
+    assert!(Run::build(&ctx, &stream, &memory, &empty, &[&short]).is_err(), "validate empty payload rows");
     for input in [[i64::MIN, i64::MAX], [0, 1i64 << 32]] {
         let wide = DeviceBuffer::from_host(&stream, &input)?;
-        assert!(Run::build(&ctx, &stream, &wide, &[]).is_err(), "reject oversized dense domain");
+        assert!(Run::build(&ctx, &stream, &memory, &wide, &[]).is_err(), "reject oversized dense domain");
     }
     println!("blocked-run oracle: all cases passed");
     Ok(())

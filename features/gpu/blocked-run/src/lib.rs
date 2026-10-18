@@ -16,8 +16,21 @@
 //! keys), and row counts must fit in u32. Sparse wider domains are rejected,
 //! not silently converted to a different lookup representation.
 
-use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
+use cuda_core::{CudaContext, CudaStream, DeviceCopy, LaunchConfig1D};
+use rccl_memory::{ContiguousDeviceRange, CudaMemoryResource, DeviceBuffer, DeviceUninitBuffer,
+    PoolMemoryResource, StatisticsMemoryResource};
 use std::{error::Error, io};
+
+pub type MemoryResource = StatisticsMemoryResource<PoolMemoryResource<CudaMemoryResource>>;
+pub type Buffer<'a, T> = DeviceBuffer<'a, T, &'a MemoryResource>;
+
+struct Input<'a>(&'a dyn ContiguousDeviceRange<i64>);
+// SAFETY: the borrowed range retains ownership and supplies its initialized extent.
+unsafe impl cuda_host::KernelSliceArg for Input<'_> {
+    type Elem = i64;
+    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr { self.0.cu_deviceptr() }
+    fn len(&self) -> usize { self.0.len() }
+}
 
 pub const BLOCK_ROWS: usize = 2048;
 pub const MAX_DOMAIN_KEYS: u64 = 1u64 << 32;
@@ -36,14 +49,14 @@ pub struct RunStats {
 
 /// Owning, immutable-after-build columns. Do not mutate directory buffers while
 /// a `RankView` is in use, or retain a view after dropping/replacing its buffers.
-pub struct Run {
-    pub keys: DeviceBuffer<i64>,
-    pub payloads: Vec<DeviceBuffer<i64>>,
-    pub offsets: DeviceBuffer<u32>,
-    pub unique_keys: DeviceBuffer<i64>,
-    pub fences: DeviceBuffer<i64>,
-    pub bits: DeviceBuffer<u64>,
-    pub prefix: DeviceBuffer<u32>,
+pub struct Run<'a> {
+    pub keys: Buffer<'a, i64>,
+    pub payloads: Vec<Buffer<'a, i64>>,
+    pub offsets: Buffer<'a, u32>,
+    pub unique_keys: Buffer<'a, i64>,
+    pub fences: Buffer<'a, i64>,
+    pub bits: Buffer<'a, u64>,
+    pub prefix: Buffer<'a, u32>,
     pub min_key: i64,
     pub max_key: i64,
     pub stats: RunStats,
@@ -97,7 +110,7 @@ pub unsafe fn point(view: RankView, key: i64) -> Option<(u32, u32)> {
     Some((begin, end))
 }
 
-impl Run {
+impl<'a> Run<'a> {
     /// Count signed i64 keys into a dense domain, scan bin offsets, restore
     /// stable source-row order per bin, and build CSR, fences and dense rank.
     ///
@@ -106,9 +119,10 @@ impl Run {
     /// key length and context. Equal keys preserve their input row order.
     pub fn build(
         ctx: &CudaContext,
-        stream: &CudaStream,
-        keys: &DeviceBuffer<i64>,
-        payloads: &[&DeviceBuffer<i64>],
+        stream: &'a CudaStream,
+        memory: &'a MemoryResource,
+        keys: &dyn ContiguousDeviceRange<i64>,
+        payloads: &[&dyn ContiguousDeviceRange<i64>],
     ) -> BuildResult<Self> {
         if ctx != stream.context().as_ref() || ctx != keys.context().as_ref() {
             return Err(invalid("context, stream and keys must share a CUDA context"));
@@ -123,18 +137,20 @@ impl Run {
                 return Err(invalid("payload and keys must share a CUDA context"));
             }
         }
+        keys.ensure_usable_on(stream)?;
+        for payload in payloads { payload.ensure_usable_on(stream)?; }
         ctx.bind_to_thread()?;
         if rows == 0 {
             let mut run = Self {
-                keys: DeviceBuffer::zeroed(stream, 0)?,
+                keys: DeviceBuffer::zeroed_in(memory, stream, 0)?,
                 payloads: payloads.iter()
-                    .map(|_| DeviceBuffer::zeroed(stream, 0))
+                    .map(|_| DeviceBuffer::zeroed_in(memory, stream, 0))
                     .collect::<Result<Vec<_>, _>>()?,
-                offsets: DeviceBuffer::zeroed(stream, 1)?,
-                unique_keys: DeviceBuffer::zeroed(stream, 0)?,
-                fences: DeviceBuffer::zeroed(stream, 0)?,
-                bits: DeviceBuffer::zeroed(stream, 0)?,
-                prefix: DeviceBuffer::zeroed(stream, 0)?,
+                offsets: DeviceBuffer::zeroed_in(memory, stream, 1)?,
+                unique_keys: DeviceBuffer::zeroed_in(memory, stream, 0)?,
+                fences: DeviceBuffer::zeroed_in(memory, stream, 0)?,
+                bits: DeviceBuffer::zeroed_in(memory, stream, 0)?,
+                prefix: DeviceBuffer::zeroed_in(memory, stream, 0)?,
                 min_key: 0,
                 max_key: -1,
                 stats: RunStats::default(),
@@ -151,11 +167,10 @@ impl Run {
         let n = keys.len();
         // Bias signed keys into unsigned order, allowing unsigned atomic
         // extrema without signed overflow at either end of the i64 range.
-        let extrema = DeviceBuffer::from_host(stream, &[u64::MAX, 0u64])?;
+        let extrema = DeviceBuffer::from_host_in(memory, stream, &[u64::MAX, 0u64])?;
         let reduce = module.prepare_extrema(config(n))?;
-        unsafe { module.extrema(stream, &reduce, keys, ptr(&extrema))?; }
-        let mut host_extrema = [0u64; 2];
-        extrema.copy_to_host(stream, &mut host_extrema)?;
+        unsafe { module.extrema(stream, &reduce, &Input(keys), ptr(&extrema))?; }
+        let host_extrema = extrema.to_host_vec()?;
         let min_key = (host_extrema[0] ^ (1u64 << 63)) as i64;
         let max_key = (host_extrema[1] ^ (1u64 << 63)) as i64;
         let span = max_key as i128 - min_key as i128 + 1;
@@ -169,13 +184,13 @@ impl Run {
         // Each level scans 256-item blocks in place and emits block totals.
         // Scan those totals recursively, then propagate their exclusive
         // prefixes downwards. Retain every level until submitted work finishes.
-        let exclusive_scan = |values: &DeviceBuffer<u32>| -> BuildResult<Vec<DeviceBuffer<u32>>> {
+        let exclusive_scan = |values: &Buffer<'a, u32>| -> BuildResult<Vec<Buffer<'a, u32>>> {
             let mut levels = Vec::new();
             let mut current = ptr(values);
             let mut length = values.len();
             loop {
                 let blocks = length.div_ceil(THREADS as usize);
-                let totals = allocate::<u32>(stream, blocks)?;
+                let totals = allocate::<u32>(memory, stream, blocks)?;
                 let launch = module.prepare_scan_blocks(
                     LaunchConfig1D::new(blocks as u32, THREADS, 32),
                 )?;
@@ -199,33 +214,32 @@ impl Run {
             Ok(levels)
         };
 
-        let bins = DeviceBuffer::<u32>::zeroed(stream, domain)?;
+        let bins = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, domain)?;
         let histogram = module.prepare_histogram(config(n))?;
-        unsafe { module.histogram(stream, &histogram, keys, min_key, ptr(&bins))?; }
+        unsafe { module.histogram(stream, &histogram, &Input(keys), min_key, ptr(&bins))?; }
         let _bin_scan = exclusive_scan(&bins)?;
 
-        let bits = allocate::<u64>(stream, words)?;
-        let prefix = allocate::<u32>(stream, words)?;
-        let maximum = DeviceBuffer::<u32>::zeroed(stream, 1)?;
+        let bits = allocate::<u64>(memory, stream, words)?;
+        let prefix = allocate::<u32>(memory, stream, words)?;
+        let maximum = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, 1)?;
         let directory = module.prepare_directory(config(words))?;
         unsafe {
             module.directory(stream, &directory, &bins, rows,
                 ptr(&bits), ptr(&prefix), ptr(&maximum))?;
         }
         let prefix_scan = exclusive_scan(&prefix)?;
-        let mut host_unique = [0u32; 1];
         // The unscanned final one-element level is the total population.
-        prefix_scan.last().unwrap().copy_to_host(stream, &mut host_unique)?;
+        let host_unique = prefix_scan.last().unwrap().to_host_vec()?;
         let unique = host_unique[0];
         let offset_items = (unique as usize).checked_add(1)
             .ok_or_else(|| invalid("CSR sentinel exceeds host address space"))?;
-        let offsets = allocate::<u32>(stream, offset_items)?;
-        let unique_keys = allocate::<i64>(stream, unique as usize)?;
-        let permutation = allocate::<u32>(stream, n)?;
-        let cursors = DeviceBuffer::<u32>::zeroed(stream, domain)?;
+        let offsets = allocate::<u32>(memory, stream, offset_items)?;
+        let unique_keys = allocate::<i64>(memory, stream, unique as usize)?;
+        let permutation = allocate::<u32>(memory, stream, n)?;
+        let cursors = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, domain)?;
         let scatter = module.prepare_scatter(config(n))?;
         unsafe {
-            module.scatter(stream, &scatter, keys, min_key, &bins,
+            module.scatter(stream, &scatter, &Input(keys), min_key, &bins,
                 ptr(&cursors), ptr(&permutation))?;
         }
         let order = module.prepare_order_bins(config(domain))?;
@@ -234,20 +248,19 @@ impl Run {
                 ptr(&permutation), ptr(&offsets), ptr(&unique_keys))?;
         }
 
-        let sorted = allocate::<i64>(stream, n)?;
+        let sorted = allocate::<i64>(memory, stream, n)?;
         let gather = module.prepare_gather(config(n))?;
-        unsafe { module.gather(stream, &gather, keys, &permutation, ptr(&sorted))?; }
-        let fences = allocate::<i64>(stream, n.div_ceil(BLOCK_ROWS))?;
+        unsafe { module.gather(stream, &gather, &Input(keys), &permutation, ptr(&sorted))?; }
+        let fences = allocate::<i64>(memory, stream, n.div_ceil(BLOCK_ROWS))?;
         let fence_launch = module.prepare_fences(config(fences.len()))?;
         unsafe { module.fences(stream, &fence_launch, &sorted, ptr(&fences))?; }
         let mut clustered = Vec::with_capacity(payloads.len());
         for payload in payloads {
-            let output = allocate::<i64>(stream, n)?;
-            unsafe { module.gather(stream, &gather, *payload, &permutation, ptr(&output))?; }
+            let output = allocate::<i64>(memory, stream, n)?;
+            unsafe { module.gather(stream, &gather, &Input(*payload), &permutation, ptr(&output))?; }
             clustered.push(output);
         }
-        let mut max_count = [0u32; 1];
-        maximum.copy_to_host(stream, &mut max_count)?;
+        let max_count = maximum.to_host_vec()?;
         stream.synchronize()?;
         let build_peak_mem_used = memory_used()?;
         Ok(Self {
@@ -297,22 +310,18 @@ fn config(items: usize) -> LaunchConfig1D {
     LaunchConfig1D::new(items.div_ceil(THREADS as usize) as u32, THREADS, 0)
 }
 
-fn ptr<T: DeviceCopy>(buffer: &DeviceBuffer<T>) -> *mut T {
+fn ptr<T: DeviceCopy>(buffer: &Buffer<'_, T>) -> *mut T {
     buffer.cu_deviceptr() as *mut T
 }
 
 // Every callsite initializes the complete allocation on its stream before
 // reading it. Avoid a redundant memset for fully overwritten output columns.
-fn allocate<T: DeviceCopy>(stream: &CudaStream, len: usize) -> BuildResult<DeviceBuffer<T>> {
-    let bytes = len.checked_mul(core::mem::size_of::<T>())
-        .filter(|&bytes| bytes <= isize::MAX as usize)
-        .ok_or_else(|| invalid("device allocation size overflow"))?;
-    let address = if bytes == 0 { 0 } else {
-        unsafe { cuda_core::memory::malloc_sync(bytes)? }
-    };
-    // SAFETY: the allocation belongs to the already-bound stream context and
-    // transfers its sole ownership to this buffer, including on error paths.
-    Ok(unsafe { DeviceBuffer::from_raw_parts(address, len, stream.context().clone()) })
+fn allocate<'a, T: DeviceCopy>(
+    memory: &'a MemoryResource, stream: &'a CudaStream, len: usize,
+) -> BuildResult<Buffer<'a, T>> {
+    // SAFETY: each callsite completely initializes its output on this stream
+    // before exposing it to any reader.
+    Ok(unsafe { DeviceUninitBuffer::new_in(memory, stream, len)?.assume_init() })
 }
 
 #[cuda_device::cuda_module]

@@ -5,7 +5,8 @@
 //! only: the complete encoded key determines equality. No shared memory or
 //! RCCL device code is used.
 
-use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D};
+use cuda_core::{CudaContext, CudaStream, LaunchConfig1D};
+use gpu_blocked_run::{Buffer, MemoryResource};
 use std::{error::Error, sync::Arc};
 
 /// Deduplicate the first `count` triples entirely on the GPU.
@@ -22,15 +23,18 @@ use std::{error::Error, sync::Arc};
 /// incomplete successful result. Only these two metadata scalars are copied
 /// to the host; keys and deduplication remain on the device. Construction is
 /// complete before returning, so the returned buffers may be read immediately.
-pub fn dedup(
+/// Output ownership borrows the shared pool and stream; dropping these buffers
+/// returns their storage to the pool without a synchronous CUDA device free.
+pub fn dedup<'a, B: cuda_host::KernelSliceArg<Elem = i64>>(
     ctx: &Arc<CudaContext>,
-    stream: &CudaStream,
-    orders: &DeviceBuffer<i64>,
-    suppliers: &DeviceBuffer<i64>,
-    nations: &DeviceBuffer<i64>,
+    stream: &'a CudaStream,
+    memory: &'a MemoryResource,
+    orders: &B,
+    suppliers: &B,
+    nations: &B,
     count: usize,
     capacity: usize,
-) -> Result<(DeviceBuffer<u64>, DeviceBuffer<u32>), Box<dyn Error>> {
+) -> Result<(Buffer<'a, u64>, Buffer<'a, u32>), Box<dyn Error>> {
     if count > orders.len() || count > suppliers.len() || count > nations.len() {
         return Err("dedup input count exceeds a column length".into());
     }
@@ -42,8 +46,8 @@ pub fn dedup(
         return Err("dedup capacity must be a power of two and at least four times the input count".into());
     }
 
-    let table = DeviceBuffer::<u64>::zeroed(stream, capacity)?;
-    let metadata = DeviceBuffer::<u32>::zeroed(stream, 2)?;
+    let table = Buffer::<u64>::zeroed_in(memory, stream, capacity)?;
+    let metadata = Buffer::<u32>::zeroed_in(memory, stream, 2)?;
     if count != 0 {
         let module = unsafe { dedup_kernels::load(ctx)? };
         let config = LaunchConfig1D::new(count.div_ceil(256) as u32, 256, 0);
@@ -64,8 +68,7 @@ pub fn dedup(
                 metadata.cu_deviceptr() as *mut u32,
             )?;
         }
-        let mut status = [0u32; 2];
-        metadata.copy_to_host(stream, &mut status)?;
+        let status = metadata.to_host_vec()?;
         if status[1] != 0 {
             return Err("dedup hash table full: capacity invariant violated".into());
         }

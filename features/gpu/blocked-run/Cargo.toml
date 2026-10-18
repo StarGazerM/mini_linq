@@ -9,3 +9,4 @@ cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true
 gpu-tiles = { path = "../tiles" }
+rccl-memory = { path = "/data/rccl/rccl-memory" }
