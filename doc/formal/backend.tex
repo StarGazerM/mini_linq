@@ -49,6 +49,31 @@ preserve multiplicity. The target of $\alpha$ is a bag, not a set;
 \code{canon} takes support and re-establishes the set boundary. Positional
 representation alone proves neither uniqueness nor ordered enumeration.
 
+\paragraph{Lookup witnesses.}
+Either representation may append \code{witness \{ b [K] at s as Type \}}.
+This cursor is not a column and does not contribute to coverage.
+\begin{mathpar}
+\Rule{STR-Witness}{
+ \mathsf{share}(r)=(b,K,s,p)\quad
+ \alpha_{\rm witness}(w)=\mathsf{lookup}_b(k)\\
+ \mathsf{allPathsConsumeBeforeEscape}(r,p)
+}{\mathsf{witness}(r,b,K,s,w)\text{ is admissible}}
+\end{mathpar}
+The escape obligation is checked explicitly, not implemented by pruning:
+only rename, project, select, point, range, and left semi/anti may forward
+the witness. Every path must reach the force probe before canon, return,
+retained let/rows, exists, union/fallback operands, fused prefixes, or opaque
+bind/guard. Rust checks the cursor's type and Copy capability.
+
+\begin{lemma}[Witness abstraction]
+Under STR-Witness, replacing the forcing probe's lookup by its carried
+cursor preserves the row bag and bucket order.
+\end{lemma}
+\begin{proof}
+The cursor abstracts to the same lookup; forwarding preserves the key,
+and the force consumes it before any boundary can expose the carrier.
+\end{proof}
+
 \subsection{E: evaluation unit as strictness}
 A \emph{stage} is a maximal $\bot$-free segment of a pipe's definition chain,
 within its producer and consumption boundaries. The total Physical kernels
@@ -83,8 +108,8 @@ a state-dependent cursor. Probe and merge produce such cursors, so a checked
 segment cannot contain them or end after them. Retaining their output as
 \code{rows} supplies a new \emph{for} producer for a subsequent segment.
 Semi and anti are total filtering steps and may lie inside a segment.
-Spanning a total probe is a possible semantic relaxation, but its fan-out
-makes the output chunk size variable; the present rule does not admit it.
+An explicit \code{expand} flag admits a SortedRun probe whose ranges
+have total, known lengths; unannotated probes still end the segment.
 This distinction follows the producer representation of
 Kiselyov et al.~\cite{paper-stream-fusion}; staging here specifies evaluation
 strictness, not an additional relational rewrite.
@@ -98,6 +123,46 @@ The staging pass records the previous fixed probe optimization as
 \code{stage = batch 128}: a total rename/select/point/range/project host-scan
 spine feeding a built probe. Unannotated authored Structures remain scalar;
 the default pipeline preserves its earlier decisions by recording them.
+
+\paragraph{By-need lookup sharing.}
+\code{r share = lookup b [K] first s force p;} names an earlier retained,
+one-level payload build, an eager semi with result $r=s$, and a later probe.
+\begin{mathpar}
+\Rule{ST-Share}{
+ b<s<p\quad \mathsf{letPayload}(b,K)\quad
+ s=\mathsf{semi}_{eager}[K](l,b)\\
+ p=\mathsf{probe}[K](l',b)\quad\mathsf{preservedKeys}(s,l',K)
+}{\mathsf{share}(s)=(b,K,s,p)}
+\end{mathpar}
+Each $(b,K,s)$ has one sharing decision. Without a witness it retains
+ordinary re-evaluation. Neither curried nor membership-only builds qualify.
+\begin{lemma}[Lookup coupling]
+The retained memo satisfies $\mathsf{memo}=\mathsf{lookup}_b(k)$ at both demands.
+\end{lemma}
+\begin{proof}
+Host immutability and the earlier let keep the build unchanged. The checked
+chain preserves key terms. IndexRead's lookup law (STR-SortedRun for runs)
+therefore identifies both total reads; no partial evaluation moves.
+\end{proof}
+
+\begin{mathpar}
+\Rule{ST-Expand}{
+ r=\mathsf{probe}[K](l,b)\quad \mathsf{rangeCursor}(b,K)\\
+ \mathsf{totalSegment}(l,r)\quad \mathsf{producer}(l):\mathsf{for}
+ \quad N>0\quad\mathsf{boundaryBeforePartial}(r)
+}{r\;\mathsf{stage}=\mathsf{batch}\ N\ \mathsf{expand}\text{ is admissible}}
+\end{mathpar}
+Here rangeCursor is declared by a one-level SortedRun build, not HashIndex.
+\begin{lemma}[Segmented flatten]
+Flattening $N$ finite ranges is total and length-known: with exclusive
+offsets $o_i=\sum_{j<i}|R_j|$, its length is $M=\sum_i|R_i|$.
+Each output position identifies exactly one nonempty owner range and offset.
+\end{lemma}
+\begin{proof}
+Exclusive scan (Blelloch's prefix-sum construction) preserves range order;
+concatenation preserves every occurrence. Chunks of the virtual array
+therefore preserve the scalar bag without crossing a partial step.
+\end{proof}
 
 For total predicates $p_1,\ldots,p_k$ and a chunk $(x_j)_{j<n}$, initialize
 $m_j=\mathsf{true}$ and update $m_j\gets m_j\land p_i(x_j)$ for each $i$.

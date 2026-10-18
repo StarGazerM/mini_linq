@@ -210,7 +210,7 @@ impl<'a> Printer<'a> {
         if let Some(rows) = self.staged_rows(name) {
             return Ok(rows);
         }
-        if self.analysis.reads.contains_key(name) {
+        if self.analysis.reads.contains_key(name) && self.carried_witnesses[name].is_empty() {
             let ids = self.read_ids(name)?;
             return Ok(self.buffer_stage(name, self.positional_rows(name, ids)));
         }
@@ -251,6 +251,12 @@ impl<'a> Printer<'a> {
                 }));
                 return Ok(self.forward(name, &input_name, rows));
             }
+        }
+        if let Operator::Semi(_, keyed) = &definition.operator
+            && self.analysis.witnesses.contains_key(name)
+        {
+            let rows = self.retained_semi(name, keyed)?;
+            return Ok(self.buffer_stage(name, rows));
         }
         let rows = match &definition.operator {
             Operator::Union(union) => self.union(name, union),
@@ -422,10 +428,12 @@ impl<'a> Printer<'a> {
         keyed: &physical::Keyed,
     ) -> syn::Result<TokenStream> {
         let columns = sorted(&keyed.columns);
-        let outer = self.scan(&keyed.left)?;
+        let mut outer = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
         let access = self.keyed(&keyed.right, &columns)?;
+        let witness = self.forcing_witness(name);
+        let expand = self.analysis.expands.contains(name);
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
             Access::Host(access) => (
                 self.host_lookup(&left, access, false),
@@ -456,7 +464,24 @@ impl<'a> Printer<'a> {
                 )
             }
             Access::Built(structure) => {
-                let lookup = self.chained_lookup(&left, structure, &right, &columns);
+                let lookup = if let Some(witness) = &witness {
+                    quote!(#witness)
+                } else if expand {
+                    let key = self
+                        .stored_key(&right, &columns)
+                        .iter()
+                        .map(|column| {
+                            self.key_field(&left, column, self.owned_key(&right, &columns))
+                        })
+                        .collect::<Vec<_>>();
+                    self.constant_key_condition(&left, &right, &columns).inspect(|condition| {
+                        let pattern = self.bind_columns(&left, &columns, true);
+                        outer = quote!(::core::iter::Iterator::filter(#outer, move |#pattern| #condition));
+                    });
+                    quote!(::cq_storage::IndexRead::lookup(&#structure, &(#(#key,)*)))
+                } else {
+                    self.chained_lookup(&left, structure, &right, &columns)
+                };
                 (
                     lookup,
                     self.built_payload(&right, &self.levels_of(&right, structure)),
@@ -464,7 +489,11 @@ impl<'a> Printer<'a> {
                 )
             }
         };
-        let mut used = columns.clone();
+        let mut used = if witness.is_some() || expand {
+            Vec::new()
+        } else {
+            columns.clone()
+        };
         used.extend(
             self.carried(name)
                 .iter()
@@ -491,13 +520,35 @@ impl<'a> Printer<'a> {
                     .unwrap_or_else(|| self.access(&left, c)),
             }
         });
+        if expand {
+            let batch = self.lookahead(name);
+            // The closure copies the retained range, never advances the witness.
+            let cursor_columns = if witness.is_some() { &[][..] } else { &columns };
+            let cursor_pattern = self.bind_columns(&left, cursor_columns, false);
+            return Ok(quote! {
+                ::core::iter::Iterator::map(
+                    ::cq_storage::stage::segmented::<#batch, _, _, _>(
+                        #outer, move |&#cursor_pattern| #lookup
+                    ),
+                    move |(#outer_pattern, __cq_v)| #row
+                )
+            });
+        }
         // The checked probe is unchanged: batch only borrowed outer columns,
         // preserve outer/bucket order, and leave curried/custom scalar access
         // to the IndexRead default. No predicate moves across a Rust boundary.
         if let Access::Built(structure) = &access {
             let levels = self.levels_of(&right, structure);
+            if witness.is_some() {
+                return Ok(quote! {
+                    ::core::iter::Iterator::flat_map(#outer, move |#outer_pattern| {
+                        ::core::iter::Iterator::map(#lookup, move |__cq_v| #row)
+                    })
+                });
+            }
             if levels.len() == 1
                 && self.infos[&left].computed.is_empty()
+                && self.carried_witnesses[&left].is_empty()
                 && !self
                     .analysis
                     .membership
@@ -547,6 +598,43 @@ impl<'a> Printer<'a> {
         Ok(quote! {
             ::core::iter::Iterator::flat_map(#outer, move |#outer_pattern| {
                 ::core::iter::Iterator::map(#lookup, move |__cq_v| #row)
+            })
+        })
+    }
+
+    /// Retain the first keyed demand as a non-column, Copy cursor.
+    fn retained_semi(&mut self, name: &str, keyed: &physical::Keyed) -> syn::Result<TokenStream> {
+        let left = symbol_name(&keyed.left);
+        let right = symbol_name(&keyed.right);
+        let columns = sorted(&keyed.columns);
+        let input = self.scan(&keyed.left)?;
+        let Access::Built(structure) = self.keyed(&keyed.right, &columns)? else {
+            unreachable!("checked witness has a one-level built index");
+        };
+        let key = self
+            .stored_key(&right, &columns)
+            .iter()
+            .map(|column| self.key_field(&left, column, self.owned_key(&right, &columns)))
+            .collect::<Vec<_>>();
+        let mut used = self.carried(name).to_vec();
+        used.extend(columns.iter().cloned());
+        let pattern = self.bind_columns(&left, &used, false);
+        let row = self.carrier(name, |column| self.access(&left, column));
+        let witness = self.witness_ident(name);
+        let ty = &self.analysis.witnesses[name].ty;
+        let condition = self
+            .constant_key_condition(&left, &right, &columns)
+            .map(|condition| quote!(if !(#condition) { return None; }));
+        Ok(quote! {
+            ::core::iter::Iterator::filter_map(#input, move |#pattern| {
+                #condition
+                let #witness: #ty = ::cq_storage::IndexRead::lookup(&#structure, &(#(#key,)*));
+                let mut __cq_first = #witness;
+                if ::core::iter::Iterator::next(&mut __cq_first).is_some() {
+                    Some(#row)
+                } else {
+                    None
+                }
             })
         })
     }

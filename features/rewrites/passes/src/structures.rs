@@ -3,6 +3,9 @@ use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token, Type};
 
+mod retain_lookups;
+pub use retain_lookups::retain_lookups;
+
 #[derive(Clone, Copy)]
 enum Kind {
     Payload,
@@ -122,7 +125,10 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 Structure::Rows { .. } => matches!(kind, Kind::Rows),
                 Structure::Selection { .. } => matches!(kind, Kind::Selection),
                 Structure::KeySet { .. } => matches!(kind, Kind::KeySet | Kind::Membership),
-                Structure::Read { .. } | Structure::Repr { .. } | Structure::Stage { .. } => false,
+                Structure::Read { .. }
+                | Structure::Repr { .. }
+                | Structure::Stage { .. }
+                | Structure::Share { .. } => false,
                 Structure::JoinFilter { .. } => matches!(kind, Kind::JoinFilter),
                 Structure::Host { reader, .. } => {
                     matches!(kind, Kind::Membership) && reader == "membership"
@@ -165,8 +171,11 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 | Structure::Selection { ty, .. }
                 | Structure::KeySet { ty, .. } => *ty = request.ty.clone(),
                 Structure::JoinFilter { filter, .. } => filter.ty = request.ty.clone(),
-                Structure::Read { .. } | Structure::Repr { .. } | Structure::Stage { .. } => {
-                    unreachable!("read, repr and stage entries carry no provider type")
+                Structure::Read { .. }
+                | Structure::Repr { .. }
+                | Structure::Stage { .. }
+                | Structure::Share { .. } => {
+                    unreachable!("read, repr, stage and share entries carry no provider type")
                 }
             }
             changed = true;
@@ -261,6 +270,94 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             #scan join_filter = ::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 67108864>
                 build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
         });
+    }
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
+/// Formal rule EXT-SortedRuns:
+/// Retype one-level HashIndex payload builds with one borrowed integral key.
+/// Host fallbacks and smallest-intersection candidates retain their providers.
+pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    if !arguments.is_empty() {
+        return Err(syn::Error::new_spanned(
+            arguments,
+            "sorted_runs takes no arguments",
+        ));
+    }
+    let analysis = ir::contract::check(source)?;
+    let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
+    let mut target = source.clone();
+    for entry in &mut target.structures.entries {
+        let Structure::Built { keyed, .. } = &mut entry.structure else {
+            continue;
+        };
+        let name = symbol_name(&entry.name);
+        if keyed.levels.len() != 1
+            || keyed.levels[0].columns.is_empty()
+            || keyed.membership.is_some()
+            || !matches!(&keyed.ty, Type::Path(p) if p.qself.is_none()
+                && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "HashIndex"]))
+        {
+            continue;
+        }
+        let columns = keyed.level_names().remove(0);
+        if candidates.iter().any(|c| {
+            c.sides
+                .iter()
+                .any(|(side, key)| *side == name && *key == columns)
+        }) {
+            continue;
+        }
+        let stored: Vec<_> = columns
+            .iter()
+            .filter(|column| {
+                !keyed.filtered.as_ref().is_some_and(|filtered| {
+                    filtered
+                        .constants
+                        .iter()
+                        .any(|binding| symbol_name(&binding.column) == **column)
+                })
+            })
+            .collect();
+        let computed = |result: &str| {
+            analysis.physical.rows[result]
+                .computed
+                .iter()
+                .any(|c| columns.contains(c))
+        };
+        let owned = computed(&name)
+            || analysis
+                .physical
+                .key_reads
+                .get(&name)
+                .into_iter()
+                .flatten()
+                .any(|(reader, _)| {
+                    source
+                        .physical
+                        .program
+                        .definitions
+                        .iter()
+                        .any(|definition| {
+                            if symbol_name(&definition.name) != *reader {
+                                return false;
+                            }
+                            match &definition.operator {
+                                Operator::Probe(_, read)
+                                | Operator::Semi(_, read)
+                                | Operator::Anti(_, read) => computed(&symbol_name(&read.left)),
+                                _ => false,
+                            }
+                        })
+                });
+        if stored.len() == 1
+            && !owned
+            && matches!(ir::ungroup_type(&analysis.physical.rows[&name].types[stored[0]]),
+                Type::Path(p) if p.path.is_ident("i32") || p.path.is_ident("i64"))
+        {
+            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>);
+        }
     }
     ir::check_rewrite(source, &target)?;
     Ok(target)

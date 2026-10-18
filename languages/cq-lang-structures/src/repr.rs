@@ -1,6 +1,125 @@
 //! Result representation is independent of the single-base positional read contract.
 use super::*;
 
+pub(crate) fn parse_witness(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Witness>> {
+    if input.peek(kw::witness) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// A cursor carried beside a row, never part of its logical heading.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Witness {
+    pub witness_token: kw::witness,
+    #[syn(braced)]
+    pub brace: token::Brace,
+    #[syn(in = brace)]
+    pub build: Ident,
+    #[syn(in = brace)]
+    pub keys: Level,
+    #[syn(in = brace)]
+    pub at_token: kw::at,
+    #[syn(in = brace)]
+    pub first: Ident,
+    #[syn(in = brace)]
+    pub as_token: Token![as],
+    #[syn(in = brace)]
+    pub ty: syn::Type,
+}
+
+pub(crate) fn check_witnesses(
+    program: &Program,
+    facts: &Analysis,
+) -> syn::Result<BTreeMap<String, Witness>> {
+    let mut result = BTreeMap::new();
+    // STR-Witness: The extra cursor abstracts to lookup_b(k), and every path
+    // consumes it at the force probe before any materialization or scope escape.
+    for entry in &program.structures.entries {
+        let Structure::Repr {
+            witness: Some(witness),
+            ..
+        } = &entry.structure
+        else {
+            continue;
+        };
+        let name = symbol_name(&entry.name);
+        let Some(share) = facts.shares.get(&name) else {
+            return error(
+                entry,
+                format!("witness {name} for {} requires share", witness.build),
+            );
+        };
+        if share.build != symbol_name(&witness.build)
+            || share.keys != names(&witness.keys.columns)
+            || share.first != symbol_name(&witness.first)
+        {
+            return error(
+                entry,
+                "witness must match share build, keys and first demand",
+            );
+        }
+        let mut pending = vec![name.clone()];
+        let mut visited = BTreeSet::new();
+        while let Some(current) = pending.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            let escape = |offender: &str| {
+                syn::Error::new_spanned(
+                    entry,
+                    format!("witness {name} for {} escapes at {offender}", share.build),
+                )
+            };
+            if current == symbol_name(&program.physical.program.returned)
+                || facts.physical.canon.contains(&current)
+                || facts.physical.modes[&current] != ModeKind::Pipe
+                || facts.retained.contains_key(&current)
+                || facts
+                    .physical
+                    .fused
+                    .values()
+                    .any(|group| group.prefix == current || group.members.contains(&current))
+            {
+                return Err(escape(&current));
+            }
+            let mut used = false;
+            for definition in &program.physical.program.definitions {
+                if !definition
+                    .operator
+                    .operands()
+                    .iter()
+                    .any(|operand| symbol_name(operand) == current)
+                {
+                    continue;
+                }
+                used = true;
+                let next = symbol_name(&definition.name);
+                if next == share.force {
+                    continue;
+                }
+                if !share::forwarding(&definition.operator)
+                    || definition
+                        .operator
+                        .input()
+                        .is_none_or(|input| symbol_name(input) != current)
+                {
+                    return Err(escape(&next));
+                }
+                pending.push(next);
+            }
+            if !used {
+                return Err(escape(&current));
+            }
+        }
+        if result.insert(name, witness.clone()).is_some() {
+            return error(entry, "duplicate witness decision");
+        }
+    }
+    Ok(result)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Repr {
     #[parse(peek = kw::tuples)]

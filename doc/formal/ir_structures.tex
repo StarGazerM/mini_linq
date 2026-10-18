@@ -15,6 +15,10 @@ Entry ::= r = Type [K]... [membership] [payload[P] constants{c = term, ...}];
               column c marker Type predicate Predicate;
         | r join_filter = Type build s [k]
               covering j marker Type;
+        | r share = lookup b [K] first s force p;
+        | r repr = (tuples | positions {H lineage {a -> c, ...}, ...}
+                         owned [O]) [witness {b [K] at s as Type}];
+        | r stage = batch N [expand];
 Predicate ::= physical | membership s [K] summary (exact | row)
 \end{lstlisting}
 
@@ -92,6 +96,27 @@ reads. The printer emits one unit witness on successful membership, without an
 occurrence-preserving payload index. The default integral-key representation is
 \code{AdaptiveKeySet} with its recorded borrowed codec and bitmap bound.
 No base-table key or foreign-key assumption is used.
+
+\paragraph{Sorted runs.}
+\code{SortedRun} stably clusters payload occurrences by key. Its directory
+and adjacent offsets partition a contiguous payload array; lookup returns a
+Copy range cursor. Equal-key input order and multiplicity are preserved.
+Presence/rank and binary-search directory access identify the same exact
+range. This is a payload representation, not a uniqueness assertion.
+\begin{mathpar}
+\Rule{STR-SortedRun}{
+ \mathsf{stableCluster}(I,K)=(D,O,V)\quad
+ \mathsf{exactDirectory}(D,O)
+}{\mathsf{lookup}(k)=I|_{K=k}\quad \alpha(D,O,V)=\mathsf{bag}(I)}
+
+\Rule{EXT-SortedRuns}{
+ \mathsf{oneLevelHashPayload}(b,K)\quad
+ \mathsf{borrowedIntegralKey}(K)\quad\mathsf{streamReads}(b)
+}{\mathsf{retype}(b,\mathsf{SortedRun})\text{ preserves Structures}}
+\end{mathpar}
+The external sorted-runs rewrite changes only eligible built providers,
+not host fallbacks or smallest-intersection candidate providers. Its
+independent checker preserves Physical and rederives coverage.
 
 \paragraph{Meaning.} That of the embedded Physical. Each Rust type is a
 representation whose abstraction function $\alpha$ satisfies the

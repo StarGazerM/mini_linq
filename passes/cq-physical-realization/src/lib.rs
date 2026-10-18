@@ -250,8 +250,8 @@ impl Printer<'_> {
         let consumer = self.consumer.replace(name.clone());
         let repr = match physical::ModeKind::from(&definition.mode) {
             physical::ModeKind::Pipe
-                if self.analysis.stages.contains_key(&name)
-                    && !self.probe_stage(&name)
+                if (!self.carried_witnesses[&name].is_empty()
+                    || (self.analysis.stages.contains_key(&name) && !self.probe_stage(&name)))
                     && !matches!(definition.operator, Operator::Rename(_)) =>
             {
                 let mut rows = self.produce(&name, definition)?;

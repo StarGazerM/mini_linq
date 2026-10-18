@@ -29,6 +29,7 @@ impl Printer<'_> {
 
     pub(super) fn buffer_stage(&self, name: &str, rows: TokenStream) -> TokenStream {
         match self.analysis.stages.get(name) {
+            Some(_) if self.analysis.expands.contains(name) => rows,
             Some(size) if !self.probe_stage(name) => {
                 quote!(::cq_storage::stage::buffered::<#size, _>(#rows))
             }

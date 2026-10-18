@@ -15,7 +15,9 @@
 //!                | "repr" "=" ("tuples" | "positions" "{"
 //!                    (Ident "lineage" "{" (Ident "->" Ident),* "}"),*
 //!                    "}" "owned" "[" Ident,* "]")
-//!                | "stage" "=" "batch" Integer) ";"
+//!                    ["witness" "{" Ident "[" Ident,* "]" "at" Ident "as" RustType "}"]
+//!                | "share" "=" "lookup" Ident "[" Ident,* "]" "first" Ident "force" Ident
+//!                | "stage" "=" "batch" Integer ["expand"]) ";"
 //! Origin ::= "base" Ident "lineage" "{" (Ident "->" Ident),* "}"
 //! ```
 //!
@@ -78,6 +80,13 @@ pub mod kw {
     syn::custom_keyword!(tuples);
     syn::custom_keyword!(stage);
     syn::custom_keyword!(batch);
+    syn::custom_keyword!(share);
+    syn::custom_keyword!(lookup);
+    syn::custom_keyword!(first);
+    syn::custom_keyword!(force);
+    syn::custom_keyword!(witness);
+    syn::custom_keyword!(at);
+    syn::custom_keyword!(expand);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -108,11 +117,25 @@ pub struct Entry {
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Structure {
+    #[parse(peek = kw::share)]
+    Share {
+        share_token: kw::share,
+        eq_token: Token![=],
+        lookup_token: kw::lookup,
+        build: Ident,
+        keys: Level,
+        first_token: kw::first,
+        first: Ident,
+        force_token: kw::force,
+        force: Ident,
+    },
     #[parse(peek = kw::repr)]
     Repr {
         repr_token: kw::repr,
         eq_token: Token![=],
         repr: Repr,
+        #[parse(repr::parse_witness)]
+        witness: Option<Witness>,
     },
     #[parse(peek = kw::stage)]
     Stage {
@@ -120,6 +143,7 @@ pub enum Structure {
         eq_token: Token![=],
         batch_token: kw::batch,
         size: syn::LitInt,
+        expand: Option<kw::expand>,
     },
     #[parse(peek = kw::join_filter)]
     JoinFilter {
@@ -289,6 +313,12 @@ pub type Built = (Vec<Vec<String>>, syn::Type);
 /// What the contract establishes for later stages.
 #[derive(Clone, Debug)]
 pub struct Analysis {
+    /// Checked by-need lookup decisions, keyed by the first semijoin result.
+    pub shares: BTreeMap<String, Share>,
+    /// Non-column cursor carriers attached to result representations.
+    pub witnesses: BTreeMap<String, Witness>,
+    /// Probe boundaries with length-known range expansion.
+    pub expands: BTreeSet<String>,
     /// Explicit result representations; omitted results keep heading tuples.
     pub repr: BTreeMap<String, Repr>,
     /// Checked batch sizes; omitted boundaries keep scalar evaluation.
@@ -386,6 +416,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 )
             })
             .collect(),
+        shares: BTreeMap::new(),
+        witnesses: BTreeMap::new(),
+        expands: BTreeSet::new(),
         repr: BTreeMap::new(),
         stages: BTreeMap::new(),
         lineage: BTreeMap::new(),
@@ -415,7 +448,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             continue;
         }
         let keyed = match &entry.structure {
-            Structure::Repr { .. } | Structure::Stage { .. } => continue,
+            Structure::Repr { .. } | Structure::Stage { .. } | Structure::Share { .. } => continue,
             Structure::JoinFilter { .. }
             | Structure::Selection { .. }
             | Structure::KeySet { .. }
@@ -614,8 +647,25 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         }
     }
     positional::check(program, &analysis)?;
+    analysis.shares = share::check(program, &analysis)?;
+    analysis.witnesses = repr::check_witnesses(program, &analysis)?;
     analysis.repr = repr::check(program, &analysis)?;
     analysis.stages = stage::check(program, &analysis)?;
+    analysis.expands = program
+        .structures
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.structure,
+                Structure::Stage {
+                    expand: Some(_),
+                    ..
+                }
+            )
+        })
+        .map(|entry| symbol_name(&entry.name))
+        .collect();
     filtered::check(program, &analysis)?;
     analysis.layouts = filtered::layouts(program, &analysis);
     let mut shared: BTreeMap<(String, Vec<String>, bool), &syn::Type> = BTreeMap::new();
@@ -917,7 +967,10 @@ pub use positional::*;
 mod join_filter;
 pub use join_filter::*;
 mod repr;
+pub use repr::Witness;
 pub use repr::{Repr, ReprBase, representation_bases};
+mod share;
+pub use share::Share;
 mod stage;
 
 mod filtered;

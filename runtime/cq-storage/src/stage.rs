@@ -87,21 +87,89 @@ pub fn for_chunks<const N: usize, H: PositionalRows>(host: H) -> impl Iterator<I
     assert!(N > 0, "stage chunk size must be positive");
     let len = host.len();
     let recycle = Arc::new(Mutex::new(Some(Vec::with_capacity(N.min(len)))));
-    (0..len).step_by(N).map(move |start| {
-        crate::count!(blocks_considered);
-        crate::count!(blocks_visited);
-        let end = start.saturating_add(N).min(len);
-        let mut selection = recycle
-            .lock()
-            .expect("stage buffer lock poisoned")
-            .take()
-            .unwrap_or_default();
-        selection.clear();
-        selection.extend((start..end).map(RowId));
-        Chunk {
-            range: RowId(start)..RowId(end),
-            selection,
-            recycle: Arc::clone(&recycle),
+    (0..len)
+        .step_by(N)
+        .map(move |start| chunk(start, start.saturating_add(N).min(len), &recycle))
+}
+
+fn chunk(start: usize, end: usize, recycle: &Arc<Mutex<Option<Vec<RowId>>>>) -> Chunk {
+    crate::count!(blocks_considered);
+    crate::count!(blocks_visited);
+    let mut selection = recycle
+        .lock()
+        .expect("stage buffer lock poisoned")
+        .take()
+        .unwrap_or_default();
+    selection.clear();
+    selection.extend((start..end).map(RowId));
+    Chunk {
+        range: RowId(start)..RowId(end),
+        selection,
+        recycle: Arc::clone(recycle),
+    }
+}
+
+/// Flatten batches of `N` length-known cursors in scalar outer/bucket order.
+/// The descriptor keeps only the outer rows, ranges and their exclusive scan;
+/// output positions are consumed through the same bounded `Chunk` machinery
+/// as positional stages. All three buffers are reused between input batches.
+/// Cursors should provide constant-time `nth`, as SortedRun's range cursor does.
+///
+/// # Panics
+/// Panics if `N` is zero or the expanded length overflows `usize`.
+pub fn segmented<const N: usize, I, F, C>(
+    mut rows: I,
+    mut lookup: F,
+) -> impl Iterator<Item = (I::Item, C::Item)>
+where
+    I: Iterator,
+    I::Item: Copy,
+    F: FnMut(&I::Item) -> C,
+    C: Copy + ExactSizeIterator,
+{
+    assert!(N > 0, "stage chunk size must be positive");
+    let mut ranges: Vec<(I::Item, C)> = Vec::with_capacity(N);
+    let mut offsets = Vec::with_capacity(N + 1);
+    let recycle = Arc::new(Mutex::new(Some(Vec::with_capacity(N))));
+    let mut survivors: Option<Survivors> = None;
+    let mut next = 0usize;
+    let mut len = 0usize;
+    std::iter::from_fn(move || {
+        loop {
+            if let Some(id) = survivors.as_mut().and_then(Iterator::next) {
+                let owner = offsets.partition_point(|&start| start <= id.0) - 1;
+                let (row, mut cursor) = ranges[owner];
+                return Some((
+                    row,
+                    cursor
+                        .nth(id.0 - offsets[owner])
+                        .expect("live segment offset"),
+                ));
+            }
+            // Return the selection allocation before acquiring the next chunk.
+            survivors = None;
+            if next < len {
+                let end = next.saturating_add(N).min(len);
+                survivors = Some(chunk(next, end, &recycle).into_iter());
+                next = end;
+                continue;
+            }
+            ranges.clear();
+            offsets.clear();
+            offsets.push(0);
+            len = 0;
+            for row in rows.by_ref().take(N) {
+                let cursor = lookup(&row);
+                len = len
+                    .checked_add(cursor.len())
+                    .expect("expanded stage length overflow");
+                ranges.push((row, cursor));
+                offsets.push(len);
+            }
+            if ranges.is_empty() {
+                return None;
+            }
+            next = 0;
         }
     })
 }
@@ -173,5 +241,35 @@ mod tests {
         assert_eq!(rows.next(), Some(0));
         assert_eq!(visited.get(), 4);
         assert_eq!(rows.collect::<Vec<_>>(), (1..9).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn segmented_expansion_matches_scalar_probe_order() {
+        use crate::{IndexRead, NoDense, SortedRun};
+        let run = SortedRun::from_pairs([(2, 20), (1, 11), (2, 21), (2, 22), (4, 40)], NoDense);
+        let outer = [0, 2, 1, 3, 2, 4, 0];
+        let scalar = outer
+            .into_iter()
+            .flat_map(|key| (&run).lookup(&key).map(move |value| (key, value)))
+            .collect::<Vec<_>>();
+        for actual in [
+            segmented::<1, _, _, _>(outer.into_iter(), |key| (&run).lookup(key))
+                .collect::<Vec<_>>(),
+            segmented::<2, _, _, _>(outer.into_iter(), |key| (&run).lookup(key))
+                .collect::<Vec<_>>(),
+            segmented::<4, _, _, _>(outer.into_iter(), |key| (&run).lookup(key))
+                .collect::<Vec<_>>(),
+        ] {
+            assert_eq!(actual, scalar);
+        }
+
+        let retained = outer.into_iter().filter_map(|key| {
+            let cursor = (&run).lookup(&key);
+            (cursor.len() != 0).then_some((key, cursor))
+        });
+        let shared = segmented::<3, _, _, _>(retained, |(_, cursor)| *cursor)
+            .map(|((key, _), value)| (key, value))
+            .collect::<Vec<_>>();
+        assert_eq!(shared, scalar);
     }
 }

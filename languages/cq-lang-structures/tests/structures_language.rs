@@ -199,6 +199,10 @@ fn representation_and_stage_entries_round_trip() {
         "r repr = tuples;",
         "r repr = positions { H lineage { a -> c }, J lineage { b -> d } } owned [x, y];",
         "r stage = batch 128;",
+        "s share = lookup b [x] first s force p;",
+        "s repr = tuples witness { b [x] at s as ::cq_storage::RunCursor<'_, _> };",
+        "s repr = positions { L lineage { x -> a } } owned [] witness { b [x] at s as Cursor };",
+        "p stage = batch 32 expand;",
     ] {
         let entry: structures::Entry = syn::parse_str(text).unwrap();
         assert_eq!(
@@ -395,4 +399,159 @@ fn generator_bind_round_trip_drops_inherited_uniqueness() {
     invalid.physical.program.definitions[1].operator =
         syn::parse_quote!(bind u with for x = ([*x]));
     assert!(structures::contract::check(&invalid).is_err());
+fn shared_program() -> structures::Program {
+    syn::parse_quote! { physical {
+        relation L(a:i32); relation R(a:i32,b:i32);
+        l = pipe rename L@0 {a -> x};
+        b = let rename R@1 {a -> x,b -> y};
+        s = pipe semi eager [x] l,b;
+        p = pipe canon probe first [x] s,b;
+        return p as answer(x,y);
+    } structures {
+        l host scan = ::core::iter::Map<_, _> [];
+        b host scan = ::core::iter::Map<_, _> [];
+        b rows = ::std::vec::Vec<_>;
+        b = ::cq_storage::SortedRun<_,_> [x];
+        p canon = ::std::collections::HashSet<_>;
+        s share = lookup b [x] first s force p;
+        s repr = tuples witness { b [x] at s as ::cq_storage::RunCursor<'_, _> };
+    } }
+}
+
+#[test]
+fn lookup_sharing_witness_and_expansion_are_additive() {
+    let mut target = shared_program();
+    target
+        .structures
+        .entries
+        .push(syn::parse_quote!(p stage = batch 32 expand;));
+    let facts = structures::contract::check(&target).unwrap();
+    assert_eq!(facts.shares["s"].force, "p");
+    assert!(facts.witnesses.contains_key("s"));
+    assert!(facts.expands.contains("p"));
+    assert_eq!(
+        syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
+        target
+    );
+    let mut source = target.clone();
+    source.structures.entries.truncate(5);
+    structures::check_rewrite(&source, &target).unwrap();
+}
+
+#[test]
+fn sharing_rejects_probe_before_semi() {
+    let mut p = shared_program();
+    p.physical.program.definitions.swap(2, 3);
+    assert!(structures::contract::check(&p).is_err());
+}
+
+#[test]
+fn witness_requires_matching_share() {
+    let mut p = shared_program();
+    p.structures.entries.remove(5);
+    assert!(
+        structures::contract::check(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("requires share")
+    );
+}
+
+#[test]
+fn witness_cannot_escape_into_canon() {
+    let mut p = shared_program();
+    p.physical.program.definitions[2].canon = Some(Default::default());
+    p.structures
+        .entries
+        .push(syn::parse_quote!(s canon = ::std::collections::HashSet<_>;));
+    let error = structures::contract::check(&p).unwrap_err().to_string();
+    assert!(error.contains("witness s for b escapes at s"), "{error}");
+}
+
+#[test]
+fn witness_cannot_escape_into_head() {
+    let mut p = shared_program();
+    p.physical.program.returned = syn::parse_quote!(s);
+    p.physical.program.head = syn::parse_quote!(answer(x));
+    p.physical.program.definitions[2].canon = Some(Default::default());
+    p.structures
+        .entries
+        .push(syn::parse_quote!(s canon = ::std::collections::HashSet<_>;));
+    assert!(structures::contract::check(&p).is_err());
+}
+
+#[test]
+fn witness_cannot_escape_into_retained_let() {
+    let mut p = shared_program();
+    p.physical.program.definitions[2].mode = syn::parse_quote!(let);
+    p.structures
+        .entries
+        .push(syn::parse_quote!(s rows = ::std::vec::Vec<_>;));
+    let error = structures::contract::check(&p).unwrap_err().to_string();
+    assert!(error.contains("witness s for b escapes at s"), "{error}");
+}
+
+#[test]
+fn expand_rejects_hash_index() {
+    let mut p = shared_program();
+    p.structures.entries[3] = syn::parse_quote!(b = ::cq_storage::HashIndex<'_,_,_> [x];);
+    p.structures
+        .entries
+        .push(syn::parse_quote!(p stage = batch 16 expand;));
+    assert!(
+        structures::contract::check(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("range-cursor")
+    );
+}
+
+#[test]
+fn expand_cannot_stage_across_bind() {
+    let mut p = shared_program();
+    p.physical
+        .program
+        .definitions
+        .push(syn::parse_quote!(q = pipe bind p with z:i32 = (1);));
+    p.physical.program.returned = syn::parse_quote!(q);
+    p.physical.program.head = syn::parse_quote!(answer(x, y, z));
+    p.structures.entries.extend([
+        syn::parse_quote!(p stage = batch 16 expand;),
+        syn::parse_quote!(q stage = batch 16;),
+    ]);
+    assert!(
+        structures::contract::check(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("partial")
+    );
+}
+
+#[test]
+fn witness_cannot_escape_into_union_arm() {
+    let mut p = shared_program();
+    p.physical.program.definitions[3] = syn::parse_quote!(p = pipe probe first [x] s,b;);
+    p.physical.program.definitions.extend([
+        syn::parse_quote!(q = pipe project p keep {x};),
+        syn::parse_quote!(u = pipe canon union s,q;),
+    ]);
+    p.physical.program.returned = syn::parse_quote!(u);
+    p.physical.program.head = syn::parse_quote!(answer(x));
+    p.structures.entries[4] = syn::parse_quote!(u canon = ::std::collections::HashSet<_>;);
+    assert!(structures::contract::check(&p).is_err());
+}
+
+#[test]
+fn witness_cannot_escape_into_fused_prefix() {
+    let mut p = shared_program();
+    p.physical.program.definitions[3] = syn::parse_quote!(p = pipe probe first [x] s,b;);
+    p.physical.program.definitions.extend([
+        syn::parse_quote!(q = pipe probe first [x] s,b;),
+        syn::parse_quote!(u = pipe canon union fused p,q block @2 free [x] interface [y] over s;),
+    ]);
+    p.physical.program.returned = syn::parse_quote!(u);
+    p.physical.program.head = syn::parse_quote!(answer(x, y));
+    p.structures.entries[4] = syn::parse_quote!(u canon = ::std::collections::HashSet<_>;);
+    let error = structures::contract::check(&p).unwrap_err().to_string();
+    assert!(error.contains("witness s for b escapes at s"), "{error}");
 }

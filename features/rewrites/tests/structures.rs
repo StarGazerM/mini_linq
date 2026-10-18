@@ -103,6 +103,25 @@ fn every_selector_has_a_pinned_ir_and_independent_mutation_checks() {
 }
 
 #[test]
+fn sorted_runs_preserves_the_observation_contract_and_records_only_eligible_types() {
+    let checked = PassCase {
+        source: source(),
+        expected_next: Some(fixture(include_str!("fixtures/sorted_runs.structures"))),
+        compile: Box::new(|p| cq_rewrite_passes::sorted_runs(p, quote!())),
+        check: Box::new(ir::check_rewrite),
+        mutations: vec![Box::new(missing_storage), Box::new(changed_physical)],
+        answers: None,
+    }
+    .run(None)
+    .unwrap();
+    assert_eq!(
+        cq_rewrite_passes::sorted_runs(&checked, quote!()).unwrap(),
+        checked
+    );
+    assert!(cq_rewrite_passes::sorted_runs(&source(), quote!(unexpected)).is_err());
+}
+
+#[test]
 fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
     let original = source();
     assert_eq!(
@@ -260,4 +279,25 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
     )
     .unwrap();
     ir::check_rewrite(&source, &row_only).unwrap();
+}
+
+#[test]
+fn sorted_runs_keeps_two_column_payload_keys_hashed() {
+    let physical = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = let rename R@1 {a -> x,b -> y,c -> z};
+        p = pipe canon probe first [x,y] l,r;
+        return p as answer(x,y,z);
+    }};
+    let source = cq_structure_selection::compile(&physical).unwrap();
+    assert!(source.structures.entries.iter().any(|entry| {
+        entry.name == "r"
+            && matches!(&entry.structure, Structure::Built { keyed, .. }
+                if keyed.level_names() == [vec!["x".to_owned(), "y".to_owned()]]
+                    && keyed.ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>))
+    }));
+    let target = cq_rewrite_passes::sorted_runs(&source, quote!()).unwrap();
+    assert_eq!(target, source);
+    ir::check_rewrite(&source, &target).unwrap();
 }
