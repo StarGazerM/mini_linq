@@ -24,6 +24,19 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   builds. Pull printer carries the witness as a non-column item pruned at the
   forcing probe and realizes `expand` through `cq_storage::stage::segmented`;
   the push printer refuses both by name. Defaults record nothing.
+- Workload corpus adds `le` and `le_runs` planner-axis witnesses and two
+  224-configuration triangle kernel targets. A deterministic pairwise extender
+  preserves the original 80 handwritten witnesses and case lists; both families
+  now require all 367 axis pairs. Of 92 additional pairwise witnesses, 90 are
+  accepted; D85 LE/LE-runs merge-on-HashMap requires `OrderedRead` and is pinned
+  by two negative UI fixtures, matching the corpus's existing accepted-domain
+  policy. TPC-H benchmarking accepts `--config NAME` to measure `default`
+  alongside that named configuration, keeping separate uninstrumented timing
+  workers, existing DuckDB columns and exact oracle checks.
+  Three-job corpus gate: 3,440 passed, zero failed, 127.07 s wall time;
+  the compile-fail test includes all eleven rejection fixtures. SF1 five-run
+  benchmarks for both named configurations and their default baselines matched
+  DuckDB exactly on all thirteen queries (also gated at SF0.1).
 - Back end split into three recorded, checked layers (`doc/formal/backend.tex`;
   rules STR-Repr, ST-Total, ST-Stage, BK-Dual). Structures gains
   `r repr = tuples | positions {H lineage {..}, ..} owned [..];` (data
