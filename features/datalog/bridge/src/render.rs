@@ -21,7 +21,22 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             .collect();
         if let Some(value) = &declaration.value {
             let expression = &value.expression;
-            bindings.push(quote!(let #all = &(#expression);));
+            // Keep the original host alive, including temporary and grouped hosts.
+            // Rows already supplies Copy tuples of borrowed columns: hash those
+            // tuples once, without cloning values or adding another reference layer.
+            bindings.push(quote!(
+                let #all = &(#expression);
+                let #all = &{
+                    struct Canonical<R>(::cq_storage::HashSet<R>);
+                    impl<R: ::core::marker::Copy> ::cq_storage::rows::Rows for &Canonical<R> {
+                        type Row = R;
+                        fn rows(self) -> impl ::core::iter::Iterator<Item = R> {
+                            self.0.iter().copied()
+                        }
+                    }
+                    Canonical(::cq_storage::rows::Rows::rows(#all).collect())
+                };
+            ));
         } else {
             let seen = &relation.seen;
             bindings.push(quote!(
@@ -35,7 +50,7 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             );
         }
     }
-    for layout in &context.layouts {
+    for layout in context.layouts.iter().chain(&context.delta_layouts) {
         let relation = &context.relations[layout.relation];
         let host = &layout.host;
         let types: Vec<_> = layout
@@ -48,6 +63,7 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             let mut #host: ::std::collections::HashMap<(#(#keys,)*), ::std::vec::Vec<(#(#values,)*)>, ::cq_storage::HashState>
                 = ::core::default::Default::default();
         ));
+        // Delta layouts name IDBs, so both IDB host kinds start empty.
         if relation.declaration.value.is_some() {
             let all = &relation.all;
             let insert = insert_layout(layout, true);
@@ -104,12 +120,28 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
                     .filter(|layout| layout.relation == i)
                     .map(|layout| insert_layout(layout, false))
                     .collect();
+                // Keep admitted-row maintenance separate from delta-run builds.
                 let updates =
-                    (!updates.is_empty()).then(|| quote!(for row in &#next { #(#updates)* }));
+                    (!updates.is_empty()).then(|| quote!({ for row in &#next { #(#updates)* } }));
+                let delta_runs = context
+                    .delta_layouts
+                    .iter()
+                    .filter(|layout| layout.relation == i)
+                    .map(|layout| {
+                        let host = &layout.host;
+                        let insert = insert_layout(layout, false);
+                        // Replace even an empty run: another SCC member may
+                        // continue, but must never see this relation's old delta.
+                        quote!({
+                            #host = ::core::default::Default::default();
+                            for row in &#delta { #insert }
+                        })
+                    });
                 quote!(
                     #updates
                     #all.extend(#next.iter().cloned());
                     #delta = #next;
+                    #(#delta_runs)*
                 )
             })
             .collect();
@@ -138,8 +170,34 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             }
         }));
     }
-    let output = &context.relations[context.output].all;
-    quote!({ #(#bindings)* #bind_observer #(#strata)* #output.into_iter() })
+    let outputs: Vec<_> = context
+        .outputs
+        .iter()
+        .map(|&index| {
+            let relation = &context.relations[index];
+            let output = &relation.all;
+            if relation.declaration.value.is_some() {
+                // Layouts, negative projections, and outputs share the same
+                // canonical borrowed source. Clone only distinct output values.
+                let columns = (0..relation.declaration.arity()).map(|column| {
+                    let column = syn::Index::from(column);
+                    quote!(::core::clone::Clone::clone(row.#column))
+                });
+                quote!(::cq_storage::rows::Rows::rows(#output)
+                .map(|row| (#(#columns,)*))
+                .collect::<::std::vec::Vec<_>>()
+                .into_iter())
+            } else {
+                quote!(#output.into_iter())
+            }
+        })
+        .collect();
+    let result = if outputs.len() == 1 {
+        outputs[0].clone()
+    } else {
+        quote!((#(#outputs,)*))
+    };
+    quote!({ #(#bindings)* #bind_observer #(#strata)* #result })
 }
 
 // Every full layout is immutable while the round's holes run. Only admitted

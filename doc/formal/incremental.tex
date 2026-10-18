@@ -199,8 +199,14 @@ The reference transition is explicitly inflationary:
 \]
 Monotonicity alone would not imply $R\subseteq F(R)$ for arbitrary $R$.
 Finite fixed input domains and recursive heads that only copy positive-atom
-columns make this ascending chain stabilize. Lower-stratum seeds may add a
-finite set of values; no within-SCC value-generating operation is assumed.
+columns make this ascending chain stabilize; lower-stratum seeds may add a
+finite set of values. The implementation also permits arbitrary Rust
+expressions and body \texttt{let}-bound values in recursive heads.
+For such value-generating rules, termination is the caller's responsibility:
+the ascending chain need not stabilize, evaluation may diverge, and a run
+that does not reach the least fixpoint is outside the denotation.
+The finite stabilization claim below is conditional on a finite reachable
+domain (and total, pure rule expressions), not a source-language restriction.
 
 \begin{mathpar}
 \Rule{DL-Delta}{q\text{ a total positive recursive rule}\\
@@ -270,8 +276,8 @@ extensionality premise is still needed.
 \toprule
 Owner & Responsibility\\
 \midrule
-Datalog & Dependency strata, finite-domain discipline, inflationary fixpoint,
-and candidate-to-fresh-set boundary.\\
+Datalog & Dependency strata, conditional finite-domain stabilization,
+inflationary fixpoint, and candidate-to-fresh-set boundary.\\
 CQ/RA & Checked per-call plans; explicit incremental expansion and version
 requirements where that optional path is introduced.\\
 Physical & Consumer-sensitive canonicalization and access scheduling.\\

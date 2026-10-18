@@ -1,5 +1,11 @@
 //! Complete-answer differential tests against sequential Ascent.
 //! `datalog-oracle golden --write` is the only golden regeneration command.
+//! Owned-string differential matrices also compare each heterogeneous output
+//! against sequential Ascent: literal selections and heads, computed descriptors,
+//! renamed keyword variables, constant-filtered stratified negation, and shared
+//! delta runs with distinct key orders, later zero-key probes, nonlinear and
+//! mutual recursion, duplicate inputs, and guards before indexed delta reads.
+//! These cases do not alter the existing integer CSV golden corpus.
 //!
 //! Run from `features/datalog`:
 //! - Exactness (no counters): `cargo test -p datalog-oracle`.
@@ -8,8 +14,8 @@
 //!
 //! `counters` requires the explicit feature. `bench` refuses storage counters,
 //! including when another selected package enables them through feature unification.
-use cq_testkit::golden;
 pub use cq_testkit::Result;
+use cq_testkit::golden;
 pub mod programs;
 pub mod strings;
 use std::collections::BTreeSet;
@@ -18,7 +24,10 @@ use std::time::Duration;
 
 pub type Rows = Vec<Vec<i32>>;
 pub fn canonical(rows: Rows) -> Rows {
-    rows.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
+    rows.into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 #[derive(Clone, Debug, Default)]
 pub struct Data {
@@ -34,7 +43,14 @@ pub struct Data {
 }
 
 pub const SCENARIOS: &[&str] = &[
-    "empty", "self_loop", "chain", "cycle", "complete", "duplicates", "disconnected", "random",
+    "empty",
+    "self_loop",
+    "chain",
+    "cycle",
+    "complete",
+    "duplicates",
+    "disconnected",
+    "random",
 ];
 pub const RANDOM_SEEDS: u64 = 24;
 
@@ -42,23 +58,34 @@ pub const RANDOM_SEEDS: u64 = 24;
 pub fn generate(scenario: &str, n: i32, mut state: u64) -> Data {
     assert!(n > 0);
     let mut d = Data::default();
-    if scenario == "empty" { return d; }
+    if scenario == "empty" {
+        return d;
+    }
     let n = if scenario == "self_loop" { 1 } else { n };
     d.nodes = (0..n).map(|x| (x,)).collect();
     d.seed = vec![(0,)];
     d.extra = vec![(n - 1,)];
     d.edge = match scenario {
         "self_loop" => vec![(0, 0)],
-        "chain" | "duplicates" => (0..n-1).map(|x| (x, x+1)).collect(),
-        "cycle" => (0..n).map(|x| (x, (x+1)%n)).collect(),
-        "complete" => (0..n).flat_map(|x| (0..n).map(move |y| (x,y))).collect(),
-        "disconnected" => (0..n-1).filter(|x| *x != n/2-1).map(|x| (x,x+1)).collect(),
+        "chain" | "duplicates" => (0..n - 1).map(|x| (x, x + 1)).collect(),
+        "cycle" => (0..n).map(|x| (x, (x + 1) % n)).collect(),
+        "complete" => (0..n).flat_map(|x| (0..n).map(move |y| (x, y))).collect(),
+        "disconnected" => (0..n - 1)
+            .filter(|x| *x != n / 2 - 1)
+            .map(|x| (x, x + 1))
+            .collect(),
         "random" => {
             let mut edges = Vec::new();
-            for x in 0..n { for y in 0..n {
-                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-                if (state >> 32) % 5 == 0 { edges.push((x,y)); }
-            }}
+            for x in 0..n {
+                for y in 0..n {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    if (state >> 32) % 5 == 0 {
+                        edges.push((x, y));
+                    }
+                }
+            }
             edges
         }
         _ => panic!("unknown scenario: {scenario}"),
@@ -66,9 +93,9 @@ pub fn generate(scenario: &str, n: i32, mut state: u64) -> Data {
     // Constraint relations preserve graph shape but occupy distinct role domains.
     // Identity address facts plus graph-shaped assignments exercise propagation;
     // loads/stores/dereferences include nonidentity facts, not empty placeholders.
-    d.address_of = d.nodes.iter().map(|&(x,)| (x,x)).collect();
+    d.address_of = d.nodes.iter().map(|&(x,)| (x, x)).collect();
     d.assign = d.edge.clone();
-    d.load = d.edge.iter().map(|&(x,y)| (y,x)).collect();
+    d.load = d.edge.iter().map(|&(x, y)| (y, x)).collect();
     d.store = d.edge.clone();
     d.dereference = d.load.clone();
     if scenario == "random" {
@@ -79,10 +106,14 @@ pub fn generate(scenario: &str, n: i32, mut state: u64) -> Data {
         d.dereference = random_relation(n, &mut state, 1, 5);
     }
     if scenario == "duplicates" {
-        d.edge.extend(d.edge.clone()); d.seed.extend(d.seed.clone());
-        d.extra.extend(d.extra.clone()); d.nodes.extend(d.nodes.clone());
-        d.address_of.extend(d.address_of.clone()); d.assign.extend(d.assign.clone());
-        d.load.extend(d.load.clone()); d.store.extend(d.store.clone());
+        d.edge.extend(d.edge.clone());
+        d.seed.extend(d.seed.clone());
+        d.extra.extend(d.extra.clone());
+        d.nodes.extend(d.nodes.clone());
+        d.address_of.extend(d.address_of.clone());
+        d.assign.extend(d.assign.clone());
+        d.load.extend(d.load.clone());
+        d.store.extend(d.store.clone());
         d.dereference.extend(d.dereference.clone());
     }
     d
@@ -90,10 +121,16 @@ pub fn generate(scenario: &str, n: i32, mut state: u64) -> Data {
 
 fn random_relation(n: i32, state: &mut u64, numerator: u64, denominator: u64) -> Vec<(i32, i32)> {
     let mut rows = Vec::new();
-    for x in 0..n { for y in 0..n {
-        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        if (*state >> 32) % denominator < numerator { rows.push((x, y)); }
-    }}
+    for x in 0..n {
+        for y in 0..n {
+            *state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            if (*state >> 32) % denominator < numerator {
+                rows.push((x, y));
+            }
+        }
+    }
     rows
 }
 
@@ -126,52 +163,102 @@ macro_rules! cases {
     }
 }
 cases! { reach:1, tc_left:2, tc_right:2, tc_nonlinear:2, same_generation:2,
-    mutual:3, multiple_seeds:1, guard:1, unreachable:1, nonedges:2,
-    recursive_upper:2, andersen:2, cspa:3 }
+mutual:3, multiple_seeds:1, guard:1, unreachable:1, nonedges:2,
+recursive_upper:2, andersen:2, cspa:3 }
 
 // Independent dense Boolean closure, not a join/delta implementation.
 pub fn naive(case: &str, d: &Data) -> Option<Rows> {
-    let n = d.nodes.iter().map(|&(x,)| x as usize + 1).max().unwrap_or(0);
+    let n = d
+        .nodes
+        .iter()
+        .map(|&(x,)| x as usize + 1)
+        .max()
+        .unwrap_or(0);
     let mut tc = vec![vec![false; n]; n];
-    for &(x,y) in &d.edge { tc[x as usize][y as usize] = true; }
-    for k in 0..n { for x in 0..n { for y in 0..n {
-        tc[x][y] |= tc[x][k] && tc[k][y];
-    }}}
+    for &(x, y) in &d.edge {
+        tc[x as usize][y as usize] = true;
+    }
+    for k in 0..n {
+        for x in 0..n {
+            for y in 0..n {
+                tc[x][y] |= tc[x][k] && tc[k][y];
+            }
+        }
+    }
     match case {
-        "reach" => Some((0..n).filter(|&y| d.seed.iter().any(|&(x,)| x as usize == y || tc[x as usize][y])).map(|y| vec![y as i32]).collect()),
-        "tc_left" | "tc_right" | "tc_nonlinear" => Some((0..n).flat_map(|x| (0..n).filter_map({let tc=&tc; move |y| tc[x][y].then_some(vec![x as i32,y as i32])})).collect()),
+        "reach" => Some(
+            (0..n)
+                .filter(|&y| {
+                    d.seed
+                        .iter()
+                        .any(|&(x,)| x as usize == y || tc[x as usize][y])
+                })
+                .map(|y| vec![y as i32])
+                .collect(),
+        ),
+        "tc_left" | "tc_right" | "tc_nonlinear" => Some(
+            (0..n)
+                .flat_map(|x| {
+                    (0..n).filter_map({
+                        let tc = &tc;
+                        move |y| tc[x][y].then_some(vec![x as i32, y as i32])
+                    })
+                })
+                .collect(),
+        ),
         "same_generation" => {
             // Walk the product graph from sibling pairs using a work queue.
             let mut seen = BTreeSet::new();
             let mut pending = std::collections::VecDeque::new();
-            for &(p,x) in &d.edge { for &(q,y) in &d.edge {
-                if p == q && seen.insert((x,y)) { pending.push_back((x,y)); }
-            }}
-            while let Some((a,b)) = pending.pop_front() {
-                for &(p,x) in &d.edge { if p != a {continue;} for &(q,y) in &d.edge {
-                    if q == b && seen.insert((x,y)) { pending.push_back((x,y)); }
-                }}
+            for &(p, x) in &d.edge {
+                for &(q, y) in &d.edge {
+                    if p == q && seen.insert((x, y)) {
+                        pending.push_back((x, y));
+                    }
+                }
             }
-            Some(seen.into_iter().map(|(x,y)| vec![x,y]).collect())
+            while let Some((a, b)) = pending.pop_front() {
+                for &(p, x) in &d.edge {
+                    if p != a {
+                        continue;
+                    }
+                    for &(q, y) in &d.edge {
+                        if q == b && seen.insert((x, y)) {
+                            pending.push_back((x, y));
+                        }
+                    }
+                }
+            }
+            Some(seen.into_iter().map(|(x, y)| vec![x, y]).collect())
         }
         _ => None,
     }
 }
 
-pub fn golden_root() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("golden") }
+pub fn golden_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("golden")
+}
 pub fn goldens(write: bool, mini: bool) -> Result<BTreeSet<PathBuf>> {
     let mut checked = BTreeSet::new();
-    for c in CASES { for scenario in SCENARIOS {
-        let data = generate(scenario, 6, 0x5eed);
-        let rows = if mini { (c.mini)(&data).0 } else { (c.oracle)(&data).0 };
-        let path = golden_root().join(c.name).join(format!("{scenario}.csv"));
-        if write {
-            std::fs::create_dir_all(path.parent().unwrap())?;
-            std::fs::write(&path, golden::canonical_bytes(&rows, c.arity)?)?;
-        } else { golden::compare(&path, &rows, c.arity)?; }
-        println!("{}\t{}\t{}", c.name, scenario, rows.len());
-        checked.insert(path);
-    }}
+    for c in CASES {
+        for scenario in SCENARIOS {
+            let data = generate(scenario, 6, 0x5eed);
+            let rows = if mini {
+                (c.mini)(&data).0
+            } else {
+                (c.oracle)(&data).0
+            };
+            let path = golden_root().join(c.name).join(format!("{scenario}.csv"));
+            if write {
+                std::fs::create_dir_all(path.parent().unwrap())?;
+                std::fs::write(&path, golden::canonical_bytes(&rows, c.arity)?)?;
+            } else {
+                golden::compare(&path, &rows, c.arity)?;
+            }
+            println!("{}\t{}\t{}", c.name, scenario, rows.len());
+            checked.insert(path);
+        }
+    }
     Ok(checked)
 }
 
@@ -181,8 +268,12 @@ mod tests {
     #[test]
     fn differential_matrix() {
         for c in CASES {
-            for scenario in SCENARIOS { check(c, scenario, 0x5eed); }
-            for seed in 0..RANDOM_SEEDS { check(c, "random", seed); }
+            for scenario in SCENARIOS {
+                check(c, scenario, 0x5eed);
+            }
+            for seed in 0..RANDOM_SEEDS {
+                check(c, "random", seed);
+            }
         }
     }
     fn check(c: &Case, scenario: &str, seed: u64) {
@@ -209,24 +300,36 @@ mod tests {
                 for (num, den) in [(1, 5), (2, n as u64)] {
                     for seed in 0..2 {
                         let d = random_data(n, seed, num, den);
-                        check_data(c, &d, &format!("random / n={n} / p={num}/{den} / seed={seed}"));
+                        check_data(
+                            c,
+                            &d,
+                            &format!("random / n={n} / p={num}/{den} / seed={seed}"),
+                        );
                     }
                 }
             }
         }
         for n in [6, 20, 50] {
             for (num, den) in [(1, 5), (2, n as u64)] {
-                for seed in 0..2 { strings::check(&random_data(n, seed, num, den)); }
+                for seed in 0..2 {
+                    strings::check(&random_data(n, seed, num, den));
+                }
             }
         }
         for n in [20, 50] {
-            for scenario in SCENARIOS { strings::check(&generate(scenario, n, 0x5eed)); }
+            for scenario in SCENARIOS {
+                strings::check(&generate(scenario, n, 0x5eed));
+            }
         }
     }
     #[test]
-    fn checked_in_goldens() { goldens(false, true).unwrap(); }
+    fn checked_in_goldens() {
+        goldens(false, true).unwrap();
+    }
     #[test]
-    fn oracle_goldens() { goldens(false, false).unwrap(); }
+    fn oracle_goldens() {
+        goldens(false, false).unwrap();
+    }
     #[test]
     fn golden_inventory() {
         let checked = goldens(false, false).unwrap();
@@ -251,6 +354,8 @@ mod tests {
         for scenario in SCENARIOS {
             strings::check(&generate(scenario, 6, 0x5eed));
         }
-        for seed in 0..RANDOM_SEEDS { strings::check(&generate("random", 6, seed)); }
+        for seed in 0..RANDOM_SEEDS {
+            strings::check(&generate("random", 6, seed));
+        }
     }
 }

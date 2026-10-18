@@ -16,13 +16,18 @@ pub mod reach {
         answer(y) <-- answer(x), edge(x,y);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
-        p.seed = data.seed.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            seed: data.seed.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0,]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -36,9 +41,13 @@ pub mod reach {
                 output answer;
                 answer(*x) :- seed(x);
                 answer(*y) :- answer(x), edge(x,y);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,)| vec![x0,]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -52,12 +61,17 @@ pub mod tc_left {
         answer(x,z) <-- answer(x,y), edge(y,z);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -69,9 +83,13 @@ pub mod tc_left {
                 output answer;
                 answer(*x,*y) :- edge(x,y);
                 answer(*x,*z) :- answer(x,y), edge(y,z);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -85,12 +103,17 @@ pub mod tc_right {
         answer(x,z) <-- edge(x,y), answer(y,z);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -102,9 +125,13 @@ pub mod tc_right {
                 output answer;
                 answer(*x,*y) :- edge(x,y);
                 answer(*x,*z) :- edge(x,y), answer(y,z);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -118,12 +145,17 @@ pub mod tc_nonlinear {
         answer(x,z) <-- answer(x,y), answer(y,z);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -135,9 +167,13 @@ pub mod tc_nonlinear {
                 output answer;
                 answer(*x,*y) :- edge(x,y);
                 answer(*x,*z) :- answer(x,y), answer(y,z);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -151,12 +187,17 @@ pub mod same_generation {
         answer(x,y) <-- answer(a,b), edge(a,x), edge(b,y);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -168,9 +209,13 @@ pub mod same_generation {
                 output answer;
                 answer(*x,*y) :- edge(p,x), edge(p,y);
                 answer(*x,*y) :- answer(a,b), edge(a,x), edge(b,y);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -190,13 +235,23 @@ pub mod mutual {
         answer(1,x,y) <-- odd(x,y);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
-        p.nodes = data.nodes.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            nodes: data.nodes.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1,x2)| vec![x0,x1,x2]).collect()), elapsed)
+        (
+            crate::canonical(
+                p.answer
+                    .into_iter()
+                    .map(|(x0, x1, x2)| vec![x0, x1, x2])
+                    .collect(),
+            ),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -215,9 +270,18 @@ pub mod mutual {
                 even(*x,*z) :- odd(x,y), edge(y,z);
                 answer(0,*x,*y) :- even(x,y);
                 answer(1,*x,*y) :- odd(x,y);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1,x2)| vec![x0,x1,x2]).collect()), elapsed)
+        (
+            crate::canonical(
+                result
+                    .into_iter()
+                    .map(|(x0, x1, x2)| vec![x0, x1, x2])
+                    .collect(),
+            ),
+            elapsed,
+        )
     }
 }
 
@@ -234,14 +298,19 @@ pub mod multiple_seeds {
         answer(y) <-- answer(x), edge(x,y);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
-        p.seed = data.seed.clone();
-        p.extra = data.extra.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            seed: data.seed.clone(),
+            extra: data.extra.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0,]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -258,9 +327,13 @@ pub mod multiple_seeds {
                 answer(*x) :- seed(x);
                 answer(*x) :- extra(x);
                 answer(*y) :- answer(x), edge(x,y);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,)| vec![x0,]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -275,13 +348,18 @@ pub mod guard {
         answer(y) <-- answer(x), edge(x,y), if *y % 2 == 0;
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
-        p.seed = data.seed.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            seed: data.seed.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0,]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -295,9 +373,13 @@ pub mod guard {
                 output answer;
                 answer(*x) :- seed(x);
                 answer(*y) :- answer(x), edge(x,y), if *y % 2 == 0;
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,)| vec![x0,]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -315,14 +397,19 @@ pub mod unreachable {
         answer(x) <-- nodes(x), !reach(x);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
-        p.seed = data.seed.clone();
-        p.nodes = data.nodes.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            seed: data.seed.clone(),
+            nodes: data.nodes.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0,]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0,)| vec![x0]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -340,9 +427,13 @@ pub mod unreachable {
                 reach(*x) :- seed(x);
                 reach(*y) :- reach(x), edge(x,y);
                 answer(*x) :- nodes(x), !reach(x);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,)| vec![x0,]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0,)| vec![x0]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -358,12 +449,17 @@ pub mod nonedges {
         answer(x,y) <-- path(x,y), !edge(x,y);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -377,9 +473,13 @@ pub mod nonedges {
                 path(*x,*y) :- edge(x,y);
                 path(*x,*z) :- path(x,y), edge(y,z);
                 answer(*x,*y) :- path(x,y), !edge(x,y);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -398,14 +498,19 @@ pub mod recursive_upper {
         answer(x,z) <-- answer(x,y), edge(y,z), !lower(z);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.edge = data.edge.clone();
-        p.seed = data.seed.clone();
-        p.nodes = data.nodes.clone();
+        let mut p = Oracle {
+            edge: data.edge.clone(),
+            seed: data.seed.clone(),
+            nodes: data.nodes.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let edge = data.edge.clone();
@@ -424,9 +529,13 @@ pub mod recursive_upper {
                 lower(*y) :- lower(x), edge(x,y);
                 answer(*x,*x) :- nodes(x), !lower(x);
                 answer(*x,*z) :- answer(x,y), edge(y,z), !lower(z);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -445,15 +554,20 @@ pub mod andersen {
         answer(z,w) <-- store(y,x), answer(y,z), answer(x,w);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.address_of = data.address_of.clone();
-        p.assign = data.assign.clone();
-        p.load = data.load.clone();
-        p.store = data.store.clone();
+        let mut p = Oracle {
+            address_of: data.address_of.clone(),
+            assign: data.assign.clone(),
+            load: data.load.clone(),
+            store: data.store.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(p.answer.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let address_of = data.address_of.clone();
@@ -473,9 +587,13 @@ pub mod andersen {
                 answer(*y,*x) :- assign(y,z), answer(z,x);
                 answer(*y,*w) :- load(y,x), answer(x,z), answer(z,w);
                 answer(*z,*w) :- store(y,x), answer(y,z), answer(x,w);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1)| vec![x0,x1]).collect()), elapsed)
+        (
+            crate::canonical(result.into_iter().map(|(x0, x1)| vec![x0, x1]).collect()),
+            elapsed,
+        )
     }
 }
 
@@ -504,13 +622,23 @@ pub mod cspa {
         answer(2,x,y) <-- valuealias(x,y);
     }
     pub fn oracle(data: &Data) -> (Rows, Duration) {
-        let mut p = Oracle::default();
-        p.assign = data.assign.clone();
-        p.dereference = data.dereference.clone();
+        let mut p = Oracle {
+            assign: data.assign.clone(),
+            dereference: data.dereference.clone(),
+            ..Default::default()
+        };
         let start = Instant::now();
         p.run();
         let elapsed = start.elapsed();
-        (crate::canonical(p.answer.into_iter().map(|(x0,x1,x2)| vec![x0,x1,x2]).collect()), elapsed)
+        (
+            crate::canonical(
+                p.answer
+                    .into_iter()
+                    .map(|(x0, x1, x2)| vec![x0, x1, x2])
+                    .collect(),
+            ),
+            elapsed,
+        )
     }
     pub fn mini(data: &Data) -> (Rows, Duration) {
         let assign = data.assign.clone();
@@ -538,9 +666,17 @@ pub mod cspa {
                 answer(0,*x,*y) :- valueflow(x,y);
                 answer(1,*x,*y) :- memoryalias(x,y);
                 answer(2,*x,*y) :- valuealias(x,y);
-        }.collect::<Vec<_>>();
+        }
+        .collect::<Vec<_>>();
         let elapsed = start.elapsed();
-        (crate::canonical(result.into_iter().map(|(x0,x1,x2)| vec![x0,x1,x2]).collect()), elapsed)
+        (
+            crate::canonical(
+                result
+                    .into_iter()
+                    .map(|(x0, x1, x2)| vec![x0, x1, x2])
+                    .collect(),
+            ),
+            elapsed,
+        )
     }
 }
-

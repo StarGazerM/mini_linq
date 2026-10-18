@@ -6,6 +6,22 @@
 //! `seminaive!` resumes a complete schedule. Every CQ hole receives the same
 //! caller continuation, including unchanged opaque pass arguments. The bridge
 //! owns sets, grouped host layouts and rounds; it adds no planner options.
+//! Full layouts are maintained by inserting each newly admitted row at
+//! publication. Delta layouts are separate grouped `HashMap` hosts: seed
+//! publication and every later publication replace each demanded run once,
+//! including empty runs, before any hole in the next round can borrow it.
+//! All holes sharing a delta layout borrow the same immutable round snapshot.
+//! Keyed delta reads and later key-zero probes use those hosts; only an initial
+//! unkeyed delta atom scans its `Vec`. Written body and guard order is unchanged.
+//! Every EDB is a set: before any layouts or rounds, its generic borrowed `Rows`
+//! host is scanned once into a hash set of borrowed column tuples. All layouts,
+//! negative-key projections, and EDB outputs reuse that canonical source; extra
+//! layouts never rescan or re-deduplicate the input. Canonicalization clones no
+//! column values. Owned grouped layouts and outputs clone only distinct tuples.
+//! All EDB columns therefore require `Eq + Hash`; negative-only columns need
+//! not implement `Clone`. This is mandatory input semantics, not a policy.
+//! Multiple outputs return a tuple of owned iterators in written output order;
+//! single outputs return one owned iterator, including EDB-only programs.
 
 use proc_macro::TokenStream;
 use quote::ToTokens;

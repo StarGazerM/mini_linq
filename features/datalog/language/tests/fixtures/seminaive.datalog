@@ -18,8 +18,8 @@ seminaive {
     delta Result = ResultChanges;
     layout Edge [0,1] key 0;
     layout Reach [0,1] key 1;
-    layout Reach [1,0] key 1;
     layout Reach [0,1] key 0;
+    delta_layout Reach [0,1] key 1;
     variant 0 seed { Reach(*x,*y) :- Edge(x,y); }
     variant 1 delta 0 { Reach(*x,*z) :- ReachChanges(x,y), Reach(y,z); }
     variant 1 delta 1 { Reach(*x,*z) :- Reach(x,y), ReachChanges(y,z); }
