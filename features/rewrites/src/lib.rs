@@ -58,9 +58,11 @@
 //! | `canon_prefixes` | Adds `canon` on a projection | Drops columns without retaining an inferred uniqueness key; retained columns satisfy the language's Leibniz checks. Existing canonical boundaries remain. |
 //! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `binary_intersection` predicate accepts the probe/check pair, and every interposed definition can move before the probe without moving Rust or breaking dependencies. |
 //! | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
+//! | `build_host_reads` | Reusable host rename becomes retained `let` | Has nonempty integral (`i32`/`i64`) keyed stream reads and no lazy membership reader. Keys and relational predicates are unchanged; selection records providers afterwards. Const-only point/range scans remain host scans. |
 //!
-//! These passes preserve the operator graph, declarations, keys, modes, return
-//! head, and opaque Rust expressions. `smallest_intersections` moves interposed
+//! Except for `build_host_reads`' explicit retention decision, these passes
+//! preserve the operator graph, declarations, keys, modes, return head, and
+//! opaque Rust expressions. `smallest_intersections` moves interposed
 //! relational definitions earlier, preserving their dependency order, to make
 //! the candidate probe and its check adjacent. This includes reusable host
 //! renames and retained relational chains. Bind/guard nodes stay at their original
@@ -231,6 +233,7 @@ physical_rewrite!(merge_joins);
 physical_rewrite!(canon_prefixes);
 physical_rewrite!(smallest_intersections);
 physical_rewrite!(lazy_semijoins);
+physical_rewrite!(build_host_reads);
 
 /// Change only the representation types matched by `selector => RustType`.
 #[proc_macro]
