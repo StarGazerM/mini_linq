@@ -1,0 +1,12 @@
+[package]
+name = "cq-gpu-runtime"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
+gpu-blocked-run = { path = "../blocked-run" }
+gpu-tiles = { path = "../tiles" }
+rccl-memory = { path = "/data/rccl/rccl-memory" }

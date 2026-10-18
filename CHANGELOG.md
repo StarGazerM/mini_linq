@@ -7,6 +7,21 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add the external `cq_gpu::print` Structures terminal printer and its pooled
+  host runtime in `experiments/gpu`: generic CUDA tile streams, exact recorded
+  keyed-read provenance, retained lookup witnesses, bounded segmented expansion
+  with an explicit frontier, budgeted membership bitmaps and exact multiword
+  device dedup. The CPU-neutral `cq_rewrites::build_host_reads` records retained
+  host modes; explicit `cq_gpu::prefix_runs` and `retype(dedup => DeviceSet<_>)`
+  record device representations rather than silently replacing CPU providers.
+  Nested macro expansion runs on CUDA; smoke agrees with pull, a 20,000-answer
+  fanout exercises frontier/grow/relaunch, and four compile-fail fixtures name
+  unsupported merge, union, non-integral build keys and opaque guards.
+  Compiled retail_h05 A/B match all 7,242 SF1 and 72,983 SF10 answers after one
+  warmup and five runs. SF10 median GPU totals are 19.039/117.689 ms versus
+  hand-written 6.2/10.1 ms: correctness is reproduced, performance is not.
+  Both final kernels use 40 registers with 44/36-byte spill stores/loads;
+  all measurements and the differing recorded Supplier prefix are documented.
 - Lookup&Expand sharing on the R/E/C back end (contract of record
   `/data/codex/gpu-le-reply.md`, confirmed by the GPU session). Structures gains
   `r share = lookup b [K] first s force p;` (ST-Share: the keyed read is

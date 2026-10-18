@@ -1,0 +1,5 @@
+error: CQ_GPU_OPAQUE_GUARD: opaque guard is unsupported; use a supported relational predicate
+ --> tests/ui/opaque_guard.rs:7:13
+  |
+7 |             g = pipe guard l if (opaque(x));
+  |             ^

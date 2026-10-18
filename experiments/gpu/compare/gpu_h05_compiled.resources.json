@@ -1,0 +1,74 @@
+{
+  "cq_gpu_stream_0_r11": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "cq_gpu_stream_0_r21": {
+    "stack_bytes": 40,
+    "spill_stores_bytes": 44,
+    "spill_loads_bytes": 36,
+    "registers": 40
+  },
+  "cq_gpu_stream_1_r7": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "cq_gpu_stream_0_r3": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "cq_gpu_stream_0_r8": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "cq_gpu_stream_1_r9": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "cq_gpu_stream_1_r2": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 32
+  },
+  "cq_gpu_stream_1_r19": {
+    "stack_bytes": 40,
+    "spill_stores_bytes": 44,
+    "spill_loads_bytes": 36,
+    "registers": 40
+  },
+  "cq_gpu_stream_0_r5": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "cq_gpu_stream_1_r15": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "cq_gpu_stream_1_r3": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "cq_gpu_stream_0_r2": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 32
+  }
+}

@@ -645,3 +645,148 @@ resource audit: the persistent kernel uses **40 registers**, **14,468 bytes
 dynamic shared memory**, a **104-byte stack frame**, and **zero spill stores
 or loads**. The BFS filter uses 18 registers, 32 bytes dynamic shared memory,
 and zero stack/spills. No CUDA C, NVRTC, or upstream checkout changes were used.
+
+## Structures GPU terminal printer
+
+`printer` is the external proc-macro crate `cq-gpu`; `printer-runtime` owns
+column uploads, pooled blocked-run builds, output allocation, device
+canonicalization and downloads. `h05-compiled` authors the retail clauses
+twice, with fact-first and customer-first written orders. It does not call
+the hand-written H05 kernels.
+
+```rust,ignore
+pipeline {
+    plan = ::cq_planners::order(le);
+    physical = [::cq_rewrites::build_host_reads];
+    structures = [
+        ::cq_rewrites::sorted_runs,
+        ::cq_gpu::prefix_runs,
+        ::cq_rewrites::retain_lookups,
+        ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_>),
+    ];
+    print = ::cq_gpu::print(tile(256,4), frontier(8), directory(rank));
+}
+```
+
+The three printer arguments are optional; the displayed values are their
+defaults. `frontier(0)` disables descriptor publication. The supported tile
+shape is 256 threads × four items, and the supported directory is `rank`;
+other shapes/directories are rejected rather than silently ignored.
+
+The extra recorded passes are necessary. The shorter
+`order(le)` + `sorted_runs` + `retain_lookups` pipeline still records host
+fallback indexes for unfiltered Supplier/Lineitem and a CPU HashSet at
+canon. `build_host_reads` is a CPU-neutral Physical mode rewrite: eligible
+integral-key host renames become retained `let` results, without changing
+the graph, keys, predicates or their order. `prefix_runs` explicitly retypes
+an existing multi-level Trie with an integral single-column first level to
+`cq_gpu_runtime::PrefixRun`. It does not change its key levels. Its abstraction
+is the first-key clustered range filtered by all remaining key equalities,
+preserving duplicates and source order. This device-only provider is not
+silently substituted for an arbitrary CPU index.
+
+| Checked Structures/Physical fact | GPU realization |
+|---|---|
+| Host rename and relational select/point/range | Uploaded column scan and device comparisons; string equality uses per-run dictionary IDs. |
+| `let` with one-level `SortedRun` | One blocked run, built on device using the recorded integral key. |
+| Explicit `PrefixRun` key levels | One prefix run, with exact residual comparisons at full-key reads. |
+| Integral membership-only provider | Budgeted exact bitmap, not an inferred payload run. |
+| Eager semi without a witness | Exact membership test at the recorded keyed read. |
+| `share` plus matching `repr witness` | Retained `(begin,end)` descriptor, consumed at the recorded forcing probe without reprobe. |
+| Probe | Block scan of range lengths, output-parallel owner search, bounded in-tile expansion loops. `first` is a traversal choice, **not** a primary-key/cardinality promise. |
+| `stage = batch N` / `expand` | Bounds cooperative work by the recorded batch; only explicit expand stages publish large descriptors to the bounded frontier. |
+| Project | Carries only demanded values to output. |
+| Recorded `DeviceSet<_>` canon | Exact device dedup; hash collisions never establish equality. |
+| Returned stream | Capacity-checked device output; overflow counts all rows, grows and relaunches the pure stream. |
+
+Each generated kernel records its Structures keyed-read provenance. PrefixRun
+witnesses are not fabricated: the existing share contract admits only
+one-level payload providers, so multi-level Supplier reads retain their
+ordinary lookup behavior. Inputs must remain immutable during execution.
+Host tuple slices are columnized with a cache keyed by slice pointer, length,
+Rust row type and schema; the cache and shared string dictionary last for one
+execution, never across unrelated calls. Answers are owned typed tuples.
+
+### Running the compiled pipeline
+
+```sh
+source /data/rccl/scripts/oxide-env.sh
+cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin printer-smoke
+./target/release/printer-smoke
+cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin gpu-h05-compiled
+./target/release/gpu-h05-compiled /data/tpch-gpu/sf1 both compare/gpu_h05_compiled.results.json
+./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 both compare/gpu_h05_compiled.results.json
+```
+
+The standalone smoke compares GPU answers with the pull printer, including
+empty input. Each H05 plan checks exact sorted answers against the independent
+`answer.tsv` after one warmup and five measured runs. The input dictionary is
+decoded to host Strings before compilation's ordinary slice-binding path;
+the runtime constructs its own per-run dictionary. Date columns use integral
+days and the manifest is checked against the authored 1994 window.
+`total_ms` is GPU build + query kernel + dedup time, excluding host
+columnization, upload and answer download; `wall_ms` includes the full call.
+Compare this scope with the hand-written SF10 totals, A 6.2 ms and B 10.1 ms,
+in `compare/gpu_h05.results.json`.
+
+Measured on the RTX 6000 Ada, 2026-10-18, both compiled plans are exact at SF1
+(7,242 answers) and SF10 (72,983). These are medians of five runs after one
+warmup; phase medians need not sum to the median total.
+
+| Plan | SF1 total ms | SF10 build ms | SF10 kernels ms | SF10 dedup ms | SF10 total ms | Hand-written SF10 total ms |
+|---|---:|---:|---:|---:|---:|---:|
+| Compiled A, fact-first | 11.619 | 9.435 | 8.980 | 0.644 | 19.039 | 6.2 |
+| Compiled B, customer-first | 14.681 | 24.371 | 92.602 | 0.730 | 117.689 | 10.1 |
+
+The compiler reproduces the answers, **not the hand-written performance**.
+It preserves the public pipeline's recorded reads, including LE semijoins
+and the Supplier prefix selected by Structures. In B that prefix is
+`nation_key`, with `supplier_key` tested as a residual; it is not the
+hand-written supplier-key point lookup. The runtime also materializes/builds
+every recorded retained stream rather than specializing the small dimensions.
+No timing claim attributes the entire gap to one cause without profiling.
+Full-call median wall times at SF10 are 1,149.596 ms (A) and 1,242.539 ms (B),
+including repeated per-run columnization and transfers.
+
+`compare/gpu_h05_compiled.ptxas.txt` and `.resources.json` contain the actual
+`ptxas -v -arch=sm_89` audit. Final streams `cq_gpu_stream_0_r21` (A) and
+`cq_gpu_stream_1_r19` (B) each use 40 registers, a 40-byte stack frame,
+44 bytes spill stores and 36 bytes spill loads. The other ten generated
+streams use 32 or 34 registers with zero stack/spills. The spills are
+reported, not hidden by an unsupported representation or plan change.
+
+Additional acceptance commands:
+
+```sh
+cargo +stable test -p cq-gpu
+cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin printer-oracle
+./target/release/printer-oracle
+```
+
+The compiler tests check exact keyed-read coverage and witness no-reprobe;
+four public-macro compile-fail fixtures name `CQ_GPU_MERGE`,
+`CQ_GPU_UNION`, `CQ_GPU_NON_INTEGRAL_KEY` and `CQ_GPU_OPAQUE_GUARD`.
+The GPU oracle exercises full-width signed multiword dedup with strings,
+and a 20,000-answer fanout using a retained witness, batch-32 expansion,
+frontier publication and output grow/relaunch.
+
+
+### Supported domain and explicit rejections
+
+- No computed head expressions, union/fallback blocks, anti, merge, smallest traversal, opaque Rust
+  binds/guards, or host keyed fallback execution. Total comparisons and
+  Boolean connectives are lowered; `#[total]` is not permission to emit an
+  arbitrary Rust function on device.
+- Keys must be integral. Strings support dictionary equality, not lexical
+  ordering or arbitrary string methods. Integer encoding is checked to fit
+  signed 64 bits. A blocked rank domain cannot exceed 2^32 positions.
+- Ordinary multi-level providers are rejected; only explicitly recorded
+  `PrefixRun` has the residual-filter interpretation above. A recorded CPU
+  canon provider is rejected; `retype(dedup => DeviceSet<_>)` is required.
+- No aggregates, recursion, host fallback algorithms, RCCL device algorithms,
+  CUDA C or NVRTC. The existing cuda-oxide PTX/shared-memory and package-loader
+  restrictions described above still apply. The consumer is a separate
+  package from both device libraries.
+- Finite device output cardinalities must fit the runtime's row-index domain.
+  Grow/relaunch preserves exhaustive answers, but repeats pure GPU work on
+  overflow; it does not assume unrecorded PK constraints.

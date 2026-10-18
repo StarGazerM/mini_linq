@@ -1,19 +1,23 @@
 # GPU execution design (exploration branch `gpu`)
 
-Status: design settled in discussion 2026-10-15/16; de-risk phase in
-`experiments/gpu`. Nothing here is wired into the compiler pipeline yet.
+Status: hand-written de-risk kernels and the external `cq_gpu::print` terminal
+printer are implemented in `experiments/gpu`. The compiled H05 plans are exact
+at SF1/SF10; measured compiler results and limitations are in that workspace's
+README. The `cq-lang-device` proposal below is historical, not an implemented
+or required language.
 
 ## Decisions
 
-1. **Attach point.** A new checked IR `cq-lang-device` between Structures and a
-   terminal printer. Every GPU decision (layout, build kind, probe mode, tile
-   shape, compaction thresholds, segment boundaries, skew policy) is recorded
-   as IR text. Not emitter flags.
+1. **Attach point.** An external terminal printer consumes checked Structures.
+   Operators, providers, key levels, lookup sharing/witnesses and expansion
+   staging are already recorded facts. GPU-only control choices are explicit
+   printer arguments (`tile`, `frontier`, `directory`); no Device IR is added.
 2. **Toolchain.** Kernels are ordinary Rust compiled by the cuda-oxide fork
    (`https://github.com/StarGazerM/cuda-oxide.git`, rev
-   `5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3`, nightly-2026-08-28); host
-   algorithms come from RCCL (`/data/rccl`: radix sort, scan, gather, merge,
-   select/unique, Bloom, sorted search). No CUDA C, no NVRTC, no OptiX.
+   `5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3`, nightly-2026-08-28). Host
+   allocation uses RCCL's memory pool; device algorithms use this workspace's
+   tiles and blocked-run kernels, not RCCL device modules (PTX collision).
+   No CUDA C, no NVRTC, no OptiX.
 3. **First workload.** TPC-H retail kernels (features/workloads), SF1 exact,
    SF10 timed, compared with srdatalog-python on the same projected inputs.
 
@@ -188,7 +192,13 @@ cursor is retained on an integral-key build (H03, H07, H07-block, H08), slower
 where it cannot be (host-fallback keysets, composite `HashIndex` whose cursor
 holds an `Rc`). The next CPU lever is a Copy cursor for `HashIndex`.
 
-## `cq-lang-device`: grammar and contract (draft for review)
+## Historical `cq-lang-device` proposal (superseded)
+
+This draft is retained as design history, not the compiler interface.
+The implemented attach point above uses the existing Structures R/E contracts:
+`share`, `repr witness`, `stage ... expand`, recorded `SortedRun`/`PrefixRun`
+and `DeviceSet` providers. GPU control parameters belong to `cq_gpu::print`.
+The grammar and correspondence below were proposed before that cutover.
 
 Shape: an external stacked language over the complete Structures program,
 exactly like `features/stacked-ir`'s Trace over Physical: text is
