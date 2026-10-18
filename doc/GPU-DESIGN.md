@@ -303,3 +303,40 @@ recognition verbatim (reuse); (b) whether `frontier`/`registers` are per
 kernel or per program (per kernel); (c) whether `column … = dict` belongs in
 Device or in a load-time dictionary annotation shared with CPU positional
 hosts (shared, if `cq-load` gains dictionary columns).
+
+## Later: the spine (Differential Dataflow) and its effect on joins
+
+Reference structure: Differential Dataflow's `Spine` — an arrangement's trace as
+a list of immutable, key-sorted batches of geometrically growing size, read
+through a `CursorList` that merges per-batch cursors in key order, physically
+compacted by merging adjacent similar-size batches, logically compacted only
+up to the frontier readers have released. srdatalog's FULL/HEAD is a naive
+two-batch approximation (compact at 10 %, re-sort, no directory). Upstream's
+`Runs⟨S⟩` (incremental.tex, STR-Maintain) already has the spine's shape:
+immutable runs, exact-once insertion, merges never crossing a protected cut
+(= DD's logical compaction frontier), `cut_u` (= a cursor as of time u).
+
+Consequences for joins, to be designed with the recursion experiment:
+
+1. Joins are cursor merges over spines: DD's `join_core` walks two
+   `CursorList`s in key order; a lookup is `seek_key` across all batches. The
+   sorted-run representation is the one that matches; a per-batch hash/rank
+   directory is an accelerator, not the structure. A key's witness is the
+   `CursorList` state — one range per batch — so the `witness { b [K] at s as
+   Type }` entry must admit the trace's Copy cursor (bounded array of ranges).
+2. Semi-naive is batch × trace: the new batch of R against the trace of S, and
+   the new batch of S against the trace of R as of before this batch (time
+   order prevents double counting). The device structure must expose a trace
+   cursor as of a boundary without copying.
+3. Compaction is explicit and twofold: physical (merge adjacent similar-size
+   batches; recorded threshold) and logical (only past the released frontier =
+   protected cuts). Both are merge-path over sorted batches; neither re-sorts.
+   A merged membership bitmap (OR of per-batch bitmaps, prefix recomputed)
+   keeps `seek_key` misses at one load — the dedup-against-trace case.
+4. Diffs: DD batches carry `(time, diff)`; under set semantics with
+   insert-only increments (incremental.tex Option A) diff is always +1 and
+   dedup is a miss test.
+
+Unchanged: RA′/Physical (one keyed read per build), R/E/C placement (the spine
+is an R fact of the build; multi-range witnesses are the same E sharing), and
+the tile kernels (segmented flatten handles variable segment counts).
