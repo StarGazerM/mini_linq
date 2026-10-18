@@ -94,7 +94,7 @@ impl Context<'_> {
         let values = key
             .iter()
             .map(|column| {
-                let value = self.ident(left, column);
+                let value = self.access(left, column);
                 if self.infos[left].computed.contains(column) {
                     quote!(&#value)
                 } else {
@@ -117,7 +117,7 @@ impl Context<'_> {
                 .columns
                 .iter()
                 .find(|(_, source)| *source == c)
-                .filter(|(logical, _)| self.heading(name).contains(logical))
+                .filter(|(logical, _)| self.carried(name).contains(logical))
                 .map_or_else(
                     || quote!(_),
                     |(logical, _)| self.ident(name, logical).to_token_stream(),
@@ -127,13 +127,18 @@ impl Context<'_> {
     }
     pub fn selection_rows(&self, name: &str, selection: &Ident) -> TokenStream {
         let pattern = self.positional_pattern(name);
-        let row = self.pattern(name);
+        let row = self.carrier(name, |c| self.access(name, c));
         quote!(::core::iter::Iterator::map(#selection.rows(), move |#pattern| #row))
     }
     pub fn positional_rows(&self, name: &str, ids: TokenStream) -> TokenStream {
+        if self.carries_positions(name) {
+            let id = self.position_ident(name, 0);
+            let row = self.carrier(name, |column| self.access(name, column));
+            return quote!(::core::iter::Iterator::map(#ids, move |#id| #row));
+        }
         let host = Self::positional_host(&self.analysis.lineage[name].base);
         let pattern = self.positional_pattern(name);
-        let row = self.pattern(name);
+        let row = self.carrier(name, |c| self.access(name, c));
         let rows = quote!(::core::iter::Iterator::map(#ids, move |__cq_id| {
             let #pattern = ::cq_storage::PositionalRows::row_at(#host, __cq_id).expect("host-issued live ID");
             #row
@@ -274,6 +279,7 @@ impl Context<'_> {
         if let Operator::Point(_, s) = &self.physical[name].operator {
             if s.condition.equalities.len() + s.condition.constraints.len() != 1 {
                 let read = &self.analysis.reads[name];
+                let used = columns_used(&s.condition);
                 let fields = self.analysis.host_layouts[&symbol_name(&read.origin.base)]
                     .iter()
                     .map(|c| {
@@ -281,6 +287,7 @@ impl Context<'_> {
                             .columns
                             .iter()
                             .find(|m| symbol_name(&m.column) == *c)
+                            .filter(|m| used.contains(&symbol_name(&m.logical)))
                             .map_or_else(
                                 || quote!(_),
                                 |m| self.ident(name, &symbol_name(&m.logical)).to_token_stream(),

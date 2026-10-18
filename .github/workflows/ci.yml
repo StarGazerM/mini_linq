@@ -48,8 +48,12 @@ jobs:
             cargo fetch --locked --manifest-path "$manifest"
           done
           # cargo package --offline resolves the packaged cq-syntax against the
-          # crates.io index entry of syn_derive (the workspace uses a git pin).
-          (cd "$RUNNER_TEMP" && cargo info --registry crates-io syn_derive@0.2.0 > /dev/null)
+          # crates.io syn_derive (the workspace uses a git pin), so its whole
+          # index closure (proc-macro-error2, ...) must already be cached.
+          mkdir -p "$RUNNER_TEMP/syn-derive-closure/src"
+          printf '[package]\nname = "syn-derive-closure"\nversion = "0.0.0"\nedition = "2021"\n[dependencies]\nsyn_derive = "=0.2.0"\n' > "$RUNNER_TEMP/syn-derive-closure/Cargo.toml"
+          : > "$RUNNER_TEMP/syn-derive-closure/src/lib.rs"
+          cargo fetch --manifest-path "$RUNNER_TEMP/syn-derive-closure/Cargo.toml"
       - name: Verify component dependency boundaries
         run: python3 tools/check_dependencies.py --isolate --frontends --consumers
       - name: Drop isolation build artifacts

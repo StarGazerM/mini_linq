@@ -27,6 +27,8 @@ fn defaults() -> cq_stage::Configuration {
         ix = ::mini_linq::passes::index_demands;
         lower = ::mini_linq::passes::lower;
         select = ::mini_linq::passes::select;
+        represent = ::mini_linq::passes::represent;
+        stage = ::mini_linq::passes::stage;
         print = ::mini_linq::passes::print_pull;
     } }
 }
@@ -258,6 +260,19 @@ pub fn select(input: TokenStream) -> TokenStream {
         cq_structure_selection::compile_with,
     )
     .into()
+}
+
+/// Structures → Structures representation decisions; `positions` opts in.
+#[proc_macro]
+pub fn represent(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_represent::compile_with)
+        .into()
+}
+
+/// Structures → Structures total lookahead; `batch(N)` opts into scan staging.
+#[proc_macro]
+pub fn stage(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_staging::compile_with).into()
 }
 
 /// Structures → final Rust pull expression.

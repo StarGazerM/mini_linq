@@ -10,6 +10,12 @@
 //! [`Context`] records checked layouts and generated bindings. Printers choose
 //! their control flow and state sinks; this crate selects neither a planner
 //! nor a runtime dependency. Runtime names occur only in emitted Rust tokens.
+//! Column environments expose [`Context::access`] for individual values,
+//! [`columns_used`] / [`columns_used_rust`] for operator dependencies, and
+//! [`Context::carried`] for the consumer-demanded tuple carrier. Adapter printers
+//! use [`Context::bind_columns`], [`Context::carrier`] and [`Context::forward`].
+//! Legacy `pattern`, `row`, and `borrowed_pattern` names remain equivalent
+//! carrier helpers for external printers; [`Context::heading`] is logical metadata.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -37,6 +43,8 @@ use structures::syntax::symbol_name;
 use syn::{Expr, Ident, Stmt};
 
 pub mod access;
+mod columns;
+pub use columns::{columns_used, columns_used_rust};
 pub mod expressions;
 mod filtered;
 mod ownership;
@@ -84,6 +92,8 @@ pub struct Context<'a> {
     pub parameters: BTreeMap<String, Ident>,
     /// The identifier every result binds each of its columns to.
     pub idents: BTreeMap<String, BTreeMap<String, Ident>>,
+    /// Consumer-demanded adapter layouts, computed once from the Physical DAG.
+    pub carried_columns: BTreeMap<String, Vec<String>>,
     pub reprs: BTreeMap<String, Repr>,
     pub statements: Vec<Stmt>,
     /// Whether a statement binds a value the iterator borrows.
@@ -134,6 +144,16 @@ pub fn positional_bases(
                 .join_filters
                 .keys()
                 .map(|scan| analysis.lineage[scan].base.clone()),
+        )
+        .chain(
+            analysis
+                .repr
+                .values()
+                .filter_map(|repr| match repr {
+                    structures::Repr::Positions { bases, .. } => Some(bases),
+                    structures::Repr::Tuples(_) => None,
+                })
+                .flat_map(|bases| bases.iter().map(|base| symbol_name(&base.base))),
         )
         .collect()
 }
@@ -255,6 +275,7 @@ impl<'a> Context<'a> {
             hosts,
             parameters,
             idents: BTreeMap::new(),
+            carried_columns: columns::carried_columns(module, analysis),
             reprs: BTreeMap::new(),
             statements,
             bound,
@@ -274,7 +295,7 @@ impl<'a> Context<'a> {
         expressions::relational_condition_with(theta, &self.parameters)
     }
 
-    /// The sorted emitted row layout established by Structures.
+    /// The sorted logical layout established by Structures, before carrier pruning.
     pub fn heading(&self, result: &str) -> &'a [String] {
         &self.analysis.layouts[result]
     }
@@ -284,30 +305,19 @@ impl<'a> Context<'a> {
         &self.idents[result][column]
     }
 
-    /// Tuple pattern binding all columns in sorted heading order.
+    /// Bind the carried columns (compatibility helper for external printers).
     pub fn pattern(&self, result: &str) -> TokenStream {
-        let columns = self.heading(result).iter().map(|c| self.ident(result, c));
-        quote!((#(#columns,)*))
+        self.bind_columns(result, self.carried(result), false)
     }
 
-    /// Construct a heading-ordered tuple using a caller-provided field expression.
+    /// Build a carrier (compatibility helper for external printers).
     pub fn row(&self, result: &str, expression: impl Fn(&str) -> TokenStream) -> TokenStream {
-        let fields = self.heading(result).iter().map(|c| expression(c));
-        quote!((#(#fields,)*))
+        self.carrier(result, expression)
     }
 
-    /// Bind a borrowed row, borrowing owned computed columns as needed.
+    /// Borrow the carried columns (compatibility helper for external printers).
     pub fn borrowed_pattern(&self, result: &str) -> TokenStream {
-        let computed = &self.infos[result].computed;
-        let binders = self.heading(result).iter().map(|c| {
-            let ident = self.ident(result, c);
-            if computed.contains(c) {
-                quote!(ref #ident)
-            } else {
-                ident.to_token_stream()
-            }
-        });
-        quote!(&(#(#binders,)*))
+        self.bind_columns(result, self.carried(result), true)
     }
 
     /// Bind only names in the step's written lexical environment. Other fields
@@ -322,7 +332,7 @@ impl<'a> Context<'a> {
         };
         let names: std::collections::BTreeSet<_> =
             environment.variables.iter().map(symbol_name).collect();
-        let binders = self.heading(result).iter().map(|column| {
+        let binders = self.carried(result).iter().map(|column| {
             if !names.contains(column) {
                 return quote!(_);
             }
@@ -345,12 +355,12 @@ impl<'a> Context<'a> {
         let names: std::collections::BTreeSet<_> = environment
             .map(|e| e.variables.iter().map(symbol_name).collect())
             .unwrap_or_else(|| self.heading(result).iter().cloned().collect());
-        self.heading(result)
+        self.carried(result)
             .iter()
             .filter(|name| names.contains(*name))
             .map(|name| {
                 let logical = &self.infos[result].bindings[name];
-                let physical = self.ident(result, name);
+                let physical = self.access(result, name);
                 if self.infos[result].computed.contains(name) {
                     quote!(#[allow(unused_variables)] let #logical = &#physical;)
                 } else {
@@ -365,7 +375,7 @@ impl<'a> Context<'a> {
         self.infos[result]
             .computed
             .iter()
-            .filter(|c| self.heading(result).contains(c))
+            .filter(|c| self.carried(result).contains(c))
             .map(|c| {
                 let ident = self.ident(result, c);
                 quote!(#[allow(unused_variables)] let #ident = &#ident;)
@@ -399,7 +409,7 @@ impl<'a> Context<'a> {
     }
 
     pub fn key_field(&self, result: &str, column: &str, owned: bool) -> TokenStream {
-        let ident = self.ident(result, column);
+        let ident = self.access(result, column);
         if !owned {
             return ident.to_token_stream();
         }
@@ -433,7 +443,7 @@ impl<'a> Context<'a> {
         });
         payload
             .as_deref()
-            .unwrap_or_else(|| self.heading(result))
+            .unwrap_or_else(|| self.carried(result))
             .iter()
             .filter(|c| {
                 !columns.contains(c)
@@ -518,7 +528,7 @@ impl<'a> Context<'a> {
                 .iter()
                 .flat_map(|level| self.stored_key(name, level))
                 .collect();
-            let binders = self.heading(name).iter().map(|column| {
+            let binders = self.carried(name).iter().map(|column| {
                 if stored_columns.contains(column) || payload_columns.contains(column) {
                     self.ident(name, column).to_token_stream()
                 } else {
@@ -526,7 +536,7 @@ impl<'a> Context<'a> {
                 }
             });
             let pattern = quote!((#(#binders,)*));
-            let payload = payload_columns.iter().map(|c| self.ident(name, c));
+            let payload = payload_columns.iter().map(|c| self.access(name, c));
             // A curried value is built from nested pairs, one per level:
             // `((k₁,), ((k₂,), (payload,)))`.
             let mut nested = quote!((#(#payload,)*));
@@ -692,7 +702,7 @@ impl<'a> Context<'a> {
             } else {
                 quote!((#(#values,)*))
             };
-            let pattern = self.pattern(name);
+            let pattern = self.bind_columns(name, key, false);
             let build_name = format!("{name}.keyset.{}", key.join("_"));
             self.profile_label(
                 &build_name,

@@ -86,6 +86,14 @@ pub trait Column<H: PositionalRows>: Copy {
 }
 pub trait ReadPredicate<K> {
     fn test(&self, key: &K) -> bool;
+    /// AND each exact row test into a same-length selection mask. Existing
+    /// false entries stay false, so successive predicates compose by intersection.
+    fn test_chunk(&self, keys: &[K], mask: &mut [bool]) {
+        assert_eq!(keys.len(), mask.len(), "chunk keys and mask lengths differ");
+        for (key, selected) in keys.iter().zip(mask) {
+            *selected &= self.test(key);
+        }
+    }
     /// False proves no satisfying key in the closed interval; true is conservative.
     fn any_in(&self, _lo: &K, _hi: &K) -> bool {
         true
@@ -95,6 +103,9 @@ impl<K, P: ReadPredicate<K> + ?Sized> ReadPredicate<K> for &P {
     #[inline]
     fn test(&self, key: &K) -> bool {
         P::test(self, key)
+    }
+    fn test_chunk(&self, keys: &[K], mask: &mut [bool]) {
+        P::test_chunk(self, keys, mask);
     }
     fn any_in(&self, lo: &K, hi: &K) -> bool {
         P::any_in(self, lo, hi)
@@ -107,6 +118,14 @@ where
     /// Bounds enclose every key in the block. None retains the block.
     fn bounds(self, _column: C, _block: BlockId) -> Option<(C::Key, C::Key)> {
         None
+    }
+    /// The block's keys in base occurrence order, borrowing where the marker
+    /// permits it. Layout-specific hosts may override this without materializing.
+    fn column_chunk(self, column: C, block: BlockId) -> impl ExactSizeIterator<Item = C::Key> {
+        let size = self.block_size().get();
+        let start = block.0.saturating_mul(size).min(self.len());
+        let end = start.saturating_add(size).min(self.len());
+        (start..end).map(move |offset| column.key(self, RowId(offset)))
     }
     /// Pulled row by row, this loop keeps the predicate test inline; an
     /// adapter chain (blocks, flatten, filter) measured twice as slow.
@@ -125,13 +144,36 @@ where
         column: C,
         predicate: P,
     ) -> impl Iterator<Item = RowId> {
+        BlockScan {
+            host: self,
+            column,
+            predicate,
+            size: self.block_size().get(),
+            len: self.len(),
+            block: 0,
+            offset: 0,
+            end: 0,
+        }
+    }
+    /// Evaluate each admitted block into a mask before yielding its survivors.
+    /// Bounds and order match `read_owned`; only predicate lookahead differs.
+    /// Key and mask buffers are reused across blocks.
+    fn read_chunked<P: ReadPredicate<C::Key>>(
+        self,
+        column: C,
+        predicate: P,
+    ) -> impl Iterator<Item = RowId> {
         let mut blocks = self.blocks().fuse();
         let mut positions = None;
+        let mut keys = Vec::new();
+        let mut mask = Vec::new();
+        let mut offset = 0;
         std::iter::from_fn(move || {
             loop {
                 while let Some(id) = positions.as_mut().and_then(Iterator::next) {
-                    crate::count!(rows_tested);
-                    if predicate.test(&column.key(self, id)) {
+                    let selected = mask[offset];
+                    offset += 1;
+                    if selected {
                         return Some(id);
                     }
                 }
@@ -146,10 +188,106 @@ where
                     continue;
                 }
                 crate::count!(blocks_visited);
+                keys.clear();
+                keys.extend(self.column_chunk(column, block).inspect(|_| {
+                    crate::count!(rows_tested);
+                }));
+                mask.clear();
+                mask.resize(keys.len(), true);
+                predicate.test_chunk(&keys, &mut mask);
                 positions = Some(self.block_positions(block));
+                offset = 0;
             }
         })
     }
+}
+/// The exact positional read as a named iterator. Its loop state is plain
+/// offsets, so `next` keeps the position in a register and writes it back once
+/// per returned row, and `fold` runs the whole read as one loop. The previous
+/// `from_fn` closure over `Option<Range>` state measured 1.3–2× a plain loop on
+/// Q6: it stored the position every row and re-tested the predicate's `Bound`
+/// discriminants every row on the mid-block re-entry path.
+pub struct BlockScan<H, C, P> {
+    host: H,
+    column: C,
+    predicate: P,
+    size: usize,
+    len: usize,
+    /// Next block to consider; blocks partition `0..len` by `size`.
+    block: usize,
+    /// Remaining positions of the current block.
+    offset: usize,
+    end: usize,
+}
+impl<H: BlockRead<C>, C: Column<H>, P: ReadPredicate<C::Key>> BlockScan<H, C, P> {
+    /// Advance to the next block the bounds cannot exclude. False when exhausted.
+    #[inline]
+    fn open(&mut self) -> bool {
+        loop {
+            let start = self.block.saturating_mul(self.size);
+            if start >= self.len {
+                return false;
+            }
+            let block = BlockId(self.block);
+            self.block += 1;
+            crate::count!(blocks_considered);
+            if self
+                .host
+                .bounds(self.column, block)
+                .is_some_and(|(lo, hi)| !self.predicate.any_in(&lo, &hi))
+            {
+                crate::count!(blocks_skipped);
+                crate::count!(blocks_skipped_metadata);
+                continue;
+            }
+            crate::count!(blocks_visited);
+            self.offset = start;
+            self.end = start.saturating_add(self.size).min(self.len);
+            return true;
+        }
+    }
+}
+impl<H: BlockRead<C>, C: Column<H>, P: ReadPredicate<C::Key>> Iterator for BlockScan<H, C, P> {
+    type Item = RowId;
+    #[inline]
+    fn next(&mut self) -> Option<RowId> {
+        loop {
+            let (mut offset, end) = (self.offset, self.end);
+            while offset < end {
+                let id = RowId(offset);
+                offset += 1;
+                crate::count!(rows_tested);
+                if self.predicate.test(&self.column.key(self.host, id)) {
+                    self.offset = offset;
+                    return Some(id);
+                }
+            }
+            self.offset = end;
+            if !self.open() {
+                return None;
+            }
+        }
+    }
+    #[inline]
+    fn fold<B, F: FnMut(B, RowId) -> B>(mut self, mut accumulator: B, mut f: F) -> B {
+        loop {
+            for offset in self.offset..self.end {
+                let id = RowId(offset);
+                crate::count!(rows_tested);
+                if self.predicate.test(&self.column.key(self.host, id)) {
+                    accumulator = f(accumulator, id);
+                }
+            }
+            self.offset = self.end;
+            if !self.open() {
+                return accumulator;
+            }
+        }
+    }
+}
+impl<H: BlockRead<C>, C: Column<H>, P: ReadPredicate<C::Key>> std::iter::FusedIterator
+    for BlockScan<H, C, P>
+{
 }
 macro_rules! scalar_read {
     ([$($g:tt)*] $ty:ty) => {

@@ -52,7 +52,8 @@ fn named_configuration_preserves_every_phase_and_planner_argument() {
     .unwrap();
     let expected: cq_stage::Pipeline = syn::parse_quote!(pipeline {
         surface(one), custom_plan(two), custom_ix(three), custom_lower(four),
-        physical_a(five), physical_b, custom_select(six), structure(seven), custom_print(eight)
+        physical_a(five), physical_b, custom_select(six), structure(seven),
+        ::mini_linq::passes::represent, ::mini_linq::passes::stage, custom_print(eight)
     });
     assert_eq!(
         input.pipeline.to_token_stream().to_string(),

@@ -55,6 +55,7 @@ use syn::{Expr, Ident};
 
 mod intersection;
 mod operators;
+mod stage;
 
 use cq_print::access::{Access, Side};
 use cq_print::{Context, Repr, error, index, sorted};
@@ -130,6 +131,50 @@ fn sources_profile<'a>(
     mut prepared: impl FnMut(&str, &Repr),
     profile: bool,
 ) -> syn::Result<Context<'a>> {
+    for definition in &module.physical.program.definitions {
+        let name = symbol_name(&definition.name);
+        let Some(structures::Repr::Positions { bases, owned, .. }) = analysis.repr.get(&name)
+        else {
+            continue;
+        };
+        if bases.len() != 1 || !owned.columns.is_empty() {
+            return error(
+                &definition.name,
+                format!(
+                    "{name} repr positions with {} bases / {} owned columns is not realized by print_pull yet",
+                    bases.len(),
+                    owned.columns.len()
+                ),
+            );
+        }
+        let parent = match &definition.operator {
+            Operator::Rename(_) => Some(None),
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
+                Some(Some(&s.input))
+            }
+            Operator::Project(p) => Some(Some(&p.input)),
+            Operator::Semi(_, k) | Operator::Anti(_, k) => Some(Some(&k.left)),
+            _ => None,
+        };
+        if definition.canon.is_some()
+            || analysis.physical.modes[&name] != physical::ModeKind::Pipe
+            || !parent.is_some_and(|parent| {
+                parent.is_none_or(|parent| {
+                    matches!(
+                        analysis.repr.get(&symbol_name(parent)),
+                        Some(structures::Repr::Positions { .. })
+                    )
+                })
+            })
+        {
+            return error(
+                &definition.name,
+                format!(
+                    "{name} repr positions outside a dependency-closed direct pipe scan chain is not realized by print_pull yet"
+                ),
+            );
+        }
+    }
     let mut printer = Printer {
         context: Context::new(module, analysis),
         active_prefixes: BTreeMap::new(),
@@ -204,6 +249,17 @@ impl Printer<'_> {
         }
         let consumer = self.consumer.replace(name.clone());
         let repr = match physical::ModeKind::from(&definition.mode) {
+            physical::ModeKind::Pipe
+                if self.analysis.stages.contains_key(&name)
+                    && !self.probe_stage(&name)
+                    && !matches!(definition.operator, Operator::Rename(_)) =>
+            {
+                let mut rows = self.produce(&name, definition)?;
+                if definition.canon.is_some() {
+                    rows = self.distinct(&definition.name, rows);
+                }
+                Repr::Pipe(Some(self.profile_stream(&name, rows)))
+            }
             physical::ModeKind::Pipe if matches!(definition.operator, Operator::Rename(_)) => {
                 Repr::Host
             }
@@ -277,7 +333,9 @@ impl Printer<'_> {
         }
         match self.reprs.get(&name) {
             Some(Repr::Host) => {
-                let rows = self.host_scan(&name);
+                let rows = self
+                    .staged_rows(&name)
+                    .unwrap_or_else(|| self.host_scan(&name));
                 let rows = if self.physical_analysis.canon.contains(&name) {
                     self.distinct(&self.physical[&name].name, rows)
                 } else {
@@ -314,7 +372,7 @@ impl Printer<'_> {
     pub(crate) fn distinct(&mut self, operator: &Ident, rows: TokenStream) -> TokenStream {
         let name = symbol_name(operator);
         let ty = self.analysis.dedup[&name].clone();
-        self.distinct_width(&name, &ty, rows, self.heading(&name).len())
+        self.distinct_width(&name, &ty, rows, self.carried(&name).len())
     }
 
     fn distinct_width(
@@ -366,7 +424,17 @@ impl Printer<'_> {
                 vec![result.into()],
             );
         }
-        let heading = self.heading(result);
+        let rows = if self.carries_positions(result) {
+            let pattern = self.bind_columns(result, self.carried(result), false);
+            let values = self
+                .carried(result)
+                .iter()
+                .map(|column| self.access(result, column));
+            quote!(::core::iter::Iterator::map(#rows, move |#pattern| (#(#values,)*)))
+        } else {
+            rows
+        };
+        let heading = self.carried(result);
         let variables: Vec<Option<&Ident>> = head.args.iter().map(cq::rust::variable).collect();
         let identity = variables.len() == heading.len()
             && variables

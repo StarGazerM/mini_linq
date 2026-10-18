@@ -26,6 +26,17 @@
 - Bushy branches: independent dimension branches recorded in VO, built once.
 - Probes: Swiss-table `HashIndex`; batched (128) prefetched probes on scan
   spines, scalar elsewhere; no per-row `Rc`.
+- Back end (`doc/formal/backend.tex`): three recorded layers over one
+  Physical program. R, representation: `r repr = tuples | positions {..}
+  owned [..]` (data refinement, α fetches columns by lineage). E, evaluation
+  unit: `r stage = batch N` (a ⊥-free segment from a `for` producer runs at
+  most N rows ahead; opaque Rust ends a stage; probe/merge cursors start
+  one). C, control: pull (unfold) or push (fold) of the same stream algebra,
+  an emitter choice. Default passes `represent` and `stage` record today's
+  decisions only (the probe lookahead is now `stage = batch 128` in text);
+  `represent(positions)` and `stage(batch(N))` opt in. Printers bind only
+  the columns an operator reads (`cq-print` column environment). Positions
+  stop at probes: carrying a `RowId` through an index payload is deferred.
 
 ## Gap to DuckDB (SF 1, single thread)
 
@@ -121,7 +132,25 @@ work is lower on H09 and D72.
    `skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem)` gives
    141–145 ms (`advised` configuration) vs 191–195 default and DuckDB 107.7.
    Choosing this automatically needs statistics or a runtime check.
-2. **Scans.** Scalar row-at-a-time over 48-byte rows (Q6 2×); columnar scans.
+2. **Scans.** Q6 `default` 28.0 ms vs DuckDB 1T 19.1 (execute) on this
+   machine. Measured (perf, plain release worker, query-only by 5/45-run
+   delta; `/data/codex/q06-perf`): 191 M instructions and 127 M cycles per
+   run, IPC 1.50, 31.8 instructions per scanned row, 5.3 M L1d misses
+   (≈ the 4.5 M cache lines of the 288 MB row array). Attribution:
+   `BlockRead::read_owned` over the shipdate column 61.5% (17.2 ms);
+   discount/quantity filters, binds and project 16.1% (4.5 ms); the `canon`
+   dedup `HashSet<(i128,i32,&i64,&i64)>` 17.2% (4.8 ms, of which
+   `reserve_rehash` growth 12.7%). A plain `for` loop over the same 48-byte
+   rows evaluating the whole predicate and sum takes 12.5–13.7 ms, and the
+   shipdate filter alone 9.8 ms (29 GB/s), so the row layout is not the
+   gap: the iterator-driven read costs 1.3–2× the plain loop (its inner
+   loop re-tests the `Bound` discriminants and stores the position per row,
+   and returns through `next()` per survivor), and the dedup set is pure
+   overhead on a key-unique relation. Staging alone (`staged`
+   configuration, one fused selection pass per chunk) does not change this:
+   29.8 vs 29.8 ms. Columnar storage would cut the shipdate pass from
+   9.8 to ~1.2 ms (measured on a 4-byte column) but is the smaller of the
+   three effects.
 3. **Positional default.** Selections need the caller's `positional(..)` advice.
 4. **Zone maps.** Block min/max exists only in the `hypergraph_zone`
    configuration; scan key sets skip blocks only there.

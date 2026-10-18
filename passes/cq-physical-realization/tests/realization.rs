@@ -51,7 +51,10 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                     | Structure::HeadDedup { ty, .. }
                     | Structure::Selection { ty, .. }
                     | Structure::KeySet { ty, .. } => ty,
-                    Structure::Read { .. } | Structure::JoinFilter { .. } => continue,
+                    Structure::Read { .. }
+                    | Structure::JoinFilter { .. }
+                    | Structure::Repr { .. }
+                    | Structure::Stage { .. } => continue,
                 };
                 replace.visit_type_mut(provider);
             }
@@ -469,4 +472,25 @@ fn point_prints_build_free_dispatch_and_canonical_lets_use_the_distinct_provider
     assert!(text.contains(". point ("));
     assert!(text.contains("HashSet < _ > > :: new"));
     assert!(text.contains("(y , x ,)"));
+}
+
+#[test]
+fn adapter_carriers_drop_columns_after_their_last_reader() {
+    let physical = syn::parse_quote!(physical {
+        relation R(a:i32,b:i32,dead:i32);
+        r = pipe rename R@0 {a -> a,b -> b,dead -> dead};
+        s = pipe select r if (a = 7);
+        p = pipe canon project s keep {b};
+        return p as answer(b);
+    });
+    let module = cq_structure_selection::compile(&physical).unwrap();
+    let analysis = structures::contract::check(&module).unwrap();
+    let context = cq_print::Context::new(&module, &analysis);
+    assert_eq!(context.carried("r"), ["a", "b"]);
+    assert_eq!(context.carried("s"), ["b"]);
+    assert_eq!(context.carried("p"), ["b"]);
+    let printed = text(compile(&module).unwrap());
+    assert!(printed.contains("(a , b , _ ,)"), "{printed}");
+    assert!(printed.contains("& (a , _ ,)"), "{printed}");
+    assert!(!printed.contains("dead"), "{printed}");
 }

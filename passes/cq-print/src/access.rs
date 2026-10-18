@@ -75,10 +75,21 @@ impl<'a> Context<'a> {
         if let Some(ids) = self.join_filter_ids(result) {
             return self.positional_rows(result, ids);
         }
+        if self.carries_positions(result) {
+            let host = Self::positional_host(&self.physical_analysis.hosts[result]);
+            let ids = quote!(::cq_storage::PositionalRows::positions(#host));
+            return self.positional_rows(result, ids);
+        }
         let access = self.host_access(result, &[]);
         let value = &access.value;
-        let row = self.pattern(result);
-        let payload = access.payload.iter().map(|c| self.ident(result, c));
+        let row = self.carrier(result, |c| self.access(result, c));
+        let payload = access.payload.iter().map(|c| {
+            if self.carried(result).contains(c) {
+                self.access(result, c)
+            } else {
+                quote!(_)
+            }
+        });
         let ty = self.fallback_type(result, "scan", &[]);
         quote! { { let __cq_scan: #ty = ::core::iter::Iterator::map(::cq_storage::rows::Rows::rows(#value), move |(#(#payload,)*)| #row); __cq_scan } }
     }
@@ -111,16 +122,16 @@ impl<'a> Context<'a> {
             let a = self.host_access(result, &columns);
             let fallback = a.fallback;
             let rows = self.profile_stream(result, self.host_scan(result));
-            let pattern = self.pattern(result);
+            let pattern = self.bind_columns(result, self.carried(result), false);
             let key = a.key.iter().map(|c| {
-                let ident = self.ident(result, c);
+                let ident = self.access(result, c);
                 if a.owned_key {
                     quote!(::core::clone::Clone::clone(#ident))
                 } else {
                     ident.to_token_stream()
                 }
             });
-            let payload = a.payload.iter().map(|c| self.ident(result, c));
+            let payload = a.payload.iter().map(|c| self.access(result, c));
             let ty = self
                 .analysis
                 .fallbacks
@@ -138,7 +149,8 @@ impl<'a> Context<'a> {
                     .then_some(ty)
                 })
                 .expect("checked fallback");
-            let pairs = quote!(::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*), (#(#payload,)*))));
+            let capture = self.carries_positions(result).then(|| quote!(move));
+            let pairs = quote!(::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*), (#(#payload,)*))));
             let ty = ty.clone();
             let build_name = format!("{result}.fallback.{}", columns.join("_"));
             self.profile_label(
@@ -179,16 +191,17 @@ impl<'a> Context<'a> {
                 let name = format_ident!("__cq_{}_merge_{}", result, columns.join("_"));
                 let ty = self.fallback_type(result, reader, columns);
                 let rows = self.profile_stream(result, self.host_scan(result));
-                let pattern = self.pattern(result);
-                let key = columns.iter().map(|c| self.ident(result, c));
+                let pattern = self.bind_columns(result, self.carried(result), false);
+                let key = columns.iter().map(|c| self.access(result, c));
                 let payload = self
                     .heading(result)
                     .iter()
                     .filter(|c| !columns.contains(c))
-                    .map(|c| self.ident(result, c));
+                    .map(|c| self.access(result, c));
+                let capture = self.carries_positions(result).then(|| quote!(move));
                 self.statements.push(syn::parse_quote! {
                     let #name = &<#ty as ::cq_storage::Build<_>>::build(
-                        ::core::iter::Iterator::map(#rows, |#pattern| ((#(#key,)*),(#(#payload,)*)))
+                        ::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*),(#(#payload,)*)))
                     );
                 });
                 self.bound = true;

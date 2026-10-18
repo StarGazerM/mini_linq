@@ -4,8 +4,8 @@ use super::*;
 
 impl<'a> Printer<'a> {
     fn arm_row(&self, name: &str, operand: &str) -> TokenStream {
-        self.row(name, |column| {
-            let value = self.ident(operand, column);
+        self.carrier(name, |column| {
+            let value = self.access(operand, column);
             if self.infos[name].computed.contains(column)
                 && !self.infos[operand].computed.contains(column)
             {
@@ -23,7 +23,7 @@ impl<'a> Printer<'a> {
         for operand in &union.operands {
             let rows = self.scan(operand)?;
             let operand = symbol_name(operand);
-            let pattern = self.pattern(&operand);
+            let pattern = self.bind_columns(&operand, self.carried(name), false);
             let row = self.arm_row(name, &operand);
             let rows = quote!(::core::iter::Iterator::map(#rows, move |#pattern| #row));
             chain = Some(match chain {
@@ -114,7 +114,7 @@ impl<'a> Printer<'a> {
                 );
             }
         }
-        let pattern = self.pattern(&group.prefix);
+        let pattern = self.bind_columns(&group.prefix, self.carried(&group.prefix), false);
         // Arm rows carry the hidden prefix names; only their source Rust scopes
         // introduce lexical aliases when those names are actually in scope.
         let hidden = self.idents[&group.prefix].clone();
@@ -142,7 +142,7 @@ impl<'a> Printer<'a> {
             let operand_name = symbol_name(operand);
             self.define_arm(&operand_name, &group, &mut defined)?;
             let rows = self.scan(operand)?;
-            let operand_pattern = self.pattern(&operand_name);
+            let operand_pattern = self.bind_columns(&operand_name, self.carried(name), false);
             let row = self.arm_row(name, &operand_name);
             let rows = quote!(::core::iter::Iterator::map(#rows,move |#operand_pattern| #row));
             let rows = if matches!(union.witness, Some(physical::Witness::Any(_))) {
@@ -206,18 +206,62 @@ impl<'a> Printer<'a> {
         name: &str,
         definition: &physical::Definition,
     ) -> syn::Result<TokenStream> {
+        if let Some(rows) = self.staged_rows(name) {
+            return Ok(rows);
+        }
         if self.analysis.reads.contains_key(name) {
             let ids = self.read_ids(name)?;
-            return Ok(self.positional_rows(name, ids));
+            return Ok(self.buffer_stage(name, self.positional_rows(name, ids)));
         }
-        match &definition.operator {
+        if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
+            &definition.operator
+        {
+            let input_name = symbol_name(&select.input);
+            if self.carries_positions(&input_name) {
+                let rows = self.scan(&select.input)?;
+                let columns = cq_print::columns_used(&select.condition)
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let pattern = self.bind_columns(&input_name, &columns, true);
+                let aliases = self.position_aliases(&input_name, &columns);
+                let condition = self.relational_condition(&select.condition);
+                let rows = quote!(::core::iter::Iterator::filter(#rows, move |#pattern| {
+                    #(#aliases)*
+                    ::cq_storage::residual(#condition)
+                }));
+                return Ok(self.forward(name, &input_name, rows));
+            }
+        }
+        if let Operator::Guard(guard) = &definition.operator {
+            let input_name = symbol_name(&guard.input);
+            if self.carries_positions(&input_name) {
+                let rows = self.scan(&guard.input)?;
+                let pattern = self.rust_borrowed_pattern(
+                    &input_name,
+                    &guard.condition,
+                    guard.environment.as_ref(),
+                );
+                let aliases =
+                    self.rust_aliases(&input_name, &guard.condition, guard.environment.as_ref());
+                let condition = &guard.condition;
+                let rows = quote!(::core::iter::Iterator::filter(#rows, move |#pattern| {
+                    #(#aliases)*
+                    ::cq_storage::residual(#condition)
+                }));
+                return Ok(self.forward(name, &input_name, rows));
+            }
+        }
+        let rows = match &definition.operator {
             Operator::Union(union) => self.union(name, union),
             Operator::Anti(_, keyed) => self.membership(keyed, true),
             Operator::Unit(_) => Ok(quote!(::core::iter::once(()))),
             Operator::Rename(_) => Ok(self.host_scan(name)),
             Operator::Select(select) => {
                 let input = self.scan(&select.input)?;
-                let pattern = self.borrowed_pattern(&symbol_name(&select.input));
+                let columns = cq_print::columns_used(&select.condition)
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let pattern = self.bind_columns(&symbol_name(&select.input), &columns, true);
                 let condition = self.relational_condition(&select.condition);
                 Ok(quote! {
                     ::core::iter::Iterator::filter(
@@ -229,10 +273,13 @@ impl<'a> Printer<'a> {
             Operator::Point(_, select) => self.point(name, select),
             Operator::Range(_, select) => {
                 if let Some(rows) = self.host_range(name, select) {
-                    return Ok(rows);
+                    return Ok(self.forward(name, &symbol_name(&select.input), rows));
                 }
                 let input = self.scan(&select.input)?;
-                let pattern = self.borrowed_pattern(&symbol_name(&select.input));
+                let columns = cq_print::columns_used(&select.condition)
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let pattern = self.bind_columns(&symbol_name(&select.input), &columns, true);
                 let condition = self.relational_condition(&select.condition);
                 Ok(
                     quote!(::core::iter::Iterator::filter(#input, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition))),
@@ -240,8 +287,9 @@ impl<'a> Printer<'a> {
             }
             Operator::Guard(guard) => {
                 let input = self.scan(&guard.input)?;
-                let pattern = self.scoped_borrowed_pattern(
+                let pattern = self.rust_borrowed_pattern(
                     &symbol_name(&guard.input),
+                    &guard.condition,
                     guard.environment.as_ref(),
                 );
                 let condition = &guard.condition;
@@ -256,8 +304,8 @@ impl<'a> Printer<'a> {
                 if let Some(environment) = &bind.environment {
                     let names: std::collections::BTreeSet<_> =
                         environment.variables.iter().map(symbol_name).collect();
-                    for column in self.heading(&input_name) {
-                        if !names.contains(column) {
+                    for column in self.carried(&input_name).to_vec() {
+                        if !names.contains(&column) {
                             self.idents.get_mut(&input_name).unwrap().insert(
                                 column.clone(),
                                 format_ident!(
@@ -270,24 +318,30 @@ impl<'a> Printer<'a> {
                         }
                     }
                 }
-                let pattern = self.pattern(&input_name);
-                let shadows = if bind.environment.is_some() {
-                    self.environment_aliases(&input_name, bind.environment.as_ref())
-                } else {
-                    self.shadows(&input_name)
-                };
+                let mut used = cq_print::columns_used_rust(
+                    &bind.expression,
+                    self.heading(&input_name),
+                    bind.environment.as_ref(),
+                );
+                used.extend(self.carried(name).iter().cloned());
+                let pattern =
+                    self.bind_columns(&input_name, &used.into_iter().collect::<Vec<_>>(), false);
+                let shadows =
+                    self.rust_aliases(&input_name, &bind.expression, bind.environment.as_ref());
                 let binding = &bind.pattern;
                 let annotation = &bind.annotation;
                 let value = &bind.expression;
-                let row = self.row(name, |column| {
+                let row = self.carrier(name, |column| {
                     if self.heading(&input_name).contains(&column.to_owned()) {
-                        self.ident(&input_name, column).to_token_stream()
+                        self.access(&input_name, column)
                     } else {
-                        self.ident(name, column).to_token_stream()
+                        self.access(name, column)
                     }
                 });
                 let result = quote! {
                     ::core::iter::Iterator::map(#input, move |#pattern| {
+                        // A dead output still evaluates its potentially partial Rust expression.
+                        #[allow(unused_variables)]
                         let #binding #annotation = { #(#shadows)* #value };
                         #row
                     })
@@ -299,37 +353,33 @@ impl<'a> Printer<'a> {
                 let project = &p.input;
                 let input = self.scan(project)?;
                 let input_name = symbol_name(project);
-                let kept = self.heading(name);
-                let binders = self.heading(&input_name).iter().map(|c| {
-                    if kept.contains(c) {
-                        self.ident(&input_name, c).to_token_stream()
-                    } else {
-                        quote!(_)
-                    }
-                });
-                let row = self.pattern(name);
+                let kept = self.carried(name);
+                let pattern = self.bind_columns(&input_name, kept, false);
+                let row = self.carrier(name, |c| self.access(&input_name, c));
                 Ok(quote! {
-                    ::core::iter::Iterator::map(#input, move |(#(#binders,)*)| #row)
+                    ::core::iter::Iterator::map(#input, move |#pattern| #row)
                 })
             }
             Operator::Probe(_, keyed) => self.probe(name, keyed),
             Operator::Semi(_, keyed) => self.semi(keyed),
             Operator::Merge(_, keyed) => self.merge(name, &definition.name, keyed),
-        }
+        }?;
+        let input = match &definition.operator {
+            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => Some(&s.input),
+            Operator::Guard(g) => Some(&g.input),
+            Operator::Semi(_, k) | Operator::Anti(_, k) => Some(&k.left),
+            _ => None,
+        };
+        let rows = match input {
+            Some(input) => self.forward(name, &symbol_name(input), rows),
+            None => rows,
+        };
+        Ok(self.buffer_stage(name, rows))
     }
 
-    /// Fixed lookahead only on a total scan spine, before any reduction or join.
-    /// Narrowed/joined streams use scalar demand, avoiding needless buffering.
-    /// Opaque guards also stay scalar: exists must not force an unvisited panic.
-    fn batch_scan(&self, name: &str) -> bool {
-        match &self.physical[name].operator {
-            Operator::Rename(_) => true,
-            Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
-                self.batch_scan(&symbol_name(&s.input))
-            }
-            Operator::Project(p) => self.batch_scan(&symbol_name(&p.input)),
-            _ => false,
-        }
+    /// Lookahead is a checked Structures decision, never a printer policy.
+    fn lookahead(&self, name: &str) -> usize {
+        self.analysis.stages.get(name).copied().unwrap_or(1)
     }
     /// For every outer row, enter the right side at the join key and append
     /// the payload of every match.
@@ -342,7 +392,6 @@ impl<'a> Printer<'a> {
         let outer = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
-        let outer_pattern = self.pattern(&left);
         let access = self.keyed(&keyed.right, &columns)?;
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
             Access::Host(access) => (
@@ -382,10 +431,18 @@ impl<'a> Printer<'a> {
                 )
             }
         };
+        let mut used = columns.clone();
+        used.extend(
+            self.carried(name)
+                .iter()
+                .filter(|c| !payload.contains(c) && self.constant_value(&right, c).is_none())
+                .cloned(),
+        );
+        let outer_pattern = self.bind_columns(&left, &used, false);
         // Payload fields are read by position: a host payload is a borrowed
         // tuple, a built payload a value; field access copies the `&T`
         // column out of either.
-        let row = self.row(name, |c| {
+        let row = self.carrier(name, |c| {
             match payload.iter().position(|p| p == c && !columns.contains(p)) {
                 Some(i) => {
                     let i = index(i);
@@ -398,7 +455,7 @@ impl<'a> Printer<'a> {
                 None => self
                     .constant_value(&right, c)
                     .filter(|_| !columns.iter().any(|key| key == c))
-                    .unwrap_or_else(|| self.ident(&left, c).to_token_stream()),
+                    .unwrap_or_else(|| self.access(&left, c)),
             }
         });
         // The checked probe is unchanged: batch only borrowed outer columns,
@@ -416,27 +473,32 @@ impl<'a> Printer<'a> {
                     .constant_key_condition(&left, &right, &columns)
                     .is_none()
             {
-                let batch = if self.batch_scan(&left) {
-                    128usize
-                } else {
-                    1usize
-                };
+                let batch = self.lookahead(&left);
                 let owned = self.owned_key(&right, &levels[0]);
                 let stored_key = self.stored_key(&right, &levels[0]);
                 let key = stored_key.iter().map(|c| self.key_field(&left, c, owned));
-                let key_binders = self.heading(&left).iter().map(|c| {
+                if self.carries_positions(&left) {
+                    let key_pattern = self.bind_columns(&left, &stored_key, true);
+                    return Ok(quote! {
+                        ::core::iter::Iterator::map(
+                            ::cq_storage::IndexRead::probe::<#batch, _, _>(#structure, #outer, move |#key_pattern| (#(#key,)*)),
+                            move |(#outer_pattern, __cq_v)| #row
+                        )
+                    });
+                }
+                let key_binders = self.carried(&left).iter().map(|c| {
                     if stored_key.contains(c) {
-                        self.ident(&left, c).to_token_stream()
+                        self.access(&left, c)
                     } else {
                         quote!(_)
                     }
                 });
-                let row_binders = self.heading(&left).iter().map(|c| {
-                    if self.heading(name).contains(c)
+                let row_binders = self.carried(&left).iter().map(|c| {
+                    if self.carried(name).contains(c)
                         && (columns.contains(c)
                             || (!payload.contains(c) && self.constant_value(&right, c).is_none()))
                     {
-                        self.ident(&left, c).to_token_stream()
+                        self.access(&left, c)
                     } else {
                         quote!(_)
                     }
@@ -464,13 +526,7 @@ impl<'a> Printer<'a> {
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
-        let binders = self.heading(&left).iter().map(|c| {
-            if columns.contains(c) {
-                self.ident(&left, c).to_token_stream()
-            } else {
-                quote!(_)
-            }
-        });
+        let pattern = self.bind_columns(&left, &columns, true);
         let test = if let Some(test) =
             self.keyset_contains(&left, &symbol_name(&keyed.right), &columns)
         {
@@ -489,7 +545,7 @@ impl<'a> Printer<'a> {
         };
         let test = if negative { quote!(!(#test)) } else { test };
         Ok(quote! {
-            ::core::iter::Iterator::filter(#input, move |&(#(#binders,)*)| ::cq_storage::residual(#test))
+            ::core::iter::Iterator::filter(#input, move |#pattern| ::cq_storage::residual(#test))
         })
     }
 
@@ -534,7 +590,7 @@ impl<'a> Printer<'a> {
             let payload: Vec<String> = match side {
                 Side::Host(access) => access.payload.clone(),
                 Side::Built(_) | Side::Pipe(_) => self
-                    .heading(&result)
+                    .carried(&result)
                     .iter()
                     .filter(|c| !columns.contains(c))
                     .cloned()
@@ -579,9 +635,9 @@ impl<'a> Printer<'a> {
                     }
                 }
                 Side::Pipe(rows) => {
-                    let pattern = self.pattern(&result);
-                    let key = columns.iter().map(|c| self.ident(&result, c));
-                    let rest = payload.iter().map(|c| self.ident(&result, c));
+                    let pattern = self.bind_columns(&result, self.carried(&result), false);
+                    let key = columns.iter().map(|c| self.access(&result, c));
+                    let rest = payload.iter().map(|c| self.access(&result, c));
                     quote! {
                         ::cq_storage::sorted_by(::core::iter::Iterator::map(
                             #rows,
@@ -605,7 +661,7 @@ impl<'a> Printer<'a> {
             };
             fields.insert(column.clone(), field);
         }
-        let row = self.row(name, |c| fields[c].clone());
+        let row = self.carrier(name, |c| fields[c].clone());
         let (left, right) = (&cursors[0], &cursors[1]);
         Ok(quote! {
             ::core::iter::Iterator::map(
@@ -628,7 +684,7 @@ impl<'a> Printer<'a> {
         let mut cursors = Vec::new();
         for (side, result) in [(left, &keyed.left), (right, &keyed.right)] {
             let result = symbol_name(result);
-            let pattern = self.pattern(&result);
+            let pattern = self.bind_columns(&result, self.carried(&result), false);
             let key = columns.iter().map(|c| self.key_field(&result, c, true));
             let pairs = match side {
                 Side::Pipe(rows) => {
@@ -636,7 +692,7 @@ impl<'a> Printer<'a> {
                 }
                 Side::Host(access) => {
                     let value = &access.value;
-                    let row = self.row(&result, |c| {
+                    let row = self.carrier(&result, |c| {
                         if let Some(i) = columns.iter().position(|k| k == c) {
                             let i = index(i);
                             quote!(&__cq_k.#i)
@@ -659,7 +715,7 @@ impl<'a> Printer<'a> {
                     } else {
                         self.built_payload(&result, &self.levels_of(&result, structure))
                     };
-                    let row = self.row(&result, |c| {
+                    let row = self.carrier(&result, |c| {
                         if let Some(i) = payload.iter().position(|p| p == c) {
                             let i = index(i);
                             quote!(__cq_v.#i)
@@ -683,13 +739,13 @@ impl<'a> Printer<'a> {
         }
         let left_name = symbol_name(&keyed.left);
         let right_name = symbol_name(&keyed.right);
-        let row = self.row(name, |c| {
-            if let Some(i) = self.heading(&left_name).iter().position(|p| p == c) {
+        let row = self.carrier(name, |c| {
+            if let Some(i) = self.carried(&left_name).iter().position(|p| p == c) {
                 let i = index(i);
                 quote!(__cq_l.#i)
             } else {
                 let i = index(
-                    self.heading(&right_name)
+                    self.carried(&right_name)
                         .iter()
                         .position(|p| p == c)
                         .unwrap(),
@@ -706,7 +762,10 @@ impl<'a> Printer<'a> {
     fn point(&mut self, name: &str, select: &cq::algebra::Select) -> syn::Result<TokenStream> {
         let input_name = symbol_name(&select.input);
         let condition = self.relational_condition(&select.condition);
-        let pattern = self.borrowed_pattern(&input_name);
+        let columns = cq_print::columns_used(&select.condition)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let pattern = self.bind_columns(&input_name, &columns, true);
         if !self.analysis.host_read(&input_name) {
             let rows = self.scan(&select.input)?;
             return Ok(

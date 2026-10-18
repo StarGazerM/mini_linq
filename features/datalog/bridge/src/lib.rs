@@ -46,6 +46,8 @@ fn defaults() -> cq_stage::Configuration {
         ix = ::mini_linq::passes::index_demands;
         lower = ::mini_linq::passes::lower;
         select = ::mini_linq::passes::select;
+        represent = ::mini_linq::passes::represent;
+        stage = ::mini_linq::passes::stage;
         print = ::mini_linq::passes::print_pull;
     } }
 }

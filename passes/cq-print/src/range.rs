@@ -16,7 +16,10 @@ impl Context<'_> {
             .range_bounds()
             .expect("checked range demand");
         let condition = self.relational_condition(&select.condition);
-        let pattern = self.borrowed_pattern(&input);
+        let columns = crate::columns_used(&select.condition)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let pattern = self.bind_columns(&input, &columns, true);
         let rows = self.profile_stream(&input, self.host_scan(&input));
         let rows = self.profile_input(name, rows);
         let filtered = quote!(::core::iter::Iterator::filter(#rows, move |#[allow(unused_variables)] #pattern| ::cq_storage::residual(#condition)));
@@ -49,12 +52,14 @@ impl Context<'_> {
         };
         let low = bound(true);
         let high = bound(false);
-        let fields = access
-            .key
-            .iter()
-            .chain(&access.payload)
-            .map(|c| self.ident(&input, c));
-        let row = self.pattern(name);
+        let fields = access.key.iter().chain(&access.payload).map(|c| {
+            if self.carried(&input).contains(c) {
+                self.access(&input, c)
+            } else {
+                quote!(_)
+            }
+        });
+        let row = self.carrier(&input, |c| self.access(&input, c));
         let read = quote!({
             use ::cq_storage::dispatch::RangeRead as _;
             ::core::iter::Iterator::map(

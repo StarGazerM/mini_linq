@@ -1,0 +1,16 @@
+[package]
+name = "cq-represent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cq-lang-structures = { workspace = true, default-features = false }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[package.metadata.cq]
+source = "cq-lang-structures"
+target = "cq-lang-structures"

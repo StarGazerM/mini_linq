@@ -5,5 +5,7 @@ mini_linq_macros::mini_linq	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::plan	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::print_pull	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::relation_loaders	{"proc_macro":{"helpers":[],"kind":"bang"}}
+mini_linq_macros::represent	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::select	{"proc_macro":{"helpers":[],"kind":"bang"}}
+mini_linq_macros::stage	{"proc_macro":{"helpers":[],"kind":"bang"}}
 mini_linq_macros::workload_query	{"proc_macro":{"helpers":[],"kind":"bang"}}

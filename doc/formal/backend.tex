@@ -1,0 +1,159 @@
+\section{Back end: representation, evaluation unit, control}
+\label{sec:backend}
+
+The back end separates three decisions over the same Physical program:
+representation $R$, evaluation unit $E$, and control $C$. Structures records
+$R$ and $E$; an emitter chooses $C$. None changes the written-order denotation
+or discharges the host premises of Section~\ref{sec:premises}.
+
+\subsection{R: representation as data refinement}
+For each result $r:U_r$, choose a representation $\rho_r$ and an abstraction
+$\alpha_r:\rho_r\to\operatorname{Bag}_{\rm fin}(\data^{U_r})$.
+Tuples use the identity abstraction. Positions carry one \code{RowId} for each
+lineage-connected base occurrence, together with owned computed columns.
+For a carried occurrence $H$ and logical-to-host map $\lambda_H$, abstraction
+fetches column $\lambda_H(c)$ at that occurrence's ID; owned columns are read
+by value. IDs are physical witnesses, not logical attributes. Distinct
+occurrences of the same host remain distinct, as in join indices~\cite{paper-join-indices}.
+The Structures grammar adds:
+\begin{lstlisting}
+Entry ::= r repr = tuples;
+        | r repr = positions { H1 lineage { a -> c, ... },
+                               H2 lineage { ... } } owned [x, y];
+\end{lstlisting}
+The occurrence list is finite; \code{owned []} is permitted. An absent entry
+means \code{tuples}. Each lineage map is rederived from Physical, not trusted
+because it was written. Let $L_r=\bigcup_H\dom\lambda_H$ and let $O_r$ be the
+owned computed columns. The structural check requires coverage of the whole
+heading (hence of every downstream key, predicate, Rust free variable and
+returned column) and valid, unambiguous origins:
+\begin{mathpar}
+\Rule{STR-Repr}{
+ \forall H,\ \mathsf{lineageConnected}(r,H,\lambda_H)\quad
+ \mathsf{validOwned}(r,O_r)\\
+ \mathsf{unambiguous}(L_r,O_r)\quad \mathsf{heading}(r)\subseteq L_r\cup O_r
+}{\mathsf{covered}(r,\rho_r)}
+\end{mathpar}
+This is the checkable part of data refinement~\cite{paper-data-refinement}.
+The semantic forward-simulation obligation, for every operator with inputs
+$r_1,\ldots,r_k$ and output $r$, is
+\[
+ \alpha_r(\mathsf{op}_{\rho}(x_1,\ldots,x_k))
+ =\mathsf{op}(\alpha_{r_1}(x_1),\ldots,\alpha_{r_k}(x_k)).
+\]
+Here $\mathsf{op}$ is the bag realization of the Physical step; extend
+$\alpha(\bot)=\bot$ for partial steps. Initialization and reads obey the same
+commuting law. Structural coverage does not prove the storage laws: fetch
+must equal the indicated column of \code{row_at}, and builds and reads must
+preserve multiplicity. The target of $\alpha$ is a bag, not a set;
+\code{canon} takes support and re-establishes the set boundary. Positional
+representation alone proves neither uniqueness nor ordered enumeration.
+
+\subsection{E: evaluation unit as strictness}
+A \emph{stage} is a maximal $\bot$-free segment of a pipe's definition chain,
+within its producer and consumption boundaries. The total Physical kernels
+are \code{unit}, \code{rename}, \code{project}, relational
+\code{select}/\code{point}/\code{range}, and
+\code{probe}/\code{semi}/\code{anti}/\code{merge} over admissible keys.
+Guards certified by \code{Constraint::Total} have already become relational
+\code{select} predicates; a Physical \code{guard} is always opaque.
+The Order premise makes comparisons total; an arbitrary Rust \code{Ord}
+implementation is not a proof. An opaque \code{guard} or \code{bind} is partial
+and ends the preceding stage. Totality of a kernel does not assert totality
+of a producer or of a lazily forced build.
+For the checked stage rule, let
+$\mathcal T_{\rm stage}=\{\mathsf{unit},\mathsf{rename},\mathsf{project},
+\mathsf{select},\mathsf{point},\mathsf{range},\mathsf{semi},\mathsf{anti}\}$:
+\begin{mathpar}
+\Rule{ST-Total}{
+ S=(o_1,\ldots,o_m)\quad \forall i,\ o_i\in\mathcal T_{\rm stage}\\
+ \mathsf{admissibleKeys}(S)\quad \mathsf{totalInputs}(S)
+}{\mathsf{total}(S)}
+\end{mathpar}
+Here inputs already materialized are values; a new producer demand must be
+$\bot$-free or retain the scalar demand boundary described below. This does
+not allow a stage to traverse partial Rust in a build source.
+
+Structures records its evaluation unit by \code{r stage = batch N;} with
+$N>0$: the chain from the preceding boundary (or producer) through $r$ runs
+at most $N$ rows ahead. Absence means scalar demand, $N=1$. A \emph{for}
+producer has a known finite length and indexable positions: a host scan,
+retained \code{rows}, or a positional read. An \emph{unfold} producer advances
+a state-dependent cursor. Probe and merge produce such cursors, so a checked
+segment cannot contain them or end after them. Retaining their output as
+\code{rows} supplies a new \emph{for} producer for a subsequent segment.
+Semi and anti are total filtering steps and may lie inside a segment.
+Spanning a total probe is a possible semantic relaxation, but its fan-out
+makes the output chunk size variable; the present rule does not admit it.
+This distinction follows the producer representation of
+Kiselyov et al.~\cite{paper-stream-fusion}; staging here specifies evaluation
+strictness, not an additional relational rewrite.
+\begin{mathpar}
+\Rule{ST-Stage}{
+ \mathsf{total}(S)\quad \mathsf{producer}(S):\mathsf{for}\quad N>0\\
+ \mathsf{boundaryBeforePartial}(S)\quad \mathsf{preserveDemand}(S)
+}{r\;\mathsf{stage}=\mathsf{batch}\ N\text{ is admissible}}
+\end{mathpar}
+The staging pass records the previous fixed probe optimization as
+\code{stage = batch 128}: a total rename/select/point/range/project host-scan
+spine feeding a built probe. Unannotated authored Structures remain scalar;
+the default pipeline preserves its earlier decisions by recording them.
+
+For total predicates $p_1,\ldots,p_k$ and a chunk $(x_j)_{j<n}$, initialize
+$m_j=\mathsf{true}$ and update $m_j\gets m_j\land p_i(x_j)$ for each $i$.
+The surviving positions are precisely
+$\{j<n\mid\bigwedge_i p_i(x_j)\}$. Evaluating later predicates on rows rejected
+by earlier ones is safe because no evaluation is $\bot$. Finite Set with
+union and $\emptyset$ is a commutative idempotent monoid, so regrouping these
+total contributions does not change the answer. At the bag level masks keep
+each surviving occurrence once. A selection vector is needed only at the
+boundary before the first partial step: only surviving positions may enter
+that step, in the unchanged pinned order. It need not be materialized between
+total predicates. Early-stop consumers can change the number of total
+evaluations, not their meaning; lookahead may not extend partial evaluation.
+
+\begin{lemma}[Forcing a lazy build with pinned Rust]
+Suppose a scalar keyed read forces a lazy index on its first demanded key,
+consumes its build source once, and preserves that source's Rust Before sets.
+Replacing only the total outer scan by chunk evaluation is a refinement if
+an empty survivor stream still does not force the build and the first
+surviving key forces it at the same demand boundary. This holds even when
+the build source contains pinned Rust.
+\end{lemma}
+\begin{proof}
+If no key survives, neither execution demands the build. Otherwise the scalar
+execution already demands the whole build on the first surviving key. Chunk
+lookahead adds only total outer work. Every Rust step in the build retains
+its free-variable binders, Rust predecessors and source-before relational
+facts, so its evaluation domain has not grown by moving it before a Before
+requirement. Subsequent reads reuse the same build. Thus no new partial
+source is forced and no new panic is introduced. Eagerly forcing that build
+before a surviving key, or batching across partial steps in its source, is
+not justified by this lemma or by kernel totality.
+\end{proof}
+
+\subsection{C: control as fold/unfold duality}
+Fix one stream algebra: empty stream, yield, map, filter and concatenation,
+with the recorded Physical operators and $R/E$ decisions. Pull realizes it
+by an unfold of a coalgebra $S\to 1+A\times S$; push realizes it by a fold
+into a consumer algebra~\cite{paper-pushpull}. Exhaustive successful
+realizations enumerate the same bag, including repeated witnesses; \code{canon}
+then yields the same set. This is a control choice, not a new IR entry.
+
+An early-stop consumer must already determine its answer from the consumed
+prefix (for example a positive existential witness); arbitrary truncation of
+returned answers is not allowed. Pull may omit later work, but may not reorder
+pinned Rust or demand a partial step skipped by the corresponding exhaustive
+push execution. Writing $P$ for that push execution and $L$ for pull:
+\begin{mathpar}
+\Rule{BK-Dual}{
+ \mathsf{sameStreamAlgebra}(P,L)\quad \mathsf{sameRE}(P,L)\\
+ \mathsf{preserveBefore}(L)\quad \mathsf{answerDeterminedStop}(L)
+}{\sem P\sqsubseteq\sem L}
+\end{mathpar}
+On total streams, fold/unfold fusion gives bag equality on exhaustion and
+answer equality at an admissible stop. In the partial case, a successful
+push execution has no panic for pull to add; a failing push execution may
+become successful if pull omits the failing suffix. Thus pull may only remove
+panics, never introduce one or change a successful answer. This is an abstract
+emitter obligation, not a claim that a source marker proves emitted Rust.

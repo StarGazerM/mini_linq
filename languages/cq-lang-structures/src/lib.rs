@@ -11,7 +11,11 @@
 //!                | "selection" "=" RustType Origin "summary" Summary
 //!                | "keyset" "=" RustType "[" Ident,* "]" Ownership Origin
 //!                | "read" "=" "positional" Origin "column" Ident
-//!                    "marker" RustType "predicate" ReadPredicate) ";"
+//!                    "marker" RustType "predicate" ReadPredicate
+//!                | "repr" "=" ("tuples" | "positions" "{"
+//!                    (Ident "lineage" "{" (Ident "->" Ident),* "}"),*
+//!                    "}" "owned" "[" Ident,* "]")
+//!                | "stage" "=" "batch" Integer) ";"
 //! Origin ::= "base" Ident "lineage" "{" (Ident "->" Ident),* "}"
 //! ```
 //!
@@ -69,6 +73,11 @@ pub mod kw {
     syn::custom_keyword!(join_filter);
     syn::custom_keyword!(build);
     syn::custom_keyword!(covering);
+    syn::custom_keyword!(repr);
+    syn::custom_keyword!(positions);
+    syn::custom_keyword!(tuples);
+    syn::custom_keyword!(stage);
+    syn::custom_keyword!(batch);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -99,6 +108,19 @@ pub struct Entry {
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub enum Structure {
+    #[parse(peek = kw::repr)]
+    Repr {
+        repr_token: kw::repr,
+        eq_token: Token![=],
+        repr: Repr,
+    },
+    #[parse(peek = kw::stage)]
+    Stage {
+        stage_token: kw::stage,
+        eq_token: Token![=],
+        batch_token: kw::batch,
+        size: syn::LitInt,
+    },
     #[parse(peek = kw::join_filter)]
     JoinFilter {
         join_filter_token: kw::join_filter,
@@ -267,6 +289,10 @@ pub type Built = (Vec<Vec<String>>, syn::Type);
 /// What the contract establishes for later stages.
 #[derive(Clone, Debug)]
 pub struct Analysis {
+    /// Explicit result representations; omitted results keep heading tuples.
+    pub repr: BTreeMap<String, Repr>,
+    /// Checked batch sizes; omitted boundaries keep scalar evaluation.
+    pub stages: BTreeMap<String, usize>,
     /// Independently derived single-base occurrence lineage.
     pub lineage: BTreeMap<String, Lineage>,
     /// Checked base occurrence and complete logical-to-host column mappings.
@@ -360,6 +386,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 )
             })
             .collect(),
+        repr: BTreeMap::new(),
+        stages: BTreeMap::new(),
         lineage: BTreeMap::new(),
         selections: BTreeMap::new(),
         keysets: BTreeMap::new(),
@@ -387,6 +415,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             continue;
         }
         let keyed = match &entry.structure {
+            Structure::Repr { .. } | Structure::Stage { .. } => continue,
             Structure::JoinFilter { .. }
             | Structure::Selection { .. }
             | Structure::KeySet { .. }
@@ -585,6 +614,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         }
     }
     positional::check(program, &analysis)?;
+    analysis.repr = repr::check(program, &analysis)?;
+    analysis.stages = stage::check(program, &analysis)?;
     filtered::check(program, &analysis)?;
     analysis.layouts = filtered::layouts(program, &analysis);
     let mut shared: BTreeMap<(String, Vec<String>, bool), &syn::Type> = BTreeMap::new();
@@ -885,6 +916,9 @@ pub mod positional;
 pub use positional::*;
 mod join_filter;
 pub use join_filter::*;
+mod repr;
+pub use repr::{Repr, ReprBase, representation_bases};
+mod stage;
 
 mod filtered;
 pub use filtered::{required_columns, selection_constants};

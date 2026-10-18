@@ -157,6 +157,39 @@ fn positions_and_selection_preserve_occurrences_snapshots_and_projected_builds()
     assert_eq!(selected.retained_bytes(), 32);
 }
 
+#[test]
+fn fetch_is_the_named_column_of_every_live_occurrence() {
+    use cq_load::ColumnAt;
+    use cq_storage::{Column, Fetch, PositionalRows};
+
+    fn check<'a, H>(host: H)
+    where
+        H: PositionalRows<Row = (&'a i64, &'a String)> + Fetch<ColumnAt<0>> + Fetch<ColumnAt<1>>,
+        ColumnAt<0>: Column<H, Key = i64>,
+        ColumnAt<1>: Column<H, Key = &'a str>,
+    {
+        for id in host.positions() {
+            let row = host.row_at(id).unwrap();
+            assert_eq!(host.fetch(ColumnAt::<0>, id), *row.0);
+            assert_eq!(host.fetch(ColumnAt::<1>, id), row.1.as_str());
+            assert!(std::ptr::eq(host.fetch(ColumnAt::<1>, id), row.1.as_str()));
+        }
+    }
+
+    let source = [
+        (7i64, String::from("same")),
+        (-2, String::from("other")),
+        (7, String::from("same")),
+    ];
+    check(&source);
+    for len in 0..=source.len() {
+        check(&source[..len]);
+        check(&source[..len].to_vec());
+    }
+    let empty: [(i64, String); 0] = [];
+    check(&empty);
+}
+
 /// The Filter square, exhaustively: for every host bag and every key set, a
 /// semijoin filter keeps exactly the matching occurrences in source order on
 /// every read (rows, positions, contains, compact build); filtering twice is

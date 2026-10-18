@@ -265,9 +265,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-represent"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-staging"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-structures",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -365,7 +385,9 @@ dependencies = [
  "cq-physical-lowering",
  "cq-physical-realization",
  "cq-reduce",
+ "cq-represent",
  "cq-stage",
+ "cq-staging",
  "cq-structure-selection",
  "proc-macro2",
  "quote",

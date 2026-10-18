@@ -139,14 +139,15 @@ order, within-bucket source order and bag multiplicity. \code{HashIndex} realize
 exact matches; \code{N=1} retains scalar demand with no lookahead or prefetch.
 Both retain one index handle per stream and enumerate payloads without per-row
 reference-count operations. An empty outer stream does not initialize the index.
-For single-level probes over borrowed rows, the printer chooses fixed 128-row
-batches only on a total host scan spine (rename, relational selection and
-projection). Already-reduced/joined streams, opaque guards and branches use
-scalar demand; computed rows and curried access retain their existing lookup
-protocol. No runtime statistics or adaptive choice is used, and bounded
+For single-level probes over borrowed rows, the staging pass records the former
+fixed lookahead as \code{stage = batch 128} on a total host scan spine
+(rename, relational select/point/range and projection).
+Section~\ref{sec:backend} gives the checked evaluation-unit decision; absent
+stage entries mean scalar demand. Already-reduced/joined streams, opaque guards
+and branches retain scalar demand by default; computed rows and curried access
+retain their existing lookup protocol. The printer consumes the recorded
+decision. No runtime statistics or adaptive choice is used, and bounded
 lookahead cannot force an unvisited partial Rust expression.
-This is a runtime realization of the same checked Physical probe, not a new
-Structures decision or approximation; no checker premise is removed.
 Candidate counts remain exact occurrence counts (upper bounds for distinct
 candidate enumeration), without enumerating a bucket. Retained-capacity
 counters account for the directory, arena and live tail buffers separately.

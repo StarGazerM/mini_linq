@@ -12,8 +12,11 @@
 //! requires Clone for retained scans and Copy for payload fan-out, as checked by the emitted Rust. Equality is Leibniz identity.
 //! Mutation, I/O and evaluation counts are outside this meaning.
 //!
-//! Merge and smallest-candidate traversal are unsupported and refused. This
-//! printer does not replace a written execution choice with a different one.
+//! Merge, smallest-candidate traversal, and positions representations are refused.
+//! A recorded `stage = batch N` bounds lookahead from above (formal rule ST-Stage:
+//! at most N rows ahead). Plain host selection chains run chunked at N; probe
+//! outers keep the shared prepared lookahead; every other stage shape runs at
+//! the admissible scalar bound rather than being refused.
 
 //! Push realizes standalone union/anti loops and consumes the prepared fused-dependent pipe once before pushing tuples to its sink.
 //! Recorded canonical providers and any/all witness choices are retained.
@@ -52,6 +55,8 @@ struct Push<'a> {
     context: Context<'a>,
     consumed: BTreeSet<String>,
     positions: BTreeMap<String, Tokens>,
+    /// Staged results realized chunk by chunk; other stages run at the scalar bound.
+    chunked: BTreeSet<String>,
 }
 impl<'a> std::ops::Deref for Push<'a> {
     type Target = Context<'a>;
@@ -76,16 +81,36 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
             _ => {}
         }
     }
+    for entry in &module.structures.entries {
+        if let structures::Structure::Repr {
+            repr: structures::Repr::Positions { .. },
+            ..
+        } = &entry.structure
+        {
+            let name = symbol_name(&entry.name);
+            return error(
+                entry,
+                format!("own_push: `{name} repr = positions` is unsupported"),
+            );
+        }
+    }
     let mut positions = BTreeMap::new();
     let context = cq_physical_realization::sources_with(module, &analysis, |name, repr| {
         if let Repr::Positions(Some(ids)) = repr {
             positions.insert(name.to_owned(), ids.clone());
         }
     })?;
+    let chunked = analysis
+        .stages
+        .keys()
+        .filter(|name| selection_chain(module, &analysis, name).is_some())
+        .cloned()
+        .collect();
     let mut push = Push {
         context,
         consumed: BTreeSet::new(),
         positions,
+        chunked,
     };
     // Hidden row names preserve Rust captures in push loops, where later
     // planned binders would otherwise surround an earlier opaque expression.
@@ -129,13 +154,48 @@ fn cloned_key(fields: impl Iterator<Item = Tokens>) -> Tokens {
     )
 }
 
+/// The supported stage is one uninterrupted selection spine over a host scan.
+fn selection_chain(
+    module: &structures::Program,
+    analysis: &structures::Analysis,
+    result: &str,
+) -> Option<()> {
+    let mut current = result.to_owned();
+    loop {
+        let definition = module
+            .physical
+            .program
+            .definitions
+            .iter()
+            .find(|definition| symbol_name(&definition.name) == current)?;
+        if current != result
+            && (definition.canon.is_some()
+                || !matches!(definition.mode, physical::Mode::Pipe(_))
+                || analysis.stages.contains_key(&current))
+        {
+            return None;
+        }
+        if analysis.reads.contains_key(&current) {
+            return None;
+        }
+        match &definition.operator {
+            Operator::Rename(_) => return Some(()),
+            Operator::Project(project) => current = symbol_name(&project.input),
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                current = symbol_name(&select.input);
+            }
+            _ => return None,
+        }
+    }
+}
+
 impl Push<'_> {
     fn head(&self, result: &str, head: &structures::syntax::Atom, out: &syn::Ident) -> Tokens {
         let mut bindings = Vec::new();
         let mut fields = Vec::new();
         for (i, expression) in head.args.iter().enumerate() {
             if let Some(variable) = structures::syntax::rust::variable(expression) {
-                fields.push(self.ident(result, &symbol_name(variable)).to_token_stream());
+                fields.push(self.access(result, &symbol_name(variable)));
             } else {
                 let id = temporary(&format!("head_{i}"), result);
                 fields.push(id.to_token_stream());
@@ -144,7 +204,9 @@ impl Push<'_> {
         }
         let ids = bindings.iter().map(|(id, _)| id);
         let expressions = bindings.iter().map(|(_, expression)| expression);
-        let shadows = self.environment_aliases(result, None);
+        let shadows = bindings
+            .iter()
+            .flat_map(|(_, expression)| self.rust_aliases(result, expression, None));
         let evaluations = (!bindings.is_empty()).then(|| {
             quote! {
                 let (#(#ids,)*) = { #(#shadows)* (#(#expressions,)*) };
@@ -164,7 +226,9 @@ impl Push<'_> {
         quote! { #evaluations #insert }
     }
 
-    fn fused_dependency(&self, result: &str) -> bool {
+    // Shared preparation preserves fused branches and recorded built-probe
+    // lookahead without imposing PositionalRows on ordinary keyed hosts.
+    fn prepared_dependency(&self, result: &str) -> bool {
         let mut pending = vec![result.to_owned()];
         let mut seen = BTreeSet::new();
         while let Some(name) = pending.pop() {
@@ -175,7 +239,10 @@ impl Push<'_> {
             if !matches!(definition.mode, physical::Mode::Pipe(_)) {
                 continue;
             }
-            if matches!(&definition.operator,Operator::Union(u) if u.fused.is_some()) {
+            if matches!(&definition.operator,Operator::Union(u) if u.fused.is_some())
+                || matches!(&definition.operator, Operator::Probe(_, keyed)
+                    if self.analysis.stages.contains_key(&symbol_name(&keyed.left)))
+            {
                 return true;
             }
             pending.extend(definition.operator.operands().into_iter().map(symbol_name));
@@ -185,14 +252,14 @@ impl Push<'_> {
 
     fn emit(&mut self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
         let definition = self.context.physical[result];
-        if matches!(definition.mode, physical::Mode::Pipe(_)) && self.fused_dependency(result) {
+        if matches!(definition.mode, physical::Mode::Pipe(_)) && self.prepared_dependency(result) {
             if !self.consumed.insert(result.to_owned()) {
-                return error(&definition.name, "own_push: fused pipe is read twice");
+                return error(&definition.name, "own_push: prepared pipe is read twice");
             }
             let rows = self.context.take_pipe(result).ok_or_else(|| {
-                syn::Error::new_spanned(&definition.name, "fused row stream is missing")
+                syn::Error::new_spanned(&definition.name, "prepared row stream is missing")
             })?;
-            let pattern = self.pattern(result);
+            let pattern = self.bind_columns(result, self.carried(result), false);
             return Ok(quote!(for #pattern in #rows { #sink }));
         }
         // Formal rule IF-PushPositional: Push accepted positions straight to the sink.
@@ -230,7 +297,7 @@ impl Push<'_> {
                     "own_push: retained scan has no recorded rows",
                 );
             };
-            let pattern = self.pattern(result);
+            let pattern = self.bind_columns(result, self.carried(result), false);
             let rows = if self.infos[result].computed.is_empty() {
                 quote!(::core::iter::Iterator::copied(#storage.iter()))
             } else {
@@ -252,7 +319,7 @@ impl Push<'_> {
             let key = cloned_key(
                 self.heading(result)
                     .iter()
-                    .map(|column| self.ident(result, column).to_token_stream()),
+                    .map(|column| self.access(result, column)),
             );
             let ty = &self.analysis.dedup[result];
             let initialize = quote!(let mut #seen = <#ty>::new(););
@@ -271,14 +338,17 @@ impl Push<'_> {
 
     fn operator(&mut self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
         let definition = self.context.physical[result];
+        if self.chunked.contains(result) {
+            return self.staged(result, self.analysis.stages[result], sink);
+        }
         match &definition.operator {
             Operator::Union(union) => {
                 let mut body = Tokens::new();
                 for operand in &union.operands {
                     let input = symbol_name(operand);
-                    let pattern = self.pattern(result);
-                    let row = self.row(result, |column| {
-                        let value = self.ident(&input, column);
+                    let pattern = self.bind_columns(result, self.carried(result), false);
+                    let row = self.carrier(result, |column| {
+                        let value = self.access(&input, column);
                         if self.infos[result].computed.contains(column)
                             && !self.infos[&input].computed.contains(column)
                         {
@@ -295,7 +365,7 @@ impl Push<'_> {
             Operator::Unit(_) => Ok(sink),
             Operator::Rename(_) => {
                 let rows = self.host_scan(result);
-                let pattern = self.pattern(result);
+                let pattern = self.bind_columns(result, self.carried(result), false);
                 Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
             }
             Operator::Project(project) => self.emit(&symbol_name(&project.input), sink),
@@ -314,10 +384,13 @@ impl Push<'_> {
                 } else {
                     self.host_range(result, select)
                 };
-                self.context.idents.insert(input_name, hidden);
+                self.context.idents.insert(input_name.clone(), hidden);
                 self.context.idents.insert(result.to_owned(), output_hidden);
                 if let Some(rows) = rows {
-                    let pattern = self.pattern(result);
+                    // The shared read yields the input's carrier; narrow it to
+                    // the result's carried columns before binding the loop.
+                    let rows = self.forward(result, &input_name, rows);
+                    let pattern = self.bind_columns(result, self.carried(result), false);
                     Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
                 } else {
                     self.select(select, sink)
@@ -327,7 +400,7 @@ impl Push<'_> {
             Operator::Guard(guard) => {
                 let condition = &guard.condition;
                 let input = symbol_name(&guard.input);
-                let shadows = self.environment_aliases(&input, guard.environment.as_ref());
+                let shadows = self.rust_aliases(&input, condition, guard.environment.as_ref());
                 self.emit(&input, quote!(if { #(#shadows)* #condition } { #sink }))
             }
             Operator::Bind(bind) => {
@@ -335,12 +408,18 @@ impl Push<'_> {
                 let annotation = &bind.annotation;
                 let expression = &bind.expression;
                 let input = symbol_name(&bind.input);
-                let shadows = self.environment_aliases(&input, bind.environment.as_ref());
+                let shadows = self.rust_aliases(&input, expression, bind.environment.as_ref());
                 self.emit(
                     &input,
                     {
-                        let row = self.row(result,|column| if self.heading(&input).contains(&column.to_owned()) { self.ident(&input,column).to_token_stream() } else { self.infos[result].bindings[column].to_token_stream() });
-                        let output = self.pattern(result);
+                        let row = self.carrier(result, |column| {
+                            if self.heading(&input).iter().any(|c| c == column) {
+                                self.access(&input, column)
+                            } else {
+                                self.infos[result].bindings[column].to_token_stream()
+                            }
+                        });
+                        let output = self.bind_columns(result, self.carried(result), false);
                         quote! { let #pattern #annotation = { #(#shadows)* #expression }; let #output = #row; #sink }
                     },
                 )
@@ -365,7 +444,7 @@ impl Push<'_> {
                     }
                 };
                 let value = temporary("payload", result);
-                let row = self.row(result, |column| {
+                let row = self.carrier(result, |column| {
                     match payload
                         .iter()
                         .position(|p| p == column && !columns.contains(p))
@@ -377,10 +456,10 @@ impl Push<'_> {
                         None => self
                             .constant_value(&right, column)
                             .filter(|_| !columns.iter().any(|key| key == column))
-                            .unwrap_or_else(|| self.ident(&left, column).to_token_stream()),
+                            .unwrap_or_else(|| self.access(&left, column)),
                     }
                 });
-                let pattern = self.pattern(result);
+                let pattern = self.bind_columns(result, self.carried(result), false);
                 self.emit(
                     &left,
                     quote! {
@@ -394,6 +473,77 @@ impl Push<'_> {
             Operator::Semi(_, keyed) => self.membership(keyed, sink, false),
             Operator::Merge(..) => error(&definition.name, "own_push: merge is unsupported"),
         }
+    }
+    fn staged(&self, result: &str, size: usize, sink: Tokens) -> syn::Result<Tokens> {
+        let mut chain = Vec::new();
+        let mut current = result.to_owned();
+        loop {
+            let definition = self.context.physical[&current];
+            chain.push(definition);
+            match &definition.operator {
+                Operator::Rename(_) => break,
+                Operator::Project(project) => current = symbol_name(&project.input),
+                Operator::Select(select)
+                | Operator::Point(_, select)
+                | Operator::Range(_, select) => current = symbol_name(&select.input),
+                _ => unreachable!("chunked stages are plain selection chains"),
+            }
+        }
+        let host = self.host_access(&current, &[]).value;
+        let chunk = temporary("chunk", result);
+        let id = temporary("position", result);
+        let mut predicates = Vec::new();
+        for definition in chain.iter().rev() {
+            if let Operator::Select(select)
+            | Operator::Point(_, select)
+            | Operator::Range(_, select) = &definition.operator
+            {
+                let input = symbol_name(&select.input);
+                let pattern = self.positional_pattern(&input);
+                let condition = self.relational_condition(&select.condition);
+                let shadows = self.predicate_aliases(&input, &select.condition);
+                predicates.push(quote! {
+                    #chunk.select_with(|#id| {
+                        #[allow(unused_variables)]
+                        let #pattern = ::cq_storage::PositionalRows::row_at(#host, #id)
+                            .expect("host-issued live ID");
+                        #(#shadows)*
+                        #condition
+                    });
+                });
+            }
+        }
+        let pattern = self.positional_pattern(result);
+        Ok(quote! {
+            for mut #chunk in ::cq_storage::stage::for_chunks::<#size, _>(#host) {
+                #(#predicates)*
+                for #id in #chunk.survivors() {
+                    #[allow(unused_variables)]
+                    let #pattern = ::cq_storage::PositionalRows::row_at(#host, #id)
+                        .expect("host-issued live ID");
+                    #sink
+                }
+            }
+        })
+    }
+
+    fn predicate_aliases(
+        &self,
+        input: &str,
+        condition: &structures::syntax::algebra::Theta,
+    ) -> Vec<Tokens> {
+        cq_print::columns_used(condition)
+            .iter()
+            .map(|column| {
+                let logical = &self.infos[input].bindings[column];
+                let value = self.access(input, column);
+                if self.infos[input].computed.contains(column) {
+                    quote!(let #logical = &#value;)
+                } else {
+                    quote!(let #logical = #value;)
+                }
+            })
+            .collect()
     }
 
     fn membership(
@@ -431,17 +581,7 @@ impl Push<'_> {
     ) -> syn::Result<Tokens> {
         let condition = self.relational_condition(&select.condition);
         let input = symbol_name(&select.input);
-        let names = select.condition.columns();
-        let environment = structures::syntax::algebra::Environment {
-            path: None,
-            scope_token: Default::default(),
-            bracket: Default::default(),
-            variables: names
-                .iter()
-                .map(|name| self.infos[&input].bindings[name].clone())
-                .collect(),
-        };
-        let shadows = self.environment_aliases(&input, Some(&environment));
+        let shadows = self.predicate_aliases(&input, &select.condition);
         self.emit(&input, quote!(if { #(#shadows)* #condition } { #sink }))
     }
 }

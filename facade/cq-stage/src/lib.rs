@@ -13,7 +13,7 @@
 //! pipeline {
 //!   plan = Path[(tokens)]; ix = Path; lower = Path;
 //!   physical = [Path[(tokens)], ...]; select = Path;
-//!   structures = [Path[(tokens)], ...]; print = Path;
+//!   structures = [Path[(tokens)], ...]; represent = Path; stage = Path; print = Path;
 //!   surface = [Path[(tokens)], ...];
 //! }
 //! ```
@@ -261,6 +261,8 @@ pub struct Configuration {
     pub physical: Vec<Invocation>,
     pub select: Option<Invocation>,
     pub structures: Vec<Invocation>,
+    pub represent: Option<Invocation>,
+    pub stage: Option<Invocation>,
     pub print: Option<Invocation>,
     pub surface: Vec<Invocation>,
 }
@@ -282,6 +284,8 @@ impl Parse for Configuration {
                 "ix" => config.ix = Some(contents.parse()?),
                 "lower" => config.lower = Some(contents.parse()?),
                 "select" => config.select = Some(contents.parse()?),
+                "represent" => config.represent = Some(contents.parse()?),
+                "stage" => config.stage = Some(contents.parse()?),
                 "print" => config.print = Some(contents.parse()?),
                 "physical" | "structures" | "surface" => {
                     let list;
@@ -314,6 +318,8 @@ impl Configuration {
         passes.extend(self.physical);
         passes.push(self.select.or(defaults.select).ok_or_else(missing)?);
         passes.extend(self.structures);
+        passes.push(self.represent.or(defaults.represent).ok_or_else(missing)?);
+        passes.push(self.stage.or(defaults.stage).ok_or_else(missing)?);
         passes.push(self.print.or(defaults.print).ok_or_else(missing)?);
         Ok(Pipeline { passes })
     }

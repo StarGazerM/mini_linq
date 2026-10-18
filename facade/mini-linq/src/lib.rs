@@ -8,6 +8,11 @@
 //! Rust binds and guards preserve their written ancestry and free variables.
 //!
 //! Select pass paths in named phases; omitted phases use the defaults:
+//! The default order is `plan, ix, lower, select, represent, stage, print`.
+//! Physical rewrites run before `select`; Structures rewrites run before
+//! `represent`. Representations remain tuples unless `represent(positions)` is
+//! requested. Staging preserves built-probe lookahead by default;
+//! `stage(batch(64))` also batches total scan predicates before partial Rust.
 //! ```
 //! let rows = [(1_i32,), (1,), (2,)];
 //! let answers: Vec<_> = mini_linq::compile! {
@@ -33,7 +38,7 @@ pub use mini_linq_macros::{compile, mini_linq, relation_loaders, workload_query}
 
 /// Core default passes. Customization is an external pass or an authored IR.
 pub mod passes {
-    pub use mini_linq_macros::{index_demands, lower, plan, print_pull, select};
+    pub use mini_linq_macros::{index_demands, lower, plan, print_pull, represent, select, stage};
 }
 
 #[cfg(doctest)]
