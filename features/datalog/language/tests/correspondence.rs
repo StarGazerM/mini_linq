@@ -299,7 +299,6 @@ fn unsafe_unstratified_modes_and_optional_syntax_are_rejected() {
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x), !A(x);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); relation B(x:i32); output A; A(*x) :- E(x), !B(x); B(*x) :- A(x);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*y) :- E(x);",
-        "struct P; relation A(x:i32); output A; A(*x+1) :- A(x);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x), !E(y);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- !E(x), E(x);",
         "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A(*x) :- E(x), !E(*x+1);",

@@ -1,4 +1,4 @@
-//! Finite, insert-only Datalog implemented above the ordinary MiniLinq compiler.
+//! Insert-only Datalog implemented above the ordinary MiniLinq compiler.
 //!
 //! The language records checked strata, semi-naive delta variants and owned
 //! index layouts. The bridge executes ordinary CQ holes against borrowed hosts
@@ -46,10 +46,16 @@
 //! EDB outputs are deduplicated and cloned into owned rows without consuming
 //! their host bindings. An EDB-only program does not require any rules.
 //! Constants in positive atoms use the ordinary CQ selection rules, including
-//! string literals against `String` columns. Nonrecursive heads accept Rust
-//! expressions (for example `format!("{}({})", ret, params)`); a `String` head
-//! constant is written `"java.lang.String".to_owned()`, while an `&'static str`
-//! column can return a literal directly. Recursive heads still only copy columns.
+//! string literals against `String` columns. All heads, including recursive
+//! heads, accept Rust expressions and body `let` bindings (for example
+//! `Path(*x, *z, *length + 1)` with a preceding `if *length < 10` guard).
+//! A `String` head constant is written `"java.lang.String".to_owned()`, while
+//! an `&'static str` column can return a literal directly.
+//! Termination is the caller's responsibility: copying positive-atom columns
+//! preserves a finite domain, but computed recursive values can grow without
+//! bound. Evaluation runs until no new tuples are admitted; a divergent run
+//! does not produce a denoted result. Rust expressions must be total and pure
+//! for the least-fixpoint interpretation to apply.
 //! Rust keywords used as logical names must be renamed (`type_`, `super_`,
 //! `ret`) or use a legal raw identifier such as `r#type`.
 //!

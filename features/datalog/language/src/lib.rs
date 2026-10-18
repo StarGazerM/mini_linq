@@ -1,10 +1,12 @@
-//! Finite, insert-only Boolean Datalog above CQ.
+//! Insert-only Boolean Datalog above CQ.
 //!
 //! Declare EDBs with host bindings, IDBs without bindings, and `output R;`.
 //! `output R, S;` returns owned iterators in the written output order.
 //! Schedule passes record dependency-ordered SCCs and one semi-naive variant
 //! per changing positive position. All stages parse, print and check alone.
-//! Recursive heads copy positive columns (`*x` or `(*x).clone()`). Opaque Rust
+//! Recursive heads accept arbitrary Rust expressions and body `let` bindings.
+//! Copying positive columns preserves a finite domain; value-generating heads
+//! may diverge, so termination is the caller's responsibility. Opaque Rust
 //! clauses retain their written order. Native `!R(x,_)` negation reads completed
 //! lower strata and requires every named argument to be bound before the clause.
 //! Negative constants (including closed Rust expressions) filter a projected
@@ -48,7 +50,7 @@
 
 pub use cq_lang_cq::{BodyItem, Query};
 use cq_stage::Language;
-use cq_syntax::{Atom, RelationDecl, rust, symbol_name};
+use cq_syntax::{RelationDecl, rust, symbol_name};
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
 mod layouts;
@@ -450,32 +452,6 @@ fn check_source(p: &Program) -> syn::Result<Graph> {
         g.index(output)?;
     }
     for q in &p.rules {
-        let head = g.index(&q.head.relation)?;
-        let columns: BTreeSet<_> = q
-            .body
-            .iter()
-            .filter_map(|i| match i {
-                BodyItem::Positive { atom } => Some(atom),
-                _ => None,
-            })
-            .flat_map(Atom::variables)
-            .map(symbol_name)
-            .collect();
-        for arg in &q.head.args {
-            if g.reach[head][head] {
-                let id = active_column(arg).ok_or_else(|| {
-                    syn::Error::new_spanned(
-                        arg,
-                        "recursive heads must copy an active-domain column: *x or (*x).clone()",
-                    )
-                })?;
-                ensure(
-                    columns.contains(&symbol_name(id)),
-                    arg,
-                    "recursive head column must come from a positive atom",
-                )?;
-            }
-        }
         check_query(p, q, &p.declarations)?;
     }
     Ok(g)

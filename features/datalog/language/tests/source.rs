@@ -36,13 +36,13 @@ fn aggregates_and_nested_blocks_are_rejected_at_the_source_boundary() {
 }
 
 #[test]
-fn recursive_heads_copy_positive_columns_even_in_seed_rules() {
-    for head in ["*x + 1", "x", "42", "(*owned).clone()", "(*x).clone(1)"] {
+fn recursive_heads_accept_computations_and_let_bindings_in_seeds_and_steps() {
+    for head in ["*x + 1", "42", "owned", "*x"] {
         let source = format!(
-            "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A({head}) :- E(x), let owned = x; A(*x) :- A(x);"
+            "struct P; relation E(x:i32) = (e); relation A(x:i32); output A; A({head}) :- E(x), let owned = *x + 1; A({head}) :- A(x), if *x < 10, let owned = *x + 1;"
         );
         let program: Program = syn::parse_str(&source).unwrap();
-        assert!(contract::check(&program).is_err(), "{source}");
+        contract::check(&program).unwrap();
     }
     for head in ["*x", "(*x).clone()", "((*x)).clone()"] {
         let source = format!(
