@@ -261,6 +261,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu-triangles"
+version = "0.1.0"
+dependencies = [
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "gpu-blocked-run",
+ "gpu-tiles",
+ "rccl-memory",
+]
+
+[[package]]
+name = "gpu-triangles-runner"
+version = "0.1.0"
+dependencies = [
+ "cuda-core",
+ "gpu-blocked-run",
+ "gpu-triangles",
+ "rccl-memory",
+ "serde_json",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

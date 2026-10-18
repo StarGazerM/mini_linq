@@ -165,10 +165,11 @@ ordered columns yields fences directly. Histogram initialization, counting,
 scatter and provenance heapsort return without work on this path. Their
 device-gated launches remain, avoiding an extra sortedness readback.
 SF10 takes this path for **customer and supplier in both plans, plus lineitem
-in Plan B**, in warmup and all measured iterations. Filtered orders do **not**
-take it: the original orders column is ordered, but the date filter's atomic
-block reservations do not preserve block order; Plan B's customer-key ordering
-is also unsorted. The optimization does not assume dbgen ordering.
+in Plan B**, in warmup and all measured iterations. The stable date-filter
+compaction now also preserves the input order for `orders_by_order`;
+`orders_by_customer` remains unsorted. The optimization checks device data
+rather than assuming dbgen ordering. See [the H05 measurements](h05/README.md)
+for the newer stable-compaction and merge-mode results.
 
 ## RCCL compiler bug and approved workaround
 
@@ -482,3 +483,165 @@ dimension-filter H05 uses six (`4` AsiaNation, `5` Supplier).
 including errors, requested/chosen plans, five samples for each accepted
 variant, counts, and paths to logs/MIR. `srdatalog_h05.results.json` labels
 the winners `best` and retains the named historical baselines.
+
+## Directed triangle lookup-expand experiment
+
+`triangles` is a separate device-library package. Its benchmark and oracle are
+in the sibling `triangles-runner` package, avoiding cuda-oxide's same-package
+library/binary module-name ambiguity. It depends on `tiles` and `blocked-run`;
+neither library is forked or copied.
+
+The query is exactly `Triangle(a,b,c) <= E(a,b) & E(b,c) & E(a,c)`.
+Input ingestion sorts and deduplicates directed edges once on the host; it
+does not add reverse edges, remove self-loops, or impose `a < b < c`. This
+canonicalization and upload are outside CUDA-event timing, and ingestion time
+is recorded separately. The GPU builds the source-keyed blocked run with
+sorted neighbors. The rank-domain budget includes histogram scratch and is
+64 MiB; domains exceeding that budget or the density bound use 2048-row fences
+and equal-range binary search instead. Sparse signed-i64 domains, including
+both extrema and repeated fences, are covered by the oracle.
+
+Each 1024-edge tile builds exclusive expansion offsets with four cooperative
+256-thread scans. Intersection expands the smaller of `N(a)` and `N(b)` and
+binary-searches the other sorted range. Parent bindings retain the original
+`(a,b)`, including when the expansion side is swapped. T-sized virtual chunks
+are consumed immediately; counting uses a block reduction and one u64 atomic
+per consumed chunk. Optional materialization emits exact triples and reports
+insufficient output capacity instead of silently dropping rows.
+
+The 14,340-byte descriptor contains 1024 edge-row bindings, 1024 range begins,
+1025 exclusive offsets, and 1024 packed u16 parent slots/side flags. Pool-on
+uses `K=8`, 64 slots, and a persistent 568-block grid. Owners publish when
+`M > K*T`, consume head chunks, and free the slot after all chunks have been
+claimed. Blocks without root tiles steal tail chunks. A slot's acquire/release
+lock protects its cursors and descriptor lifetime: a thief copies the complete
+descriptor to its own shared memory before releasing the lock. Consequently
+slot reuse cannot invalidate an in-flight chunk. A full pool falls back to the
+owner's in-tile loop. A global root cursor and remaining-owner counter terminate
+the grid; stolen chunks finish before their blocks test termination. `K=0`
+disables publication. Both modes use the same fixed RCCL allocation reserve,
+primed before warmup, with no CUDA allocation/free in timed regions.
+
+The descriptor uses u32 offsets. Expansion overflow is detected rather than
+wrapped into an answer; each range is currently limited to `u32::MAX/256`
+items so each block scan is exact, and each descriptor total must fit u32.
+Triangle totals and pool statistics use u64. These representation limits do
+not constrain either measured input or the degree-1,000,000 oracle.
+
+The BFS baseline first materializes **all** `E(a,b) & E(b,c)` wedges as
+three-i64 tuples, then launches the membership filter. It does not use the
+smaller-range optimization. Its required allocation is `24 * wedge_count`
+bytes; results also report the `12 * wedge_count` lower demand for a possible
+u32-column implementation. An allocation exceeding available VRAM is recorded
+as `oom_preflight`, not as an executed BFS timing.
+
+Reproduce from `features/gpu`:
+
+```sh
+source /data/rccl/scripts/oxide-env.sh
+cargo oxide build --arch sm_89 -- --release -p gpu-triangles-runner --bins
+./target/release/triangles-oracle
+# Supply the independently obtained DuckDB count:
+./target/release/gpu-triangles EDGE_FILE DUCKDB_COUNT RESULT_JSON
+/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9/bin/ptxas \
+  -v -arch=sm_89 target/oxide-ir/gpu_triangles.ptx -o /dev/null
+```
+
+The oracle compares pool capacities 0, 1, and 64, thresholds 0, 1, and 8,
+with three repetitions of each combination. Cases include empty graphs,
+duplicate input edges, self-loops, random partial tiles, a clique, sparse
+repeated fences, output-capacity exhaustion, and a geometric power-law graph
+whose first node has exactly 1,000,000 outgoing neighbors. It checks counts,
+materialized triple membership/uniqueness, termination, released slots,
+actual stealing, and pool-full fallback.
+
+### Triangle measurements (2026-10-18)
+
+Both inputs were exact against DuckDB on every warmup and measured GPU run:
+**DBLP: 2,224,385 triangles from 1,049,866 edges**;
+**LiveJournal: 946,400,853 triangles from 68,993,773 edges**.
+Neither input contained duplicate edges. Both source domains fit the rank
+budget. Results and the comparison table are retained in
+[`compare/gpu_triangles.results.json`](compare/gpu_triangles.results.json);
+per-run samples, reference SQL, console logs, and the independent comparison
+runner remain alongside it.
+
+These are medians of five runs after one warmup on an RTX 6000 Ada (sm_89).
+GPU columns separate the fused query from run-build plus query. SRDatalog's
+run includes `KnowsLoad` and its index builds; DuckDB's 24-thread self-join runs
+on an already loaded distinct-edge table. All exclude file loading/H2D.
+Our host ingestion additionally sorts the neighbor lists before upload:
+67.013 ms for DBLP and 4,859.487 ms for LiveJournal, excluded from these GPU
+event intervals. Thus this table is **not an end-to-end ingestion comparison**.
+
+| Dataset | Method | Query/kernel ms | Build + query / engine run ms | Device memory / BFS demand | Stolen chunks |
+|---|---|---:|---:|---|---:|
+| DBLP | GPU pool off | 0.715 | 1.877 | 128 MiB sampled delta | 0 |
+| DBLP | GPU pool on (`K=8`, 64 slots) | 0.711 | 1.866 | 128 MiB sampled delta | 153–171 |
+| DBLP | BFS materialize, then filter | 1.293 | — | 161.699 MiB wedge allocation; 398 MiB sampled delta | — |
+| DBLP | SRDatalog best: `b,a,c` | — | 5.857 | 2,206 MiB whole-device sampled lower bound | — |
+| DBLP | DuckDB, 24 threads | 77 | — | CPU | — |
+| LiveJournal | GPU pool off | 88.255 | 95.885 | 5,412 MiB sampled delta | 0 |
+| LiveJournal | GPU pool on (`K=8`, 64 slots) | 89.431 | 101.773 | 5,412 MiB sampled delta | 1,740–3,607 |
+| LiveJournal | BFS materialize, then filter | OOM preflight | — | **132.225 GiB** i64 wedges; **66.112 GiB** even with u32 triples | — |
+| LiveJournal | SRDatalog best: `b,a,c` | — | 1,760.952 | 9,374 MiB whole-device sampled lower bound | — |
+| LiveJournal | DuckDB, 24 threads | 35,368 | — | CPU | — |
+
+The GPU memory delta is measured with `cuMemGetInfo` relative to the
+post-module/pre-upload baseline. It includes inputs and the entire fixed RCCL
+pool reserve, not just live logical suballocations. The same reserve is used
+with publication disabled and enabled. DBLP's BFS peak also includes the
+retained lazy-query pool, explicitly recorded in its JSON. SRDatalog's 1 Hz
+whole-device sampling is a different metric and must not be treated as a
+comparable allocator high-water mark.
+
+LiveJournal has 5,915,633,945 wedges: 141,975,214,680 bytes for the implemented
+three-i64 BFS layout, or 70,987,607,340 bytes for three u32 columns before any
+index/scratch storage. Available device memory at preflight was
+43,942,019,072 bytes; the baseline was rejected without allocating or launching.
+DBLP's 7,064,738 wedges were actually materialized and filtered, with exact
+counts on all six runs. The host-only wedge-demand diagnostic is separate
+from query execution (112.362 ms DBLP, 48,809.696 ms LiveJournal).
+
+Maximum `M/T` was **18.782** on DBLP and **388.771** on LiveJournal. On
+LiveJournal the 64-slot pool published 7,158–7,316 descriptors per measured run
+and fell back depth-first 56,863–57,021 times. Pool stealing is exercised and
+correct, but **does not improve this LiveJournal measurement**: its kernel is
+about 1.3% slower than the in-tile-only loop. Build medians also varied
+(7.600 ms pool-off versus 11.887 ms pool-on), so total-time differences cannot
+all be attributed to descriptor stealing.
+
+Final GPU timings were taken after the reference and H05 GPU runs finished;
+there was no intentional concurrent GPU benchmark. The machine was **not
+quiet**: recorded 1/5/15-minute CPU load averages were `21.94/21.39/12.85`
+(DBLP) and `22.31/21.20/13.29` (LiveJournal). Concurrent CPU gates and host
+scheduling can affect CUDA-event intervals that span host submissions.
+
+SRDatalog's actual `examples/lsqb_triangle_count.py` is imported by
+`compare/srdatalog_triangles.py`; only the requested variable plan is replaced.
+Its default selected `a,b,c`. All six dataset/order combinations completed and
+matched DuckDB on the warmup and every measured run:
+
+| SRDatalog order | DBLP ms | LiveJournal ms |
+|---|---:|---:|
+| engine default (`a,b,c`) | 6.618 | 2,576.524 |
+| explicit `a,b,c` | 6.547 | 2,575.829 |
+| explicit `b,a,c` | **5.857** | **1,760.952** |
+
+```sh
+uv run --project /home/stargazermiao/workspace/srdatalog-python python \
+  compare/srdatalog_triangles.py --dataset dblp livejournal \
+  --order default abc bac
+./target/release/gpu-triangles /data/dataset/graph/com-dblp.ungraph.txt \
+  2224385 compare/triangles_dblp.gpu.json
+./target/release/gpu-triangles /data/dataset/graph/soc-LiveJournal/edge.facts \
+  946400853 compare/triangles_livejournal.gpu.json
+```
+
+`compare/triangles.oracle.txt` records the passing oracle, including 32,394
+stolen chunks across the degree-1,000,000 graph's protocol variants and
+3,999,859 exact triangles. `compare/triangles.ptxas.txt` records the actual
+resource audit: the persistent kernel uses **40 registers**, **14,468 bytes
+dynamic shared memory**, a **104-byte stack frame**, and **zero spill stores
+or loads**. The BFS filter uses 18 registers, 32 bytes dynamic shared memory,
+and zero stack/spills. No CUDA C, NVRTC, or upstream checkout changes were used.

@@ -1,0 +1,10 @@
+Command: ./target/release/triangles-oracle
+empty: edges=0 expected=0 steals=0 pool_full=0 exact=true
+self_loops_duplicates: edges=5 expected=9 steals=0 pool_full=0 exact=true
+sparse_i64_fences: edges=4 expected=4 steals=0 pool_full=0 exact=true
+sparse_repeated_fences: edges=16389 expected=8195 steals=98 pool_full=6 exact=true
+random_partial_tile: edges=2451 expected=10835 steals=269 pool_full=24 exact=true
+clique_repeated_offsets: edges=16641 expected=2146689 steals=10573 pool_full=198 exact=true
+power_law_degree_1000000: edges=2999992 expected=3999859 steals=32394 pool_full=108 exact=true
+all intersection, materialization, termination, saturation and slot-reuse oracles passed
+Wall time: 11.56 seconds
