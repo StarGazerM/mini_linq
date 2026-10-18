@@ -36,7 +36,7 @@ unfiltered run additionally has 120,000,000 date bytes, plus its directory; it
 really exceeds the GPU's 96 MiB L2. Allocations still use the pre-reserved pool,
 never CUDA allocation/free in timed regions.
 
-From `features/gpu`:
+From `experiments/gpu`:
 
 ```sh
 source /data/rccl/scripts/oxide-env.sh

@@ -3,7 +3,7 @@
 
 Run with:
   uv run --project /home/stargazermiao/workspace/srdatalog-python python \
-      features/gpu/compare/srdatalog_triangles.py
+      experiments/gpu/compare/srdatalog_triangles.py
 
 DuckDB CLI uses 24 threads, deduplicates edges, records graph statistics, and
 counts E(a,b) JOIN E(b,c) JOIN E(a,c) once warm and five times measured.

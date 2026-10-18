@@ -1,7 +1,7 @@
 # GPU execution design (exploration branch `gpu`)
 
 Status: design settled in discussion 2026-10-15/16; de-risk phase in
-`features/gpu`. Nothing here is wired into the compiler pipeline yet.
+`experiments/gpu`. Nothing here is wired into the compiler pipeline yet.
 
 ## Decisions
 
@@ -92,7 +92,7 @@ Recursion: delta = a new run; compaction = RCCL merge of sorted runs.
 - RTIndeX/cgRX: BVH lookups do not beat hash/CSR for equi-joins; OptiX is
   unreachable from cuda-oxide. Not used.
 
-## De-risk phase (features/gpu)
+## De-risk phase (experiments/gpu)
 
 Hand-written kernels before any IR work:
 
@@ -112,7 +112,7 @@ or a documented Segment split.
 
 ## De-risk results (2026-10-16, RTX 6000 Ada, retail_h05)
 
-Hand-written kernels in `features/gpu` (cuda-oxide, no RCCL in the device
+Hand-written kernels in `experiments/gpu` (cuda-oxide, no RCCL in the device
 path — see the compiler bug below). Exact against the DuckDB answer at SF1
 (7,242 rows) and SF10 (72,983 rows) for both plans. Times are medians of five
 runs after one warmup; GPU numbers exclude the one-time column upload, include
@@ -136,7 +136,7 @@ srdatalog's sensitivity to variable order is itself a finding: 14 orders at
 SF1 span 5.2 ms to 2.9 s, and four accepted orders (`o,d,c,n,r,s`,
 `o,d,s,c,n,r`, `s,n,r,o,d,c`, `d,o,c,n,r,s`) compile but return wrong counts
 (125 or 0 instead of 7,242) — recorded as rejected in
-`features/gpu/compare/srdatalog_h05.sweep.json`, not used.
+`experiments/gpu/compare/srdatalog_h05.sweep.json`, not used.
 
 Findings:
 
@@ -155,8 +155,8 @@ Findings:
 - Dedup via a packed-u64 CAS set costs ~1 ms, dominated by readback and
   allocation boundaries, not hashing.
 
-Toolchain limitations hit (details in `features/gpu/README.md` and
-`features/gpu/compare/rccl-ptx-collision.txt`):
+Toolchain limitations hit (details in `experiments/gpu/README.md` and
+`experiments/gpu/compare/rccl-ptx-collision.txt`):
 
 1. cuda-oxide names static shared globals `__shared_mem_{n}` per module and
    the host embedder concatenates PTX without namespacing; loading RCCL's
@@ -196,7 +196,7 @@ exactly like `features/stacked-ir`'s Trace over Physical: text is
 Structures and the annotation; `Structures → Device` is a `cq_stage::pass`
 with its own correspondence check; the GPU printer is the terminal
 `Device → syn::Expr`. The language crate is plain Rust (syn) and lives in
-`features/gpu`; only the printer's generated code needs the nightly pin. No
+`experiments/gpu`; only the printer's generated code needs the nightly pin. No
 core crate depends on cuda-oxide.
 
 ```text

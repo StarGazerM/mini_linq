@@ -10,7 +10,7 @@ No CUDA C, NVRTC, OptiX or CPU join is in the measured path.
 
 ## Reproduce
 
-Run from `features/gpu` in the `gpu` fork:
+Run from `experiments/gpu` in the `gpu` fork:
 
 ```sh
 source /data/rccl/scripts/oxide-env.sh
@@ -469,9 +469,9 @@ Reproduce the winner from this fork's root:
 
 ```sh
 uv run --project /home/stargazermiao/workspace/srdatalog-python python -u \
-  features/gpu/compare/srdatalog_h05.py --sf 1 10 \
+  experiments/gpu/compare/srdatalog_h05.py --sf 1 10 \
   --var-order c,n,r,o,d,s --dimension-filters --clause-order 3,4,1,2,0,5 \
-  --output features/gpu/compare/srdatalog_h05.winner-rerun.json
+  --output experiments/gpu/compare/srdatalog_h05.winner-rerun.json
 ```
 
 `--var-order` is repeatable and can be combined with named `--order`
@@ -535,7 +535,7 @@ bytes; results also report the `12 * wedge_count` lower demand for a possible
 u32-column implementation. An allocation exceeding available VRAM is recorded
 as `oom_preflight`, not as an executed BFS timing.
 
-Reproduce from `features/gpu`:
+Reproduce from `experiments/gpu`:
 
 ```sh
 source /data/rccl/scripts/oxide-env.sh

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export projected TPC-H Q5 inputs, exact answers, and DuckDB CPU timings.
 
-Run: python3 features/gpu/compare/export_tpch.py [--sf 1 10]
+Run: python3 experiments/gpu/compare/export_tpch.py [--sf 1 10]
 Existing databases are reused; exports are replaced deterministically. SF1 is
 copied from the original benchmark database, never modified in place. Timing
 uses the complete SELECT DISTINCT, not a count wrapper, in one CLI process per

@@ -117,9 +117,10 @@ added. `physical = [cq_rewrites::smallest_intersections]` remains the public
 intersection hook; this coarse planner does not manufacture Fine ranges or
 claim a worst-case-optimal join bound.
 
-The retail runtime registers `le`. The e2e corpus axes are intentionally
-unchanged: adding LE there requires extending the named planner axis and
-regenerating its pairwise configurations, then running the corpus gate.
+The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
+as planner axes (538 new accepted configurations; the two D85 `merge_joins`
++ HashMap witnesses are excluded by the existing accepted-domain policy and
+pinned as negative UI fixtures); the corpus gate passes (3,440 tests).
 
 `le_runs` explicitly applies `sorted_runs`; core default selection is
 unchanged. Sorted-run retyping is limited to one-level HashIndex payload
