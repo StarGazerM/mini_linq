@@ -1,0 +1,46 @@
+{
+  "before": {
+    "kernel_ms_sum_six_iterations": {
+      "plan_a": 5.592237,
+      "word_offsets": 4.349796,
+      "clear_histogram": 3.692158,
+      "scatter": 2.68415,
+      "filter_orders": 2.317618,
+      "order_bins": 2.206771,
+      "histogram": 2.124657,
+      "gather": 1.799695,
+      "sorted_check": 0.965382,
+      "sorted_starts": 0.442242,
+      "sorted_directory": 0.433796,
+      "scan_blocks": 0.171746,
+      "add_prefix": 0.07968,
+      "fences": 0.046912,
+      "dedup_insert": 0.042465,
+      "complete_stats": 0.021984,
+      "initialize": 0.018177
+    },
+    "build_kernel_ms_sum_six_iterations": 21.354763999999996
+  },
+  "after": {
+    "kernel_ms_sum_six_iterations": {
+      "plan_a": 5.65822,
+      "filter_orders": 3.103384,
+      "sorted_starts": 2.482001,
+      "gather": 1.659019,
+      "sorted_directory": 1.557133,
+      "order_bins": 0.765894,
+      "word_offsets": 0.49725,
+      "sorted_check": 0.421125,
+      "histogram": 0.223938,
+      "scatter": 0.223361,
+      "scan_blocks": 0.167521,
+      "add_prefix": 0.087394,
+      "fences": 0.04541,
+      "dedup_insert": 0.042369,
+      "clear_histogram": 0.022592,
+      "complete_stats": 0.022048,
+      "initialize": 0.019008
+    },
+    "build_kernel_ms_sum_six_iterations": 11.297077999999999
+  }
+}

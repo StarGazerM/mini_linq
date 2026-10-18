@@ -65,10 +65,14 @@ fn pool_bytes(data:&Data,domains:[(i64,i64);5])->Result<usize,Error>{
 fn main()->Result<(),Error>{
     let args=std::env::args().skip(1).collect::<Vec<_>>();
     if args.first().map(String::as_str)==Some("--synthetic") {data::synthetic(Path::new(args.get(1).ok_or("--synthetic DIR")?))?;return Ok(());}
-    let dir=Path::new(args.first().ok_or("usage: gpu-h05 DATA_DIR [A|B|both] [RESULTS_JSON]")?);
+    let merge=args.iter().any(|s|s=="--merge");
+    let unfiltered=args.iter().any(|s|s=="--unfiltered-orders");
+    let args=args.into_iter().filter(|s|s!="--merge" && s!="--unfiltered-orders").collect::<Vec<_>>();
+    let dir=Path::new(args.first().ok_or("usage: gpu-h05 DATA_DIR [A|B|both] [RESULTS_JSON] [--merge] [--unfiltered-orders]")?);
     let plan=args.get(1).map(String::as_str).unwrap_or("both");
     if !["A","B","both"].contains(&plan){return Err("plan must be A, B or both".into());}
     let result_path=args.get(2).map(String::as_str).unwrap_or("compare/gpu_h05.results.json");
+    if unfiltered && plan!="A" {return Err("--unfiltered-orders requires Plan A".into());}
     let data=Data::load(dir)?;
     // Bounds are computed once from uploaded-column sources, never downloaded
     // from the GPU. Filtered runs retain these conservative full-column bounds.
@@ -89,7 +93,7 @@ fn main()->Result<(),Error>{
     let mut asia_regions=0u64;
     for (&r,&name) in data.col("region.r_regionkey").iter().zip(data.col("region.r_name")){if r<0 || r>=64{return Err("region bitmap domain unsupported".into());}if name==data.asia{asia_regions|=1u64<<r;}}
     let line_count=data.col("lineitem.l_orderkey").len();
-    let pool_size=pool_bytes(&data,domains)?;
+    let pool_size=pool_bytes(&data,domains)?+data.col("orders.o_orderkey").len()*8+4*data.col("orders.o_orderkey").len().div_ceil(256)+4096;
     // Equal initial/maximum sizes forbid upstream CUDA allocations in warmup
     // and timed iterations. Only input uploads remain cuda_core-owned.
     let memory:MemoryResource=StatisticsMemoryResource::new(PoolMemoryResource::new(CudaMemoryResource::new(ctx.clone()),pool_size,pool_size)?);
@@ -102,12 +106,14 @@ fn main()->Result<(),Error>{
     let timing=Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT);
     let mut results=vec![];
     let launch_a=module.prepare_plan_a(LaunchConfig1D::new(568,256,9216))?;
+    let launch_merge=module.prepare_plan_a_merge(LaunchConfig1D::new(568,256,17408))?;
     let launch_b=module.prepare_plan_b(LaunchConfig1D::new(568,256,33808))?;
     for which in ["A","B"] {
         if plan!="both" && plan!=which{continue;}
         let mut build_samples=vec![];let mut kernel_samples=vec![];let mut dedup_samples=vec![];let mut total_samples=vec![];
         let mut allocation_samples=vec![];let mut peak_bytes_samples=vec![];
         let mut sorted_build_samples=vec![];
+        let mut order_rows=0u32;
         let mut peak_mem=memory_used()?;let mut max_fanout=[0u32;2];let mut answer_count=0;
         for iteration in 0..6 {
             stream.synchronize()?;
@@ -115,14 +121,23 @@ fn main()->Result<(),Error>{
             let (b,k,u,total,build_stats)={
             let start=stream.record_event(timing)?;
             let order_count=data.col("orders.o_orderkey").len();
-            let mut filter_keys=Buffer::<i64>::zeroed_in(&memory,&stream,order_count)?;
-            let mut filter_customers=Buffer::<i64>::zeroed_in(&memory,&stream,order_count)?;
-            let mut selected=Buffer::<u32>::zeroed_in(&memory,&stream,1)?;
-            let filter_launch=module.prepare_filter_orders(LaunchConfig1D::new(order_count.div_ceil(256).max(1) as u32,256,64))?;
-            module.filter_orders(&stream,&filter_launch,dcol("orders.o_orderkey"),dcol("orders.o_custkey"),dcol("orders.o_orderdate"),data.start,data.end,mut_ptr(&mut filter_keys),mut_ptr(&mut filter_customers),mut_ptr(&mut selected))?;
+            let filter_capacity=if unfiltered {0}else{order_count};
+            let mut filter_keys=Buffer::<i64>::zeroed_in(&memory,&stream,filter_capacity)?;
+            let mut filter_customers=Buffer::<i64>::zeroed_in(&memory,&stream,filter_capacity)?;
+            let mut block_counts=Buffer::<u32>::zeroed_in(&memory,&stream,filter_capacity.div_ceil(256).max(1))?;
+            let filter_scan=if unfiltered {vec![]}else{
+                let filter_launch=module.prepare_filter_orders(LaunchConfig1D::new(order_count.div_ceil(256).max(1) as u32,256,64))?;
+                module.filter_orders(&stream,&filter_launch,dcol("orders.o_orderkey"),dcol("orders.o_custkey"),dcol("orders.o_orderdate"),data.start,data.end,mut_ptr(&mut filter_keys),mut_ptr(&mut filter_customers),mut_ptr(&mut block_counts),false)?;
+                let scan=gpu_blocked_run::exclusive_scan(&stream,&memory,&block_counts)?;
+                module.filter_orders(&stream,&filter_launch,dcol("orders.o_orderkey"),dcol("orders.o_custkey"),dcol("orders.o_orderdate"),data.start,data.end,mut_ptr(&mut filter_keys),mut_ptr(&mut filter_customers),mut_ptr(&mut block_counts),true)?;
+                scan
+            };
+            let selected=filter_scan.last();
             let customers=Run::build(&ctx,&stream,&memory,dcol("customer.c_custkey"),&[dcol("customer.c_nationkey") as &dyn ContiguousDeviceRange<i64>],customer_domain,None)?;
             let suppliers=Run::build(&ctx,&stream,&memory,dcol("supplier.s_suppkey"),&[dcol("supplier.s_nationkey") as &dyn ContiguousDeviceRange<i64>],supplier_domain,None)?;
-            let orders=if which=="A" {Run::build(&ctx,&stream,&memory,&filter_keys,&[&filter_customers as &dyn ContiguousDeviceRange<i64>],order_domain,Some(&selected))?}else{Run::build(&ctx,&stream,&memory,&filter_customers,&[&filter_keys as &dyn ContiguousDeviceRange<i64>],order_customer_domain,Some(&selected))?};
+            let orders=if unfiltered {
+                Run::build(&ctx,&stream,&memory,dcol("orders.o_orderkey"),&[dcol("orders.o_custkey") as &dyn ContiguousDeviceRange<i64>,dcol("orders.o_orderdate") as &dyn ContiguousDeviceRange<i64>],order_domain,None)?
+            }else if which=="A" {Run::build(&ctx,&stream,&memory,&filter_keys,&[&filter_customers as &dyn ContiguousDeviceRange<i64>],order_domain,selected)?}else{Run::build(&ctx,&stream,&memory,&filter_customers,&[&filter_keys as &dyn ContiguousDeviceRange<i64>],order_customer_domain,selected)?};
             let lines=if which=="B" {Some(Run::build(&ctx,&stream,&memory,dcol("lineitem.l_orderkey"),&[dcol("lineitem.l_suppkey") as &dyn ContiguousDeviceRange<i64>],line_domain,None)?)}else{None};
             // One combined metadata readback also rejects invalid device row
             // counts/domains before any plan consumes the constructed runs.
@@ -133,10 +148,13 @@ fn main()->Result<(),Error>{
             };
             peak_mem=peak_mem.max(memory_used()?);
             unsafe{cuda_core::memory::memset_d8_async(counters.cu_deviceptr(),0,counters.num_bytes(),stream.cu_stream())?;}
-            let dims=Dimensions{orders:orders.view(),customer:customers.view(),supplier:suppliers.view(),order_customer:ptr(&orders.payloads[0]),customer_nation:ptr(&customers.payloads[0]),supplier_nation:ptr(&suppliers.payloads[0]),nation_region:ptr(&nation_region),nation_len:nr.len() as u32,asia_regions};
+            let dims=Dimensions{orders:orders.view(),customer:customers.view(),supplier:suppliers.view(),order_customer:ptr(&orders.payloads[0]),customer_nation:ptr(&customers.payloads[0]),supplier_nation:ptr(&suppliers.payloads[0]),nation_region:ptr(&nation_region),nation_len:nr.len() as u32,asia_regions,
+                order_keys:ptr(&orders.keys),order_fences:ptr(&orders.fences),order_rows:build_stats[2].rows,
+                order_dates:if unfiltered {ptr(&orders.payloads[1])}else{std::ptr::null()},start:data.start,end:data.end};
             let built=stream.record_event(timing)?;
             if which=="A" {
-                module.plan_a(&stream,&launch_a,dcol("lineitem.l_orderkey"),dcol("lineitem.l_suppkey"),dims,output)?;
+                if merge {module.plan_a_merge(&stream,&launch_merge,dcol("lineitem.l_orderkey"),dcol("lineitem.l_suppkey"),dims,output)?;}
+                else {module.plan_a(&stream,&launch_a,dcol("lineitem.l_orderkey"),dcol("lineitem.l_suppkey"),dims,output)?;}
             }else{
                 let lines=lines.as_ref().unwrap();
                 module.plan_b(&stream,&launch_b,&customers.keys,&customers.payloads[0],dims,orders.view(),ptr(&orders.payloads[0]),lines.view(),ptr(&lines.keys),ptr(&lines.payloads[0]),output)?;
@@ -169,6 +187,7 @@ fn main()->Result<(),Error>{
             let allocations=memory.pop_counters()?;
             let allocation_count=allocations.allocations.total;
             let peak_bytes=persistent_bytes+allocations.bytes.peak;
+            order_rows=build_stats[2].rows;
             // Report the device's decision, including empty sorted runs; do
             // not infer this fast path from host input order or column names.
             let build_names=["customer","supplier",if which=="A" {"orders_by_order"}else{"orders_by_customer"},"lineitem"];
@@ -182,7 +201,10 @@ fn main()->Result<(),Error>{
             "sf":data.sf,"plan":which,"build_ms":metric(&build_samples),
             "kernel_ms":metric(&kernel_samples),"dedup_ms":metric(&dedup_samples),
             "total_ms":metric(&total_samples),"answer_count":answer_count,"exact":true,
-            "regs":null,"spills":null,"smem":if which=="A"{9216}else{33808},
+            "regs":null,"spills":null,"smem":if which=="A"{if merge {17408}else{9216}}else{33808},
+            "probe_mode":if merge {"merge"}else{"point"},"unfiltered_orders":unfiltered,"merge_block_limit":kernels::MERGE_BLOCK_LIMIT,
+            "orders_rows":order_rows,"orders_key_customer_bytes":order_rows as u64*16,
+            "orders_date_bytes":if unfiltered {order_rows as u64*8}else{0},
             "peak_mem_mib":peak_mem.saturating_sub(baseline_mem) as f64/1048576.0,
             "peak_mem_scope":"cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
             "pool_bytes":pool_size,"allocation_scope":"iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
@@ -203,7 +225,7 @@ fn main()->Result<(),Error>{
     }
     let path=Path::new(result_path);if let Some(parent)=path.parent(){fs::create_dir_all(parent)?;}
     let mut existing:Vec<Value>=if path.exists(){serde_json::from_slice(&fs::read(path)?)?}else{vec![]};
-    existing.retain(|r|!results.iter().any(|n|r["sf"]==n["sf"] && r["plan"]==n["plan"]));existing.extend(results);
+    existing.retain(|r|!results.iter().any(|n|r["sf"]==n["sf"] && r["plan"]==n["plan"] && r["probe_mode"]==n["probe_mode"] && r["unfiltered_orders"]==n["unfiltered_orders"]));existing.extend(results);
     fs::write(path,serde_json::to_vec_pretty(&existing)?)?;
     Ok(())
 }

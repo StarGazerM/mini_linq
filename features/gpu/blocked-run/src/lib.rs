@@ -110,6 +110,33 @@ pub unsafe fn point(view: RankView, key: i64) -> Option<(u32, u32)> {
     Some((begin, end))
 }
 
+/// In-place exclusive scan. Returned scratch must live until stream completion;
+/// its last buffer contains the total, including for an empty input.
+pub fn exclusive_scan<'a>(
+    stream: &'a CudaStream, memory: &'a MemoryResource, values: &Buffer<'a, u32>,
+) -> BuildResult<Vec<Buffer<'a, u32>>> {
+    let module = unsafe { kernels::load(stream.context()) }?;
+    let mut levels = Vec::new();
+    let mut current = ptr(values);
+    let mut length = values.len();
+    loop {
+        let blocks = length.div_ceil(THREADS as usize).max(1);
+        let totals = allocate::<u32>(memory, stream, blocks)?;
+        let launch = module.prepare_scan_blocks(LaunchConfig1D::new(blocks as u32, THREADS, 32))?;
+        unsafe { module.scan_blocks(stream, &launch, current, length, ptr(&totals))?; }
+        current = ptr(&totals);
+        length = blocks;
+        levels.push(totals);
+        if blocks == 1 { break; }
+    }
+    for level in (0..levels.len() - 1).rev() {
+        let target = if level == 0 { values } else { &levels[level - 1] };
+        let launch = module.prepare_add_prefix(config(target.len()))?;
+        unsafe { module.add_prefix(stream, &launch, ptr(target), target.len(), &levels[level])?; }
+    }
+    Ok(levels)
+}
+
 impl<'a> Run<'a> {
     /// Enqueue a stable counting-sort build without any host readback.
     ///
@@ -161,29 +188,7 @@ impl<'a> Run<'a> {
             module.initialize(stream, &initialize, capacity,
                 row_count.map_or(core::ptr::null(), |c| ptr(c) as *const u32), ptr(&stats))?;
         }
-        let exclusive_scan = |values: &Buffer<'a, u32>| -> BuildResult<Vec<Buffer<'a, u32>>> {
-            let mut levels = Vec::new();
-            let mut current = ptr(values);
-            let mut length = values.len();
-            loop {
-                let blocks = length.div_ceil(THREADS as usize).max(1);
-                let totals = allocate::<u32>(memory, stream, blocks)?;
-                let launch = module.prepare_scan_blocks(
-                    LaunchConfig1D::new(blocks as u32, THREADS, 32),
-                )?;
-                unsafe { module.scan_blocks(stream, &launch, current, length, ptr(&totals))?; }
-                current = ptr(&totals);
-                length = blocks;
-                levels.push(totals);
-                if blocks == 1 { break; }
-            }
-            for level in (0..levels.len() - 1).rev() {
-                let target = if level == 0 { values } else { &levels[level - 1] };
-                let launch = module.prepare_add_prefix(config(target.len()))?;
-                unsafe { module.add_prefix(stream, &launch, ptr(target), target.len(), &levels[level])?; }
-            }
-            Ok(levels)
-        };
+        let exclusive_scan = |values: &Buffer<'a, u32>| exclusive_scan(stream, memory, values);
         let check = module.prepare_sorted_check(config(n))?;
         unsafe {
             module.sorted_check(stream, &check, &Input(keys), min_key, domain, ptr(&stats))?;
