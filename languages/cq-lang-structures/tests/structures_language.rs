@@ -399,6 +399,8 @@ fn generator_bind_round_trip_drops_inherited_uniqueness() {
     invalid.physical.program.definitions[1].operator =
         syn::parse_quote!(bind u with for x = ([*x]));
     assert!(structures::contract::check(&invalid).is_err());
+}
+
 fn shared_program() -> structures::Program {
     syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
