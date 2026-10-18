@@ -82,6 +82,15 @@ fn compile(module: &structures::Program) -> syn::Result<syn::Expr> {
         }
     }
     for entry in &module.structures.entries {
+        match &entry.structure {
+            structures::Structure::Repr { witness: Some(_), .. } => {
+                return error(entry, format!("own_push: `{} repr witness` is unsupported", entry.name));
+            }
+            structures::Structure::Stage { expand: Some(_), .. } => {
+                return error(entry, format!("own_push: `{} stage expand` is unsupported", entry.name));
+            }
+            _ => {}
+        }
         if let structures::Structure::Repr {
             repr: structures::Repr::Positions { .. },
             ..

@@ -7,6 +7,23 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Lookup&Expand sharing on the R/E/C back end (contract of record
+  `/data/codex/gpu-le-reply.md`, confirmed by the GPU session). Structures gains
+  `r share = lookup b [K] first s force p;` (ST-Share: the keyed read is
+  evaluated once at the eager semi and reused by the forcing probe; coupling
+  invariant `memo = lookup b k`), a `witness { b [K] at s as Type }` clause on
+  `repr` (STR-Witness: α of the witness is the lookup cursor; it is not a
+  column, and the contract rejects any program where it would escape into a
+  canon key, the head, a retained let, a union/fallback arm, a fused prefix or
+  an exists before its forcing probe), and `r stage = batch N expand;`
+  (ST-Expand: a stage may span a probe whose build exposes a Copy range cursor
+  because the chunk's expansion is a segmented flatten, total and
+  length-known). `SortedRun` (Copy range cursor, O(1) `nth`) and the
+  `sorted_runs` retype are cherry-picked from `gpu`; `cq_rewrites::retain_lookups`
+  records share+witness for eligible eager-semi/later-probe pairs on such
+  builds. Pull printer carries the witness as a non-column item pruned at the
+  forcing probe and realizes `expand` through `cq_storage::stage::segmented`;
+  the push printer refuses both by name. Defaults record nothing.
 - Back end split into three recorded, checked layers (`doc/formal/backend.tex`;
   rules STR-Repr, ST-Total, ST-Stage, BK-Dual). Structures gains
   `r repr = tuples | positions {H lineage {..}, ..} owned [..];` (data

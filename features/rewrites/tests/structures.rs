@@ -301,4 +301,3 @@ fn sorted_runs_keeps_two_column_payload_keys_hashed() {
     assert_eq!(target, source);
     ir::check_rewrite(&source, &target).unwrap();
 }
-

@@ -242,3 +242,33 @@ fn positions_representation_is_explicitly_refused() {
         "own_push: `r repr = positions` is unsupported",
     );
 }
+
+#[test]
+fn lookup_witness_and_expansion_are_refused_by_name() {
+    let compiler = Compiler::new();
+    for (name, decision, expected) in [
+        ("lookup_witness", "s share = lookup r [k] first s force p; s repr = tuples witness { r [k] at s as ::cq_storage::RunCursor<'_, _> };", "own_push: `s repr witness` is unsupported"),
+        ("lookup_expand", "p stage = batch 4 expand;", "own_push: `p stage expand` is unsupported"),
+    ] {
+        let source = format!(r#"own_push::push! {{
+            pipeline {{}};
+            physical {{
+                relation R(a:i32,b:i32); relation S(a:i32,c:i32);
+                l = pipe rename R@0 {{a -> k,b -> b}};
+                r = let rename S@1 {{a -> k,c -> v}};
+                s = pipe semi eager [k] l,r;
+                p = pipe probe first [k] s,r;
+                out = pipe canon project p keep {{k,v}};
+                return out as answer(k,v);
+            }}
+            structures {{
+                l host scan = ::core::iter::Map<_,_> [];
+                r host scan = ::core::iter::Map<_,_> [];
+                r = ::cq_storage::SortedRun<_,_> [k];
+                out canon = ::std::collections::HashSet<_>;
+                {decision}
+            }}
+        }}"#);
+        failure(compiler.compile(name, &source), expected);
+    }
+}

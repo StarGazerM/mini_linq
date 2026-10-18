@@ -94,6 +94,8 @@ pub struct Context<'a> {
     pub idents: BTreeMap<String, BTreeMap<String, Ident>>,
     /// Consumer-demanded adapter layouts, computed once from the Physical DAG.
     pub carried_columns: BTreeMap<String, Vec<String>>,
+    /// Non-column lookup cursors live only between their first and forcing reads.
+    pub carried_witnesses: BTreeMap<String, Vec<String>>,
     pub reprs: BTreeMap<String, Repr>,
     pub statements: Vec<Stmt>,
     /// Whether a statement binds a value the iterator borrows.
@@ -276,6 +278,7 @@ impl<'a> Context<'a> {
             parameters,
             idents: BTreeMap::new(),
             carried_columns: columns::carried_columns(module, analysis),
+            carried_witnesses: columns::carried_witnesses(module, analysis),
             reprs: BTreeMap::new(),
             statements,
             bound,

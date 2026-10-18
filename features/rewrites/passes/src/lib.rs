@@ -25,4 +25,4 @@ mod selection;
 mod structures;
 
 pub use physical::{canon_prefixes, lazy_semijoins, merge_joins, smallest_intersections};
-pub use structures::{join_filter, retype, sorted_runs};
+pub use structures::{join_filter, retain_lookups, retype, sorted_runs};

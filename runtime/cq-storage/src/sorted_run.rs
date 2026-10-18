@@ -158,6 +158,10 @@ impl<V: Copy> Iterator for RunCursor<'_, V> {
         }
         item
     }
+    fn nth(&mut self, n: usize) -> Option<V> {
+        self.position = self.position.saturating_add(n).min(self.items.len());
+        self.next()
+    }
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.items.len() - self.position;
         (remaining, Some(remaining))
@@ -278,6 +282,22 @@ mod tests {
         let run = SortedRun::from_pairs([(-1, 'a'), (1, 'b')], Partial);
         assert!(run.rank.is_none());
         assert_eq!((&run).lookup(&-1).collect::<Vec<_>>(), ['a']);
+    }
+
+    #[test]
+    fn range_offsets_match_scalar_cursor_steps() {
+        let run = SortedRun::<_, _>::build([(1, 'a'), (1, 'b'), (1, 'c')].into_iter());
+        for offset in [0, 1, 2, 3, usize::MAX] {
+            let mut cursor = (&run).lookup(&1);
+            assert_eq!(cursor.nth(offset), ['a', 'b', 'c'].get(offset).copied());
+            assert_eq!(
+                cursor.len(),
+                3usize.saturating_sub(offset.saturating_add(1))
+            );
+            if offset >= 3 {
+                assert_eq!(cursor.next(), None);
+            }
+        }
     }
 
     #[test]

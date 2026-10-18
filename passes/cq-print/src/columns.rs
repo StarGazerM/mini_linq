@@ -141,7 +141,74 @@ pub(super) fn carried_columns(
         .collect()
 }
 
+/// Witness demand ends at its forcing probe; it never enters the logical heading.
+pub(super) fn carried_witnesses(
+    module: &structures::Program,
+    analysis: &structures::Analysis,
+) -> BTreeMap<String, Vec<String>> {
+    let definitions: BTreeMap<_, _> = module
+        .physical
+        .program
+        .definitions
+        .iter()
+        .map(|definition| (symbol_name(&definition.name), definition))
+        .collect();
+    let mut carried: BTreeMap<String, Vec<String>> = definitions
+        .keys()
+        .map(|name| (name.clone(), Vec::new()))
+        .collect();
+    for origin in analysis.witnesses.keys() {
+        let share = &analysis.shares[origin];
+        let Operator::Probe(_, probe) = &definitions[&share.force].operator else {
+            unreachable!("checked witness force");
+        };
+        let mut current = symbol_name(&probe.left);
+        loop {
+            carried.get_mut(&current).unwrap().push(origin.clone());
+            if current == *origin {
+                break;
+            }
+            current = match &definitions[&current].operator {
+                Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
+                    symbol_name(&s.input)
+                }
+                Operator::Project(p) => symbol_name(&p.input),
+                Operator::Semi(_, k) | Operator::Anti(_, k) => symbol_name(&k.left),
+                Operator::Bind(b) => symbol_name(&b.input),
+                Operator::Guard(g) => symbol_name(&g.input),
+                _ => unreachable!("checked witness forwarding chain"),
+            };
+        }
+    }
+    carried
+}
+
 impl Context<'_> {
+    /// Stable non-column binding for a retained lookup cursor.
+    pub fn witness_ident(&self, origin: &str) -> Ident {
+        format_ident!(
+            "__cq_witness_{}",
+            origin,
+            span = proc_macro2::Span::mixed_site()
+        )
+    }
+
+    /// Cursor consumed by this probe, if a sharing decision records one.
+    pub fn forcing_witness(&self, result: &str) -> Option<Ident> {
+        self.analysis
+            .witnesses
+            .keys()
+            .find(|origin| self.analysis.shares[*origin].force == result)
+            .map(|origin| self.witness_ident(origin))
+    }
+
+    fn witness_fields(&self, result: &str) -> Vec<Ident> {
+        self.carried_witnesses[result]
+            .iter()
+            .map(|origin| self.witness_ident(origin))
+            .collect()
+    }
+
     /// Whether this result carries base-relative row IDs rather than values.
     pub fn carries_positions(&self, result: &str) -> bool {
         matches!(
@@ -202,6 +269,10 @@ impl Context<'_> {
     /// Positional carriers project the host's borrowed row so String and scalar
     /// columns keep their exact `&T` type; key markers may normalize or copy keys.
     pub fn access(&self, result: &str, column: &str) -> TokenStream {
+        assert!(
+            column != "<witness>",
+            "a lookup witness is not a logical column"
+        );
         if let Some(structures::Repr::Positions { bases, .. }) = self.analysis.repr.get(result) {
             for (i, base) in bases.iter().enumerate() {
                 if let Some(lineage) = base
@@ -233,6 +304,11 @@ impl Context<'_> {
     /// Bind selected columns of a tuple carrier; unread fields are wildcards.
     /// `borrowed` borrows owned computed values rather than moving them.
     pub fn bind_columns(&self, result: &str, columns: &[String], borrowed: bool) -> TokenStream {
+        let witnesses = self
+            .witness_fields(result)
+            .into_iter()
+            .map(|id| if borrowed { quote!(_) } else { quote!(#id) })
+            .collect::<Vec<_>>();
         if let Some(structures::Repr::Positions { bases, owned, .. }) =
             self.analysis.repr.get(result)
         {
@@ -250,9 +326,9 @@ impl Context<'_> {
                 }
             });
             return if borrowed {
-                quote!(&(#(#ids,)* #(#values,)*))
+                quote!(&(#(#ids,)* #(#values,)* #(#witnesses,)*))
             } else {
-                quote!((#(#ids,)* #(#values,)*))
+                quote!((#(#ids,)* #(#values,)* #(#witnesses,)*))
             };
         }
         let fields = self.carried(result).iter().map(|c| {
@@ -267,9 +343,9 @@ impl Context<'_> {
             }
         });
         if borrowed {
-            quote!(&(#(#fields,)*))
+            quote!(&(#(#fields,)* #(#witnesses,)*))
         } else {
-            quote!((#(#fields,)*))
+            quote!((#(#fields,)* #(#witnesses,)*))
         }
     }
 
@@ -296,7 +372,8 @@ impl Context<'_> {
                 quote!(#id)
             }
         });
-        quote!(&(#(#fields,)*))
+        let witnesses = self.carried_witnesses[result].iter().map(|_| quote!(_));
+        quote!(&(#(#fields,)* #(#witnesses,)*))
     }
 
     /// Introduce lexical aliases only for Rust's free inputs.
@@ -322,6 +399,7 @@ impl Context<'_> {
 
     /// Build the selected adapter carrier from column expressions.
     pub fn carrier(&self, result: &str, expression: impl Fn(&str) -> TokenStream) -> TokenStream {
+        let witnesses = self.witness_fields(result);
         if let Some(structures::Repr::Positions { bases, owned, .. }) =
             self.analysis.repr.get(result)
         {
@@ -330,16 +408,17 @@ impl Context<'_> {
                 .columns
                 .iter()
                 .map(|column| expression(&symbol_name(column)));
-            return quote!((#(#ids,)* #(#values,)*));
+            return quote!((#(#ids,)* #(#values,)* #(#witnesses,)*));
         }
         let fields = self.carried(result).iter().map(|c| expression(c));
-        quote!((#(#fields,)*))
+        quote!((#(#fields,)* #(#witnesses,)*))
     }
 
     /// Forward a subset after a filtering adapter without retaining dead columns.
     pub fn forward(&self, result: &str, input: &str, rows: TokenStream) -> TokenStream {
         if self.carried(result) == self.carried(input)
             && self.carries_positions(result) == self.carries_positions(input)
+            && self.carried_witnesses[result] == self.carried_witnesses[input]
         {
             return rows;
         }

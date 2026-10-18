@@ -21,8 +21,9 @@ fn total(operator: &Operator) -> bool {
 
 pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, usize>> {
     let mut stages = BTreeMap::new();
+    let mut expands = BTreeSet::new();
     for entry in &program.structures.entries {
-        let Structure::Stage { size, .. } = &entry.structure else {
+        let Structure::Stage { size, expand, .. } = &entry.structure else {
             continue;
         };
         let size = size.base10_parse::<usize>()?;
@@ -31,6 +32,9 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         }
         if stages.insert(symbol_name(&entry.name), size).is_some() {
             return error(entry, "duplicate stage decision");
+        }
+        if expand.is_some() {
+            expands.insert(symbol_name(&entry.name));
         }
     }
     let definitions: BTreeMap<_, _> = program
@@ -46,6 +50,21 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         .values()
         .flat_map(|group| group.members.iter())
         .collect();
+    // ST-Expand: SortedRun lookups expose total length-known ranges, so an
+    // expanded probe is a segmented for producer, not a partial cursor.
+    for name in &expands {
+        let definition = definitions[name];
+        let Operator::Probe(_, probe) = &definition.operator else {
+            return error(definition, "expand requires a probe");
+        };
+        let keys = names(&probe.columns);
+        let range = facts.built.get(&symbol_name(&probe.right)).into_iter().flatten()
+            .any(|(levels, ty)| levels.len() == 1 && levels[0] == keys
+                && matches!(ty, syn::Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "SortedRun")));
+        if !range {
+            return error(definition, "expand requires a SortedRun range-cursor build");
+        }
+    }
     // ST-Stage: A positive, unique boundary ends a total segment before any
     // partial step, starting at a for producer, never a probe/merge cursor.
     for boundary in stages.keys() {
@@ -77,7 +96,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             if matches!(
                 definition.operator,
                 Operator::Probe(_, _) | Operator::Merge(_, _)
-            ) {
+            ) && !expands.contains(&current)
+            {
                 return error(
                     definition,
                     "stage requires a for producer, not a probe or merge cursor",

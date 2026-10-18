@@ -3,6 +3,9 @@ use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token, Type};
 
+mod retain_lookups;
+pub use retain_lookups::retain_lookups;
+
 #[derive(Clone, Copy)]
 enum Kind {
     Payload,
@@ -122,7 +125,10 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 Structure::Rows { .. } => matches!(kind, Kind::Rows),
                 Structure::Selection { .. } => matches!(kind, Kind::Selection),
                 Structure::KeySet { .. } => matches!(kind, Kind::KeySet | Kind::Membership),
-                Structure::Read { .. } | Structure::Repr { .. } | Structure::Stage { .. } => false,
+                Structure::Read { .. }
+                | Structure::Repr { .. }
+                | Structure::Stage { .. }
+                | Structure::Share { .. } => false,
                 Structure::JoinFilter { .. } => matches!(kind, Kind::JoinFilter),
                 Structure::Host { reader, .. } => {
                     matches!(kind, Kind::Membership) && reader == "membership"
@@ -165,8 +171,11 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                 | Structure::Selection { ty, .. }
                 | Structure::KeySet { ty, .. } => *ty = request.ty.clone(),
                 Structure::JoinFilter { filter, .. } => filter.ty = request.ty.clone(),
-                Structure::Read { .. } | Structure::Repr { .. } | Structure::Stage { .. } => {
-                    unreachable!("read, repr and stage entries carry no provider type")
+                Structure::Read { .. }
+                | Structure::Repr { .. }
+                | Structure::Stage { .. }
+                | Structure::Share { .. } => {
+                    unreachable!("read, repr, stage and share entries carry no provider type")
                 }
             }
             changed = true;

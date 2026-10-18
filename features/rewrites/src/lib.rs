@@ -20,6 +20,17 @@
 //! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
 //!
+//! `retain_lookups` takes no arguments and records a `share` decision and a
+//! `repr` witness for each eligible eager semijoin followed by a probe of the
+//! same SortedRun build and preserved keys. The cursor is
+//! `::cq_storage::RunCursor<'_, _>`; an existing positions representation is
+//! preserved. The Structures contract rejects witness escape across retained
+//! rows, canonicalization, opaque steps or other unsupported boundaries.
+//! HashIndex builds and probes preceding the semijoin are unchanged. Compose
+//! explicitly with
+//! `pipeline { structures = [cq_rewrites::sorted_runs, cq_rewrites::retain_lookups]; }`.
+//! Neither rewrite is enabled by default.
+//!
 //! ```rust
 //! let rows = [(1, 10), (1, 11), (2, 20)];
 //! let answer: Vec<_> = mini_linq::compile! {
@@ -239,4 +250,18 @@ pub fn join_filter(input: TokenStream) -> TokenStream {
 pub fn sorted_runs(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_runs)
         .into()
+}
+
+/// Retain a SortedRun lookup cursor from an eager semijoin until its later probe.
+///
+/// Records checked `share` and `repr ... witness` decisions only when invoked;
+/// ordinary pipelines retain their existing lookup behavior. Compose after
+/// `sorted_runs` to make eligible payload builds expose Copy range cursors.
+#[proc_macro]
+pub fn retain_lookups(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(
+        input.into(),
+        cq_rewrite_passes::retain_lookups,
+    )
+    .into()
 }

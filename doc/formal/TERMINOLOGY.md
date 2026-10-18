@@ -89,6 +89,15 @@ printed pages.
   Exhaustion preserves the bag. Answer-determined early stopping can omit
   evaluations and remove panics, but cannot change successful answers.
   R and E have Structures entries; C is an emitter choice, not another IR.
+- **Lookup sharing** (`share`) is an E decision: an immutable `lookup b k`
+  has an eager first demand and a later force. Its coupling invariant is
+  `memo = lookup b k`; without a carrier it still re-evaluates.
+- **Lookup witness** is an R carrier beside a row, not a heading column or
+  lineage base. Its abstraction is the cursor returned by that lookup.
+  All paths must consume it before materialization, return or branch escape.
+- **Expanded stage** (`expand`) is an E decision over length-known SortedRun
+  ranges. Exclusive scan of range lengths supplies a segmented virtual array
+  (Blelloch's prefix-sum construction); HashIndex cursors do not qualify.
 
 These correspondences establish which definitions and adaptations are being
 used. They do not discharge the implementation and host-language proof

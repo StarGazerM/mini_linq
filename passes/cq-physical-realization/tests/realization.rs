@@ -54,7 +54,8 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                     Structure::Read { .. }
                     | Structure::JoinFilter { .. }
                     | Structure::Repr { .. }
-                    | Structure::Stage { .. } => continue,
+                    | Structure::Stage { .. }
+                    | Structure::Share { .. } => continue,
                 };
                 replace.visit_type_mut(provider);
             }

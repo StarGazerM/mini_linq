@@ -158,3 +158,8 @@ STR-Repr	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Repr:	Ch
 ST-Total	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Total:	Derive total stage steps without crossing opaque Rust or cursor-producing probe and merge operators.
 ST-Stage	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Stage:	Require an indexable for producer, positive batch size and a boundary before partial evaluation.
 BK-Dual	abstract	-	-	Fold and unfold realize one stream algebra; lawful early stop preserves answers and may only remove panics.
+ST-Share	implementation	languages/cq-lang-structures/src/share.rs	// ST-Share:	Couple an eager semi and later same-key probe over an earlier immutable one-level payload build.
+STR-Witness	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Witness:	Check the non-column cursor carrier and reject every path escaping before its force probe.
+ST-Expand	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Expand:	Admit total segmented flattening of SortedRun ranges from a for producer without crossing partial steps.
+STR-SortedRun	implementation	runtime/cq-storage/src/sorted_run.rs	/// Formal rule STR-SortedRun:	Stable clustered runs preserve the occurrence bag and within-key order; exact directory lookup selects the matching range.
+EXT-SortedRuns	implementation	features/rewrites/passes/src/structures.rs	/// Formal rule EXT-SortedRuns:	Retype eligible one-level stream-keyed HashIndex payload providers while preserving Physical and coverage.
