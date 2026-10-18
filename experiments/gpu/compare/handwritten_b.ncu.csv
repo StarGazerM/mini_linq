@@ -1,0 +1,10 @@
+==PROF== Connected to process 2492400 (/data/mini_linq-gpu/experiments/gpu/target/release/gpu-h05)
+==PROF== Disconnected from process 2492400
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","2492400","gpu-h05","127.0.0.1","plan_b","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes.sum","byte","87,058,816"
+"0","2492400","gpu-h05","127.0.0.1","plan_b","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","28.81"
+"0","2492400","gpu-h05","127.0.0.1","plan_b","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","gpu__time_duration.sum","ns","331,648"
+"0","2492400","gpu-h05","127.0.0.1","plan_b","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","sm__warps_active.avg.pct_of_peak_sustained_active","%","32.81"
+"0","2492400","gpu-h05","127.0.0.1","plan_b","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","smsp__warp_issue_stalled_barrier_per_warp_active.pct","%","20.60"
+"0","2492400","gpu-h05","127.0.0.1","plan_b","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct","%","52.04"
+"0","2492400","gpu-h05","127.0.0.1","plan_b","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","smsp__warp_issue_stalled_wait_per_warp_active.pct","%","11.34"

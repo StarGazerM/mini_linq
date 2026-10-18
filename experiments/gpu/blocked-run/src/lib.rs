@@ -5,6 +5,8 @@
 //! Bounds are supplied from input metadata; active row counts and all stage
 //! totals stay on device. `read_stats` is the single build-completion readback.
 //! Inputs and consumers must be ordered on the supplied stream.
+//! Kernel code is retained in a thread-local, context-identity-checked cache.
+//! The cache owns no inputs, bounds, counts, runs or algorithm scratch.
 //!
 //! Buffer lengths are capacities: stats.rows, stats.unique and their fence
 //! count delimit initialized logical results. Unused output tails are zero.
@@ -15,9 +17,11 @@
 //! not silently converted to a different lookup representation.
 
 use cuda_core::{CudaContext, CudaStream, DeviceCopy, LaunchConfig1D};
-use rccl_memory::{ContiguousDeviceRange, CudaMemoryResource, DeviceBuffer, DeviceUninitBuffer,
-    PoolMemoryResource, StatisticsMemoryResource};
-use std::{error::Error, io};
+use rccl_memory::{
+    ContiguousDeviceRange, CudaMemoryResource, DeviceBuffer, DeviceUninitBuffer,
+    PoolMemoryResource, StatisticsMemoryResource,
+};
+use std::{cell::RefCell, error::Error, io, rc::Rc, sync::Arc};
 
 pub type MemoryResource = StatisticsMemoryResource<PoolMemoryResource<CudaMemoryResource>>;
 pub type Buffer<'a, T> = DeviceBuffer<'a, T, &'a MemoryResource>;
@@ -26,8 +30,12 @@ struct Input<'a>(&'a dyn ContiguousDeviceRange<i64>);
 // SAFETY: the borrowed range retains ownership and supplies its initialized extent.
 unsafe impl cuda_host::KernelSliceArg for Input<'_> {
     type Elem = i64;
-    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr { self.0.cu_deviceptr() }
-    fn len(&self) -> usize { self.0.len() }
+    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
+        self.0.cu_deviceptr()
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 pub const BLOCK_ROWS: usize = 2048;
@@ -35,6 +43,32 @@ pub const MAX_DOMAIN_KEYS: u64 = 1u64 << 32;
 const THREADS: u32 = 256;
 
 type BuildResult<T> = Result<T, Box<dyn Error>>;
+
+thread_local! {
+    static CACHED_KERNELS: RefCell<Option<(Arc<CudaContext>, Rc<kernels::LoadedModule>)>> =
+        const { RefCell::new(None) };
+}
+
+fn cached_kernels(context: &Arc<CudaContext>) -> BuildResult<Rc<kernels::LoadedModule>> {
+    CACHED_KERNELS.with(|cache| {
+        if let Some((owner, module)) = cache.borrow().as_ref() {
+            if Arc::ptr_eq(owner, context) {
+                return Ok(Rc::clone(module));
+            }
+        }
+        let module = Rc::new(unsafe { kernels::load(context)? });
+        // Retain only the latest context on this thread. Replacing it cannot
+        // invalidate in-flight host launchers, which retain their own Rc.
+        *cache.borrow_mut() = Some((Arc::clone(context), Rc::clone(&module)));
+        Ok(module)
+    })
+}
+
+/// Load code before a timed build interval without retaining any query data.
+/// Run construction and scans also initialize this cache lazily when needed.
+pub fn prepare_kernels(context: &Arc<CudaContext>) -> BuildResult<()> {
+    cached_kernels(context).map(|_| ())
+}
 
 /// Cardinalities of a completed run; counts and row offsets use the same width.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -103,8 +137,8 @@ pub unsafe fn point(view: RankView, key: i64) -> Option<(u32, u32)> {
     if word & mask == 0 {
         return None;
     }
-    let rank = unsafe { view.prefix.add(word_index).read() }
-        + (word & mask.wrapping_sub(1)).count_ones();
+    let rank =
+        unsafe { view.prefix.add(word_index).read() } + (word & mask.wrapping_sub(1)).count_ones();
     let begin = unsafe { view.offsets.add(rank as usize).read() };
     let end = unsafe { view.offsets.add(rank as usize + 1).read() };
     Some((begin, end))
@@ -113,9 +147,11 @@ pub unsafe fn point(view: RankView, key: i64) -> Option<(u32, u32)> {
 /// In-place exclusive scan. Returned scratch must live until stream completion;
 /// its last buffer contains the total, including for an empty input.
 pub fn exclusive_scan<'a>(
-    stream: &'a CudaStream, memory: &'a MemoryResource, values: &Buffer<'a, u32>,
+    stream: &'a CudaStream,
+    memory: &'a MemoryResource,
+    values: &Buffer<'a, u32>,
 ) -> BuildResult<Vec<Buffer<'a, u32>>> {
-    let module = unsafe { kernels::load(stream.context()) }?;
+    let module = cached_kernels(stream.context())?;
     let mut levels = Vec::new();
     let mut current = ptr(values);
     let mut length = values.len();
@@ -123,16 +159,26 @@ pub fn exclusive_scan<'a>(
         let blocks = length.div_ceil(THREADS as usize).max(1);
         let totals = allocate::<u32>(memory, stream, blocks)?;
         let launch = module.prepare_scan_blocks(LaunchConfig1D::new(blocks as u32, THREADS, 32))?;
-        unsafe { module.scan_blocks(stream, &launch, current, length, ptr(&totals))?; }
+        unsafe {
+            module.scan_blocks(stream, &launch, current, length, ptr(&totals))?;
+        }
         current = ptr(&totals);
         length = blocks;
         levels.push(totals);
-        if blocks == 1 { break; }
+        if blocks == 1 {
+            break;
+        }
     }
     for level in (0..levels.len() - 1).rev() {
-        let target = if level == 0 { values } else { &levels[level - 1] };
+        let target = if level == 0 {
+            values
+        } else {
+            &levels[level - 1]
+        };
         let launch = module.prepare_add_prefix(config(target.len()))?;
-        unsafe { module.add_prefix(stream, &launch, ptr(target), target.len(), &levels[level])?; }
+        unsafe {
+            module.add_prefix(stream, &launch, ptr(target), target.len(), &levels[level])?;
+        }
     }
     Ok(levels)
 }
@@ -155,10 +201,12 @@ impl<'a> Run<'a> {
         row_count: Option<&Buffer<'_, u32>>,
     ) -> BuildResult<Self> {
         if ctx != stream.context().as_ref() || ctx != keys.context().as_ref() {
-            return Err(invalid("context, stream and keys must share a CUDA context"));
+            return Err(invalid(
+                "context, stream and keys must share a CUDA context",
+            ));
         }
-        let capacity = u32::try_from(keys.len())
-            .map_err(|_| invalid("run row count exceeds u32::MAX"))?;
+        let capacity =
+            u32::try_from(keys.len()).map_err(|_| invalid("run row count exceeds u32::MAX"))?;
         keys.ensure_usable_on(stream)?;
         for payload in payloads {
             if payload.len() != keys.len() {
@@ -168,7 +216,9 @@ impl<'a> Run<'a> {
         }
         if let Some(count) = row_count {
             count.ensure_usable_on(stream)?;
-            if count.is_empty() { return Err(invalid("empty device row count")); }
+            if count.is_empty() {
+                return Err(invalid("empty device row count"));
+            }
         }
         let (min_key, max_key) = domain;
         let span = (max_key as i128 - min_key as i128 + 1).max(0);
@@ -180,13 +230,18 @@ impl<'a> Run<'a> {
         let words = domain.div_ceil(64);
         let n = keys.len();
         let unique_capacity = n.min(domain);
-        let module = unsafe { kernels::load(stream.context()) }
+        let module = cached_kernels(stream.context())
             .map_err(|e| invalid(format!("run kernels load: {e}")))?;
         let stats = DeviceBuffer::zeroed_in(memory, stream, 1)?;
         let initialize = module.prepare_initialize(config(1))?;
         unsafe {
-            module.initialize(stream, &initialize, capacity,
-                row_count.map_or(core::ptr::null(), |c| ptr(c) as *const u32), ptr(&stats))?;
+            module.initialize(
+                stream,
+                &initialize,
+                capacity,
+                row_count.map_or(core::ptr::null(), |c| ptr(c) as *const u32),
+                ptr(&stats),
+            )?;
         }
         let exclusive_scan = |values: &Buffer<'a, u32>| exclusive_scan(stream, memory, values);
         let check = module.prepare_sorted_check(config(n))?;
@@ -199,28 +254,53 @@ impl<'a> Run<'a> {
         let cursors = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, domain)?;
         let bins_ptr = bins.cu_deviceptr() as *mut u32;
         let cursors_ptr = cursors.cu_deviceptr() as *mut u32;
-        let clear = module.prepare_clear_histogram(
-            LaunchConfig1D::new(domain.div_ceil(256).clamp(1, 568) as u32, THREADS, 0))?;
+        let clear = module.prepare_clear_histogram(LaunchConfig1D::new(
+            domain.div_ceil(256).clamp(1, 568) as u32,
+            THREADS,
+            0,
+        ))?;
         unsafe {
             module.clear_histogram(stream, &clear, domain, ptr(&stats), bins_ptr, cursors_ptr)?;
         }
         let bits = DeviceBuffer::zeroed_in(memory, stream, words)?;
         let adjacent = module.prepare_sorted_starts(config(n))?;
         unsafe {
-            module.sorted_starts(stream, &adjacent, &Input(keys), min_key, ptr(&stats),
-                bins_ptr, ptr(&bits))?;
+            module.sorted_starts(
+                stream,
+                &adjacent,
+                &Input(keys),
+                min_key,
+                ptr(&stats),
+                bins_ptr,
+                ptr(&bits),
+            )?;
         }
         let histogram = module.prepare_histogram(config(n))?;
         unsafe {
-            module.histogram(stream, &histogram, &Input(keys), min_key,
-                ptr(&stats), bins_ptr, ptr(&bits))?;
+            module.histogram(
+                stream,
+                &histogram,
+                &Input(keys),
+                min_key,
+                ptr(&stats),
+                bins_ptr,
+                ptr(&bits),
+            )?;
         }
         let prefix = allocate::<u32>(memory, stream, words)?;
         let word_rows = allocate::<u32>(memory, stream, words)?;
         let word_offsets = module.prepare_word_offsets(config(words * 32))?;
         unsafe {
-            module.word_offsets(stream, &word_offsets, bins_ptr, domain, ptr(&stats),
-                &bits, ptr(&prefix), ptr(&word_rows))?;
+            module.word_offsets(
+                stream,
+                &word_offsets,
+                bins_ptr,
+                domain,
+                ptr(&stats),
+                &bits,
+                ptr(&prefix),
+                ptr(&word_rows),
+            )?;
         }
         let _row_scan = exclusive_scan(&word_rows)?;
         let prefix_scan = exclusive_scan(&prefix)?;
@@ -228,41 +308,105 @@ impl<'a> Run<'a> {
         let unique_keys = DeviceBuffer::zeroed_in(memory, stream, unique_capacity)?;
         let complete = module.prepare_complete_stats(config(1))?;
         unsafe {
-            module.complete_stats(stream, &complete, ptr(prefix_scan.last().unwrap()),
-                ptr(&stats), ptr(&offsets))?;
+            module.complete_stats(
+                stream,
+                &complete,
+                ptr(prefix_scan.last().unwrap()),
+                ptr(&stats),
+                ptr(&offsets),
+            )?;
         }
         let permutation = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, n)?;
         let permutation_ptr = permutation.cu_deviceptr() as *mut u32;
         let scatter = module.prepare_scatter(config(n))?;
         unsafe {
-            module.scatter(stream, &scatter, &Input(keys), min_key, bins_ptr, &word_rows, ptr(&stats),
-                cursors_ptr, permutation_ptr)?;
+            module.scatter(
+                stream,
+                &scatter,
+                &Input(keys),
+                min_key,
+                bins_ptr,
+                &word_rows,
+                ptr(&stats),
+                cursors_ptr,
+                permutation_ptr,
+            )?;
         }
         let order = module.prepare_order_bins(config(domain))?;
         unsafe {
-            module.order_bins(stream, &order, bins_ptr, domain, &word_rows, ptr(&stats), min_key, &bits, &prefix,
-                permutation_ptr, ptr(&offsets), ptr(&unique_keys))?;
+            module.order_bins(
+                stream,
+                &order,
+                bins_ptr,
+                domain,
+                &word_rows,
+                ptr(&stats),
+                min_key,
+                &bits,
+                &prefix,
+                permutation_ptr,
+                ptr(&offsets),
+                ptr(&unique_keys),
+            )?;
         }
         let sorted_directory = module.prepare_sorted_directory(config(n))?;
         unsafe {
-            module.sorted_directory(stream, &sorted_directory, &Input(keys), min_key, ptr(&stats),
-                bins_ptr, &bits, &prefix, ptr(&offsets), ptr(&unique_keys))?;
+            module.sorted_directory(
+                stream,
+                &sorted_directory,
+                &Input(keys),
+                min_key,
+                ptr(&stats),
+                bins_ptr,
+                &bits,
+                &prefix,
+                ptr(&offsets),
+                ptr(&unique_keys),
+            )?;
         }
         let sorted = allocate::<i64>(memory, stream, n)?;
         let gather = module.prepare_gather(config(n))?;
-        unsafe { module.gather(stream, &gather, &Input(keys), permutation_ptr, ptr(&stats), ptr(&sorted))?; }
+        unsafe {
+            module.gather(
+                stream,
+                &gather,
+                &Input(keys),
+                permutation_ptr,
+                ptr(&stats),
+                ptr(&sorted),
+            )?;
+        }
         let fences = allocate::<i64>(memory, stream, n.div_ceil(BLOCK_ROWS))?;
         let fence_launch = module.prepare_fences(config(fences.len()))?;
-        unsafe { module.fences(stream, &fence_launch, &sorted, ptr(&stats), ptr(&fences))?; }
+        unsafe {
+            module.fences(stream, &fence_launch, &sorted, ptr(&stats), ptr(&fences))?;
+        }
         let mut clustered = Vec::with_capacity(payloads.len());
         for payload in payloads {
             let output = allocate::<i64>(memory, stream, n)?;
-            unsafe { module.gather(stream, &gather, &Input(*payload), permutation_ptr, ptr(&stats), ptr(&output))?; }
+            unsafe {
+                module.gather(
+                    stream,
+                    &gather,
+                    &Input(*payload),
+                    permutation_ptr,
+                    ptr(&stats),
+                    ptr(&output),
+                )?;
+            }
             clustered.push(output);
         }
         Ok(Self {
-            keys: sorted, payloads: clustered, offsets, unique_keys, fences,
-            bits, prefix, min_key, max_key, stats,
+            keys: sorted,
+            payloads: clustered,
+            offsets,
+            unique_keys,
+            fences,
+            bits,
+            prefix,
+            min_key,
+            max_key,
+            stats,
         })
     }
 
@@ -282,7 +426,9 @@ impl<'a> Run<'a> {
 
 /// Complete any number of stream-ordered builds with one metadata readback.
 pub fn read_stats(
-    memory: &MemoryResource, stream: &CudaStream, runs: &[&Run<'_>],
+    memory: &MemoryResource,
+    stream: &CudaStream,
+    runs: &[&Run<'_>],
 ) -> BuildResult<Vec<RunStats>> {
     let combined = allocate::<RunStats>(memory, stream, runs.len())?;
     for (index, run) in runs.iter().enumerate() {
@@ -290,12 +436,17 @@ pub fn read_stats(
         unsafe {
             cuda_core::memory::memcpy_dtod_async(
                 combined.cu_deviceptr() + (index * core::mem::size_of::<RunStats>()) as u64,
-                run.stats.cu_deviceptr(), core::mem::size_of::<RunStats>(), stream.cu_stream())?;
+                run.stats.cu_deviceptr(),
+                core::mem::size_of::<RunStats>(),
+                stream.cu_stream(),
+            )?;
         }
     }
     let result = combined.to_host_vec()?;
     if result.iter().any(|s| s.invalid != 0) {
-        return Err(invalid("device row count exceeds capacity or key outside supplied domain"));
+        return Err(invalid(
+            "device row count exceeds capacity or key outside supplied domain",
+        ));
     }
     Ok(result)
 }
@@ -315,7 +466,9 @@ fn ptr<T: DeviceCopy>(buffer: &Buffer<'_, T>) -> *mut T {
 // Every callsite initializes the complete allocation on its stream before
 // reading it. Avoid a redundant memset for fully overwritten output columns.
 fn allocate<'a, T: DeviceCopy>(
-    memory: &'a MemoryResource, stream: &'a CudaStream, len: usize,
+    memory: &'a MemoryResource,
+    stream: &'a CudaStream,
+    len: usize,
 ) -> BuildResult<Buffer<'a, T>> {
     // SAFETY: each callsite completely initializes its output on this stream
     // before exposing it to any reader.
@@ -324,16 +477,22 @@ fn allocate<'a, T: DeviceCopy>(
 
 #[cuda_device::cuda_module]
 mod kernels {
-    use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, warp, DynamicSharedArray};
-    use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
     use super::RunStats;
+    use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
+    use cuda_device::{
+        DynamicSharedArray, device, kernel, launch_bounds, launch_contract, thread, warp,
+    };
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn initialize(capacity: u32, count: *const u32, stats: *mut RunStats) {
         if thread::index_1d().get() == 0 {
-            let rows = if count.is_null() { capacity } else { unsafe { count.read() } };
+            let rows = if count.is_null() {
+                capacity
+            } else {
+                unsafe { count.read() }
+            };
             unsafe {
                 (*stats).rows = rows.min(capacity);
                 (*stats).invalid = (rows > capacity) as u32;
@@ -358,9 +517,7 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn sorted_check(
-        keys: &[i64], min_key: i64, domain: usize, stats: *mut RunStats,
-    ) {
+    pub unsafe fn sorted_check(keys: &[i64], min_key: i64, domain: usize, stats: *mut RunStats) {
         let i = thread::index_1d().get();
         let active = i < unsafe { (*stats).rows } as usize;
         let invalid = active && (keys[i] as u64).wrapping_sub(min_key as u64) >= domain as u64;
@@ -384,12 +541,22 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn clear_histogram(domain: usize, stats: *const RunStats, bins: *mut u32, cursors: *mut u32) {
-        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
+    pub unsafe fn clear_histogram(
+        domain: usize,
+        stats: *const RunStats,
+        bins: *mut u32,
+        cursors: *mut u32,
+    ) {
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
+            return;
+        }
         let mut bin = thread::index_1d().get();
         let stride = thread::gridDim_x() as usize * 256;
         while bin < domain {
-            unsafe { bins.add(bin).write(0); cursors.add(bin).write(0); }
+            unsafe {
+                bins.add(bin).write(0);
+                cursors.add(bin).write(0);
+            }
             bin += stride;
         }
     }
@@ -398,9 +565,15 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn sorted_starts(
-        keys: &[i64], min_key: i64, stats: *const RunStats, bins: *mut u32, bits: *mut u64,
+        keys: &[i64],
+        min_key: i64,
+        stats: *const RunStats,
+        bins: *mut u32,
+        bits: *mut u64,
     ) {
-        if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } { return; }
+        if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } {
+            return;
+        }
         let i = thread::index_1d().get();
         if i < unsafe { (*stats).rows } as usize && (i == 0 || keys[i - 1] != keys[i]) {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
@@ -416,10 +589,18 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn sorted_directory(
-        keys: &[i64], min_key: i64, stats: *mut RunStats, bins: *const u32,
-        bits: &[u64], prefix: &[u32], offsets: *mut u32, unique: *mut i64,
+        keys: &[i64],
+        min_key: i64,
+        stats: *mut RunStats,
+        bins: *const u32,
+        bits: &[u64],
+        prefix: &[u32],
+        offsets: *mut u32,
+        unique: *mut i64,
     ) {
-        if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } { return; }
+        if unsafe { (*stats).sorted == 0 || (*stats).invalid != 0 } {
+            return;
+        }
         let i = thread::index_1d().get();
         let rows = unsafe { (*stats).rows } as usize;
         let mut maximum = 0;
@@ -441,12 +622,16 @@ mod kernels {
         let mut distance = 1;
         while distance < 32 {
             let left = warp::shuffle_up(maximum, distance);
-            if lane >= distance { maximum = maximum.max(left); }
+            if lane >= distance {
+                maximum = maximum.max(left);
+            }
             distance <<= 1;
         }
         if lane == 31 && maximum != 0 {
-            unsafe { DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).max_count))
-                .fetch_max(maximum, AtomicOrdering::Relaxed); }
+            unsafe {
+                DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).max_count))
+                    .fetch_max(maximum, AtomicOrdering::Relaxed);
+            }
         }
     }
 
@@ -454,10 +639,15 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn histogram(
-        keys: &[i64], min_key: i64, stats: *const RunStats, counts: *mut u32,
+        keys: &[i64],
+        min_key: i64,
+        stats: *const RunStats,
+        counts: *mut u32,
         bits: *mut u64,
     ) {
-        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
+            return;
+        }
         let i = thread::index_1d().get();
         if i < unsafe { (*stats).rows } as usize {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
@@ -477,14 +667,22 @@ mod kernels {
     #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (32, 32))]
     pub unsafe fn scan_blocks(values: *mut u32, length: usize, totals: *mut u32) {
         let i = thread::index_1d().get();
-        let value = if i < length { unsafe { values.add(i).read() } } else { 0 };
+        let value = if i < length {
+            unsafe { values.add(i).read() }
+        } else {
+            0
+        };
         let scratch = DynamicSharedArray::<u8>::get_raw() as *mut u32;
         let (prefix, total) = gpu_tiles::scan(value, scratch);
         if i < length {
-            unsafe { values.add(i).write(prefix); }
+            unsafe {
+                values.add(i).write(prefix);
+            }
         }
         if thread::threadIdx_x() == 0 {
-            unsafe { totals.add(i / 256).write(total); }
+            unsafe {
+                totals.add(i / 256).write(total);
+            }
         }
     }
 
@@ -505,8 +703,12 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn word_offsets(
-        bins: *mut u32, domain: usize, stats: *mut RunStats, bits: &[u64],
-        prefix: *mut u32, word_rows: *mut u32,
+        bins: *mut u32,
+        domain: usize,
+        stats: *mut RunStats,
+        bits: &[u64],
+        prefix: *mut u32,
+        word_rows: *mut u32,
     ) {
         // One converged warp handles a bitmap word. Both 32-bin halves are
         // coalesced; only the 64x smaller word totals need a global scan.
@@ -523,8 +725,16 @@ mod kernels {
         }
         let first = word * 64 + lane as usize;
         let second = first + 32;
-        let a = if first < domain { unsafe { bins.add(first).read() } } else { 0 };
-        let b = if second < domain { unsafe { bins.add(second).read() } } else { 0 };
+        let a = if first < domain {
+            unsafe { bins.add(first).read() }
+        } else {
+            0
+        };
+        let b = if second < domain {
+            unsafe { bins.add(second).read() }
+        } else {
+            0
+        };
         let mut sum_a = a;
         let mut sum_b = b;
         let mut maximum = a.max(b);
@@ -542,8 +752,12 @@ mod kernels {
         }
         let first_total = warp::shuffle_down_sync(u32::MAX, sum_a, 31 - lane);
         unsafe {
-            if first < domain { bins.add(first).write(sum_a - a); }
-            if second < domain { bins.add(second).write(first_total + sum_b - b); }
+            if first < domain {
+                bins.add(first).write(sum_a - a);
+            }
+            if second < domain {
+                bins.add(second).write(first_total + sum_b - b);
+            }
             if lane == 31 && word < bits.len() {
                 word_rows.add(word).write(first_total + sum_b);
                 prefix.add(word).write(bits[word].count_ones());
@@ -557,17 +771,26 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn scatter(
-        keys: &[i64], min_key: i64, bins: *const u32, word_rows: &[u32], stats: *const RunStats,
-        cursors: *mut u32, permutation: *mut u32,
+        keys: &[i64],
+        min_key: i64,
+        bins: *const u32,
+        word_rows: &[u32],
+        stats: *const RunStats,
+        cursors: *mut u32,
+        permutation: *mut u32,
     ) {
-        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
+            return;
+        }
         let i = thread::index_1d().get();
         if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0 {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
             unsafe {
                 let slot = DeviceAtomicU32::from_ptr(cursors.add(bin))
                     .fetch_add(1, AtomicOrdering::Relaxed);
-                permutation.add((word_rows[bin >> 6] + bins.add(bin).read() + slot) as usize).write(i as u32);
+                permutation
+                    .add((word_rows[bin >> 6] + bins.add(bin).read() + slot) as usize)
+                    .write(i as u32);
             }
         }
     }
@@ -591,33 +814,50 @@ mod kernels {
             if value >= child_value {
                 break;
             }
-            unsafe { values.add(root).write(child_value); }
+            unsafe {
+                values.add(root).write(child_value);
+            }
             root = child;
         }
-        unsafe { values.add(root).write(value); }
+        unsafe {
+            values.add(root).write(value);
+        }
     }
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn order_bins(
-        bins: *const u32, domain: usize, word_rows: &[u32], stats: *const RunStats, min_key: i64,
-        bits: &[u64], prefix: &[u32],
-        permutation: *mut u32, offsets: *mut u32, unique: *mut i64,
+        bins: *const u32,
+        domain: usize,
+        word_rows: &[u32],
+        stats: *const RunStats,
+        min_key: i64,
+        bits: &[u64],
+        prefix: &[u32],
+        permutation: *mut u32,
+        offsets: *mut u32,
+        unique: *mut i64,
     ) {
-        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } { return; }
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
+            return;
+        }
         let bin = thread::index_1d().get();
         if bin < domain && unsafe { (*stats).invalid } == 0 {
             let begin = word_rows[bin >> 6] + unsafe { bins.add(bin).read() };
             let end = if bin + 1 < domain {
                 word_rows[(bin + 1) >> 6] + unsafe { bins.add(bin + 1).read() }
-            } else { unsafe { (*stats).rows } };
+            } else {
+                unsafe { (*stats).rows }
+            };
             if begin != end {
                 let mask = 1u64 << (bin & 63);
                 let rank = prefix[bin >> 6] + (bits[bin >> 6] & (mask - 1)).count_ones();
                 unsafe {
                     offsets.add(rank as usize).write(begin);
-                    unique.add(rank as usize).write((min_key as u64).wrapping_add(bin as u64) as i64);
+                    unique
+                        .add(rank as usize)
+                        .write((min_key as u64).wrapping_add(bin as u64) as i64);
                     let values = permutation.add(begin as usize);
                     let length = (end - begin) as usize;
                     let mut parent = length / 2;
@@ -641,13 +881,27 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn gather(input: &[i64], permutation: *const u32, stats: *const RunStats, output: *mut i64) {
+    pub unsafe fn gather(
+        input: &[i64],
+        permutation: *const u32,
+        stats: *const RunStats,
+        output: *mut i64,
+    ) {
         let i = thread::index_1d().get();
         if i < input.len() {
-            let value = if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0 {
-                if unsafe { (*stats).sorted } != 0 { input[i] } else { input[unsafe { permutation.add(i).read() } as usize] }
-            } else { 0 };
-            unsafe { output.add(i).write(value); }
+            let value = if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0
+            {
+                if unsafe { (*stats).sorted } != 0 {
+                    input[i]
+                } else {
+                    input[unsafe { permutation.add(i).read() } as usize]
+                }
+            } else {
+                0
+            };
+            unsafe {
+                output.add(i).write(value);
+            }
         }
     }
 
@@ -658,7 +912,13 @@ mod kernels {
         let i = thread::index_1d().get();
         if i < (keys.len() + super::BLOCK_ROWS - 1) / super::BLOCK_ROWS {
             let row = i * super::BLOCK_ROWS;
-            unsafe { output.add(i).write(if row < (*stats).rows as usize { keys[row] } else { 0 }); }
+            unsafe {
+                output.add(i).write(if row < (*stats).rows as usize {
+                    keys[row]
+                } else {
+                    0
+                });
+            }
         }
     }
 }

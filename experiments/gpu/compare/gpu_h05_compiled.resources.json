@@ -1,74 +1,96 @@
 {
-  "cq_gpu_stream_0_r11": {
+  "cq_gpu_stream_0_r21": {
     "stack_bytes": 0,
     "spill_stores_bytes": 0,
     "spill_loads_bytes": 0,
-    "registers": 34
-  },
-  "cq_gpu_stream_0_r21": {
-    "stack_bytes": 40,
-    "spill_stores_bytes": 44,
-    "spill_loads_bytes": 36,
-    "registers": 40
+    "registers": 48
   },
   "cq_gpu_stream_1_r7": {
     "stack_bytes": 0,
     "spill_stores_bytes": 0,
     "spill_loads_bytes": 0,
-    "registers": 34
+    "registers": 24
   },
   "cq_gpu_stream_0_r3": {
     "stack_bytes": 0,
     "spill_stores_bytes": 0,
     "spill_loads_bytes": 0,
-    "registers": 34
+    "registers": 22
   },
   "cq_gpu_stream_0_r8": {
     "stack_bytes": 0,
     "spill_stores_bytes": 0,
     "spill_loads_bytes": 0,
-    "registers": 34
-  },
-  "cq_gpu_stream_1_r9": {
-    "stack_bytes": 0,
-    "spill_stores_bytes": 0,
-    "spill_loads_bytes": 0,
-    "registers": 34
+    "registers": 26
   },
   "cq_gpu_stream_1_r2": {
     "stack_bytes": 0,
     "spill_stores_bytes": 0,
     "spill_loads_bytes": 0,
-    "registers": 32
+    "registers": 22
   },
   "cq_gpu_stream_1_r19": {
-    "stack_bytes": 40,
-    "spill_stores_bytes": 44,
-    "spill_loads_bytes": 36,
+    "stack_bytes": 24,
+    "spill_stores_bytes": 28,
+    "spill_loads_bytes": 20,
     "registers": 40
   },
   "cq_gpu_stream_0_r5": {
     "stack_bytes": 0,
     "spill_stores_bytes": 0,
     "spill_loads_bytes": 0,
-    "registers": 34
-  },
-  "cq_gpu_stream_1_r15": {
-    "stack_bytes": 0,
-    "spill_stores_bytes": 0,
-    "spill_loads_bytes": 0,
-    "registers": 34
+    "registers": 24
   },
   "cq_gpu_stream_1_r3": {
     "stack_bytes": 0,
     "spill_stores_bytes": 0,
     "spill_loads_bytes": 0,
-    "registers": 34
+    "registers": 22
   },
   "cq_gpu_stream_0_r2": {
     "stack_bytes": 0,
     "spill_stores_bytes": 0,
     "spill_loads_bytes": 0,
-    "registers": 32
+    "registers": 22
+  },
+  "dedup_insert": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 18
+  },
+  "filter_orders": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 18
+  },
+  "plan_b": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 34
+  },
+  "plan_a": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 36
+  },
+  "plan_a_implKb0_EB4_": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0
+  },
+  "plan_a_merge": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0,
+    "registers": 40
+  },
+  "plan_a_implKb1_EB4_": {
+    "stack_bytes": 0,
+    "spill_stores_bytes": 0,
+    "spill_loads_bytes": 0
   }
 }

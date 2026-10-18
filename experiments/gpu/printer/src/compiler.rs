@@ -56,6 +56,30 @@ fn supported(ty: &Type) -> bool {
 fn membership(facts: &ir::Analysis, name: &str) -> bool {
     facts.membership.iter().any(|(build, _)| build == name)
 }
+fn directory_column<'a>(facts: &'a ir::Analysis, name: &str, provider: usize) -> &'a str {
+    let build = &facts.built[name][provider];
+    if qualified(&build.1, "cq_gpu_runtime", "PrefixRun") {
+        crate::prefix::recorded_column(&build.1, &facts.layouts[name])
+            .expect("validated recorded prefix directory")
+    } else {
+        &build.0[0][0]
+    }
+}
+fn read_provider(facts: &ir::Analysis, keyed: &physical::Keyed) -> usize {
+    let mut keys = keyed.columns.iter().map(symbol_name).collect::<Vec<_>>();
+    keys.sort();
+    facts.built[&symbol_name(&keyed.right)]
+        .iter()
+        .position(|build| serves(&build.0, &keys))
+        .expect("validated keyed provider")
+}
+fn provider_id(role: &str, name: &str, provider: usize) -> Ident {
+    if provider == 0 {
+        id(role, name)
+    } else {
+        id(role, &format!("{name}_{provider}"))
+    }
+}
 fn membership_budget(ty: &Type) -> syn::Result<usize> {
     if let Type::Path(path) = ty {
         if let syn::PathArguments::AngleBracketed(args) =
@@ -148,6 +172,18 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                         "the run prefix must be one integral key column",
                     );
                 }
+                if prefix {
+                    let name = symbol_name(&entry.name);
+                    let recorded =
+                        crate::prefix::recorded_column(&keyed.ty, &facts.layouts[&name])?;
+                    if recorded != symbol_name(&keyed.levels[0].columns[0]) {
+                        return fail(
+                            entry,
+                            "CQ_GPU_PREFIX_LEVEL",
+                            "recorded prefix must be the first directory level",
+                        );
+                    }
+                }
                 for key in keyed.columns().map(symbol_name) {
                     if !integral(&facts.physical.rows[&symbol_name(&entry.name)].types[&key]) {
                         return fail(
@@ -167,11 +203,12 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                         "membership requires recorded AdaptiveKeySet",
                     );
                 }
-                if facts.built[&symbol_name(&entry.name)].len() != 1 {
+                let name = symbol_name(&entry.name);
+                if membership(facts, &name) && facts.built[&name].len() != 1 {
                     return fail(
                         entry,
-                        "CQ_GPU_MULTIPLE_RUNS",
-                        "one recorded provider per let is required",
+                        "CQ_GPU_MULTIPLE_MEMBERSHIP",
+                        "membership-only results require one recorded provider",
                     );
                 }
             }
@@ -267,7 +304,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                         format!("read {reader} of {build} has no recorded run"),
                     );
                 };
-                if builds.len() != 1 || !serves(&builds[0].0, keys) {
+                if !builds.iter().any(|build| serves(&build.0, keys)) {
                     return fail(
                         &program.structures,
                         "CQ_GPU_READ_KEY",
@@ -363,6 +400,53 @@ pub(crate) fn compile(
         }
         chain.reverse();
         let first = context.physical[&chain[0]];
+        let selection = if let Operator::Rename(rename) = &first.operator {
+            if !chain
+                .iter()
+                .any(|name| facts.stages.contains_key(name) || facts.expands.contains(name))
+                && chain.iter().all(|name| {
+                    matches!(
+                        &context.physical[name].operator,
+                        Operator::Rename(_)
+                            | Operator::Project(_)
+                            | Operator::Select(_)
+                            | Operator::Point(..)
+                            | Operator::Range(..)
+                            | Operator::Semi(..)
+                    )
+                })
+            {
+                let host_name = symbol_name(&rename.relation);
+                let source = id("host", &host_name);
+                let columns = context.carried_columns[&endpoint]
+                    .iter()
+                    .map(|column| {
+                        let mapping = rename
+                            .mapping
+                            .iter()
+                            .find(|m| symbol_name(&m.target) == *column)
+                            .expect("selection column originates in rename");
+                        context.hosts[&host_name]
+                            .layout
+                            .iter()
+                            .position(|c| *c == symbol_name(&mapping.source))
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let projection = !facts.join_filters.contains_key(&chain[0])
+                    && chain.iter().all(|name| {
+                        matches!(
+                            &context.physical[name].operator,
+                            Operator::Rename(_) | Operator::Project(_)
+                        )
+                    });
+                Some((quote!(#source), columns, projection))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let (driver, mut root, mut state) = match &first.operator {
             Operator::Rename(rename) => {
                 let host_name = symbol_name(&rename.relation);
@@ -379,9 +463,20 @@ pub(crate) fn compile(
                         .iter()
                         .position(|c| *c == symbol_name(&mapping.source))
                         .unwrap();
-                    let variable = id("value", &column);
-                    loads.push(quote!(let #variable=if __valid {::cq_gpu_runtime::column(__driver,#index,__row)} else {0};));
-                    state.columns.insert(column, quote!(#variable));
+                    if selection.is_none()
+                        && !chain
+                            .iter()
+                            .any(|n| facts.stages.contains_key(n) || facts.expands.contains(n))
+                    {
+                        state.columns.insert(
+                            column,
+                            quote!(::cq_gpu_runtime::column(__driver,#index,__row)),
+                        );
+                    } else {
+                        let variable = id("value", &column);
+                        loads.push(quote!(let #variable=if __valid {::cq_gpu_runtime::column(__driver,#index,__row)} else {0};));
+                        state.columns.insert(column, quote!(#variable));
+                    }
                 }
                 (
                     quote!(__execution.table_view(#table)?),
@@ -426,14 +521,19 @@ pub(crate) fn compile(
         let runs: BTreeSet<_> = chain
             .iter()
             .filter_map(|n| match &context.physical[n].operator {
-                Operator::Probe(_, k) | Operator::Semi(_, k) => Some(symbol_name(&k.right)),
+                Operator::Probe(_, k) | Operator::Semi(_, k) => {
+                    Some((symbol_name(&k.right), read_provider(&facts, k)))
+                }
                 _ => None,
             })
             .collect();
-        let mut run_ids: Vec<_> = runs.iter().map(|n| id("run_view", n)).collect();
+        let mut run_ids: Vec<_> = runs
+            .iter()
+            .map(|(n, p)| provider_id("run_view", n, *p))
+            .collect();
         let mut run_types = runs
             .iter()
-            .map(|name| {
+            .map(|(name, _)| {
                 if membership(&facts, name) {
                     quote!(::cq_gpu_runtime::MembershipView)
                 } else {
@@ -444,8 +544,8 @@ pub(crate) fn compile(
         let mut run_bindings = runs
             .iter()
             .zip(&run_ids)
-            .map(|(n, view)| {
-                let run = id("run", n);
+            .map(|((n, p), view)| {
+                let run = provider_id("run", n, *p);
                 if membership(&facts, n) {
                     quote!(let #view=__execution.membership_view(#run)?;)
                 } else {
@@ -500,6 +600,10 @@ pub(crate) fn compile(
             continuations: Vec::new(),
             module_number,
             frontier,
+            serial: !chain
+                .iter()
+                .any(|n| facts.stages.contains_key(n) || facts.expands.contains(n)),
+            selection: selection.is_some(),
             batch: batch.min(256),
             frontier_threshold: options.frontier,
             descriptors: Vec::new(),
@@ -541,6 +645,7 @@ pub(crate) fn compile(
             continuations,
             frontier,
             batch,
+            selection,
             endpoint,
         });
     }
@@ -637,21 +742,28 @@ pub(crate) fn compile(
         .iter()
         .map(|entry| entry.to_token_stream().to_string());
     let source_bindings = &context.statements;
-    syn::parse2(quote!({
-        #[::cuda_device::cuda_module]
-        mod #module_id {
-            use ::cuda_device::{device,kernel,launch_bounds,launch_contract};
-            #(#device)*
+    let has_kernels = device.iter().any(|item| !item.is_empty());
+    let module = has_kernels.then(|| {
+        quote! {
+            #[::cuda_device::cuda_module]
+            mod #module_id {
+                use ::cuda_device::{device,kernel,launch_bounds,launch_contract};
+                #(#device)*
+            }
         }
+    });
+    let load =
+        has_kernels.then(|| quote!(let __module=unsafe {#module_id::load(__runtime.context())?};));
+    syn::parse2(quote!({
+        #module
         const __CQ_GPU_KEYED_READS: &[&str]=&[#(#reads),*];
         const __CQ_GPU_KERNEL_READS: &[(&str,&str)]=&[#(#kernel_reads),*];
         const __CQ_GPU_JOIN_FILTER_READS: &[(&str,&str)]=&[#(#filter_reads),*];
         const __CQ_GPU_RECORDED_STRUCTURES: &[&str]=&[#(#recorded_structures),*];
         #(#source_bindings)*
-        (|| -> ::cq_gpu_runtime::Result<_> {
-            let __runtime=::cq_gpu_runtime::Runtime::new()?;
+        ::cq_gpu_runtime::with_runtime(|__runtime| {
             let mut __execution=__runtime.execution();
-            let __module=unsafe {#module_id::load(__runtime.context())?};
+            #load
             #(#constants)*
             #(#host)*
             let __count=__execution.table_view(#output)?.len as usize;
@@ -660,7 +772,7 @@ pub(crate) fn compile(
             for __row in 0..__count { __answer.push((#(#decoded,)*)); }
             __execution.finish()?;
             Ok(__answer.into_iter())
-        })().unwrap_or_else(|error|panic!("CQ_GPU_EXECUTION: {error}"))
+        }).unwrap_or_else(|error|panic!("CQ_GPU_EXECUTION: {error}"))
     }))
 }
 
@@ -684,6 +796,8 @@ struct Emitter<'a, 'b> {
     continuations: Vec<Continuation>,
     module_number: usize,
     frontier: bool,
+    serial: bool,
+    selection: bool,
     batch: usize,
     frontier_threshold: u32,
     descriptors: Vec<usize>,
@@ -702,6 +816,18 @@ impl Emitter<'_, '_> {
                     })
                 })
                 .collect::<syn::Result<Vec<_>>>()?;
+            if self.selection {
+                let writes = values.iter().enumerate().map(|(column,value)|quote!(::cq_gpu_runtime::write_output(__output,#column,__destination,#value);));
+                return Ok(quote! {
+                    let __destination=::cq_gpu_runtime::stable_select(__output,__counts,__scatter,__row,__valid,__scratch);
+                    if __destination!=u64::MAX { #(#writes)* }
+                });
+            }
+            if self.serial {
+                return Ok(quote! {
+                    if __valid { ::cq_gpu_runtime::emit(__output,[#(#values),*]); }
+                });
+            }
             let writes=values.iter().enumerate().map(|(column,value)|quote!(::cq_gpu_runtime::write_output(__output,#column,__base+__offset as u64,#value);));
             return Ok(quote! {
                 let (__offset,__total)=::cq_gpu_runtime::tiles::scan(__valid as u32,__scratch);
@@ -741,8 +867,9 @@ impl Emitter<'_, '_> {
             }
             Operator::Semi(_, k) => {
                 let right = symbol_name(&k.right);
-                let run = id("run_view", &right);
-                let prefix = &self.facts.built[&right][0].0[0][0];
+                let provider = read_provider(self.facts, k);
+                let run = provider_id("run_view", &right, provider);
+                let prefix = directory_column(self.facts, &right, provider);
                 let key = state.columns[prefix].clone();
                 let begin = id("begin", name);
                 let end = id("end", name);
@@ -768,6 +895,7 @@ impl Emitter<'_, '_> {
                     #rest
                 })
             }
+            Operator::Probe(_, k) if self.serial => self.serial_expand(index, state, k),
             Operator::Probe(_, k) => self.expand(index, state, k),
             _ => fail(
                 &definition.name,
@@ -784,8 +912,9 @@ impl Emitter<'_, '_> {
         payload: bool,
     ) -> syn::Result<Tokens> {
         let right = symbol_name(&k.right);
-        let view = id("run_view", &right);
-        let key = state.columns[&self.facts.built[&right][0].0[0][0]].clone();
+        let provider = read_provider(self.facts, k);
+        let view = provider_id("run_view", &right, provider);
+        let key = state.columns[directory_column(self.facts, &right, provider)].clone();
         if payload {
             for column in &self.facts.physical.headings[&right] {
                 if !self.context.carried_columns[&self.chain[index]].contains(column) {
@@ -815,10 +944,90 @@ impl Emitter<'_, '_> {
         let rest = self.steps(index + 1, state)?;
         Ok(quote! {__valid=__valid && ::cq_gpu_runtime::membership_contains(#view,#key);#rest})
     }
+    // Exhaustive thread-local traversal needs neither a uniqueness promise nor
+    // a shared-memory materialization. Explicit batch/expand stages retain the
+    // cooperative traversal below, including their publication contract.
+    fn serial_expand(
+        &mut self,
+        index: usize,
+        state: &mut State,
+        k: &physical::Keyed,
+    ) -> syn::Result<Tokens> {
+        let name = &self.chain[index];
+        let right = symbol_name(&k.right);
+        let provider = read_provider(self.facts, k);
+        let run = provider_id("run_view", &right, provider);
+        let begin = id("begin", name);
+        let end = id("end", name);
+        let row = id("row", name);
+        let witness = self
+            .facts
+            .witnesses
+            .keys()
+            .find(|origin| self.facts.shares[*origin].force == *name)
+            .cloned();
+        let lookup = if let Some(origin) = witness {
+            let (a, b) = state.witnesses.remove(&origin).ok_or_else(|| {
+                syn::Error::new_spanned(k, "CQ_GPU_WITNESS: forcing read lost its recorded witness")
+            })?;
+            quote!((#a,#b))
+        } else {
+            let prefix = directory_column(self.facts, &right, provider);
+            let key = &state.columns[prefix];
+            quote!(::cq_gpu_runtime::blocked_run::point(#run.rank,#key).unwrap_or((0,0)))
+        };
+        let mut loads = Vec::new();
+        for column in &self.facts.physical.headings[&right] {
+            if !self.context.carried_columns[name].contains(column)
+                || state.columns.contains_key(column)
+            {
+                continue;
+            }
+            let local = id("value", column);
+            let value = if let Some(slot) = self.context.carried_columns[&right]
+                .iter()
+                .position(|c| c == column)
+            {
+                quote!(::cq_gpu_runtime::run_column(#run,#slot,#row))
+            } else if let Some(constant) = self.facts.filtered.get(&right).and_then(|f| {
+                f.constants
+                    .iter()
+                    .find(|b| symbol_name(&b.column) == *column)
+            }) {
+                self.constants.term(&constant.value, &state.columns)?
+            } else {
+                return fail(
+                    k,
+                    "CQ_GPU_PAYLOAD_COLUMN",
+                    format!("recorded run {right} does not carry {column}"),
+                );
+            };
+            loads.push(quote!(let #local=#value;));
+            state.columns.insert(column.clone(), quote!(#local));
+        }
+        let residual = self.residual(k, state, quote!(#row))?;
+        state
+            .columns
+            .retain(|c, _| self.context.carried_columns[name].contains(c));
+        let rest = self.steps(index + 1, state)?;
+        Ok(quote! {
+            if __valid {
+                let (#begin,#end)=#lookup;
+                let mut #row=#begin;
+                while #row<#end {
+                    #(#loads)*
+                    let mut __valid=#residual;
+                    #rest
+                    #row+=1;
+                }
+            }
+        })
+    }
     fn residual(&self, k: &physical::Keyed, state: &State, row: Tokens) -> syn::Result<Tokens> {
         let right = symbol_name(&k.right);
-        let view = id("run_view", &right);
-        let prefix = &self.facts.built[&right][0].0[0][0];
+        let provider = read_provider(self.facts, k);
+        let view = provider_id("run_view", &right, provider);
+        let prefix = directory_column(self.facts, &right, provider);
         let mut tests = Vec::new();
         for key in k
             .columns
@@ -845,7 +1054,8 @@ impl Emitter<'_, '_> {
     ) -> syn::Result<Tokens> {
         let name = &self.chain[index];
         let right = symbol_name(&k.right);
-        let run = id("run_view", &right);
+        let provider = read_provider(self.facts, k);
+        let run = provider_id("run_view", &right, provider);
         let begin = id("begin", name);
         let end = id("end", name);
         let witness = self
@@ -860,7 +1070,7 @@ impl Emitter<'_, '_> {
             })?;
             quote!(if __valid {(#a,#b)}else{(0,0)})
         } else {
-            let prefix = &self.facts.built[&right][0].0[0][0];
+            let prefix = directory_column(self.facts, &right, provider);
             let key = state.columns[prefix].clone();
             quote!(if __valid {::cq_gpu_runtime::blocked_run::point(#run.rank,#key).unwrap_or((0,0))}else{(0,0)})
         };
@@ -1015,6 +1225,7 @@ struct Kernel {
     frontier: bool,
     batch: usize,
     endpoint: String,
+    selection: Option<(Tokens, Vec<usize>, bool)>,
 }
 impl Kernel {
     fn emit(
@@ -1038,15 +1249,18 @@ impl Kernel {
             frontier,
             batch,
             endpoint,
+            selection,
         } = self;
         let prepare = format_ident!("prepare_{}", kernel);
         let table = id("table", &endpoint);
-        let run = id("run", &endpoint);
         let width = context.carried_columns[&endpoint].len();
         let shared_bytes =
             ((shared_words + if frontier { descriptor_words + 2 } else { 0 }) * 4) as u32;
         let common = quote!(__driver,#(#run_ids,)*#(#constants,)*__output,__frontier);
         let signature = quote!(__driver: ::cq_gpu_runtime::TableView,#(#run_ids: #run_types,)*#(#constants:i64,)*__output: ::cq_gpu_runtime::OutputView,__frontier: ::cq_gpu_runtime::FrontierView);
+        let selection_args = selection
+            .as_ref()
+            .map(|_| quote!(__counts:*mut u32,__scatter:bool,));
         fn substitute(tokens: Tokens, replacement: &Tokens) -> Tokens {
             tokens
                 .into_iter()
@@ -1126,12 +1340,21 @@ impl Kernel {
                 }
             }
         };
+        let scheduler = if selection.is_some() {
+            quote! {
+                let __row=::cuda_device::thread::blockIdx_x() as u64*256+__tid as u64;
+                let mut __valid=__row<__driver.len;
+                #root #body
+            }
+        } else {
+            scheduler
+        };
         let device = quote! {
             #(#functions)*
             #[kernel]
             #[launch_bounds(256)]
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_bytes,#shared_bytes))]
-            pub fn #kernel(#signature) {
+            pub fn #kernel(#signature,#selection_args) {
                 let __tid=::cuda_device::thread::threadIdx_x() as usize;
                 let __scratch=::cuda_device::DynamicSharedArray::<u8>::get_raw() as *mut u32;
                 unsafe {#scheduler}
@@ -1140,17 +1363,21 @@ impl Kernel {
         let canon = facts.dedup.contains_key(&endpoint);
         let dedup = canon.then(|| quote!(let #table=__execution.dedup(#table)?;));
         let build = facts.built.get(&endpoint).map(|builds| {
-            let key = &builds[0].0[0][0];
-            let slot = context.carried_columns[&endpoint]
-                .iter()
-                .position(|c| c == key)
-                .expect("checked carried run key");
-            if membership(facts, &endpoint) {
-                let budget = membership_budget(&builds[0].1).expect("validated membership budget");
-                quote!(let #run=__execution.prepare_membership(#table,#slot,#budget)?;)
-            } else {
-                quote!(let #run=__execution.prepare_run(#table,#slot)?;)
-            }
+            let providers = builds.iter().enumerate().map(|(provider, build)| {
+                let run = provider_id("run", &endpoint, provider);
+                let key = directory_column(facts, &endpoint, provider);
+                let slot = context.carried_columns[&endpoint]
+                    .iter()
+                    .position(|c| c == key)
+                    .expect("checked carried run key");
+                if membership(facts, &endpoint) {
+                    let budget = membership_budget(&build.1).expect("validated membership budget");
+                    quote!(let #run=__execution.prepare_membership(#table,#slot,#budget)?;)
+                } else {
+                    quote!(let #run=__execution.prepare_run(#table,#slot)?;)
+                }
+            });
+            quote!(#(#providers)*)
         });
         let mut filter_builds = Vec::new();
         for (scan, filters) in &facts.join_filters {
@@ -1186,6 +1413,40 @@ impl Kernel {
                 })?
             };
             #dedup #build #(#filter_builds)*
+        };
+        let device = if selection
+            .as_ref()
+            .is_some_and(|(_, _, projection)| *projection)
+        {
+            Tokens::new()
+        } else {
+            device
+        };
+        let launch = if let Some((source, columns, projection)) = selection {
+            if projection {
+                quote! {
+                    let #table=__execution.project_table(#source,&[#(#columns),*])?;
+                    #dedup #build #(#filter_builds)*
+                }
+            } else {
+                quote! {
+                    let #table={
+                        let __driver=#driver;
+                        #(#run_bindings)*
+                        let __pool=__execution.frontier(0,#descriptor_words as u32)?;
+                        let __frontier=__pool.view();
+                        let __grid=__driver.len.div_ceil(256).max(1) as u32;
+                        let __launch=__module.#prepare(::cuda_core::LaunchConfig1D::new(__grid,256,#shared_bytes))?;
+                        __execution.execute_selection(#source,&[#(#columns),*],|__stream,__output,__counts,__scatter| {
+                            unsafe { __module.#kernel(__stream,&__launch,#common,__counts,__scatter)?; }
+                            Ok(())
+                        })?
+                    };
+                    #dedup #build #(#filter_builds)*
+                }
+            }
+        } else {
+            launch
         };
         (device, launch)
     }

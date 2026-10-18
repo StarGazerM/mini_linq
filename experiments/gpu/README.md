@@ -679,11 +679,16 @@ fallback indexes for unfiltered Supplier/Lineitem and a CPU HashSet at
 canon. `build_host_reads` is a CPU-neutral Physical mode rewrite: eligible
 integral-key host renames become retained `let` results, without changing
 the graph, keys, predicates or their order. `prefix_runs` explicitly retypes
-an existing multi-level Trie with an integral single-column first level to
-`cq_gpu_runtime::PrefixRun`. It does not change its key levels. Its abstraction
-is the first-key clustered range filtered by all remaining key equalities,
-preserving duplicates and source order. This device-only provider is not
-silently substituted for an arbitrary CPU index.
+an existing multi-level Trie to `cq_gpu_runtime::PrefixRun`. Without arguments
+it records the existing first singleton integral level. An explicit
+`prefix_runs(Supplier => supplier_key)` selects a singleton level by base
+relation or retained-result name and moves it to the directory position.
+The provider's fourth const argument records that column's Structures layout
+index; the printer rejects disagreement with the first level. Other levels
+remain exact residual equalities. Displaced singleton-prefix reads receive
+additional recorded one-level SortedRuns and retained Vec rows, rather than
+silently losing semijoins. B therefore preserves its nation-key semijoin while
+its full Supplier lookup uses the supplier-key directory.
 
 | Checked Structures/Physical fact | GPU realization |
 |---|---|
@@ -694,7 +699,7 @@ silently substituted for an arbitrary CPU index.
 | Recorded `join_filter` | Budgeted bitmap prefilter on its recorded scan column, retaining the covering exact keyed read. |
 | Eager semi without a witness | Exact membership test at the recorded keyed read. |
 | `share` plus matching `repr witness` | Retained `(begin,end)` descriptor, consumed at the recorded forcing probe without reprobe. |
-| Probe | Block scan of range lengths, output-parallel owner search, bounded in-tile expansion loops. `first` is a traversal choice, **not** a primary-key/cardinality promise. |
+| Probe | Unstaged exhaustive lane-local range traversal; recorded batch/expand streams retain block scans, owner search and bounded cooperative expansion. `first` never implies uniqueness. |
 | `stage = batch N` / `expand` | Bounds cooperative work by the recorded batch; only explicit expand stages publish large descriptors to the bounded frontier. |
 | Project | Carries only demanded values to output. |
 | Recorded `DeviceSet<_>` canon | Exact device dedup; hash collisions never establish equality. |
@@ -706,7 +711,11 @@ one-level payload providers, so multi-level Supplier reads retain their
 ordinary lookup behavior. Inputs must remain immutable during execution.
 Host tuple slices are columnized with a cache keyed by slice pointer, length,
 Rust row type and schema; the cache and shared string dictionary last for one
-execution, never across unrelated calls. Answers are owned typed tuples.
+execution, never across unrelated calls. Only the context, stream and allocator
+pool survive across calls. Pure projections share execution-owned uploaded
+columns; nonexpanding filtered streams compact stably with block counts and an
+exclusive scan. Run construction consumes the selected logical prefix, not
+unused output capacity. Answers are owned typed tuples.
 
 ### Running the compiled pipeline
 
@@ -727,34 +736,131 @@ the runtime constructs its own per-run dictionary. Date columns use integral
 days and the manifest is checked against the authored 1994 window.
 `total_ms` is GPU build + query kernel + dedup time, excluding host
 columnization, upload and answer download; `wall_ms` includes the full call.
-Compare this scope with the hand-written SF10 totals, A 6.2 ms and B 10.1 ms,
-in `compare/gpu_h05.results.json`.
+The original hand-written SF10 totals (A 6.2 ms, B 10.1 ms) remain in
+`compare/gpu_h05.results.json`. The fresh comparison below rebuilds both runners:
+the context-scoped blocked-run module cache also benefits the hand-written
+build path. Its samples are in `compare/gpu_h05_compiled.handwritten.results.json`.
 
-Measured on the RTX 6000 Ada, 2026-10-18, both compiled plans are exact at SF1
-(7,242 answers) and SF10 (72,983). These are medians of five runs after one
-warmup; phase medians need not sum to the median total.
+Measured on the RTX 6000 Ada, 2026-10-18. Every warmup and measured run is exact
+at SF1 (7,242 answers) and SF10 (72,983). Medians of five unprofiled runs after
+one warmup; phase medians need not sum to the median total:
 
-| Plan | SF1 total ms | SF10 build ms | SF10 kernels ms | SF10 dedup ms | SF10 total ms | Hand-written SF10 total ms |
+| SF | Plan | Implementation | Build ms | Kernel ms | Dedup ms | Total ms |
+|---:|:---:|---|---:|---:|---:|---:|
+| 1 | A | Compiled | 0.512 | 0.114 | 0.058 | 0.686 |
+| 1 | A | Hand-written | 0.274 | 0.093 | 0.461 | 0.830 |
+| 1 | B | Compiled | 1.328 | 0.109 | 0.059 | 1.495 |
+| 1 | B | Hand-written | 0.831 | 0.043 | 0.463 | 1.337 |
+| 10 | A | Compiled | 1.972 | 1.044 | 0.069 | 3.087 |
+| 10 | A | Hand-written | 2.336 | 0.943 | 0.475 | 3.760 |
+| 10 | B | Compiled | 14.201 | 0.506 | 0.069 | 14.767 |
+| 10 | B | Hand-written | 8.417 | 0.304 | 0.480 | 9.202 |
+
+Separate final `nsys` per-kernel medians (six launches, including warmup):
+
+| SF10 kernel | Compiled ms | Hand-written ms |
+|---|---:|---:|
+| A | 1.031799 | 0.942022 |
+| B | 0.503507 | 0.300995 |
+
+Complete build/query/dedup kernel summaries and CUDA API counts are retained in
+`compare/compiled_final.nsys.csv` and `handwritten_final.nsys.csv`.
+
+Compiled SF10 A is **1.11×** the fresh hand-written kernel, below the requested
+1.3× bound against 0.94 ms, with zero spills. Its build is below both the fresh
+hand-written build and the original 4.9 ms reference. B's kernel falls from
+92.602 to 0.506 ms; its remaining build and traversal overhead is not hidden.
+Host columnization and upload still occur on every execution: only allocator
+capacity and kernel code objects are reused, never input contents.
+
+#### A diagnosis and emitter changes
+
+The old A kernel emitted a cooperative descriptor, two block scans (including
+overflow checking), shared parent/witness save/restore and owner search at every
+probe. Its four items per thread were four serial 256-row stripes, each paying
+the nested synchronization costs. PTX contained **37 barrier sites**, versus
+eight in the hand-written implementation. There was no uninlined generic trait
+dispatch: generated A PTX contained no calls and no explicit local-memory
+instructions. `ptxas` introduced eleven 32-bit spill stores and nine loads
+(44/36 bytes), with a 40-byte frame, while allocating the live nested scheduler
+state. SASS additionally outlines warp-sync/shuffle sequences as local calls;
+these are not Rust trait dispatch.
+
+Unstaged probes now exhaust their full ranges in lane-local nested loops.
+This is a cardinality-independent lowering, not a PK inference from `first`.
+Recorded batch/expand streams retain cooperative descriptors and frontier
+publication. Witness `(begin,end)` values stay in registers and their forcing
+read still does not reprobe. Root-column loads are demand-driven, so supplier
+keys are read after order/customer filters. Output capacity checking and
+grow/relaunch remain exact; the dedup set is touched only by the later dedup
+kernel, not by each input row. Integer predicates and dictionary IDs remain
+device integer comparisons.
+
+The generated scan retains static grid-stride scheduling; the hand-written
+scan uses an atomic dynamic tile cursor and packs four results per thread
+before block-coalesced output. Neither examined PTX uses vectorized read-only
+`ld.global.nc` loads: both use scalar generic 64-bit loads with coalesced lane
+addresses. The speedup is therefore not attributed to vectorization or an
+invented read-only-cache optimization. Static PTX/SASS evidence is retained in
+`compare/gpu_h05_compiled.assembly.json`.
+
+#### Hardware counters
+
+Separate SF10 A `ncu` kernel-replay captures, one profiled launch each; these
+are hardware counters, not the README's logical `scan_gbps` estimate:
+
+| A kernel | DRAM bytes | DRAM % peak | Achieved occupancy % | Barrier stall % | Long-scoreboard stall % | Wait stall % |
 |---|---:|---:|---:|---:|---:|---:|
-| Compiled A, fact-first | 11.619 | 9.435 | 8.980 | 0.644 | 19.039 | 6.2 |
-| Compiled B, customer-first | 14.681 | 24.371 | 92.602 | 0.730 | 117.689 | 10.1 |
+| Compiled before | 994,048,256 | 8.01 | 42.40 | 54.97 | 11.62 | 9.76 |
+| Compiled after | 532,209,024 | 36.14 | 58.36 | 0.00 | 62.32 | 16.74 |
+| Hand-written | 573,238,912 | 39.65 | 66.48 | 26.01 | 52.49 | 10.44 |
 
-The compiler reproduces the answers, **not the hand-written performance**.
-It preserves the public pipeline's recorded reads, including LE semijoins
-and the Supplier prefix selected by Structures. In B that prefix is
-`nation_key`, with `supplier_key` tested as a residual; it is not the
-hand-written supplier-key point lookup. The runtime also materializes/builds
-every recorded retained stream rather than specializing the small dimensions.
-No timing claim attributes the entire gap to one cause without profiling.
-Full-call median wall times at SF10 are 1,149.596 ms (A) and 1,242.539 ms (B),
-including repeated per-run columnization and transfers.
+Replay durations were 13.612, 1.616 and 1.587 ms respectively; use the
+unprofiled table above for performance ratios. Raw metric names/values are in
+`compare/compiled_a.before.ncu.csv`, `compiled_a.after.ncu.csv` and
+`handwritten_a.ncu.csv`.
 
-`compare/gpu_h05_compiled.ptxas.txt` and `.resources.json` contain the actual
-`ptxas -v -arch=sm_89` audit. Final streams `cq_gpu_stream_0_r21` (A) and
-`cq_gpu_stream_1_r19` (B) each use 40 registers, a 40-byte stack frame,
-44 bytes spill stores and 36 bytes spill loads. The other ten generated
-streams use 32 or 34 registers with zero stack/spills. The spills are
-reported, not hidden by an unsupported representation or plan change.
+The final B captures report 87,557,504 DRAM bytes at 13.21% peak for compiled,
+versus 87,058,816 bytes at 28.81% for hand-written. Achieved occupancy is
+52.82% versus 32.81%; long-scoreboard stalls are 75.89% versus 52.04%.
+Their replay durations are 0.727488 versus 0.331648 ms. Full B counters are in
+`compare/compiled_b.after.ncu.csv` and `handwritten_b.ncu.csv`; all parsed
+profiles, original results and intermediate stages are in
+`compare/gpu_h05_compiled.profile.json`.
+
+#### Build/runtime changes and resources
+
+Pure projections now share immutable execution-owned column allocations.
+Filtered nonexpanding streams, including semijoins, use stable count/scan/scatter
+and inherit conservative source bounds. Runs allocate/gather only the selected
+logical prefix. Output count/error metadata uses one readback. Disabled
+frontiers allocate no counters and launch no initializer.
+
+Profiling also exposed a dominant host-side cause: the intermediate compiled A
+capture loaded and unloaded CUDA modules **120 times over six executions**,
+with 33.359 ms in `cuModuleLoadData`. The pinned loader does not cache those
+modules. The experimental runtime now retains its module, and blocked-run
+caches its module by actual CUDA-context identity. These are code-object
+lifetimes, not changes to Structures or upstream cuda-oxide. Fresh executions
+still rebuild every recorded run and dictionary.
+The final compiled **both-plan** capture has 14 module loads across twelve
+executions, including per-call generated query modules and startup owners,
+versus 120 across six A executions before code-object retention. These are
+whole-process counts, not falsely normalized timed-region allocation counts.
+
+`compare/gpu_h05_compiled.ptxas.txt` and `.resources.json` contain the final
+`ptxas -v -arch=sm_89` audit:
+
+| Kernel | Registers | Stack bytes | Spill stores / loads bytes |
+|---|---:|---:|---:|
+| Compiled A `cq_gpu_stream_0_r21` | 48 | 0 | 0 / 0 |
+| Compiled B `cq_gpu_stream_1_r19` | 40 | 24 | 28 / 20 |
+| Hand-written `plan_a` | 36 | 0 | 0 / 0 |
+| Hand-written `plan_b` | 34 | 0 | 0 / 0 |
+
+The seven other generated kernels use 22–26 registers and zero stack/spills.
+B's residual spills are reported explicitly; the zero-spill acceptance is
+met for A, not claimed for B.
 
 Additional acceptance commands:
 
@@ -770,6 +876,10 @@ four public-macro compile-fail fixtures name `CQ_GPU_MERGE`,
 The GPU oracle exercises full-width signed multiword dedup with strings,
 and a 20,000-answer fanout using a recorded scan join filter, retained witness,
 batch-32 expansion, frontier publication and output grow/relaunch.
+The smoke additionally checks an unstaged 4,097-row fanout (including output
+growth) and mutates its input in place before another execution, verifying that
+pool/module reuse does not retain stale input data. The 21 printer unit tests
+and all four compile-fail fixtures pass.
 
 
 ### Supported domain and explicit rejections
@@ -784,9 +894,10 @@ batch-32 expansion, frontier publication and output grow/relaunch.
 - Ordinary multi-level providers are rejected; only explicitly recorded
   `PrefixRun` has the residual-filter interpretation above. A recorded CPU
   canon provider is rejected; `retype(dedup => DeviceSet<_>)` is required.
-- Positional carriers, positional selection/read adapters, standalone keyset
-  annotations and multiple recorded providers on one retained result are
-  rejected. Recorded join filters support the exact `AdaptiveKeySet` bitmap
+- Positional carriers, positional selection/read adapters and standalone keyset
+  annotations are rejected. Multiple recorded
+  run providers are selected by their exact served key prefixes. Recorded join
+  filters support the exact `AdaptiveKeySet` bitmap
   provider and its budget; Bloom or arbitrary filter implementations are not
   silently substituted. Unknown provider aliases and non-Vec retained-row
   representations are rejected.

@@ -148,7 +148,6 @@ fn main() -> Result<(), Error> {
             "build_ms": metric(&build), "kernel_ms": metric(&kernel),
             "dedup_ms": metric(&dedup), "total_ms": metric(&total), "wall_ms": metric(&wall),
             "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
-            "handwritten_sf10_total_ms": if plan == "A" { 6.2 } else { 10.1 },
             "samples": {"build_ms": build, "kernel_ms": kernel, "dedup_ms": dedup, "total_ms": total, "wall_ms": wall}
         }));
     }

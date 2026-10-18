@@ -1,0 +1,10 @@
+==PROF== Connected to process 2481402 (/data/mini_linq-gpu/experiments/gpu/target/release/gpu-h05-compiled)
+==PROF== Disconnected from process 2481402
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","2481402","gpu-h05-compiled","127.0.0.1","cq_gpu_stream_0_r21","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes.sum","byte","994,048,256"
+"0","2481402","gpu-h05-compiled","127.0.0.1","cq_gpu_stream_0_r21","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","8.01"
+"0","2481402","gpu-h05-compiled","127.0.0.1","cq_gpu_stream_0_r21","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","gpu__time_duration.sum","ns","13,611,968"
+"0","2481402","gpu-h05-compiled","127.0.0.1","cq_gpu_stream_0_r21","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","sm__warps_active.avg.pct_of_peak_sustained_active","%","42.40"
+"0","2481402","gpu-h05-compiled","127.0.0.1","cq_gpu_stream_0_r21","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","smsp__warp_issue_stalled_barrier_per_warp_active.pct","%","54.97"
+"0","2481402","gpu-h05-compiled","127.0.0.1","cq_gpu_stream_0_r21","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct","%","11.62"
+"0","2481402","gpu-h05-compiled","127.0.0.1","cq_gpu_stream_0_r21","1","7","(256, 1, 1)","(568, 1, 1)","0","8.9","Command line profiler metrics","smsp__warp_issue_stalled_wait_per_warp_active.pct","%","9.76"

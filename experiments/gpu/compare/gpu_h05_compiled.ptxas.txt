@@ -1,61 +1,79 @@
+FILE target/oxide-ir/gpu_h05_compiled.ptx
 ptxas info    : 0 bytes gmem
-ptxas info    : Compiling entry function 'cq_gpu_stream_0_r11' for 'sm_89'
-ptxas info    : Function properties for cq_gpu_stream_0_r11
-    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 34 registers, used 1 barriers, 456 bytes cmem[0]
-ptxas info    : Compile time = 7.920 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_0_r21' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_0_r21
-    40 bytes stack frame, 44 bytes spill stores, 36 bytes spill loads
-ptxas info    : Used 40 registers, used 1 barriers, 40 bytes cumulative stack size, 704 bytes cmem[0], 32 bytes cmem[2]
-ptxas info    : Compile time = 50.268 ms
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 48 registers, used 0 barriers, 704 bytes cmem[0]
+ptxas info    : Compile time = 13.266 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_1_r7' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_1_r7
     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 34 registers, used 1 barriers, 456 bytes cmem[0]
-ptxas info    : Compile time = 6.678 ms
+ptxas info    : Used 24 registers, used 1 barriers, 465 bytes cmem[0]
+ptxas info    : Compile time = 4.883 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_0_r3' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_0_r3
     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 34 registers, used 1 barriers, 480 bytes cmem[0]
-ptxas info    : Compile time = 6.869 ms
+ptxas info    : Used 22 registers, used 1 barriers, 489 bytes cmem[0]
+ptxas info    : Compile time = 4.896 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_0_r8' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_0_r8
     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 34 registers, used 1 barriers, 512 bytes cmem[0]
-ptxas info    : Compile time = 7.710 ms
-ptxas info    : Compiling entry function 'cq_gpu_stream_1_r9' for 'sm_89'
-ptxas info    : Function properties for cq_gpu_stream_1_r9
-    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 34 registers, used 1 barriers, 456 bytes cmem[0]
-ptxas info    : Compile time = 6.523 ms
+ptxas info    : Used 26 registers, used 1 barriers, 521 bytes cmem[0]
+ptxas info    : Compile time = 5.190 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_1_r2' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_1_r2
     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 32 registers, used 1 barriers, 456 bytes cmem[0]
-ptxas info    : Compile time = 6.210 ms
+ptxas info    : Used 22 registers, used 1 barriers, 465 bytes cmem[0]
+ptxas info    : Compile time = 3.988 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_1_r19' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_1_r19
-    40 bytes stack frame, 44 bytes spill stores, 36 bytes spill loads
-ptxas info    : Used 40 registers, used 1 barriers, 40 bytes cumulative stack size, 704 bytes cmem[0], 32 bytes cmem[2]
-ptxas info    : Compile time = 50.200 ms
+    24 bytes stack frame, 28 bytes spill stores, 20 bytes spill loads
+ptxas info    : Used 40 registers, used 0 barriers, 24 bytes cumulative stack size, 760 bytes cmem[0], 8 bytes cmem[2]
+ptxas info    : Compile time = 11.577 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_0_r5' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_0_r5
     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 34 registers, used 1 barriers, 512 bytes cmem[0]
-ptxas info    : Compile time = 7.692 ms
-ptxas info    : Compiling entry function 'cq_gpu_stream_1_r15' for 'sm_89'
-ptxas info    : Function properties for cq_gpu_stream_1_r15
-    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 34 registers, used 1 barriers, 456 bytes cmem[0]
-ptxas info    : Compile time = 6.528 ms
+ptxas info    : Used 24 registers, used 1 barriers, 521 bytes cmem[0]
+ptxas info    : Compile time = 4.871 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_1_r3' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_1_r3
     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 34 registers, used 1 barriers, 480 bytes cmem[0]
-ptxas info    : Compile time = 6.854 ms
+ptxas info    : Used 22 registers, used 1 barriers, 489 bytes cmem[0]
+ptxas info    : Compile time = 4.448 ms
 ptxas info    : Compiling entry function 'cq_gpu_stream_0_r2' for 'sm_89'
 ptxas info    : Function properties for cq_gpu_stream_0_r2
     0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
-ptxas info    : Used 32 registers, used 1 barriers, 456 bytes cmem[0]
-ptxas info    : Compile time = 6.140 ms
+ptxas info    : Used 22 registers, used 1 barriers, 465 bytes cmem[0]
+ptxas info    : Compile time = 4.029 ms
+
+FILE target/oxide-ir/gpu_h05.ptx
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'dedup_insert' for 'sm_89'
+ptxas info    : Function properties for dedup_insert
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers, 432 bytes cmem[0]
+ptxas info    : Compile time = 3.443 ms
+ptxas info    : Compiling entry function 'filter_orders' for 'sm_89'
+ptxas info    : Function properties for filter_orders
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 1 barriers, 441 bytes cmem[0]
+ptxas info    : Compile time = 5.040 ms
+ptxas info    : Compiling entry function 'plan_b' for 'sm_89'
+ptxas info    : Function properties for plan_b
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 1 barriers, 736 bytes cmem[0], 40 bytes cmem[2]
+ptxas info    : Compile time = 26.925 ms
+ptxas info    : Compiling entry function 'plan_a' for 'sm_89'
+ptxas info    : Function properties for plan_a
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 36 registers, used 1 barriers, 632 bytes cmem[0]
+ptxas info    : Compile time = 27.552 ms
+ptxas info    : Function properties for plan_a_implKb0_EB4_
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Compiling entry function 'plan_a_merge' for 'sm_89'
+ptxas info    : Function properties for plan_a_merge
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, used 1 barriers, 632 bytes cmem[0], 24 bytes cmem[2]
+ptxas info    : Compile time = 46.931 ms
+ptxas info    : Function properties for plan_a_implKb1_EB4_
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads

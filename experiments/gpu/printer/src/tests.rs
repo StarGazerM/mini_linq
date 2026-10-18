@@ -27,7 +27,7 @@ fn shared() -> ir::Program {
 }
 
 #[test]
-fn scan_is_a_nested_cuda_module_not_a_workload_recognizer() {
+fn pure_projection_uses_runtime_without_a_redundant_copy_kernel() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation Arbitrary(k:i64);
         scan = pipe rename Arbitrary@0 {k -> renamed};
@@ -41,10 +41,12 @@ fn scan_is_a_nested_cuda_module_not_a_workload_recognizer() {
         .unwrap()
         .to_token_stream()
         .to_string();
-    assert!(generated.contains("cuda_module"));
+    assert!(!generated.contains("cuda_module"));
+    assert!(generated.contains("__execution . dedup"));
     assert!(generated.contains("encode_slice"));
     assert!(generated.contains("decode_value :: < i64 >"));
-    assert_eq!(generated.matches("pub fn cq_gpu_stream_").count(), 1);
+    assert_eq!(generated.matches("pub fn cq_gpu_stream_").count(), 0);
+    assert!(generated.contains("project_table"));
     assert!(!generated.contains("prepare_run"));
     assert!(!generated.contains("blocked_run :: point"));
 }
@@ -78,10 +80,16 @@ fn every_keyed_read_has_exactly_one_provenance_entry_and_witness_does_not_reprob
         .to_string();
     assert_eq!(generated.matches("blocked_run :: point").count(), 1);
     assert_eq!(generated.matches("prepare_run").count(), 1);
-    assert_eq!(generated.matches("pub fn cq_gpu_stream_").count(), 2);
+    assert_eq!(generated.matches("pub fn cq_gpu_stream_").count(), 1);
+    assert!(generated.contains("cuda_module"));
     assert!(generated.contains("p:b[x]:witness:s"));
-    assert!(generated.contains("tiles :: scan"));
-    assert!(generated.contains("tiles :: owner"));
+    assert!(
+        generated.contains(
+            "let (__cq_gpu_begin_p , __cq_gpu_end_p) = (__cq_gpu_begin_s , __cq_gpu_end_s)"
+        )
+    );
+    assert!(generated.contains("while __cq_gpu_row_p < __cq_gpu_end_p"));
+    assert!(!generated.contains("tiles :: owner"));
 }
 
 #[test]
@@ -98,11 +106,8 @@ fn unshared_first_probe_still_expands_every_range_row() {
         .to_token_stream()
         .to_string();
     assert_eq!(generated.matches("blocked_run :: point").count(), 2);
-    assert!(generated.contains("while __chunk < __chunks"));
-    assert!(
-        generated.contains("__end_p - __cq_gpu_begin_p")
-            || generated.contains("__cq_gpu_end_p - __cq_gpu_begin_p")
-    );
+    assert!(generated.contains("while __cq_gpu_row_p < __cq_gpu_end_p"));
+    assert!(generated.contains("__cq_gpu_row_p += 1"));
 }
 
 #[test]
@@ -261,7 +266,7 @@ fn recorded_prefix_run_preserves_all_residual_key_comparisons() {
         l host scan = ::core::iter::Map<_,_> [];
         r host scan = ::core::iter::Map<_,_> [];
         r rows = ::std::vec::Vec<_>;
-        r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec> [x][y];
+        r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [x][y];
         p canon = ::cq_gpu_runtime::DeviceSet<_>;
     }};
     let facts = ir::contract::check(&source).unwrap();
@@ -274,8 +279,13 @@ fn recorded_prefix_run_preserves_all_residual_key_comparisons() {
         .to_token_stream()
         .to_string();
     assert_eq!(generated.matches("prepare_run").count(), 1);
-    assert!(generated.contains("== __cq_gpu_value_y"));
-    assert!(generated.contains("tiles :: owner"));
+    let residual = quote!(
+        ::cq_gpu_runtime::run_column(__cq_gpu_run_view_r, 1usize, __cq_gpu_row_p)
+            == ::cq_gpu_runtime::column(__driver, 1usize, __row)
+    )
+    .to_string();
+    assert!(generated.contains(&residual));
+    assert!(generated.contains("while __cq_gpu_row_p < __cq_gpu_end_p"));
 }
 
 #[test]

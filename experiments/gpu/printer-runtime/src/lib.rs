@@ -1,6 +1,8 @@
 //! Host/runtime contract for the Structures GPU printer.
 //!
 //! Each execution owns its slice/schema upload cache and string dictionary.
+//! `with_runtime` reuses only the thread-local context, stream and allocation
+//! pool: all input values, bounds, runs and outputs are rebuilt on every call.
 //! All device storage uses rccl-memory's pooled allocator; query algorithms
 //! come from blocked-run, tiles and this crate, never RCCL device algorithms.
 //! Generated launchers must be pure: an overflowing bounded output is counted
@@ -20,7 +22,14 @@ use gpu_blocked_run::{Buffer, MemoryResource, Run};
 use rccl_memory::{
     ContiguousDeviceRange, CudaMemoryResource, PoolMemoryResource, StatisticsMemoryResource,
 };
-use std::{cell::Cell, collections::HashMap, fmt, marker::PhantomData, sync::Arc, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    fmt,
+    marker::PhantomData,
+    sync::Arc,
+    time::Instant,
+};
 
 pub type Error = Box<dyn std::error::Error>;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -29,12 +38,13 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// interprets this recorded choice and invokes the exact packed device set.
 pub struct DeviceSet<T>(PhantomData<T>);
 
-/// Recorded prefix-run provider. Its abstraction law is a stable multiset:
-/// full-key lookup equals the first integral key's blocked-run range filtered
-/// by equality on every remaining recorded key. Multiplicity and source order
-/// within that range are preserved. Generated residual checks are mandatory;
-/// this marker never grants an unrecorded lookup or an implicit host fallback.
-pub struct PrefixRun<K, V, C>(PhantomData<(K, V, C)>);
+/// Recorded prefix-run provider. `PREFIX` identifies the directory column in
+/// the recorded Structures layout, not the host tuple. Its abstraction law is
+/// a stable multiset: full-key lookup equals that integral key's blocked-run
+/// range filtered by equality on every remaining recorded key. Multiplicity
+/// and source order within that range are preserved. Generated residual checks
+/// are mandatory; this marker grants no unrecorded lookup or host fallback.
+pub struct PrefixRun<K, V, C, const PREFIX: usize>(PhantomData<(K, V, C)>);
 
 #[derive(Debug)]
 pub struct RuntimeError {
@@ -78,6 +88,7 @@ pub fn take_last_timings() -> Option<Timings> {
 /// Drop order releases pooled allocations before their stream and context.
 pub struct Runtime {
     memory: MemoryResource,
+    kernels: kernels::runtime_kernels::LoadedModule,
     stream: Arc<CudaStream>,
     context: Arc<CudaContext>,
 }
@@ -95,8 +106,13 @@ impl Runtime {
             initial_bytes,
             maximum_bytes,
         )?);
+        // Keep launchers/code resident, rather than loading and unloading the
+        // same module for every materialization, extrema and dedup operation.
+        let kernels = unsafe { kernels::runtime_kernels::load(&context)? };
+        gpu_blocked_run::prepare_kernels(&context)?;
         Ok(Self {
             memory,
+            kernels,
             stream,
             context,
         })
@@ -124,6 +140,24 @@ impl Runtime {
     }
 }
 
+thread_local! {
+    static SHARED_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) };
+}
+
+/// Reuse allocation capacity, not query data, across calls on the same thread.
+/// Every generated invocation must create a fresh `runtime.execution()`.
+/// Nothing borrowing the runtime can escape the callback; execution-owned
+/// uploads, dictionary, retained runs and outputs are dropped before return.
+pub fn with_runtime<T>(execute: impl FnOnce(&Runtime) -> Result<T>) -> Result<T> {
+    SHARED_RUNTIME.with(|runtime| {
+        if runtime.borrow().is_none() {
+            *runtime.borrow_mut() = Some(Runtime::new()?);
+        }
+        let runtime = runtime.borrow();
+        execute(runtime.as_ref().unwrap())
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct TableId(usize);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -139,7 +173,8 @@ struct SliceKey {
     width: usize,
 }
 struct Table<'runtime> {
-    columns: Vec<Buffer<'runtime, i64>>,
+    // Completed tables are immutable; projections share allocation ownership.
+    columns: Vec<Arc<Buffer<'runtime, i64>>>,
     pointers: Buffer<'runtime, u64>,
     len: usize,
     bounds: Option<Vec<(i64, i64)>>,
@@ -152,6 +187,33 @@ impl Table<'_> {
         }
     }
 }
+
+/// Borrow only initialized logical rows, rather than a materialization's spare
+/// capacity. Run construction sizes its scratch and clustered outputs from
+/// this range, so a selective stream does not build at its input cardinality.
+struct ColumnPrefix<'a, 'runtime> {
+    column: &'a Buffer<'runtime, i64>,
+    len: usize,
+}
+// SAFETY: prefixes are created from a table's checked logical row count, which
+// never exceeds its owned column capacity. The borrow retains the allocation.
+unsafe impl ContiguousDeviceRange<i64> for ColumnPrefix<'_, '_> {
+    fn len(&self) -> usize {
+        self.len
+    }
+    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
+        self.column.cu_deviceptr()
+    }
+    fn context(&self) -> &Arc<CudaContext> {
+        self.column.context()
+    }
+    fn ensure_usable_on(
+        &self,
+        stream: &CudaStream,
+    ) -> std::result::Result<(), rccl_memory::MemoryError> {
+        self.column.ensure_usable_on(stream)
+    }
+}
 struct BuiltRun<'runtime> {
     run: Run<'runtime>,
     pointers: Buffer<'runtime, u64>,
@@ -162,10 +224,19 @@ struct Membership<'runtime> {
     min_key: i64,
     max_key: i64,
 }
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct OutputCount {
+    rows: u64,
+    error: u32,
+    padding: u32,
+}
+// SAFETY: C-layout scalar metadata, including initialized explicit padding.
+unsafe impl DeviceCopy for OutputCount {}
+
 struct Output<'runtime> {
     table: Table<'runtime>,
-    count: Buffer<'runtime, u64>,
-    error: Buffer<'runtime, u32>,
+    metadata: Buffer<'runtime, OutputCount>,
     capacity: usize,
 }
 impl Output<'_> {
@@ -173,13 +244,13 @@ impl Output<'_> {
         OutputView {
             columns: ptr(&self.table.pointers) as *const *mut i64,
             capacity: self.capacity as u64,
-            count: ptr(&self.count),
-            error: ptr(&self.error),
+            count: ptr(&self.metadata).cast::<u64>(),
+            error: unsafe { ptr(&self.metadata).cast::<u8>().add(8).cast::<u32>() },
         }
     }
     fn count(&self) -> Result<usize> {
-        let code = self.error.to_host_vec()?[0];
-        let named = match code {
+        let metadata = self.metadata.to_host_vec()?[0];
+        let named = match metadata.error {
             0 => None,
             1 => Some((
                 "CQ_GPU_OUTPUT_OVERFLOW",
@@ -201,7 +272,7 @@ impl Output<'_> {
         if let Some((name, detail)) = named {
             return Err(failure(name, detail));
         }
-        let count = self.count.to_host_vec()?[0];
+        let count = metadata.rows;
         if count > u32::MAX as u64 {
             return Err(failure(
                 "CQ_GPU_OUTPUT_ROWS",
@@ -272,7 +343,9 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         let start = runtime.stream.record_event(timing_flags())?;
         let device_columns = columns
             .iter()
-            .map(|column| Buffer::from_host_in(&runtime.memory, &runtime.stream, column))
+            .map(|column| {
+                Buffer::from_host_in(&runtime.memory, &runtime.stream, column).map(Arc::new)
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let pointers = pointer_array(runtime, &device_columns)?;
         let end = runtime.stream.record_event(timing_flags())?;
@@ -286,6 +359,50 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         });
         self.uploads.insert(key, id);
         Ok(id)
+    }
+
+    /// Realize a recorded rename/projection without copying any row data.
+    /// Column positions may be reordered or repeated; row order, multiplicity
+    /// and logical length remain unchanged. Shared allocations live only in
+    /// this execution, and no table exposes a mutable column after completion.
+    pub fn project_table(&mut self, source: TableId, columns: &[usize]) -> Result<TableId> {
+        let input = self.table(source)?;
+        if columns.len() == input.columns.len()
+            && columns
+                .iter()
+                .enumerate()
+                .all(|(index, &column)| index == column)
+        {
+            return Ok(source);
+        }
+        let projected = columns
+            .iter()
+            .map(|&column| {
+                input.columns.get(column).cloned().ok_or_else(|| {
+                    failure(
+                        "CQ_GPU_KEY_COLUMN",
+                        "projection column is outside the source schema",
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let len = input.len;
+        let bounds = input
+            .bounds
+            .as_ref()
+            .map(|bounds| columns.iter().map(|&column| bounds[column]).collect());
+        let runtime = self.runtime;
+        let start = runtime.stream.record_event(timing_flags())?;
+        let pointers = pointer_array(runtime, &projected)?;
+        let end = runtime.stream.record_event(timing_flags())?;
+        end.synchronize()?;
+        self.timings.build_ms += start.elapsed_ms(&end)? as f64;
+        Ok(self.add_table(Table {
+            columns: projected,
+            pointers,
+            len,
+            bounds,
+        }))
     }
 
     pub fn table_view(&self, id: TableId) -> Result<TableView> {
@@ -332,7 +449,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         }
         let runtime = self.runtime;
         let start = runtime.stream.record_event(timing_flags())?;
-        self.ensure_bounds(table)?;
+        self.ensure_domain_bounds(table, key_column, (budget_bytes / 8) as u128 * 64)?;
         let source = self.table(table)?;
         let &(min_key, max_key) =
             source
@@ -356,7 +473,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         }
         let bits = Buffer::<u64>::zeroed_in(&runtime.memory, &runtime.stream, words as usize)?;
         if source.len != 0 {
-            let module = unsafe { kernels::runtime_kernels::load(&runtime.context)? };
+            let module = &runtime.kernels;
             let launch = module.prepare_membership_insert(config(source.len, 0))?;
             unsafe {
                 module.membership_insert(
@@ -390,12 +507,23 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         }
         let runtime = self.runtime;
         let start = runtime.stream.record_event(timing_flags())?;
-        self.ensure_bounds(table)?;
+        self.ensure_domain_bounds(table, key_column, gpu_blocked_run::MAX_DOMAIN_KEYS as u128)?;
         let source = self.table(table)?;
-        let key = source
+        if key_column >= source.columns.len() {
+            return Err(failure(
+                "CQ_GPU_KEY_COLUMN",
+                "run key is outside the table schema",
+            ));
+        }
+        let columns: Vec<_> = source
             .columns
-            .get(key_column)
-            .ok_or_else(|| failure("CQ_GPU_KEY_COLUMN", "run key is outside the table schema"))?;
+            .iter()
+            .map(|column| ColumnPrefix {
+                column: column.as_ref(),
+                len: source.len,
+            })
+            .collect();
+        let key = &columns[key_column];
         let domain = source.bounds.as_ref().unwrap()[key_column];
         let span = (domain.1 as i128 - domain.0 as i128 + 1).max(0);
         if span > gpu_blocked_run::MAX_DOMAIN_KEYS as i128 {
@@ -404,23 +532,13 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 "dense rank domain exceeds 2^32 key positions",
             ));
         }
-        let payloads: Vec<&dyn ContiguousDeviceRange<i64>> = source
-            .columns
+        let payloads: Vec<&dyn ContiguousDeviceRange<i64>> = columns
             .iter()
             .enumerate()
             .filter_map(|(index, column)| {
                 (index != key_column).then_some(column as &dyn ContiguousDeviceRange<i64>)
             })
             .collect();
-        let active = if key.len() != source.len {
-            Some(Buffer::from_host_in(
-                &runtime.memory,
-                &runtime.stream,
-                &[source.len as u32],
-            )?)
-        } else {
-            None
-        };
         let run = Run::build(
             &runtime.context,
             &runtime.stream,
@@ -428,7 +546,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             key,
             &payloads,
             domain,
-            active.as_ref(),
+            None,
         )
         .map_err(|error| failure("CQ_GPU_RUN_BUILD", error.to_string()))?;
         let stats = gpu_blocked_run::read_stats(&runtime.memory, &runtime.stream, &[&run])
@@ -455,6 +573,75 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         });
         self.run_cache.insert((table, key_column), id);
         Ok(id)
+    }
+
+    /// Materialize a recorded projection/filter stream in source order.
+    ///
+    /// `columns` maps each output field to its unchanged source field. The
+    /// generated callback launches one 256-thread block per 256 source rows,
+    /// calls `stable_select` collectively, and writes at most one result per
+    /// source row. It first writes block counts, then scatters using their
+    /// exclusive scan. This is not valid for a multiplicity-expanding stream;
+    /// those retain `execute` and its exact overflow/replay protocol.
+    pub fn execute_selection<F>(
+        &mut self,
+        source: TableId,
+        columns: &[usize],
+        mut launch: F,
+    ) -> Result<TableId>
+    where
+        F: FnMut(&CudaStream, OutputView, *mut u32, bool) -> Result<()>,
+    {
+        let runtime = self.runtime;
+        let start = runtime.stream.record_event(timing_flags())?;
+        self.ensure_bounds(source)?;
+        let input = self.table(source)?;
+        let rows = input.len;
+        let bounds = columns
+            .iter()
+            .map(|&column| {
+                input
+                    .bounds
+                    .as_ref()
+                    .unwrap()
+                    .get(column)
+                    .copied()
+                    .ok_or_else(|| {
+                        failure(
+                            "CQ_GPU_KEY_COLUMN",
+                            "selection column is outside the source schema",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut output = allocate_output(runtime, columns.len(), rows)?;
+        let counts =
+            Buffer::<u32>::zeroed_in(&runtime.memory, &runtime.stream, rows.div_ceil(256).max(1))?;
+        let _scan = if rows != 0 {
+            launch(&runtime.stream, output.view(), ptr(&counts), false)?;
+            let scan = gpu_blocked_run::exclusive_scan(&runtime.stream, &runtime.memory, &counts)?;
+            launch(&runtime.stream, output.view(), ptr(&counts), true)?;
+            scan
+        } else {
+            Vec::new()
+        };
+        let count = output.count()?;
+        if count > rows {
+            return Err(failure(
+                "CQ_GPU_SELECTION_ROWS",
+                "projection/filter output exceeds its source cardinality",
+            ));
+        }
+        output.table.len = count;
+        output.table.bounds = Some(if count == 0 {
+            vec![(0, -1); columns.len()]
+        } else {
+            bounds
+        });
+        let end = runtime.stream.record_event(timing_flags())?;
+        end.synchronize()?;
+        self.timings.build_ms += start.elapsed_ms(&end)? as f64;
+        Ok(self.add_table(output.table))
     }
 
     /// Every attempted row must increment OutputView.count, including rows
@@ -539,7 +726,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         let slots = Buffer::<u64>::zeroed_in(&runtime.memory, &runtime.stream, capacity)?;
         let fields_device = Buffer::from_host_in(&runtime.memory, &runtime.stream, &fields)?;
         let mut output = allocate_output(runtime, source.columns.len(), source.len)?;
-        let module = unsafe { kernels::runtime_kernels::load(&runtime.context)? };
+        let module = &runtime.kernels;
         let pack = module.prepare_pack(config(source.len, 0))?;
         let insert = module.prepare_set_insert(config(source.len, 0))?;
         unsafe {
@@ -626,6 +813,30 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         self.tables.push(table);
         id
     }
+    /// A projection/filter may retain conservative source bounds. Tighten
+    /// them before rejecting a recorded provider's domain/budget, so a wide
+    /// source filtered to a legal domain keeps the ordinary exact behavior.
+    fn ensure_domain_bounds(
+        &mut self,
+        table: TableId,
+        key_column: usize,
+        maximum_span: u128,
+    ) -> Result<()> {
+        self.ensure_bounds(table)?;
+        let source = self.table(table)?;
+        let &(min, max) = source
+            .bounds
+            .as_ref()
+            .unwrap()
+            .get(key_column)
+            .ok_or_else(|| failure("CQ_GPU_KEY_COLUMN", "key is outside the table schema"))?;
+        if (max as i128 - min as i128 + 1).max(0) as u128 > maximum_span {
+            self.tables[table.0].bounds = None;
+            self.ensure_bounds(table)?;
+        }
+        Ok(())
+    }
+
     fn ensure_bounds(&mut self, table: TableId) -> Result<()> {
         let source = self.table(table)?;
         if source.bounds.is_some() {
@@ -639,7 +850,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         let runtime = self.runtime;
         let initial: Vec<u64> = (0..width).flat_map(|_| [u64::MAX, 0]).collect();
         let extrema = Buffer::from_host_in(&runtime.memory, &runtime.stream, &initial)?;
-        let module = unsafe { kernels::runtime_kernels::load(&runtime.context)? };
+        let module = &runtime.kernels;
         let launch = module.prepare_extrema(config(source.len, 4096))?;
         unsafe {
             module.extrema(
@@ -684,7 +895,11 @@ impl<'runtime> Frontier<'runtime> {
         Ok(Self {
             runtime,
             pool: Buffer::zeroed_in(&runtime.memory, &runtime.stream, words)?,
-            counters: Buffer::zeroed_in(&runtime.memory, &runtime.stream, 2)?,
+            counters: Buffer::zeroed_in(
+                &runtime.memory,
+                &runtime.stream,
+                if slots == 0 { 0 } else { 2 },
+            )?,
             slots,
             descriptor_words,
         })
@@ -694,11 +909,22 @@ impl<'runtime> Frontier<'runtime> {
             pool: ptr(&self.pool),
             slots: self.slots,
             descriptor_words: self.descriptor_words,
-            cursor: ptr(&self.counters),
-            remaining: unsafe { ptr(&self.counters).add(1) },
+            cursor: if self.slots == 0 {
+                std::ptr::null_mut()
+            } else {
+                ptr(&self.counters)
+            },
+            remaining: if self.slots == 0 {
+                std::ptr::null_mut()
+            } else {
+                unsafe { ptr(&self.counters).add(1) }
+            },
         }
     }
     pub fn reset(&self, root_tiles: u64) -> Result<()> {
+        if self.slots == 0 {
+            return Ok(());
+        }
         let stream = &self.runtime.stream;
         if !self.pool.is_empty() {
             unsafe {
@@ -710,7 +936,7 @@ impl<'runtime> Frontier<'runtime> {
                 )?;
             }
         }
-        let module = unsafe { kernels::runtime_kernels::load(&self.runtime.context)? };
+        let module = &self.runtime.kernels;
         let launch = module.prepare_frontier_initialize(LaunchConfig1D::new(1, 256, 0))?;
         unsafe {
             module.frontier_initialize(stream, &launch, self.view(), root_tiles)?;
@@ -740,12 +966,9 @@ fn config(rows: usize, shared: u32) -> LaunchConfig1D {
 }
 fn pointer_array<'runtime>(
     runtime: &'runtime Runtime,
-    columns: &[Buffer<'runtime, i64>],
+    columns: &[Arc<Buffer<'runtime, i64>>],
 ) -> Result<Buffer<'runtime, u64>> {
-    let pointers: Vec<u64> = columns
-        .iter()
-        .map(ContiguousDeviceRange::cu_deviceptr)
-        .collect();
+    let pointers: Vec<u64> = columns.iter().map(|column| column.cu_deviceptr()).collect();
     Ok(Buffer::from_host_in(
         &runtime.memory,
         &runtime.stream,
@@ -758,7 +981,7 @@ fn allocate_output<'runtime>(
     capacity: usize,
 ) -> Result<Output<'runtime>> {
     let columns = (0..width)
-        .map(|_| Buffer::<i64>::zeroed_in(&runtime.memory, &runtime.stream, capacity))
+        .map(|_| Buffer::<i64>::zeroed_in(&runtime.memory, &runtime.stream, capacity).map(Arc::new))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let pointers = pointer_array(runtime, &columns)?;
     Ok(Output {
@@ -768,8 +991,7 @@ fn allocate_output<'runtime>(
             len: 0,
             bounds: None,
         },
-        count: Buffer::zeroed_in(&runtime.memory, &runtime.stream, 1)?,
-        error: Buffer::zeroed_in(&runtime.memory, &runtime.stream, 1)?,
+        metadata: Buffer::zeroed_in(&runtime.memory, &runtime.stream, 1)?,
         capacity,
     })
 }

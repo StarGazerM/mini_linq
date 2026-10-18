@@ -114,6 +114,46 @@ pub unsafe fn emit<const N: usize>(output: OutputView, values: [i64; N]) {
     }
 }
 
+/// Stable projection/filter placement, called by all 256 lanes exactly once
+/// per source block. `scratch` supplies eight shared u32 words for tiles::scan.
+/// The count pass returns MAX for every lane; scatter returns MAX for rejected
+/// lanes and an initialized-prefix destination for each selected source row.
+/// `row` is the source row (block * 256 + lane), and output.capacity is the
+/// source cardinality. The compiler must not use this for expanding operators.
+#[device]
+#[inline(always)]
+pub unsafe fn stable_select(
+    output: OutputView,
+    counts: *mut u32,
+    scatter: bool,
+    row: u64,
+    valid: bool,
+    scratch: *mut u32,
+) -> u64 {
+    let selected = valid && row < output.capacity;
+    let (offset, total) = gpu_tiles::scan(selected as u32, scratch);
+    let block = (row / 256) as usize;
+    if !scatter {
+        if thread::threadIdx_x() == 0 {
+            unsafe {
+                counts.add(block).write(total);
+            }
+        }
+        return u64::MAX;
+    }
+    let base = unsafe { counts.add(block).read() } as u64;
+    if thread::threadIdx_x() == 0 && row + 256 >= output.capacity {
+        unsafe {
+            output.count.write(base + total as u64);
+        }
+    }
+    if selected {
+        base + offset as u64
+    } else {
+        u64::MAX
+    }
+}
+
 #[device]
 #[inline(always)]
 unsafe fn lock(slot: *mut u32, state: u32) -> bool {

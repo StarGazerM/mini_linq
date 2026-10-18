@@ -32,7 +32,9 @@ pub fn plan_b(data: &Rows) -> Vec<Answer> {
         pipeline {
             plan = ::cq_planners::order(le);
             physical = [::cq_rewrites::build_host_reads];
-            structures = [::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs, ::cq_rewrites::retain_lookups,
+            // Supplier's directory is explicit; nation_key stays an exact residual,
+            // with a separate recorded nation run preserving the earlier semijoin.
+            structures = [::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs(Supplier => supplier_key), ::cq_rewrites::retain_lookups,
                 ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_>)];
             print = ::cq_gpu::print;
         }

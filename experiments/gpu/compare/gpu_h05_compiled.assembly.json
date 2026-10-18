@@ -1,0 +1,122 @@
+{
+  "scope": "Static instruction-site counts, not dynamically executed instructions. Hand Plan A wrapper calls plan_a_impl; SASS includes its assembled body. SASS CALL sites include ptxas-outlined warp-sync/shuffle helpers, not trait dispatch.",
+  "before": {
+    "compiled_a": {
+      "ptx_instructions": 1156,
+      "ptx_calls": 0,
+      "ptx_barriers": 37,
+      "ptx_global_loads": 0,
+      "ptx_generic_loads": 36,
+      "ptx_readonly_loads": 0,
+      "sass_barriers": 37,
+      "sass_local_loads": 9,
+      "sass_local_stores": 11,
+      "sass_calls": 25,
+      "sass_global_loads": 0,
+      "sass_generic_loads": 37
+    },
+    "hand_a": {
+      "ptx_instructions": 63,
+      "ptx_calls": 1,
+      "ptx_barriers": 0,
+      "ptx_global_loads": 0,
+      "ptx_generic_loads": 0,
+      "ptx_readonly_loads": 0,
+      "sass_barriers": 8,
+      "sass_local_loads": 0,
+      "sass_local_stores": 0,
+      "sass_calls": 1,
+      "sass_global_loads": 0,
+      "sass_generic_loads": 80,
+      "ptx_impl_barriers": 8,
+      "ptx_impl_generic_loads": 66,
+      "ptx_impl_readonly_loads": 0
+    }
+  },
+  "after": {
+    "compiled_a": {
+      "ptx_instructions": 331,
+      "ptx_calls": 0,
+      "ptx_barriers": 0,
+      "ptx_global_loads": 0,
+      "ptx_generic_loads": 42,
+      "ptx_readonly_loads": 0,
+      "sass_barriers": 0,
+      "sass_local_loads": 0,
+      "sass_local_stores": 0,
+      "sass_calls": 4,
+      "sass_global_loads": 0,
+      "sass_generic_loads": 43
+    },
+    "compiled_b": {
+      "ptx_instructions": 368,
+      "ptx_calls": 0,
+      "ptx_barriers": 0,
+      "ptx_global_loads": 0,
+      "ptx_generic_loads": 46,
+      "ptx_readonly_loads": 0,
+      "sass_barriers": 0,
+      "sass_local_loads": 5,
+      "sass_local_stores": 7,
+      "sass_calls": 4,
+      "sass_global_loads": 0,
+      "sass_generic_loads": 47
+    },
+    "hand_a": {
+      "ptx_instructions": 63,
+      "ptx_calls": 1,
+      "ptx_barriers": 0,
+      "ptx_global_loads": 0,
+      "ptx_generic_loads": 0,
+      "ptx_readonly_loads": 0,
+      "sass_barriers": 8,
+      "sass_local_loads": 0,
+      "sass_local_stores": 0,
+      "sass_calls": 1,
+      "sass_global_loads": 0,
+      "sass_generic_loads": 80
+    },
+    "hand_b": {
+      "ptx_instructions": 824,
+      "ptx_calls": 0,
+      "ptx_barriers": 17,
+      "ptx_global_loads": 9,
+      "ptx_generic_loads": 25,
+      "ptx_readonly_loads": 0,
+      "sass_barriers": 17,
+      "sass_local_loads": 0,
+      "sass_local_stores": 0,
+      "sass_calls": 2,
+      "sass_global_loads": 9,
+      "sass_generic_loads": 25
+    }
+  },
+  "ptx_sha256": {
+    "before_compiled": "0f7134b2e0daafeddc0eeb89e0f26848b33860d1ca3576f55842df360198ed43",
+    "after_compiled": "2d8868f7243c304500868c6ffb5deef252c9874398d9a4f58dcc2c4ea69495e1",
+    "handwritten": "0343ded31742a9706926083af3a4c634c8ff5adaba6507aa068373a36dd39e30"
+  },
+  "before_spill_sass": [
+    "/*00b0*/                   STL [R1+0x1c], R5 ;                                        /* 0x00001c0501007387 */",
+    "/*00c0*/                   STL [R1+0x20], R4 ;                                        /* 0x0000200401007387 */",
+    "/*0180*/                   LDL R3, [R1+0x1c] ;                                        /* 0x00001c0001037983 */",
+    "/*0190*/                   LDL R4, [R1+0x20] ;                                        /* 0x0000200001047983 */",
+    "/*01c0*/                   STL [R1], RZ ;                                             /* 0x000000ff01007387 */",
+    "/*01f0*/                   STL [R1+0x4], RZ ;                                         /* 0x000004ff01007387 */",
+    "/*0260*/                   STL [R1+0x14], R3 ;                                        /* 0x0000140301007387 */",
+    "/*0270*/                   STL [R1+0x18], R4 ;                                        /* 0x0000180401007387 */",
+    "/*0280*/                   LDL R3, [R1+0x14] ;                                        /* 0x0000140001037983 */",
+    "/*0290*/                   LDL.LU R15, [R1] ;                                         /* 0x00000000010f7983 */",
+    "/*02a0*/                   LDL.LU R14, [R1+0x4] ;                                     /* 0x00000400010e7983 */",
+    "/*03f0*/                   STL [R1], R15 ;                                            /* 0x0000000f01007387 */",
+    "/*0410*/                   STL [R1+0x4], R14 ;                                        /* 0x0000040e01007387 */",
+    "/*0430*/                   STL [R1+0x10], R8 ;                                        /* 0x0000100801007387 */",
+    "/*0460*/                   LDL R18, [R1+0xc] ;                                        /* 0x00000c0001127983 */",
+    "/*0470*/                   LDL R16, [R1+0x8] ;                                        /* 0x0000080001107983 */",
+    "/*06c0*/                   STL [R1+0x8], R16 ;                                        /* 0x0000081001007387 */",
+    "/*06d0*/                   STL [R1+0xc], R18 ;                                        /* 0x00000c1201007387 */",
+    "/*4540*/                   LDL.LU R5, [R1+0x10] ;                                     /* 0x0000100001057983 */",
+    "/*45a0*/                   LDL.LU R5, [R1+0x18] ;                                     /* 0x0000180001057983 */"
+  ],
+  "diagnosis": "Baseline generated A PTX has no call or local-memory instruction; ptxas introduces 40-byte frame and 11 32-bit STL / 9 LDL sites (44/36 spill bytes). Thirty-seven barrier sites and nested shared descriptors retain loop indices/live columns across cooperative expansion. Final lane-local exhaustive traversal removes these descriptors/barriers and all A spills. Neither implementation contains vectorized read-only ld.global.nc loads in the examined PTX."
+}
