@@ -5,7 +5,7 @@
 //! answers; the production builder never downloads keys or sorts on CPU.
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D};
-use gpu_blocked_run::{MemoryResource, Run, RunStats, RankView, BLOCK_ROWS};
+use gpu_blocked_run::{read_stats, Buffer, MemoryResource, Run, RunStats, RankView, BLOCK_ROWS};
 use rccl_memory::{ContiguousDeviceRange, CudaMemoryResource, PoolMemoryResource};
 use std::error::Error;
 
@@ -49,29 +49,40 @@ fn check(
             else { -(row as i64) * 31 - column as i64 }
         }).collect()
     }).collect();
-    let device_keys = DeviceBuffer::from_host(stream, &input)?;
+    let domain = input.iter().min().zip(input.iter().max())
+        .map(|(&lo, &hi)| (lo, hi)).unwrap_or((0, -1));
+    let mut padded = input.clone();
+    padded.extend([i64::MIN; 7]);
+    let device_keys = DeviceBuffer::from_host(stream, &padded)?;
     let device_payloads: Vec<DeviceBuffer<i64>> = payloads.iter()
-        .map(|column| DeviceBuffer::from_host(stream, column))
+        .map(|column| {
+            let mut padded = column.clone(); padded.extend([i64::MAX; 7]);
+            DeviceBuffer::from_host(stream, &padded)
+        })
         .collect::<Result<_, _>>()?;
     let refs: Vec<&dyn ContiguousDeviceRange<i64>> = device_payloads.iter()
         .map(|p| p as &dyn ContiguousDeviceRange<i64>).collect();
     let memory = MemoryResource::new(PoolMemoryResource::new(
         CudaMemoryResource::new(stream.context().clone()), 32 << 20, 0)?);
-    let run = Run::build(ctx, stream, &memory, &device_keys, &refs)?;
+    let count = Buffer::from_host_in(&memory, stream, &[input.len() as u32])?;
+    let run = Run::build(ctx, stream, &memory, &device_keys, &refs, domain, Some(&count))?;
+    let stats = read_stats(&memory, stream, &[&run])?[0];
 
     let mut order: Vec<usize> = (0..input.len()).collect();
     order.sort_by_key(|&row| input[row]);
     let sorted: Vec<i64> = order.iter().map(|&row| input[row]).collect();
-    assert_eq!(run.keys.to_host_vec()?, sorted, "{name}: sorted keys");
+    let actual_keys = run.keys.to_host_vec()?;
+    assert_eq!(&actual_keys[..input.len()], sorted, "{name}: sorted keys");
+    assert!(actual_keys[input.len()..].iter().all(|&key| key == 0), "{name}: inactive tail");
     assert_eq!(run.payloads.len(), payload_columns, "{name}: payload count");
     for (column, payload) in payloads.iter().enumerate() {
         let expected: Vec<_> = order.iter().map(|&row| payload[row]).collect();
-        assert_eq!(run.payloads[column].to_host_vec()?, expected,
+        assert_eq!(&run.payloads[column].to_host_vec()?[..input.len()], expected,
             "{name}: payload column {column} / stable duplicate ordering");
-        assert_eq!(device_payloads[column].to_host_vec(stream)?, *payload,
+        assert_eq!(&device_payloads[column].to_host_vec(stream)?[..input.len()], *payload,
             "{name}: input payload unchanged");
     }
-    assert_eq!(device_keys.to_host_vec(stream)?, input, "{name}: input keys unchanged");
+    assert_eq!(device_keys.to_host_vec(stream)?, padded, "{name}: input keys unchanged");
 
     let mut unique = Vec::new();
     let mut offsets = Vec::new();
@@ -83,13 +94,13 @@ fn check(
     }
     offsets.push(sorted.len() as u32);
     let max_count = offsets.windows(2).map(|pair| pair[1] - pair[0]).max().unwrap_or(0);
-    assert_eq!(run.stats, RunStats {
-        rows: sorted.len() as u32, unique: unique.len() as u32, max_count,
+    assert_eq!(stats, RunStats {
+        rows: sorted.len() as u32, unique: unique.len() as u32, max_count, invalid: 0,
     }, "{name}: stats");
-    assert_eq!(run.offsets.to_host_vec()?, offsets, "{name}: CSR offsets and sentinel");
-    assert_eq!(run.unique_keys.to_host_vec()?, unique, "{name}: unique keys");
+    assert_eq!(&run.offsets.to_host_vec()?[..offsets.len()], offsets, "{name}: CSR offsets and sentinel");
+    assert_eq!(&run.unique_keys.to_host_vec()?[..unique.len()], unique, "{name}: unique keys");
     let fences: Vec<i64> = sorted.chunks(BLOCK_ROWS).map(|block| block[0]).collect();
-    assert_eq!(run.fences.to_host_vec()?, fences, "{name}: every 2048-row fence");
+    assert_eq!(&run.fences.to_host_vec()?[..fences.len()], fences, "{name}: every 2048-row fence");
 
     let mut queries = vec![i64::MIN, i64::MAX, -1, 0, 1];
     if let (Some(&min), Some(&max)) = (sorted.first(), sorted.last()) {
@@ -192,13 +203,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let keys = DeviceBuffer::from_host(&stream, &[1i64, 2])?;
     let short = DeviceBuffer::from_host(&stream, &[9i64])?;
-    assert!(Run::build(&ctx, &stream, &memory, &keys, &[&short]).is_err(), "reject mismatched payload rows");
+    assert!(Run::build(&ctx, &stream, &memory, &keys, &[&short], (1, 2), None).is_err(), "reject mismatched payload rows");
     let empty = DeviceBuffer::<i64>::zeroed(&stream, 0)?;
-    assert!(Run::build(&ctx, &stream, &memory, &empty, &[&short]).is_err(), "validate empty payload rows");
+    assert!(Run::build(&ctx, &stream, &memory, &empty, &[&short], (0, -1), None).is_err(), "validate empty payload rows");
     for input in [[i64::MIN, i64::MAX], [0, 1i64 << 32]] {
         let wide = DeviceBuffer::from_host(&stream, &input)?;
-        assert!(Run::build(&ctx, &stream, &memory, &wide, &[]).is_err(), "reject oversized dense domain");
+        assert!(Run::build(&ctx, &stream, &memory, &wide, &[], (input[0], input[1]), None).is_err(), "reject oversized dense domain");
     }
+    let invalid_count = Buffer::from_host_in(&memory, &stream, &[3u32])?;
+    let run = Run::build(&ctx, &stream, &memory, &keys, &[], (1, 2), Some(&invalid_count))?;
+    assert!(read_stats(&memory, &stream, &[&run]).is_err(), "reject device count overflow");
+    let run = Run::build(&ctx, &stream, &memory, &keys, &[], (1, 1), None)?;
+    assert!(read_stats(&memory, &stream, &[&run]).is_err(), "reject out-of-domain device key");
+    let run = Run::build(&ctx, &stream, &memory, &keys, &[], (-64, 128), None)?;
+    assert_eq!(read_stats(&memory, &stream, &[&run])?[0].unique, 2);
+    assert_eq!(&run.offsets.to_host_vec()?[..3], &[0, 1, 2], "sentinel with trailing domain holes");
     println!("blocked-run oracle: all cases passed");
     Ok(())
 }

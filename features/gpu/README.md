@@ -134,6 +134,14 @@ Only one-time input uploads remain on `cuda_core::DeviceBuffer`. Per-iteration
 allocation counts are logical suballocations, not CUDA allocation calls, and
 peak bytes count live requested bytes rather than reserved pool capacity.
 
+Key-domain bounds are prepared once from manifest-validated input columns.
+Filtered cardinalities, scan totals and run metadata remain on device; run
+buffers have bounded capacity rather than requiring a downloaded unique count.
+`read_stats` combines all run records into one end-of-build DtoH transfer.
+The query output count is read once to size the dedup table, whose kernel reads
+the device counter. Dedup status and exact-answer downloads happen after the
+final timing event. No extrema or per-stage total readback remains in a build.
+
 ## RCCL compiler bug and approved workaround
 
 The initial RCCL-based blocked-run oracle built and passed its two empty-input

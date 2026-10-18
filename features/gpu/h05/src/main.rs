@@ -4,7 +4,7 @@ mod dedup;
 use data::{Data,Error};
 use kernels::{Dimensions,Output};
 use cuda_core::{CudaContext,CudaStream,DeviceBuffer,LaunchConfig1D};
-use gpu_blocked_run::{Buffer,MemoryResource,Run};
+use gpu_blocked_run::{read_stats,Buffer,MemoryResource,Run,RunStats};
 use rccl_memory::{ContiguousDeviceRange,CudaMemoryResource,PoolMemoryResource,StatisticsMemoryResource};
 use serde_json::{json,Value};
 use std::{collections::BTreeMap,fs,path::Path};
@@ -28,15 +28,18 @@ fn copy_prefix<'a,T:cuda_core::DeviceCopy>(stream:&'a CudaStream,memory:&'a Memo
 // this also covers fragmentation until all iteration-local buffers are dropped.
 // Column lengths were checked against manifest row counts by Data::load.
 fn padded_bytes(rows:usize,width:usize)->u128{(rows as u128*width as u128).div_ceil(256)*256}
-fn run_pool_bytes(keys:&[i64])->Result<u128,Error>{
-    if keys.is_empty(){return Ok(256);}
-    let min=*keys.iter().min().unwrap();let max=*keys.iter().max().unwrap();
+fn key_domain(keys:&[i64])->(i64,i64){
+    let Some((&first,rest))=keys.split_first() else{return (0,-1);};
+    rest.iter().fold((first,first),|(min,max),&key|(min.min(key),max.max(key)))
+}
+fn run_pool_bytes(rows:usize,(min,max):(i64,i64))->Result<u128,Error>{
+    if rows==0{return Ok(padded_bytes(1,4)+padded_bytes(1,std::mem::size_of::<RunStats>()));}
     let span=max as i128-min as i128+1;
     if span>gpu_blocked_run::MAX_DOMAIN_KEYS as i128{return Err("dense rank domain exceeds 2^32 key positions".into());}
-    let domain=usize::try_from(span)?;let rows=keys.len();let words=domain.div_ceil(64);let unique=rows.min(domain);
-    // Extrema, bins, bitmap/prefix, maximum, CSR, unique keys, permutation,
+    let domain=usize::try_from(span)?;let words=domain.div_ceil(64);let unique=rows.min(domain);
+    // Device stats, bins, bitmap/prefix, CSR, unique keys, permutation,
     // cursors, sorted keys, fences and one clustered payload.
-    let mut bytes=[(2,8),(domain,4),(words,8),(words,4),(1,4),
+    let mut bytes=[(1,std::mem::size_of::<RunStats>()),(domain,4),(words,8),(words,4),
         (unique+1,4),(unique,8),(rows,4),(domain,4),(rows,8),
         (rows.div_ceil(gpu_blocked_run::BLOCK_ROWS),8),(rows,8)]
         .into_iter().map(|(n,w)|padded_bytes(n,w)).sum::<u128>();
@@ -45,17 +48,18 @@ fn run_pool_bytes(keys:&[i64])->Result<u128,Error>{
     }
     Ok(bytes)
 }
-fn pool_bytes(data:&Data)->Result<usize,Error>{
+fn pool_bytes(data:&Data,domains:[(i64,i64);5])->Result<usize,Error>{
     let lines=data.col("lineitem.l_orderkey").len();let orders=data.col("orders.o_orderkey").len();
     let capacity=lines.max(1).checked_mul(4).and_then(usize::checked_next_power_of_two).ok_or("dedup capacity overflow")?;
     // Three persistent outputs plus three exactness-readback copies; two
-    // filter columns plus their compacted copies; counters and dedup metadata.
-    let bytes=6*padded_bytes(lines,8)+4*padded_bytes(orders,8)
+    // capacity-sized filter columns; counters, dedup and combined run metadata.
+    let bytes=6*padded_bytes(lines,8)+2*padded_bytes(orders,8)
         +padded_bytes(4,4)+padded_bytes(1,4)+padded_bytes(2,4)+padded_bytes(capacity,8)
-        +run_pool_bytes(data.col("customer.c_custkey"))?
-        +run_pool_bytes(data.col("supplier.s_suppkey"))?
-        +run_pool_bytes(data.col("orders.o_orderkey"))?.max(run_pool_bytes(data.col("orders.o_custkey"))?)
-        +run_pool_bytes(data.col("lineitem.l_orderkey"))?;
+        +padded_bytes(4,std::mem::size_of::<RunStats>())
+        +run_pool_bytes(data.col("customer.c_custkey").len(),domains[0])?
+        +run_pool_bytes(data.col("supplier.s_suppkey").len(),domains[1])?
+        +run_pool_bytes(orders,domains[2])?.max(run_pool_bytes(orders,domains[3])?)
+        +run_pool_bytes(lines,domains[4])?;
     Ok(usize::try_from(bytes)?)
 }
 fn main()->Result<(),Error>{
@@ -66,6 +70,11 @@ fn main()->Result<(),Error>{
     if !["A","B","both"].contains(&plan){return Err("plan must be A, B or both".into());}
     let result_path=args.get(2).map(String::as_str).unwrap_or("compare/gpu_h05.results.json");
     let data=Data::load(dir)?;
+    // Bounds are computed once from uploaded-column sources, never downloaded
+    // from the GPU. Filtered runs retain these conservative full-column bounds.
+    let domains=["customer.c_custkey","supplier.s_suppkey","orders.o_orderkey","orders.o_custkey","lineitem.l_orderkey"]
+        .map(|name|key_domain(data.col(name)));
+    let [customer_domain,supplier_domain,order_domain,order_customer_domain,line_domain]=domains;
     let ctx=CudaContext::new(0)?;let stream=ctx.default_stream();
     let module=unsafe{kernels::kernels::load(&ctx)?};
     let baseline_mem=memory_used()?;
@@ -80,7 +89,7 @@ fn main()->Result<(),Error>{
     let mut asia_regions=0u64;
     for (&r,&name) in data.col("region.r_regionkey").iter().zip(data.col("region.r_name")){if r<0 || r>=64{return Err("region bitmap domain unsupported".into());}if name==data.asia{asia_regions|=1u64<<r;}}
     let line_count=data.col("lineitem.l_orderkey").len();
-    let pool_size=pool_bytes(&data)?;
+    let pool_size=pool_bytes(&data,domains)?;
     // Equal initial/maximum sizes forbid upstream CUDA allocations in warmup
     // and timed iterations. Only input uploads remain cuda_core-owned.
     let memory:MemoryResource=StatisticsMemoryResource::new(PoolMemoryResource::new(CudaMemoryResource::new(ctx.clone()),pool_size,pool_size)?);
@@ -110,16 +119,18 @@ fn main()->Result<(),Error>{
             let mut selected=Buffer::<u32>::zeroed_in(&memory,&stream,1)?;
             let filter_launch=module.prepare_filter_orders(LaunchConfig1D::new(order_count.div_ceil(256).max(1) as u32,256,64))?;
             module.filter_orders(&stream,&filter_launch,dcol("orders.o_orderkey"),dcol("orders.o_custkey"),dcol("orders.o_orderdate"),data.start,data.end,mut_ptr(&mut filter_keys),mut_ptr(&mut filter_customers),mut_ptr(&mut selected))?;
-            let count=selected.to_host_vec()?[0] as usize;
-            let filtered_keys=copy_prefix(&stream,&memory,&filter_keys,count)?;
-            let filtered_customers=copy_prefix(&stream,&memory,&filter_customers,count)?;
-            let customers=Run::build(&ctx,&stream,&memory,dcol("customer.c_custkey"),&[dcol("customer.c_nationkey") as &dyn ContiguousDeviceRange<i64>])?;
-            let suppliers=Run::build(&ctx,&stream,&memory,dcol("supplier.s_suppkey"),&[dcol("supplier.s_nationkey") as &dyn ContiguousDeviceRange<i64>])?;
-            let orders=if which=="A" {Run::build(&ctx,&stream,&memory,&filtered_keys,&[&filtered_customers as &dyn ContiguousDeviceRange<i64>])?}else{Run::build(&ctx,&stream,&memory,&filtered_customers,&[&filtered_keys as &dyn ContiguousDeviceRange<i64>])?};
-            let lines=if which=="B" {Some(Run::build(&ctx,&stream,&memory,dcol("lineitem.l_orderkey"),&[dcol("lineitem.l_suppkey") as &dyn ContiguousDeviceRange<i64>])?)}else{None};
+            let customers=Run::build(&ctx,&stream,&memory,dcol("customer.c_custkey"),&[dcol("customer.c_nationkey") as &dyn ContiguousDeviceRange<i64>],customer_domain,None)?;
+            let suppliers=Run::build(&ctx,&stream,&memory,dcol("supplier.s_suppkey"),&[dcol("supplier.s_nationkey") as &dyn ContiguousDeviceRange<i64>],supplier_domain,None)?;
+            let orders=if which=="A" {Run::build(&ctx,&stream,&memory,&filter_keys,&[&filter_customers as &dyn ContiguousDeviceRange<i64>],order_domain,Some(&selected))?}else{Run::build(&ctx,&stream,&memory,&filter_customers,&[&filter_keys as &dyn ContiguousDeviceRange<i64>],order_customer_domain,Some(&selected))?};
+            let lines=if which=="B" {Some(Run::build(&ctx,&stream,&memory,dcol("lineitem.l_orderkey"),&[dcol("lineitem.l_suppkey") as &dyn ContiguousDeviceRange<i64>],line_domain,None)?)}else{None};
+            // One combined metadata readback also rejects invalid device row
+            // counts/domains before any plan consumes the constructed runs.
+            if let Some(lines)=&lines {
+                read_stats(&memory,&stream,&[&customers,&suppliers,&orders,lines])?;
+            }else{
+                read_stats(&memory,&stream,&[&customers,&suppliers,&orders])?;
+            }
             peak_mem=peak_mem.max(memory_used()?);
-            peak_mem=peak_mem.max(customers.build_peak_mem_used).max(suppliers.build_peak_mem_used).max(orders.build_peak_mem_used);
-            if let Some(lines)=&lines {peak_mem=peak_mem.max(lines.build_peak_mem_used);}
             unsafe{cuda_core::memory::memset_d8_async(counters.cu_deviceptr(),0,counters.num_bytes(),stream.cu_stream())?;}
             let dims=Dimensions{orders:orders.view(),customer:customers.view(),supplier:suppliers.view(),order_customer:ptr(&orders.payloads[0]),customer_nation:ptr(&customers.payloads[0]),supplier_nation:ptr(&suppliers.payloads[0]),nation_region:ptr(&nation_region),nation_len:nr.len() as u32,asia_regions};
             let built=stream.record_event(timing)?;
@@ -134,11 +145,13 @@ fn main()->Result<(),Error>{
             if emitted>line_count{return Err("output capacity invariant violated".into());}
             max_fanout[0]=max_fanout[0].max(counts[2]);max_fanout[1]=max_fanout[1].max(counts[3]);
             let capacity=emitted.max(1).checked_mul(4).and_then(usize::checked_next_power_of_two).ok_or("dedup capacity overflow")?;
-            let (unique,unique_count)=dedup::dedup(&ctx,&stream,&memory,&output_orders,&output_suppliers,&output_nations,emitted,capacity)?;
+            let (unique,unique_count)=dedup::dedup(&ctx,&stream,&memory,&output_orders,&output_suppliers,&output_nations,&counters,emitted,capacity)?;
             peak_mem=peak_mem.max(memory_used()?);
             let finished=stream.record_event(timing)?;finished.synchronize()?;
             let b=start.elapsed_ms(&built)?;let k=built.elapsed_ms(&executed)?;let u=executed.elapsed_ms(&finished)?;let total=start.elapsed_ms(&finished)?;
-            answer_count=unique_count.to_host_vec()?[0] as usize;
+            let dedup_metadata=unique_count.to_host_vec()?;
+            if dedup_metadata[1]!=0{return Err("dedup hash table full: capacity invariant violated".into());}
+            answer_count=dedup_metadata[0] as usize;
             let answer=unique.to_host_vec()?;
             let mut actual=answer.into_iter().filter(|&v|v!=0).map(dedup::decode).collect::<Vec<_>>();
             actual.sort_unstable();
@@ -165,7 +178,7 @@ fn main()->Result<(),Error>{
             "total_ms":metric(&total_samples),"answer_count":answer_count,"exact":true,
             "regs":null,"spills":null,"smem":if which=="A"{9216}else{33808},
             "peak_mem_mib":peak_mem.saturating_sub(baseline_mem) as f64/1048576.0,
-            "peak_mem_scope":"cuMemGetInfo sampled with build scratch live, after build and dedup",
+            "peak_mem_scope":"cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
             "pool_bytes":pool_size,"allocation_scope":"iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
             "scan_gbps":scan_gbps,"bandwidth_model_gbps":960,
             "max_expansion_rows":max_fanout,

@@ -9,20 +9,21 @@ use cuda_core::{CudaContext, CudaStream, LaunchConfig1D};
 use gpu_blocked_run::{Buffer, MemoryResource};
 use std::{error::Error, sync::Arc};
 
-/// Deduplicate the first `count` triples entirely on the GPU.
+/// Enqueue deduplication of the first `count_device[0]` triples on the GPU.
 ///
 /// The caller must validate `0 <= order < 2^26`, `0 <= supplier < 2^17`, and
 /// `0 <= nation < 2^5` before uploading inputs. These bounds make the encoding
 /// injective, with occupied words in `1..=2^48`, including the all-zero triple.
 /// Inputs must belong to `ctx` and their writes must precede this call on
-/// `stream`. `capacity` must be a power of two and at least `4 * count`.
+/// `stream`. `count_device` must contain the same `count` used to size the
+/// launch, and `capacity` must be a power of two and at least `4 * count`.
 ///
 /// Returns the hash table (including zero-valued empty slots) and two device
 /// metadata words: `[unique_count, full_status]`. Only successful insertions
-/// increment the count. A nonzero full status produces an error, never an
-/// incomplete successful result. Only these two metadata scalars are copied
-/// to the host; keys and deduplication remain on the device. Construction is
-/// complete before returning, so the returned buffers may be read immediately.
+/// increment the count. The caller must read metadata after stream completion
+/// and reject nonzero full status before accepting the result. This function
+/// performs no host readback or synchronization; all buffers must remain alive
+/// until their stream-ordered work completes.
 /// Output ownership borrows the shared pool and stream; dropping these buffers
 /// returns their storage to the pool without a synchronous CUDA device free.
 pub fn dedup<'a, B: cuda_host::KernelSliceArg<Elem = i64>>(
@@ -32,9 +33,13 @@ pub fn dedup<'a, B: cuda_host::KernelSliceArg<Elem = i64>>(
     orders: &B,
     suppliers: &B,
     nations: &B,
+    count_device: &Buffer<'_, u32>,
     count: usize,
     capacity: usize,
 ) -> Result<(Buffer<'a, u64>, Buffer<'a, u32>), Box<dyn Error>> {
+    if count_device.is_empty() {
+        return Err("dedup device row count is missing".into());
+    }
     if count > orders.len() || count > suppliers.len() || count > nations.len() {
         return Err("dedup input count exceeds a column length".into());
     }
@@ -52,9 +57,9 @@ pub fn dedup<'a, B: cuda_host::KernelSliceArg<Elem = i64>>(
         let module = unsafe { dedup_kernels::load(ctx)? };
         let config = LaunchConfig1D::new(count.div_ceil(256) as u32, 256, 0);
         let launch = module.prepare_dedup_insert(config)?;
-        // SAFETY: the zeroed allocations have the declared capacities, remain
-        // alive through the metadata readback, and are accessed atomically by
-        // the kernel. All launches and initialization use this same stream.
+        // SAFETY: the buffers have the declared capacities and the caller
+        // keeps them alive through stream completion. All launches and
+        // initialization use this same stream; table accesses are atomic.
         unsafe {
             module.dedup_insert(
                 stream,
@@ -62,18 +67,12 @@ pub fn dedup<'a, B: cuda_host::KernelSliceArg<Elem = i64>>(
                 orders,
                 suppliers,
                 nations,
-                count as u32,
+                count_device.cu_deviceptr() as *const u32,
                 table.cu_deviceptr() as *mut u64,
                 capacity,
                 metadata.cu_deviceptr() as *mut u32,
             )?;
         }
-        let status = metadata.to_host_vec()?;
-        if status[1] != 0 {
-            return Err("dedup hash table full: capacity invariant violated".into());
-        }
-    } else {
-        stream.synchronize()?;
     }
     Ok((table, metadata))
 }
@@ -100,13 +99,13 @@ mod dedup_kernels {
         orders: &[i64],
         suppliers: &[i64],
         nations: &[i64],
-        count: u32,
+        count_device: *const u32,
         table: *mut u64,
         capacity: usize,
         metadata: *mut u32,
     ) {
         let row = thread::index_1d().get();
-        if row >= count as usize {
+        if row >= unsafe { count_device.read() } as usize {
             return;
         }
         let word = ((orders[row] as u64) << 22

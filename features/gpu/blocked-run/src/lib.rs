@@ -1,17 +1,15 @@
 //! GPU-built sorted, clustered runs with a dense rank directory.
 //!
-//! Construction uses a dense counting sort and hierarchical GPU scans, with no
-//! external sorting library. Atomic scatter is made stable by sorting original
-//! row IDs within each bin with heapsort before gathering payload columns.
-//! Only extrema, the unique count, and the maximum bin count are read back.
-//! Input writes must be ordered before `Run::build` on its stream. Construction
-//! completes before returning, so the result can subsequently be used on any
-//! stream in the same context. Inputs are not modified.
+//! Construction uses dense counting sort and hierarchical GPU scans.
+//! Atomic scatter is made stable by sorting original row IDs within each bin.
+//! Bounds are supplied from input metadata; active row counts and all stage
+//! totals stay on device. `read_stats` is the single build-completion readback.
+//! Inputs and consumers must be ordered on the supplied stream.
 //!
-//! `offsets` has `stats.unique + 1` entries, including the final row count.
-//! `fences[b]` is the minimum key of sorted rows `[2048*b, 2048*(b+1))`.
-//! `prefix[w]` is the number of set bits strictly before bitmap word `w`.
-//! Empty runs have offsets `[0]`, empty other columns, and `min_key > max_key`.
+//! Buffer lengths are capacities: stats.rows, stats.unique and their fence
+//! count delimit initialized logical results. Unused output tails are zero.
+//! `prefix[w]` counts set bits strictly before bitmap word `w`.
+//! Empty domains have min_key > max_key and offsets `[0]`.
 //! Dense directories accept at most 2^32 key positions (including missing
 //! keys), and row counts must fit in u32. Sparse wider domains are rejected,
 //! not silently converted to a different lookup representation.
@@ -45,7 +43,10 @@ pub struct RunStats {
     pub rows: u32,
     pub unique: u32,
     pub max_count: u32,
+    pub invalid: u32,
 }
+// SAFETY: this C-layout record consists only of u32 scalars.
+unsafe impl DeviceCopy for RunStats {}
 
 /// Owning, immutable-after-build columns. Do not mutate directory buffers while
 /// a `RankView` is in use, or retain a view after dropping/replacing its buffers.
@@ -59,10 +60,7 @@ pub struct Run<'a> {
     pub prefix: Buffer<'a, u32>,
     pub min_key: i64,
     pub max_key: i64,
-    pub stats: RunStats,
-    /// Absolute device bytes in use at build completion, including live scratch.
-    /// This is a context/device memory sample, not this run's allocation size.
-    pub build_peak_mem_used: usize,
+    pub stats: Buffer<'a, RunStats>,
 }
 
 /// Non-owning device ABI. Pointers address GPU memory, never host memory.
@@ -111,170 +109,126 @@ pub unsafe fn point(view: RankView, key: i64) -> Option<(u32, u32)> {
 }
 
 impl<'a> Run<'a> {
-    /// Count signed i64 keys into a dense domain, scan bin offsets, restore
-    /// stable source-row order per bin, and build CSR, fences and dense rank.
+    /// Enqueue a stable counting-sort build without any host readback.
     ///
-    /// The payload slice can be made from an existing `Vec<DeviceBuffer<i64>>`
-    /// with `payloads.iter().collect::<Vec<_>>()`. Every column must match the
-    /// key length and context. Equal keys preserve their input row order.
+    /// `domain` is an inclusive bound supplied by input metadata, not inferred
+    /// by downloading keys. `row_count`, when present, supplies the active
+    /// prefix length on device; otherwise all input rows are active.
+    /// Call `read_stats` before using results to reject invalid device counts
+    /// or keys outside the supplied domain. All operations use `stream`.
     pub fn build(
         ctx: &CudaContext,
         stream: &'a CudaStream,
         memory: &'a MemoryResource,
         keys: &dyn ContiguousDeviceRange<i64>,
         payloads: &[&dyn ContiguousDeviceRange<i64>],
+        domain: (i64, i64),
+        row_count: Option<&Buffer<'_, u32>>,
     ) -> BuildResult<Self> {
         if ctx != stream.context().as_ref() || ctx != keys.context().as_ref() {
             return Err(invalid("context, stream and keys must share a CUDA context"));
         }
-        let rows = u32::try_from(keys.len())
+        let capacity = u32::try_from(keys.len())
             .map_err(|_| invalid("run row count exceeds u32::MAX"))?;
+        keys.ensure_usable_on(stream)?;
         for payload in payloads {
             if payload.len() != keys.len() {
                 return Err(invalid("payload length differs from key length"));
             }
-            if ctx != payload.context().as_ref() {
-                return Err(invalid("payload and keys must share a CUDA context"));
-            }
+            payload.ensure_usable_on(stream)?;
         }
-        keys.ensure_usable_on(stream)?;
-        for payload in payloads { payload.ensure_usable_on(stream)?; }
-        ctx.bind_to_thread()?;
-        if rows == 0 {
-            let mut run = Self {
-                keys: DeviceBuffer::zeroed_in(memory, stream, 0)?,
-                payloads: payloads.iter()
-                    .map(|_| DeviceBuffer::zeroed_in(memory, stream, 0))
-                    .collect::<Result<Vec<_>, _>>()?,
-                offsets: DeviceBuffer::zeroed_in(memory, stream, 1)?,
-                unique_keys: DeviceBuffer::zeroed_in(memory, stream, 0)?,
-                fences: DeviceBuffer::zeroed_in(memory, stream, 0)?,
-                bits: DeviceBuffer::zeroed_in(memory, stream, 0)?,
-                prefix: DeviceBuffer::zeroed_in(memory, stream, 0)?,
-                min_key: 0,
-                max_key: -1,
-                stats: RunStats::default(),
-                build_peak_mem_used: 0,
-            };
-            stream.synchronize()?;
-            run.build_peak_mem_used = memory_used()?;
-            return Ok(run);
+        if let Some(count) = row_count {
+            count.ensure_usable_on(stream)?;
+            if count.is_empty() { return Err(invalid("empty device row count")); }
         }
-
-        // SAFETY: this crate owns these kernel declarations and their bundle.
-        let module = unsafe { kernels::load(stream.context()) }
-            .map_err(|e| invalid(format!("run kernels load: {e}")))?;
-        let n = keys.len();
-        // Bias signed keys into unsigned order, allowing unsigned atomic
-        // extrema without signed overflow at either end of the i64 range.
-        let extrema = DeviceBuffer::from_host_in(memory, stream, &[u64::MAX, 0u64])?;
-        let reduce = module.prepare_extrema(config(n))?;
-        unsafe { module.extrema(stream, &reduce, &Input(keys), ptr(&extrema))?; }
-        let host_extrema = extrema.to_host_vec()?;
-        let min_key = (host_extrema[0] ^ (1u64 << 63)) as i64;
-        let max_key = (host_extrema[1] ^ (1u64 << 63)) as i64;
-        let span = max_key as i128 - min_key as i128 + 1;
+        let (min_key, max_key) = domain;
+        let span = (max_key as i128 - min_key as i128 + 1).max(0);
         if span > MAX_DOMAIN_KEYS as i128 {
             return Err(invalid("dense rank domain exceeds 2^32 key positions"));
         }
         let domain = usize::try_from(span)
             .map_err(|_| invalid("dense domain exceeds host address space"))?;
         let words = domain.div_ceil(64);
-
-        // Each level scans 256-item blocks in place and emits block totals.
-        // Scan those totals recursively, then propagate their exclusive
-        // prefixes downwards. Retain every level until submitted work finishes.
+        let n = keys.len();
+        let unique_capacity = n.min(domain);
+        let module = unsafe { kernels::load(stream.context()) }
+            .map_err(|e| invalid(format!("run kernels load: {e}")))?;
+        let stats = DeviceBuffer::zeroed_in(memory, stream, 1)?;
+        let initialize = module.prepare_initialize(config(1))?;
+        unsafe {
+            module.initialize(stream, &initialize, capacity,
+                row_count.map_or(core::ptr::null(), |c| ptr(c) as *const u32), ptr(&stats))?;
+        }
         let exclusive_scan = |values: &Buffer<'a, u32>| -> BuildResult<Vec<Buffer<'a, u32>>> {
             let mut levels = Vec::new();
             let mut current = ptr(values);
             let mut length = values.len();
             loop {
-                let blocks = length.div_ceil(THREADS as usize);
+                let blocks = length.div_ceil(THREADS as usize).max(1);
                 let totals = allocate::<u32>(memory, stream, blocks)?;
                 let launch = module.prepare_scan_blocks(
                     LaunchConfig1D::new(blocks as u32, THREADS, 32),
                 )?;
-                unsafe {
-                    module.scan_blocks(stream, &launch, current, length, ptr(&totals))?;
-                }
+                unsafe { module.scan_blocks(stream, &launch, current, length, ptr(&totals))?; }
                 current = ptr(&totals);
                 length = blocks;
                 levels.push(totals);
-                if blocks == 1 {
-                    break;
-                }
+                if blocks == 1 { break; }
             }
             for level in (0..levels.len() - 1).rev() {
                 let target = if level == 0 { values } else { &levels[level - 1] };
                 let launch = module.prepare_add_prefix(config(target.len()))?;
-                unsafe {
-                    module.add_prefix(stream, &launch, ptr(target), target.len(), &levels[level])?;
-                }
+                unsafe { module.add_prefix(stream, &launch, ptr(target), target.len(), &levels[level])?; }
             }
             Ok(levels)
         };
-
         let bins = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, domain)?;
         let histogram = module.prepare_histogram(config(n))?;
-        unsafe { module.histogram(stream, &histogram, &Input(keys), min_key, ptr(&bins))?; }
+        unsafe {
+            module.histogram(stream, &histogram, &Input(keys), min_key, domain, ptr(&stats), ptr(&bins))?;
+        }
         let _bin_scan = exclusive_scan(&bins)?;
-
         let bits = allocate::<u64>(memory, stream, words)?;
         let prefix = allocate::<u32>(memory, stream, words)?;
-        let maximum = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, 1)?;
         let directory = module.prepare_directory(config(words))?;
         unsafe {
-            module.directory(stream, &directory, &bins, rows,
-                ptr(&bits), ptr(&prefix), ptr(&maximum))?;
+            module.directory(stream, &directory, &bins, ptr(&stats), ptr(&bits), ptr(&prefix))?;
         }
         let prefix_scan = exclusive_scan(&prefix)?;
-        // The unscanned final one-element level is the total population.
-        let host_unique = prefix_scan.last().unwrap().to_host_vec()?;
-        let unique = host_unique[0];
-        let offset_items = (unique as usize).checked_add(1)
-            .ok_or_else(|| invalid("CSR sentinel exceeds host address space"))?;
-        let offsets = allocate::<u32>(memory, stream, offset_items)?;
-        let unique_keys = allocate::<i64>(memory, stream, unique as usize)?;
+        let offsets = DeviceBuffer::zeroed_in(memory, stream, unique_capacity + 1)?;
+        let unique_keys = DeviceBuffer::zeroed_in(memory, stream, unique_capacity)?;
+        let complete = module.prepare_complete_stats(config(1))?;
+        unsafe {
+            module.complete_stats(stream, &complete, ptr(prefix_scan.last().unwrap()),
+                ptr(&stats), ptr(&offsets))?;
+        }
         let permutation = allocate::<u32>(memory, stream, n)?;
         let cursors = DeviceBuffer::<u32, _>::zeroed_in(memory, stream, domain)?;
         let scatter = module.prepare_scatter(config(n))?;
         unsafe {
-            module.scatter(stream, &scatter, &Input(keys), min_key, &bins,
+            module.scatter(stream, &scatter, &Input(keys), min_key, &bins, ptr(&stats),
                 ptr(&cursors), ptr(&permutation))?;
         }
         let order = module.prepare_order_bins(config(domain))?;
         unsafe {
-            module.order_bins(stream, &order, &bins, rows, min_key, &bits, &prefix,
+            module.order_bins(stream, &order, &bins, ptr(&stats), min_key, &bits, &prefix,
                 ptr(&permutation), ptr(&offsets), ptr(&unique_keys))?;
         }
-
         let sorted = allocate::<i64>(memory, stream, n)?;
         let gather = module.prepare_gather(config(n))?;
-        unsafe { module.gather(stream, &gather, &Input(keys), &permutation, ptr(&sorted))?; }
+        unsafe { module.gather(stream, &gather, &Input(keys), &permutation, ptr(&stats), ptr(&sorted))?; }
         let fences = allocate::<i64>(memory, stream, n.div_ceil(BLOCK_ROWS))?;
         let fence_launch = module.prepare_fences(config(fences.len()))?;
-        unsafe { module.fences(stream, &fence_launch, &sorted, ptr(&fences))?; }
+        unsafe { module.fences(stream, &fence_launch, &sorted, ptr(&stats), ptr(&fences))?; }
         let mut clustered = Vec::with_capacity(payloads.len());
         for payload in payloads {
             let output = allocate::<i64>(memory, stream, n)?;
-            unsafe { module.gather(stream, &gather, &Input(*payload), &permutation, ptr(&output))?; }
+            unsafe { module.gather(stream, &gather, &Input(*payload), &permutation, ptr(&stats), ptr(&output))?; }
             clustered.push(output);
         }
-        let max_count = maximum.to_host_vec()?;
-        stream.synchronize()?;
-        let build_peak_mem_used = memory_used()?;
         Ok(Self {
-            keys: sorted,
-            payloads: clustered,
-            offsets,
-            unique_keys,
-            fences,
-            bits,
-            prefix,
-            min_key,
-            max_key,
-            stats: RunStats { rows, unique, max_count: max_count[0] },
-            build_peak_mem_used,
+            keys: sorted, payloads: clustered, offsets, unique_keys, fences,
+            bits, prefix, min_key, max_key, stats,
         })
     }
 
@@ -292,14 +246,24 @@ impl<'a> Run<'a> {
     }
 }
 
-fn memory_used() -> BuildResult<usize> {
-    let mut free = 0;
-    let mut total = 0;
-    let status = unsafe { cuda_core::sys::cuMemGetInfo_v2(&mut free, &mut total) };
-    if status != 0 {
-        return Err(format!("cuMemGetInfo: {status}").into());
+/// Complete any number of stream-ordered builds with one metadata readback.
+pub fn read_stats(
+    memory: &MemoryResource, stream: &CudaStream, runs: &[&Run<'_>],
+) -> BuildResult<Vec<RunStats>> {
+    let combined = allocate::<RunStats>(memory, stream, runs.len())?;
+    for (index, run) in runs.iter().enumerate() {
+        run.stats.ensure_usable_on(stream)?;
+        unsafe {
+            cuda_core::memory::memcpy_dtod_async(
+                combined.cu_deviceptr() + (index * core::mem::size_of::<RunStats>()) as u64,
+                run.stats.cu_deviceptr(), core::mem::size_of::<RunStats>(), stream.cu_stream())?;
+        }
     }
-    Ok(total - free)
+    let result = combined.to_host_vec()?;
+    if result.iter().any(|s| s.invalid != 0) {
+        return Err(invalid("device row count exceeds capacity or key outside supplied domain"));
+    }
+    Ok(result)
 }
 
 fn invalid(message: impl Into<String>) -> Box<dyn Error> {
@@ -307,7 +271,7 @@ fn invalid(message: impl Into<String>) -> Box<dyn Error> {
 }
 
 fn config(items: usize) -> LaunchConfig1D {
-    LaunchConfig1D::new(items.div_ceil(THREADS as usize) as u32, THREADS, 0)
+    LaunchConfig1D::new(items.div_ceil(THREADS as usize).max(1) as u32, THREADS, 0)
 }
 
 fn ptr<T: DeviceCopy>(buffer: &Buffer<'_, T>) -> *mut T {
@@ -326,33 +290,19 @@ fn allocate<'a, T: DeviceCopy>(
 
 #[cuda_device::cuda_module]
 mod kernels {
-    use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, warp, DynamicSharedArray};
-    use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
+    use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, DynamicSharedArray};
+    use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
+    use super::RunStats;
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn extrema(keys: &[i64], output: *mut u64) {
-        let i = thread::index_1d().get();
-        let mut low = if i < keys.len() { (keys[i] as u64) ^ (1u64 << 63) } else { u64::MAX };
-        let mut high = if i < keys.len() { low } else { 0 };
-        let lane = warp::lane_id();
-        let mut distance = 1;
-        while distance < 32 {
-            let previous_low = warp::shuffle_up(low as u32, distance) as u64
-                | ((warp::shuffle_up((low >> 32) as u32, distance) as u64) << 32);
-            let previous_high = warp::shuffle_up(high as u32, distance) as u64
-                | ((warp::shuffle_up((high >> 32) as u32, distance) as u64) << 32);
-            if lane >= distance {
-                low = low.min(previous_low);
-                high = high.max(previous_high);
-            }
-            distance <<= 1;
-        }
-        if lane == 31 {
+    pub unsafe fn initialize(capacity: u32, count: *const u32, stats: *mut RunStats) {
+        if thread::index_1d().get() == 0 {
+            let rows = if count.is_null() { capacity } else { unsafe { count.read() } };
             unsafe {
-                DeviceAtomicU64::from_ptr(output).fetch_min(low, AtomicOrdering::Relaxed);
-                DeviceAtomicU64::from_ptr(output.add(1)).fetch_max(high, AtomicOrdering::Relaxed);
+                (*stats).rows = rows.min(capacity);
+                (*stats).invalid = (rows > capacity) as u32;
             }
         }
     }
@@ -360,10 +310,30 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn histogram(keys: &[i64], min_key: i64, counts: *mut u32) {
+    pub unsafe fn complete_stats(total: *const u32, stats: *mut RunStats, offsets: *mut u32) {
+        if thread::index_1d().get() == 0 {
+            unsafe {
+                let unique = total.read();
+                (*stats).unique = unique;
+                offsets.add(unique as usize).write((*stats).rows);
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn histogram(
+        keys: &[i64], min_key: i64, domain: usize, stats: *mut RunStats, counts: *mut u32,
+    ) {
         let i = thread::index_1d().get();
-        if i < keys.len() {
+        if i < unsafe { (*stats).rows } as usize {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
+            if bin >= domain {
+                unsafe { DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).invalid))
+                    .store(1, AtomicOrdering::Relaxed); }
+                return;
+            }
             unsafe {
                 DeviceAtomicU32::from_ptr(counts.add(bin)).fetch_add(1, AtomicOrdering::Relaxed);
             }
@@ -403,16 +373,16 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn directory(
-        bins: &[u32], rows: u32, bits: *mut u64, prefix: *mut u32, maximum: *mut u32,
+        bins: &[u32], stats: *mut RunStats, bits: *mut u64, prefix: *mut u32,
     ) {
         let word = thread::index_1d().get();
         if word < (bins.len() + 63) / 64 {
             let mut bits_in_word = 0u64;
             let mut max_count = 0;
             let mut bit = 0;
-            while bit < 64 && word * 64 + bit < bins.len() {
+            while unsafe { (*stats).invalid } == 0 && bit < 64 && word * 64 + bit < bins.len() {
                 let bin = word * 64 + bit;
-                let end = if bin + 1 < bins.len() { bins[bin + 1] } else { rows };
+                let end = if bin + 1 < bins.len() { bins[bin + 1] } else { unsafe { (*stats).rows } };
                 let count = end - bins[bin];
                 if count != 0 {
                     bits_in_word |= 1u64 << bit;
@@ -423,7 +393,8 @@ mod kernels {
             unsafe {
                 bits.add(word).write(bits_in_word);
                 prefix.add(word).write(bits_in_word.count_ones());
-                DeviceAtomicU32::from_ptr(maximum).fetch_max(max_count, AtomicOrdering::Relaxed);
+                DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).max_count))
+                    .fetch_max(max_count, AtomicOrdering::Relaxed);
             }
         }
     }
@@ -432,10 +403,11 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn scatter(
-        keys: &[i64], min_key: i64, bins: &[u32], cursors: *mut u32, permutation: *mut u32,
+        keys: &[i64], min_key: i64, bins: &[u32], stats: *const RunStats,
+        cursors: *mut u32, permutation: *mut u32,
     ) {
         let i = thread::index_1d().get();
-        if i < keys.len() {
+        if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0 {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
             unsafe {
                 let slot = DeviceAtomicU32::from_ptr(cursors.add(bin))
@@ -474,22 +446,19 @@ mod kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn order_bins(
-        bins: &[u32], rows: u32, min_key: i64, bits: &[u64], prefix: &[u32],
+        bins: &[u32], stats: *const RunStats, min_key: i64, bits: &[u64], prefix: &[u32],
         permutation: *mut u32, offsets: *mut u32, unique: *mut i64,
     ) {
         let bin = thread::index_1d().get();
-        if bin < bins.len() {
+        if bin < bins.len() && unsafe { (*stats).invalid } == 0 {
             let begin = bins[bin];
-            let end = if bin + 1 < bins.len() { bins[bin + 1] } else { rows };
+            let end = if bin + 1 < bins.len() { bins[bin + 1] } else { unsafe { (*stats).rows } };
             if begin != end {
                 let mask = 1u64 << (bin & 63);
                 let rank = prefix[bin >> 6] + (bits[bin >> 6] & (mask - 1)).count_ones();
                 unsafe {
                     offsets.add(rank as usize).write(begin);
                     unique.add(rank as usize).write((min_key as u64).wrapping_add(bin as u64) as i64);
-                    if bin + 1 == bins.len() {
-                        offsets.add(rank as usize + 1).write(rows);
-                    }
                     let values = permutation.add(begin as usize);
                     let length = (end - begin) as usize;
                     let mut parent = length / 2;
@@ -513,20 +482,24 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn gather(input: &[i64], permutation: &[u32], output: *mut i64) {
+    pub unsafe fn gather(input: &[i64], permutation: &[u32], stats: *const RunStats, output: *mut i64) {
         let i = thread::index_1d().get();
         if i < permutation.len() {
-            unsafe { output.add(i).write(input[permutation[i] as usize]); }
+            let value = if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0 {
+                input[permutation[i] as usize]
+            } else { 0 };
+            unsafe { output.add(i).write(value); }
         }
     }
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn fences(keys: &[i64], output: *mut i64) {
+    pub unsafe fn fences(keys: &[i64], stats: *const RunStats, output: *mut i64) {
         let i = thread::index_1d().get();
         if i < (keys.len() + super::BLOCK_ROWS - 1) / super::BLOCK_ROWS {
-            unsafe { output.add(i).write(keys[i * super::BLOCK_ROWS]); }
+            let row = i * super::BLOCK_ROWS;
+            unsafe { output.add(i).write(if row < (*stats).rows as usize { keys[row] } else { 0 }); }
         }
     }
 }

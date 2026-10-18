@@ -1,7 +1,7 @@
 #[path = "../dedup.rs"]
 mod dedup;
 use cuda_core::{CudaContext,DeviceBuffer};
-use gpu_blocked_run::MemoryResource;
+use gpu_blocked_run::{Buffer,MemoryResource};
 use rccl_memory::{CudaMemoryResource, PoolMemoryResource};
 use std::collections::BTreeSet;
 fn main()->Result<(),Box<dyn std::error::Error>>{
@@ -16,10 +16,13 @@ fn main()->Result<(),Box<dyn std::error::Error>>{
         let suppliers=DeviceBuffer::from_host(&stream,&triples.iter().map(|v|v.1).collect::<Vec<_>>())?;
         let nations=DeviceBuffer::from_host(&stream,&triples.iter().map(|v|v.2).collect::<Vec<_>>())?;
         let capacity=(4*n.max(1)).next_power_of_two();
-        let (table,count)=dedup::dedup(&ctx,&stream,&memory,&orders,&suppliers,&nations,n,capacity)?;
+        let count_device=Buffer::from_host_in(&memory,&stream,&[n as u32])?;
+        let (table,count)=dedup::dedup(&ctx,&stream,&memory,&orders,&suppliers,&nations,&count_device,n,capacity)?;
         let actual=table.to_host_vec()?.into_iter().filter(|&v|v!=0).map(dedup::decode).collect::<BTreeSet<_>>();
         let expected=triples.into_iter().collect::<BTreeSet<_>>();
-        assert_eq!(actual,expected);assert_eq!(count.to_host_vec()?[0] as usize,expected.len());
+        let metadata=count.to_host_vec()?;
+        assert_eq!(metadata[1],0,"dedup table unexpectedly full");
+        assert_eq!(actual,expected);assert_eq!(metadata[0] as usize,expected.len());
     }
     println!("dedup oracle: 12 boundary/random cases exact, including zero and maximum encoded triples");
     Ok(())
