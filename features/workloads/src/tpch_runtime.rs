@@ -152,12 +152,13 @@ macro_rules! retail_kernel {
                 }.map(|($($out,)+)| ($(::core::clone::Clone::clone($out),)+)).collect()
             }
         });
-        // Lookup & Expand with sorted runs: integral-key builds become sorted
-        // clustered runs with rank directories (no cursor retention yet).
+        // Lookup & Expand with sorted runs and shared lookups: integral-key
+        // builds become sorted clustered runs with rank directories, and each
+        // early lookup's cursor is the witness its later expansion forces.
         crate::tpch_runtime::configuration!(le_runs, $d, {
             plan = ::cq_planners::order(le);
             select = ::mini_linq::passes::select(positional($($relation),*));
-        }, [::cq_rewrites::sorted_runs], {
+        }, [::cq_rewrites::sorted_runs, ::cq_rewrites::retain_lookups], {
             #[allow(non_snake_case)]
             pub(super) fn run(data: &Data) -> Vec<Answer> {
                 $(let $relation = data.$table.as_slice();)*

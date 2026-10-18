@@ -259,25 +259,3 @@ are checked by rustc, rather than by a provider-name whitelist. External
 admissible covering operator of \code{s} not yet recorded (including total
 unfiltered builds); it records positional-host advice and undergoes the same
 contract and correspondence checks.
-
-\paragraph{Sorted runs.}
-\code{SortedRun<K,V,C>} is a payload-exact index: keys stably sorted, items
-clustered per key in source order, \code{offsets} delimiting each key's range,
-and an optional presence-and-rank directory for an integral codec $C$ over a
-bounded key span. Lookups return a \code{Copy} borrowed range cursor that
-outlives the \code{\&self} borrow, so a later read may reuse it.
-\begin{mathpar}
-\Rule{STR-SortedRun}{r=\mathsf{build}(b)\quad
- \mathsf{stable}(r)\quad \mathsf{span}(C)\le\mathsf{budget}\ \lor\ C=\mathsf{NoDense}}
- {\alpha(r)=b\quad \mathsf{lookup}_r(k)=[\,v\mid(k,v)\in b\,]_{\text{source order}}\quad
-  \mathsf{contains}_r(k)\Leftrightarrow k\in\pi_K(b)}
-
-\Rule{EXT-SortedRuns}{s=\code{HashIndex}[K]\ \mathsf{payload}\ P\quad |\mathsf{levels}(s)|=1\\
- \neg\mathsf{membershipOnly}(s)\quad \neg\mathsf{candidateUse}(s)\quad
- K\text{ is one borrowed \code{i32}/\code{i64}}\quad C=\text{its integral codec}}
- {\mathsf{retype}(s\Rightarrow\code{SortedRun<\_,\_,C>})\ \text{preserves the observation contract}}
-\end{mathpar}
-The rank directory tests presence before mapping a key to its range; holes in
-the span are absent keys. Retyping changes only the recorded provider type;
-levels, membership reads and Physical are unchanged, and the Structures rewrite
-check discharges observation preservation.

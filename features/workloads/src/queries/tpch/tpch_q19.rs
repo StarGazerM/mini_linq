@@ -110,7 +110,7 @@ crate::tpch_runtime::configuration!(le, $, { plan = ::cq_planners::order(le); },
 });
 crate::tpch_runtime::configuration!(le_runs, $, {
     plan = ::cq_planners::order(le);
-}, [::cq_rewrites::sorted_runs], {
+}, [::cq_rewrites::sorted_runs, ::cq_rewrites::retain_lookups], {
     query_body!();
 });
 
