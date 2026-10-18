@@ -130,15 +130,31 @@ computed/owned keys stay hashed; the rewrite never selects NoDense
 binary-search runs. An integral key with an over-budget span can still fall
 back to binary search at runtime.
 
-Cursor retention (`p via cursor s;`, `cq_rewrites::retained_lookups`) was
-implemented on this branch and **dropped at the rebase onto the back-end
-layering (`ad9727b`)**: its hidden row fields and per-operator threading
-duplicated the new column environment. It is to be re-expressed as a
-representation decision (`repr`: the semi's result carries an unexpanded
-RowId range for the build occurrence; see `doc/GPU-LE-BACKEND-CODESIGN.md`).
-The table below was measured with that implementation present and is kept
-as evidence of what cursor reuse is worth; `le_runs` today measures
-`order(le)` with sorted runs only.
+Cursor retention is now upstream's `share` / `repr … witness` / `stage …
+expand` (ST-Share, STR-Witness, ST-Expand; `cq_rewrites::retain_lookups`),
+the R/E encoding agreed in `doc/GPU-LE-BACKEND-CODESIGN.md`; the earlier
+`p via cursor s;` hidden-field implementation was dropped. `le_runs` =
+`order(le)` + `sorted_runs` + `retain_lookups`. SF1 uninstrumented medians
+(`cargo xtask bench --tpch --sf 1 --runs 5 --config le_runs`, 2026-10-18,
+all 13 exact vs DuckDB):
+
+| Query | default | le_runs | ratio |
+|---|---:|---:|---:|
+| retail_h03 | 33.5 | 27.7 | 0.83 |
+| retail_h07 | 37.0 | 29.5 | 0.80 |
+| retail_h07_block | 34.8 | 28.4 | 0.82 |
+| retail_h08 | 31.6 | 27.1 | 0.86 |
+| retail_d19 / d27 / d85 / q06 / q19 | 21.2 / 17.2 / 28.9 / 25.6 / 36.3 | 20.8 / 17.5 / 29.4 / 26.0 / 35.2 | 0.97–1.02 |
+| retail_d72_inner | 182.5 | 193.6 | 1.06 |
+| retail_h09 | 164.2 | 186.6 | 1.14 |
+| retail_h21_positive | 89.6 | 105.6 | 1.18 |
+| retail_h05 | 32.6 | 41.0 | 1.26 |
+
+Same gains as the dropped encoding where a witness is retained on an
+integral-key build; the regressions are the cases without a Copy cursor
+(Supplier host fallback in H05, composite `HashIndex` keys in H09/D85) or
+with lookups that retain every row (H21). The earlier table below is kept as
+the record of the dropped implementation.
 
 Re-measured 2026-10-16 from `features/workloads`, sequentially with
 `cargo xtask profile --tpch --sf 1 --config default` then
