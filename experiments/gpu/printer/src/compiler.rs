@@ -25,6 +25,20 @@ fn type_name(ty: &Type) -> Option<String> {
         None
     }
 }
+fn qualified(ty: &Type, module: &str, name: &str) -> bool {
+    matches!(ty, Type::Path(path) if path.qself.is_none()
+        && path.path.segments.len() == 2
+        && path.path.segments[0].ident == module
+        && path.path.segments[1].ident == name)
+}
+fn known_vec(ty: &Type) -> bool {
+    matches!(ty, Type::Path(path) if path.qself.is_none()
+        && ((path.path.segments.len() == 1 && path.path.segments[0].ident == "Vec")
+            || (path.path.segments.len() == 3
+                && (path.path.segments[0].ident == "std" || path.path.segments[0].ident == "alloc")
+                && path.path.segments[1].ident == "vec"
+                && path.path.segments[2].ident == "Vec")))
+}
 fn integral(ty: &Type) -> bool {
     matches!(
         type_name(ty).as_deref(),
@@ -110,10 +124,9 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
     for entry in &program.structures.entries {
         match &entry.structure {
             ir::Structure::Built { keyed, .. } => {
-                let provider = type_name(&keyed.ty);
-                let bitmap =
-                    keyed.membership.is_some() && provider.as_deref() == Some("AdaptiveKeySet");
-                let prefix = matches!(&keyed.ty,Type::Path(path) if path.path.segments.len()==2 && path.path.segments[0].ident=="cq_gpu_runtime" && path.path.segments[1].ident=="PrefixRun");
+                let bitmap = keyed.membership.is_some()
+                    && qualified(&keyed.ty, "cq_storage", "AdaptiveKeySet");
+                let prefix = qualified(&keyed.ty, "cq_gpu_runtime", "PrefixRun");
                 if keyed.levels.len() != 1 && !prefix {
                     return fail(
                         entry,
@@ -121,7 +134,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                         "multilevel builds require explicitly recorded cq_gpu_runtime::PrefixRun",
                     );
                 }
-                if provider.as_deref() != Some("SortedRun") && !prefix && !bitmap {
+                if !qualified(&keyed.ty, "cq_storage", "SortedRun") && !prefix && !bitmap {
                     return fail(
                         entry,
                         "CQ_GPU_BUILD_TYPE",
@@ -163,7 +176,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                 }
             }
             ir::Structure::Dedup { ty, .. } | ir::Structure::HeadDedup { ty, .. } => {
-                let recorded = matches!(ty,Type::Path(path) if path.path.segments.len()==2 && path.path.segments[0].ident=="cq_gpu_runtime" && path.path.segments[1].ident=="DeviceSet");
+                let recorded = qualified(ty, "cq_gpu_runtime", "DeviceSet");
                 if !recorded {
                     return fail(
                         entry,
@@ -186,7 +199,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                     );
                 }
             }
-            ir::Structure::Rows { ty, .. } if type_name(ty).as_deref() != Some("Vec") => {
+            ir::Structure::Rows { ty, .. } if !known_vec(ty) => {
                 return fail(entry, "CQ_GPU_ROWS_TYPE", "retained rows must record Vec");
             }
             ir::Structure::Repr {
@@ -199,19 +212,28 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                     "positions representations are unsupported",
                 );
             }
+            ir::Structure::JoinFilter { filter, .. } => {
+                if !qualified(&filter.ty, "cq_storage", "AdaptiveKeySet") {
+                    return fail(
+                        entry,
+                        "CQ_GPU_JOIN_FILTER_TYPE",
+                        "join filters require recorded ::cq_storage::AdaptiveKeySet; Bloom and opaque providers are unsupported",
+                    );
+                }
+                membership_budget(&filter.ty)?;
+            }
             ir::Structure::Selection { .. }
             | ir::Structure::Read { .. }
-            | ir::Structure::KeySet { .. }
-            | ir::Structure::JoinFilter { .. } => {
+            | ir::Structure::KeySet { .. } => {
                 return fail(
                     entry,
                     "CQ_GPU_STRUCTURE",
-                    "positional/keyset/join-filter providers are unsupported",
+                    "positional/keyset providers are unsupported",
                 );
             }
             ir::Structure::Repr {
                 witness: Some(w), ..
-            } if type_name(&w.ty).as_deref() != Some("RunCursor") => {
+            } if !qualified(&w.ty, "cq_storage", "RunCursor") => {
                 return fail(
                     entry,
                     "CQ_GPU_WITNESS_TYPE",
@@ -283,7 +305,11 @@ pub(crate) fn compile(
 ) -> syn::Result<syn::Expr> {
     let facts = ir::contract::check(program)?;
     let provenance = validate(program, &facts)?;
-    let context = Context::new(program, &facts);
+    // GPU join filters read uploaded columns, not host PositionalRows handles.
+    // Keep the checked filter facts below; suppress only the CPU source binder.
+    let mut source_facts = facts.clone();
+    source_facts.join_filters.clear();
+    let context = Context::new(program, &source_facts);
     let returned = symbol_name(&program.physical.program.returned);
     let endpoints: BTreeSet<_> = program
         .physical
@@ -315,6 +341,8 @@ pub(crate) fn compile(
     let mut kernels = Vec::new();
     let mut kernel_reads = Vec::new();
     let mut covered_reads = BTreeMap::<String, usize>::new();
+    let mut filter_reads = Vec::new();
+    let mut covered_filters = BTreeSet::new();
     let mut all_constants = Constants::default();
     for definition in &program.physical.program.definitions {
         let endpoint = symbol_name(&definition.name);
@@ -335,7 +363,7 @@ pub(crate) fn compile(
         }
         chain.reverse();
         let first = context.physical[&chain[0]];
-        let (driver, root, mut state) = match &first.operator {
+        let (driver, mut root, mut state) = match &first.operator {
             Operator::Rename(rename) => {
                 let host_name = symbol_name(&rename.relation);
                 let table = id("host", &host_name);
@@ -402,8 +430,8 @@ pub(crate) fn compile(
                 _ => None,
             })
             .collect();
-        let run_ids: Vec<_> = runs.iter().map(|n| id("run_view", n)).collect();
-        let run_types = runs
+        let mut run_ids: Vec<_> = runs.iter().map(|n| id("run_view", n)).collect();
+        let mut run_types = runs
             .iter()
             .map(|name| {
                 if membership(&facts, name) {
@@ -413,7 +441,7 @@ pub(crate) fn compile(
                 }
             })
             .collect::<Vec<_>>();
-        let run_bindings = runs
+        let mut run_bindings = runs
             .iter()
             .zip(&run_ids)
             .map(|(n, view)| {
@@ -425,6 +453,35 @@ pub(crate) fn compile(
                 }
             })
             .collect::<Vec<_>>();
+        let mut stream_filters = Vec::new();
+        if let Some(filters) = facts.join_filters.get(&chain[0]) {
+            for (index, filter) in filters.iter().enumerate() {
+                let key = symbol_name(&filter.key.columns[0]);
+                let value = state.columns.get(&key).ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        filter,
+                        "CQ_GPU_JOIN_FILTER_COLUMN: scan must carry its recorded filter key",
+                    )
+                })?;
+                let filter_name = format!("{}_{}", chain[0], index);
+                let handle = id("join_filter", &filter_name);
+                let view = id("join_filter_view", &filter_name);
+                run_ids.push(view.clone());
+                run_types.push(quote!(::cq_gpu_runtime::MembershipView));
+                run_bindings.push(quote!(let #view=__execution.membership_view(#handle)?;));
+                root = quote!(#root __valid=__valid && ::cq_gpu_runtime::membership_contains(#view,#value););
+                covered_filters.insert((chain[0].clone(), index));
+                stream_filters.push(format!(
+                    "{}:join-filter:{}:{}[{}]:covering={}:provider={}",
+                    chain[0],
+                    index,
+                    filter.build,
+                    key,
+                    filter.covering,
+                    filter.ty.to_token_stream()
+                ));
+            }
+        }
         let batch = chain
             .iter()
             .filter_map(|n| facts.stages.get(n))
@@ -452,6 +509,9 @@ pub(crate) fn compile(
         let descriptor_words = emitter.descriptors.iter().copied().max().unwrap_or(1);
         let continuations = emitter.continuations;
         let kernel = format_ident!("cq_gpu_stream_{}_{}", module_number, endpoint);
+        for read in stream_filters {
+            filter_reads.push((kernel.to_string(), read));
+        }
         for read in provenance
             .iter()
             .filter(|read| chain.contains(&read.reader))
@@ -494,6 +554,17 @@ pub(crate) fn compile(
                     read.reader
                 ),
             );
+        }
+    }
+    for (scan, filters) in &facts.join_filters {
+        for index in 0..filters.len() {
+            if !covered_filters.contains(&(scan.clone(), index)) {
+                return fail(
+                    &program.structures,
+                    "CQ_GPU_JOIN_FILTER_CORRESPONDENCE",
+                    format!("recorded filter {scan}:{index} must occur at its scan"),
+                );
+            }
         }
     }
     let constant_ids: Vec<_> = all_constants
@@ -557,6 +628,9 @@ pub(crate) fn compile(
     let kernel_reads = kernel_reads
         .iter()
         .map(|(kernel, read)| quote!((#kernel,#read)));
+    let filter_reads = filter_reads
+        .iter()
+        .map(|(kernel, read)| quote!((#kernel,#read)));
     let recorded_structures = program
         .structures
         .entries
@@ -571,6 +645,7 @@ pub(crate) fn compile(
         }
         const __CQ_GPU_KEYED_READS: &[&str]=&[#(#reads),*];
         const __CQ_GPU_KERNEL_READS: &[(&str,&str)]=&[#(#kernel_reads),*];
+        const __CQ_GPU_JOIN_FILTER_READS: &[(&str,&str)]=&[#(#filter_reads),*];
         const __CQ_GPU_RECORDED_STRUCTURES: &[&str]=&[#(#recorded_structures),*];
         #(#source_bindings)*
         (|| -> ::cq_gpu_runtime::Result<_> {
@@ -1077,6 +1152,24 @@ impl Kernel {
                 quote!(let #run=__execution.prepare_run(#table,#slot)?;)
             }
         });
+        let mut filter_builds = Vec::new();
+        for (scan, filters) in &facts.join_filters {
+            for (index, filter) in filters.iter().enumerate() {
+                if symbol_name(&filter.build) != endpoint {
+                    continue;
+                }
+                let handle = id("join_filter", &format!("{scan}_{index}"));
+                let key = symbol_name(&filter.key.columns[0]);
+                let slot = context.carried_columns[&endpoint]
+                    .iter()
+                    .position(|column| column == &key)
+                    .expect("checked covering key is carried by its build");
+                let budget = membership_budget(&filter.ty).expect("validated filter budget");
+                filter_builds.push(
+                    quote!(let #handle=__execution.prepare_membership(#table,#slot,#budget)?;),
+                );
+            }
+        }
         let slots = if frontier { 64u32 } else { 0 };
         let launch = quote! {
             let #table={
@@ -1092,7 +1185,7 @@ impl Kernel {
                     Ok(())
                 })?
             };
-            #dedup #build
+            #dedup #build #(#filter_builds)*
         };
         (device, launch)
     }

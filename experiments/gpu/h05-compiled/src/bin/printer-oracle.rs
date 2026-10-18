@@ -26,7 +26,7 @@ fn main() {
         "multiword packed-key dedup and string decoding"
     );
 
-    let left = [(1i64,), (1,)];
+    let left = [(1i64,), (2,), (1,)];
     let right: Vec<_> = (0..20000i64).map(|value| (1i64, value)).collect();
     let mut expanded: Vec<(i64, i64)> = cq_gpu::print! {
         arguments { tile(256,4), frontier(1), directory(rank) };
@@ -45,6 +45,8 @@ fn main() {
             b host scan = ::core::iter::Map<_,_> [];
             b rows = ::std::vec::Vec<_>;
             b = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [x];
+            l join_filter = ::cq_storage::AdaptiveKeySet<i64,::cq_storage::I64Codec,16777216>
+                build b [x] covering s marker ::cq_load::ColumnAt<0>;
             p canon = ::cq_gpu_runtime::DeviceSet<_>;
             s share = lookup b [x] first s force p;
             s repr = tuples witness {b [x] at s as ::cq_storage::RunCursor<'_,_>};
@@ -55,7 +57,7 @@ fn main() {
     expanded.sort_unstable();
     assert_eq!(
         expanded, right,
-        "witness expansion, frontier and output grow/relaunch"
+        "join filter, witness expansion, frontier and output grow/relaunch"
     );
     println!(
         "printer oracle exact=true multiword_rows={} expanded_rows={}",

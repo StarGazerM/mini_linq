@@ -691,6 +691,7 @@ silently substituted for an arbitrary CPU index.
 | `let` with one-level `SortedRun` | One blocked run, built on device using the recorded integral key. |
 | Explicit `PrefixRun` key levels | One prefix run, with exact residual comparisons at full-key reads. |
 | Integral membership-only provider | Budgeted exact bitmap, not an inferred payload run. |
+| Recorded `join_filter` | Budgeted bitmap prefilter on its recorded scan column, retaining the covering exact keyed read. |
 | Eager semi without a witness | Exact membership test at the recorded keyed read. |
 | `share` plus matching `repr witness` | Retained `(begin,end)` descriptor, consumed at the recorded forcing probe without reprobe. |
 | Probe | Block scan of range lengths, output-parallel owner search, bounded in-tile expansion loops. `first` is a traversal choice, **not** a primary-key/cardinality promise. |
@@ -767,8 +768,8 @@ The compiler tests check exact keyed-read coverage and witness no-reprobe;
 four public-macro compile-fail fixtures name `CQ_GPU_MERGE`,
 `CQ_GPU_UNION`, `CQ_GPU_NON_INTEGRAL_KEY` and `CQ_GPU_OPAQUE_GUARD`.
 The GPU oracle exercises full-width signed multiword dedup with strings,
-and a 20,000-answer fanout using a retained witness, batch-32 expansion,
-frontier publication and output grow/relaunch.
+and a 20,000-answer fanout using a recorded scan join filter, retained witness,
+batch-32 expansion, frontier publication and output grow/relaunch.
 
 
 ### Supported domain and explicit rejections
@@ -783,6 +784,12 @@ frontier publication and output grow/relaunch.
 - Ordinary multi-level providers are rejected; only explicitly recorded
   `PrefixRun` has the residual-filter interpretation above. A recorded CPU
   canon provider is rejected; `retype(dedup => DeviceSet<_>)` is required.
+- Positional carriers, positional selection/read adapters, standalone keyset
+  annotations and multiple recorded providers on one retained result are
+  rejected. Recorded join filters support the exact `AdaptiveKeySet` bitmap
+  provider and its budget; Bloom or arbitrary filter implementations are not
+  silently substituted. Unknown provider aliases and non-Vec retained-row
+  representations are rejected.
 - No aggregates, recursion, host fallback algorithms, RCCL device algorithms,
   CUDA C or NVRTC. The existing cuda-oxide PTX/shared-memory and package-loader
   restrictions described above still apply. The consumer is a separate

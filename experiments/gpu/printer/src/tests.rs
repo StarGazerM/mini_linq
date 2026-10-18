@@ -305,3 +305,107 @@ fn recorded_membership_uses_its_bitmap_budget_and_reconstructs_constants() {
     assert!(!generated.contains("prepare_run"));
     assert!(generated.contains("bitmap-membership"));
 }
+
+#[test]
+fn recorded_join_filter_keeps_its_exact_covering_read_and_budget() {
+    let mut source = shared();
+    source.structures.entries.push(syn::parse_quote! {
+        l join_filter = ::cq_storage::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 8192>
+            build b [x] covering s marker ::cq_load::ColumnAt<0>;
+    });
+    let facts = ir::contract::check(&source).unwrap();
+    let reads = validate(&source, &facts).unwrap();
+    assert_eq!(reads.len(), 2);
+    assert_eq!(
+        reads.iter().find(|read| read.reader == "s").unwrap().source,
+        "rank-point"
+    );
+    let generated = compile(&source, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert_eq!(generated.matches("prepare_membership").count(), 1);
+    assert_eq!(generated.matches("membership_contains").count(), 1);
+    assert_eq!(generated.matches("prepare_run").count(), 1);
+    assert_eq!(generated.matches("blocked_run :: point").count(), 1);
+    assert!(generated.contains("8192usize"));
+    assert!(generated.contains("__CQ_GPU_JOIN_FILTER_READS"));
+    assert!(generated.contains("l:join-filter:0:b[x]:covering=s"));
+    assert!(generated.contains("s:b[x]:rank-point"));
+    assert!(!generated.contains("positional_handle"));
+    assert!(
+        generated.find("membership_contains").unwrap()
+            < generated.find("blocked_run :: point").unwrap()
+    );
+}
+
+#[test]
+fn join_filter_does_not_silently_replace_bloom_or_opaque_providers() {
+    for ty in [
+        quote!(::cq_join_filters::BloomFilter<16>),
+        quote!(::user::AdaptiveKeySet<i64, ::cq_storage::I64Codec, 8192>),
+    ] {
+        let mut source = shared();
+        source.structures.entries.push(syn::parse_quote! {
+            l join_filter = #ty build b [x] covering s marker ::cq_load::ColumnAt<0>;
+        });
+        let error = compile(&source, Options::default())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("CQ_GPU_JOIN_FILTER_TYPE"), "{error}");
+    }
+}
+
+#[test]
+fn provider_names_must_resolve_to_the_supported_recorded_paths() {
+    for ty in [
+        quote!(::user::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
+        quote!(SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
+        quote!(::user::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 4096>),
+    ] {
+        let mut source = shared();
+        let ir::Structure::Built { keyed, .. } = &mut source.structures.entries[3].structure else {
+            unreachable!("fixture build");
+        };
+        keyed.ty = syn::parse2(ty).unwrap();
+        let facts = ir::contract::check(&shared()).unwrap();
+        let error = validate(&source, &facts).unwrap_err().to_string();
+        assert!(error.contains("CQ_GPU_BUILD_TYPE"), "{error}");
+    }
+    let mut source = shared();
+    let ir::Structure::Repr {
+        witness: Some(witness),
+        ..
+    } = &mut source.structures.entries[6].structure
+    else {
+        unreachable!("fixture witness");
+    };
+    witness.ty = syn::parse_quote!(::user::RunCursor<'_, _>);
+    let error = compile(&source, Options::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("CQ_GPU_WITNESS_TYPE"), "{error}");
+
+    for ty in [
+        quote!(::std::vec::Vec<_>),
+        quote!(::alloc::vec::Vec<_>),
+        quote!(Vec<_>),
+    ] {
+        let mut source = shared();
+        let ir::Structure::Rows { ty: rows, .. } = &mut source.structures.entries[2].structure
+        else {
+            unreachable!("fixture rows");
+        };
+        *rows = syn::parse2(ty).unwrap();
+        compile(&source, Options::default()).unwrap();
+    }
+    let mut source = shared();
+    let ir::Structure::Rows { ty, .. } = &mut source.structures.entries[2].structure else {
+        unreachable!("fixture rows");
+    };
+    *ty = syn::parse_quote!(::user::Vec<_>);
+    let error = compile(&source, Options::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("CQ_GPU_ROWS_TYPE"), "{error}");
+}
