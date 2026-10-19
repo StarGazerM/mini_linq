@@ -460,3 +460,78 @@ fn generated_bindings_follow_let_negation_scope_restrictions() {
     let error = contract::check(&program).unwrap_err().to_string();
     assert!(error.contains("bound by a positive atom"), "{error}");
 }
+
+#[test]
+fn if_let_source_round_trips_and_desugars_without_new_decisions() {
+    let source: Program = syn::parse_quote! {
+        struct Matched;
+        relation Input(o:Option<(i32,(i32,i32))>,k:Kind) = (input);
+        relation Out(x:i32,y:i32);
+        output Out;
+        Out(x,y) :- Input(o,k), if let Some((x, (y, _))) = *o,
+            if let Kind::A = *k, if x < y;
+    };
+    contract::check(&source).unwrap();
+    assert!(matches!(&source.rules[0].body[1], BodyItem::Filter(filter)
+        if matches!(filter.condition, syn::Expr::Let(_))));
+    assert_eq!(source, syn::parse2(source.to_token_stream()).unwrap());
+    let expected: Program = syn::parse_quote! {
+        struct Matched;
+        relation Input(o:Option<(i32,(i32,i32))>,k:Kind) = (input);
+        relation Out(x:i32,y:i32);
+        output Out;
+        Out(x,y) :- Input(o,k),
+            for (x,y,) in match *o {
+                Some((x, (y, _))) => ::core::option::Option::Some((x,y,)),
+                _ => ::core::option::Option::None,
+            },
+            for () in match *k {
+                Kind::A => ::core::option::Option::Some(()),
+                _ => ::core::option::Option::None,
+            },
+            if x < y;
+    };
+    let mut lowered = source.clone();
+    lowered.desugar_if_let().unwrap();
+    assert_eq!(lowered, expected);
+    check_rewrite(&source, &lowered).unwrap();
+    let scheduled: Program = syn::parse2(quote! {
+        #source
+        strata { component [Out]; }
+    })
+    .unwrap();
+    assert_eq!(scheduled.rules, expected.rules);
+    check_rewrite(&source, &scheduled).unwrap();
+    assert_eq!(scheduled, syn::parse2(scheduled.to_token_stream()).unwrap());
+    let mut changed = scheduled.clone();
+    changed.rules[0].body[1] = syn::parse_quote!(for (x,y) in [(0,0)]);
+    assert!(check_rewrite(&source, &changed).is_err());
+}
+
+#[test]
+fn authored_if_let_variants_normalize_before_erasure_checking() {
+    let program: Program = syn::parse_quote! {
+        struct Matched;
+        relation Seed(o:Option<i32>) = (seeds);
+        relation Reach(x:i32);
+        output Reach;
+        Reach(x) :- Seed(o), if let Some(x) = *o;
+        Reach(y) :- Reach(x), if let Some(y) = x.checked_add(1), if y < 4;
+        strata { component [Reach]; }
+        seminaive {
+            insert_new hash_set_all_columns;
+            negation_keys hash_set_borrowed;
+            delta Reach = Recent;
+            layout Seed [0] key 0;
+            variant 0 seed { Reach(x) :- Seed(o), if let Some(x) = *o; }
+            variant 1 delta 0 {
+                Reach(y) :- Recent(x), if let Some(y) = x.checked_add(1), if y < 4;
+            }
+        }
+    };
+    contract::check(&program).unwrap();
+    for variant in program.variants.as_ref().unwrap() {
+        assert!(matches!(variant.query.body[1], BodyItem::For(_)));
+    }
+    assert_eq!(program, syn::parse2(program.to_token_stream()).unwrap());
+}

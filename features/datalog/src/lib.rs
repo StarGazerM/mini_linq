@@ -58,6 +58,18 @@
 //! duplicates collapse at Boolean insertion. Generator clauses preserve the
 //! written opaque Rust clause order. A panic while constructing or advancing
 //! an iterator produces no denoted result.
+//! Refutable patterns use `if let pattern = expression`, for example
+//! `Value(x) :- Optional(o), if let Some(x) = *o;`. A failed match drops the
+//! valuation; a successful match makes every pattern binding available to
+//! later clauses and recursive or non-recursive heads. Patterns without
+//! bindings, such as `if let Kind::A = *kind`, act as filters.
+//! This is Datalog-only sugar for `for (bindings, ...) in match expression {
+//! pattern => Some((bindings, ...)), _ => None }` (using qualified `Option`
+//! variants); no bindings use `Some(())` and `for ()`. It inherits generators'
+//! written-order and placement constraints. A panic in the expression is
+//! bottom, not a failed match. Unscheduled source round trips retain `if let`;
+//! stratification and parsing scheduled text lower it to the ordinary `for`,
+//! so stratified/semi-naive printing exposes the desugaring.
 //! Termination is the caller's responsibility: copying positive-atom columns
 //! preserves a finite domain, but computed recursive values can grow without
 //! bound even when every individual generator is finite. Evaluation runs until

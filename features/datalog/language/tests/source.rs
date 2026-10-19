@@ -157,3 +157,31 @@ fn edb_outputs_are_declared_and_can_stand_alone() {
         );
     }
 }
+
+#[test]
+fn if_let_inherits_generator_scope_and_fresh_binding_obligations() {
+    for body in [
+        "Input(o), if let Some(x) = *o",
+        "Input(o), if let Some((x, _)) = *o",
+        "Input(o), if let Some(x) = *o, let y = x",
+    ] {
+        let source = format!(
+            "struct P; relation Input(o:Option<i32>) = (input); relation Out(x:i32); output Out; Out(x) :- {body};"
+        );
+        let program: Program = syn::parse_str(&source).unwrap();
+        contract::check(&program).unwrap();
+    }
+    for body in [
+        "Input(o), let y = x, if let Some(x) = *o",
+        "if let Some(x) = *o, Input(o)",
+        "Input(o), if let Some(o) = *o",
+        "Input(o), if let Some(x) = *o, if let Some(x) = *o",
+        "Input(o), if let None = *o",
+    ] {
+        let source = format!(
+            "struct P; relation Input(o:Option<i32>) = (input); relation Out(x:i32); output Out; Out(x) :- {body};"
+        );
+        let program: Program = syn::parse_str(&source).unwrap();
+        assert!(contract::check(&program).is_err(), "{body}");
+    }
+}
