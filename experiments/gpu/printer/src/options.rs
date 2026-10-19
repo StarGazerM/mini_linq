@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use syn::{
-    parse::{Parse, ParseStream},
     Ident, LitInt, Token,
+    parse::{Parse, ParseStream},
 };
 
 /// Control choices do not alter any Structures representation decision.
@@ -9,12 +9,18 @@ use syn::{
 pub(crate) struct Options {
     pub frontier: u32,
     pub capacity: Option<Ident>,
+    pub datalog_keys: Vec<(Ident, Vec<syn::Type>)>,
+    pub datalog_dictionary: Option<Ident>,
+    pub datalog_pool: Option<Ident>,
 }
 impl Default for Options {
     fn default() -> Self {
         Self {
             frontier: 8,
             capacity: None,
+            datalog_keys: Vec::new(),
+            datalog_dictionary: None,
+            datalog_pool: None,
         }
     }
 }
@@ -58,6 +64,33 @@ impl Parse for Options {
                 }
                 "capacity" => {
                     options.capacity = Some(args.parse()?);
+                }
+                "datalog_dictionary" => {
+                    options.datalog_dictionary = Some(args.parse()?);
+                }
+                "datalog_pool" => {
+                    options.datalog_pool = Some(args.parse()?);
+                }
+                "datalog_keys" => {
+                    let mut names = BTreeSet::new();
+                    while !args.is_empty() {
+                        let name: Ident = args.parse()?;
+                        if !names.insert(name.to_string()) {
+                            return Err(syn::Error::new_spanned(
+                                name,
+                                "CQ_GPU_DATALOG_KEYS: duplicate key host",
+                            ));
+                        }
+                        args.parse::<Token![:]>()?;
+                        let tuple: syn::TypeTuple = args.parse()?;
+                        options
+                            .datalog_keys
+                            .push((name, tuple.elems.into_iter().collect()));
+                        if args.is_empty() {
+                            break;
+                        }
+                        args.parse::<Token![,]>()?;
+                    }
                 }
                 _ => {
                     return Err(syn::Error::new_spanned(

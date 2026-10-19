@@ -124,6 +124,16 @@ fn expand(tokens: proc_macro2::TokenStream, stage: Stage) -> syn::Result<proc_ma
     if !matches!(stage, Stage::Seminaive) {
         program = cq_datalog_schedule::seminaive::compile(&program)?;
     }
+    if program
+        .insertion
+        .as_ref()
+        .is_some_and(|policy| policy != "hash_set_all_columns")
+    {
+        return Err(syn::Error::new_spanned(
+            &program,
+            "CPU Datalog bridge requires insert_new hash_set_all_columns",
+        ));
+    }
     let fork = cq_datalog_fork::fork(&program, |hole| {
         pipeline.clone().start(hole.into_token_stream())
     })?;

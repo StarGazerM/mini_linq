@@ -6,7 +6,7 @@ use cq_lang_structures::{
 };
 use cq_print::Context;
 use proc_macro2::{Span, TokenStream as Tokens};
-use quote::{format_ident, quote, ToTokens};
+use quote::{ToTokens, format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use syn::{Ident, Type};
@@ -139,6 +139,107 @@ fn supported(ty: &Type) -> bool {
     integral(ty) || string(ty) || type_name(ty).as_deref() == Some("bool")
 }
 
+fn ungroup(expression: &syn::Expr) -> &syn::Expr {
+    match expression {
+        syn::Expr::Paren(p) => ungroup(&p.expr),
+        syn::Expr::Group(g) => ungroup(&g.expr),
+        _ => expression,
+    }
+}
+
+fn copied_column(expression: &syn::Expr) -> Option<String> {
+    let syn::Expr::Unary(unary) = ungroup(expression) else {
+        return None;
+    };
+    if !matches!(unary.op, syn::UnOp::Deref(_)) {
+        return None;
+    }
+    syntax::rust::variable(ungroup(&unary.expr)).map(symbol_name)
+}
+
+// This is a proof of a very small total fragment, not permission to execute
+// arbitrary Rust on device (or eagerly on the host).
+fn bind_value(
+    bind: &syntax::algebra::Bind,
+    types: &BTreeMap<String, Type>,
+    columns: &BTreeMap<String, Tokens>,
+    constants: &mut Constants,
+) -> syn::Result<(String, Tokens)> {
+    let syn::Pat::Ident(pattern) = &bind.pattern else {
+        return fail(
+            bind,
+            "CQ_GPU_OPAQUE_BIND",
+            "bind requires one typed scalar identifier",
+        );
+    };
+    if pattern.by_ref.is_some() || pattern.mutability.is_some() || pattern.subpat.is_some() {
+        return fail(
+            bind,
+            "CQ_GPU_OPAQUE_BIND",
+            "bind requires an immutable scalar identifier",
+        );
+    }
+    let bindings = bind.binding_types();
+    let Some((_, ty)) = bindings.first().filter(|_| bindings.len() == 1) else {
+        return fail(
+            bind,
+            "CQ_GPU_OPAQUE_BIND",
+            "bind requires an explicit supported scalar type",
+        );
+    };
+    if !supported(ty) || type_name(ty).as_deref() == Some("String") {
+        return fail(
+            bind,
+            "CQ_GPU_OPAQUE_BIND",
+            "bind requires a supported Copy scalar type",
+        );
+    }
+    let value = if let Some(source) = copied_column(&bind.expression) {
+        if bind.environment.as_ref().is_some_and(|environment| {
+            !environment
+                .variables
+                .iter()
+                .any(|v| symbol_name(v) == source)
+        }) || types.get(&source) != Some(ty)
+        {
+            return fail(
+                bind,
+                "CQ_GPU_BIND_TYPE",
+                "copied column must be in scope and have the exact declared bind type",
+            );
+        }
+        columns.get(&source).cloned().ok_or_else(|| {
+            syn::Error::new_spanned(bind, "CQ_GPU_BIND_COLUMN: copied column is not carried")
+        })?
+    } else {
+        let expression = ungroup(&bind.expression);
+        let valid = match expression {
+            syn::Expr::Lit(lit) => match &lit.lit {
+                syn::Lit::Int(_) => integral(ty),
+                syn::Lit::Bool(_) => type_name(ty).as_deref() == Some("bool"),
+                syn::Lit::Str(_) => matches!(ty, Type::Reference(r) if r.mutability.is_none()
+                    && type_name(&r.elem).as_deref() == Some("str")),
+                _ => false,
+            },
+            syn::Expr::Unary(unary) => {
+                matches!(unary.op, syn::UnOp::Neg(_))
+                    && integral(ty)
+                    && matches!(&*unary.expr, syn::Expr::Lit(lit) if matches!(lit.lit, syn::Lit::Int(_)))
+            }
+            _ => false,
+        };
+        if !valid {
+            return fail(
+                bind,
+                "CQ_GPU_OPAQUE_BIND",
+                "only copied dereferences and typed integral, bool or &str literals are supported",
+            );
+        }
+        constants.add(quote!({ let __cq_gpu_literal: #ty = #expression; __cq_gpu_literal }))
+    };
+    Ok((symbol_name(&pattern.ident), value))
+}
+
 fn membership(facts: &ir::Analysis, name: &str) -> bool {
     facts.membership.iter().any(|(build, _)| build == name)
 }
@@ -206,8 +307,11 @@ pub(crate) struct Read {
 pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Result<Vec<Read>> {
     for (name, &size) in &facts.stages {
         if size == 0 || size > 1024 {
-            return fail(&program.structures, "CQ_GPU_STAGE_SIZE",
-                format!("stage {name} records batch {size}; supported scan batches are 1..=1024"));
+            return fail(
+                &program.structures,
+                "CQ_GPU_STAGE_SIZE",
+                format!("stage {name} records batch {size}; supported scan batches are 1..=1024"),
+            );
         }
     }
     for d in &program.physical.program.definitions {
@@ -215,7 +319,25 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
         match &d.operator {
             Operator::Merge(..) => return fail(n, "CQ_GPU_MERGE", "merge is unsupported"),
             Operator::Union(..) => return fail(n, "CQ_GPU_UNION", "union blocks are unsupported"),
-            Operator::Anti(..) => return fail(n, "CQ_GPU_ANTI", "anti is unsupported"),
+            Operator::Anti(_, keyed) => {
+                for operand in [&keyed.right] {
+                    let name = symbol_name(operand);
+                    if !facts.retained.contains_key(&name) {
+                        return fail(
+                            n,
+                            "CQ_GPU_ANTI_ROWS",
+                            "anti right operand requires recorded retained rows",
+                        );
+                    }
+                }
+                if !matches!(keyed.choice, Some(physical::Choice::Eager(_))) {
+                    return fail(
+                        n,
+                        "CQ_GPU_ANTI_CHOICE",
+                        "anti requires recorded eager evaluation",
+                    );
+                }
+            }
             Operator::Guard(..) => {
                 return fail(
                     n,
@@ -226,8 +348,14 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
             Operator::Bind(bind) if bind.for_token.is_some() => {
                 return fail(n, "CQ_GPU_GENERATOR", "iterator generators are unsupported");
             }
-            Operator::Bind(..) => {
-                return fail(n, "CQ_GPU_OPAQUE_BIND", "opaque bind is unsupported");
+            Operator::Bind(bind) => {
+                let input = symbol_name(&bind.input);
+                let types = &facts.physical.rows[&input].types;
+                let columns = types
+                    .keys()
+                    .map(|name| (name.clone(), quote!(0u64)))
+                    .collect();
+                bind_value(bind, types, &columns, &mut Constants::default())?;
             }
             Operator::Probe(_, k) | Operator::Semi(_, k)
                 if matches!(k.choice, Some(physical::Choice::Smallest(_))) =>
@@ -401,7 +529,10 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
     let mut reads = Vec::new();
     for (build, items) in &facts.physical.keyed_reads {
         for (reader, keys, supply) in items {
-            let source = if matches!(supply, syntax::SupplyKind::Const | syntax::SupplyKind::Range) {
+            let source = if matches!(
+                supply,
+                syntax::SupplyKind::Const | syntax::SupplyKind::Range
+            ) {
                 "scan-filter".to_owned()
             } else {
                 let Some(builds) = facts.built.get(build) else {
@@ -558,10 +689,15 @@ fn output_bounds(
             let name = symbol_name(&rename.relation);
             let table = id("host", &name);
             for mapping in &rename.mapping {
-                let slot = context.hosts[&name].layout.iter()
-                    .position(|column| *column == symbol_name(&mapping.source)).unwrap();
-                bounds.insert(symbol_name(&mapping.target),
-                    quote!(__execution.column_bounds(#table,#slot)?));
+                let slot = context.hosts[&name]
+                    .layout
+                    .iter()
+                    .position(|column| *column == symbol_name(&mapping.source))
+                    .unwrap();
+                bounds.insert(
+                    symbol_name(&mapping.target),
+                    quote!(__execution.column_bounds(#table,#slot)?),
+                );
             }
         }
         Operator::Unit(_) => {}
@@ -569,7 +705,10 @@ fn output_bounds(
             let input = symbol_name(first.operator.input().expect("checked stream root"));
             let table = id("table", &input);
             for (slot, column) in context.carried_columns[&input].iter().enumerate() {
-                bounds.insert(column.clone(), quote!(__execution.column_bounds(#table,#slot)?));
+                bounds.insert(
+                    column.clone(),
+                    quote!(__execution.column_bounds(#table,#slot)?),
+                );
             }
         }
     }
@@ -582,7 +721,9 @@ fn output_bounds(
                     continue;
                 }
                 let bound = if !membership(facts, &right)
-                    && let Some(slot) = context.carried_columns[&right].iter().position(|c| c == column)
+                    && let Some(slot) = context.carried_columns[&right]
+                        .iter()
+                        .position(|c| c == column)
                 {
                     quote!(__execution.column_bounds(#table,#slot)?)
                 } else {
@@ -590,19 +731,48 @@ fn output_bounds(
                         .and_then(|f| f.constants.iter().find(|b| symbol_name(&b.column) == *column))
                         .ok_or_else(|| syn::Error::new_spanned(keyed,
                             "CQ_GPU_PAYLOAD_COLUMN: output has no source column or certified constant"))?;
-                    let value = constants.term(&binding.value, &BTreeMap::new(),
-                        facts.physical.rows[&right].types.get(column))?;
+                    let value = constants.term(
+                        &binding.value,
+                        &BTreeMap::new(),
+                        facts.physical.rows[&right].types.get(column),
+                    )?;
                     quote!(::cq_gpu_runtime::Bounds::singleton(#value))
                 };
                 bounds.insert(column.clone(), bound);
             }
         }
+        if let Operator::Bind(bind) = &context.physical[name].operator {
+            let types = &facts.physical.rows[&symbol_name(&bind.input)].types;
+            let placeholders = types
+                .keys()
+                .map(|column| (column.clone(), quote!(0u64)))
+                .collect();
+            let (column, value) = bind_value(bind, types, &placeholders, constants)?;
+            let bound = if let Some(source) = copied_column(&bind.expression) {
+                bounds.get(&source).cloned().ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        bind,
+                        "CQ_GPU_COLUMN_BOUNDS: copied bind source has no bounds",
+                    )
+                })?
+            } else {
+                quote!(::cq_gpu_runtime::Bounds::singleton(#value))
+            };
+            bounds.insert(column, bound);
+        }
         bounds.retain(|column, _| context.carried_columns[name].contains(column));
     }
-    context.carried_columns[endpoint].iter().map(|column| {
-        bounds.get(column).cloned().ok_or_else(|| syn::Error::new_spanned(first,
-            format!("CQ_GPU_COLUMN_BOUNDS: missing source for {column}")))
-    }).collect()
+    context.carried_columns[endpoint]
+        .iter()
+        .map(|column| {
+            bounds.get(column).cloned().ok_or_else(|| {
+                syn::Error::new_spanned(
+                    first,
+                    format!("CQ_GPU_COLUMN_BOUNDS: missing source for {column}"),
+                )
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn compile(
@@ -682,12 +852,49 @@ pub(crate) fn compile(
         ));
         host.push(quote!(let #table=__execution.bind_host(#value,#schema,#width)?;));
     }
+    for (name, types) in &options.datalog_keys {
+        if types.iter().any(|ty| !supported(ty)) {
+            return fail(
+                name,
+                "CQ_GPU_DATALOG_KEY_TYPE",
+                "unsupported frozen key column type",
+            );
+        }
+        let table = id("datalog_table", &symbol_name(name));
+        let membership = id("datalog_membership", &symbol_name(name));
+        // Empty projected keys use a canonical u8 witness row; the index has
+        // no key columns and therefore tests existence.
+        let row_types = if types.is_empty() {
+            vec![syn::parse_quote!(u8)]
+        } else {
+            types.clone()
+        };
+        let width = row_types.len();
+        let slots: Vec<_> = (0..types.len()).collect();
+        host_pools.push(quote!(::cq_gpu_runtime::HostColumns::pool(&#name)));
+        host_dictionaries.push(quote!(
+            ::cq_gpu_runtime::HostColumns::seed_dictionary(&#name,__execution.dictionary_mut())?;
+        ));
+        host.push(quote! {
+            {
+                fn __cq_gpu_check_key_schema<'data, H: ::cq_gpu_runtime::HostColumns<'data, Row=(#(#row_types,)*)>>(_: H) {}
+                __cq_gpu_check_key_schema(&#name);
+            }
+            let #table=__execution.bind_host(&#name,stringify!(#name),#width)?;
+            let #membership=__execution.prepare_exact_membership(#table,&[#(#slots),*])?;
+        });
+    }
     let mut kernels = Vec::new();
     let mut kernel_reads = Vec::new();
     let mut covered_reads = BTreeMap::<String, usize>::new();
     let mut filter_reads = Vec::new();
     let mut covered_filters = BTreeSet::new();
     let mut all_constants = Constants::default();
+    all_constants.datalog_keys = options
+        .datalog_keys
+        .iter()
+        .map(|(name, types)| (symbol_name(name), types.clone()))
+        .collect();
     for definition in &program.physical.program.definitions {
         let endpoint = symbol_name(&definition.name);
         if !endpoints.contains(&endpoint) {
@@ -833,7 +1040,7 @@ pub(crate) fn compile(
         let runs: BTreeSet<_> = chain
             .iter()
             .filter_map(|n| match &context.physical[n].operator {
-                Operator::Probe(_, k) | Operator::Semi(_, k) => {
+                Operator::Probe(_, k) | Operator::Semi(_, k) | Operator::Anti(_, k) => {
                     Some((symbol_name(&k.right), read_provider(&facts, k)))
                 }
                 _ => None,
@@ -865,6 +1072,13 @@ pub(crate) fn compile(
                 }
             })
             .collect::<Vec<_>>();
+        for (name, _) in &options.datalog_keys {
+            let view = id("datalog_view", &symbol_name(name));
+            let membership = id("datalog_membership", &symbol_name(name));
+            run_ids.push(view.clone());
+            run_types.push(quote!(::cq_gpu_runtime::ExactMembershipView));
+            run_bindings.push(quote!(let #view=__execution.exact_membership_view(#membership)?;));
+        }
         let mut stream_filters = Vec::new();
         if let Some(filters) = facts.join_filters.get(&chain[0]) {
             for (index, filter) in filters.iter().enumerate() {
@@ -894,18 +1108,27 @@ pub(crate) fn compile(
                 ));
             }
         }
-        let recorded_batches: BTreeSet<_> = chain.iter()
-            .filter_map(|n| facts.stages.get(n)).copied().collect();
-        let expanding = chain.iter().any(|n| matches!(
-            context.physical[n].operator, Operator::Probe(..)
-        ));
+        let recorded_batches: BTreeSet<_> = chain
+            .iter()
+            .filter_map(|n| facts.stages.get(n))
+            .copied()
+            .collect();
+        let expanding = chain
+            .iter()
+            .any(|n| matches!(context.physical[n].operator, Operator::Probe(..)));
         let maximum = if expanding { 256 } else { 1024 };
         if recorded_batches.len() > 1
-            || recorded_batches.iter().any(|&size| size == 0 || size > maximum)
+            || recorded_batches
+                .iter()
+                .any(|&size| size == 0 || size > maximum)
         {
-            return fail(definition, "CQ_GPU_STAGE_SIZE", format!(
-                "fused streams require one exact batch size in 1..={maximum}; split incompatible stages into materialized streams"
-            ));
+            return fail(
+                definition,
+                "CQ_GPU_STAGE_SIZE",
+                format!(
+                    "fused streams require one exact batch size in 1..={maximum}; split incompatible stages into materialized streams"
+                ),
+            );
         }
         let batch = recorded_batches.first().copied().unwrap_or(1024);
         let expansion_batch = recorded_batches.first().copied().unwrap_or(256);
@@ -1005,6 +1228,15 @@ pub(crate) fn compile(
             endpoint,
         });
     }
+    for (name, _) in &options.datalog_keys {
+        if !all_constants.used_datalog_keys.contains(&symbol_name(name)) {
+            return fail(
+                name,
+                "CQ_GPU_DATALOG_KEYS",
+                "certified key host is not used by an exact membership intrinsic",
+            );
+        }
+    }
     for read in &provenance {
         if covered_reads.get(&read.reader) != Some(&1) {
             return fail(
@@ -1051,14 +1283,26 @@ pub(crate) fn compile(
     let mut output_types = Vec::new();
     let mut output_columns = Vec::new();
     for expression in &program.physical.program.head.args {
-        let Some(variable) = syntax::rust::variable(expression) else {
+        let Some(column) = syntax::rust::variable(expression)
+            .map(symbol_name)
+            .or_else(|| copied_column(expression))
+        else {
             return fail(
                 expression,
                 "CQ_GPU_HEAD_EXPR",
-                "heads must contain column variables; compute relational columns before printing",
+                "heads require columns or copied dereferences; normalize typed literals to Bind",
             );
         };
-        let column = symbol_name(variable);
+        if copied_column(expression).is_some()
+            && type_name(&facts.physical.rows[&returned].types[&column]).as_deref()
+                == Some("String")
+        {
+            return fail(
+                expression,
+                "CQ_GPU_HEAD_EXPR",
+                "copied head requires a Copy scalar type",
+            );
+        }
         let Some(index) = context.carried_columns[&returned]
             .iter()
             .position(|c| c == &column)
@@ -1073,14 +1317,30 @@ pub(crate) fn compile(
         output_columns.push(index);
     }
     let output_codec = materialized_codec(&facts, &returned)?.marker();
-    let final_dedup = facts.head_dedup.contains_key(&returned);
-    if final_dedup {
-        return fail(
-            &program.physical.program.head,
-            "CQ_GPU_HEAD_CANON",
-            "computed head canonicalization is unsupported",
-        );
-    }
+    let final_dedup = facts
+        .head_dedup
+        .get(&returned)
+        .map(|ty| {
+            let codec = provider_codec(ty)?.value();
+            Ok::<_, syn::Error>(quote! {
+                let #output=__execution.project_table(#output,&[#(#output_columns),*])?;
+                let #output=__execution.dedup(#output)?;
+                let #output=__execution.reencode_table(#output,#codec)?;
+            })
+        })
+        .transpose()?;
+    let output_codec = facts
+        .head_dedup
+        .get(&returned)
+        .map(provider_codec)
+        .transpose()?
+        .map(RecordedCodec::marker)
+        .unwrap_or(output_codec);
+    let final_columns: Vec<_> = if final_dedup.is_some() {
+        (0..output_columns.len()).collect()
+    } else {
+        output_columns
+    };
     let reads = provenance.iter().map(|r| {
         format!(
             "{}:{}[{}]:{}",
@@ -1116,6 +1376,24 @@ pub(crate) fn compile(
             quote!((#name,#codec))
         });
     let source_bindings = &context.statements;
+    let shared_dictionary = options.datalog_dictionary.as_ref().map(|dictionary| {
+        quote! {
+            {
+                let __cq_gpu_shared_dictionary:
+                    &::std::sync::Arc<::cq_gpu_runtime::Dictionary<'_>> = &#dictionary;
+                __execution.dictionary_mut().merge(__cq_gpu_shared_dictionary.as_ref())?;
+            }
+        }
+    });
+    let shared_pool = options.datalog_pool.as_ref().map_or_else(
+        || quote!(None),
+        |pool| {
+            quote!({
+                let __cq_gpu_shared_pool: &::std::sync::Arc<::cq_gpu_runtime::Pool> = &#pool;
+                Some(__cq_gpu_shared_pool.clone())
+            })
+        },
+    );
     let has_kernels = device.iter().any(|item| !item.is_empty());
     let module = has_kernels.then(|| {
         quote! {
@@ -1159,16 +1437,18 @@ pub(crate) fn compile(
         const __CQ_GPU_DERIVED_CODECS: &[(&str,&str)]=&[#(#derived_codecs),*];
         const __CQ_GPU_CAPACITY: ::core::option::Option<&str>=#recorded_capacity;
         #(#source_bindings)*
-        let __pool=None #(.or_else(|| #host_pools))*;
+        let __pool=#shared_pool #(.or_else(|| #host_pools))*;
         ::cq_gpu_runtime::with_runtime_for(__pool,|__runtime| {
             let mut __execution=__runtime.execution();
             #load
+            #shared_dictionary
             #(#host_dictionaries)*
             #(#host)*
             #(#constants)*
             #(#launches)*
+            #final_dedup
             let __answer=__execution.into_columns::<(#(#output_types,)*),#output_codec>(
-                #output,&[#(#output_columns),*]
+                #output,&[#(#final_columns),*]
             )?;
             __execution.finish()?;
             Ok(__answer)
@@ -1278,15 +1558,29 @@ impl ResumeEmitter<'_, '_, '_> {
                 let rest = self.steps(index + 1, state, next)?;
                 Ok(self.block(quote! {__valid=__valid && (#condition);__resume_pc=#rest;}))
             }
+            Operator::Bind(bind) => {
+                let (column, value) = bind_value(
+                    bind,
+                    &facts.physical.rows[&symbol_name(&bind.input)].types,
+                    &state.columns,
+                    self.source.constants,
+                )?;
+                state.columns.insert(column, value);
+                state
+                    .columns
+                    .retain(|column, _| context.carried_columns[&name].contains(column));
+                self.steps(index + 1, state, next)
+            }
             Operator::Project(_) => {
                 state
                     .columns
                     .retain(|column, _| context.carried_columns[&name].contains(column));
                 self.steps(index + 1, state, next)
             }
-            Operator::Semi(_, k) | Operator::Probe(_, k)
+            Operator::Semi(_, k) | Operator::Probe(_, k) | Operator::Anti(_, k)
                 if membership(facts, &symbol_name(&k.right)) =>
             {
+                let negative = matches!(definition.operator, Operator::Anti(..));
                 let right = symbol_name(&k.right);
                 let provider = read_provider(facts, k);
                 let view = provider_id("run_view", &right, provider);
@@ -1303,7 +1597,11 @@ impl ResumeEmitter<'_, '_, '_> {
                         }).ok_or_else(|| syn::Error::new_spanned(
                             k, "CQ_GPU_MEMBERSHIP_PAYLOAD: membership probe cannot expose unrecorded payload",
                         ))?;
-                        let value = self.source.constants.term(&binding.value, &state.columns, facts.physical.rows[&right].types.get(column))?;
+                        let value = self.source.constants.term(
+                            &binding.value,
+                            &state.columns,
+                            facts.physical.rows[&right].types.get(column),
+                        )?;
                         state.columns.insert(column.clone(), value);
                     }
                 }
@@ -1312,11 +1610,12 @@ impl ResumeEmitter<'_, '_, '_> {
                     .retain(|column, _| context.carried_columns[&name].contains(column));
                 let rest = self.steps(index + 1, state, next)?;
                 Ok(self.block(quote! {
-                    __valid=__valid && ::cq_gpu_runtime::membership_contains(#view,#key);
+                    __valid=__valid && (::cq_gpu_runtime::membership_contains(#view,#key) != #negative);
                     __resume_pc=#rest;
                 }))
             }
-            Operator::Semi(_, k) => {
+            Operator::Semi(_, k) | Operator::Anti(_, k) => {
+                let negative = matches!(definition.operator, Operator::Anti(..));
                 let right = symbol_name(&k.right);
                 let provider = read_provider(facts, k);
                 let run = provider_id("run_view", &right, provider);
@@ -1345,7 +1644,7 @@ impl ResumeEmitter<'_, '_, '_> {
                         __found=#residual;
                         __candidate+=1;
                     }
-                    __valid=__valid && __found;
+                    __valid=__valid && (__found != #negative);
                     __resume_pc=#rest;
                 }))
             }
@@ -1444,9 +1743,11 @@ impl ResumeEmitter<'_, '_, '_> {
                     .iter()
                     .find(|b| symbol_name(&b.column) == *column)
             }) {
-                self.source
-                    .constants
-                    .term(&constant.value, &child.columns, facts.physical.rows[&right].types.get(column))?
+                self.source.constants.term(
+                    &constant.value,
+                    &child.columns,
+                    facts.physical.rows[&right].types.get(column),
+                )?
             } else {
                 return fail(
                     k,
@@ -1734,19 +2035,35 @@ impl Emitter<'_, '_> {
                 let rest = self.steps(index + 1, state)?;
                 Ok(quote! {__valid=__valid && (#condition);#rest})
             }
+            Operator::Bind(bind) => {
+                let (column, value) = bind_value(
+                    bind,
+                    &self.facts.physical.rows[&symbol_name(&bind.input)].types,
+                    &state.columns,
+                    self.constants,
+                )?;
+                state.columns.insert(column, value);
+                state
+                    .columns
+                    .retain(|column, _| self.context.carried_columns[name].contains(column));
+                self.steps(index + 1, state)
+            }
             Operator::Project(_) => {
                 state
                     .columns
                     .retain(|c, _| self.context.carried_columns[name].contains(c));
                 self.steps(index + 1, state)
             }
-            Operator::Semi(_, k) if membership(self.facts, &symbol_name(&k.right)) => {
+            Operator::Semi(_, k) | Operator::Anti(_, k)
+                if membership(self.facts, &symbol_name(&k.right)) =>
+            {
                 self.member(index, state, k, false)
             }
             Operator::Probe(_, k) if membership(self.facts, &symbol_name(&k.right)) => {
                 self.member(index, state, k, true)
             }
-            Operator::Semi(_, k) => {
+            Operator::Semi(_, k) | Operator::Anti(_, k) => {
+                let negative = matches!(definition.operator, Operator::Anti(..));
                 let right = symbol_name(&k.right);
                 let provider = read_provider(self.facts, k);
                 let run = provider_id("run_view", &right, provider);
@@ -1772,7 +2089,7 @@ impl Emitter<'_, '_> {
                         __found=#residual;
                         __candidate+=1;
                     }
-                    __valid=__valid && __found;
+                    __valid=__valid && (__found != #negative);
                     #rest
                 })
             }
@@ -1815,7 +2132,11 @@ impl Emitter<'_, '_> {
                         "membership probe cannot expose unrecorded payload",
                     );
                 };
-                let value = self.constants.term(&binding.value, &state.columns, self.facts.physical.rows[&right].types.get(column))?;
+                let value = self.constants.term(
+                    &binding.value,
+                    &state.columns,
+                    self.facts.physical.rows[&right].types.get(column),
+                )?;
                 state.columns.insert(column.clone(), value);
             }
         }
@@ -1823,7 +2144,13 @@ impl Emitter<'_, '_> {
             .columns
             .retain(|column, _| self.context.carried_columns[&self.chain[index]].contains(column));
         let rest = self.steps(index + 1, state)?;
-        Ok(quote! {__valid=__valid && ::cq_gpu_runtime::membership_contains(#view,#key);#rest})
+        let negative = matches!(
+            self.context.physical[&self.chain[index]].operator,
+            Operator::Anti(..)
+        );
+        Ok(
+            quote! {__valid=__valid && (::cq_gpu_runtime::membership_contains(#view,#key) != #negative);#rest},
+        )
     }
     // Exhaustive thread-local traversal needs neither a uniqueness promise nor
     // a shared-memory materialization. Explicit batch/expand stages retain the
@@ -1878,7 +2205,11 @@ impl Emitter<'_, '_> {
                     .iter()
                     .find(|b| symbol_name(&b.column) == *column)
             }) {
-                self.constants.term(&constant.value, &state.columns, self.facts.physical.rows[&right].types.get(column))?
+                self.constants.term(
+                    &constant.value,
+                    &state.columns,
+                    self.facts.physical.rows[&right].types.get(column),
+                )?
             } else {
                 return fail(
                     k,
@@ -2026,7 +2357,11 @@ impl Emitter<'_, '_> {
                     .iter()
                     .find(|b| symbol_name(&b.column) == *column)
             }) {
-                self.constants.term(&constant.value, &child.columns, self.facts.physical.rows[&right].types.get(column))?
+                self.constants.term(
+                    &constant.value,
+                    &child.columns,
+                    self.facts.physical.rows[&right].types.get(column),
+                )?
             } else {
                 return fail(
                     k,

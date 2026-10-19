@@ -8,7 +8,24 @@ use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 
+/// Concrete admission/key representation selected before scheduling.
+/// Layout demands remain logical permutations; device consumers rebuild indexes per hole.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Representation {
+    #[default]
+    CpuHashSet,
+    DeviceSet,
+}
+
 pub fn compile(source: &Program) -> syn::Result<Program> {
+    compile_with_representation(source, Representation::CpuHashSet)
+}
+
+/// Schedule the same Boolean cover with an explicitly checked backend policy.
+pub fn compile_with_representation(
+    source: &Program,
+    representation: Representation,
+) -> syn::Result<Program> {
     let analysis = contract::check(source)?;
     ensure(
         source.strata.is_some() && source.variants.is_none(),
@@ -63,8 +80,18 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
     target.variants = Some(variants);
     (target.layouts, target.delta_layouts) =
         choose_layouts(target.variants.as_ref().unwrap(), &target.rules);
-    target.insertion = Some(syn::parse_quote!(hash_set_all_columns));
-    target.negation_keys = Some(syn::parse_quote!(hash_set_borrowed));
+    let (insertion, keys) = match representation {
+        Representation::CpuHashSet => (
+            syn::parse_quote!(hash_set_all_columns),
+            syn::parse_quote!(hash_set_borrowed),
+        ),
+        Representation::DeviceSet => (
+            syn::parse_quote!(device_set_all_columns),
+            syn::parse_quote!(device_set_owned),
+        ),
+    };
+    target.insertion = Some(insertion);
+    target.negation_keys = Some(keys);
     check(source, &target)?;
     Ok(target)
 }

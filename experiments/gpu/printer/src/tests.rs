@@ -4,7 +4,7 @@ use crate::{
     predicate::Constants,
 };
 use cq_lang_structures as ir;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use std::collections::BTreeMap;
 
 fn shared() -> ir::Program {
@@ -86,8 +86,11 @@ fn every_keyed_read_has_exactly_one_provenance_entry_and_witness_does_not_reprob
     assert_eq!(generated.matches("pub fn cq_gpu_stream_").count(), 1);
     assert!(generated.contains("cuda_module"));
     assert!(generated.contains("p:b[x]:witness:s"));
-    assert!(generated
-        .contains("let (__cq_gpu_begin_p , __cq_gpu_end_p) = (__cq_gpu_begin_s , __cq_gpu_end_s)"));
+    assert!(
+        generated.contains(
+            "let (__cq_gpu_begin_p , __cq_gpu_end_p) = (__cq_gpu_begin_s , __cq_gpu_end_s)"
+        )
+    );
     assert!(generated.contains("while __cq_gpu_row_p < __cq_gpu_end_p"));
     assert!(!generated.contains("tiles :: owner"));
     assert!(generated.contains("let __cq_gpu_payload_p_y = __cq_gpu_run_view_b . columns"));
@@ -146,14 +149,14 @@ fn backend_rejection_codes_name_every_unsupported_operator() {
     for (definition, code) in [
         (quote!(bad = pipe merge [x] l,b;), "CQ_GPU_MERGE"),
         (quote!(bad = pipe union l,b;), "CQ_GPU_UNION"),
-        (quote!(bad = pipe anti eager [x] l,b;), "CQ_GPU_ANTI"),
+        (quote!(bad = pipe anti lazy [x] l,b;), "CQ_GPU_ANTI_CHOICE"),
         (
             quote!(bad = pipe probe smallest [x] l,b;),
             "CQ_GPU_SMALLEST",
         ),
         (quote!(bad = pipe guard l if (true);), "CQ_GPU_OPAQUE_GUARD"),
         (
-            quote!(bad = pipe bind l with z:i64 = (1);),
+            quote!(bad = pipe bind l with z:i64 = (opaque(x));),
             "CQ_GPU_OPAQUE_BIND",
         ),
         (
@@ -193,7 +196,8 @@ fn generators_are_rejected_before_device_lowering() {
         } structures {
             l host scan = ::core::iter::Map<_,_> [];
             p canon = ::cq_gpu_runtime::DeviceSet<_>;
-        } }).unwrap();
+        } })
+        .unwrap();
         assert!(
             compile(&source, Options::default())
                 .unwrap_err()
@@ -246,10 +250,12 @@ fn backend_rejection_codes_name_unsupported_recorded_storage() {
         .unwrap()
         .types
         .insert("x".into(), syn::parse_quote!(String));
-    assert!(validate(&source, &bad_types)
-        .unwrap_err()
-        .to_string()
-        .contains("CQ_GPU_NON_INTEGRAL_KEY"));
+    assert!(
+        validate(&source, &bad_types)
+            .unwrap_err()
+            .to_string()
+            .contains("CQ_GPU_NON_INTEGRAL_KEY")
+    );
 }
 
 #[test]
@@ -264,10 +270,12 @@ fn printer_options_are_explicit_and_checked() {
             "CQ_GPU_DUPLICATE_ARGUMENT",
         ),
     ] {
-        assert!(syn::parse2::<Options>(args)
-            .unwrap_err()
-            .to_string()
-            .contains(code));
+        assert!(
+            syn::parse2::<Options>(args)
+                .unwrap_err()
+                .to_string()
+                .contains(code)
+        );
     }
 }
 
@@ -276,11 +284,13 @@ fn dictionary_order_is_never_silently_integer_order() {
     let vars = BTreeMap::from([("name".into(), quote!(__name))]);
     let types = BTreeMap::from([("name".into(), syn::parse_quote!(String))]);
     let theta = syn::parse_quote!(name < "z");
-    assert!(Constants::default()
-        .theta(&theta, &vars, &types)
-        .unwrap_err()
-        .to_string()
-        .contains("CQ_GPU_STRING_ORDER"));
+    assert!(
+        Constants::default()
+            .theta(&theta, &vars, &types)
+            .unwrap_err()
+            .to_string()
+            .contains("CQ_GPU_STRING_ORDER")
+    );
 }
 
 #[test]
@@ -469,8 +479,10 @@ fn resident_host_binding_preserves_codec_ownership_and_explicit_download() {
     assert!(generated.contains("bind_host"));
     assert!(generated.contains("HostColumns :: seed_dictionary"));
     assert!(generated.find("seed_dictionary").unwrap() < generated.find("bind_host").unwrap());
-    assert!(generated
-        .contains("into_columns :: < (& str , i64 , & str ,) , :: cq_gpu_runtime :: Plain >"));
+    assert!(
+        generated
+            .contains("into_columns :: < (& str , i64 , & str ,) , :: cq_gpu_runtime :: Plain >")
+    );
     assert!(generated.contains("& [0usize , 1usize , 0usize]"));
     assert!(generated.contains("__execution . dedup"));
     assert!(!generated.contains("Codec :: Delta"));
@@ -739,25 +751,38 @@ fn range_reads_are_truthfully_scan_filters() {
 fn recorded_stage_sizes_are_not_silently_changed() {
     for size in [257usize, 1024, 2048] {
         let mut source = shared();
-        source.structures.entries.push(syn::parse2(
-            quote!(p stage = batch #size expand;)
-        ).unwrap());
-        assert!(compile(&source, Options::default())
-            .unwrap_err().to_string().contains("CQ_GPU_STAGE_SIZE"));
+        source
+            .structures
+            .entries
+            .push(syn::parse2(quote!(p stage = batch #size expand;)).unwrap());
+        assert!(
+            compile(&source, Options::default())
+                .unwrap_err()
+                .to_string()
+                .contains("CQ_GPU_STAGE_SIZE")
+        );
     }
 }
 
 #[test]
 fn typed_literals_follow_declared_types_in_relational_predicates() {
     let vars = BTreeMap::from([("x".to_owned(), quote!(x)), ("y".to_owned(), quote!(y))]);
-    let types = BTreeMap::from([("x".to_owned(), syn::parse_quote!(i64)), ("y".to_owned(), syn::parse_quote!(u32))]);
+    let types = BTreeMap::from([
+        ("x".to_owned(), syn::parse_quote!(i64)),
+        ("y".to_owned(), syn::parse_quote!(u32)),
+    ]);
     for theta in [
         syn::parse_quote!(x >= -3000000000, y >= 4000000000),
         syn::parse_quote!(x = 3000000000),
     ] {
         let mut constants = Constants::default();
         constants.theta(&theta, &vars, &types).unwrap();
-        let values = constants.values.iter().map(|(_, value)| value.to_string()).collect::<Vec<_>>().join(" ");
+        let values = constants
+            .values
+            .iter()
+            .map(|(_, value)| value.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(values.contains("let __cq_gpu_literal : i64"));
         if values.contains("4000000000") {
             assert!(values.contains("let __cq_gpu_literal : u32"));
@@ -767,8 +792,14 @@ fn typed_literals_follow_declared_types_in_relational_predicates() {
 
 #[test]
 fn output_bounds_follow_driver_and_run_payload_without_full_domain_fallback() {
-    for options in [Options::default(), syn::parse2(quote!(capacity(R))).unwrap()] {
-        let generated = compile(&shared(), options).unwrap().to_token_stream().to_string();
+    for options in [
+        Options::default(),
+        syn::parse2(quote!(capacity(R))).unwrap(),
+    ] {
+        let generated = compile(&shared(), options)
+            .unwrap()
+            .to_token_stream()
+            .to_string();
         assert!(generated.contains("column_bounds (__cq_gpu_host_L , 0usize)"));
         assert!(generated.contains("column_bounds (__cq_gpu_table_b , 1usize)"));
         assert!(!generated.contains("i64 :: MIN"));
@@ -789,18 +820,221 @@ fn integer_literal_encoding_compiles_large_values_but_rejects_declared_type_over
         (quote!(-1), quote!(u32), false),
     ] {
         let mut constants = Constants::default();
-        constants.literal(&syn::parse2(literal).unwrap(), Some(&syn::parse2(ty).unwrap())).unwrap();
+        constants
+            .literal(
+                &syn::parse2(literal).unwrap(),
+                Some(&syn::parse2(ty).unwrap()),
+            )
+            .unwrap();
         let value = &constants.values[0].1;
         let source = directory.join("literal.rs");
         std::fs::write(&source, quote!(fn main() { let _ = #value; }).to_string()).unwrap();
         let output = std::process::Command::new("rustc")
-            .arg("--emit=metadata").arg("--out-dir").arg(&directory).arg(&source)
-            .output().unwrap();
-        assert_eq!(output.status.success(), valid, "{}", String::from_utf8_lossy(&output.stderr));
+            .arg("--emit=metadata")
+            .arg("--out-dir")
+            .arg(&directory)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            valid,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         if !valid {
             let diagnostic = String::from_utf8_lossy(&output.stderr);
-            assert!(diagnostic.contains("out of range") || diagnostic.contains("cannot apply unary operator"));
+            assert!(
+                diagnostic.contains("out of range")
+                    || diagnostic.contains("cannot apply unary operator")
+            );
         }
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn copied_and_literal_binds_preserve_types_and_bounds() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        scan = pipe rename R@0 {a -> x};
+        copied = pipe bind scan with y:i32 = (*x);
+        literal = pipe bind copied with z:u8 = (7);
+        output = pipe canon project literal keep {y,z};
+        return output as answer(y,z,y);
+    } structures {
+        scan host scan = ::core::iter::Map<_,_> [];
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    for options in [
+        Options::default(),
+        syn::parse2(quote!(capacity(R))).unwrap(),
+    ] {
+        let generated = compile(&source, options)
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert!(generated.contains("let __cq_gpu_literal : u8 = 7"));
+        assert!(generated.contains("Bounds :: singleton"));
+        assert!(generated.contains("into_columns :: < (i32 , u8 , i32 ,)"));
+        assert!(generated.contains("__execution . dedup"));
+        assert!(!generated.contains("opaque"));
+    }
+}
+
+#[test]
+fn typed_bind_rejects_opaque_numeric_and_type_changing_expressions() {
+    for (expression, ty, code) in [
+        (quote!(*x + 1), quote!(i32), "CQ_GPU_OPAQUE_BIND"),
+        (quote!(x.clone()), quote!(i32), "CQ_GPU_OPAQUE_BIND"),
+        (quote!(*x), quote!(i64), "CQ_GPU_BIND_TYPE"),
+        (quote!(external()), quote!(i32), "CQ_GPU_OPAQUE_BIND"),
+    ] {
+        let source: ir::Program = syn::parse_quote! { physical {
+            relation R(a:i32);
+            scan = pipe rename R@0 {a -> x};
+            output = pipe canon bind scan with y:#ty = (#expression);
+            return output as answer(x,y);
+        } structures {
+            scan host scan = ::core::iter::Map<_,_> [];
+            output canon = ::cq_gpu_runtime::DeviceSet<_>;
+        }};
+        let error = compile(&source, Options::default())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(code), "{error}");
+    }
+}
+
+#[test]
+fn certified_exact_membership_is_device_only_and_schema_checked() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation R(a:i32,b:bool);
+        scan = pipe rename R@0 {a -> x,b -> flag};
+        selected = pipe select scan if (
+            #[total] { x = x, flag = flag } (!::cq_gpu_runtime::datalog::contains(&keys, &(x,flag,)))
+        );
+        output = pipe canon project selected keep {x,flag};
+        return output as answer(x,flag);
+    } structures {
+        scan host scan = ::core::iter::Map<_,_> [];
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    let options = syn::parse2(quote!(datalog_keys(keys:(i32,bool)))).unwrap();
+    let generated = compile(&source, options)
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("prepare_exact_membership"));
+    assert!(generated.contains("ExactMembershipView"));
+    assert!(generated.contains("exact_contains"));
+    assert!(!generated.contains("datalog :: contains"));
+    assert!(!generated.contains("download"));
+    let error = compile(&source, Options::default())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("bridge-certified"), "{error}");
+    let options = syn::parse2(quote!(datalog_keys(keys:(i64,bool)))).unwrap();
+    let error = compile(&source, options).unwrap_err().to_string();
+    assert!(error.contains("CQ_GPU_DATALOG_KEY_TYPE"), "{error}");
+}
+
+#[test]
+fn lossy_and_repeated_heads_canon_after_projection() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        scan = pipe canon rename R@0 {a -> x};
+        return scan as answer(*x,*x);
+    } structures {
+        scan host scan = ::core::iter::Map<_,_> [];
+        scan canon = ::cq_gpu_runtime::DeviceSet<_>;
+        scan head = ::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::Delta>;
+    }};
+    let generated = compile(&source, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(generated.contains("project_table (__cq_gpu_table_scan , & [0usize , 0usize])"));
+    assert_eq!(generated.matches("__execution . dedup").count(), 2);
+    assert!(generated.contains("into_columns :: < (i32 , i32 ,) , :: cq_gpu_runtime :: Delta >"));
+}
+
+#[test]
+fn physical_anti_reuses_recorded_run_and_inverts_exact_membership() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64); relation R(a:i64,b:i64);
+        l = pipe rename L@0 {a -> x};
+        b = let rename R@1 {a -> x,b -> y};
+        output = pipe canon anti eager [x] l,b;
+        return output as answer(x);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        b host scan = ::core::iter::Map<_,_> [];
+        b rows = ::cq_gpu_runtime::DeviceColumns<_>;
+        b = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [x];
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    for options in [
+        Options::default(),
+        syn::parse2(quote!(capacity(L))).unwrap(),
+    ] {
+        let generated = compile(&source, options)
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert!(generated.contains("__found != true"));
+        assert_eq!(generated.matches("prepare_run").count(), 1);
+        assert!(!generated.contains("prepare_exact_membership"));
+        assert!(generated.contains("output:b[x]:rank-point"));
+    }
+}
+
+#[test]
+fn shared_datalog_dictionary_seeds_input_free_literal_rules() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        root = pipe unit;
+        output = pipe canon bind root with x:&str = ("literal");
+        return output as answer(x);
+    } structures {
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    let options = syn::parse2(quote!(datalog_dictionary(shared), datalog_pool(pool))).unwrap();
+    let generated = compile(&source, options)
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    let compact: String = generated.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(compact.contains("&::std::sync::Arc<::cq_gpu_runtime::Dictionary<'_>>=&shared"));
+    assert!(compact.contains("&::std::sync::Arc<::cq_gpu_runtime::Pool>=&pool"));
+    assert!(compact.contains("Some(__cq_gpu_shared_pool.clone())"));
+    assert!(
+        generated.find("__cq_gpu_shared_pool").unwrap()
+            < generated.find("with_runtime_for").unwrap()
+    );
+    assert!(
+        generated.find("dictionary_mut () . merge").unwrap()
+            < generated.find("encode_value").unwrap()
+    );
+    let generated = compile(
+        &shared(),
+        syn::parse2(quote!(datalog_dictionary(dictionary))).unwrap(),
+    )
+    .unwrap()
+    .to_token_stream()
+    .to_string();
+    assert!(
+        generated.find("dictionary_mut () . merge").unwrap()
+            < generated.find("HostColumns :: seed_dictionary").unwrap()
+    );
+    assert!(syn::parse2::<Options>(quote!(datalog_dictionary(shared, extra))).is_err());
+    assert!(
+        syn::parse2::<Options>(quote!(
+            datalog_dictionary(shared),
+            datalog_dictionary(other)
+        ))
+        .is_err()
+    );
+    assert!(syn::parse2::<Options>(quote!(datalog_dictionary(make_dictionary()))).is_err());
+    assert!(syn::parse2::<Options>(quote!(datalog_pool(pool), datalog_pool(other))).is_err());
+    assert!(syn::parse2::<Options>(quote!(datalog_pool(make_pool()))).is_err());
 }

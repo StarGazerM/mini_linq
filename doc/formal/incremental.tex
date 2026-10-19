@@ -254,6 +254,20 @@ recorded layout, ordinary CQ fallback construction remains correct but may
 cost more work. Layout choice is therefore a checked Datalog decision, not a
 claim that every possible caller pipeline reuses every index.
 
+The device backend reuses these SCC and Boolean-cover decisions with the
+explicit policy pair \texttt{device\_set\_all\_columns} and
+\texttt{device\_set\_owned}. Mixed CPU/device policy pairs are rejected.
+The fork records resident column projections with per-hole index rebuilding,
+not maintained grouped hosts. Its bridge realizes each supported CQ hole with
+the GPU printer; an unsupported device expression is rejected rather than
+executed on the CPU. Admission computes the equations above on device-resident
+rows and prepares every SCC successor before publishing any member, including
+empty member deltas. Small checked cardinality/status readbacks govern host
+allocation and convergence; they do not transfer relation tuples.
+This rebuild-per-publication realization is not a \code{Runs} spine, does not
+implement logical timestamp compaction, and makes no incremental-index reuse
+claim. Output device relations remain owned and resident until explicitly read.
+
 Core negation is lowered to a total membership guard over a key set built
 once at the consuming stratum boundary, after its negative inputs are complete.
 Wildcards are omitted from the key. These guards introduce no bindings and do

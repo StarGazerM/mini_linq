@@ -7,6 +7,15 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add experimental `cq_gpu_datalog::datalog!` using the existing checked
+  strata, semi-naive variants and fork, with explicit device admission and
+  negative-key policies. Exact resident union/difference publishes immutable
+  SCC snapshots and returns persistent device relations. Support copied/literal
+  GPU heads and stratified exact negative membership; reject unsupported Rust
+  expressions and CPU-policy schedules. Seed one compatible dictionary across
+  all rule holes so different string constants cannot acquire conflicting IDs.
+  This baseline rebuilds indexes/sets; it does not implement a maintained spine.
+
 - Integrate upstream CQ generators with LE scheduling; reject unsupported GPU
   generators explicitly. GPU cleanup pins RCCL to a published revision,
   removes mandatory local checkout paths, and archives duplicate generated

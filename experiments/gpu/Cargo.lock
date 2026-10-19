@@ -101,6 +101,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-datalog-fork"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-lang-datalog",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-datalog-schedule"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-datalog",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-elaborate"
 version = "0.1.0"
 dependencies = [
@@ -118,6 +141,27 @@ dependencies = [
  "cq-lang-structures",
  "cq-print",
  "cq-stage",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "trybuild",
+]
+
+[[package]]
+name = "cq-gpu-datalog"
+version = "0.1.0"
+dependencies = [
+ "cq-datalog-fork",
+ "cq-datalog-schedule",
+ "cq-gpu",
+ "cq-gpu-runtime",
+ "cq-lang-datalog",
+ "cq-rewrites",
+ "cq-storage",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "mini-linq",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -157,6 +201,18 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "syn_derive",
+]
+
+[[package]]
+name = "cq-lang-datalog"
+version = "0.0.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -544,6 +600,21 @@ dependencies = [
  "cuda-host",
  "gpu-tiles",
  "rccl-memory",
+]
+
+[[package]]
+name = "gpu-datalog-oracle"
+version = "0.1.0"
+dependencies = [
+ "cq-gpu",
+ "cq-gpu-datalog",
+ "cq-gpu-runtime",
+ "cq-rewrites",
+ "cq-storage",
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "mini-linq",
 ]
 
 [[package]]

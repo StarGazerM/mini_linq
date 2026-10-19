@@ -1,5 +1,5 @@
 [workspace]
-members = ["tiles", "blocked-run", "h05", "triangles", "triangles-runner", "printer", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle"]
+members = ["tiles", "blocked-run", "h05", "triangles", "triangles-runner", "printer", "printer-runtime", "h05-compiled", "device-columns", "device-columns-oracle", "datalog", "datalog-oracle"]
 resolver = "2"
 
 [workspace.package]

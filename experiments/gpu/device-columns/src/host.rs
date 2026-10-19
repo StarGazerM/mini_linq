@@ -1,6 +1,6 @@
 use crate::{
-    decode_value, encode_value, failure, Buffer, Codec, ColumnView, DecodeValue, Dictionary,
-    Bounds, EncodeValue, EncodedColumn, Pool, Result,
+    Bounds, Buffer, Codec, ColumnView, DecodeValue, Dictionary, EncodeValue, EncodedColumn, Pool,
+    Result, decode_value, encode_value, failure,
 };
 use cuda_core::DeviceCopy;
 use std::{marker::PhantomData, sync::Arc};
@@ -31,6 +31,15 @@ pub trait RowCodec<'data>: Sized {
     const WIDTH: usize;
     fn encode(&'data self, dictionary: &mut Dictionary<'data>, output: &mut [i64]) -> Result<()>;
     fn decode(values: &[i64], dictionary: &Dictionary<'data>) -> Result<Self>;
+}
+impl RowCodec<'_> for () {
+    const WIDTH: usize = 0;
+    fn encode(&self, _: &mut Dictionary<'_>, _: &mut [i64]) -> Result<()> {
+        Ok(())
+    }
+    fn decode(_: &[i64], _: &Dictionary<'_>) -> Result<Self> {
+        Ok(())
+    }
 }
 macro_rules! tuple_codec {
     ($($T:ident:$i:tt),+) => {
@@ -72,7 +81,9 @@ macro_rules! owned_scalar {
         }
     )+};
 }
-owned_scalar!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, bool);
+owned_scalar!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, bool
+);
 impl OwnedEncodeValue for String {
     fn encode_owned(&self, dictionary: &mut Dictionary<'static>) -> Result<i64> {
         dictionary.intern_owned(self)
@@ -86,6 +97,12 @@ impl OwnedEncodeValue for &str {
 pub trait OwnedRowCodec {
     const WIDTH: usize;
     fn encode_owned(&self, dictionary: &mut Dictionary<'static>, output: &mut [i64]) -> Result<()>;
+}
+impl OwnedRowCodec for () {
+    const WIDTH: usize = 0;
+    fn encode_owned(&self, _: &mut Dictionary<'static>, _: &mut [i64]) -> Result<()> {
+        Ok(())
+    }
 }
 macro_rules! owned_tuple {
     ($($T:ident:$i:tt),+) => {
@@ -190,7 +207,10 @@ impl<Row: OwnedRowCodec> DeviceColumns<'static, Row> {
             })
             .collect::<Result<Vec<_>>>()?;
         let bounds = columns.iter().map(|column| column.bounds()).collect();
-        let host_views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
+        let host_views: Vec<_> = columns
+            .iter()
+            .map(|column| unsafe { column.view() })
+            .collect();
         let views = Arc::new(Buffer::from_host(pool.clone(), &host_views)?);
         let metadata = Arc::new(Buffer::from_host(
             pool.clone(),
@@ -242,6 +262,19 @@ impl<'data, Row, C> DeviceColumns<'data, Row, C> {
     }
     pub fn dictionary(&self) -> &Dictionary<'data> {
         &self.dictionary
+    }
+    /// Share this resident relation with a common, compatible dictionary.
+    /// The replacement must contain the complete existing ID prefix and retain
+    /// borrowed text lifetimes. Columns, statuses, pool, stream and context are
+    /// unchanged; no tuple remapping, copying or device transfer occurs.
+    pub fn with_dictionary(&self, dictionary: Arc<Dictionary<'data>>) -> Result<Self> {
+        self.dictionary.check_extension(&dictionary)?;
+        Ok(Self {
+            table: self.table.clone(),
+            dictionary,
+            pool: self.pool.clone(),
+            marker: PhantomData,
+        })
     }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool

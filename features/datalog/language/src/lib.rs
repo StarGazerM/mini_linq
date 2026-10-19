@@ -37,17 +37,21 @@
 //! variant 0 seed { ... } variant 1 delta 0 { ... } }` records insertion,
 //! borrowed HashSet negation keys, fresh delta declarations and the Boolean
 //! cover of changing positive positions. Both policies are required, in this
-//! order, and only these fixed representations are supported. Each
-//! delta inherits its base relation's complete ordered schema. Every IDB has
-//! exactly one delta declaration; EDBs have none. Non-delta reads use current
+//! order. The CPU pair above and the device pair `device_set_all_columns` /
+//! `device_set_owned` are checked separately; mixed pairs are rejected.
+//! Device layouts denote resident projections with per-hole index builds,
+//! not maintained CPU grouped hosts. Each delta inherits its base relation's
+//! complete ordered schema. Every IDB has exactly one delta declaration;
+//! EDBs have none. Non-delta reads use current
 //! relations, not an exact bag-valued product rule.
 //! Full positive reads record `layout R [0,1] key 1;` after deltas and before
 //! variants. Columns form a complete permutation; the leading `key` columns
 //! are variables bound by earlier positive atoms plus constant expressions.
 //! Delta reads record separate `delta_layout R [1,0] key 1;` entries naming the
 //! base IDB, after full layouts and before variants. Every keyed delta read and
-//! every later key-zero probe has a layout; an initial unkeyed delta stays a Vec
-//! scan. Every variant retains written body order: a delta adds bindings only
+//! every later key-zero probe has a layout; an initial unkeyed delta stays a
+//! scan (a CPU Vec or resident device relation according to policy).
+//! Every variant retains written body order: a delta adds bindings only
 //! at its actual position. Wildcards and variables first introduced in the atom
 //! are not keys. Decisions are deduplicated in rule/changing-position order,
 //! independently of variant order; negation uses its separate policy.
@@ -569,18 +573,17 @@ fn check_variants(p: &Program, analysis: &Analysis) -> syn::Result<()> {
     };
     ensure(p.strata.is_some(), p, "seminaive requires strata")?;
     ensure(
-        p.insertion
-            .as_ref()
-            .is_some_and(|i| i == "hash_set_all_columns"),
+        matches!(
+            &(
+                p.insertion.as_ref().map(ToString::to_string),
+                p.negation_keys.as_ref().map(ToString::to_string),
+            ),
+            (Some(insertion), Some(keys))
+                if (insertion == "hash_set_all_columns" && keys == "hash_set_borrowed")
+                    || (insertion == "device_set_all_columns" && keys == "device_set_owned")
+        ),
         p,
-        "insert_new requires the canonical all-column HashSet",
-    )?;
-    ensure(
-        p.negation_keys
-            .as_ref()
-            .is_some_and(|i| i == "hash_set_borrowed"),
-        p,
-        "negation_keys requires the borrowed-key HashSet",
+        "insert_new and negation_keys require a matching canonical CPU HashSet or device set policy pair",
     )?;
     let mut seen = BTreeSet::new();
     let mut declarations = p.declarations.clone();

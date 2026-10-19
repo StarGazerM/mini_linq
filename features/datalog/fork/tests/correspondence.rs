@@ -667,3 +667,41 @@ fn fork_preserves_generators_and_generated_join_values() {
     changed.holes[hole].query.body[2] = syn::parse_quote!(for y in [*x + 2]);
     assert!(check(&source, &changed).is_err());
 }
+
+#[test]
+fn device_keys_have_owned_schema_and_checked_membership_intrinsic() {
+    let mut source = authored();
+    source.insertion = Some(syn::parse_quote!(device_set_all_columns));
+    source.negation_keys = Some(syn::parse_quote!(device_set_owned));
+    let mut target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+    assert_eq!(
+        target.context.representation,
+        cq_datalog_fork::KeyRepresentation::DeviceSetOwned
+    );
+    let key = &target.context.strata[0].keys[0];
+    let key_hole = &target.holes[key.hole];
+    assert_eq!(
+        key_hole.declarations.len(),
+        2,
+        "only completed input and output"
+    );
+    assert_eq!(
+        key_hole.declarations.last().unwrap().columns[0].ty,
+        syn::parse_quote!(i32)
+    );
+    let rule = &target.context.strata[0].seeds[0];
+    assert_eq!(
+        target.holes[rule.hole].declarations.len(),
+        2,
+        "only used layout and output"
+    );
+    assert!(
+        target.holes[rule.hole]
+            .to_token_stream()
+            .to_string()
+            .contains("datalog :: contains")
+    );
+    target.context.representation = cq_datalog_fork::KeyRepresentation::HashSetBorrowed;
+    assert!(check(&source, &target).is_err());
+}

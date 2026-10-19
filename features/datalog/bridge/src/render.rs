@@ -85,6 +85,9 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
                 KeyRepresentation::HashSetBorrowed => {
                     quote!(let #name = &(#invocation).collect::<::cq_storage::HashSet<_>>();)
                 }
+                KeyRepresentation::DeviceSetOwned => {
+                    unreachable!("CPU bridge rejects device policy")
+                }
             }
         });
         let emit = |rule: &cq_datalog_fork::RuleHole| {

@@ -256,3 +256,24 @@ fn if_let_is_lowered_before_seminaive_variants_and_keeps_written_positions() {
         if atom.relation == "Link")
     );
 }
+
+#[test]
+fn device_selection_preserves_cover_and_checks_policy_pairs() {
+    let strata = stratify::compile(&source()).unwrap();
+    let cpu = seminaive::compile(&strata).unwrap();
+    let device =
+        seminaive::compile_with_representation(&strata, seminaive::Representation::DeviceSet)
+            .unwrap();
+    assert_eq!(cpu.variants, device.variants);
+    assert_eq!(cpu.layouts, device.layouts);
+    assert_eq!(cpu.delta_layouts, device.delta_layouts);
+    assert_eq!(cpu.deltas, device.deltas);
+    seminaive::check(&strata, &device).unwrap();
+    let restored: Program = syn::parse2(device.to_token_stream()).unwrap();
+    assert_eq!(device, restored);
+    contract::check(&restored).unwrap();
+    assert!(cq_lang_datalog::check_rewrite(&cpu, &device).is_err());
+    let mut mixed = device;
+    mixed.negation_keys = cpu.negation_keys;
+    assert!(contract::check(&mixed).is_err());
+}

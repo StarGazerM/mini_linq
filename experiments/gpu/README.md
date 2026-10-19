@@ -10,6 +10,131 @@ device algorithms, whose merged PTX hit the compiler bug documented below.
 RCCL's host-only `rccl-memory` allocator is used without a device bundle.
 No CUDA C, NVRTC, OptiX or CPU join is in the measured path.
 
+## Resident Datalog
+
+`cq_gpu_datalog::datalog!` reuses the source contract, stratification,
+Boolean semi-naive cover, layout-demand analysis, and independently checked
+fork in `features/datalog`. It does not introduce a second scheduler.
+The scheduler explicitly selects `insert_new device_set_all_columns` and
+`negation_keys device_set_owned`; authored CPU HashSet schedules are rejected
+by the GPU bridge rather than silently reinterpreted. The CPU default remains
+`hash_set_all_columns` / `hash_set_borrowed`.
+This entry currently accepts a Datalog program, not a caller-supplied pipeline.
+Every CQ hole uses the fixed ordinary MiniLinq pipeline with host-read recording,
+sorted/prefix runs, retained lookups, device-set dedup representation, and
+`cq_gpu::print`; negative-key schema metadata is explicit printer input.
+
+For an already loaded `edges: DeviceColumns<'_, (i64, i64)>`:
+
+```rust,ignore
+let paths = cq_gpu_datalog::datalog! {
+    struct Closure;
+    relation Edge(x: i64, y: i64) = (&edges);
+    relation Path(x: i64, y: i64);
+    output Path;
+    Path(*x, *y) :- Edge(x, y);
+    Path(*x, *z) :- Path(x, y), Edge(y, z);
+};
+// `paths` owns a resident device relation; download only when requested.
+let rows = paths.to_host()?;
+```
+
+The consumer package must use the GPU workspace's pinned toolchain and depend
+on `cq-gpu-datalog` plus the generated CQ/runtime crates, as demonstrated by
+`datalog-oracle/Cargo.toml`.
+
+Every EDB must be resident `DeviceColumns`, share one pool/stream/context, and
+use compatible dictionary IDs. Grouped CPU hosts are not supported.
+Before any stratum, the bridge merges compatible EDB dictionaries and interns
+every authored rule string literal in stable source order, including negative
+constant filters. Every EDB/empty IDB is bound to this common dictionary without
+remapping device IDs. Every CQ hole receives explicit dictionary and pool
+seeds before host binding or literal encoding. Distinct literal-producing
+rules therefore cannot independently assign conflicting IDs. Incompatible
+input dictionary prefixes remain errors; no CPU tuple remap is attempted.
+At least one EDB is needed to supply the device context; that EDB may be empty.
+A single output returns one owning resident `DeviceColumns`; multiple outputs
+return a tuple in authored order, matching the CPU entry's shape. An empty IDB
+and a canonicalized EDB are valid outputs.
+Explicit user `to_host()` calls are the only tuple-download boundary.
+
+The initial device fragment consists of positive relational joins/projections,
+typed copied/literal heads supported by the GPU printer, supported total
+device comparisons, and stratified exact negative membership. Negative keys
+are owned projected device values, built once from frozen lower-stratum
+snapshots; the checked fork's dedicated membership intrinsic is not arbitrary
+Rust method execution. Arbitrary Rust heads, opaque body bindings, generators,
+and observers are not supported. Printer restrictions on scalar types,
+integral run keys, and representable key domains still apply.
+
+Each SCC evaluates every hole against immutable full/current-delta snapshots.
+Other recursive operands read FULL, including the current delta: nonlinear
+variants form a Boolean cover, not a disjoint positional partition.
+Admission canonicalizes candidates across rules and computes candidates minus
+full on device. All members are prepared before publication, including empty
+member deltas. Full/delta demanded column permutations are resident projections;
+physical indexes are rebuilt per CQ invocation. This is an explicit per-hole
+build policy, not maintained indexes, an LSM/spine, or cross-hole index reuse.
+Small checked metadata readbacks provide convergence and allocation bounds.
+
+The `gpu-datalog-oracle` consumer compares complete answers against independent
+naive closure/parity oracles for empty inputs, self-loops, chains with alternating
+member deltas, cycles, disconnected graphs, duplicates, empty seeds, linear and
+nonlinear closure, mutual recursion, lower-stratum negation, multiple outputs,
+empty IDBs, EDB outputs, literal heads, and a resident result consumed by a
+second compiled GPU query. `--bench` additionally selects a 192-node chain and
+six connected branching 32-node cycles, with duplicate EDBs and integer values
+above three billion. Printed execution time includes EDB canonicalization,
+all recursive CQ/index builds, admission, and publication, separately from input
+upload; there is no excluded compaction phase. These are reproduction commands:
+
+```sh
+cargo oxide build --arch sm_89 -- --release -p gpu-datalog-oracle
+./target/release/gpu-datalog-oracle
+./target/release/string-dictionary
+./target/release/gpu-datalog-oracle --bench
+```
+
+The string-dictionary regression first reproduced the incompatible-ID admission
+failure for two rules emitting `"a"` and `"b"`. It now verifies those complete
+answers, a join of separate literal-producing relations, a negative string
+constant filter, a total string equality guard, constant-only projected heads,
+compatible EDB dictionary prefixes of different lengths, and owned input text
+sharing an ID with a borrowed literal. Both GPU regression programs pass with
+the common-dictionary initialization policy.
+
+Compiler-policy regression gate:
+`cargo test -p cq-datalog -p cq-lang-datalog -p cq-datalog-schedule -p cq-datalog-fork -p datalog-bridge`
+from `features/datalog` passed 98 tests after the device-policy/fork extension.
+The separate sequential Ascent/naive CPU differential gate
+`cargo test -p datalog-oracle` passed another 17 tests. The GPU macro package
+passed four unit tests plus all four compile-fail fixtures (CPU-policy
+reinterpretation, grouped host, arbitrary Rust head, and unsafe negation).
+The GPU oracle reports a lifetime-wide allocator peak across all scenarios
+(including existing pool allocations), allocation count, upload/setup time,
+and fixed-point time separately. `nonempty_publications` counts successful
+nonempty SCC batches, including seed publications and excluding terminal empty
+batches; it is not a per-rule iteration count. Final answer downloads, resident
+replay, and independent CPU-oracle work are excluded from fixed-point time.
+Run compile-fails with the pinned nightly, not stable:
+`cargo test -p cq-gpu-datalog`.
+
+Recorded single-run evidence (`datalog-oracle/results.json`, RTX 6000 Ada,
+driver 580.178.04, release `sm_89`): all seven small scenarios and both
+moderate inputs matched complete independent oracle answers. The 192-node
+chain (191 edges) produced 18,336 TC pairs in 213.342 ms fixed-point time,
+0.125 ms upload/setup, with 590 aggregate nonempty SCC publications.
+The branching/cyclic input has six 32-node SCCs with local offsets 1 and 5,
+five forward inter-SCC edges, and every seventh edge duplicated: 445 input
+rows / 389 distinct edges, values `3_000_000_000 + 17*i`. It produced 21,504
+TC pairs in 91.526 ms, 0.144 ms upload/setup, with 163 nonempty publications.
+Both timings cover the complete 15-output program, not an isolated TC kernel:
+linear `TC(x,z) :- TC(x,y), Edge(y,z)` and nonlinear
+`TC(x,z) :- TC(x,y), TC(y,z)` run alongside reachability, parity, negation,
+and copied/literal-output rules. Lifetime-wide peak pooled device allocation
+was 196,559,600 bytes across all nine scenarios (62,298 allocations).
+This is correctness-backed reproduction evidence, not a speedup claim.
+
 ## Evidence retention
 
 CSV/JSON summaries and historical commands under `compare/` retain their
@@ -1289,11 +1414,12 @@ above for current resident-code verification.
 
 ### Supported domain and explicit rejections
 
-- No computed head expressions, union/fallback blocks, anti, merge, smallest traversal, opaque Rust
-  binds/guards, iterator generators, or host keyed fallback execution. The
-  upstream `bind ... with for ...` form is rejected as `CQ_GPU_GENERATOR`,
-  including on unused results; it is never interpreted as a scalar bind.
-  Total comparisons and Boolean connectives are lowered; `#[total]` is not
+- Typed copied-column dereferences and literal binds/heads are supported;
+  arbitrary computed expressions, union/fallback blocks, merge, smallest
+  traversal, opaque Rust binds/guards and iterator generators are rejected.
+  Recorded eager anti reads and bridge-certified device negative membership
+  use exact resident sets. The upstream generator form is rejected as
+  `CQ_GPU_GENERATOR`, including unused definitions. `#[total]` is not
   permission to emit an arbitrary Rust function on device.
 - Keys must be integral. Strings support dictionary equality, not lexical
   ordering or arbitrary string methods. Integer encoding is checked to fit
@@ -1308,10 +1434,10 @@ above for current resident-code verification.
   provider and its budget; Bloom or arbitrary filter implementations are not
   silently substituted. Unknown provider aliases and non-Vec retained-row
   representations are rejected.
-- No aggregates, recursion, host fallback algorithms, RCCL device algorithms,
-  CUDA C or NVRTC. The existing cuda-oxide PTX/shared-memory and package-loader
-  restrictions described above still apply. The consumer is a separate
-  package from both device libraries.
+- No aggregates, host fallback algorithms, RCCL device algorithms, CUDA C or
+  NVRTC. Recursion is provided by the separate checked GPU Datalog bridge
+  described above, not by a CQ operator. Existing cuda-oxide PTX/shared-memory
+  and package-loader restrictions remain.
 - Finite device output cardinalities must fit the runtime's row-index domain.
   An explicit `capacity(Relation)` is a checked allocation contract and never
   establishes an unrecorded PK constraint. The default bounded-output path

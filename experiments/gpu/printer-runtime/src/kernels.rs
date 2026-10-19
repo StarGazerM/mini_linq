@@ -1,8 +1,8 @@
 #[cuda_device::cuda_module]
 pub(crate) mod runtime_kernels {
     use crate::{
-        column, column_stripe, flag_error, reserve, table_len, write_output, FrontierView,
-        OutputCount, OutputView, TableView,
+        FrontierView, OutputCount, OutputView, TableView, column, column_stripe, flag_error,
+        reserve, table_len, write_output,
     };
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU64};
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
@@ -150,7 +150,8 @@ pub(crate) mod runtime_kernels {
         }
         if thread::threadIdx_x() % 32 == 0 {
             unsafe { DeviceAtomicU64::from_ptr(bounds) }.fetch_min(low, AtomicOrdering::Relaxed);
-            unsafe { DeviceAtomicU64::from_ptr(bounds.add(1)) }.fetch_max(high, AtomicOrdering::Relaxed);
+            unsafe { DeviceAtomicU64::from_ptr(bounds.add(1)) }
+                .fetch_max(high, AtomicOrdering::Relaxed);
         }
     }
 
@@ -279,6 +280,7 @@ pub(crate) mod runtime_kernels {
         slots: *mut u64,
         capacity: usize,
         output: OutputView,
+        emit: bool,
     ) {
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
@@ -302,13 +304,15 @@ pub(crate) mod runtime_kernels {
                 let entry = unsafe { DeviceAtomicU64::from_ptr(slots.add(slot)) };
                 match entry.compare_exchange_relaxed(0, row + 1) {
                     Ok(_) => {
-                        let destination = unsafe { reserve(output, 1) };
-                        let mut col = 0;
-                        while col < width {
-                            unsafe {
-                                write_output(output, col, destination, column(input, col, row));
+                        if emit {
+                            let destination = unsafe { reserve(output, 1) };
+                            let mut col = 0;
+                            while col < width {
+                                unsafe {
+                                    write_output(output, col, destination, column(input, col, row));
+                                }
+                                col += 1;
                             }
-                            col += 1;
                         }
                         finished = true;
                         break;
@@ -339,6 +343,132 @@ pub(crate) mod runtime_kernels {
                 }
             }
             row += stride;
+        }
+    }
+    /// Append live rows, never allocation padding. Each launch is stream ordered.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn append(input: TableView, width: usize, output: OutputView) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        while row < unsafe { table_len(input) } {
+            let destination = unsafe { reserve(output, 1) };
+            let mut col = 0;
+            while col < width {
+                unsafe {
+                    write_output(output, col, destination, column(input, col, row));
+                }
+                col += 1;
+            }
+            row += stride;
+        }
+    }
+
+    /// Probe the same exact multiword set as dedup; preserve the source payload.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn set_exclude(
+        source: TableView,
+        projected: TableView,
+        keys: TableView,
+        width: usize,
+        key_width: usize,
+        packed: *const u64,
+        words: usize,
+        slots: *const u64,
+        allocation: usize,
+        output: OutputView,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        let capacity = active_set_capacity(unsafe { table_len(keys) }, allocation);
+        while row < unsafe { table_len(source) } {
+            let mut hash = 0x9e37_79b9_7f4a_7c15u64;
+            let mut word = 0;
+            while word < words {
+                let value = if key_width == 0 {
+                    0
+                } else {
+                    unsafe { column(projected, word, row) as u64 }
+                };
+                hash ^= value;
+                hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                hash ^= hash >> 31;
+                word += 1;
+            }
+            let mut slot = hash as usize & (capacity - 1);
+            let mut probes = 0;
+            let mut found = false;
+            while probes < capacity {
+                let existing = unsafe { slots.add(slot).read() };
+                if existing == 0 {
+                    break;
+                }
+                let other = unsafe { packed.add((existing - 1) as usize * words) };
+                let mut same = true;
+                let mut word = 0;
+                while word < words {
+                    let value = if key_width == 0 {
+                        0
+                    } else {
+                        unsafe { column(projected, word, row) as u64 }
+                    };
+                    if value != unsafe { other.add(word).read() } {
+                        same = false;
+                        break;
+                    }
+                    word += 1;
+                }
+                if same {
+                    found = true;
+                    break;
+                }
+                slot = (slot + 1) & (capacity - 1);
+                probes += 1;
+            }
+            if !found {
+                let destination = unsafe { reserve(output, 1) };
+                let mut col = 0;
+                while col < width {
+                    unsafe {
+                        write_output(output, col, destination, column(source, col, row));
+                    }
+                    col += 1;
+                }
+            }
+            row += stride;
+        }
+    }
+
+    /// Fold checked metadata on device; ancestors contribute errors, not rows.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn fold_status(
+        input: *const OutputCount,
+        capacity: u64,
+        include_rows: bool,
+        output: *mut OutputCount,
+    ) {
+        if thread::index_1d().get() == 0 {
+            unsafe {
+                let status = input.read();
+                if status.error != 0 {
+                    (*output).error = status.error;
+                }
+                if status.rows > capacity {
+                    (*output).error = 4;
+                }
+                if include_rows {
+                    match (*output).rows.checked_add(status.rows) {
+                        Some(rows) => (*output).rows = rows,
+                        None => (*output).error = 1,
+                    }
+                }
+            }
         }
     }
 }

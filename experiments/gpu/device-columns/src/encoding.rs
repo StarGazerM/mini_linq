@@ -1,4 +1,4 @@
-use crate::{failure, Result};
+use crate::{Result, failure};
 use std::{collections::HashMap, sync::Arc};
 
 /// A dataset-wide shared string domain. IDs preserve equality, not lexical order.
@@ -25,7 +25,14 @@ pub struct Dictionary<'data> {
 
 impl<'data> Dictionary<'data> {
     pub fn intern(&mut self, value: &'data str) -> Result<i64> {
-        if let Some(&id) = self.ids.get(value).or_else(|| self.owned_ids.get(value)) {
+        if let Some(&id) = self.ids.get(value) {
+            return Ok(id);
+        }
+        if let Some(id) = self.owned_ids.remove(value) {
+            // A genuine caller-owned borrow can safely replace an owned copy
+            // at the same ID, allowing both String and &'data str decoding.
+            self.values[id as usize] = Text::Borrowed(value);
+            self.ids.insert(value, id);
             return Ok(id);
         }
         let id = i64::try_from(self.values.len())
@@ -81,6 +88,9 @@ impl<'data> Dictionary<'data> {
                         "resident inputs use incompatible dictionary IDs",
                     ));
                 }
+                if let Text::Borrowed(value) = value {
+                    self.intern(value)?;
+                }
             } else {
                 match value {
                     Text::Borrowed(value) => {
@@ -90,6 +100,32 @@ impl<'data> Dictionary<'data> {
                         self.intern_owned(value)?;
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate a replacement dictionary without changing any encoded IDs or
+    /// weakening a borrowed row's decoding lifetime.
+    pub(crate) fn check_extension(&self, replacement: &Self) -> Result<()> {
+        for (index, original) in self.values.iter().enumerate() {
+            let Some(next) = replacement.values.get(index) else {
+                return Err(failure(
+                    "CQ_GPU_DICTIONARY_DOMAIN",
+                    "replacement dictionary omits existing resident IDs",
+                ));
+            };
+            if original.text() != next.text() {
+                return Err(failure(
+                    "CQ_GPU_DICTIONARY_DOMAIN",
+                    "replacement dictionary changes existing resident IDs",
+                ));
+            }
+            if matches!((original, next), (Text::Borrowed(_), Text::Owned(_))) {
+                return Err(failure(
+                    "CQ_GPU_DICTIONARY_BORROW",
+                    "replacement dictionary would discard borrowed text owners",
+                ));
             }
         }
         Ok(())
@@ -139,7 +175,9 @@ macro_rules! integers {
         }
     )*};
 }
-integers!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
+integers!(
+    i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize
+);
 
 impl<'data> EncodeValue<'data> for bool {
     fn encode(self, _: &mut Dictionary<'data>) -> Result<i64> {
@@ -201,10 +239,12 @@ mod tests {
             decode_value::<u32>(u32::MAX as i64, &dictionary).unwrap(),
             u32::MAX
         );
-        assert!(encode_value(u64::MAX, &mut dictionary)
-            .unwrap_err()
-            .to_string()
-            .contains("CQ_GPU_INTEGER_RANGE"));
+        assert!(
+            encode_value(u64::MAX, &mut dictionary)
+                .unwrap_err()
+                .to_string()
+                .contains("CQ_GPU_INTEGER_RANGE")
+        );
         assert!(decode_value::<u8>(256, &dictionary).is_err());
         assert!(decode_value::<bool>(2, &dictionary).is_err());
     }
@@ -246,5 +286,38 @@ mod tests {
         let mut incompatible = Dictionary::default();
         incompatible.intern_owned("different").unwrap();
         assert!(first_relation.merge(&incompatible).is_err());
+    }
+
+    #[test]
+    fn common_dictionary_preserves_ids_and_prefers_real_borrows() {
+        let mut owned = Dictionary::default();
+        assert_eq!(owned.intern_owned("shared").unwrap(), 0);
+        let mut common = owned.clone();
+        assert_eq!(common.intern("shared").unwrap(), 0);
+        assert_eq!(common.intern("second").unwrap(), 1);
+        assert_eq!(common.decode(0).unwrap(), "shared");
+        owned.check_extension(&common).unwrap();
+        assert!(common.check_extension(&owned).is_err());
+
+        let mut merged = owned.clone();
+        merged.merge(&common).unwrap();
+        assert_eq!(merged.decode(0).unwrap(), "shared");
+        assert_eq!(merged.decode(1).unwrap(), "second");
+        assert_eq!(merged.intern_owned("shared").unwrap(), 0);
+        common.check_extension(&merged).unwrap();
+
+        let mut changed = Dictionary::default();
+        changed.intern("different").unwrap();
+        assert!(owned.check_extension(&changed).is_err());
+        assert!(owned.check_extension(&Dictionary::default()).is_err());
+        let mut borrowed = Dictionary::default();
+        borrowed.intern("shared").unwrap();
+        assert!(
+            borrowed
+                .check_extension(&owned)
+                .unwrap_err()
+                .to_string()
+                .contains("CQ_GPU_DICTIONARY_BORROW")
+        );
     }
 }

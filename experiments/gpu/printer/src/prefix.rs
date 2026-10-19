@@ -5,7 +5,7 @@
 //! Explicit choices may reorder singleton key levels; any displaced singleton
 //! prefix read receives its own recorded SortedRun. Later levels remain stable
 //! residual equalities. The terminal printer consumes these provider choices.
-use cq_lang_structures::{self as structures, symbol_name, Structure};
+use cq_lang_structures::{self as structures, Structure, symbol_name};
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token};
@@ -207,7 +207,7 @@ pub fn compile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quote::{quote, ToTokens};
+    use quote::{ToTokens, quote};
 
     fn source() -> structures::Program {
         syn::parse_quote! {
@@ -299,10 +299,12 @@ mod tests {
             (quote!(R => z), "singleton key level"),
             (quote!(R => missing), "singleton key level"),
         ] {
-            assert!(compile(&source(), arguments)
-                .unwrap_err()
-                .to_string()
-                .contains(expected));
+            assert!(
+                compile(&source(), arguments)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            );
         }
     }
 
@@ -337,10 +339,12 @@ mod tests {
             ::cq_gpu_runtime::PrefixRun<_, _, ::cq_storage::BorrowedI64TupleCodec, 0>
         );
         let facts = structures::contract::check(&target).unwrap();
-        assert!(crate::compiler::validate(&target, &facts)
-            .unwrap_err()
-            .to_string()
-            .contains("CQ_GPU_PREFIX_LEVEL"));
+        assert!(
+            crate::compiler::validate(&target, &facts)
+                .unwrap_err()
+                .to_string()
+                .contains("CQ_GPU_PREFIX_LEVEL")
+        );
     }
 
     #[test]
@@ -350,10 +354,12 @@ mod tests {
             syn::parse_quote!(::cq_gpu_runtime::PrefixRun<_, _, ::cq_storage::BorrowedI64TupleCodec>),
             syn::parse_quote!(::cq_gpu_runtime::PrefixRun<_, _, ::cq_storage::BorrowedI64TupleCodec, 2>),
         ] {
-            assert!(recorded_column(&ty, &layout)
-                .unwrap_err()
-                .to_string()
-                .contains("CQ_GPU_PREFIX_COLUMN"));
+            assert!(
+                recorded_column(&ty, &layout)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("CQ_GPU_PREFIX_COLUMN")
+            );
         }
     }
 

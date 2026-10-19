@@ -37,7 +37,8 @@ host pool allocation, not device sort/scan kernels: the recorded PTX shared
 symbol collision prevents that combination. Unsupported constructs are
 rejected rather than run on an implicit CPU fallback. These include opaque
 Rust, generators, arbitrary computed heads, union/fallback, merge/smallest,
-aggregates and recursion. See the [workspace contract and supported domain](../experiments/gpu/README.md#structures-gpu-terminal-printer)
+and aggregates. GPU recursion is handled by a separate checked Datalog bridge,
+not a new CQ operator. See the [workspace contract and supported domain](../experiments/gpu/README.md#structures-gpu-terminal-printer)
 for current codecs, provider restrictions, reproduction commands and resource
 audits. The printer is experimental, not a general GPU implementation of all CQ.
 
@@ -87,7 +88,19 @@ Canonical evidence, rather than duplicate specification and tuning narratives:
   set triangles, with host edge sort/dedup and upload excluded from GPU timing.
   Its count baseline is not a like-for-like end-to-end full-tuple speedup.
 
-## Recursion: design boundary, not an implemented GPU feature
+## Resident Datalog and the remaining maintenance boundary
+
+`cq_gpu_datalog::datalog!` reuses the existing source, SCC, semi-naive and fork
+checks with explicit device admission/negative-key policies. Supported CQ holes
+use the existing GPU printer. Candidates are deduplicated and subtracted from
+the accumulated relation on device; every SCC successor is prepared before
+publication. Full/delta outputs remain immutable resident snapshots. Small
+checked metadata readbacks control convergence and allocation.
+
+This implementation rebuilds sets and per-hole indexes. It does not maintain
+a spine or claim amortized compaction costs. Supported syntax, dictionary
+requirements, oracle cases and measured boundaries are documented under
+[Resident Datalog](../experiments/gpu/README.md#resident-datalog).
 
 Immutable sorted batches and cursor merges are useful reference mechanisms
 from Differential Dataflow, but its logical timestamp compaction is not
@@ -101,6 +114,6 @@ they are not generally +1. Insert-only set maintenance can admit each new tuple
 once after deduplication; that restricted case does not describe arbitrary DD
 batches or join intermediates. Likewise, source evidence for SRDatalog's merge
 maintenance supports a merge claim, not an assertion that it re-sorts the
-whole relation. GPU recursion, trace witnesses and compaction remain outside
-the implemented printer contract; this note does not extend the mathematical
-core specification.
+whole relation. Trace witnesses and compaction remain outside the implemented
+backend; this note does not add Differential Dataflow timestamp semantics to
+the mathematical core specification.

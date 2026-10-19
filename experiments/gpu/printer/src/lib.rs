@@ -27,6 +27,25 @@
 //! `cq_gpu_runtime::DeviceColumns<_, Codec>`. Supported codec markers are
 //! `Plain`, `For`, `Delta` and `DictionaryCodec`; unknown aliases are rejected.
 //! Unsupported operators and representations fail before CUDA is emitted.
+//!
+//! Scalar Bind supports explicitly typed copied dereferences and integral,
+//! bool or `&str` literals. Arbitrary Rust, arithmetic and generators are
+//! rejected rather than evaluated on the host. Copy and projection preserve
+//! source bounds; literals have singleton bounds. Recorded head canon runs
+//! after the ordered (possibly repeated) head projection.
+//! Eager physical Anti uses its recorded run or exact integral membership
+//! provider (composite keys require a supported prefix run). The Datalog bridge may certify
+//! frozen projected key hosts with `datalog_keys(host:(Type,...),...)` for the
+//! narrow `::cq_gpu_runtime::datalog::contains(&host, &(columns,))` total
+//! predicate. This is a device membership intrinsic, not arbitrary captured
+//! Rust `.contains`; missing schemas and mismatched key types are rejected.
+//! Each execution rebuilds these exact indexes from its immutable key input.
+//! `datalog_dictionary(shared)` seeds every rule execution from the bridge's
+//! shared `Arc<Dictionary>` before binding inputs or encoding literals. This
+//! also applies to input-free literal rules, so all rule holes share one ID
+//! assignment rather than independently extending dictionary snapshots.
+//! `datalog_pool(pool)` selects the bridge's shared `Arc<Pool>` even when a
+//! rule has no bound input from which to inherit its device context.
 
 use proc_macro::TokenStream;
 

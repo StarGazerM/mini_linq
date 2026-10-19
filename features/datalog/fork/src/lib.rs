@@ -1,7 +1,7 @@
 //! Fork a complete semi-naive Datalog schedule into independently checked CQ
 //! programs and a round context. This pass emits no Rust loops and knows no
 //! pipeline protocol. A bridge expands every hole through its own continuation.
-//! Negative atoms become total membership predicates over borrowed key sets;
+//! Negative atoms become total membership predicates over recorded key sets;
 //! each distinct projection and constant filter is built once per stratum.
 //! Key-hole correspondence compares complete parsed CQ programs, including
 //! CQ's schema-aware guard recognition, rather than raw isolated predicates.
@@ -29,7 +29,7 @@ pub struct Relation {
     pub delta_host: Option<Ident>,
 }
 
-/// A selected full or delta layout exposed as an ordinary borrowed CQ host.
+/// A selected full/delta permutation with its context-recorded realization.
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub relation: usize,
@@ -43,14 +43,31 @@ pub struct Layout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyRepresentation {
     HashSetBorrowed,
+    DeviceSetOwned,
 }
 
-/// A borrowed-key projection, materialized once before a stratum starts.
+/// Concrete layout lifecycle, checked together with admission/key selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutRealization {
+    MaintainedGroupedHost,
+    ResidentProjectionPerHoleBuild,
+}
+
+impl KeyRepresentation {
+    fn layouts(self) -> LayoutRealization {
+        match self {
+            Self::HashSetBorrowed => LayoutRealization::MaintainedGroupedHost,
+            Self::DeviceSetOwned => LayoutRealization::ResidentProjectionPerHoleBuild,
+        }
+    }
+}
+
+/// A key projection, materialized once before a stratum starts.
 #[derive(Clone, Debug)]
 pub struct KeySet {
     pub relation: usize,
     pub columns: Vec<usize>,
-    /// Constant column selections applied before projecting borrowed keys.
+    /// Constant column selections applied before projecting keys.
     pub filters: Vec<(usize, Expr)>,
     pub name: Ident,
     pub representation: KeyRepresentation,
@@ -77,6 +94,9 @@ pub struct Stratum {
 /// All information a round printer needs, without a pipeline dependency.
 #[derive(Clone, Debug)]
 pub struct RoundContext {
+    /// Admission and negative-key policy selected by the checked schedule.
+    pub representation: KeyRepresentation,
+    pub layout_realization: LayoutRealization,
     pub relations: Vec<Relation>,
     pub layouts: Vec<Layout>,
     pub delta_layouts: Vec<Layout>,
@@ -251,6 +271,12 @@ fn filters(atom: &cq_syntax::Atom) -> Vec<(usize, Expr)> {
 
 fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
     let name = &key.name;
+    if key.representation == KeyRepresentation::DeviceSetOwned {
+        let args = key.columns.iter().map(|&i| &atom.args[i]);
+        return syn::parse_quote!(
+            #[total] if !::cq_gpu_runtime::datalog::contains(&#name, &(#(#args,)*))
+        );
+    }
     if key.columns.is_empty() {
         syn::parse_quote!(#[total] if !#name.contains(&((),)))
     } else {
@@ -262,11 +288,30 @@ fn guard(atom: &cq_syntax::Atom, key: &KeySet) -> BodyItem {
 fn key_representation(source: &Program) -> syn::Result<KeyRepresentation> {
     match source.negation_keys.as_ref().map(symbol_name).as_deref() {
         Some("hash_set_borrowed") => Ok(KeyRepresentation::HashSetBorrowed),
+        Some("device_set_owned") => Ok(KeyRepresentation::DeviceSetOwned),
         _ => Err(syn::Error::new_spanned(
             source,
-            "fork requires negation_keys hash_set_borrowed",
+            "fork requires a checked negation key representation",
         )),
     }
+}
+
+fn parse_hole(tokens: TokenStream, representation: KeyRepresentation) -> syn::Result<CqProgram> {
+    let mut program: CqProgram = syn::parse2(tokens)?;
+    if representation == KeyRepresentation::DeviceSetOwned {
+        // Device binders evaluate declared hosts. Keep precisely the source
+        // scans and output schema of this checked hole, not unrelated layouts.
+        let mut used = BTreeSet::from([symbol_name(&program.query.head.relation)]);
+        for item in &program.query.body {
+            if let BodyItem::Positive { atom } = item {
+                used.insert(symbol_name(&atom.relation));
+            }
+        }
+        program
+            .declarations
+            .retain(|declaration| used.contains(&symbol_name(&declaration.name)));
+    }
+    Ok(program)
 }
 
 /// Lower variants and key projections, retaining the recorded schedule.
@@ -279,6 +324,8 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
     let representation = key_representation(source)?;
     let mut fresh = Fresh::new(source);
     let mut context = RoundContext {
+        representation,
+        layout_realization: representation.layouts(),
         relations: source
             .declarations
             .iter()
@@ -376,19 +423,37 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
                         .collect();
                     let (selected, output_columns): (Vec<_>, Vec<_>) = if key.columns.is_empty() {
                         let column = &variables[0];
-                        (vec![quote!(())], vec![quote!(#column: ())])
+                        match representation {
+                            KeyRepresentation::HashSetBorrowed => {
+                                (vec![quote!(())], vec![quote!(#column: ())])
+                            }
+                            KeyRepresentation::DeviceSetOwned => {
+                                (vec![quote!(0u8)], vec![quote!(#column: u8)])
+                            }
+                        }
                     } else {
                         (
                             key.columns
                                 .iter()
-                                .map(|&i| variables[i].to_token_stream())
+                                .map(|&i| {
+                                    let variable = &variables[i];
+                                    match representation {
+                                        KeyRepresentation::HashSetBorrowed => quote!(#variable),
+                                        KeyRepresentation::DeviceSetOwned => quote!(*#variable),
+                                    }
+                                })
                                 .collect(),
                             key.columns
                                 .iter()
                                 .map(|&i| {
                                     let variable = &variables[i];
                                     let ty = &source.declarations[relation].columns[i].ty;
-                                    quote!(#variable: &#ty)
+                                    match representation {
+                                        KeyRepresentation::HashSetBorrowed => {
+                                            quote!(#variable: &#ty)
+                                        }
+                                        KeyRepresentation::DeviceSetOwned => quote!(#variable: #ty),
+                                    }
                                 })
                                 .collect(),
                         )
@@ -401,7 +466,7 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
                         let variable = &variables[*column];
                         quote!(if *#variable == (#expression))
                     });
-                    holes.push(syn::parse2(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#variables),*) #(, #selections)*;))?);
+                    holes.push(parse_hole(quote!(struct #name; #(#declarations)* relation #name(#(#output_columns),*); #name(#(#selected),*) :- #source_name(#(#variables),*) #(, #selections)*;), representation)?);
                     stratum.keys.push(key);
                     stratum.keys.len() - 1
                 };
@@ -412,8 +477,9 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
             let mut output = source.declarations[head].clone();
             output.name = name.clone();
             let hole = holes.len();
-            holes.push(syn::parse2(
+            holes.push(parse_hole(
                 quote!(struct #name; #(#declarations)* #output #query),
+                representation,
             )?);
             let rule = RuleHole {
                 variant: variant_index,
@@ -444,6 +510,12 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
         .ok_or_else(|| syn::Error::new_spanned(source, "fork requires seminaive variants"))?;
     let representation = key_representation(source)?;
     let context = &target.context;
+    ensure(
+        context.representation == representation
+            && context.layout_realization == representation.layouts(),
+        source,
+        "fork changed the recorded representation policy",
+    )?;
     ensure(
         context.relations.len() == source.declarations.len()
             && context.strata.len() == analysis.components.len(),
@@ -590,8 +662,16 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
             output.value = None;
             let expected_args: Vec<Expr> = if key.columns.is_empty() {
                 let column = &hole.declarations.last().expect("checked output").columns[0].name;
-                output.columns = syn::parse_quote!(#column: ());
-                vec![syn::parse_quote!(())]
+                match representation {
+                    KeyRepresentation::HashSetBorrowed => {
+                        output.columns = syn::parse_quote!(#column: ());
+                        vec![syn::parse_quote!(())]
+                    }
+                    KeyRepresentation::DeviceSetOwned => {
+                        output.columns = syn::parse_quote!(#column: u8);
+                        vec![syn::parse_quote!(0u8)]
+                    }
+                }
             } else {
                 output.columns = key
                     .columns
@@ -600,11 +680,22 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
                         let mut column = declaration.columns[i].clone();
                         column.name = variables[i].expect("checked key variable").clone();
                         let ty = &column.ty;
-                        column.ty = syn::parse_quote!(&#ty);
+                        if representation == KeyRepresentation::HashSetBorrowed {
+                            column.ty = syn::parse_quote!(&#ty);
+                        }
                         column
                     })
                     .collect();
-                key.columns.iter().map(|&i| atom.args[i].clone()).collect()
+                key.columns
+                    .iter()
+                    .map(|&i| {
+                        let arg = &atom.args[i];
+                        match representation {
+                            KeyRepresentation::HashSetBorrowed => arg.clone(),
+                            KeyRepresentation::DeviceSetOwned => syn::parse_quote!(*#arg),
+                        }
+                    })
+                    .collect()
             };
             let mut expected_declarations = declarations.clone();
             expected_declarations.push(output);
@@ -616,11 +707,14 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
             // A complete CQ parse recognizes literal equalities and total
             // predicates. Parsing isolated BodyItems would leave raw Filters
             // and compare different language representations of the same clause.
-            let expected: CqProgram = syn::parse2(quote! {
-                struct #name;
-                #(#expected_declarations)*
-                #name(#(#expected_args),*) :- #atom #(, #selections)*;
-            })?;
+            let expected = parse_hole(
+                quote! {
+                    struct #name;
+                    #(#expected_declarations)*
+                    #name(#(#expected_args),*) :- #atom #(, #selections)*;
+                },
+                representation,
+            )?;
             ensure(
                 hole == &expected,
                 source,
@@ -648,11 +742,6 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
                 output.name = hole.name.clone();
                 let mut expected_declarations = declarations.clone();
                 expected_declarations.push(output);
-                ensure(
-                    hole.declarations == expected_declarations,
-                    source,
-                    "fork changed hole declarations",
-                )?;
                 let mut query = variant.query.clone();
                 query.head.relation = hole.name.clone();
                 use_layouts(&mut query, context)?;
@@ -681,8 +770,10 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
                     }
                 }
                 let name = &hole.name;
-                let expected: CqProgram =
-                    syn::parse2(quote!(struct #name; #(#expected_declarations)* #query))?;
+                let expected = parse_hole(
+                    quote!(struct #name; #(#expected_declarations)* #query),
+                    representation,
+                )?;
                 ensure(
                     hole == &expected,
                     source,

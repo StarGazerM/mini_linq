@@ -1,0 +1,16 @@
+[package]
+name = "gpu-datalog-oracle"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+cq-gpu-datalog = { path = "../datalog" }
+mini-linq = { path = "../../../facade/mini-linq" }
+cq-rewrites = { path = "../../../features/rewrites" }
+cq-storage = { path = "../../../runtime/cq-storage" }
+cq-gpu = { path = "../printer" }
+cq-gpu-runtime = { path = "../printer-runtime" }
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
+

@@ -7,17 +7,19 @@
 //! ancestor statuses before decoding; capacities are never logical row counts.
 //! Dense runs consume conservative loader/projection bounds and reject domains
 //! outside their recorded representation rather than downloading extrema.
+pub mod datalog;
 mod device;
 mod kernels;
+mod sets;
 
 use cuda_core::{CudaContext, CudaStream, LaunchConfig1D};
 pub use device::*;
 pub use gpu_blocked_run as blocked_run;
 use gpu_blocked_run::{Buffer as Scratch, Run};
 pub use gpu_device_columns::{
-    decode_stripe, decode_tile_pair, decode_value, detect_integer_codec, encode_value, Bounds, Buffer,
-    Codec, ColumnView, DecodeValue, Delta, DeviceColumns, Dictionary, DictionaryCodec, EncodeValue,
-    EncodedColumn, For, OwnedRowCodec, Plain, Pool, Representation, RowCodec,
+    Bounds, Buffer, Codec, ColumnView, DecodeValue, Delta, DeviceColumns, Dictionary,
+    DictionaryCodec, EncodeValue, EncodedColumn, For, OwnedRowCodec, Plain, Pool, Representation,
+    RowCodec, decode_stripe, decode_tile_pair, decode_value, detect_integer_codec, encode_value,
 };
 use gpu_device_columns::{OutputCount, Table};
 pub use gpu_tiles as tiles;
@@ -221,6 +223,7 @@ impl Runtime {
             run_cache: HashMap::new(),
             memberships: Vec::new(),
             membership_cache: HashMap::new(),
+            exact_memberships: Vec::new(),
             timings: Timings::default(),
             pending_timings: Vec::new(),
             started: Instant::now(),
@@ -353,6 +356,14 @@ pub struct TableId(usize);
 pub struct RunId(usize);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct MembershipId(usize);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct ExactMembershipId(usize);
+struct ExactMembership {
+    packed: Buffer<u64>,
+    slots: Buffer<u64>,
+    keys: TableId,
+    width: usize,
+}
 #[derive(Eq, PartialEq, Hash)]
 struct SliceKey {
     pointer: usize,
@@ -423,6 +434,7 @@ pub struct Execution<'runtime, 'data> {
     run_cache: HashMap<(TableId, usize), RunId>,
     memberships: Vec<Membership>,
     membership_cache: HashMap<(TableId, usize, usize), MembershipId>,
+    exact_memberships: Vec<ExactMembership>,
     timings: Timings,
     pending_timings: Vec<PendingTiming>,
     started: Instant,
@@ -547,9 +559,11 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             })
     }
     pub fn column_bounds(&self, id: TableId, index: usize) -> Result<Bounds> {
-        self.table(id)?.bounds.get(index).copied().ok_or_else(|| {
-            failure("CQ_GPU_KEY_COLUMN", "column bounds outside source schema")
-        })
+        self.table(id)?
+            .bounds
+            .get(index)
+            .copied()
+            .ok_or_else(|| failure("CQ_GPU_KEY_COLUMN", "column bounds outside source schema"))
     }
     pub fn table_width(&self, id: TableId) -> Result<usize> {
         Ok(self.table(id)?.columns.len())
@@ -601,14 +615,26 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         let reduce = domain_words > words as u128;
         let status = self.runtime.metadata(0)?;
         if reduce {
-            let initialize = self.runtime.kernels.prepare_membership_extrema_initialize(config(1, 0))?;
-            let reduce = self.runtime.kernels.prepare_membership_extrema(config(source.capacity, 0))?;
+            let initialize = self
+                .runtime
+                .kernels
+                .prepare_membership_extrema_initialize(config(1, 0))?;
+            let reduce = self
+                .runtime
+                .kernels
+                .prepare_membership_extrema(config(source.capacity, 0))?;
             unsafe {
                 self.runtime.kernels.membership_extrema_initialize(
-                    self.runtime.stream(), &initialize, bounds.ptr(),
+                    self.runtime.stream(),
+                    &initialize,
+                    bounds.ptr(),
                 )?;
                 self.runtime.kernels.membership_extrema(
-                    self.runtime.stream(), &reduce, source.view(), key_column, bounds.ptr(),
+                    self.runtime.stream(),
+                    &reduce,
+                    source.view(),
+                    key_column,
+                    bounds.ptr(),
                 )?;
             }
         }
@@ -899,11 +925,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         self.record_timing(TimingStage::Kernel, start)?;
         Ok(self.add_table(table))
     }
-    fn complete_output(
-        &self,
-        output: Output,
-        bounds: Vec<Bounds>,
-    ) -> Result<Table> {
+    fn complete_output(&self, output: Output, bounds: Vec<Bounds>) -> Result<Table> {
         let runtime = self.runtime;
         let check = runtime.kernels.prepare_validate_output(config(1, 0))?;
         unsafe {
@@ -996,6 +1018,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 slots.ptr(),
                 capacity,
                 output.view(),
+                true,
             )?;
         }
         let bounds = source.bounds.clone();
@@ -1081,7 +1104,8 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     }
     fn record_timing(&mut self, stage: TimingStage, start: cuda_core::CudaEvent) -> Result<()> {
         let end = self.runtime.stream().record_event(timing_flags())?;
-        self.pending_timings.push(PendingTiming { stage, start, end });
+        self.pending_timings
+            .push(PendingTiming { stage, start, end });
         Ok(())
     }
     /// Explicit timing-collection boundary. One synchronization covers every

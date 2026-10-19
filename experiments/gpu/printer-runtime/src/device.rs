@@ -35,6 +35,68 @@ pub struct MembershipView {
     pub bits: *const u64,
     pub bounds: *const u64,
 }
+/// Immutable exact multiword keys. Storage is owned by the parent Execution.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct ExactMembershipView {
+    pub packed: *const u64,
+    pub slots: *const u64,
+    pub keys: TableView,
+    pub allocation: usize,
+    pub width: usize,
+}
+unsafe impl DeviceCopy for ExactMembershipView {}
+
+#[device]
+#[inline(always)]
+pub unsafe fn exact_contains(view: ExactMembershipView, keys: &[u64]) -> bool {
+    if keys.len() != view.width {
+        return false;
+    }
+    let needed = (unsafe { table_len(view.keys) } as usize)
+        .saturating_mul(2)
+        .max(2);
+    let mut capacity = 2usize;
+    while capacity < needed && capacity < view.allocation {
+        capacity *= 2;
+    }
+    capacity = capacity.min(view.allocation);
+    let words = view.width.max(1);
+    let mut hash = 0x9e37_79b9_7f4a_7c15u64;
+    let mut word = 0;
+    while word < words {
+        hash ^= if view.width == 0 { 0 } else { keys[word] };
+        hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        hash ^= hash >> 31;
+        word += 1;
+    }
+    let mut slot = hash as usize & (capacity - 1);
+    let mut probes = 0;
+    while probes < capacity {
+        let existing = unsafe { view.slots.add(slot).read() };
+        if existing == 0 {
+            return false;
+        }
+        let other = unsafe { view.packed.add((existing - 1) as usize * words) };
+        let mut word = 0;
+        let mut same = true;
+        while word < words {
+            let key = if view.width == 0 { 0 } else { keys[word] };
+            if key != unsafe { other.add(word).read() } {
+                same = false;
+                break;
+            }
+            word += 1;
+        }
+        if same {
+            return true;
+        }
+        slot = (slot + 1) & (capacity - 1);
+        probes += 1;
+    }
+    false
+}
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct FrontierView {
