@@ -56,8 +56,13 @@ impl Pool {
 
 /// An owned device allocation retaining its allocator, context and stream.
 /// Deallocation is ordered on that stream; there is no host-runtime lifetime.
+/// An immutable range may retain an allocation through `owner` instead of
+/// owning its affine token. Range construction is unsafe: the unique writer
+/// must never overwrite a published range, even when the backing buffer grows.
 pub struct Buffer<T: DeviceCopy> {
     block: Option<DeviceBlock>,
+    owner: Option<Arc<Buffer<T>>>,
+    offset: usize,
     pool: Arc<Pool>,
     len: usize,
     marker: PhantomData<T>,
@@ -94,6 +99,8 @@ impl<T: DeviceCopy> Buffer<T> {
             .map_err(allocation_error)?;
         Ok(Self {
             block: Some(block),
+            owner: None,
+            offset: 0,
             pool,
             len,
             marker: PhantomData,
@@ -114,11 +121,34 @@ impl<T: DeviceCopy> Buffer<T> {
         }
         Ok(buffer)
     }
+    /// Retain a range without copying its initialized elements.
+    ///
+    /// # Safety
+    /// All reads must be stream ordered after initialization. Neither the
+    /// caller nor any alias may mutate this range while it is published.
+    /// Writers may append outside the range. This does not permit slicing
+    /// encoded payloads: offsets here are native element offsets only.
+    pub unsafe fn shared_slice(owner: Arc<Self>, offset: usize, len: usize) -> Result<Self> {
+        if offset.checked_add(len).is_none_or(|end| end > owner.len()) {
+            return Err("shared device range exceeds allocation".into());
+        }
+        Ok(Self {
+            pool: owner.pool.clone(),
+            block: None,
+            owner: Some(owner),
+            offset,
+            len,
+            marker: PhantomData,
+        })
+    }
     pub fn ptr(&self) -> *mut T {
         self.cu_deviceptr() as *mut T
     }
     pub fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
-        self.block.as_ref().unwrap().cu_deviceptr()
+        match &self.owner {
+            Some(owner) => owner.cu_deviceptr() + (self.offset * std::mem::size_of::<T>()) as u64,
+            None => self.block.as_ref().unwrap().cu_deviceptr(),
+        }
     }
     pub fn len(&self) -> usize {
         self.len

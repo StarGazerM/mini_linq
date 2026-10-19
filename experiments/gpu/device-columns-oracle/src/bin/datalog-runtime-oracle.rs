@@ -141,6 +141,44 @@ fn batched_rounds(runtime: &Runtime, dictionary: &mut Dictionary<'static>) -> Re
     Ok(())
 }
 
+fn persistent_growth(runtime: &Runtime, dictionary: &mut Dictionary<'static>) -> Result<()> {
+    let mut relation = Relation::<(i64, i64)>::empty(
+        runtime.pool().clone(), Arc::new(dictionary.clone()), 2,
+    )?;
+    let mut expected = BTreeSet::new();
+    let mut snapshots = Vec::new();
+    for round in 0..10 {
+        let end = 1i64 << round;
+        let rows: Vec<_> = (0..end).map(|value| (value, !value)).collect();
+        let candidates = runtime.upload_owned_rows(&rows, dictionary, &[Codec::Plain; 2])?;
+        snapshots.push((relation.full().clone(), expected.clone()));
+        let next = prepare(&relation, &[candidates.clone(), candidates])?;
+        let delta: BTreeSet<_> = rows.iter().copied()
+            .filter(|row| !expected.contains(row)).collect();
+        exact(next.delta().to_host()?, delta);
+        expected.extend(rows);
+        exact(next.full().to_host()?, expected.iter().copied());
+        if round == 5 {
+            // Branch from an old Relation after its successor appended. Its
+            // lazy state must detach rather than overwrite the successor tail.
+            let branch_rows = runtime.upload_owned_rows(
+                &[(-1, 7), (-1, 7)], dictionary, &[Codec::Plain; 2],
+            )?;
+            let branch = prepare(&relation, &[branch_rows])?;
+            let mut branch_expected = snapshots.last().unwrap().1.clone();
+            branch_expected.insert((-1, 7));
+            exact(branch.full().to_host()?, branch_expected);
+            exact(next.full().to_host()?, expected.iter().copied());
+        }
+        relation = next;
+    }
+    for (snapshot, expected) in snapshots {
+        exact(snapshot.to_host()?, expected);
+    }
+    println!("persistent admission exact=true: geometric full/set growth, duplicate holes, existing candidates, immutable prefixes and detached old branches");
+    Ok(())
+}
+
 fn mismatched_batch(runtime: &Runtime, dictionary: &Dictionary<'_>) -> Result<()> {
     let relation =
         Relation::<(i64,)>::empty(runtime.pool().clone(), Arc::new(dictionary.clone()), 1)?;
@@ -163,6 +201,7 @@ fn main() -> Result<()> {
     let mut dictionary = Dictionary::default();
     batched_rounds(&runtime, &mut dictionary)?;
     mismatched_batch(&runtime, &dictionary)?;
+    persistent_growth(&runtime, &mut dictionary)?;
     // Force 32 different full rows into the same initial hash bucket. Each
     // appears twice; neither hash collisions nor row-ID races may lose rows.
     let colliding: Vec<_> = (0..i64::MAX)

@@ -39,6 +39,7 @@ syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"]
 [features]
 default = []
 counters = ["cq-storage/counters"]
+hoist-invariants = ["datalog-bridge/hoist-invariants"]
 
 [dependencies]
 cq-lang-datalog.workspace = true

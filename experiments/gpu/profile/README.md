@@ -376,3 +376,190 @@ made.
   in `gpu-cvc5.json`. Profiling omitted CPU checking and ran serially on an idle
   GPU. No builds, tests, or formatting were run by the profiling worker.
 * SRDatalog source trees were not modified.
+
+## Exact admission and fused-emission investigation (2026-10-19)
+
+The Datalog macro accepts `dedup(Staged);`, `dedup(Compacting);`, or
+`dedup(Fused);` before the program. These are recorded as the third
+`DeviceSet<Row, Codec, Policy>` parameter in each checked Structures hole.
+Compacting remains the default. Cargo features
+`cq-gpu-datalog/dedup-staged` and `cq-gpu-datalog/dedup-fused` select global
+defaults; an explicit macro prefix takes precedence.
+
+Fused compares every emitted head word, publishes its output row with
+acquire/release synchronization, and writes only the first occurrence.
+Busy slots return to the reconvergent caller rather than spinning inside an
+insertion. Output overflow leaves the pending candidate in its checkpoint;
+the runtime grows output storage and rebuilds the exact row-ID table before
+resuming. No hash fingerprint is treated as equality. Ordered/lossy head
+canonicalization remains a separate boundary after projection.
+
+Evidence is under
+`/data/artifacts/mini-linq-gpu-profiles/2026-10-19-fused-admission/`;
+`variant22-{Compacting,Fused}.structures.txt` and `.generated.rs` are actual
+checked dumps, including the default `cq_staging` pass. The earlier
+cyclic-plan dumps stopped before staging: the actual final decision is
+`r0 stage = batch 128`, not an unstaged serial stream. The diagnostic dump
+uses module number zero; the baseline consumer's corresponding kernel is
+`cq_gpu_stream_28_r11`. The historical emitted LLVM and executable are
+preserved beside the baseline trace as `gpu-datalog-ddisasm-baseline.ll`
+and `gpu-datalog-ddisasm-baseline`.
+
+### Variant-22 baseline diagnosis
+
+The outer relation is complete `StackDefUseLiveVarAtPriorUsed`; the first
+expansion probes delta `StackDefUseDefUsed` on `(eaUsed,varp,varr)`, and
+the second probes complete `StackDefUseLiveVarUsedEDB` on
+`(nxtBlk,varp,varr)`. Both are recorded HashedRuns, with full-key residual
+comparisons after bucket lookup. The 256-thread kernel processes 128-row
+staged units, retaining two expansion descriptors and 29 continuation
+registers per lane. Dynamic shared memory is 24,672 bytes. No `expand`
+decision is recorded, so expansion frontier publication is disabled.
+
+The baseline SQLite trace contains 42 invocations of
+`hole/StackDefUseDefUsed/variant-22`, 265 resumable attempts and 223 prefix
+compactions. Kernel durations in milliseconds are min 1.073, median 7.849,
+p95 10.270, p99 10.710, max 18.767, sum 1,948.617. Raw records and SQL-derived
+statistics are in `../2026-10-19-ddisasm/variant22-baseline.json`.
+
+Full NCU capture of same-name launch ordinal 187 (zero-based), selected by
+the longest baseline nsys duration, is
+`../2026-10-19-ddisasm/variant22-baseline-long.ncu-rep`; its raw CSV and
+selected metrics are retained alongside it. It reports:
+
+* 568 blocks × 256 threads, 48 registers/thread, 44.04% active-cycle occupancy.
+* SM active/elapsed cycles only 4.58%, SM throughput 1.34%, DRAM throughput
+  0.34%, and 30.76 active threads per executed warp instruction.
+* 11.48 barrier and 6.95 long-scoreboard stalled warps per issued warp;
+  atomic-pipeline activity rounds to 0.00%.
+
+This supports a block-tail/load-distribution and synchronization/latency
+bottleneck, not saturated bandwidth or primarily within-warp divergence.
+NCU replay measured 39.204 ms for that launch; it is not a replacement for
+the 18.767 ms nsys duration.
+
+Exact CPU fixed-point exports plus the immutable outer/EDB inputs give
+769,206,847 raw head witnesses over the recursive delta partition. The
+separately recorded CPU per-round canonical outputs sum to 3,093,081
+(248.69 raw witnesses per per-round distinct head), with 1,377,031 newly
+admitted tuples. This is relational multiplicity evidence, not a GPU atomic
+counter or a count of rejected hash-bucket matches. The SQL and provenance
+are in `../2026-10-19-ddisasm/variant22-multiplicity.json`.
+
+### Fused contention diagnosis and exact ticket reservation
+
+`cq-gpu-runtime/dedup-diagnostics` is an opt-in diagnostic build. It adds
+striped device counters for inserts, duplicate hits, busy returns, overflow
+returns, total probes and maximum probe count, plus a host report of initial
+capacity, final capacity, slots, distinct rows and growth attempts. All of
+these counters/readbacks are compiled out normally. Never use diagnostic
+execution durations as performance measurements.
+
+The initial Fused implementation was exact but regressed: 24.136 s resident
+computation versus 8.195 s for the integrated Compacting configuration.
+Hoisted Fused was also exact and took 25.015 s. Those initial Fused binaries
+are preserved for diagnosis, not recommended as the final implementation.
+The old Fused nsys trace attributes 13.019 s to `cq_gpu_stream_21_r9`,
+2.784 s to `cq_gpu_stream_24_r11`, and 1.779 s to variant-22.
+
+Diagnostic variant-22 counters exactly reproduce the independent relational
+witness count: 769,206,847 completed candidates, 3,093,081 distinct rows,
+766,113,766 duplicate hits. There were **3,796,786,034 busy retries**, despite
+maximum probe chain 8, zero growth/rehash and at most 1,404,862 occupied slots
+out of 16,777,216 (8.37%). Even a nearly distinct 79,400-row projection had
+95,164,903 busy returns. Table saturation is not the cause.
+
+The lock owner was holding its hash slot while retrying a globally contended
+CAS output-counter reservation. NCU of the old kernel21's longest nsys
+invocation (ordinal 46) records **2,793,221,446 L2 CAS requests** in that one
+launch (`fused-regression-k21.ncu-rep`). A warp reconvergence barrier alone
+did not eliminate the bottleneck.
+
+The final insertion takes a single atomic output ticket. Tickets outside the
+capacity publish neither a key nor a row and leave their candidate pending.
+Once the launch suspends, a stream-ordered finalizer clamps the count to the
+completed dense in-capacity prefix before growth and exact rehash. Thus no
+ticket is lost, no failed key is retained, and no candidate is replayed after
+successful publication. The active-mask warp barrier prevents retrying lanes
+from racing ahead of their publishing peers.
+
+With tickets, diagnostic variant-22 busy returns fell to 79,097 with identical
+candidate/distinct counts; the nearly distinct projection fell to 2,675.
+The same regression oracle checks repeated growth, exact collisions, heavy
+duplicates, frontier continuations, wide keys, and lossy/repeated head canon.
+
+A separate scheduling ablation found no persuasive variant-22 improvement
+from dynamic root claiming: static/dynamic kernel sums were 1,933.638 /
+1,924.545 ms, with 267 / 263 attempts. Whole nsys windows were 7,180.803 /
+7,031.861 ms. The small difference is confounded by suspension ordering;
+the dynamic-root change was removed. The `.generated.rs` diagnostic dumps
+preserve that experimental scheduler, while the final implementation retains
+the original static root schedule.
+
+### Final measured results and remaining limits
+
+All timings are preliminary, single-run observations on the shared workstation;
+CPU baseline work ran concurrently. Exactness checks compare every tuple of all
+11 outputs, not fingerprints. The resident timer includes EDB canonicalization;
+the narrower nsys fixed-point range does not.
+
+| Configuration | Resident ms | nsys fixed-point ms | Exact CPU tuples |
+|---|---:|---:|---|
+| Historical Compacting baseline | 11,444.806 | 12,896.983 | all 11 |
+| Persistent admission, Compacting, static roots | 5,919.146 | 7,180.803 | all 11 |
+| Final Fused, static roots | 5,961.520 | 4,355.017 | all 11 |
+| Final Fused + checked invariant hoisting | 5,897.183 | 4,331.103 | all 11 |
+| Staged | unavailable | unavailable | blocked by device allocation |
+
+The final Fused nsys totals versus the historical trace are:
+
+| Kernel | Before ms / calls | Final Fused ms / calls |
+|---|---:|---:|
+| `set_insert` | 3,946.044 / 10,014 | 17.125 / 2,385 |
+| `pack` | 881.499 / 10,014 | 4.842 / 2,385 |
+| `append` | 741.449 / 9,879 | 0 / 0 |
+| `order_bins` | 1,261.573 / 7,383 | 1,263.042 / 7,383 |
+| variant-22 | 1,948.617 / 265 | 353.134 / 42 |
+
+Variant-22 now has zero compactions; its launch-duration min/median/p95/max
+is 1.138 / 1.152 / 25.593 / 126.714 ms. Fewer, longer complete launches
+replace suspension-sized attempts, so a single-launch before/after duration
+is not an equal-work comparison. Final GPU busy time is 54.04% of the window.
+The old Fused regression kernel21 fell from 13,019.167 ms to 27.960 ms.
+
+Final long-launch NCU (`final-variant22-long.ncu-rep`, ordinal 1) reports
+SM throughput 17.54%, DRAM throughput 0.58%, active-cycle occupancy 41.37%,
+28.72 active threads/warp instruction, and SM active/elapsed cycles 78.52%.
+Barrier and long-scoreboard stalled warps per issued warp are 13.22 and 7.16.
+The replay duration is 314.337 ms and must not substitute for nsys timing.
+Its 58 registers/thread allocate 64 registers/thread. The final emitted LLVM
+is preserved as `ddisasm-fused-final.ll`.
+
+Persistent admission ranges in the final Fused trace are 2,390 `insert-new`,
+2,390 `append-tail`, 28 `full-grow`, 13 `rehash`, and 878 `count-check`
+calls. Their inclusive host-range totals are respectively 139.579, 6.765,
+0.739, 1.019 and 180.526 ms, not GPU-only execution times.
+`persistent_admit`, `persistent_rehash` and `persistent_copy` consume
+35.944, 18.188 and 6.442 ms of GPU time. The remaining 1.263 s of
+`order_bins` is unchanged; persistent admission is not maintained join indexes.
+
+Verification completed: printer/Datalog tests **57 passed**; printer oracle
+(including Fused growth/collision/frontier/head regressions), persistent
+Datalog-runtime oracle, string-dictionary oracle, and Compacting/Fused
+`gpu-datalog-oracle --bench` passed. Final static-root Compacting, Fused, and
+hoisted Fused each passed cvc5 full-tuple comparisons. Persistent-admission code
+needed no fixes. The late Compacting resident run was faster than its earlier
+8,195 ms dynamic-root run; together with the scheduling ablation this reinforces
+that single-run wall times cannot establish an isolated scheduling improvement.
+
+Staged cvc5 builds but fails while growing a six-column candidate output to
+274,508,544 rows with `CQ_GPU_VRAM_EXCEEDED` / CUDA out-of-memory
+(`staged-exact.log`). Its full-input exactness and timing criterion therefore
+remains unmet; no Compacting fallback was substituted. Final Fused allocator
+peak is 12,687,827,976 bytes, versus 6,504,636,136 bytes historically: speed
+improved at a higher persistent-storage memory cost.
+
+The 0.609 s prepared SRDatalog target is **not reached**. Re-time isolated
+after integration before claiming a stable end-to-end factor. All raw traces,
+exact-check logs, feature configuration, diagnostic records and kernel summaries
+remain in the evidence directory above.

@@ -157,6 +157,7 @@ fn composite_hash_collisions() {
                     r rows = ::std::vec::Vec<_>;
                     r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];
                     p canon = ::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::Plain,::cq_gpu_runtime::$policy>;
+                    l stage = batch 32;
                 }
             }.to_host().expect("composite collision query");
             actual.sort_unstable();
@@ -165,6 +166,10 @@ fn composite_hash_collisions() {
     }
     check!(Staged; keys,rows,expected;);
     check!(Staged; keys,rows,expected; capacity(R));
+    cq_gpu_runtime::reset_host_wait_count();
+    check!(Fused; keys,rows,expected;);
+    assert!(cq_gpu_runtime::resume_readback_count() > 1, "distinct fused output must grow and rehash");
+    check!(Fused; keys,rows,expected; capacity(L));
     let keys = vec![(-7, collisions[0]); 128];
     let rows: Vec<_> = rows.into_iter().map(|(x,y,z)| (x,y,z % 7)).collect();
     let mut expected: Vec<_> = rows.iter().copied().filter(|&(x,y,_)| keys.contains(&(x,y))).collect();
@@ -174,8 +179,33 @@ fn composite_hash_collisions() {
     check!(Compacting; keys,rows,expected;);
     assert!(cq_gpu_runtime::resume_readback_count() > 3, "heavy multiplicity must suspend repeatedly");
     check!(Staged; keys,rows,expected;);
+    cq_gpu_runtime::reset_host_wait_count();
+    check!(Fused; keys,rows,expected;);
+    assert_eq!(cq_gpu_runtime::compaction_readback_count(), 0);
+    assert_eq!(cq_gpu_runtime::resume_readback_count(), 1, "duplicate candidates must not consume output capacity");
+    println!("fused-dedup exact=true growth-rehash=true duplicates=true frontier=true");
     println!("compacting-dedup exact=true repeated-suspensions=true hash-collisions=true");
     println!("composite-hash exact=true forced-collisions=true skew=true bounded=true resumable=true");
+}
+
+fn fused_head_projection() {
+    let rows = [(1i64, 2i64), (1, 3), (2, 4), (1, 2)];
+    let mut actual = cq_gpu::print! {
+        arguments {};
+        pipeline {};
+        physical {
+            relation R(a:i64,b:i64) = (&rows);
+            scan = pipe canon rename R@0 {a -> x,b -> y};
+            return scan as answer(*x,*x);
+        }
+        structures {
+            scan host scan = ::core::iter::Map<_,_> [];
+            scan canon = ::cq_gpu_runtime::DeviceSet<_>;
+            scan head = ::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::Plain,::cq_gpu_runtime::Fused>;
+        }
+    }.to_host().expect("fused repeated lossy head");
+    actual.sort_unstable();
+    assert_eq!(actual, [(1,1),(2,2)]);
 }
 
 fn main() {
@@ -183,6 +213,7 @@ fn main() {
     chained_answers();
     typed_filters();
     closed_scalar_captures();
+    fused_head_projection();
     let rows = vec![
         (i64::MIN, i64::MAX, "alpha".to_owned()),
         (i64::MAX, i64::MIN, "beta".to_owned()),
@@ -191,7 +222,7 @@ fn main() {
     ];
     let mut actual: Vec<(i64, i64, String)> = mini_linq::compile! {
         pipeline {
-            structures = [::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_>)];
+            structures = [::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::Plain,::cq_gpu_runtime::Fused>)];
             print = ::cq_gpu::print;
         }
         struct WideKeys;
@@ -230,7 +261,7 @@ fn main() {
             b = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [x];
             l join_filter = ::cq_storage::AdaptiveKeySet<i64,::cq_storage::I64Codec,16777216>
                 build b [x] covering s marker ::cq_load::ColumnAt<0>;
-            p canon = ::cq_gpu_runtime::DeviceSet<_>;
+            p canon = ::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::Plain,::cq_gpu_runtime::Fused>;
             s share = lookup b [x] first s force p;
             s repr = tuples witness {b [x] at s as ::cq_storage::RunCursor<'_,_>};
             p stage = batch 32 expand;

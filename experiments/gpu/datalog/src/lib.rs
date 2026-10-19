@@ -1,8 +1,17 @@
 //! Checked Datalog scheduling with resident device publication.
+//! Optional `dedup(Staged);`, `dedup(Compacting);` or `dedup(Fused);` before
+//! the program records every hole's DeviceSet policy in Structures. Compacting
+//! remains the default; `dedup-staged` and `dedup-fused` Cargo features choose
+//! a global default, overridden by an explicit macro prefix.
+//! `arguments { hoist_invariants; };` opts into checked, once-per-SCC
+//! materialization of immutable rule factors; the CPU default is unchanged.
 use cq_datalog_fork::{Fork, RoundContext};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as Tokens;
 use quote::{ToTokens, quote};
+
+#[cfg(all(feature = "dedup-staged", feature = "dedup-fused"))]
+compile_error!("select at most one default Datalog dedup policy feature");
 
 #[proc_macro]
 pub fn datalog(input: TokenStream) -> TokenStream {
@@ -11,8 +20,59 @@ pub fn datalog(input: TokenStream) -> TokenStream {
         .into()
 }
 
+struct Input {
+    policy: syn::Ident,
+    hoist_invariants: bool,
+    source: cq_lang_datalog::Program,
+}
+impl syn::parse::Parse for Input {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let default_policy = if cfg!(feature = "dedup-fused") {
+            "Fused"
+        } else if cfg!(feature = "dedup-staged") {
+            "Staged"
+        } else {
+            "Compacting"
+        };
+        let mut policy = syn::Ident::new(default_policy, proc_macro2::Span::call_site());
+        let mut hoist_invariants = false;
+        let mut seen_policy = false;
+        let mut seen_arguments = false;
+        while input.peek(syn::Ident) {
+            let name = input.fork().parse::<syn::Ident>()?;
+            if name == "dedup" && !seen_policy {
+                seen_policy = true;
+                input.parse::<syn::Ident>()?;
+                let content;
+                syn::parenthesized!(content in input);
+                policy = content.parse()?;
+                if !content.is_empty() || !matches!(policy.to_string().as_str(), "Staged" | "Compacting" | "Fused") {
+                    return Err(syn::Error::new_spanned(policy, "CQ_GPU_DEDUP_POLICY: expected Staged, Compacting or Fused"));
+                }
+            } else if name == "arguments" && !seen_arguments {
+                seen_arguments = true;
+                input.parse::<syn::Ident>()?;
+                let content;
+                syn::braced!(content in input);
+                while !content.is_empty() {
+                    let argument: syn::Ident = content.parse()?;
+                    if argument != "hoist_invariants" || hoist_invariants {
+                        return Err(syn::Error::new_spanned(argument, "CQ_GPU_DATALOG_ARGUMENT: expected hoist_invariants once"));
+                    }
+                    hoist_invariants = true;
+                    content.parse::<syn::Token![;]>()?;
+                }
+            } else {
+                break;
+            }
+            input.parse::<syn::Token![;]>()?;
+        }
+        Ok(Self { policy, hoist_invariants, source: input.parse()? })
+    }
+}
+
 fn expand(input: Tokens) -> syn::Result<Tokens> {
-    let mut source: cq_lang_datalog::Program = syn::parse2(input)?;
+    let Input { policy, hoist_invariants, mut source } = syn::parse2(input)?;
     cq_lang_datalog::contract::check(&source)?;
     if source.observer.is_some() {
         return Err(syn::Error::new_spanned(
@@ -22,6 +82,9 @@ fn expand(input: Tokens) -> syn::Result<Tokens> {
     }
     if source.strata.is_none() {
         source = cq_datalog_schedule::stratify::compile(&source)?;
+    }
+    if hoist_invariants {
+        source = cq_datalog_schedule::invariants::compile(&source)?;
     }
     if source.variants.is_none() {
         source = cq_datalog_schedule::seminaive::compile_with_representation(
@@ -41,7 +104,7 @@ fn expand(input: Tokens) -> syn::Result<Tokens> {
     }
     let fork = cq_datalog_fork::compile(&source)?;
     let literals = string_literals(source.rules.iter().map(ToTokens::to_token_stream).collect());
-    render(fork, literals)
+    render(fork, literals, policy)
 }
 
 fn snapshots(context: &RoundContext, queries: Tokens) -> Tokens {
@@ -75,7 +138,7 @@ fn snapshots(context: &RoundContext, queries: Tokens) -> Tokens {
     quote!(#(#relations)* #(#layouts)*)
 }
 
-fn render(fork: Fork, literals: Vec<syn::LitStr>) -> syn::Result<Tokens> {
+fn render(fork: Fork, literals: Vec<syn::LitStr>, policy: syn::Ident) -> syn::Result<Tokens> {
     let context = &fork.context;
     let anchor = context
         .relations
@@ -183,7 +246,7 @@ fn render(fork: Fork, literals: Vec<syn::LitStr>) -> syn::Result<Tokens> {
                         physical = [::cq_rewrites::build_host_reads];
                         structures = [::cq_rewrites::sorted_runs, ::cq_rewrites::hashed_runs, ::cq_gpu::prefix_runs,
                             ::cq_rewrites::retain_lookups,
-                            ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::Compacting>)];
+                            ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::#policy>)];
                         print = #print;
                     }
                     #hole
@@ -348,6 +411,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn invariant_opt_in_composes_with_dedup_policy() {
+        for prefix in [
+            quote!(arguments { hoist_invariants; }; dedup(Staged);),
+            quote!(dedup(Staged); arguments { hoist_invariants; };),
+        ] {
+            let input: Input = syn::parse2(quote! {
+                #prefix
+                struct Copy;
+                relation E(x:i64) = (input);
+                relation R(x:i64);
+                output R;
+                R(*x) :- E(x);
+            }).unwrap();
+            assert!(input.hoist_invariants);
+            assert_eq!(input.policy, "Staged");
+            expand(quote! {
+                #prefix
+                struct Copy;
+                relation E(x:i64) = (input);
+                relation R(x:i64);
+                output R;
+                R(*x) :- E(x);
+            }).unwrap();
+        }
+    }
+
+    #[test]
+    fn explicit_dedup_policy_is_recorded_for_every_hole() {
+        for name in ["Staged", "Compacting", "Fused"] {
+            let policy = syn::Ident::new(name, proc_macro2::Span::call_site());
+            let emitted = expand(quote! {
+                dedup(#policy);
+                struct Reachability;
+                relation Edge(x:i64,y:i64) = (edges);
+                relation Reach(x:i64,y:i64);
+                output Reach;
+                Reach(*x,*y) :- Edge(x,y);
+                Reach(*x,*z) :- Reach(x,y), Edge(y,z);
+            }).unwrap().to_string();
+            assert_eq!(emitted.matches(&format!("cq_gpu_runtime :: {name}")).count(), 2);
+        }
+        assert!(syn::parse2::<Input>(quote!(dedup(Unknown); struct Empty;)).is_err());
+    }
+
+    #[test]
     fn string_domain_uses_stable_authored_literal_order() {
         let literals = string_literals(quote! {
             T(*x, "a") :- E(x), !M(x, r#"b"#), #[total] if *x == "a";
@@ -377,6 +485,7 @@ mod tests {
     #[test]
     fn every_hole_uses_gpu_printer_and_resident_publication() {
         let emitted = expand(quote! {
+            dedup(Compacting);
             struct Reachability;
             relation Edge(x:i64,y:i64) = (edges);
             relation Reach(x:i64,y:i64);

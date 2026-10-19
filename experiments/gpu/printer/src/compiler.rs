@@ -86,7 +86,7 @@ fn provider_codec(ty: &Type) -> syn::Result<RecordedCodec> {
         }
     }
     if qualified(ty, "cq_gpu_runtime", "DeviceSet") && types.len() == 3 {
-        dedup_compacting(ty)?;
+        dedup_policy(ty)?;
         types.pop();
     }
     match types.as_slice() {
@@ -105,7 +105,10 @@ fn provider_codec(ty: &Type) -> syn::Result<RecordedCodec> {
     }
 }
 
-fn dedup_compacting(ty: &Type) -> syn::Result<bool> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DedupPolicy { Staged, Compacting, Fused }
+
+fn dedup_policy(ty: &Type) -> syn::Result<DedupPolicy> {
     let Type::Path(path) = ty else {
         return fail(ty, "CQ_GPU_DEDUP_POLICY", "expected DeviceSet representation");
     };
@@ -116,10 +119,11 @@ fn dedup_compacting(ty: &Type) -> syn::Result<bool> {
         if let syn::GenericArgument::Type(ty) = arg { Some(ty) } else { None }
     }).collect();
     match types.as_slice() {
-        [_] | [_, _] => Ok(false),
-        [_, _, policy] if qualified(policy, "cq_gpu_runtime", "Staged") => Ok(false),
-        [_, _, policy] if qualified(policy, "cq_gpu_runtime", "Compacting") => Ok(true),
-        _ => fail(ty, "CQ_GPU_DEDUP_POLICY", "record cq_gpu_runtime::{Staged,Compacting} as DeviceSet's third type parameter"),
+        [_] | [_, _] => Ok(DedupPolicy::Staged),
+        [_, _, policy] if qualified(policy, "cq_gpu_runtime", "Staged") => Ok(DedupPolicy::Staged),
+        [_, _, policy] if qualified(policy, "cq_gpu_runtime", "Compacting") => Ok(DedupPolicy::Compacting),
+        [_, _, policy] if qualified(policy, "cq_gpu_runtime", "Fused") => Ok(DedupPolicy::Fused),
+        _ => fail(ty, "CQ_GPU_DEDUP_POLICY", "record cq_gpu_runtime::{Staged,Compacting,Fused} as DeviceSet's third type parameter"),
     }
 }
 
@@ -507,7 +511,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                     );
                 }
                 provider_codec(ty)?;
-                dedup_compacting(ty)?;
+                dedup_policy(ty)?;
             }
             ir::Structure::Host { reader, .. } if reader != "scan" => {
                 let name = symbol_name(reader);
@@ -979,8 +983,10 @@ pub(crate) fn compile(
         }
         chain.reverse();
         let first = context.physical[&chain[0]];
+        let fused = facts.dedup.get(&endpoint).is_some_and(|ty|
+            dedup_policy(ty).expect("validated dedup policy") == DedupPolicy::Fused);
         let selection = if let Operator::Rename(rename) = &first.operator {
-            if !chain
+            if !fused && !chain
                 .iter()
                 .any(|name| facts.stages.contains_key(name) || facts.expands.contains(name))
                 && chain.iter().all(|name| {
@@ -1217,7 +1223,7 @@ pub(crate) fn compile(
             frontier_threshold: options.frontier,
             descriptors: Vec::new(),
         };
-        let resume = if capacity.is_none() && selection.is_none() {
+        let resume = if fused || (capacity.is_none() && selection.is_none()) {
             Some(emitter.resumable(start, &state, root.clone())?)
         } else {
             None
@@ -1387,6 +1393,59 @@ pub(crate) fn compile(
         .get(&returned)
         .map(|ty| {
             let codec = provider_codec(ty)?.value();
+            if dedup_policy(ty)? == DedupPolicy::Fused {
+                // Head canon is after the ordered projection, not canon over
+                // the producer's wider heading. Keep this separate boundary
+                // so other consumers of the producer retain their rows.
+                let kernel = format_ident!("cq_gpu_head_{}", module_number);
+                let prepare = format_ident!("prepare_{}", kernel);
+                let columns: Vec<_> = (0..output_columns.len()).collect();
+                device.push(quote! {
+                    #[kernel]
+                    #[launch_bounds(256)]
+                    #[launch_contract(domain=1,block=(256,1,1))]
+                    pub fn #kernel(
+                        input: ::cq_gpu_runtime::TableView,
+                        output: ::cq_gpu_runtime::OutputView,
+                        resume: ::cq_gpu_runtime::ResumeView,
+                        set: ::cq_gpu_runtime::FusedSetView,
+                    ) {
+                        unsafe {
+                            let lane=::cuda_device::thread::index_1d().get() as usize;
+                            let checkpoint=resume.state.add(lane);
+                            let saved=*checkpoint;
+                            if saved==u64::MAX { return; }
+                            let mut row=if saved==0 {lane as u64}else{saved-1};
+                            let len=::cq_gpu_runtime::table_len(input);
+                            while row<len && !::cq_gpu_runtime::resume_requested(resume) {
+                                match ::cq_gpu_runtime::fused_emit(output,set,[
+                                    #(::cq_gpu_runtime::column(input,#columns,row)),*
+                                ]) {
+                                    0 => { row+=::cuda_device::thread::gridDim_x() as u64*256; }
+                                    2 => { ::cq_gpu_runtime::resume_suspend(resume); }
+                                    _ => {}
+                                }
+                            }
+                            *checkpoint=if row>=len {u64::MAX}else{row+1};
+                        }
+                    }
+                });
+                return Ok(quote! {
+                    let #output=__execution.project_table(#output,&[#(#output_columns),*])?;
+                    let __head_input=__execution.table_view(#output)?;
+                    let __head_bounds=[#(__execution.column_bounds(#output,#columns)?),*];
+                    let __head_grid=__head_input.len.div_ceil(256).clamp(1,568) as u32;
+                    let __head_launch=__module.#prepare(::cuda_core::LaunchConfig1D::new(__head_grid,256,0))?;
+                    let #output=__execution.execute_resumable_fused(
+                        &__head_bounds,__head_input.len as usize,__head_grid as usize*256,
+                        |stream,output,resume,set| {
+                            unsafe {__module.#kernel(stream,&__head_launch,__head_input,output,resume,set)?;}
+                            Ok(())
+                        },
+                    )?;
+                    let #output=__execution.reencode_table(#output,#codec)?;
+                });
+            }
             Ok::<_, syn::Error>(quote! {
                 let #output=__execution.project_table(#output,&[#(#output_columns),*])?;
                 let #output=__execution.dedup(#output)?;
@@ -1583,6 +1642,33 @@ impl ResumeEmitter<'_, '_, '_> {
                     })
                 })
                 .collect::<syn::Result<Vec<_>>>()?;
+            if facts.dedup.get(self.source.endpoint).is_some_and(|ty|
+                dedup_policy(ty).expect("validated dedup policy") == DedupPolicy::Fused)
+            {
+                let insert = quote! {
+                    if __valid {
+                        match ::cq_gpu_runtime::fused_emit(__output,__fused,[#(#values),*]) {
+                            0 => { __valid=false; }
+                            2 => { ::cq_gpu_runtime::resume_suspend(__resume); }
+                            _ => {}
+                        }
+                    }
+                };
+                return Ok(if self.source.serial {
+                    self.block(quote! {
+                        #insert
+                        if !__valid { __resume_pc=#next; }
+                    })
+                } else {
+                    self.block(quote! {
+                        #insert
+                        // Rejoin before retrying busy slots: no lane waits on
+                        // an owner that has not yet executed its publication.
+                        let (_,__pending)=::cq_gpu_runtime::tiles::scan(__valid as u32,__scratch);
+                        if __pending==0 { __resume_pc=#next; }
+                    })
+                });
+            }
             let writes = values.iter().enumerate().map(|(column, value)| {
                 quote!(::cq_gpu_runtime::write_output(__output,#column,__destination,#value);)
             });
@@ -2570,6 +2656,10 @@ impl Kernel {
         let common =
             quote!(__driver,#(#root_columns,)*#(#run_ids,)*#(#constants,)*__output,__frontier);
         let signature = quote!(__driver: ::cq_gpu_runtime::TableView,#(#root_columns: ::cq_gpu_runtime::ColumnView,)*#(#run_ids: #run_types,)*#(#constants:i64,)*__output: ::cq_gpu_runtime::OutputView,__frontier: ::cq_gpu_runtime::FrontierView);
+        let fused = facts.dedup.get(&endpoint).is_some_and(|ty|
+            dedup_policy(ty).expect("validated dedup policy") == DedupPolicy::Fused);
+        let fused_args = fused.then(|| quote!(__fused: ::cq_gpu_runtime::FusedSetView,));
+        let fused_call = fused.then(|| quote!(__fused,));
         let resume_args = resume
             .as_ref()
             .map(|_| quote!(__resume: ::cq_gpu_runtime::ResumeView,));
@@ -2800,14 +2890,14 @@ impl Kernel {
             #[kernel]
             #[launch_bounds(256, #min_blocks)]
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_bytes,#shared_bytes))]
-            pub fn #kernel(#signature,#resume_args #selection_args) {
+            pub fn #kernel(#signature,#resume_args #fused_args #selection_args) {
                 let __tid=::cuda_device::thread::threadIdx_x() as usize;
                 let __scratch=::cuda_device::DynamicSharedArray::<u8>::get_raw() as *mut u32;
                 unsafe {#scheduler}
             }
         };
         let canon = facts.dedup.contains_key(&endpoint);
-        let dedup = canon.then(|| quote!(let #table=__execution.dedup(#table)?;));
+        let dedup = (canon && !fused).then(|| quote!(let #table=__execution.dedup(#table)?;));
         let codec = materialized_codec(facts, &endpoint)
             .expect("validated materialized codec")
             .value();
@@ -2854,19 +2944,20 @@ impl Kernel {
             }
         }
         let slots = if frontier { 64u32 } else { 0 };
-        let resume_method = if facts.dedup.get(&endpoint).is_some_and(|ty| {
-            dedup_compacting(ty).expect("validated dedup policy")
-        }) {
-            format_ident!("execute_resumable_compacting")
-        } else {
-            format_ident!("execute_resumable")
+        let resume_method = match facts.dedup.get(&endpoint)
+            .map(|ty| dedup_policy(ty).expect("validated dedup policy"))
+        {
+            Some(DedupPolicy::Fused) => format_ident!("execute_resumable_fused"),
+            Some(DedupPolicy::Compacting) => format_ident!("execute_resumable_compacting"),
+            _ => format_ident!("execute_resumable"),
         };
+        let initial_capacity = capacity.cloned().unwrap_or_else(|| quote!(__driver.len as usize));
         let execute = if resume.is_some() {
             quote! {
                 __execution.#resume_method(
-                    &[#(#bounds),*],__driver.len as usize,__grid as usize * #checkpoint_words,
-                    |__stream,__output,__resume| {
-                        unsafe {__module.#kernel(__stream,&__launch,#common,__resume)?;}
+                    &[#(#bounds),*],#initial_capacity,__grid as usize * #checkpoint_words,
+                    |__stream,__output,__resume,#fused_call| {
+                        unsafe {__module.#kernel(__stream,&__launch,#common,__resume,#fused_call)?;}
                         Ok(())
                     },
                 )?

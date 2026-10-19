@@ -26,6 +26,12 @@
 //! records packed answers. Retained rows can likewise record
 //! `cq_gpu_runtime::DeviceColumns<_, Codec>`. Supported codec markers are
 //! `Plain`, `For`, `Delta` and `DictionaryCodec`; unknown aliases are rejected.
+//! `DeviceSet<Row, Codec, Policy>` records `Staged` (default), `Compacting`,
+//! or `Fused`: respectively materialize then canonicalize, compact exact
+//! prefixes at suspension, or compare complete emitted tuples before writing.
+//! Fused output and its hash table grow together through saved continuations;
+//! capacity advice is its initial reservation, not a uniqueness assumption.
+//! Head canon still compares the ordered projected head, including repeats.
 //! Unsupported operators and representations fail before CUDA is emitted.
 //!
 //! Scalar Bind supports explicitly typed copied dereferences and integral,
@@ -62,8 +68,9 @@ mod prefix;
 /// `frontier(8)` (zero disables publishing), `directory(rank)`, and
 /// `capacity(InputRelation)` for an explicit input-cardinality allocation bound.
 /// Capacity advice does not assert key uniqueness or change relational meaning;
-/// exceeding it reports an error instead of dropping answers. Without advice,
-/// bounded output grows by resuming saved device execution state.
+/// exceeding it reports an error on bounded staged paths. Fused canon uses it
+/// as an initial reservation and resumes on overflow. Without advice, outputs
+/// grow by resuming saved device execution state.
 /// Data/evaluation decisions come exclusively from checked Structures.
 #[proc_macro]
 pub fn print(input: TokenStream) -> TokenStream {

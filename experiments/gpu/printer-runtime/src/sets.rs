@@ -1,5 +1,130 @@
-//! Exact resident row algebra. Sets are rebuilt per operation/publication.
+//! Exact resident row algebra and maintained all-column Datalog admission.
 use crate::*;
+
+/// Unique mutable state, moved from a relation into its pending successor.
+/// Published tables hold immutable native ranges, never this writer capability.
+pub(crate) struct MaintainedSet {
+    keys: Buffer<u64>,
+    slots: Buffer<u64>,
+    width: usize,
+    columns: Vec<Arc<Buffer<i64>>>,
+    pointers: Option<Buffer<u64>>,
+    capacity: usize,
+}
+
+impl MaintainedSet {
+    pub(crate) fn new(runtime: &Runtime, width: usize, rows: usize) -> Result<Self> {
+        let capacity = Self::set_capacity(rows)?;
+        let words = capacity.checked_mul(width)
+            .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "persistent key size overflow"))?;
+        Ok(Self {
+            keys: unsafe { Buffer::uninitialized(runtime.pool.clone(), words)? },
+            slots: Buffer::zeroed(runtime.pool.clone(), capacity)?,
+            width,
+            columns: Vec::new(),
+            pointers: None,
+            capacity: 0,
+        })
+    }
+
+    fn set_capacity(rows: usize) -> Result<usize> {
+        rows.max(1).checked_mul(2).and_then(usize::checked_next_power_of_two)
+            .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "persistent set capacity overflow"))
+    }
+
+    pub(crate) fn reserve_set(&mut self, runtime: &Runtime, rows: usize) -> Result<()> {
+        let capacity = Self::set_capacity(rows)?;
+        if capacity <= self.slots.len() {
+            return Ok(());
+        }
+        let _nvtx = nvtx::range(c"admission/rehash");
+        let words = capacity.checked_mul(self.width)
+            .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "persistent key size overflow"))?;
+        let keys = unsafe { Buffer::uninitialized(runtime.pool.clone(), words)? };
+        let slots = Buffer::zeroed(runtime.pool.clone(), capacity)?;
+        let launch = runtime.kernels.prepare_persistent_rehash(config(self.slots.len(), 0))?;
+        unsafe {
+            runtime.kernels.persistent_rehash(
+                runtime.stream(), &launch, self.keys.ptr(), self.slots.ptr(), self.slots.len(),
+                keys.ptr(), slots.ptr(), capacity, self.width,
+            )?;
+        }
+        self.keys = keys;
+        self.slots = slots;
+        Ok(())
+    }
+
+    pub(crate) fn insert(
+        &self, runtime: &Runtime, input: &Table, output: OutputView, emit: bool,
+    ) -> Result<()> {
+        let launch = runtime.kernels.prepare_persistent_admit(config(input.capacity, 0))?;
+        unsafe {
+            runtime.kernels.persistent_admit(
+                runtime.stream(), &launch, input.view(), self.width,
+                self.keys.ptr(), self.slots.ptr(), self.slots.len(), output, emit,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Reserve from the checked distinct count, not the candidate upper bound.
+    /// Existing prefixes are copied only when doubling or detaching a branch.
+    pub(crate) fn append(
+        &mut self, runtime: &Runtime, previous: &Table, delta: &Table, rows: usize, added: usize,
+    ) -> Result<()> {
+        let _nvtx = nvtx::range(c"admission/append-tail");
+        if self.pointers.is_none() || rows > self.capacity {
+            let _growth = nvtx::range(c"admission/full-grow");
+            let capacity = rows.max(1).checked_next_power_of_two()
+                .ok_or_else(|| failure("CQ_GPU_OUTPUT_ROWS", "persistent full capacity overflow"))?;
+            let output = allocate_output(runtime, self.width, capacity)?;
+            let launch = runtime.kernels.prepare_persistent_copy(config(previous.capacity, 0))?;
+            unsafe {
+                runtime.kernels.persistent_copy(
+                    runtime.stream(), &launch, previous.view(), self.width, output.view(), 0,
+                )?;
+            }
+            self.columns = output.columns.into_iter().map(Arc::new).collect();
+            self.pointers = Some(output.pointers);
+            self.capacity = capacity;
+        }
+        if added != 0 {
+            let launch = runtime.kernels.prepare_persistent_copy(config(added, 0))?;
+            let output = OutputView {
+                columns: self.pointers.as_ref().unwrap().ptr().cast(),
+                capacity: self.capacity as u64,
+                count: delta.metadata.ptr().cast(),
+                error: unsafe { delta.metadata.ptr().cast::<u8>().add(8).cast() },
+            };
+            unsafe {
+                runtime.kernels.persistent_copy(
+                    runtime.stream(), &launch, delta.view(), self.width, output, (rows - added) as u64,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn snapshot(
+        &self, runtime: &Runtime, offset: usize, rows: usize,
+        metadata: Arc<Buffer<OutputCount>>, bounds: Vec<Bounds>,
+    ) -> Result<Table> {
+        let columns = self.columns.iter().zip(&bounds).map(|(column, &bound)| {
+            // The writer only appends beyond all published prefixes. Range
+            // metadata is version-local and is never advanced by later appends.
+            let range = unsafe { Buffer::shared_slice(column.clone(), offset, rows)? };
+            EncodedColumn::from_plain_buffer(range, metadata.clone(), 0, bound).map(Arc::new)
+        }).collect::<Result<Vec<_>>>()?;
+        Ok(Table {
+            views: runtime.column_views(&columns)?,
+            columns,
+            metadata: metadata.clone(),
+            capacity: rows,
+            bounds,
+            statuses: vec![metadata],
+        })
+    }
+}
 
 impl<'runtime, 'data> Execution<'runtime, 'data> {
     /// Concatenate live rows without decoding them on the host. Inputs must have

@@ -148,20 +148,28 @@ integral run keys, and representable key domains still apply.
 Each SCC evaluates every hole against immutable full/current-delta snapshots.
 Other recursive operands read FULL, including the current delta: nonlinear
 variants form a Boolean cover, not a disjoint positional partition.
-Admission canonicalizes candidates across rules and computes candidates minus
-full on device. All members are prepared before publication, including empty
-member deltas. Full/delta demanded column permutations are resident projections;
-physical indexes are rebuilt per CQ invocation. This is an explicit per-hole
-build policy, not maintained indexes, an LSM/spine, or cross-hole index reuse.
-`Relation::prepare` queues a resident delta into a shared `RoundStatus`.
-Its single checked D2H batch contains one ancestor-error slot and one
-16-byte count/status slot per member. `PreparedRelation::finish` uses that
-checked count to allocate exact-live-sized immutable full and delta snapshots.
-Compacting delta capacity at this already-checked boundary prevents candidate
-capacity slack from multiplying through recursive joins in subsequent rounds;
-it adds no cardinality readback.
-All successors finish preparation before any publication; the next round,
-including its terminal empty batch, checks the preceding full-copy status.
+Admission inserts every hole's candidates into the member's persistent exact
+all-column device hash set. Full-word equality (including zero-column existence)
+admits each new tuple once across holes, duplicates, and prior full rows.
+The set grows and rehashes geometrically; it is not rebuilt each round.
+Full columns are append-only native `Plain` buffers with geometric reserve.
+`Relation::prepare` queues the new delta into a shared `RoundStatus`; holes never
+read the mutable admission set, so preparing one member cannot affect another
+member's old FULL/current-delta inputs.
+The single checked D2H batch contains one ancestor-error slot and one 16-byte
+count/status slot per member. `PreparedRelation::finish` reserves from the exact
+distinct count and copies only the new delta into the full tail, copying old full
+rows only on capacity growth or explicit branch detachment. Full/delta snapshots
+are owner-retaining prefix/suffix ranges with immutable version-local counts and
+exact logical capacities; later appends cannot change any published prefix.
+A cloned or reused old relation detaches its own storage before appending.
+All successors finish before any publication, including empty deltas; convergence
+requires every delta to be empty, and ancestor errors remain checked rather than
+being interpreted as emptiness. Normal admission work is candidate insertion
+plus delta copying, not a full scan; geometric growth is amortized.
+Demanded column permutations remain resident projections. Join indexes are
+rebuilt per CQ invocation: maintaining the admission set is not maintained join
+indexes, an LSM/spine, timestamp compaction, or cross-hole index reuse.
 Timing events are retained until a round readback, with one final program
 completion covering trailing metadata work. There is no per-hole completion
 wait or per-member cardinality wait.

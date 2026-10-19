@@ -260,13 +260,24 @@ explicit policy pair \texttt{device\_set\_all\_columns} and
 The fork records resident column projections with per-hole index rebuilding,
 not maintained grouped hosts. Its bridge realizes each supported CQ hole with
 the GPU printer; an unsupported device expression is rejected rather than
-executed on the CPU. Admission computes the equations above on device-resident
-rows and prepares every SCC successor before publishing any member, including
-empty member deltas. Small checked cardinality/status readbacks govern host
-allocation and convergence; they do not transfer relation tuples.
-This rebuild-per-publication realization is not a \code{Runs} spine, does not
-implement logical timestamp compaction, and makes no incremental-index reuse
-claim. Output device relations remain owned and resident until explicitly read.
+executed on the CPU. Admission realizes \texttt{insert\_new} with a persistent
+exact all-column device hash set: full-word equality admits each new tuple once
+across every member's holes and prior full rows. Geometric set growth rehashes
+only at capacity boundaries. Native full columns have geometric reserve and
+append only the admitted delta; growth copies the prior full prefix. Every
+published full or delta range retains its allocation and an immutable,
+version-local count, so later appends never modify a published prefix.
+Preparing a reused old handle detaches its writer and copies its own prefix.
+Holes read only old full/delta snapshots, not the mutable admission set;
+therefore set insertion during preparation cannot change another hole's inputs.
+Every SCC successor is prepared before publishing any member, including empty
+member deltas. One batched checked cardinality/status readback governs reserve
+and convergence and retains ancestor failures; it transfers no relation tuples.
+Normal admission touches candidates and new delta rows, with full copying and
+rehashing amortized over geometric growth. Frozen negative keys are unchanged.
+This maintained admission structure is not a \code{Runs} spine, does not
+implement logical timestamp compaction, and makes no incremental join-index
+reuse claim. Output device relations remain owned and resident until explicitly read.
 
 Core negation is lowered to a total membership guard over a key set built
 once at the consuming stratum boundary, after its negative inputs are complete.

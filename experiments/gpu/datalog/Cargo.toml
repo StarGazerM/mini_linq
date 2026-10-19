@@ -6,6 +6,10 @@ edition.workspace = true
 [lib]
 proc-macro = true
 
+[features]
+dedup-staged = []
+dedup-fused = []
+
 [dependencies]
 cq-lang-datalog = { path = "../../../features/datalog/language" }
 cq-datalog-schedule = { path = "../../../features/datalog/schedule" }

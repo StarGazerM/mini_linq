@@ -1,13 +1,12 @@
 //! Resident, exact Boolean Datalog publication.
 //!
-//! The baseline rebuilds sets and full snapshots at each publication. It does
-//! not retain a spine or share indexes across separately compiled rule holes.
-//! All rule holes in an SCC must read the old `full`/`delta` handles; prepare
-//! every member's successor before replacing any member. Even empty deltas are
-//! published. Tuple data never crosses the device boundary here. One checked
-//! batch downloads every member's delta count and ancestor error status before
-//! allocating exact-live-sized full snapshots. Their copies are stream ordered;
-//! the next batch (including terminal empty batches) checks their statuses.
+//! Each IDB retains an exact all-column device set and geometrically reserved
+//! native full columns. Published full/delta handles are immutable ranges with
+//! version-local counts; later appends touch only the unpublished tail.
+//! All holes read old snapshots, never the mutable set, so set insertion may
+//! happen during preparation. Prepare and finish every SCC member before
+//! replacing any member, including empty deltas. One checked batch downloads
+//! all delta counts and sticky ancestor errors. Join indexes are not maintained.
 use crate::*;
 
 thread_local! {
@@ -39,6 +38,7 @@ pub struct Relation<'data, Row> {
     full: DeviceColumns<'data, Row>,
     delta: DeviceColumns<'data, Row>,
     rows: usize,
+    maintained: RefCell<Option<crate::sets::MaintainedSet>>,
 }
 impl<Row> Clone for Relation<'_, Row> {
     fn clone(&self) -> Self {
@@ -46,6 +46,9 @@ impl<Row> Clone for Relation<'_, Row> {
             full: self.full.clone(),
             delta: self.delta.clone(),
             rows: self.rows,
+            // A branch is a read-only snapshot until preparation detaches its
+            // own columns and set. Never duplicate the append writer.
+            maintained: RefCell::new(None),
         }
     }
 }
@@ -70,6 +73,7 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
                 delta: full.clone(),
                 full,
                 rows: 0,
+                maintained: RefCell::new(None),
             })
         })
     }
@@ -98,6 +102,7 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
                 delta: full.clone(),
                 full,
                 rows,
+                maintained: RefCell::new(None),
             })
         })
     }
@@ -112,8 +117,10 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
         self.full
     }
 
-    /// Queue exact `delta' = distinct(union(candidates)) \\ full` and register
-    /// its count/status in the shared round. No host wait occurs here.
+    /// Insert every hole's candidates into the maintained exact set, emitting
+    /// newly inserted tuples once. No host wait or full scan occurs on the
+    /// normal path. The writer moves into the pending successor; preparing this
+    /// old handle again creates a detached branch, never a second tail writer.
     pub fn prepare<C>(
         &self,
         candidates: &[DeviceColumns<'data, Row, C>],
@@ -122,17 +129,40 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
         with_runtime_for(Some(self.full.pool().clone()), |runtime| {
             let mut execution = runtime.execution();
             let full = execution.bind_columns(&self.full)?;
-            let candidates = candidates
-                .iter()
+            let candidates = candidates.iter()
                 .map(|input| execution.bind_columns(input))
                 .collect::<Result<Vec<_>>>()?;
-            let candidates = if candidates.is_empty() {
-                execution.empty_table(Row::WIDTH)?
-            } else {
-                execution.union_all(&candidates)?
+            let capacity = candidates.iter().try_fold(0usize, |sum, &id| {
+                sum.checked_add(execution.table(id)?.capacity)
+                    .ok_or_else(|| failure("CQ_GPU_OUTPUT_ROWS", "candidate capacity overflow"))
+            })?;
+            check_rows(capacity)?;
+            let upper = self.rows.checked_add(capacity)
+                .ok_or_else(|| failure("CQ_GPU_OUTPUT_ROWS", "admission capacity overflow"))?;
+            let _nvtx = nvtx::range(c"admission/insert-new");
+            let mut maintained = match self.maintained.borrow_mut().take() {
+                Some(state) => state,
+                None => {
+                    let state = crate::sets::MaintainedSet::new(runtime, Row::WIDTH, upper)?;
+                    let status = allocate_output(runtime, 0, 0)?;
+                    state.insert(runtime, execution.table(full)?, status.view(), false)?;
+                    let status = execution.complete_output(status, Vec::new())?;
+                    execution.add_table(status);
+                    state
+                }
             };
-            let candidates = execution.dedup(candidates)?;
-            let delta = execution.difference(candidates, full)?;
+            maintained.reserve_set(runtime, upper)?;
+            let output = allocate_output(runtime, Row::WIDTH, capacity)?;
+            let mut bounds = vec![Bounds::Empty; Row::WIDTH];
+            for &candidate in &candidates {
+                let table = execution.table(candidate)?;
+                for (bound, &next) in bounds.iter_mut().zip(&table.bounds) {
+                    *bound = merge_bound(*bound, next);
+                }
+                maintained.insert(runtime, table, output.view(), true)?;
+            }
+            let delta = execution.complete_output(output, bounds)?;
+            let delta = execution.add_table(delta);
             let delta = execution.into_columns(delta, &(0..Row::WIDTH).collect::<Vec<_>>())?;
             let slot = round.tables.len();
             round.include(&delta)?;
@@ -140,6 +170,7 @@ impl<'data, Row: RowCodec<'data>> Relation<'data, Row> {
                 previous: self.clone(),
                 delta,
                 slot,
+                maintained,
             })
         })
     }
@@ -150,12 +181,12 @@ pub struct PreparedRelation<'data, Row> {
     previous: Relation<'data, Row>,
     delta: DeviceColumns<'data, Row>,
     slot: usize,
+    maintained: crate::sets::MaintainedSet,
 }
 impl<'data, Row: RowCodec<'data>> PreparedRelation<'data, Row> {
     /// Prepare the immutable full successor. Finish every member before
     /// replacing any source handle. Only the matching checked batch is accepted.
-    pub fn finish(self, checked: &CheckedRound) -> Result<Relation<'data, Row>> {
-        let _nvtx = nvtx::range(c"admission/full-copy");
+    pub fn finish(mut self, checked: &CheckedRound) -> Result<Relation<'data, Row>> {
         let Some((metadata, added)) = checked.members.get(self.slot) else {
             return Err(failure("CQ_GPU_ROUND", "missing checked member"));
         };
@@ -170,42 +201,44 @@ impl<'data, Row: RowCodec<'data>> PreparedRelation<'data, Row> {
             .rows
             .checked_add(*added)
             .ok_or_else(|| failure("CQ_GPU_OUTPUT_ROWS", "full cardinality overflow"))?;
+        check_rows(rows)?;
         with_runtime_for(Some(self.delta.pool().clone()), |runtime| {
-            let mut execution = runtime.execution();
-            let full = execution.bind_columns(&self.previous.full)?;
-            let delta = execution.bind_columns(&self.delta)?;
-            // The batch checked every ancestor. Drop historical chains, but
-            // retain current owners and any new full-copy status.
-            for table in &mut execution.tables {
-                table.statuses.clear();
-            }
-            // The shared barrier already checked the exact delta count. Keep
-            // that capacity exact too: carrying candidate upper bounds into
-            // the next round compounds slack through recursive joins/unions.
-            let delta = if execution.table(delta)?.capacity == *added {
-                delta
-            } else {
-                execution.union_with_capacity(&[delta], *added)?
+            self.maintained.append(
+                runtime, self.previous.full.storage(), self.delta.storage(), rows, *added,
+            )?;
+            let bounds = self.previous.full.storage().bounds.iter()
+                .zip(&self.delta.storage().bounds)
+                .map(|(&old, &new)| merge_bound(old, new))
+                .collect();
+            let full = self.maintained.snapshot(runtime, 0, rows, runtime.metadata(rows)?, bounds)?;
+            let delta = self.maintained.snapshot(
+                runtime, self.previous.rows, *added, self.delta.storage().metadata.clone(),
+                self.delta.storage().bounds.clone(),
+            )?;
+            let dictionary = Arc::new(self.delta.dictionary().clone());
+            // The shared check validated every ancestor before any successor
+            // is published. Deterministic tail copies cannot overflow: rows was
+            // checked and storage reserved above. New metadata remains checked
+            // by subsequent rounds, including terminal empty publication.
+            let full = unsafe {
+                DeviceColumns::from_parts(full, dictionary.clone(), self.delta.pool().clone())
             };
-            let full = if *added == 0 {
-                full
-            } else {
-                execution.union_with_capacity(&[full, delta], rows)?
-            };
-            let columns: Vec<_> = (0..Row::WIDTH).collect();
-            let full: DeviceColumns<'data, Row> = execution.into_columns(full, &columns)?;
-            let delta: DeviceColumns<'data, Row> = execution.into_columns(delta, &columns)?;
-            let mut table = delta.storage().clone();
-            table.statuses.push(full.storage().metadata.clone());
             let delta = unsafe {
-                DeviceColumns::from_parts(
-                    table,
-                    Arc::new(delta.dictionary().clone()),
-                    delta.pool().clone(),
-                )
+                DeviceColumns::from_parts(delta, dictionary, self.delta.pool().clone())
             };
-            Ok(Relation { full, delta, rows })
+            Ok(Relation {
+                full, delta, rows,
+                maintained: RefCell::new(Some(self.maintained)),
+            })
         })
+    }
+}
+
+fn merge_bound(left: Bounds, right: Bounds) -> Bounds {
+    match (left, right) {
+        (Bounds::Empty, bound) | (bound, Bounds::Empty) => bound,
+        (Bounds::Inclusive { min: a, max: b }, Bounds::Inclusive { min: c, max: d }) =>
+            Bounds::Inclusive { min: a.min(c), max: b.max(d) },
     }
 }
 

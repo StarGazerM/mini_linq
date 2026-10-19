@@ -10,6 +10,20 @@ use cq_gpu_runtime::{Codec, Dictionary, Runtime};
 use datalog_ddisasm::{loader, mini_engine, Facts, Results};
 use std::{error::Error, path::PathBuf, time::Instant};
 
+#[cfg(feature = "hoist-invariants")]
+macro_rules! resident_datalog {
+    ($($program:tt)*) => {
+        cq_gpu_datalog::datalog! {
+            arguments { hoist_invariants; };
+            $($program)*
+        }
+    };
+}
+#[cfg(not(feature = "hoist-invariants"))]
+macro_rules! resident_datalog {
+    ($($program:tt)*) => { cq_gpu_datalog::datalog! { $($program)* } };
+}
+
 fn run(
     runtime: &Runtime,
     facts: &Facts,
@@ -136,7 +150,7 @@ fn run(
         StackDefUseDefUsed,
         StackDefUseLiveVarAtBlockEnd,
         StackDefUseLiveVarAtPriorUsed,
-    ) = cq_gpu_datalog::datalog! {
+    ) = resident_datalog! {
      struct Ddisasm;
      relation ArchMemoryAccess(c0:i64,c1:i64,c2:i64,c3:i64,c4:i64,c5:i64) = (&ArchMemoryAccess);
      relation ArchRegRegArithOp(c0:i64,c1:i64,c2:i64,c3:i64,c4:i64,c5:i64) = (&ArchRegRegArithOp);

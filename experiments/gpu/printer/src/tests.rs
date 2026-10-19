@@ -55,19 +55,29 @@ fn composite_hashed_runs_require_recorded_type_and_check_every_key() {
 
 #[test]
 fn dedup_execution_policy_is_read_only_from_the_recorded_type() {
-    for (policy, compacting) in [
-        (quote!(::cq_gpu_runtime::Staged), false),
-        (quote!(::cq_gpu_runtime::Compacting), true),
+    for (policy, compacting, fused) in [
+        (quote!(::cq_gpu_runtime::Staged), false, false),
+        (quote!(::cq_gpu_runtime::Compacting), true, false),
+        (quote!(::cq_gpu_runtime::Fused), false, true),
     ] {
         let mut source = shared();
         let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else { unreachable!() };
         *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For, #policy>);
         let text = compile(&source, Options::default()).unwrap().to_token_stream().to_string();
         assert_eq!(text.contains("execute_resumable_compacting"), compacting, "{text}");
+        assert_eq!(text.contains("execute_resumable_fused"), fused, "{text}");
+        assert_eq!(text.contains("fused_emit"), fused, "{text}");
+        if fused {
+            assert!(!text.contains("__execution . dedup"), "{text}");
+            let bounded = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
+                .unwrap().to_token_stream().to_string();
+            assert!(bounded.contains("execute_resumable_fused"), "{bounded}");
+            assert!(!bounded.contains("execute_bounded"), "{bounded}");
+        }
     }
     let mut source = shared();
     let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else { unreachable!() };
-    *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::Fused>);
+    *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::UnknownPolicy>);
     assert!(compile(&source, Options::default()).unwrap_err().to_string().contains("CQ_GPU_DEDUP_POLICY"));
 }
 
@@ -1051,7 +1061,7 @@ fn certified_exact_membership_is_device_only_and_schema_checked() {
 
 #[test]
 fn lossy_and_repeated_heads_canon_after_projection() {
-    let source: ir::Program = syn::parse_quote! { physical {
+    let mut source: ir::Program = syn::parse_quote! { physical {
         relation R(a:i32);
         scan = pipe canon rename R@0 {a -> x};
         return scan as answer(*x,*x);
@@ -1067,6 +1077,13 @@ fn lossy_and_repeated_heads_canon_after_projection() {
     assert!(generated.contains("project_table (__cq_gpu_table_scan , & [0usize , 0usize])"));
     assert_eq!(generated.matches("__execution . dedup").count(), 2);
     assert!(generated.contains("into_columns :: < (i32 , i32 ,) , :: cq_gpu_runtime :: Delta >"));
+    let ir::Structure::HeadDedup { ty, .. } = &mut source.structures.entries[2].structure else { unreachable!() };
+    *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::Delta,::cq_gpu_runtime::Fused>);
+    let generated = compile(&source, Options::default()).unwrap().to_token_stream().to_string();
+    assert!(generated.contains("cq_gpu_head_"));
+    assert!(generated.contains("execute_resumable_fused"));
+    assert_eq!(generated.matches("__execution . dedup").count(), 1);
+    assert!(generated.contains("project_table (__cq_gpu_table_scan , & [0usize , 0usize])"));
 }
 
 #[test]

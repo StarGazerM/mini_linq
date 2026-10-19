@@ -13,6 +13,7 @@
 //! Ordered output lists and constant selections in negative atoms are source
 //! decisions: both passes preserve them verbatim through printing and replay.
 
+pub mod invariants;
 pub mod seminaive;
 pub mod stratify;
 

@@ -240,6 +240,163 @@ pub(crate) mod runtime_kernels {
             row += stride;
         }
     }
+    /// Maintained exact keys live in slots, not in transient candidate storage.
+    /// Busy slots cause a retry after warp reconvergence, never an owner-wait
+    /// spin inside divergent control flow.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn persistent_admit(
+        input: TableView,
+        width: usize,
+        keys: *mut u64,
+        slots: *mut u64,
+        capacity: usize,
+        output: OutputView,
+        emit: bool,
+    ) {
+        let lane = thread::threadIdx_x() as u64 % 32;
+        let mut base = thread::index_1d().get() as u64 - lane;
+        let stride = thread::gridDim_x() as u64 * 256;
+        let count = unsafe { table_len(input) };
+        while base < count {
+            let row = base + lane;
+            let mut pending = row < count;
+            while cuda_device::warp::ballot_sync(u32::MAX, pending) != 0 {
+                if pending {
+                    let mut hash = 0x9e37_79b9_7f4a_7c15u64;
+                    let mut word = 0;
+                    while word < width.max(1) {
+                        hash ^= if width == 0 { 0 } else {
+                            unsafe { column(input, word, row) as u64 }
+                        };
+                        hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                        hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                        hash ^= hash >> 31;
+                        word += 1;
+                    }
+                    let mut slot = hash as usize & (capacity - 1);
+                    let mut probes = 0;
+                    while probes < capacity {
+                        let entry = unsafe { DeviceAtomicU64::from_ptr(slots.add(slot)) };
+                        let mut state = entry.load(AtomicOrdering::Acquire);
+                        if state == 0 {
+                            match entry.compare_exchange(
+                                0, 1, AtomicOrdering::Acquire, AtomicOrdering::Relaxed,
+                            ) {
+                                Ok(_) => {
+                                    let destination = if emit {
+                                        unsafe { reserve(output, 1) }
+                                    } else { 0 };
+                                    let mut col = 0;
+                                    while col < width {
+                                        let value = unsafe { column(input, col, row) };
+                                        unsafe {
+                                            keys.add(slot * width + col).write(value as u64);
+                                            if emit { write_output(output, col, destination, value); }
+                                        }
+                                        col += 1;
+                                    }
+                                    entry.store(2, AtomicOrdering::Release);
+                                    pending = false;
+                                    break;
+                                }
+                                Err(_) => state = entry.load(AtomicOrdering::Acquire),
+                            }
+                        }
+                        if state == 1 {
+                            break;
+                        }
+                        let mut same = true;
+                        let mut col = 0;
+                        while col < width {
+                            if unsafe {
+                                keys.add(slot * width + col).read() != column(input, col, row) as u64
+                            } {
+                                same = false;
+                                break;
+                            }
+                            col += 1;
+                        }
+                        if same {
+                            pending = false;
+                            break;
+                        }
+                        slot = (slot + 1) & (capacity - 1);
+                        probes += 1;
+                    }
+                    if probes == capacity {
+                        unsafe { flag_error(output, 3); }
+                        pending = false;
+                    }
+                }
+            }
+            base += stride;
+        }
+    }
+
+    /// Rehash only on geometric growth. Old keys are unique, so claiming an
+    /// empty destination is sufficient; no partially published key is read.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn persistent_rehash(
+        old_keys: *const u64, old_slots: *const u64, old_capacity: usize,
+        keys: *mut u64, slots: *mut u64, capacity: usize, width: usize,
+    ) {
+        let mut old = thread::index_1d().get() as usize;
+        let stride = thread::gridDim_x() as usize * 256;
+        while old < old_capacity {
+            if unsafe { old_slots.add(old).read() } == 2 {
+                let mut hash = 0x9e37_79b9_7f4a_7c15u64;
+                let mut col = 0;
+                while col < width.max(1) {
+                    hash ^= if width == 0 { 0 } else {
+                        unsafe { old_keys.add(old * width + col).read() }
+                    };
+                    hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                    hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                    hash ^= hash >> 31;
+                    col += 1;
+                }
+                let mut slot = hash as usize & (capacity - 1);
+                loop {
+                    let entry = unsafe { DeviceAtomicU64::from_ptr(slots.add(slot)) };
+                    if entry.compare_exchange_relaxed(0, 2).is_ok() {
+                        let mut col = 0;
+                        while col < width {
+                            unsafe {
+                                keys.add(slot * width + col)
+                                    .write(old_keys.add(old * width + col).read());
+                            }
+                            col += 1;
+                        }
+                        break;
+                    }
+                    slot = (slot + 1) & (capacity - 1);
+                }
+            }
+            old += stride;
+        }
+    }
+
+    /// Copy into a known unpublished tail; no per-row append atomic.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn persistent_copy(input: TableView, width: usize, output: OutputView, offset: u64) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        while row < unsafe { table_len(input) } {
+            let mut col = 0;
+            while col < width {
+                unsafe { write_output(output, col, offset + row, column(input, col, row)); }
+                col += 1;
+            }
+            row += stride;
+        }
+    }
+
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
@@ -490,6 +647,44 @@ pub(crate) mod runtime_kernels {
                     }
                 }
             }
+        }
+    }
+    /// Failed fused tickets never publish rows or keys. All in-range tickets
+    /// have completed before this stream-ordered suspension finalizer runs.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn fused_clamp(output: OutputView) {
+        if thread::index_1d().get() == 0 {
+            unsafe { output.count.write(output.count.read().min(output.capacity)); }
+        }
+    }
+    /// Rebuild only at growth boundaries; retained output rows are immutable.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn fused_rehash(output: OutputView, width: usize, set: crate::FusedSetView) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        while row < unsafe { output.count.read() } {
+            let mut hash = crate::HASHED_RUN_SEED;
+            let mut column = 0;
+            while column < width {
+                hash = crate::hashed_run_step(hash, unsafe {
+                    (*output.columns.add(column)).add(row as usize).read()
+                });
+                column += 1;
+            }
+            let mut slot = hash as usize & (set.capacity - 1);
+            loop {
+                if unsafe { DeviceAtomicU64::from_ptr(set.slots.add(slot)) }
+                    .compare_exchange_relaxed(0, row + 1).is_ok()
+                {
+                    break;
+                }
+                slot = (slot + 1) & (set.capacity - 1);
+            }
+            row += stride;
         }
     }
 }

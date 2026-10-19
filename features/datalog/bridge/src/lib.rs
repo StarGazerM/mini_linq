@@ -22,6 +22,11 @@
 //! not implement `Clone`. This is mandatory input semantics, not a policy.
 //! Multiple outputs return a tuple of owned iterators in written output order;
 //! single outputs return one owned iterator, including EDB-only programs.
+//! Opt in with `arguments { hoist_invariants; };` before the pipeline/program.
+//! The checked schedule factors bounded frozen positive-plus-negation sides
+//! before semi-naive expansion; the CPU default remains unchanged.
+//! The `hoist-invariants` Cargo feature enables the same policy for source
+//! entrypoints (useful for paired benchmark builds without editing rules).
 
 use proc_macro::TokenStream;
 use quote::ToTokens;
@@ -33,11 +38,13 @@ mod render;
 mod kw {
     syn::custom_keyword!(arguments);
     syn::custom_keyword!(pipeline);
+    syn::custom_keyword!(hoist_invariants);
 }
 
 struct Input {
     pipeline: cq_stage::Pipeline,
     program: cq_lang_datalog::Program,
+    hoist_invariants: bool,
 }
 
 fn defaults() -> cq_stage::Configuration {
@@ -54,12 +61,18 @@ fn defaults() -> cq_stage::Configuration {
 
 impl Parse for Input {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut hoist_invariants = cfg!(feature = "hoist-invariants");
         if input.peek(kw::arguments) {
             input.parse::<kw::arguments>()?;
             let args;
             braced!(args in input);
+            if args.peek(kw::hoist_invariants) {
+                args.parse::<kw::hoist_invariants>()?;
+                args.parse::<Token![;]>()?;
+                hoist_invariants = true;
+            }
             if !args.is_empty() {
-                return Err(args.error("Datalog entries do not accept arguments"));
+                return Err(args.error("expected hoist_invariants;"));
             }
             input.parse::<Token![;]>()?;
         }
@@ -89,6 +102,7 @@ impl Parse for Input {
         }
         Ok(Self {
             pipeline,
+            hoist_invariants,
             program: input.parse()?,
         })
     }
@@ -104,6 +118,7 @@ enum Stage {
 fn expand(tokens: proc_macro2::TokenStream, stage: Stage) -> syn::Result<proc_macro2::TokenStream> {
     let Input {
         pipeline,
+        hoist_invariants,
         mut program,
     } = syn::parse2(tokens)?;
     cq_lang_datalog::contract::check(&program)?;
@@ -120,6 +135,9 @@ fn expand(tokens: proc_macro2::TokenStream, stage: Stage) -> syn::Result<proc_ma
     }
     if matches!(stage, Stage::Source) {
         program = cq_datalog_schedule::stratify::compile(&program)?;
+    }
+    if hoist_invariants && !matches!(stage, Stage::Seminaive) && program.invariants.is_empty() {
+        program = cq_datalog_schedule::invariants::compile(&program)?;
     }
     if !matches!(stage, Stage::Seminaive) {
         program = cq_datalog_schedule::seminaive::compile(&program)?;

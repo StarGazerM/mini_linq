@@ -3,6 +3,26 @@
 use std::collections::BTreeSet;
 
 #[test]
+fn opt_in_frozen_filter_preserves_exact_recursive_answers() {
+    let seed = [(0_i32, 1_i32)];
+    let edges = [(1_i32, 2_i32), (1, 2), (2, 3), (3, 4), (4, 5)];
+    let blocked = [(3_i32,)];
+    let actual: BTreeSet<_> = cq_datalog::datalog! {
+        arguments { hoist_invariants; };
+        struct Filtered;
+        relation Seed(x:i32,y:i32) = (seed);
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Block(x:i32) = (blocked);
+        relation Reach(x:i32,y:i32);
+        output Reach;
+        Reach(*x,*y) :- Seed(x,y);
+        Reach(*x,*z) :- Reach(x,y), Edge(y,z), !Block(z);
+    }
+    .collect();
+    assert_eq!(actual, BTreeSet::from([(0, 1), (0, 2)]));
+}
+
+#[test]
 fn documented_language_entry_executes_without_a_surface_wrapper() {
     let edges = [(1_i32, 2_i32), (2, 3)];
     let answers: BTreeSet<_> = cq_datalog::datalog! {

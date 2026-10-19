@@ -58,12 +58,18 @@
 //! Optional `observe = (|round, delta_rows| ...);` before `struct` observes
 //! nonempty rounds; round numbering restarts for each component. Observation
 //! effects, like all evaluation counts, are outside the query denotation.
+//! Optional `invariants { hoist N using Helper { original_rule; } }` after
+//! strata certifies a bounded frozen filter materialized before its consumer.
+//! The helper has one positive input and one or more bound negative filters;
+//! it cannot expand that input. Certificates reconstruct the original program
+//! independently, preserving its SCCs, bindings, and Boolean answers.
 
 pub use cq_lang_cq::{BodyItem, Query};
 use cq_stage::Language;
 use cq_syntax::{RelationDecl, rust, symbol_name};
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
+pub mod invariants;
 mod layouts;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{
@@ -85,6 +91,9 @@ pub mod kw {
     syn::custom_keyword!(layout);
     syn::custom_keyword!(delta_layout);
     syn::custom_keyword!(key);
+    syn::custom_keyword!(invariants);
+    syn::custom_keyword!(hoist);
+    syn::custom_keyword!(using);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,12 +104,20 @@ pub struct Program {
     pub rules: Vec<Query>,
     pub observer: Option<Expr>,
     pub strata: Option<Vec<Vec<Ident>>>,
+    pub invariants: Vec<Invariant>,
     pub variants: Option<Vec<Variant>>,
     pub deltas: Vec<Delta>,
     pub layouts: Vec<Layout>,
     pub delta_layouts: Vec<Layout>,
     pub insertion: Option<Ident>,
     pub negation_keys: Option<Ident>,
+}
+/// A checked factorization witness, retaining the original rule for erasure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Invariant {
+    pub rule: usize,
+    pub helper: Ident,
+    pub source: Query,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Variant {
@@ -174,6 +191,29 @@ impl Parse for Program {
         } else {
             None
         };
+        let mut invariants = Vec::new();
+        if input.peek(kw::invariants) {
+            input.parse::<kw::invariants>()?;
+            let body;
+            syn::braced!(body in input);
+            while !body.is_empty() {
+                body.parse::<kw::hoist>()?;
+                let rule = number(&body)?;
+                body.parse::<kw::using>()?;
+                let helper = body.parse()?;
+                let original;
+                syn::braced!(original in body);
+                let source = original.parse()?;
+                if !original.is_empty() {
+                    return Err(original.error("unexpected invariant source text"));
+                }
+                invariants.push(Invariant {
+                    rule,
+                    helper,
+                    source,
+                });
+            }
+        }
         let (variants, insertion, negation_keys, deltas, layouts, delta_layouts) =
             if input.peek(kw::seminaive) {
                 input.parse::<kw::seminaive>()?;
@@ -272,6 +312,7 @@ impl Parse for Program {
             rules,
             observer,
             strata,
+            invariants,
             variants,
             deltas,
             layouts,
@@ -336,6 +377,7 @@ impl ToTokens for Program {
             rules,
             observer,
             strata,
+            invariants,
             variants,
             deltas,
             layouts,
@@ -352,6 +394,15 @@ impl ToTokens for Program {
                 .iter()
                 .map(|members| quote!(component [#(#members),*];));
             tokens.extend(quote!(strata { #(#components)* }));
+        }
+        if !invariants.is_empty() {
+            let entries = invariants.iter().map(|entry| {
+                let rule = syn::Index::from(entry.rule);
+                let helper = &entry.helper;
+                let source = &entry.source;
+                quote!(hoist #rule using #helper { #source })
+            });
+            tokens.extend(quote!(invariants { #(#entries)* }));
         }
         if let Some(variants) = variants {
             let variants = variants.iter().map(|v| {
@@ -688,6 +739,7 @@ pub mod contract {
     use super::*;
 
     pub fn check(program: &Program) -> syn::Result<Analysis> {
+        invariants::check(program)?;
         let graph = check_source(program)?;
         check_strata(program, &graph)?;
         let positions: BTreeMap<_, _> = graph
@@ -786,8 +838,10 @@ pub mod contract {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
-    let mut source_rules = source_only(source);
-    let mut target_rules = source_only(target);
+    let source_erased = invariants::erase(source)?;
+    let target_erased = invariants::erase(target)?;
+    let mut source_rules = source_only(&source_erased);
+    let mut target_rules = source_only(&target_erased);
     source_rules.desugar_if_let()?;
     target_rules.desugar_if_let()?;
     ensure(
@@ -796,9 +850,14 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         "Datalog pass changed source rules or declarations",
     )?;
     ensure(
-        source.strata.is_none() || source.strata == target.strata,
+        source.strata.is_none() || source_erased.strata == target_erased.strata,
         target,
         "Datalog pass changed existing strata",
+    )?;
+    ensure(
+        source.invariants.is_empty() || source.invariants == target.invariants,
+        target,
+        "Datalog pass changed existing invariant decisions",
     )?;
     ensure(
         source.variants.is_none()

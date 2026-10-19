@@ -40,6 +40,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct Staged;
 /// Exact prefix compaction at resumable suspension boundaries.
 pub struct Compacting;
+/// Exact head-tuple insertion before materialization, with resumable growth.
+pub struct Fused;
 pub struct DeviceSet<T, C = Plain, P = Staged>(PhantomData<(T, C, P)>);
 pub struct PrefixRun<K, V, C, const PREFIX: usize>(PhantomData<(K, V, C)>);
 pub struct HashedRun<K, V>(PhantomData<(K, V)>);
@@ -984,27 +986,37 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         bounds: &[Bounds],
         initial_capacity: usize,
         state_words: usize,
-        launch: F,
+        mut launch: F,
     ) -> Result<TableId>
     where
         F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
     {
-        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, false, launch)
+        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, false, false,
+            |stream, output, resume, _| launch(stream, output, resume))
     }
     pub fn execute_resumable_compacting<F>(
+        &mut self, bounds: &[Bounds], initial_capacity: usize, state_words: usize, mut launch: F,
+    ) -> Result<TableId>
+    where
+        F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
+    {
+        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, true, false,
+            |stream, output, resume, _| launch(stream, output, resume))
+    }
+    pub fn execute_resumable_fused<F>(
         &mut self, bounds: &[Bounds], initial_capacity: usize, state_words: usize, launch: F,
     ) -> Result<TableId>
     where
-        F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
+        F: FnMut(&CudaStream, OutputView, ResumeView, FusedSetView) -> Result<()>,
     {
-        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, true, launch)
+        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, false, true, launch)
     }
     fn execute_resumable_with_policy<F>(
         &mut self, bounds: &[Bounds], initial_capacity: usize, state_words: usize,
-        compacting: bool, mut launch: F,
+        compacting: bool, fused: bool, mut launch: F,
     ) -> Result<TableId>
     where
-        F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
+        F: FnMut(&CudaStream, OutputView, ResumeView, FusedSetView) -> Result<()>,
     {
         check_rows(initial_capacity)?;
         let width = bounds.len();
@@ -1017,7 +1029,19 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             control: control.ptr(),
         };
         let mut output = allocate_output(runtime, width, initial_capacity.max(1))?;
+        let allocate_set = |capacity: usize| -> Result<Buffer<u64>> {
+            let slots = capacity.checked_mul(2).and_then(usize::checked_next_power_of_two)
+                .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "fused set capacity overflow"))?;
+            Ok(Buffer::<u64>::zeroed(runtime.pool.clone(), slots)?)
+        };
+        let mut set = if fused { Some(allocate_set(output.capacity)?) } else { None };
+        #[cfg(feature = "dedup-diagnostics")]
+        let counters = if fused { Some(Buffer::<u64>::zeroed(runtime.pool.clone(), 568 * 6)?) } else { None };
+        #[cfg(feature = "dedup-diagnostics")]
+        let mut attempts = 0usize;
         loop {
+            #[cfg(feature = "dedup-diagnostics")]
+            { attempts += 1; }
             let _nvtx = nvtx::range(c"resumable/attempt");
             unsafe {
                 cuda_core::memory::memset_d8_async(
@@ -1027,11 +1051,21 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                     runtime.stream().cu_stream(),
                 )?;
             }
-            launch(runtime.stream(), output.view(), resume)?;
+            let fused_view = FusedSetView {
+                slots: set.as_ref().map_or(std::ptr::null_mut(), |set| set.ptr()),
+                capacity: if fused { (output.capacity * 2).next_power_of_two() } else { 0 },
+                #[cfg(feature = "dedup-diagnostics")]
+                counters: counters.as_ref().map_or(std::ptr::null_mut(), |buffer| buffer.ptr()),
+            };
+            launch(runtime.stream(), output.view(), resume, fused_view)?;
             record_host_wait(true);
             RESUME_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
             if control.to_host()?[0] == 0 {
                 break;
+            }
+            if fused {
+                let clamp = runtime.kernels.prepare_fused_clamp(config(1, 0))?;
+                unsafe { runtime.kernels.fused_clamp(runtime.stream(), &clamp, output.view())?; }
             }
             if compacting {
                 let _nvtx = nvtx::range(c"resumable/compact");
@@ -1088,6 +1122,29 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             }
             grown.metadata = output.metadata.clone();
             output = grown;
+            if fused {
+                let slots = allocate_set(capacity)?;
+                let view = FusedSetView {
+                    slots: slots.ptr(), capacity: (capacity * 2).next_power_of_two(),
+                    #[cfg(feature = "dedup-diagnostics")]
+                    counters: counters.as_ref().map_or(std::ptr::null_mut(), |buffer| buffer.ptr()),
+                };
+                let rehash = runtime.kernels.prepare_fused_rehash(config(capacity, 0))?;
+                unsafe { runtime.kernels.fused_rehash(runtime.stream(), &rehash, output.view(), width, view)?; }
+                set = Some(slots);
+            }
+        }
+        #[cfg(feature = "dedup-diagnostics")]
+        if let Some(counters) = counters {
+            let mut totals = [0u64; 6];
+            for block in counters.to_host()?.chunks_exact(6) {
+                for index in 0..5 { totals[index] += block[index]; }
+                totals[5] = totals[5].max(block[5]);
+            }
+            let rows = output.metadata.to_host()?[0].rows;
+            eprintln!("CQ_GPU_FUSED_DIAGNOSTIC width={width} initial_capacity={initial_capacity} capacity={} slots={} rows={rows} attempts={attempts} rehashes={} inserted={} duplicates={} busy={} full={} probes={} max_probes={}",
+                output.capacity, (output.capacity * 2).next_power_of_two(), attempts - 1,
+                totals[0], totals[1], totals[2], totals[3], totals[4], totals[5]);
         }
         let table = self.complete_output(output, bounds.to_vec())?;
         self.record_timing(TimingStage::Kernel, start)?;
