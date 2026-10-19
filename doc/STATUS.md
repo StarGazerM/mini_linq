@@ -272,6 +272,17 @@ of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
 Remaining Datalog work: rule-local aggregates; FlowLog comparison;
 partial-Rust multi-round refinement.
 
+Parallel Datalog (`b7a9c13`, slice 1): hole evaluation scales ~3–4× to 5
+threads (P cores) and barely beyond; avrora is flat 5→15 (skew or an
+unpartitioned dominant hole, not yet diagnosed). Sequential admission +
+publication (0.3–0.7 s per app) becomes ~15–20% of round time at 15 threads.
+Narrow-delta workloads (reach chain) slow down (0.33× at 15): no inline
+threshold across holes yet. zxing RSS 1331 → 2090 MiB at 15 threads
+(materialized candidates). Sequential residual +1.0–1.9% (interleaved A/B,
+token-identical realization). Next: diagnose skew per hole, then slice 2
+(parallel admission + partition-owned maintenance) together with the held
+storage work.
+
 On hold until the GPU-side storage work settles, so storage is designed once
 for both: lattices and custom providers; DOOP probe efficiency (flat value
 storage, batched/prefetched probes on Datalog hosts; probes are 43–46% of DOOP

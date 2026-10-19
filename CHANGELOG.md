@@ -7,6 +7,14 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Datalog `parallel;` (opt-in, Rayon, `features/datalog` only, core unchanged):
+  rule holes run concurrently; a body-position-0 key-0 scan (delta `Vec` or
+  key-0 full layout bucket) is split into contiguous chunks, recorded and
+  checked as fork partition metadata. Admission and publication stay
+  sequential at the round barrier. Sequential mode binds the original whole
+  host (expansion differs only by the chunk binding). DOOP: all 6 apps exact
+  vs Ascent at 1–15 threads; best speedups 1.86–3.05× on 5P+10E cores.
+
 - Lookup&Expand sharing on the R/E/C back end (contract of record
   `/data/codex/gpu-le-reply.md`, confirmed by the GPU session). Structures gains
   `r share = lookup b [K] first s force p;` (ST-Share: the keyed read is
