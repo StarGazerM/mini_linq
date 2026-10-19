@@ -20,6 +20,19 @@ pub struct RunView {
     pub columns: *const *const i64,
     pub len: u64,
     pub count: *const u32,
+    pub bucket_mask: u64,
+}
+
+pub const HASHED_RUN_SEED: u64 = 0xcbf29ce484222325;
+
+/// Shared build/probe mixer; equality is always checked separately.
+#[device]
+#[inline(always)]
+pub fn hashed_run_step(hash: u64, value: i64) -> u64 {
+    let mut value = value as u64;
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+    (hash ^ value ^ (value >> 31)).wrapping_mul(0x100000001b3)
 }
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]

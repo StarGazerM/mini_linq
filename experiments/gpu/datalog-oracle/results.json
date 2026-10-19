@@ -11,6 +11,33 @@
   "memory_scope": "One lifetime-wide allocator counter over all nine scenarios, including setup, recursive execution, resident replay and downloads; cached allocations remain inside scope.",
   "peak_device_bytes": 196559600,
   "allocation_count": 62298,
+  "stream_order_phase_2a": {
+    "date": "2026-10-18",
+    "measurement_scope": "One instrumented baseline run and one stream-ordered run, identical --bench program and timing boundary. Preliminary: RTX 6000 Ada shared with sibling work; integrator should re-time.",
+    "counter_scope": "Explicit runtime stream waits and control D2H operations; excludes input uploads, user tuple downloads, allocator-internal synchronization. checked_rounds includes terminal empty batches. Three EDB checks and one final program completion are outside rounds.",
+    "protocol": "One batched checked count/status readback per SCC publication independent of H and M. General resumable output still requires a four-byte suspension check before dependent operators, including its successful attempt; these waits are included in totals and reported separately.",
+    "bounded_round_oracle": {"holes_per_member":[1,2,8],"members":[1,2,8,32],"rounds_per_case":2,"measured_waits_per_round":1,"exact":true},
+    "checks": {
+      "cargo_test_cq_gpu_and_cq_gpu_datalog": "51 passed across 6 suites",
+      "datalog_runtime_oracle": "passed; full tuples, immutable snapshots, mismatched checked batch rejection, resident overflow checked in one readback",
+      "gpu_datalog_oracle_bench": "all seven scenarios and both benchmark inputs exact",
+      "string_dictionary": "both scenarios exact"
+    },
+    "benchmarks": [
+      {
+        "name":"moderate-chain-192","checked_rounds":603,"nonempty_publications":590,"closure":18336,"exact":true,
+        "before":{"execution_ms":213.421,"host_waits":3035,"readbacks":2232},
+        "after":{"execution_ms":199.903,"host_waits":1437,"readbacks":1436,"resume_readbacks":830}
+      },
+      {
+        "name":"moderate-branching-cycles-wide-duplicates-192","checked_rounds":176,"nonempty_publications":163,"closure":21504,"exact":true,
+        "before":{"execution_ms":91.149,"host_waits":915,"readbacks":682},
+        "after":{"execution_ms":86.100,"host_waits":456,"readbacks":455,"resume_readbacks":276}
+      }
+    ],
+    "after_peak_device_bytes":196553104,
+    "after_allocation_count":62298
+  },
   "scenarios": [
     {"name":"empty","nodes":8,"edges":0,"closure":0,"nonempty_publications":5,"setup_ms":0.989,"execution_ms":34.138,"exact":true},
     {"name":"self-loop","nodes":8,"edges":1,"closure":1,"nonempty_publications":11,"setup_ms":0.128,"execution_ms":14.810,"exact":true},

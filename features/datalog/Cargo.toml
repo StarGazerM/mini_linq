@@ -6,7 +6,7 @@ rust-version = "1.85.1"
 publish = false
 
 [workspace]
-members = [".", "language", "schedule", "fork", "bridge", "oracle", "doop"]
+members = [".", "language", "schedule", "fork", "bridge", "oracle", "doop", "ddisasm"]
 resolver = "3"
 
 # The frozen testkit exposes golden helpers only with bundled DuckDB.

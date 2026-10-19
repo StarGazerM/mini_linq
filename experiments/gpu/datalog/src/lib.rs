@@ -173,17 +173,17 @@ fn render(fork: Fork, literals: Vec<syn::LitStr>) -> syn::Result<Tokens> {
                 })
                 .collect();
             let print = if keys.is_empty() {
-                quote!(::cq_gpu::print(datalog_dictionary(#dictionary), datalog_pool(#pool)))
+                quote!(::cq_gpu::print(completion(round), datalog_dictionary(#dictionary), datalog_pool(#pool)))
             } else {
-                quote!(::cq_gpu::print(datalog_dictionary(#dictionary), datalog_pool(#pool), datalog_keys(#(#keys),*)))
+                quote!(::cq_gpu::print(completion(round), datalog_dictionary(#dictionary), datalog_pool(#pool), datalog_keys(#(#keys),*)))
             };
             quote! {
                 ::mini_linq::compile! {
                     pipeline {
                         physical = [::cq_rewrites::build_host_reads];
-                        structures = [::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs,
+                        structures = [::cq_rewrites::sorted_runs, ::cq_rewrites::hashed_runs, ::cq_gpu::prefix_runs,
                             ::cq_rewrites::retain_lookups,
-                            ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_>)];
+                            ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::Compacting>)];
                         print = #print;
                     }
                     #hole
@@ -192,13 +192,28 @@ fn render(fork: Fork, literals: Vec<syn::LitStr>) -> syn::Result<Tokens> {
         })
         .collect();
     let key_snapshots = snapshots(context, Tokens::new());
-    let strata = context.strata.iter().map(|stratum| {
+    let strata = context.strata.iter().enumerate().map(|(scc, stratum)| {
+        let scc_label = syn::LitCStr::new(
+            &std::ffi::CString::new(format!("scc/{scc}")).unwrap(),
+            proc_macro2::Span::call_site(),
+        );
         let keys = stratum.keys.iter().map(|key| {
             let name = &key.name;
             let hole = &holes[key.hole];
-            quote!(let #name = #hole;)
+            let label = syn::LitCStr::new(
+                &std::ffi::CString::new(format!("hole/key/{name}")).unwrap(),
+                proc_macro2::Span::call_site(),
+            );
+            quote!(let #name = {
+                let _cq_hole = ::cq_gpu_runtime::nvtx::range(#label);
+                #hole
+            };)
         });
-        let phase = |rules: &[cq_datalog_fork::RuleHole]| {
+        let phase = |rules: &[cq_datalog_fork::RuleHole], phase: &str| {
+            let round_label = syn::LitCStr::new(
+                &std::ffi::CString::new(format!("round/{phase}")).unwrap(),
+                proc_macro2::Span::call_site(),
+            );
             let queries: Tokens = rules.iter()
                 .map(|rule| fork.holes[rule.hole].query.to_token_stream()).collect();
             let snapshots = snapshots(context, queries);
@@ -211,13 +226,25 @@ fn render(fork: Fork, literals: Vec<syn::LitStr>) -> syn::Result<Tokens> {
             let calls = rules.iter().map(|rule| {
                 let next = &context.relations[rule.head].next;
                 let hole = &holes[rule.hole];
-                quote!(#next.push(#hole);)
+                let name = &context.relations[rule.head].declaration.name;
+                let label = syn::LitCStr::new(
+                    &std::ffi::CString::new(format!("hole/{name}/variant-{}", rule.variant)).unwrap(),
+                    proc_macro2::Span::call_site(),
+                );
+                quote!({
+                    let _cq_hole = ::cq_gpu_runtime::nvtx::range(#label);
+                    #next.push(#hole);
+                })
             });
             let prepare = stratum.members.iter().map(|&index| {
                 let relation = &context.relations[index];
                 let state = &relation.seen;
                 let next = &relation.next;
-                quote!(let #next = #state.prepare(&#next).expect("GPU Datalog admission failed");)
+                quote!(let #next = #state.prepare(&#next, &mut __cq_status).expect("GPU Datalog admission failed");)
+            });
+            let finish = stratum.members.iter().map(|&index| {
+                let next = &context.relations[index].next;
+                quote!(let #next = #next.finish(&__cq_checked).expect("GPU Datalog full snapshot failed");)
             });
             let publish = stratum.members.iter().map(|&index| {
                 let relation = &context.relations[index];
@@ -225,30 +252,29 @@ fn render(fork: Fork, literals: Vec<syn::LitStr>) -> syn::Result<Tokens> {
                 let next = &relation.next;
                 quote!(#state = #next;)
             });
-            quote! {
+            quote! {{
+                let _cq_round = ::cq_gpu_runtime::nvtx::range(#round_label);
+                let mut __cq_status = ::cq_gpu_runtime::datalog::RoundStatus::new(#anchor_state.full().pool().clone());
                 #(#candidates)*
                 { #snapshots #(#calls)* }
                 #(#prepare)*
+                let __cq_checked = __cq_status.check().expect("GPU Datalog convergence failed");
+                #(#finish)*
                 #(#publish)*
-            }
+                __cq_checked.any()
+            }}
         };
-        let seed = phase(&stratum.seeds);
-        let step = phase(&stratum.steps);
-        let include = stratum.members.iter().map(|&index| {
-            let state = &context.relations[index].seen;
-            quote!(__cq_status.include(#state.delta()).expect("GPU Datalog convergence status failed");)
-        });
+        let seed = phase(&stratum.seeds, "seed");
+        let step = phase(&stratum.steps, "step");
         quote! {
             {
+                let _cq_scc = ::cq_gpu_runtime::nvtx::range(#scc_label);
                 // Lower-stratum snapshots and projected negative keys stay frozen.
                 #key_snapshots
                 #(#keys)*
-                #seed
-                loop {
-                    let mut __cq_status = ::cq_gpu_runtime::datalog::RoundStatus::new(#anchor_state.full().pool().clone());
-                    #(#include)*
-                    if !__cq_status.any().expect("GPU Datalog convergence failed") { break; }
-                    #step
+                let mut __cq_continue = #seed;
+                while __cq_continue {
+                    __cq_continue = #step;
                 }
             }
         }
@@ -266,7 +292,16 @@ fn render(fork: Fork, literals: Vec<syn::LitStr>) -> syn::Result<Tokens> {
     } else {
         quote!((#(#outputs,)*))
     };
-    Ok(quote!({ #dictionary_setup #(#bindings)* #(#strata)* #result }))
+    Ok(quote!({
+        let _cq_program = ::cq_gpu_runtime::nvtx::range(c"program");
+        #dictionary_setup #(#bindings)*
+        let _cq_fixed_point = ::cq_gpu_runtime::nvtx::range(c"fixed-point");
+        #(#strata)*
+        ::cq_gpu_runtime::with_runtime_for(Some(#pool.clone()), |runtime| {
+            runtime.execution().finish()
+        }).expect("GPU Datalog completion failed");
+        #result
+    }))
 }
 
 fn mentions(tokens: Tokens, name: &syn::Ident) -> bool {
@@ -353,6 +388,10 @@ mod tests {
         .to_string();
         assert_eq!(emitted.matches("cq_gpu :: print").count(), 2);
         assert!(emitted.contains("prepare"));
+        assert_eq!(emitted.matches("completion (round)").count(), 2);
+        assert_eq!(emitted.matches("cq_rewrites :: hashed_runs").count(), 2);
+        assert_eq!(emitted.matches("cq_gpu_runtime :: Compacting").count(), 2);
+        assert!(emitted.find(". check").unwrap() < emitted.find(". finish").unwrap());
         assert!(emitted.contains("RoundStatus"));
         assert!(!emitted.contains("to_host"));
         assert!(!emitted.contains("HashSet"));

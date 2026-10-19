@@ -301,3 +301,59 @@ fn sorted_runs_keeps_two_column_payload_keys_hashed() {
     assert_eq!(target, source);
     ir::check_rewrite(&source, &target).unwrap();
 }
+
+#[test]
+fn hashed_runs_records_composite_keys_and_preserves_single_key_selection() {
+    let physical = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = let rename R@1 {a -> x,b -> y,c -> z};
+        p = pipe canon probe first [x,y] l,r;
+        return p as answer(x,y,z);
+    }};
+    let source = cq_structure_selection::compile(&physical).unwrap();
+    let target = cq_rewrite_passes::hashed_runs(&source, quote!()).unwrap();
+    ir::check_rewrite(&source, &target).unwrap();
+    let text = target.to_token_stream().to_string();
+    assert!(text.contains("cq_gpu_runtime :: HashedRun < _ , _ > [x , y]"), "{text}");
+    assert_eq!(cq_rewrite_passes::hashed_runs(&target, quote!()).unwrap(), target);
+    assert!(cq_rewrite_passes::hashed_runs(&source, quote!(unexpected)).is_err());
+}
+
+#[test]
+fn sorted_runs_records_owned_singleton_probe_as_no_dense() {
+    let physical = syn::parse_quote! { physical {
+        relation R(a:i64,b:i64);
+        u = pipe unit;
+        l = pipe bind u with x:i64 = (meta.x);
+        r = let rename R@0 {a -> x,b -> y};
+        p = pipe canon probe first[x] l,r;
+        return p as answer(x,y);
+    }};
+    let source = cq_structure_selection::compile(&physical).unwrap();
+    let target = cq_rewrite_passes::sorted_runs(&source, quote!()).unwrap();
+    let text = target.to_token_stream().to_string();
+    assert!(text.contains("SortedRun < _ , _ , :: cq_storage :: NoDense > [x]"), "{text}");
+    assert_eq!(cq_rewrite_passes::hashed_runs(&target, quote!()).unwrap(), target);
+    ir::check_rewrite(&source, &target).unwrap();
+}
+
+#[test]
+fn hashed_runs_accepts_dictionary_and_boolean_keys_but_not_opaque_types() {
+    for (ty, eligible) in [
+        (quote!(String), true), (quote!(&str), true), (quote!(bool), true),
+        (quote!(CustomKey), false),
+    ] {
+        let physical = syn::parse_quote! { physical {
+            relation L(a:#ty,b:i64); relation R(a:#ty,b:i64,c:i64);
+            l = pipe rename L@0 {a -> x,b -> y};
+            r = let rename R@1 {a -> x,b -> y,c -> z};
+            p = pipe canon probe first[x,y] l,r;
+            return p as answer(x,y,z);
+        }};
+        let source = cq_structure_selection::compile(&physical).unwrap();
+        let target = cq_rewrite_passes::hashed_runs(&source, quote!()).unwrap();
+        assert_eq!(target.to_token_stream().to_string().contains("HashedRun"), eligible);
+        ir::check_rewrite(&source, &target).unwrap();
+    }
+}

@@ -83,3 +83,20 @@ fn one_run_answers_both_payload_and_membership_reads() {
     .collect();
     assert_eq!(actual, BTreeSet::from([(1, 10), (1, 11), (3, 30), (4, 40)]));
 }
+
+#[test]
+fn closed_owned_probe_key_uses_exact_sorted_run() {
+    let right = [(3i64, 30i64), (1, 10), (3, 31)];
+    let actual: BTreeSet<_> = mini_linq::passes::select! {
+        pipeline { cq_rewrites::sorted_runs, mini_linq::passes::print_pull };
+        physical {
+            relation R(a:i64,b:i64) = (&right);
+            u = pipe unit;
+            l = pipe bind u with x:i64 = (3i64);
+            r = let rename R@0 {a -> x,b -> y};
+            p = pipe canon probe first[x] l,r;
+            return p as answer(*y);
+        }
+    }.collect();
+    assert_eq!(actual, BTreeSet::from([(30,), (31,)]));
+}

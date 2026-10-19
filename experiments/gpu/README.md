@@ -21,8 +21,85 @@ by the GPU bridge rather than silently reinterpreted. The CPU default remains
 `hash_set_all_columns` / `hash_set_borrowed`.
 This entry currently accepts a Datalog program, not a caller-supplied pipeline.
 Every CQ hole uses the fixed ordinary MiniLinq pipeline with host-read recording,
-sorted/prefix runs, retained lookups, device-set dedup representation, and
-`cq_gpu::print`; negative-key schema metadata is explicit printer input.
+sorted/hashed/prefix runs, retained lookups, device-set dedup representation, and
+`cq_gpu::print(completion(round))`; negative-key schemas and the completion
+boundary are explicit printer inputs. Standalone queries retain the default
+`completion(query)` boundary.
+
+### ddisasm scale baseline
+
+`features/datalog/ddisasm` implements the SRDatalog ddisasm slice (23 rules,
+39 declared relations, 28 CSV inputs, 11 outputs) in MiniLinq and independent
+Ascent engines. It loads only the mapped CSVs and resolves LOAD/STORE/NONE/
+PCRelative from each dataset's `str2num.json` (or explicit `--meta JSON`).
+The local z3 directory requires `--meta` because its dictionary is absent.
+All columns are lossless `i64`
+interned identities; apparent offsets are not interpreted arithmetically.
+Only LiveVarUsed2 reorders a negative atom to bind its register first.
+The unused declared BlockLastInstr input is loaded; SRDatalog's Python Program
+auto-discovery omits that input and reports 38 relations/27 inputs.
+
+```bash
+DATA=/home/stargazermiao/workspace/SRDatalog/benchmarks/data/ddisasm
+cargo run --release --manifest-path ../../features/datalog/Cargo.toml \
+  -p datalog-ddisasm --bin ddisasm -- "$DATA/cvc5" --engine both --check
+META=/home/stargazermiao/workspace/SRDatalog/integration_tests/examples/ddisasm
+cargo run --release --manifest-path ../../features/datalog/Cargo.toml \
+  -p datalog-ddisasm --bin ddisasm -- "$DATA/z3" --engine both --check \
+  --meta "$META/z3_consts.json"
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+cargo oxide build --arch sm_89 -- --release \
+  -p gpu-datalog-ddisasm --bin gpu-datalog-ddisasm --features cq-gpu-runtime/nvtx
+target/release/gpu-datalog-ddisasm "$DATA/cvc5" --check --meta "$META/cvc5_consts.json"
+uv run --project /home/stargazermiao/workspace/srdatalog-python \
+  python datalog-ddisasm/measure_srdatalog.py cvc5
+uv run --project /home/stargazermiao/workspace/srdatalog-python \
+  python datalog-ddisasm/measure_srdatalog.py z3
+```
+
+The GPU consumer preserves the same program and uploads all EDBs before its
+fixed-point timer. The checked `hashed_runs` rewrite realizes composite equality
+indexes, and closed typed scalar captures lower `meta.*` values once on the host.
+The fixed Datalog pipeline records `DeviceSet<_, Plain, Compacting>` so exact
+canonicalization can run at resumable suspension boundaries instead of retaining
+hundreds of millions of duplicate candidates. No dataset-specific constants,
+helper relations, or Datalog rule changes are substituted.
+
+**cvc5 GPU equals CPU on all full tuples in all 11 outputs.** The single measured
+run took **11.444806 s** for synchronized resident computation, plus **13.844 ms**
+upload, with **6,504,636,136 bytes (6.058 GiB)** allocator peak, **878 checked
+rounds / 871 nonempty publications**, and 773 prefix compactions. Compared with
+SRDatalog's **0.609062 s** prepared synchronized run, this is **18.791× longer**.
+Both exclude CSV parsing, H2D upload, result download and answer checking;
+MiniLinq's interval includes resident EDB canonicalization, first-use query module
+loads, all indexes, admission, compaction and publication. This is a prepared-run
+comparison, not an end-to-end speedup. Raw metrics are in
+`datalog-ddisasm/gpu-cvc5.json`; merged CPU/SRD/GPU evidence is in
+`datalog-ddisasm/results.json`, and detailed traces are summarized in
+[`profile/README.md`](profile/README.md). The historical rejection logs are
+retained as pre-unblock evidence, not current status.
+
+The z3 GPU full-check was started but stopped when wrap-up was requested, before
+it produced a completed report. Its GPU exactness, timings and memory-fit outcome
+are therefore **unavailable**, not inferred from the successful CPU baseline.
+
+CPU compute includes index construction and output collection, excluding CSV
+loading, input cloning and sorted full-tuple comparison. SRDatalog's prepared
+run timer excludes parsing, upload and JIT compilation. These preliminary timings
+are not equal-boundary end-to-end speedups; SRDatalog count equality is not an
+independent full-tuple oracle.
+
+Single-run preliminary compute seconds on this shared machine:
+
+| Dataset | CPU load | MiniLinq CPU | Ascent CPU | SRDatalog prepared GPU |
+|---|---:|---:|---:|---:|
+| cvc5 | 5.498 | 36.013 | 50.151 | 0.609 |
+| z3 | 9.071 | 2085.226 | 119.720 | 1.947 |
+
+MiniLinq and Ascent matched **all full tuples in all 11 outputs on both datasets**;
+every output count also matched SRDatalog. Exact counts and unrounded timings are
+in `datalog-ddisasm/results.json`. The large z3 MiniLinq CPU time is measured,
+not extrapolated; this baseline does not diagnose its cause.
 
 For an already loaded `edges: DeviceColumns<'_, (i64, i64)>`:
 
@@ -59,12 +136,13 @@ and a canonicalized EDB are valid outputs.
 Explicit user `to_host()` calls are the only tuple-download boundary.
 
 The initial device fragment consists of positive relational joins/projections,
-typed copied/literal heads supported by the GPU printer, supported total
+typed copied/literal heads and closed typed integral/bool captures supported
+by the GPU printer, supported total
 device comparisons, and stratified exact negative membership. Negative keys
 are owned projected device values, built once from frozen lower-stratum
 snapshots; the checked fork's dedicated membership intrinsic is not arbitrary
-Rust method execution. Arbitrary Rust heads, opaque body bindings, generators,
-and observers are not supported. Printer restrictions on scalar types,
+Rust method execution. Query-dependent arbitrary Rust heads and body bindings,
+generators, and observers are not supported. Printer restrictions on scalar types,
 integral run keys, and representable key domains still apply.
 
 Each SCC evaluates every hole against immutable full/current-delta snapshots.
@@ -75,7 +153,32 @@ full on device. All members are prepared before publication, including empty
 member deltas. Full/delta demanded column permutations are resident projections;
 physical indexes are rebuilt per CQ invocation. This is an explicit per-hole
 build policy, not maintained indexes, an LSM/spine, or cross-hole index reuse.
-Small checked metadata readbacks provide convergence and allocation bounds.
+`Relation::prepare` queues a resident delta into a shared `RoundStatus`.
+Its single checked D2H batch contains one ancestor-error slot and one
+16-byte count/status slot per member. `PreparedRelation::finish` uses that
+checked count to allocate exact-live-sized immutable full and delta snapshots.
+Compacting delta capacity at this already-checked boundary prevents candidate
+capacity slack from multiplying through recursive joins in subsequent rounds;
+it adds no cardinality readback.
+All successors finish preparation before any publication; the next round,
+including its terminal empty batch, checks the preceding full-copy status.
+Timing events are retained until a round readback, with one final program
+completion covering trailing metadata work. There is no per-hole completion
+wait or per-member cardinality wait.
+
+`host_wait_count`, `control_readback_count`, `resume_readback_count`, and `compaction_readback_count`
+are thread-local diagnostics (reset with `reset_host_wait_count`). They count
+explicit runtime waits, not allocator-internal synchronization, uploads, or
+caller-requested tuple downloads. Publication/completion costs one readback per
+round, independent of hole/member count, plus EDB checks and one final program
+wait. General grow/resume attempts still read a four-byte suspension flag before
+dependent operators consume their output; even success cannot be deferred under
+that protocol without speculative replay or a different scheduling/storage
+protocol. Those waits are reported separately, not excluded from total waits.
+Recorded `Compacting` adds one distinct-count check per suspended-prefix
+compaction; that count is reported separately and remains in total waits.
+The runtime oracle varies 1/2/8 holes per member and 1/2/8/32 members and asserts
+one wait per bounded-output round, including a terminal empty round.
 
 The `gpu-datalog-oracle` consumer compares complete answers against independent
 naive closure/parity oracles for empty inputs, self-loops, chains with alternating
@@ -840,6 +943,7 @@ pipeline {
     physical = [::cq_rewrites::build_host_reads];
     structures = [
         ::cq_rewrites::sorted_runs,
+        ::cq_rewrites::hashed_runs,
         ::cq_gpu::prefix_runs,
         ::cq_rewrites::retain_lookups,
         ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_>),
@@ -874,10 +978,21 @@ additional recorded one-level SortedRuns and retained Vec rows, rather than
 silently losing semijoins. B therefore preserves its nation-key semijoin while
 its full Supplier lookup uses the supplier-key directory.
 
+`hashed_runs` records one-level composite integral/bool/dictionary-key HashIndex
+providers as `cq_gpu_runtime::HashedRun<_, _>`. It follows `sorted_runs`, leaving
+single-key selection unchanged. The device hashes every recorded key into a
+capacity-sized power-of-two directory (capped at 2^24 buckets), then uses the
+same blocked counting-sort build without host cardinality readback. Every probe
+compares **all** key columns within the bucket; collisions never imply equality.
+Standalone `cq_gpu::print` accepts this recorded type and rejects an unretyped
+HashIndex. `Runtime::with_hashed_run_bucket_limit` can cap directories further
+for memory control or deliberate collision testing without changing answers.
+
 | Checked Structures/Physical fact | GPU realization |
 |---|---|
 | Host rename and relational select/point/range | Resident column scan and device comparisons; string equality uses the host's shared dictionary IDs. Ordinary tuple bindings explicitly take the upload path. |
 | `let` with one-level `SortedRun` | One blocked run, built on device using the recorded integral key. |
+| Explicit one-level composite `HashedRun` | Blocked run of deterministic hash buckets, with exact residual comparison of every key column. |
 | Explicit `PrefixRun` key levels | One prefix run, with exact residual comparisons at full-key reads. |
 | Integral membership-only provider | Budgeted exact bitmap, not an inferred payload run. |
 | Recorded `join_filter` | Budgeted bitmap prefilter on its recorded scan column, retaining the covering exact keyed read. |
@@ -888,6 +1003,17 @@ its full Supplier lookup uses the supplier-key directory.
 | Project | Carries only demanded values to output. |
 | Recorded `DeviceSet<_>` canon | Exact device dedup; hash collisions never establish equality. |
 | Returned stream | Owned resident device columns, with an explicitly recorded capacity contract or bounded grow-and-resume execution. Tuple transfer requires `.to_host()`. |
+
+`DeviceSet<Row, Codec = Plain, Policy = Staged>` records both storage encoding
+and dedup scheduling. `Staged` retains standalone behavior: materialize all
+candidates, then canonicalize. `Compacting` exact-deduplicates a completed prefix
+when a resumable kernel suspends, preserves its query checkpoints, and resumes
+into the compacted output; growth uses the checked distinct cardinality instead
+of raw candidate multiplicity. This policy adds a checked count transfer at
+compaction boundaries, but never transfers tuples. The Datalog fixed pipeline
+explicitly records `DeviceSet<_, Plain, Compacting>` through `retype`; the printer
+never infers the policy from a query or dataset. A future fused insertion policy
+can occupy this same policy parameter; unknown policies are rejected today.
 
 Each generated kernel records its Structures keyed-read provenance. PrefixRun
 witnesses are not fabricated: the existing share contract admits only
@@ -958,11 +1084,12 @@ budget; otherwise a bounded parallel signed-extrema reduction checks the
 actual live domain on-device. Codec word offsets use hierarchical 256-thread
 u64 prefix scans, not a single-thread walk over every vector.
 
-Timing events are recorded during submission and collected by `finish`, the
-explicit timing boundary. Stages no longer synchronize merely to accumulate
-their elapsed time. `finish` propagates asynchronous CUDA errors; explicit
-downloads and the grow/resume control-word read retain their required waits.
-The timing intervals still include GPU idle gaps within each recorded stage.
+Timing events are recorded during submission. Standalone `finish` completes
+and collects them once; Datalog holes retain them for the shared checked round
+readback and final program completion. Stages do not synchronize to accumulate
+elapsed time. Both boundaries propagate asynchronous CUDA errors; explicit
+downloads and grow/resume control-word reads retain their required waits.
+Timing intervals still include GPU idle gaps within each recorded stage.
 
 Derived storage is different: its codec is an explicit Structures provider
 fact, selected by a rewrite rather than guessed from a query or Rust host
@@ -1414,9 +1541,18 @@ above for current resident-code verification.
 
 ### Supported domain and explicit rejections
 
-- Typed copied-column dereferences and literal binds/heads are supported;
-  arbitrary computed expressions, union/fallback blocks, merge, smallest
-  traversal, opaque Rust binds/guards and iterator generators are rejected.
+- Typed copied-column dereferences and literal binds/heads are supported.
+  Explicitly typed integral/bool binds whose expressions reference no query
+  variable (for example `y:i64 = (meta.x)`) are evaluated once on the host
+  and encoded as scalar kernel parameters, with singleton output bounds.
+  Closure is checked using Physical's Rust variable analysis and the bind's
+  written lexical environment; a field named like a query variable is not a
+  dependency. Query-dependent computations such as `*x + meta.x` remain
+  `CQ_GPU_OPAQUE_BIND`. Nonliteral string captures are not supported.
+  The printer oracle checks full tuples, boolean/integral captures, and
+  once-only evaluation in both bounded and resumable paths.
+  Union/fallback blocks, merge, smallest traversal, opaque Rust binds/guards
+  and iterator generators are rejected.
   Recorded eager anti reads and bridge-certified device negative membership
   use exact resident sets. The upstream generator form is rejected as
   `CQ_GPU_GENERATOR`, including unused definitions. `#[total]` is not

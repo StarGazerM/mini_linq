@@ -5,6 +5,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     /// Concatenate live rows without decoding them on the host. Inputs must have
     /// the same ordered schema; callers retain responsibility for Rust types.
     pub fn union_all(&mut self, inputs: &[TableId]) -> Result<TableId> {
+        let _nvtx = nvtx::range(c"admission/union");
         let capacity = inputs.iter().try_fold(0usize, |sum, &id| {
             sum.checked_add(self.table(id)?.capacity)
                 .ok_or_else(|| failure("CQ_GPU_OUTPUT_ROWS", "union capacity overflow"))
@@ -68,6 +69,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     /// Exact all-column difference. This preserves candidate multiplicity;
     /// canonical admission separately deduplicates the union of all holes.
     pub fn difference(&mut self, candidates: TableId, full: TableId) -> Result<TableId> {
+        let _nvtx = nvtx::range(c"admission/difference");
         let width = self.table(candidates)?.columns.len();
         if self.table(full)?.columns.len() != width {
             return Err(failure(
@@ -132,6 +134,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         table: TableId,
         columns: &[usize],
     ) -> Result<ExactMembershipId> {
+        let _nvtx = nvtx::range(c"membership/exact-build");
         let keys = self.project_table(table, columns)?;
         let source = self.table(keys)?;
         let width = columns.len();
@@ -221,25 +224,37 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
 /// Ancestors contribute failures but not cardinality. Owners remain alive until
 /// the single compact result has been downloaded and the stream synchronized.
 pub(crate) fn checked_tables(runtime: &Runtime, tables: &[Table]) -> Result<usize> {
-    let summary = runtime.metadata(0)?;
+    checked_table_rows(runtime, tables)?
+        .into_iter()
+        .try_fold(0usize, |total, rows| {
+            total.checked_add(rows).ok_or_else(|| {
+                failure(
+                    "CQ_GPU_OUTPUT_ROWS",
+                    "combined row count exceeds address space",
+                )
+            })
+        })
+}
+
+/// One error slot and one count/status slot per member, downloaded together.
+pub(crate) fn checked_table_rows(runtime: &Runtime, tables: &[Table]) -> Result<Vec<usize>> {
+    let summary = Buffer::<OutputCount>::zeroed(runtime.pool.clone(), tables.len() + 1)?;
     let launch = runtime.kernels.prepare_fold_status(config(1, 0))?;
-    let mut seen = Vec::<&Arc<Buffer<OutputCount>>>::new();
-    for table in tables {
+    let mut seen = std::collections::HashSet::new();
+    for (index, table) in tables.iter().enumerate() {
         for status in &table.statuses {
-            if seen.iter().any(|other| Arc::ptr_eq(status, other)) {
-                continue;
+            if seen.insert(Arc::as_ptr(status)) {
+                unsafe {
+                    runtime.kernels.fold_status(
+                        runtime.stream(),
+                        &launch,
+                        status.ptr(),
+                        u64::MAX,
+                        false,
+                        summary.ptr(),
+                    )?;
+                }
             }
-            unsafe {
-                runtime.kernels.fold_status(
-                    runtime.stream(),
-                    &launch,
-                    status.ptr(),
-                    u64::MAX,
-                    false,
-                    summary.ptr(),
-                )?;
-            }
-            seen.push(status);
         }
         unsafe {
             runtime.kernels.fold_status(
@@ -248,11 +263,24 @@ pub(crate) fn checked_tables(runtime: &Runtime, tables: &[Table]) -> Result<usiz
                 table.metadata.ptr(),
                 table.capacity as u64,
                 true,
-                summary.ptr(),
+                summary.ptr().add(index + 1),
             )?;
         }
     }
-    let status = summary.to_host()?[0];
+    record_host_wait(true);
+    let statuses = summary.to_host()?;
+    runtime.collect_timings()?;
+    statuses
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, status)| {
+            let checked = checked_status(status);
+            (index != 0 || checked.is_err()).then_some(checked)
+        })
+        .collect()
+}
+
+fn checked_status(status: OutputCount) -> Result<usize> {
     if status.error != 0 {
         let code = match status.error {
             1 => "CQ_GPU_OUTPUT_OVERFLOW",

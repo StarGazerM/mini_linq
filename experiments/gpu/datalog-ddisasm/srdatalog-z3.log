@@ -1,0 +1,151 @@
+>> CUDA Device: NVIDIA RTX 6000 Ada Generation (Compute 8.9)
+init 0.16096282796934247
+load_all 5.945257926010527
+prepare 0.6990256439894438
+[Step 0 (simple)] Relations: JumpTableTarget completed in 6 ms
+[Step 1 (simple)]  completed in 0 ms
+[Step 2 (simple)] Relations: RegDefUseDefUsed, RegDefUseLiveVarUsed completed in 164 ms
+[Step 3 (simple)]  completed in 0 ms
+[Step 4 (simple)]  completed in 0 ms
+[Step 5 (recursive)] Relations: RegDefUseDefUsed, RegDefUseReturnValUsed, RegDefUseLiveVarUsed, RegDefUseLiveVarAtPriorUsed, RegDefUseLiveVarAtBlockEnd completed in 1060 ms
+[Step 6 (simple)]  completed in 0 ms
+[Step 7 (simple)]  completed in 0 ms
+[Step 8 (simple)]  completed in 0 ms
+[Step 9 (simple)]  completed in 0 ms
+[Step 10 (simple)]  completed in 0 ms
+[Step 11 (simple)]  completed in 0 ms
+[Step 12 (simple)] Relations: StackDefUseLiveVarAtBlockEnd completed in 7 ms
+[Step 13 (simple)]  completed in 0 ms
+[Step 14 (recursive)] Relations: _temp_StackLiveVarBlockEnd1, StackDefUseLiveVarAtBlockEnd completed in 485 ms
+[Step 15 (simple)]  completed in 1 ms
+[Step 16 (simple)]  completed in 0 ms
+[Step 17 (simple)] Relations: StackDefUseLiveVarAtPriorUsed completed in 45 ms
+[Step 18 (simple)]  completed in 0 ms
+[Step 19 (simple)] Relations: StackDefUseDefUsed completed in 74 ms
+[Step 20 (simple)]  completed in 0 ms
+[Step 21 (recursive)] Relations: StackDefUseDefUsed completed in 26 ms
+[Step 22 (simple)]  completed in 0 ms
+[Step 23 (simple)] Relations: DefUsedForAddress completed in 26 ms
+[Step 24 (simple)]  completed in 0 ms
+[Step 25 (recursive)] Relations: DefUsedForAddress completed in 41 ms
+[Step 26 (simple)]  completed in 0 ms
+[Step 27 (simple)] Relations: RegRegArithOpDefs completed in 4 ms
+[Step 28 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> JumpTableTarget : 21170
+ >>>>>>>>>>>>>>>>> RegDefUseDefUsed : 8886292
+ >>>>>>>>>>>>>>>>> RegDefUseLiveVarAtBlockEnd : 17474127
+ >>>>>>>>>>>>>>>>> RegDefUseLiveVarUsed : 4460395
+ >>>>>>>>>>>>>>>>> RegDefUseLiveVarAtPriorUsed : 4505301
+ >>>>>>>>>>>>>>>>> RegDefUseReturnValUsed : 628021
+ >>>>>>>>>>>>>>>>> RegRegArithOpDefs : 242234
+ >>>>>>>>>>>>>>>>> DefUsedForAddress : 1398119
+ >>>>>>>>>>>>>>>>> StackDefUseDefUsed : 578706
+ >>>>>>>>>>>>>>>>> StackDefUseLiveVarAtBlockEnd : 37769498
+ >>>>>>>>>>>>>>>>> StackDefUseLiveVarAtPriorUsed : 547991
+{
+  "dataset": "z3",
+  "source": "/data/doop-next-round/source/examples/ddisasm.py",
+  "source_sha256": "8f0ea812858a627b2a60f9fd14b5c233383bc61070df72666b8f837dca64f8bd",
+  "metadata_path": "/home/stargazermiao/workspace/SRDatalog/integration_tests/examples/ddisasm/z3_consts.json",
+  "constants": {
+    "LOAD": 0,
+    "STORE": 2309374,
+    "NONE": 4,
+    "PCRelative": 8859592
+  },
+  "data_path": "/home/stargazermiao/workspace/SRDatalog/benchmarks/data/ddisasm/z3",
+  "rule_count": 23,
+  "relation_count": 38,
+  "input_mapping": {
+    "JumpTableStart": "Jump_table_start.csv",
+    "RelJumpTableEntryCandidate": "Relative_jump_table_entry_candidate.csv",
+    "RegDefUseUsed": "Reg_def_use_used.csv",
+    "RegDefUseBlockLastDef": "Reg_def_use_block_last_def.csv",
+    "RegDefUseLiveVarDef": "Reg_def_use_live_var_def.csv",
+    "RegDefUseReturnBlockEnd": "Reg_def_use_return_block_end.csv",
+    "ArchReturnReg": "Arch_return_reg.csv",
+    "DirectCall": "Direct_call.csv",
+    "RegDefUseUsedInBlock": "Reg_def_use_used_in_block.csv",
+    "RegDefUseDefinedInBlock": "Reg_def_use_defined_in_block.csv",
+    "BlockNext": "Block_next.csv",
+    "RegDefUseFlowDef": "Reg_def_use_flow_def.csv",
+    "RegDefUseRefInBlock": "Reg_def_use_ref_in_block.csv",
+    "ArchRegRegArithOp": "Arch_reg_reg_arithmetic_operation.csv",
+    "DefUsedForAddressEDB": "Def_used_for_address.csv",
+    "RegUsedFor": "Reg_used_for.csv",
+    "ArchMemoryAccess": "Arch_memory_access_truncate.csv",
+    "StackDefUseUsed": "Stack_def_use_used.csv",
+    "StackDefUseBlockLastDef": "Stack_def_use_block_last_def.csv",
+    "StackDefUseLiveVarDef": "Stack_def_use_live_var_def.csv",
+    "StackDefUseLiveVarUsedEDB": "Stack_def_use_live_var_used.csv",
+    "MayFallthrough": "May_fallthrough.csv",
+    "CodeInBlock": "Code_in_block.csv",
+    "StackDefUseDef": "Stack_def_use_def.csv",
+    "StackDefUseRefInBlock": "Stack_def_use_ref_in_block.csv",
+    "StackDefUseUsedInBlock": "Stack_def_use_used_in_block.csv",
+    "StackDefUseDefinedInBlock": "Stack_def_use_defined_in_block.csv"
+  },
+  "timers_seconds": {
+    "emit": 0.02027774800080806,
+    "compile": 85.07260733901057,
+    "init": 0.16096282796934247,
+    "load_all": 5.945257926010527,
+    "prepare": 0.6990256439894438,
+    "run_call": 1.946785609005019,
+    "run_synchronized": 1.9468003580113873
+  },
+  "artifact": "/data/mini_linq/experiments/gpu/datalog-ddisasm/srdatalog-build/jit/DdisasmZ3_DB_5EC9/libDdisasmZ3_DB_5EC9.so",
+  "counts": {
+    "JumpTableTarget": 21170,
+    "JumpTableStart": 644,
+    "RelJumpTableEntryCandidate": 8456,
+    "RegDefUseDefUsed": 8886292,
+    "RegDefUseUsed": 32727427,
+    "RegDefUseBlockLastDef": 9886803,
+    "RegDefUseLiveVarAtBlockEnd": 17474127,
+    "RegDefUseLiveVarDef": 4018155,
+    "RegDefUseLiveVarUsed": 4460395,
+    "RegDefUseLiveVarAtPriorUsed": 4505301,
+    "RegDefUseReturnValUsed": 628021,
+    "RegDefUseReturnBlockEnd": 20535,
+    "ArchReturnReg": 1,
+    "DirectCall": 555641,
+    "RegDefUseUsedInBlock": 6771555,
+    "RegDefUseDefinedInBlock": 3993209,
+    "BlockNext": 2889135,
+    "RegDefUseFlowDef": 32847,
+    "RegDefUseRefInBlock": 6713330,
+    "RegRegArithOpDefs": 242234,
+    "DefUsedForAddress": 1398119,
+    "ArchRegRegArithOp": 1005589,
+    "DefUsedForAddressEDB": 1398249,
+    "RegUsedFor": 12584731,
+    "ArchMemoryAccess": 3751781,
+    "StackDefUseDefUsed": 578706,
+    "StackDefUseUsed": 2001461,
+    "StackDefUseBlockLastDef": 1352006,
+    "StackDefUseLiveVarAtBlockEnd": 37769498,
+    "StackDefUseLiveVarDef": 368614,
+    "StackDefUseLiveVarUsedEDB": 887765,
+    "MayFallthrough": 24159104,
+    "CodeInBlock": 6266739,
+    "StackDefUseDef": 1332463,
+    "StackDefUseLiveVarAtPriorUsed": 547991,
+    "StackDefUseRefInBlock": 1035776,
+    "StackDefUseUsedInBlock": 804020,
+    "StackDefUseDefinedInBlock": 391584
+  },
+  "output_counts": {
+    "JumpTableTarget": 21170,
+    "RegDefUseDefUsed": 8886292,
+    "RegDefUseLiveVarAtBlockEnd": 17474127,
+    "RegDefUseLiveVarUsed": 4460395,
+    "RegDefUseLiveVarAtPriorUsed": 4505301,
+    "RegDefUseReturnValUsed": 628021,
+    "RegRegArithOpDefs": 242234,
+    "DefUsedForAddress": 1398119,
+    "StackDefUseDefUsed": 578706,
+    "StackDefUseLiveVarAtBlockEnd": 37769498,
+    "StackDefUseLiveVarAtPriorUsed": 547991
+  }
+}

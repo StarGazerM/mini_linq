@@ -12,6 +12,7 @@ pub(crate) struct Options {
     pub datalog_keys: Vec<(Ident, Vec<syn::Type>)>,
     pub datalog_dictionary: Option<Ident>,
     pub datalog_pool: Option<Ident>,
+    pub defer_completion: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -21,6 +22,7 @@ impl Default for Options {
             datalog_keys: Vec::new(),
             datalog_dictionary: None,
             datalog_pool: None,
+            defer_completion: false,
         }
     }
 }
@@ -70,6 +72,16 @@ impl Parse for Options {
                 }
                 "datalog_pool" => {
                     options.datalog_pool = Some(args.parse()?);
+                }
+                "completion" => {
+                    let boundary: Ident = args.parse()?;
+                    if boundary != "round" && boundary != "query" {
+                        return Err(syn::Error::new_spanned(
+                            boundary,
+                            "CQ_GPU_COMPLETION: expected completion(query) or completion(round)",
+                        ));
+                    }
+                    options.defer_completion = boundary == "round";
                 }
                 "datalog_keys" => {
                     let mut names = BTreeSet::new();

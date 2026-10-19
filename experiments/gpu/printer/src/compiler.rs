@@ -85,6 +85,10 @@ fn provider_codec(ty: &Type) -> syn::Result<RecordedCodec> {
             _ => return fail(ty, "CQ_GPU_CODEC_TYPE", "expected row and codec types"),
         }
     }
+    if qualified(ty, "cq_gpu_runtime", "DeviceSet") && types.len() == 3 {
+        dedup_compacting(ty)?;
+        types.pop();
+    }
     match types.as_slice() {
         [_] => Ok(RecordedCodec::Plain),
         [_, codec] if qualified(codec, "cq_gpu_runtime", "Plain") => Ok(RecordedCodec::Plain),
@@ -98,6 +102,24 @@ fn provider_codec(ty: &Type) -> syn::Result<RecordedCodec> {
             "CQ_GPU_CODEC_TYPE",
             "record one row type and optional cq_gpu_runtime::{Plain,For,Delta,DictionaryCodec}",
         ),
+    }
+}
+
+fn dedup_compacting(ty: &Type) -> syn::Result<bool> {
+    let Type::Path(path) = ty else {
+        return fail(ty, "CQ_GPU_DEDUP_POLICY", "expected DeviceSet representation");
+    };
+    let syn::PathArguments::AngleBracketed(args) = &path.path.segments.last().unwrap().arguments else {
+        return fail(ty, "CQ_GPU_DEDUP_POLICY", "expected DeviceSet row type");
+    };
+    let types: Vec<_> = args.args.iter().filter_map(|arg| {
+        if let syn::GenericArgument::Type(ty) = arg { Some(ty) } else { None }
+    }).collect();
+    match types.as_slice() {
+        [_] | [_, _] => Ok(false),
+        [_, _, policy] if qualified(policy, "cq_gpu_runtime", "Staged") => Ok(false),
+        [_, _, policy] if qualified(policy, "cq_gpu_runtime", "Compacting") => Ok(true),
+        _ => fail(ty, "CQ_GPU_DEDUP_POLICY", "record cq_gpu_runtime::{Staged,Compacting} as DeviceSet's third type parameter"),
     }
 }
 
@@ -157,8 +179,18 @@ fn copied_column(expression: &syn::Expr) -> Option<String> {
     syntax::rust::variable(ungroup(&unary.expr)).map(symbol_name)
 }
 
-// This is a proof of a very small total fragment, not permission to execute
-// arbitrary Rust on device (or eagerly on the host).
+fn closed_bind(bind: &syntax::algebra::Bind, types: &BTreeMap<String, Type>) -> bool {
+    let environment = bind.environment.as_ref().map_or_else(
+        || types.keys().cloned().collect(),
+        |environment| environment.variables.iter().map(symbol_name).collect(),
+    );
+    syntax::rust::free_variables(&bind.expression)
+        .dependencies(&environment)
+        .is_empty()
+}
+
+// Query-independent typed scalars are captured on the host. Query-dependent
+// expressions remain restricted to copied columns, never arbitrary device Rust.
 fn bind_value(
     bind: &syntax::algebra::Bind,
     types: &BTreeMap<String, Type>,
@@ -194,7 +226,12 @@ fn bind_value(
             "bind requires a supported Copy scalar type",
         );
     }
-    let value = if let Some(source) = copied_column(&bind.expression) {
+    let value = if closed_bind(bind, types)
+        && (integral(ty) || type_name(ty).as_deref() == Some("bool"))
+    {
+        let expression = ungroup(&bind.expression);
+        constants.add(quote!({ let __cq_gpu_literal: #ty = #expression; __cq_gpu_literal }))
+    } else if let Some(source) = copied_column(&bind.expression) {
         if bind.environment.as_ref().is_some_and(|environment| {
             !environment
                 .variables
@@ -232,7 +269,7 @@ fn bind_value(
             return fail(
                 bind,
                 "CQ_GPU_OPAQUE_BIND",
-                "only copied dereferences and typed integral, bool or &str literals are supported",
+                "only copied dereferences, typed literals, and closed integral or bool captures are supported",
             );
         }
         constants.add(quote!({ let __cq_gpu_literal: #ty = #expression; __cq_gpu_literal }))
@@ -251,6 +288,26 @@ fn directory_column<'a>(facts: &'a ir::Analysis, name: &str, provider: usize) ->
     } else {
         &build.0[0][0]
     }
+}
+fn hashed(facts: &ir::Analysis, name: &str, provider: usize) -> bool {
+    qualified(&facts.built[name][provider].1, "cq_gpu_runtime", "HashedRun")
+}
+fn lookup_key(
+    facts: &ir::Analysis,
+    name: &str,
+    provider: usize,
+    columns: &BTreeMap<String, Tokens>,
+) -> Tokens {
+    if !hashed(facts, name, provider) {
+        return columns[directory_column(facts, name, provider)].clone();
+    }
+    let run = provider_id("run_view", name, provider);
+    let values = facts.built[name][provider].0[0].iter().map(|key| &columns[key]);
+    quote!({
+        let mut __hash = ::cq_gpu_runtime::HASHED_RUN_SEED;
+        #(__hash = ::cq_gpu_runtime::hashed_run_step(__hash, #values);)*
+        (__hash & #run.bucket_mask) as i64
+    })
 }
 fn read_provider(facts: &ir::Analysis, keyed: &physical::Keyed) -> usize {
     let mut keys = keyed.columns.iter().map(symbol_name).collect::<Vec<_>>();
@@ -374,6 +431,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                 let bitmap = keyed.membership.is_some()
                     && qualified(&keyed.ty, "cq_storage", "AdaptiveKeySet");
                 let prefix = qualified(&keyed.ty, "cq_gpu_runtime", "PrefixRun");
+                let hashed = qualified(&keyed.ty, "cq_gpu_runtime", "HashedRun");
                 if keyed.levels.len() != 1 && !prefix {
                     return fail(
                         entry,
@@ -381,14 +439,17 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                         "multilevel builds require explicitly recorded cq_gpu_runtime::PrefixRun",
                     );
                 }
-                if !qualified(&keyed.ty, "cq_storage", "SortedRun") && !prefix && !bitmap {
+                if !qualified(&keyed.ty, "cq_storage", "SortedRun") && !prefix && !bitmap && !hashed {
                     return fail(
                         entry,
                         "CQ_GPU_BUILD_TYPE",
-                        "record SortedRun, PrefixRun, or certified AdaptiveKeySet membership",
+                        format!("record SortedRun, HashedRun, PrefixRun, or certified AdaptiveKeySet membership; unsupported provider: {}", entry.to_token_stream()),
                     );
                 }
-                if keyed.levels[0].columns.len() != 1 {
+                if hashed && keyed.levels[0].columns.len() < 2 {
+                    return fail(entry, "CQ_GPU_COMPOSITE_KEY", "HashedRun requires at least two recorded key columns");
+                }
+                if keyed.levels[0].columns.len() != 1 && !hashed {
                     return fail(
                         entry,
                         "CQ_GPU_COMPOSITE_KEY",
@@ -408,7 +469,8 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                     }
                 }
                 for key in keyed.columns().map(symbol_name) {
-                    if !integral(&facts.physical.rows[&symbol_name(&entry.name)].types[&key]) {
+                    let ty = &facts.physical.rows[&symbol_name(&entry.name)].types[&key];
+                    if !integral(ty) && !(hashed && (string(ty) || type_name(ty).as_deref() == Some("bool"))) {
                         return fail(
                             entry,
                             "CQ_GPU_NON_INTEGRAL_KEY",
@@ -445,6 +507,7 @@ pub(crate) fn validate(program: &ir::Program, facts: &ir::Analysis) -> syn::Resu
                     );
                 }
                 provider_codec(ty)?;
+                dedup_compacting(ty)?;
             }
             ir::Structure::Host { reader, .. } if reader != "scan" => {
                 let name = symbol_name(reader);
@@ -748,7 +811,9 @@ fn output_bounds(
                 .map(|column| (column.clone(), quote!(0u64)))
                 .collect();
             let (column, value) = bind_value(bind, types, &placeholders, constants)?;
-            let bound = if let Some(source) = copied_column(&bind.expression) {
+            let bound = if let Some(source) = copied_column(&bind.expression)
+                .filter(|_| !closed_bind(bind, types))
+            {
                 bounds.get(&source).cloned().ok_or_else(|| {
                     syn::Error::new_spanned(
                         bind,
@@ -1428,6 +1493,16 @@ pub(crate) fn compile(
             })?;
         }
     });
+    let completion = if options.defer_completion {
+        quote!(
+            const __CQ_GPU_COMPLETION: &str = "round";
+        )
+    } else {
+        quote! {
+            const __CQ_GPU_COMPLETION: &str = "query";
+            __execution.finish()?;
+        }
+    };
     syn::parse2(quote!({
         #module
         const __CQ_GPU_KEYED_READS: &[&str]=&[#(#reads),*];
@@ -1450,7 +1525,7 @@ pub(crate) fn compile(
             let __answer=__execution.into_columns::<(#(#output_types,)*),#output_codec>(
                 #output,&[#(#final_columns),*]
             )?;
-            __execution.finish()?;
+            #completion
             Ok(__answer)
         }).unwrap_or_else(|error|panic!("CQ_GPU_EXECUTION: {error}"))
     }))
@@ -1619,7 +1694,7 @@ impl ResumeEmitter<'_, '_, '_> {
                 let right = symbol_name(&k.right);
                 let provider = read_provider(facts, k);
                 let run = provider_id("run_view", &right, provider);
-                let key = state.columns[directory_column(facts, &right, provider)].clone();
+                let key = lookup_key(facts, &right, provider, &state.columns);
                 let begin = self.register();
                 let end = self.register();
                 if facts.witnesses.contains_key(&name) {
@@ -1681,7 +1756,7 @@ impl ResumeEmitter<'_, '_, '_> {
             })?;
             quote!((#a,#b))
         } else {
-            let key = &state.columns[directory_column(facts, &right, provider)];
+            let key = lookup_key(facts, &right, provider, &state.columns);
             quote!(::cq_gpu_runtime::blocked_run::point(#run.rank,#key).unwrap_or((0,0)))
         };
         let mut child = State::default();
@@ -2067,8 +2142,7 @@ impl Emitter<'_, '_> {
                 let right = symbol_name(&k.right);
                 let provider = read_provider(self.facts, k);
                 let run = provider_id("run_view", &right, provider);
-                let prefix = directory_column(self.facts, &right, provider);
-                let key = state.columns[prefix].clone();
+                let key = lookup_key(self.facts, &right, provider, &state.columns);
                 let begin = id("begin", name);
                 let end = id("end", name);
                 if self.facts.witnesses.contains_key(name) {
@@ -2180,8 +2254,7 @@ impl Emitter<'_, '_> {
             })?;
             quote!((#a,#b))
         } else {
-            let prefix = directory_column(self.facts, &right, provider);
-            let key = &state.columns[prefix];
+            let key = lookup_key(self.facts, &right, provider, &state.columns);
             quote!(::cq_gpu_runtime::blocked_run::point(#run.rank,#key).unwrap_or((0,0)))
         };
         let mut payloads = Vec::new();
@@ -2254,7 +2327,7 @@ impl Emitter<'_, '_> {
             .columns
             .iter()
             .map(symbol_name)
-            .filter(|key| key != prefix)
+            .filter(|key| hashed(self.facts, &right, provider) || key != prefix)
         {
             let slot = self.context.carried_columns[&right]
                 .iter()
@@ -2291,8 +2364,7 @@ impl Emitter<'_, '_> {
             })?;
             quote!(if __valid {(#a,#b)}else{(0,0)})
         } else {
-            let prefix = directory_column(self.facts, &right, provider);
-            let key = state.columns[prefix].clone();
+            let key = lookup_key(self.facts, &right, provider, &state.columns);
             quote!(if __valid {::cq_gpu_runtime::blocked_run::point(#run.rank,#key).unwrap_or((0,0))}else{(0,0)})
         };
         if let Some(origin) = witness {
@@ -2751,6 +2823,12 @@ impl Kernel {
                 if membership(facts, &endpoint) {
                     let budget = membership_budget(&build.1).expect("validated membership budget");
                     quote!(let #run=__execution.prepare_membership(#table,#slot,#budget)?;)
+                } else if hashed(facts, &endpoint, provider) {
+                    let slots = build.0[0].iter().map(|key| {
+                        context.carried_columns[&endpoint].iter().position(|c| c == key)
+                            .expect("checked carried hashed run key")
+                    });
+                    quote!(let #run=__execution.prepare_hashed_run(#table,&[#(#slots),*])?;)
                 } else {
                     quote!(let #run=__execution.prepare_run(#table,#slot)?;)
                 }
@@ -2776,9 +2854,16 @@ impl Kernel {
             }
         }
         let slots = if frontier { 64u32 } else { 0 };
+        let resume_method = if facts.dedup.get(&endpoint).is_some_and(|ty| {
+            dedup_compacting(ty).expect("validated dedup policy")
+        }) {
+            format_ident!("execute_resumable_compacting")
+        } else {
+            format_ident!("execute_resumable")
+        };
         let execute = if resume.is_some() {
             quote! {
-                __execution.execute_resumable(
+                __execution.#resume_method(
                     &[#(#bounds),*],__driver.len as usize,__grid as usize * #checkpoint_words,
                     |__stream,__output,__resume| {
                         unsafe {__module.#kernel(__stream,&__launch,#common,__resume)?;}

@@ -46,6 +46,10 @@
 //! assignment rather than independently extending dictionary snapshots.
 //! `datalog_pool(pool)` selects the bridge's shared `Arc<Pool>` even when a
 //! rule has no bound input from which to inherit its device context.
+//! `completion(round)` records that the caller owns the completion boundary:
+//! holes enqueue work and retain statuses/events for a checked round readback.
+//! The default `completion(query)` still completes once before returning.
+//! Grow/resume suspension feedback remains necessary before dependent operators.
 
 use proc_macro::TokenStream;
 

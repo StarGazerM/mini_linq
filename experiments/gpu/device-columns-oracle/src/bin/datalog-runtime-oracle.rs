@@ -14,6 +14,18 @@ mod checks {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn copy(source: TableView, output: OutputView) {
+        let row = thread::index_1d().get() as u64;
+        if row < unsafe { table_len(source) } {
+            let destination = unsafe { cq_gpu_runtime::reserve(output, 1) };
+            unsafe {
+                cq_gpu_runtime::write_output(output, 0, destination, column(source, 0, row));
+            }
+        }
+    }
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn probe(source: TableView, set: ExactMembershipView, output: *mut u32) {
         let mut row = thread::index_1d().get() as u64;
         while row < unsafe { table_len(source) } {
@@ -52,11 +64,105 @@ fn exact<T: Ord + std::fmt::Debug>(actual: Vec<T>, expected: impl IntoIterator<I
 fn status<Row, C>(input: &DeviceColumns<'_, Row, C>) -> Result<bool> {
     let mut status = RoundStatus::new(input.pool().clone());
     status.include(input)?;
-    status.any()
+    Ok(status.check()?.any())
+}
+fn prepare<'data, Row: RowCodec<'data>, C>(
+    relation: &Relation<'data, Row>,
+    candidates: &[DeviceColumns<'data, Row, C>],
+) -> Result<Relation<'data, Row>> {
+    let mut round = RoundStatus::new(relation.full().pool().clone());
+    let pending = relation.prepare(candidates, &mut round)?;
+    pending.finish(&round.check()?)
+}
+
+fn batched_rounds(runtime: &Runtime, dictionary: &mut Dictionary<'static>) -> Result<()> {
+    let input = runtime.upload_owned_rows(&[(17i64,)], dictionary, &[Codec::Plain])?;
+    let module = unsafe { checks::load(runtime.context())? };
+    let launch = module.prepare_copy(LaunchConfig1D::new(1, 256, 0))?;
+    for members in [1, 2, 8, 32] {
+        for holes in [1, 2, 8] {
+            let empty =
+                Relation::<(i64,)>::empty(runtime.pool().clone(), Arc::new(dictionary.clone()), 1)?;
+            let mut relations = vec![empty; members];
+            reset_host_wait_count();
+            for round_index in 0..2 {
+                let mut round = RoundStatus::new(runtime.pool().clone());
+                let pending = relations
+                    .iter()
+                    .map(|relation| {
+                        let candidates = (0..holes)
+                            .map(|_| {
+                                let mut execution = runtime.execution();
+                                let source = execution.bind_columns(&input)?;
+                                let source = execution.table_view(source)?;
+                                let output = execution.execute_bounded(
+                                    &[Bounds::singleton(17)],
+                                    1,
+                                    |stream, output| {
+                                        unsafe {
+                                            module.copy(stream, &launch, source, output)?;
+                                        }
+                                        Ok(())
+                                    },
+                                )?;
+                                execution.into_columns::<(i64,), Plain>(output, &[0])
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        relation.prepare(&candidates, &mut round)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                assert_eq!(
+                    host_wait_count(),
+                    round_index,
+                    "holes/members must not wait"
+                );
+                let checked = round.check()?;
+                assert_eq!(checked.any(), round_index == 0);
+                let next = pending
+                    .into_iter()
+                    .map(|member| member.finish(&checked))
+                    .collect::<Result<Vec<_>>>()?;
+                assert_eq!(
+                    host_wait_count(),
+                    round_index + 1,
+                    "one wait for H={holes}, M={members}"
+                );
+                relations = next;
+            }
+            assert_eq!(control_readback_count(), 2);
+            assert_eq!(resume_readback_count(), 0);
+            for relation in relations {
+                exact(relation.full().to_host()?, [(17,)]);
+                exact(relation.delta().to_host()?, []);
+            }
+        }
+    }
+    println!("batched rounds exact=true holes_per_member=1,2,8 members=1,2,8,32 waits_per_round=1");
+    Ok(())
+}
+
+fn mismatched_batch(runtime: &Runtime, dictionary: &Dictionary<'_>) -> Result<()> {
+    let relation =
+        Relation::<(i64,)>::empty(runtime.pool().clone(), Arc::new(dictionary.clone()), 1)?;
+    let mut first = RoundStatus::new(runtime.pool().clone());
+    let pending = relation.prepare::<Plain>(&[], &mut first)?;
+    let mut second = RoundStatus::new(runtime.pool().clone());
+    let _other = relation.prepare::<Plain>(&[], &mut second)?;
+    assert!(
+        pending
+            .finish(&second.check()?)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("CQ_GPU_ROUND")
+    );
+    Ok(())
 }
 fn main() -> Result<()> {
     let runtime = Runtime::with_pool(0, 64 << 20, 512 << 20)?;
     let mut dictionary = Dictionary::default();
+    batched_rounds(&runtime, &mut dictionary)?;
+    mismatched_batch(&runtime, &dictionary)?;
     // Force 32 different full rows into the same initial hash bucket. Each
     // appears twice; neither hash collisions nor row-ID races may lose rows.
     let colliding: Vec<_> = (0..i64::MAX)
@@ -78,7 +184,7 @@ fn main() -> Result<()> {
         runtime.upload_owned_rows(&doubled, &mut dictionary, &[Codec::Plain; 3])?;
     let collisions = Relation::from_columns(&collision_input)?;
     exact(collisions.full().to_host()?, colliding);
-    assert!(!status(collisions.prepare(&[collision_input])?.delta())?);
+    assert!(!status(prepare(&collisions, &[collision_input])?.delta())?);
     let codes = [Codec::For, Codec::Dictionary];
     let rows: Vec<_> = (0..4096i64)
         .flat_map(|i| [(i, i ^ 31), (i, i ^ 31), (i, i ^ 63)])
@@ -96,9 +202,10 @@ fn main() -> Result<()> {
         ];
         let candidate = runtime.upload_owned_rows(&rows, &mut dictionary, &codes)?;
         let old = state.full().clone();
-        let next = state.prepare(&[candidate.clone(), candidate])?;
+        let next = prepare(&state, &[candidate.clone(), candidate])?;
         exact(old.to_host()?, expected.iter().copied());
         exact(next.delta().to_host()?, [(5000 + cycle, -cycle)]);
+        assert_eq!(next.delta().capacity(), 1, "checked deltas must not retain candidate capacity");
         assert!(status(next.delta())?);
         expected.insert((5000 + cycle, -cycle));
         exact(next.full().to_host()?, expected.iter().copied());
@@ -106,13 +213,14 @@ fn main() -> Result<()> {
         state = next;
     }
     assert_eq!(original.to_host()?.len(), 8192);
-    state = state.prepare::<Plain>(&[])?;
+    state = prepare::<_, Plain>(&state, &[])?;
     assert!(!status(state.delta())?);
+    assert_eq!(state.delta().capacity(), 0);
     exact(state.full().to_host()?, expected);
     let empty =
         Relation::<(i64, i64)>::empty(runtime.pool().clone(), Arc::new(dictionary.clone()), 2)?;
     assert!(!status(empty.delta())?);
-    let empty = empty.prepare::<Plain>(&[])?;
+    let empty = prepare::<_, Plain>(&empty, &[])?;
     exact(empty.full().to_host()?, []);
 
     // Lossy head projection must be canonicalized after projection.
@@ -129,20 +237,21 @@ fn main() -> Result<()> {
     let mut b = a.clone();
     for cycle in 0..6i64 {
         let value = runtime.upload_owned_rows(&[(cycle,)], &mut dictionary, &[Codec::Plain])?;
+        let mut summary = RoundStatus::new(runtime.pool().clone());
         let next_a = if cycle % 2 == 0 {
-            a.prepare(&[value.clone()])?
+            a.prepare(&[value.clone()], &mut summary)?
         } else {
-            a.prepare::<Plain>(&[])?
+            a.prepare::<Plain>(&[], &mut summary)?
         };
         let next_b = if cycle % 2 != 0 {
-            b.prepare(&[value])?
+            b.prepare(&[value], &mut summary)?
         } else {
-            b.prepare::<Plain>(&[])?
+            b.prepare::<Plain>(&[], &mut summary)?
         };
-        let mut summary = RoundStatus::new(runtime.pool().clone());
-        summary.include(next_a.delta())?;
-        summary.include(next_b.delta())?;
-        assert!(summary.any()?);
+        let checked = summary.check()?;
+        assert!(checked.any());
+        let next_a = next_a.finish(&checked)?;
+        let next_b = next_b.finish(&checked)?;
         assert_eq!(status(next_a.delta())?, cycle % 2 == 0);
         assert_eq!(status(next_b.delta())?, cycle % 2 != 0);
         a = next_a;
@@ -214,7 +323,7 @@ fn main() -> Result<()> {
     let units = runtime.upload_owned_rows(&[(), (), ()], &mut dictionary, &[])?;
     let units = Relation::from_columns(&units)?;
     exact(units.full().to_host()?, [()]);
-    assert!(!status(units.prepare(&[units.full().clone()])?.delta())?);
+    assert!(!status(prepare(&units, &[units.full().clone()])?.delta())?);
 
     // Dictionary equality is ID equality only inside a consistent dictionary.
     let mut dict_a = Dictionary::default();
@@ -224,14 +333,14 @@ fn main() -> Result<()> {
     let text_b =
         runtime.upload_owned_rows(&[("beta".to_owned(),)], &mut dict_b, &[Codec::Dictionary])?;
     let text = Relation::from_columns(&text_a)?;
-    assert!(text.prepare(&[text_b]).is_err());
+    assert!(prepare(&text, &[text_b]).is_err());
     let compatible = runtime.upload_owned_rows(
         &[("beta".to_owned(),), ("alpha".to_owned(),)],
         &mut dict_a,
         &[Codec::Dictionary],
     )?;
     exact(
-        text.prepare(&[compatible])?.full().to_host()?,
+        prepare(&text, &[compatible])?.full().to_host()?,
         [("alpha".to_owned(),), ("beta".to_owned(),)],
     );
     // Install one common literal domain without touching resident columns.
@@ -265,8 +374,7 @@ fn main() -> Result<()> {
     let foreign =
         foreign_runtime.upload_owned_rows(&[(1i64, 2i64)], &mut dictionary, &[Codec::Plain; 2])?;
     assert!(
-        state
-            .prepare(&[foreign])
+        prepare(&state, &[foreign])
             .err()
             .unwrap()
             .to_string()
@@ -283,6 +391,28 @@ fn main() -> Result<()> {
         Ok(())
     })?;
     let bad: DeviceColumns<'_, (i64,)> = execution.into_columns(bad, &[0])?;
+    reset_host_wait_count();
+    let mut failed_batch = RoundStatus::new(runtime.pool().clone());
+    let _good_empty = b.prepare::<Plain>(&[], &mut failed_batch)?;
+    let _failed = a.prepare(&[bad.clone()], &mut failed_batch)?;
+    assert_eq!(
+        host_wait_count(),
+        0,
+        "failed statuses stay resident until the round check"
+    );
+    assert!(
+        failed_batch
+            .check()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("CQ_GPU_OUTPUT_CAPACITY")
+    );
+    assert_eq!(
+        host_wait_count(),
+        1,
+        "all member errors use the same readback"
+    );
     datalog::reset_round_count();
     assert!(
         status(&bad)
@@ -291,7 +421,7 @@ fn main() -> Result<()> {
             .contains("CQ_GPU_OUTPUT_CAPACITY")
     );
     assert!(
-        a.prepare(&[bad])
+        prepare(&a, &[bad])
             .err()
             .unwrap()
             .to_string()

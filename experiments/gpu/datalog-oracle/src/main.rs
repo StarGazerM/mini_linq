@@ -36,6 +36,7 @@ fn run(runtime: &Runtime, name: &str, edges: &[(i64, i64)], seeds: &[(i64,)], no
         .unwrap();
     let setup_ms = setup.elapsed().as_secs_f64() * 1000.0;
     ::cq_gpu_runtime::datalog::reset_round_count();
+    ::cq_gpu_runtime::reset_host_wait_count();
     let started = Instant::now();
     let (
         reach,
@@ -94,6 +95,24 @@ fn run(runtime: &Runtime, name: &str, edges: &[(i64, i64)], seeds: &[(i64,)], no
     };
     let execution_ms = started.elapsed().as_secs_f64() * 1000.0;
     let nonempty_publications = ::cq_gpu_runtime::datalog::round_count();
+    let checked_rounds = ::cq_gpu_runtime::datalog::checked_round_count();
+    let host_waits = ::cq_gpu_runtime::host_wait_count();
+    let readbacks = ::cq_gpu_runtime::control_readback_count();
+    let resume_readbacks = ::cq_gpu_runtime::resume_readback_count();
+    let compaction_readbacks = ::cq_gpu_runtime::compaction_readback_count();
+    // Three EDB checks and one program completion are outside SCC rounds.
+    // Suspension feedback is required before dependent operators can consume
+    // grow/resume outputs, and is accounted separately rather than hidden.
+    assert_eq!(
+        host_waits - resume_readbacks - compaction_readbacks,
+        checked_rounds + 4,
+        "{name}: round waits"
+    );
+    assert_eq!(
+        readbacks - resume_readbacks - compaction_readbacks,
+        checked_rounds + 3,
+        "{name}: round readbacks"
+    );
     // A separately compiled query consumes the resident IDB without downloading it.
     let replay: DeviceColumns<'_, (i64,)> = mini_linq::compile! {
         pipeline {
@@ -247,7 +266,7 @@ fn run(runtime: &Runtime, name: &str, edges: &[(i64, i64)], seeds: &[(i64,)], no
         "{name}: copied heads"
     );
     println!(
-        "scenario={name} exact=true nodes={} edges={} closure={} nonempty_publications={nonempty_publications} setup_ms={setup_ms:.3} execution_ms={execution_ms:.3}",
+        "scenario={name} exact=true nodes={} edges={} closure={} nonempty_publications={nonempty_publications} checked_rounds={checked_rounds} host_waits={host_waits} readbacks={readbacks} resume_readbacks={resume_readbacks} compaction_readbacks={compaction_readbacks} setup_ms={setup_ms:.3} execution_ms={execution_ms:.3}",
         nodes.len(),
         edges.len(),
         expected_tc.len()

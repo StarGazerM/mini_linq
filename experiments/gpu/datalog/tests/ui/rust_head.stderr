@@ -1,4 +1,4 @@
-error: CQ_GPU_OPAQUE_BIND: only copied dereferences and typed integral, bool or &str literals are supported
+error: CQ_GPU_OPAQUE_BIND: only copied dereferences, typed literals, and closed integral or bool captures are supported
  --> tests/ui/rust_head.rs:3:5
   |
 3 | /     cq_gpu_datalog::datalog! {

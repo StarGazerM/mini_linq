@@ -70,6 +70,27 @@ pub(crate) mod runtime_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn hash_run_keys(
+        table: TableView, slots: *const u64, width: usize, mask: u64, output: *mut i64,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        let count = unsafe { table_len(table) };
+        while row < count {
+            let mut hash = crate::HASHED_RUN_SEED;
+            let mut index = 0;
+            while index < width {
+                let slot = unsafe { slots.add(index).read() } as usize;
+                hash = crate::hashed_run_step(hash, unsafe { column(table, slot, row) });
+                index += 1;
+            }
+            unsafe { output.add(row as usize).write((hash & mask) as i64); }
+            row += stride;
+        }
+    }
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn run_status(stats: *const gpu_blocked_run::RunStats, status: *mut OutputCount) {
         if thread::index_1d().get() == 0 && unsafe { (*stats).invalid } != 0 {
             unsafe {

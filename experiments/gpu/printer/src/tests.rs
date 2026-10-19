@@ -27,6 +27,51 @@ fn shared() -> ir::Program {
 }
 
 #[test]
+fn composite_hashed_runs_require_recorded_type_and_check_every_key() {
+    let mut source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = let rename R@1 {a -> x,b -> y,c -> z};
+        p = pipe canon probe first [x,y] l,r;
+        return p as answer(x,y,z);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        r rows = ::std::vec::Vec<_>;
+        r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];
+        p canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    for options in [quote!(), quote!(capacity(R))] {
+        let text = compile(&source, syn::parse2(options).unwrap()).unwrap().to_token_stream().to_string();
+        assert!(text.contains("prepare_hashed_run"), "{text}");
+        assert_eq!(text.matches("hashed_run_step").count(), 2);
+        assert!(text.contains("run_column (__cq_gpu_run_view_r , 0usize"));
+        assert!(text.contains("run_column (__cq_gpu_run_view_r , 1usize"));
+    }
+    let ir::Structure::Built { keyed, .. } = &mut source.structures.entries[3].structure else { unreachable!() };
+    keyed.ty = syn::parse_quote!(::cq_storage::HashIndex<'_,_,_>);
+    assert!(compile(&source, Options::default()).unwrap_err().to_string().contains("CQ_GPU_BUILD_TYPE"));
+}
+
+#[test]
+fn dedup_execution_policy_is_read_only_from_the_recorded_type() {
+    for (policy, compacting) in [
+        (quote!(::cq_gpu_runtime::Staged), false),
+        (quote!(::cq_gpu_runtime::Compacting), true),
+    ] {
+        let mut source = shared();
+        let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else { unreachable!() };
+        *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For, #policy>);
+        let text = compile(&source, Options::default()).unwrap().to_token_stream().to_string();
+        assert_eq!(text.contains("execute_resumable_compacting"), compacting, "{text}");
+    }
+    let mut source = shared();
+    let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else { unreachable!() };
+    *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::Fused>);
+    assert!(compile(&source, Options::default()).unwrap_err().to_string().contains("CQ_GPU_DEDUP_POLICY"));
+}
+
+#[test]
 fn pure_projection_uses_runtime_without_a_redundant_copy_kernel() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation Arbitrary(k:i64);
@@ -569,6 +614,23 @@ fn capacity_is_explicit_and_names_a_declared_input() {
     let error = compile(&shared(), options).unwrap_err().to_string();
     assert!(error.contains("CQ_GPU_CAPACITY"), "{error}");
     assert!(syn::parse2::<Options>(quote!(capacity(L), capacity(R))).is_err());
+    assert!(syn::parse2::<Options>(quote!(completion(invented))).is_err());
+}
+
+#[test]
+fn completion_boundary_is_explicit_and_query_default_is_unchanged() {
+    let query = compile(&shared(), Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(query.contains(". finish"));
+    let round = compile(&shared(), syn::parse2(quote!(completion(round))).unwrap())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert!(!round.contains(". finish"));
+    assert!(round.contains("__CQ_GPU_COMPLETION"));
+    assert!(round.contains("\"round\""));
 }
 
 #[test]
@@ -883,12 +945,60 @@ fn copied_and_literal_binds_preserve_types_and_bounds() {
 }
 
 #[test]
+fn closed_typed_scalar_binds_are_encoded_once_on_host() {
+    for (expression, ty) in [
+        (quote!(meta.x), quote!(i32)),
+        (quote!(meta.enabled), quote!(bool)),
+        (quote!(external()), quote!(u64)),
+        (quote!(*external), quote!(i32)),
+    ] {
+        let source: ir::Program = syn::parse_quote! { physical {
+            relation R(a:i32);
+            scan = pipe rename R@0 {a -> x};
+            output = pipe canon bind scan with y:#ty = (#expression);
+            return output as answer(x,y);
+        } structures {
+            scan host scan = ::core::iter::Map<_,_> [];
+            output canon = ::cq_gpu_runtime::DeviceSet<_>;
+        }};
+        for options in [Options::default(), syn::parse2(quote!(capacity(R))).unwrap()] {
+            let generated = compile(&source, options).unwrap().to_token_stream().to_string();
+            let capture = quote!(let __cq_gpu_literal: #ty = #expression).to_string();
+            assert_eq!(generated.matches(&capture).count(), 1, "{generated}");
+            assert!(generated.contains("encode_value"));
+            assert!(generated.contains("Bounds :: singleton"));
+        }
+    }
+}
+
+#[test]
+fn closed_capture_respects_written_bind_scope() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation R(a:i32);
+        scan = pipe rename R@0 {a -> x};
+        output = pipe canon bind scan with y:i32 = (*x) scope [];
+        return output as answer(x,y);
+    } structures {
+        scan host scan = ::core::iter::Map<_,_> [];
+        output canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    let generated = compile(&source, Options::default())
+        .unwrap().to_token_stream().to_string();
+    assert_eq!(generated.matches("let __cq_gpu_literal : i32 = * x").count(), 1);
+    assert!(generated.contains("Bounds :: singleton"));
+}
+
+#[test]
 fn typed_bind_rejects_opaque_numeric_and_type_changing_expressions() {
     for (expression, ty, code) in [
         (quote!(*x + 1), quote!(i32), "CQ_GPU_OPAQUE_BIND"),
         (quote!(x.clone()), quote!(i32), "CQ_GPU_OPAQUE_BIND"),
         (quote!(*x), quote!(i64), "CQ_GPU_BIND_TYPE"),
-        (quote!(external()), quote!(i32), "CQ_GPU_OPAQUE_BIND"),
+        (quote!(meta.x + *x), quote!(i32), "CQ_GPU_OPAQUE_BIND"),
+        (quote!(opaque!(x)), quote!(i32), "CQ_GPU_OPAQUE_BIND"),
+        // Physical rejects floating-point relational columns before GPU lowering.
+        (quote!(meta.x), quote!(f64), "requires Eq + Hash or Ord"),
+        (quote!(meta.name), quote!(&str), "CQ_GPU_OPAQUE_BIND"),
     ] {
         let source: ir::Program = syn::parse_quote! { physical {
             relation R(a:i32);
@@ -920,7 +1030,7 @@ fn certified_exact_membership_is_device_only_and_schema_checked() {
         scan host scan = ::core::iter::Map<_,_> [];
         output canon = ::cq_gpu_runtime::DeviceSet<_>;
     }};
-    let options = syn::parse2(quote!(datalog_keys(keys:(i32,bool)))).unwrap();
+    let options = syn::parse2(quote!(datalog_keys(keys: (i32, bool)))).unwrap();
     let generated = compile(&source, options)
         .unwrap()
         .to_token_stream()
@@ -934,7 +1044,7 @@ fn certified_exact_membership_is_device_only_and_schema_checked() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("bridge-certified"), "{error}");
-    let options = syn::parse2(quote!(datalog_keys(keys:(i64,bool)))).unwrap();
+    let options = syn::parse2(quote!(datalog_keys(keys: (i64, bool)))).unwrap();
     let error = compile(&source, options).unwrap_err().to_string();
     assert!(error.contains("CQ_GPU_DATALOG_KEY_TYPE"), "{error}");
 }

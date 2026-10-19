@@ -276,7 +276,7 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
 }
 
 /// Formal rule EXT-SortedRuns:
-/// Retype one-level HashIndex payload builds with one borrowed integral key.
+/// Retype one-level HashIndex payload builds with one integral key.
 /// Host fallbacks and smallest-intersection candidates retain their providers.
 pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -352,11 +352,51 @@ pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                         })
                 });
         if stored.len() == 1
-            && !owned
             && matches!(ir::ungroup_type(&analysis.physical.rows[&name].types[stored[0]]),
                 Type::Path(p) if p.path.is_ident("i32") || p.path.is_ident("i64"))
         {
-            keyed.ty = syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>);
+            keyed.ty = if owned {
+                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::NoDense>)
+            } else {
+                syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::BorrowedI64TupleCodec>)
+            };
+        }
+    }
+    ir::check_rewrite(source, &target)?;
+    Ok(target)
+}
+
+/// Record an exact hashed-bucket run for one-level composite scalar keys.
+/// Bucket collisions are resolved by comparing every recorded key column.
+pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    if !arguments.is_empty() {
+        return Err(syn::Error::new_spanned(arguments, "hashed_runs takes no arguments"));
+    }
+    let analysis = ir::contract::check(source)?;
+    let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
+    let mut target = source.clone();
+    for entry in &mut target.structures.entries {
+        let Structure::Built { keyed, .. } = &mut entry.structure else { continue };
+        if keyed.levels.len() != 1 || keyed.levels[0].columns.len() < 2
+            || keyed.membership.is_some()
+            || !matches!(&keyed.ty, Type::Path(p) if p.qself.is_none()
+                && p.path.segments.iter().map(|s| s.ident.to_string()).eq(["cq_storage", "HashIndex"]))
+        {
+            continue;
+        }
+        let name = symbol_name(&entry.name);
+        let columns = keyed.level_names().remove(0);
+        if candidates.iter().any(|c| c.sides.iter().any(|(side, key)| *side == name && *key == columns)) {
+            continue;
+        }
+        if columns.iter().all(|column| {
+            let ty = ir::ungroup_type(&analysis.physical.rows[&name].types[column]);
+            matches!(ty,
+                Type::Path(p) if ["i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "bool", "String"]
+                    .iter().any(|name| p.path.is_ident(name)))
+                || matches!(ty, Type::Reference(r) if matches!(&*r.elem, Type::Path(p) if p.path.is_ident("str")))
+        }) && keyed.filtered.is_none() {
+            keyed.ty = syn::parse_quote!(::cq_gpu_runtime::HashedRun<_, _>);
         }
     }
     ir::check_rewrite(source, &target)?;

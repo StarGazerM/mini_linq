@@ -10,6 +10,7 @@
 pub mod datalog;
 mod device;
 mod kernels;
+pub mod nvtx;
 mod sets;
 
 use cuda_core::{CudaContext, CudaStream, LaunchConfig1D};
@@ -35,8 +36,13 @@ use std::{
 
 pub type Error = Box<dyn std::error::Error>;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
-pub struct DeviceSet<T, C = Plain>(PhantomData<(T, C)>);
+/// Materialize candidates before exact canonicalization (standalone default).
+pub struct Staged;
+/// Exact prefix compaction at resumable suspension boundaries.
+pub struct Compacting;
+pub struct DeviceSet<T, C = Plain, P = Staged>(PhantomData<(T, C, P)>);
 pub struct PrefixRun<K, V, C, const PREFIX: usize>(PhantomData<(K, V, C)>);
+pub struct HashedRun<K, V>(PhantomData<(K, V)>);
 
 #[derive(Debug)]
 pub struct RuntimeError {
@@ -71,6 +77,41 @@ pub fn last_run_timings() -> Option<Timings> {
 }
 pub fn take_last_timings() -> Option<Timings> {
     LAST_TIMINGS.with(Cell::take)
+}
+
+thread_local! {
+    static HOST_WAITS: Cell<usize> = const { Cell::new(0) };
+    static CONTROL_READBACKS: Cell<usize> = const { Cell::new(0) };
+    static RESUME_READBACKS: Cell<usize> = const { Cell::new(0) };
+    static COMPACTION_READBACKS: Cell<usize> = const { Cell::new(0) };
+}
+/// Explicit runtime stream waits, including checked control readbacks.
+/// Excludes uploads, user downloads, and allocator-internal synchronization.
+pub fn host_wait_count() -> usize {
+    HOST_WAITS.with(Cell::get)
+}
+pub fn control_readback_count() -> usize {
+    CONTROL_READBACKS.with(Cell::get)
+}
+/// Suspension checks required before dependent operators can consume an output.
+pub fn resume_readback_count() -> usize {
+    RESUME_READBACKS.with(Cell::get)
+}
+/// Distinct-cardinality checks at recorded Compacting suspension boundaries.
+pub fn compaction_readback_count() -> usize {
+    COMPACTION_READBACKS.with(Cell::get)
+}
+pub fn reset_host_wait_count() {
+    HOST_WAITS.with(|count| count.set(0));
+    CONTROL_READBACKS.with(|count| count.set(0));
+    RESUME_READBACKS.with(|count| count.set(0));
+    COMPACTION_READBACKS.with(|count| count.set(0));
+}
+fn record_host_wait(readback: bool) {
+    HOST_WAITS.with(|count| count.set(count.get().saturating_add(1)));
+    if readback {
+        CONTROL_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
+    }
 }
 
 trait TableViewAccess {
@@ -186,6 +227,8 @@ pub struct Runtime {
     kernels: kernels::runtime_kernels::LoadedModule,
     pool: Arc<Pool>,
     dedup_scratch: RefCell<DedupScratch>,
+    pending_timings: RefCell<Vec<PendingTiming>>,
+    hashed_run_bucket_limit: usize,
 }
 impl Runtime {
     pub fn new() -> Result<Self> {
@@ -197,11 +240,23 @@ impl Runtime {
     pub fn from_pool(pool: Arc<Pool>) -> Result<Self> {
         let kernels = unsafe { kernels::runtime_kernels::load(pool.context())? };
         gpu_blocked_run::prepare_kernels(pool.context())?;
+        nvtx::name_stream(pool.stream().cu_stream() as *mut std::ffi::c_void);
         Ok(Self {
             kernels,
             pool,
             dedup_scratch: RefCell::new(DedupScratch::default()),
+            pending_timings: RefCell::new(Vec::new()),
+            hashed_run_bucket_limit: 1 << 24,
         })
+    }
+    /// Limit hashed-run directories (also useful for collision stress tests).
+    /// A smaller directory changes performance, never equality semantics.
+    pub fn with_hashed_run_bucket_limit(mut self, buckets: usize) -> Result<Self> {
+        if !buckets.is_power_of_two() || buckets as u128 > gpu_blocked_run::MAX_DOMAIN_KEYS as u128 {
+            return Err(failure("CQ_GPU_HASH_BUCKETS", "bucket limit must be a power of two within the run domain"));
+        }
+        self.hashed_run_bucket_limit = buckets;
+        Ok(self)
     }
     pub fn context(&self) -> &Arc<CudaContext> {
         self.pool.context()
@@ -321,6 +376,26 @@ impl Runtime {
         Ok(views)
     }
 }
+
+impl Runtime {
+    // Called only after a checked readback or explicit finish has completed the
+    // stream. Query holes and publication operations only enqueue their events.
+    fn collect_timings(&self) -> Result<Timings> {
+        let mut timings = Timings::default();
+        for timing in self.pending_timings.borrow_mut().drain(..) {
+            let elapsed = timing.start.elapsed_ms(&timing.end)? as f64;
+            match timing.stage {
+                TimingStage::Upload => timings.upload_ms += elapsed,
+                TimingStage::Build => timings.build_ms += elapsed,
+                TimingStage::Kernel => timings.kernel_ms += elapsed,
+                TimingStage::Dedup => timings.dedup_ms += elapsed,
+            }
+        }
+        timings.total_ms = timings.build_ms + timings.kernel_ms + timings.dedup_ms;
+        LAST_TIMINGS.with(|last| last.set(Some(timings)));
+        Ok(timings)
+    }
+}
 thread_local! { static SHARED_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) }; }
 thread_local! { static RESIDENT_RUNTIME: RefCell<Option<Runtime>> = const { RefCell::new(None) }; }
 pub fn with_runtime<T>(execute: impl FnOnce(&Runtime) -> Result<T>) -> Result<T> {
@@ -376,6 +451,7 @@ struct BuiltRun<'runtime> {
     run: Run<'runtime>,
     pointers: Buffer<u64>,
     len: u64,
+    bucket_mask: u64,
 }
 struct Membership {
     bits: Buffer<u64>,
@@ -438,6 +514,15 @@ pub struct Execution<'runtime, 'data> {
     timings: Timings,
     pending_timings: Vec<PendingTiming>,
     started: Instant,
+}
+
+impl Drop for Execution<'_, '_> {
+    fn drop(&mut self) {
+        self.runtime
+            .pending_timings
+            .borrow_mut()
+            .append(&mut self.pending_timings);
+    }
 }
 impl<'runtime, 'data> Execution<'runtime, 'data> {
     pub fn dictionary(&self) -> &Dictionary<'data> {
@@ -578,6 +663,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             columns: built.pointers.ptr().cast(),
             len: built.len,
             count: built.run.stats.cu_deviceptr() as *const u32,
+            bucket_mask: built.bucket_mask,
         })
     }
     pub fn membership_view(&self, id: MembershipId) -> Result<MembershipView> {
@@ -600,6 +686,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         if let Some(&id) = self.membership_cache.get(&key) {
             return Ok(id);
         }
+        let _nvtx = nvtx::range(c"membership/build");
         let source = self.table(table)?;
         if key_column >= source.columns.len() {
             return Err(failure(
@@ -685,11 +772,31 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         if let Some(&id) = self.run_cache.get(&(table, key_column)) {
             return Ok(id);
         }
+        let id = self.prepare_run_inner(table, Some(key_column), &[])?;
+        self.run_cache.insert((table, key_column), id);
+        Ok(id)
+    }
+    pub fn prepare_hashed_run(&mut self, table: TableId, keys: &[usize]) -> Result<RunId> {
+        if keys.len() < 2 {
+            return Err(failure("CQ_GPU_HASH_KEYS", "hashed runs require composite keys"));
+        }
+        self.prepare_run_inner(table, None, keys)
+    }
+    fn prepare_run_inner(&mut self, table: TableId, key_column: Option<usize>, keys: &[usize]) -> Result<RunId> {
+        let _nvtx = nvtx::range(c"index/run/build");
         let source = self.table(table)?;
-        let domain = *source
-            .bounds
-            .get(key_column)
-            .ok_or_else(|| failure("CQ_GPU_KEY_COLUMN", "run key outside schema"))?;
+        let buckets = source.capacity.max(1).checked_next_power_of_two()
+            .unwrap_or(self.runtime.hashed_run_bucket_limit)
+            .min(self.runtime.hashed_run_bucket_limit);
+        let bucket_mask = (buckets - 1) as u64;
+        let domain = if let Some(key) = key_column {
+            *source.bounds.get(key).ok_or_else(|| failure("CQ_GPU_KEY_COLUMN", "run key outside schema"))?
+        } else {
+            if keys.iter().any(|&key| key >= source.columns.len()) {
+                return Err(failure("CQ_GPU_KEY_COLUMN", "hashed run key outside schema"));
+            }
+            Bounds::Inclusive { min: 0, max: bucket_mask as i64 }
+        };
         if domain.cardinality() > gpu_blocked_run::MAX_DOMAIN_KEYS as u128 {
             return Err(failure(
                 "CQ_GPU_RUN_DOMAIN",
@@ -731,18 +838,29 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 count.cu_deviceptr() as *mut u32,
             )?;
         }
+        let hashed_keys = if key_column.is_none() {
+            let slots = unsafe { Buffer::<u64>::uninitialized(runtime.pool.clone(), keys.len())? };
+            let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
+            for (index, &key) in keys.iter().enumerate() {
+                unsafe { runtime.kernels.initialize_pointer(runtime.stream(), &launch, slots.ptr(), index, key as u64)?; }
+            }
+            let hashes = unsafe { Buffer::<i64>::uninitialized(runtime.pool.clone(), source.capacity)? };
+            let launch = runtime.kernels.prepare_hash_run_keys(config(source.capacity, 0))?;
+            unsafe { runtime.kernels.hash_run_keys(runtime.stream(), &launch, source.view(), slots.ptr(), keys.len(), bucket_mask, hashes.ptr())?; }
+            Some(hashes)
+        } else { None };
         let payloads: Vec<&dyn ContiguousDeviceRange<i64>> = columns
             .iter()
             .enumerate()
             .filter_map(|(index, column)| {
-                (index != key_column).then_some(*column as &dyn ContiguousDeviceRange<i64>)
+                (Some(index) != key_column).then_some(*column as &dyn ContiguousDeviceRange<i64>)
             })
             .collect();
         let run = Run::build(
             runtime.context(),
             runtime.stream(),
             runtime.pool.resource(),
-            columns[key_column],
+            key_column.map(|key| columns[key]).or(hashed_keys.as_ref()).expect("run key buffer"),
             &payloads,
             match domain {
                 Bounds::Empty => (0, -1),
@@ -755,7 +873,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
         let mut payload = 0;
         for index in 0..columns.len() {
-            let pointer = if index == key_column {
+            let pointer = if Some(index) == key_column {
                 run.keys.cu_deviceptr()
             } else {
                 let value = run.payloads[payload].cu_deviceptr();
@@ -786,8 +904,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         self.record_timing(TimingStage::Build, start)?;
         self.tables[table.0].statuses.push(status);
         let id = RunId(self.runs.len());
-        self.runs.push(BuiltRun { run, pointers, len });
-        self.run_cache.insert((table, key_column), id);
+        self.runs.push(BuiltRun { run, pointers, len, bucket_mask });
         Ok(id)
     }
     pub fn execute_selection<F>(
@@ -867,7 +984,24 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         bounds: &[Bounds],
         initial_capacity: usize,
         state_words: usize,
-        mut launch: F,
+        launch: F,
+    ) -> Result<TableId>
+    where
+        F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
+    {
+        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, false, launch)
+    }
+    pub fn execute_resumable_compacting<F>(
+        &mut self, bounds: &[Bounds], initial_capacity: usize, state_words: usize, launch: F,
+    ) -> Result<TableId>
+    where
+        F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
+    {
+        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, true, launch)
+    }
+    fn execute_resumable_with_policy<F>(
+        &mut self, bounds: &[Bounds], initial_capacity: usize, state_words: usize,
+        compacting: bool, mut launch: F,
     ) -> Result<TableId>
     where
         F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
@@ -884,6 +1018,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         };
         let mut output = allocate_output(runtime, width, initial_capacity.max(1))?;
         loop {
+            let _nvtx = nvtx::range(c"resumable/attempt");
             unsafe {
                 cuda_core::memory::memset_d8_async(
                     control.ptr() as u64,
@@ -893,8 +1028,39 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 )?;
             }
             launch(runtime.stream(), output.view(), resume)?;
+            record_host_wait(true);
+            RESUME_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
             if control.to_host()?[0] == 0 {
                 break;
+            }
+            if compacting {
+                let _nvtx = nvtx::range(c"resumable/compact");
+                let old_capacity = output.capacity;
+                // Checkpoints contain only query cursors/registers, never
+                // output addresses. Exact prefix replacement cannot replay or
+                // skip a candidate; the suspended append is still pending.
+                let mut work = runtime.execution();
+                let table = work.complete_output(output, bounds.to_vec())?;
+                let source = work.add_table(table);
+                let distinct = work.dedup(source)?;
+                COMPACTION_READBACKS.with(|count| count.set(count.get().saturating_add(1)));
+                let rows = work.checked_rows(distinct)?;
+                // A pending cooperative reservation can contain a whole
+                // 256-lane block, even when the completed prefix is tiny.
+                // Always leave room for it, or compaction could livelock.
+                let capacity = rows.saturating_mul(2)
+                    .max(rows.saturating_add(256))
+                    .min(u32::MAX as usize).max(old_capacity);
+                if capacity <= rows {
+                    return Err(failure("CQ_GPU_OUTPUT_ROWS", "canonical output exceeds u32::MAX"));
+                }
+                output = allocate_output(runtime, width, capacity)?;
+                let source = work.table(distinct)?;
+                let append = runtime.kernels.prepare_append(config(rows, 0))?;
+                unsafe {
+                    runtime.kernels.append(runtime.stream(), &append, source.view(), width, output.view())?;
+                }
+                continue;
             }
             let capacity = output
                 .capacity
@@ -907,7 +1073,9 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                     "resumable output exceeds u32::MAX",
                 ));
             }
-            let mut grown = allocate_output(runtime, width, capacity)?;
+            let mut grown = allocate_output(runtime, width, capacity).map_err(|error| {
+                failure("CQ_GPU_RESUMABLE_ALLOCATION", format!("width={width}, capacity={capacity}: {error}"))
+            })?;
             for (source, destination) in output.columns.iter().zip(&grown.columns) {
                 unsafe {
                     cuda_core::memory::memcpy_dtod_async(
@@ -966,6 +1134,7 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         })
     }
     pub fn dedup(&mut self, table: TableId) -> Result<TableId> {
+        let _nvtx = nvtx::range(c"admission/dedup");
         let source = self.table(table)?;
         if source.capacity < 2 {
             return Ok(table);
@@ -1111,16 +1280,13 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     /// Explicit timing-collection boundary. One synchronization covers every
     /// preceding operation, including asynchronous errors and ordered frees.
     pub fn finish(&mut self) -> Result<Timings> {
+        record_host_wait(false);
         self.runtime.stream().synchronize()?;
-        for timing in self.pending_timings.drain(..) {
-            let elapsed = timing.start.elapsed_ms(&timing.end)? as f64;
-            match timing.stage {
-                TimingStage::Upload => self.timings.upload_ms += elapsed,
-                TimingStage::Build => self.timings.build_ms += elapsed,
-                TimingStage::Kernel => self.timings.kernel_ms += elapsed,
-                TimingStage::Dedup => self.timings.dedup_ms += elapsed,
-            }
-        }
+        self.runtime
+            .pending_timings
+            .borrow_mut()
+            .append(&mut self.pending_timings);
+        self.timings = self.runtime.collect_timings()?;
         self.timings.total_ms =
             self.timings.build_ms + self.timings.kernel_ms + self.timings.dedup_ms;
         self.timings.wall_ms = self.started.elapsed().as_secs_f64() * 1000.0;

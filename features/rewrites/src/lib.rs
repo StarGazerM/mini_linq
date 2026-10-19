@@ -13,9 +13,9 @@
 //! used as smallest-intersection candidates are unchanged. The replacement
 //! requires Ord + Copy keys and Copy items (Leibniz admissibility is a premise);
 //! rustc checks Build, IndexRead and ExactMembership at the existing guards.
-//! Only a single stored borrowed i32/i64 column is eligible, recording
-//! BorrowedI64TupleCodec for the rank directory. Multi-column, non-integral,
-//! and computed/owned keys remain HashIndex rather than selecting NoDense.
+//! A single stored i32/i64 column is eligible. Borrowed keys record
+//! BorrowedI64TupleCodec for the rank directory; computed/owned keys record
+//! NoDense for exact binary search. Multi-column and non-integral keys remain HashIndex.
 //! Eligible rank spans exceeding 1,048,576 bits still fall back to binary
 //! search at runtime. No default selection changes.
 //! Use `pipeline { structures = [cq_rewrites::sorted_runs]; }`.
@@ -252,6 +252,14 @@ pub fn join_filter(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn sorted_runs(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::sorted_runs)
+        .into()
+}
+
+/// Record one-level composite scalar HashIndex providers as exact GPU hashed runs.
+/// Compose after `sorted_runs`; this opt-in rewrite leaves CPU defaults unchanged.
+#[proc_macro]
+pub fn hashed_runs(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_rewrite_passes::hashed_runs)
         .into()
 }
 

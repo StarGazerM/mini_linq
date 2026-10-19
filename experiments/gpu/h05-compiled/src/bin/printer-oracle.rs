@@ -80,9 +80,109 @@ fn typed_filters() {
     println!("typed-large-literals exact=true relational=true total=true");
 }
 
+fn closed_scalar_captures() {
+    struct Metadata {
+        x: i64,
+        enabled: bool,
+    }
+    let meta = Metadata { x: -3_000_000_001, enabled: true };
+    let evaluations = std::cell::Cell::new(0u32);
+    let captured = || {
+        evaluations.set(evaluations.get() + 1);
+        4_000_000_001u64
+    };
+    let rows = [(1i32,), (2,), (1,)];
+    macro_rules! check {
+        ($($arguments:tt)*) => {{
+            evaluations.set(0);
+            let mut actual = cq_gpu::print! {
+                arguments { $($arguments)* };
+                pipeline {};
+                physical {
+                    relation R(a:i32) = (&rows);
+                    scan = pipe rename R@0 {a -> x};
+                    value = pipe bind scan with y:i64 = (meta.x);
+                    flag = pipe bind value with enabled:bool = (meta.enabled);
+                    counted = pipe bind flag with z:u64 = (captured());
+                    output = pipe canon project counted keep {x,y,enabled,z};
+                    return output as answer(x,y,enabled,z);
+                }
+                structures {
+                    scan host scan = ::core::iter::Map<_,_> [];
+                    output canon = ::cq_gpu_runtime::DeviceSet<_>;
+                }
+            }.to_host().expect("closed typed scalar captures");
+            actual.sort_unstable();
+            assert_eq!(actual, [(1, meta.x, true, 4_000_000_001), (2, meta.x, true, 4_000_000_001)]);
+            assert_eq!(evaluations.get(), 1, "capture must be evaluated once, not per row or launch");
+        }};
+    }
+    check!();
+    check!(capacity(R));
+    println!("closed-scalar-captures exact=true once=true bounded=true resumable=true");
+}
+
+fn composite_hash_collisions() {
+    // All keys land in bucket zero even with the default 256-bucket directory.
+    fn step(hash: u64, value: i64) -> u64 {
+        let mut value = value as u64;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+        (hash ^ value ^ (value >> 31)).wrapping_mul(0x100000001b3)
+    }
+    let collisions: Vec<i64> = (0..100_000).filter(|&y| step(step(0xcbf29ce484222325, -7), y) & 255 == 0).take(58).collect();
+    assert_eq!(collisions.len(), 58);
+    let mut rows: Vec<_> = (0..200).map(|z| (-7i64, collisions[0], z)).collect();
+    rows.extend(collisions[1..57].iter().enumerate().map(|(z, &y)| (-7, y, z as i64)));
+    let keys = [(-7, collisions[0]), (-7, collisions[22]), (-7, collisions[57]), (9, collisions[0])];
+    let mut expected: Vec<_> = rows.iter().copied().filter(|&(x,y,_)| keys.contains(&(x,y))).collect();
+    expected.sort_unstable();
+    macro_rules! check {
+        ($policy:ident; $keys:ident,$rows:ident,$expected:ident; $($arguments:tt)*) => {{
+            let mut actual = cq_gpu::print! {
+                arguments { $($arguments)* };
+                pipeline {};
+                physical {
+                    relation L(a:i64,b:i64) = (&$keys);
+                    relation R(a:i64,b:i64,c:i64) = (&$rows);
+                    l = pipe rename L@0 {a -> x,b -> y};
+                    r = let rename R@1 {a -> x,b -> y,c -> z};
+                    s = pipe semi eager [x,y] l,r;
+                    p = pipe canon probe first [x,y] s,r;
+                    return p as answer(x,y,z);
+                }
+                structures {
+                    l host scan = ::core::iter::Map<_,_> [];
+                    r host scan = ::core::iter::Map<_,_> [];
+                    r rows = ::std::vec::Vec<_>;
+                    r = ::cq_gpu_runtime::HashedRun<_,_> [x,y];
+                    p canon = ::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::Plain,::cq_gpu_runtime::$policy>;
+                }
+            }.to_host().expect("composite collision query");
+            actual.sort_unstable();
+            assert_eq!(actual, $expected);
+        }};
+    }
+    check!(Staged; keys,rows,expected;);
+    check!(Staged; keys,rows,expected; capacity(R));
+    let keys = vec![(-7, collisions[0]); 128];
+    let rows: Vec<_> = rows.into_iter().map(|(x,y,z)| (x,y,z % 7)).collect();
+    let mut expected: Vec<_> = rows.iter().copied().filter(|&(x,y,_)| keys.contains(&(x,y))).collect();
+    expected.sort_unstable();
+    expected.dedup();
+    cq_gpu_runtime::reset_host_wait_count();
+    check!(Compacting; keys,rows,expected;);
+    assert!(cq_gpu_runtime::resume_readback_count() > 3, "heavy multiplicity must suspend repeatedly");
+    check!(Staged; keys,rows,expected;);
+    println!("compacting-dedup exact=true repeated-suspensions=true hash-collisions=true");
+    println!("composite-hash exact=true forced-collisions=true skew=true bounded=true resumable=true");
+}
+
 fn main() {
+    composite_hash_collisions();
     chained_answers();
     typed_filters();
+    closed_scalar_captures();
     let rows = vec![
         (i64::MIN, i64::MAX, "alpha".to_owned()),
         (i64::MAX, i64::MIN, "beta".to_owned()),
