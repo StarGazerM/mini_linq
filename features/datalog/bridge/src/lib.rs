@@ -22,6 +22,9 @@
 //! not implement `Clone`. This is mandatory input semantics, not a policy.
 //! Multiple outputs return a tuple of owned iterators in written output order;
 //! single outputs return one owned iterator, including EDB-only programs.
+//! `parallel;` before `struct` opts into Rayon rule-hole evaluation. Admission
+//! and publication remain sequential. Consumers supply their own `rayon`
+//! dependency; captured values must be `Sync` and candidate rows `Send`.
 
 use proc_macro::TokenStream;
 use quote::ToTokens;
@@ -33,10 +36,13 @@ mod render;
 mod kw {
     syn::custom_keyword!(arguments);
     syn::custom_keyword!(pipeline);
+    syn::custom_keyword!(parallel);
+    syn::custom_keyword!(observe);
 }
 
 struct Input {
     pipeline: cq_stage::Pipeline,
+    parallel: bool,
     program: cq_lang_datalog::Program,
 }
 
@@ -87,9 +93,34 @@ impl Parse for Input {
         if input.peek(Token![;]) {
             input.parse::<Token![;]>()?;
         }
+        let mut parallel = false;
+        let mut observer = None;
+        loop {
+            if input.peek(kw::parallel) {
+                if parallel {
+                    return Err(input.error("duplicate parallel option"));
+                }
+                input.parse::<kw::parallel>()?;
+                input.parse::<Token![;]>()?;
+                parallel = true;
+            } else if input.peek(kw::observe) {
+                if observer.is_some() {
+                    return Err(input.error("duplicate observe option"));
+                }
+                input.parse::<kw::observe>()?;
+                input.parse::<Token![=]>()?;
+                observer = Some(input.parse::<syn::Expr>()?);
+                input.parse::<Token![;]>()?;
+            } else {
+                break;
+            }
+        }
+        let mut program: cq_lang_datalog::Program = input.parse()?;
+        program.observer = observer;
         Ok(Self {
             pipeline,
-            program: input.parse()?,
+            parallel,
+            program,
         })
     }
 }
@@ -104,6 +135,7 @@ enum Stage {
 fn expand(tokens: proc_macro2::TokenStream, stage: Stage) -> syn::Result<proc_macro2::TokenStream> {
     let Input {
         pipeline,
+        parallel,
         mut program,
     } = syn::parse2(tokens)?;
     cq_lang_datalog::contract::check(&program)?;
@@ -127,7 +159,7 @@ fn expand(tokens: proc_macro2::TokenStream, stage: Stage) -> syn::Result<proc_ma
     let fork = cq_datalog_fork::fork(&program, |hole| {
         pipeline.clone().start(hole.into_token_stream())
     })?;
-    Ok(render::render(fork))
+    Ok(render::render(fork, parallel))
 }
 
 fn entry(input: TokenStream, stage: Stage) -> TokenStream {

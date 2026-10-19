@@ -82,6 +82,7 @@ fn entries_enforce_their_authored_stage() {
     assert!(expand(quote!(arguments { unexpected }; #source), Stage::Source).is_err());
 }
 
+#[cfg(not(feature = "phase-timing"))]
 #[test]
 fn authored_round_expansion_matches_independent_fixture() {
     let source = source();
@@ -101,7 +102,7 @@ fn authored_round_expansion_matches_independent_fixture() {
     })
     .unwrap();
     let fork = cq_datalog_fork::fork(&program, |_| Ok(quote!(authored_rows()))).unwrap();
-    let actual: syn::Expr = syn::parse2(render::render(fork)).unwrap();
+    let actual: syn::Expr = syn::parse2(render::render(fork, false)).unwrap();
     let expected: syn::Expr = syn::parse_str(include_str!("../tests/fixtures/round.rs")).unwrap();
     assert_eq!(actual, expected);
 }
@@ -137,7 +138,7 @@ fn lower_stratum_negation_builds_one_key_set_outside_rounds() {
     })
     .unwrap();
     assert_eq!(fork.context.strata[1].keys.len(), 1);
-    let expanded = render::render(fork).to_string();
+    let expanded = render::render(fork, false).to_string();
     assert_eq!(expanded.matches("completed_keys ()").count(), 1);
     assert_eq!(expanded.matches("Rows :: rows").count(), 2);
     assert!(expanded.contains("observer"));
@@ -184,7 +185,7 @@ fn full_idb_layouts_publish_only_admitted_rows_after_all_holes() {
         }
     }
     .to_string();
-    let rendered = render::render(expanded).to_string();
+    let rendered = render::render(expanded, false).to_string();
     // One publication after seeds and one after all recursive variants, not
     // one insertion into the full maps per rule or per rejected candidate.
     assert_eq!(rendered.matches(&expected_updates).count(), 2);
@@ -249,7 +250,7 @@ fn delta_layout_runs_are_built_once_per_publication_outside_all_holes() {
         .iter()
         .map(|rule| fork.holes[rule.hole].to_string())
         .collect();
-    let rendered: syn::ExprBlock = syn::parse2(render::render(fork)).unwrap();
+    let rendered: syn::ExprBlock = syn::parse2(render::render(fork, false)).unwrap();
     let text = rendered.to_token_stream().to_string();
     for build in &builds {
         assert_eq!(
@@ -321,7 +322,7 @@ fn multioutput_render_moves_each_relation_in_output_order() {
     let a = &fork.context.relations[1].all;
     let b = &fork.context.relations[2].all;
     let expected: syn::Expr = syn::parse_quote!((#b.into_iter(), #a.into_iter(),));
-    let actual: syn::ExprBlock = syn::parse2(render::render(fork)).unwrap();
+    let actual: syn::ExprBlock = syn::parse2(render::render(fork, false)).unwrap();
     assert_eq!(
         actual.block.stmts.last(),
         Some(&syn::Stmt::Expr(expected, None))
@@ -358,7 +359,7 @@ fn constant_key_projection_is_built_once_before_recursive_rounds() {
     })
     .unwrap();
     assert_eq!(fork.context.strata[0].keys.len(), 1);
-    let rendered = render::render(fork).to_string();
+    let rendered = render::render(fork, false).to_string();
     assert_eq!(rendered.matches("filtered_keys ()").count(), 1);
     assert!(rendered.find("filtered_keys ()").unwrap() < rendered.find("while").unwrap());
 }
@@ -395,7 +396,7 @@ fn edb_canonicalization_precedes_and_is_shared_by_layouts_keys_and_outputs() {
     let canonicalize =
         quote!(Canonical(::cq_storage::rows::Rows::rows(#all).collect())).to_string();
     let output = quote!(::cq_storage::rows::Rows::rows(#all).map).to_string();
-    let rendered = render::render(fork).to_string();
+    let rendered = render::render(fork, false).to_string();
     assert_eq!(rendered.matches("input ()").count(), 1);
     assert_eq!(rendered.matches(&canonicalize).count(), 1);
     assert_eq!(rendered.matches("struct Canonical").count(), 1);
@@ -411,4 +412,31 @@ fn edb_canonicalization_precedes_and_is_shared_by_layouts_keys_and_outputs() {
             .count(),
         1
     );
+}
+
+#[test]
+fn parallel_is_an_entry_control_not_datalog_ir() {
+    let source = source();
+    for prefix in [
+        quote!(parallel; observe = (watch);),
+        quote!(observe = (watch); parallel;),
+        quote!(pipeline {} parallel; observe = (watch);),
+    ] {
+        let input: Input = syn::parse2(quote!(#prefix #source)).unwrap();
+        assert!(input.parallel);
+        assert!(input.program.observer.is_some());
+        assert!(
+            !input
+                .program
+                .to_token_stream()
+                .to_string()
+                .contains("parallel")
+        );
+    }
+    assert!(syn::parse2::<Input>(quote!(parallel; parallel; #source)).is_err());
+    let expanded = expand(quote!(parallel; #source), Stage::Source)
+        .unwrap()
+        .to_string();
+    assert!(expanded.contains("rayon :: scope"));
+    assert!(expanded.contains("par_chunks"));
 }

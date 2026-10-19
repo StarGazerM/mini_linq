@@ -9,6 +9,9 @@ publish = false
 [lib]
 proc-macro = true
 
+[features]
+phase-timing = []
+
 [dependencies]
 cq-lang-datalog.workspace = true
 cq-datalog-schedule.workspace = true

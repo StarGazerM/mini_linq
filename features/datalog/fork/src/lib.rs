@@ -8,6 +8,11 @@
 //! Full hosts use keys bound by earlier positive atoms plus constant arguments.
 //! Delta probes use separately recorded layouts; an initial unkeyed delta scans
 //! its ordinary host. No atom or partial Rust guard is moved to enable a layout.
+//! A positive key-zero scan at body position zero is exposed as a fresh flat
+//! chunk relation. Its declaration binds directly to the chunk host, retaining
+//! column order. Only that occurrence changes, including in self joins. The
+//! bridge binds either the whole scan or each parallel chunk to the same hole;
+//! partition metadata does not choose execution policy or emit Rust loops.
 
 use cq_lang_cq::{BodyItem, Program as CqProgram};
 use cq_lang_datalog::{Program, contract};
@@ -57,12 +62,29 @@ pub struct KeySet {
     pub hole: usize,
 }
 
+/// Immutable scan whose rows may be split by the bridge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PartitionSource {
+    /// Index into `RoundContext::relations`, selecting its ordinary delta host.
+    DeltaHost(usize),
+    /// Index into `RoundContext::layouts`, selecting its key-zero bucket.
+    LayoutBucket(usize),
+}
+
+/// A fresh flat CQ relation bound directly to a bridge-provided chunk host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Partition {
+    pub source: PartitionSource,
+    pub chunk: Ident,
+}
+
 /// One rule invocation and the relation receiving its new rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuleHole {
     pub variant: usize,
     pub head: usize,
     pub hole: usize,
+    pub partition: Option<Partition>,
 }
 
 /// Immutable snapshots are shared by all step holes before publication.
@@ -228,6 +250,52 @@ fn use_layouts(query: &mut cq_lang_cq::Query, context: &RoundContext) -> syn::Re
         atom.relation = layout.name.clone();
     }
     Ok(())
+}
+
+fn partition_source(query: &cq_lang_cq::Query, context: &RoundContext) -> Option<PartitionSource> {
+    let BodyItem::Positive { atom } = query.body.first()? else {
+        return None;
+    };
+    if let Some(index) = context
+        .relations
+        .iter()
+        .position(|relation| relation.delta.as_ref() == Some(&atom.relation))
+    {
+        return Some(PartitionSource::DeltaHost(index));
+    }
+    context
+        .layouts
+        .iter()
+        .position(|layout| layout.name == atom.relation && layout.key == 0)
+        .map(PartitionSource::LayoutBucket)
+}
+
+fn use_partition(
+    query: &mut cq_lang_cq::Query,
+    context: &RoundContext,
+    partition: &Partition,
+) -> RelationDecl {
+    let mut declaration = match partition.source {
+        PartitionSource::DeltaHost(index) => context.relations[index].declaration.clone(),
+        PartitionSource::LayoutBucket(index) => {
+            let layout = &context.layouts[index];
+            let mut declaration = context.relations[layout.relation].declaration.clone();
+            declaration.columns = layout
+                .columns
+                .iter()
+                .map(|&column| declaration.columns[column].clone())
+                .collect();
+            declaration
+        }
+    };
+    let chunk = &partition.chunk;
+    declaration.name = chunk.clone();
+    declaration.value = Some(syn::parse_quote!(= (#chunk)));
+    let BodyItem::Positive { atom } = &mut query.body[0] else {
+        unreachable!("checked partition source")
+    };
+    atom.relation = chunk.clone();
+    declaration
 }
 
 fn columns(atom: &cq_syntax::Atom) -> Vec<usize> {
@@ -407,18 +475,26 @@ pub fn compile(source: &Program) -> syn::Result<Fork> {
                 };
                 *item = guard(&negative.atom, &stratum.keys[key_index]);
             }
+            let partition = partition_source(&query, &context).map(|source| Partition {
+                source,
+                chunk: fresh.id("chunk"),
+            });
+            let partition_declaration = partition
+                .as_ref()
+                .map(|partition| use_partition(&mut query, &context, partition));
             let name = fresh.id("hole");
             query.head.relation = name.clone();
             let mut output = source.declarations[head].clone();
             output.name = name.clone();
             let hole = holes.len();
             holes.push(syn::parse2(
-                quote!(struct #name; #(#declarations)* #output #query),
+                quote!(struct #name; #(#declarations)* #partition_declaration #output #query),
             )?);
             let rule = RuleHole {
                 variant: variant_index,
                 head,
                 hole,
+                partition,
             };
             if variant.delta.is_some() {
                 stratum.steps.push(rule);
@@ -647,15 +723,25 @@ pub fn check(source: &Program, target: &Fork) -> syn::Result<()> {
                 let mut output = source.declarations[rule.head].clone();
                 output.name = hole.name.clone();
                 let mut expected_declarations = declarations.clone();
+                let mut query = variant.query.clone();
+                query.head.relation = hole.name.clone();
+                use_layouts(&mut query, context)?;
+                ensure(
+                    rule.partition.as_ref().map(|partition| &partition.source)
+                        == partition_source(&query, context).as_ref(),
+                    source,
+                    "fork changed partition coverage or source",
+                )?;
+                if let Some(partition) = &rule.partition {
+                    add_name(&partition.chunk)?;
+                    expected_declarations.push(use_partition(&mut query, context, partition));
+                }
                 expected_declarations.push(output);
                 ensure(
                     hole.declarations == expected_declarations,
                     source,
                     "fork changed hole declarations",
                 )?;
-                let mut query = variant.query.clone();
-                query.head.relation = hole.name.clone();
-                use_layouts(&mut query, context)?;
                 for item in &mut query.body {
                     if let BodyItem::Negation(negative) = item {
                         let relation = analysis.positions[&symbol_name(&negative.atom.relation)];
