@@ -1,0 +1,17 @@
+Pinned RCCL 745f53cc8d447ec58033d97f4d13f2d7e2f7463a; cuda-oxide 5f7c34fddadcf250f2e45d0cffe83a3d27f2bea3; sm_89.
+
+Runtime, after moving the probe to a distinct host package:
+loading blocked-run module
+blocked-run loaded; loading RCCL own Program
+Error: Driver(DriverError(218, "a PTX JIT compilation failed"))
+
+The public generic pair-sort API emits radix specializations into the probe's PTX even though it uses RCCL's own cuda::Program and does not call a device kernel directly.
+probe PTX: .visible .shared .align 16 .b8 __shared_mem_0[4096];
+rccl_cub PTX: .visible .shared .align 16 .b8 __shared_mem_0[8192];
+
+Offline ptxas, with only duplicate module headers removed and no symbol rewriting:
+ptxas /tmp/mini-linq-radix-probe/merged.ptx, line 13664; error   : Inconsistent redefinition of variable '__shared_mem_0'
+ptxas /tmp/mini-linq-radix-probe/merged.ptx, line 13664; error   : Duplicate definition of variable '__shared_mem_0'
+ptxas fatal   : Ptx assembly aborted due to errors
+
+No throughput, stream-ordering execution result, or runtime synchronization conclusion is claimed for this failed pinned revision. The radix source dispatch uses the supplied stream and no host size readback; that observation alone is not an executed proof.

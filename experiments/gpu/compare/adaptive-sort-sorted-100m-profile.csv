@@ -1,0 +1,47 @@
+Generating SQLite file /tmp/adaptive-sort-sorted-100m.sqlite from /tmp/adaptive-sort-sorted-100m.nsys-rep
+Processing [/tmp/adaptive-sort-sorted-100m.sqlite] with [/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/profilers/Nsight_Systems/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+54.9,3915936,2,1957968.0,1957968.0,1921232,1994704,51952.5,gather
+13.2,941544,1,941544.0,941544.0,941544,941544,0.0,sorted_directory
+13.0,924679,1,924679.0,924679.0,924679,924679,0.0,sorted_starts
+12.6,899048,1,899048.0,899048.0,899048,899048,0.0,sorted_check
+2.9,204354,1,204354.0,204354.0,204354,204354,0.0,histogram
+2.9,203682,1,203682.0,203682.0,203682,203682,0.0,scatter
+0.2,12704,1,12704.0,12704.0,12704,12704,0.0,fences
+0.1,5088,4,1272.0,1264.0,1248,1312,30.6,scan_blocks
+0.1,4960,3,1653.3,1664.0,1632,1664,18.5,radix_scatter
+0.1,3840,3,1280.0,1280.0,1248,1312,32.0,radix_init_pass
+0.0,3040,1,3040.0,3040.0,3040,3040,0.0,word_offsets
+0.0,2144,2,1072.0,1072.0,1056,1088,22.6,add_prefix
+0.0,1696,1,1696.0,1696.0,1696,1696,0.0,clear_histogram
+0.0,1312,1,1312.0,1312.0,1312,1312,0.0,order_prefix_bins
+0.0,1280,1,1280.0,1280.0,1280,1280,0.0,radix_histogram
+0.0,1248,1,1248.0,1248.0,1248,1248,0.0,initialize
+0.0,1088,1,1088.0,1088.0,1088,1088,0.0,complete_stats
+0.0,1056,1,1056.0,1056.0,1056,1056,0.0,radix_clear_histogram
+0.0,992,1,992.0,992.0,992,992,0.0,radix_prefix_bins
+0.0,960,1,960.0,960.0,960,960,0.0,small_sort
+
+Processing [/tmp/adaptive-sort-sorted-100m.sqlite] with [/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/profilers/Nsight_Systems/host-linux-x64/reports/cuda_api_sum.py]... 
+Time (%),Total Time (ns),Num Calls,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+86.0,714540499,8,89317562.4,1150784.0,11932,356092830,163588081.3,cuMemcpyDtoHAsync_v2
+12.0,100004175,2,50002087.5,50002087.5,40758480,59245695,13072435.1,cuMemcpyHtoDAsync_v2
+0.8,6570777,5,1314155.4,551.0,361,6567581,2936754.2,cuEventSynchronize
+0.8,6562131,4,1640532.8,1832065.0,183852,2714149,1271689.4,cuMemFree_v2
+0.2,1875954,2,937977.0,937977.0,807948,1068006,183888.8,cuModuleLoadData
+0.1,1071161,4,267790.3,304102.5,110281,352675,111597.1,cuMemAlloc_v2
+0.0,182750,2,91375.0,91375.0,89671,93079,2409.8,cuModuleUnload
+0.0,141530,29,4880.3,3967.0,2154,28043,4825.3,cuLaunchKernel
+0.0,85535,15,5702.3,1713.0,431,33675,10117.0,cuStreamSynchronize
+0.0,30691,4,7672.8,7445.0,2575,13226,5028.4,cuMemsetD8Async
+0.0,25353,32,792.3,161.0,140,6702,1522.3,cuEventRecord
+0.0,24256,1,24256.0,24256.0,24256,24256,0.0,cuStreamCreate
+0.0,19007,1,19007.0,19007.0,19007,19007,0.0,cuMemcpyDtoDAsync_v2
+0.0,15580,4,3895.0,491.0,120,14478,7057.6,cuEventDestroy_v2
+0.0,9688,4,2422.0,1102.0,661,6823,2950.9,cuEventCreate
+0.0,8886,17,522.7,381.0,260,2334,502.0,cuStreamWaitEvent
+0.0,8536,1,8536.0,8536.0,8536,8536,0.0,cuCtxSynchronize
+0.0,8046,54,149.0,60.0,50,2886,423.4,cuStreamGetId
+0.0,7905,1,7905.0,7905.0,7905,7905,0.0,cuStreamDestroy_v2
+0.0,481,1,481.0,481.0,481,481,0.0,cuCtxSetCurrent
+

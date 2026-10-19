@@ -1,5 +1,6 @@
 //! Source-only regression tests: no gpu_blocked_run import, CUDA initialization,
-//! kernel execution, or oracle invocation. Baseline: 5e09a15 Run::build.
+//! kernel execution, or oracle invocation. The sorted directory path is retained;
+//! small/radix stages are device-gated without any selector readback.
 use syn::{
     visit::{self, Visit},
     Block, Expr, ImplItem, Item, Stmt,
@@ -90,7 +91,9 @@ impl<'ast> Visit<'ast> for Trace {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if path_is(&call.receiver, "module") && !call.method.to_string().starts_with("prepare_") {
+        if (path_is(&call.receiver, "module") || path_is(&call.receiver, "radix_module"))
+            && !call.method.to_string().starts_with("prepare_")
+        {
             self.events.push(call.method.to_string());
         }
         visit::visit_expr_method_call(self, call);
@@ -135,8 +138,8 @@ impl<'ast> Visit<'ast> for Trace {
 }
 
 fn expected(prefix: bool) -> Vec<String> {
-    // Captured from git show 5e09a15:experiments/gpu/blocked-run/src/lib.rs.
-    // Allocation markers intentionally require BOTH scans before directory allocation.
+    // Existing directory scans/allocation order plus gated adaptive ordering.
+    // A loop body is traced once; init/scatter repeat up to eight times.
     [
         "initialize",
         if prefix {
@@ -154,11 +157,13 @@ fn expected(prefix: bool) -> Vec<String> {
         "allocate:unique_keys",
         "complete_stats",
         "scatter",
-        if prefix {
-            "order_prefix_bins"
-        } else {
-            "order_bins"
-        },
+        "small_sort",
+        "radix_clear_histogram",
+        "radix_histogram",
+        "radix_prefix_bins",
+        "radix_init_pass",
+        "radix_scatter",
+        "order_prefix_bins",
         "sorted_directory",
         "gather",
         "fences",
@@ -172,7 +177,7 @@ fn expected(prefix: bool) -> Vec<String> {
 }
 
 #[test]
-fn single_key_preserves_baseline_launch_and_allocation_order() {
+fn single_key_preserves_directory_order_and_gates_adaptive_sort() {
     let file = source();
     let mut trace = Trace::default();
     trace.visit_block(&run_method(&file, "build_inner"));
@@ -180,7 +185,7 @@ fn single_key_preserves_baseline_launch_and_allocation_order() {
 }
 
 #[test]
-fn prefix_only_substitutes_check_and_in_bin_ordering() {
+fn prefix_uses_the_same_adaptive_pipeline() {
     let file = source();
     let mut trace = Trace {
         prefix: true,
@@ -200,7 +205,6 @@ fn unsorted_kernels_return_before_any_work_on_sorted_or_invalid_input() {
         "clear_histogram",
         "histogram",
         "scatter",
-        "order_bins",
         "order_prefix_bins",
     ] {
         let body = kernel(&file, name);
@@ -208,6 +212,34 @@ fn unsorted_kernels_return_before_any_work_on_sorted_or_invalid_input() {
             body.stmts.first(),
             Some(&guard),
             "{name}: exact early gate must be first"
+        );
+    }
+}
+
+#[test]
+fn small_sort_and_radix_skip_before_accessing_scratch() {
+    let file = source();
+    let small_guard: Stmt = syn::parse_str(
+        "if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 || (*plan).method != 1 } { return; }"
+    ).unwrap();
+    assert_eq!(
+        kernel(&file, "small_sort").stmts.first(),
+        Some(&small_guard)
+    );
+    let radix = syn::parse_file(include_str!("../src/radix.rs")).unwrap();
+    let guard: Stmt =
+        syn::parse_str("if !unsafe { radix_enabled(plan, stats) } { return; }").unwrap();
+    for name in ["radix_clear_histogram", "radix_histogram"] {
+        assert_eq!(kernel(&radix, name).stmts.first(), Some(&guard), "{name}");
+    }
+    let pass_guard: Stmt = syn::parse_str(
+        "if !unsafe { radix_enabled(plan, stats) } || pass >= 8 || pass * 8 >= unsafe { (*plan).bits - (*plan).begin_bit } { return; }"
+    ).unwrap();
+    for name in ["radix_init_pass", "radix_scatter"] {
+        assert_eq!(
+            kernel(&radix, name).stmts.first(),
+            Some(&pass_guard),
+            "{name}"
         );
     }
 }

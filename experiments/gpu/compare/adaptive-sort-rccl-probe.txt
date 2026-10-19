@@ -1,0 +1,12 @@
+loading blocked-run module
+blocked-run loaded; loading RCCL own Program
+Error: Driver(DriverError(218, "a PTX JIT compilation failed"))
+
+Above: local dynamic-lookback-scan repair, subsequently committed as RCCL 6e30ca6.
+
+Offline merged-PTX assembler diagnostic:
+ptxas /tmp/mini-linq-radix-probe/current-merged.ptx, line 19821; error   : Duplicate definition of function 'scan'
+ptxas fatal   : Ptx assembly aborted due to errors
+
+The merged image includes both gpu_tiles.ptx and gpu_blocked_run.ptx definitions of scan.
+No RCCL throughput samples completed. The optional reference was stopped at this loader failure; the local Cargo patch was removed.

@@ -1734,3 +1734,246 @@ above for current resident-code verification.
   Immutable inputs are required; other errors do not retry. Its checked
   control/count readbacks remain required even with `completion(round)`.
   Tuple transfer remains explicit for every policy.
+
+## Adaptive blocked-run ordering
+
+`Run` records one ordering contract: lexicographic order over all recorded key
+levels, with original row ID breaking ties. Algorithm selection is a runtime
+device decision, not an IR fact. The first key still owns the dense rank
+directory; the accepted domain and zero-filled inactive-output contracts are
+unchanged.
+
+The existing order check measures adjacent descents. For unsorted input only,
+the histogram also measures observed minimum and maximum offsets within each
+supplied domain; `word_offsets` selects the method after that kernel completes.
+Sorted input therefore pays no range-statistics atomics. Unsigned subtraction
+handles negative keys and domains beside either i64 endpoint. Warp reductions
+amortize the statistics atomics.
+
+| Device condition | Ordering |
+|---|---|
+| No descents | Existing sorted starts/directory/gather path; ordering kernels return immediately |
+| At most 4096 active rows | One shared-memory radix block for packed keys; bitonic row-ID sort with the complete comparator for wider tuples |
+| Sum of observed key widths plus row-ID width at most 64 | Packed u64 key/u32 row-ID stable eight-bit LSD radix |
+| Wider tuple | Original first-key atomic partition and per-bin tuple heapsort fallback |
+
+The radix implementation is local Rust CUDA using dynamic shared memory only.
+It computes all digit histograms in one key read, scans their global bases,
+then uses stable warp ranking, a shared-memory grouping exchange and
+acquire/release decoupled lookback. Monotonic tile assignment and a bounded
+persistent grid avoid waiting for an unassigned predecessor. Lookback state is
+u64: a separate 32-bit status and full 32-bit row count. Row IDs are included in
+the packed key, but their low bits are already ordered at input: stable passes
+start above them, avoiding redundant provenance passes. Payloads are gathered
+once, after ordering.
+
+Selection performs **no host readback or synchronization**. Host-known capacity
+and recorded domain bounds only limit scratch and possible pass submissions;
+the device-selected bit count gates unused passes. A capacity at most 4096
+requires no radix scratch or radix launches. Larger capacities add one gated
+small-sort launch plus three gated radix setup launches and two launches per
+possible digit (at most 20 additional launches). Sorted input keeps the
+directory/gather work unchanged, but pays those explicitly gated launches.
+No few-run merge path is selected.
+
+The reusable launch sequence is:
+`initialize → sorted_check/prefix_sorted_check → clear_histogram →
+sorted_starts → histogram → word_offsets → row scan → bitmap-prefix scan →
+complete_stats → scatter(pack or fallback) → small_sort →
+[radix_clear_histogram → radix_histogram → radix_prefix_bins →
+(radix_init_pass → radix_scatter)*] → order_prefix_bins(directory plus
+non-packable fallback only) → sorted_directory → gather → fences →
+payload gathers`.
+
+The CPU oracle checks complete outputs, row-ID stability, inactive tails,
+active device counts, small-sort boundaries, multi-tile radix, Zipf and extreme
+skew, deep prefixes, non-packable tuples, and wide metadata domains with narrow
+observed values. Benchmark checksums include every public output buffer, so the
+same harness can compare the original and adaptive builders exactly.
+
+```sh
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9
+cargo +nightly-2026-08-28 test -p cq-gpu -p cq-gpu-datalog -p gpu-blocked-run --tests
+cargo +nightly-2026-08-28 oxide build --arch sm_89 -- --release \
+  -p gpu-h05 --bin blocked-run-oracle --bin sort-bench
+target/release/blocked-run-oracle
+target/release/sort-bench --n 31,4096,1000000,10000000,100000000 --levels 1
+nsys profile --force-overwrite=true -o /tmp/blocked-sort \
+  target/release/sort-bench --case zipf1.5 --n 100000000 --levels 1 --repeat 1
+nsys stats --report cuda_gpu_kern_sum,cuda_api_sum /tmp/blocked-sort.nsys-rep
+```
+
+The optional `radix-probe` binary loads RCCL's own `cuda::Program` beside the
+blocked-run module and invokes selected-bit u32/u32 and u64/u32 pair sorts on
+one non-default stream, using the same pool for all pair and control storage.
+It is registered in `gpu-h05`, not in `gpu-blocked-run`: cuda-oxide's embedded
+package names are not unique between a library and its binary, so putting
+RCCL-generated binary PTX under the library's package name makes the blocked-run
+loader select the wrong bundle (`DriverError(500, "named symbol not found")`).
+RCCL is an optional dependency confined to the probe feature.
+
+```sh
+cargo +nightly-2026-08-28 oxide build --arch sm_89 -- --release \
+  -p gpu-h05 --features rccl-probe --bin radix-probe
+target/release/radix-probe 1000000 10000000 100000000
+```
+
+### Ordering measurements (2026-10-19)
+
+RTX 6000 Ada, sm_89, pinned nightly-2026-08-28. All timed runs started with an
+empty `nvidia-smi --query-compute-apps=pid` result. The original builder is
+`d6527a3`'s `blocked-run/src/lib.rs`, compiled in an isolated temporary package
+against the identical benchmark source. Inputs use seed `81985529216486895`,
+domain 1,000,000 and one original-row-ID payload. Generation, uploads,
+readbacks and checksums are outside CUDA-event timing. Old figures are one
+sample after one warmup; new figures are medians of three after one warmup.
+These are complete index builds, not just radix kernels.
+
+| Case | Rows | Old ms | New ms | Speedup |
+|---|---:|---:|---:|---:|
+| sorted | 31 | 0.053280 | 0.056576 | 0.94x |
+| reverse | 31 | 0.057216 | 0.069792 | 0.82x |
+| uniform | 31 | 0.056512 | 0.068256 | 0.83x |
+| extreme-skew | 31 | 0.051328 | 0.048896 | 1.05x |
+| Zipf 1.0 | 31 | 0.057440 | 0.069696 | 0.82x |
+| Zipf 1.5 | 31 | 0.058720 | 0.068256 | 0.86x |
+| sorted | 4,096 | 0.055232 | 0.056096 | 0.98x |
+| reverse | 4,096 | 0.059008 | 0.080704 | 0.73x |
+| uniform | 4,096 | 0.060768 | 0.080768 | 0.75x |
+| extreme-skew | 4,096 | 0.046304 | 0.050336 | 0.92x |
+| Zipf 1.0 | 4,096 | 0.171584 | 0.081152 | 2.11x |
+| Zipf 1.5 | 4,096 | 0.888192 | 0.076320 | 11.64x |
+| sorted | 1,000,000 | 0.091872 | 0.109120 | 0.84x |
+| reverse | 1,000,000 | 0.146400 | 0.303424 | 0.48x |
+| uniform | 1,000,000 | 0.224384 | 0.332256 | 0.68x |
+| extreme-skew | 1,000,000 | 1264.332886 | 0.221792 | 5700.53x |
+| Zipf 1.0 | 1,000,000 | 70.000290 | 0.370592 | 188.89x |
+| Zipf 1.5 | 1,000,000 | 492.642731 | 0.339808 | 1449.77x |
+| sorted | 10,000,000 | 0.605920 | 0.652128 | 0.93x |
+| reverse | 10,000,000 | 2.045792 | 2.908928 | 0.70x |
+| uniform | 10,000,000 | 3.292832 | 3.823520 | 0.86x |
+| extreme-skew | 10,000,000 | 14743.226562 | 2.260704 | 6521.52x |
+| Zipf 1.0 | 10,000,000 | 900.171570 | 4.287840 | 209.94x |
+| Zipf 1.5 | 10,000,000 | 5846.967773 | 3.906528 | 1496.72x |
+| sorted | 100,000,000 | 7.211296 | 7.246624 | 1.00x |
+| reverse | 100,000,000 | 42.613663 | 27.269695 | 1.56x |
+| uniform | 100,000,000 | 83.977409 | 57.784832 | 1.45x |
+| extreme-skew | 100,000,000 | 171837.812500 | 22.606239 | 7601.34x |
+| Zipf 1.0 | 100,000,000 | 10725.708008 | 60.120415 | 178.40x |
+| Zipf 1.5 | 100,000,000 | 69393.437500 | 44.164223 | 1571.26x |
+
+The new complete-build throughput at 1M / 10M / 100M rows is respectively
+3.010 / 2.615 / 1.731 G rows/s for uniform input,
+2.698 / 2.332 / 1.663 for Zipf 1.0, and
+2.943 / 2.560 / 2.264 for Zipf 1.5. At 100M, extreme skew reaches
+4.424 G rows/s. Uniform/reverse small and medium inputs remain regressions;
+the replacement eliminates the skew-serialized tail, not every overhead.
+The 31/4096-row extreme-skew samples happen to contain only one repeated key
+and therefore take the sorted skip.
+
+Prefix builds at 1M rows, one sample after one warmup:
+
+| Case | Levels | Old ms | New ms |
+|---|---:|---:|---:|
+| sorted | 2 | 0.095744 | 0.122816 |
+| sorted | 3 | 1.117312 | 1.147712 |
+| reverse | 2 | 0.155712 | 0.426080 |
+| reverse | 3 | 1.183680 | 1.298080 |
+| uniform | 2 | 0.243936 | 0.472928 |
+| uniform | 3 | 1.251040 | 1.390528 |
+| extreme-skew | 2 | 3645.431396 | 0.323872 |
+| extreme-skew | 3 | 6361.488281 | 6367.875488 |
+| Zipf 1.0 | 2 | 272.803406 | 0.437312 |
+| Zipf 1.0 | 3 | 342.412354 | 342.472290 |
+| Zipf 1.5 | 2 | 1647.500854 | 0.402656 |
+| Zipf 1.5 | 3 | 2664.909424 | 2667.197998 |
+
+Two 20-bit levels plus row ID fit u64 and need five key-field radix passes.
+Three such levels plus row ID do not fit: they intentionally retain the old
+fallback and its skew cost. This is not a claim of skew-insensitivity for
+non-packable keys.
+
+The oracle passed **104 exact cases**, including non-packable tuples and
+observed ranges narrower than metadata bounds. All 90 single-key measured
+samples and all 12 prefix samples had the same complete-output checksum as
+the original builder. Data and oracle output are in
+`compare/adaptive-sort-{baseline,new,prefix-baseline,prefix-new}.csv` and
+`compare/adaptive-sort-oracle.txt`.
+
+### 100M skew profile and sorted launch overhead
+
+Nsight Systems 2025.3.1, 100M extreme-skew rows, one build without warmup:
+22.604383 ms. The profile contains 29 kernels:
+
+| Kernel/stage | Launches | Total ms |
+|---|---:|---:|
+| `radix_scatter` | 3 | 9.670769 |
+| key and payload `gather` | 2 | 4.905129 |
+| `histogram` including observed ranges | 1 | 3.269500 |
+| `scatter` packed-key generation | 1 | 2.434421 |
+| all-pass `radix_histogram` | 1 | 1.000840 |
+| `sorted_check` | 1 | 0.899111 |
+| `radix_init_pass` | 3 | 0.256515 |
+| directory/scans/fences and gated stages | 17 | 0.059233 |
+
+The three u64/u32 scatter passes require at least
+`100M * 12 bytes * 2 * 3 = 7.2 GB` of pair traffic. Their measured 9.670769 ms
+corresponds to **744.5 GB/s**, or **77.6%** of the approximately 960 GB/s
+bandwidth bound (ideal 7.5 ms). This is an effective minimum-traffic rate,
+not a hardware DRAM-counter measurement; it excludes lookback traffic, packing
+and payload gathering. The complete build is 4.424 G rows/s.
+
+For this one-level 20-bit domain, capacities above 4096 enqueue three possible
+passes: 19 original directory/build launches plus **10** adaptive launches.
+Sorted 100M input executes those ten as no-ops, totaling **13.088 microseconds**
+of GPU time in its separate profile. Complete sorted build time is
+7.246624 ms versus 7.211296 ms originally, a measured 35.328-microsecond
+difference. Capacities at most 4096 add only one gated small-sort launch.
+Two-level packable benchmark inputs enqueue five possible passes (33 total
+launches); the three-level non-packable case enqueues eight gated passes
+(39 total) before its existing fallback.
+
+Between the first and last build-kernel submissions, the 100M trace contains
+29 `cuLaunchKernel`, 4 `cuEventRecord`, 3 asynchronous memsets,
+14 `cuStreamWaitEvent`, 24 `cuStreamGetId`, and one cold-pool `cuMemAlloc`.
+It contains **no DtoH copy or stream/context/event synchronization** in that
+submission interval. Completion waits and output downloads belong to the
+benchmark outside it. Raw kernel/API summaries are
+`compare/adaptive-sort-{100m,sorted-100m}-profile.csv`; the full reports were
+captured as `/tmp/adaptive-sort-{100m,sorted-100m}.nsys-rep`.
+
+### RCCL probe outcome and isolated repair
+
+At pinned RCCL `745f53c`, loading `rccl_cub::cuda::Program` alongside blocked-run
+fails with `DriverError(218, "a PTX JIT compilation failed")`. The public
+generic pair-sort API still emits its specializations into the consumer's
+PTX: the probe declares `__shared_mem_0[4096]` while RCCL's fixed u32 scan
+declares `__shared_mem_0[8192]`. `ptxas` reports both inconsistent redefinition
+and duplicate definition. Exact evidence is in
+`compare/adaptive-sort-rccl-collision.txt`.
+
+The contained scan repair was committed, without pushing, as **`6e30ca6`** on
+`/data/rccl` branch **`mini-linq/dynamic-lookback-scan`**. It replaces that scan's
+static allocation with an 8192-byte dynamic allocation and matching launcher
+contract. RCCL's 94 host tests passed, as did its GPU inclusive/exclusive scan
+probe expanded around the 1920-item tile boundary.
+
+That repair removes the shared-global collision but does not make the combined
+program load: RCCL's generic loader merges *all* embedded bundles, exposing
+a second error, **duplicate function `scan`**, defined by both `gpu_tiles.ptx`
+and `gpu_blocked_run.ptx`. The experimental local workspace override has been
+removed; this workspace retains the pinned RCCL revision.
+
+Future RCCL work could add an explicit
+`Program::load_with_modules(context, &["rccl-cub", "gpu-h05"])` that binds its
+internal modules to only the selected RCCL/consumer-specialization image.
+That API was not implemented. The optional reference experiment was stopped
+at this second loader failure, so **no RCCL 1M/10M/100M throughput numbers or
+executed stream/synchronization claims are reported**. Its source dispatcher
+uses the supplied stream without host size readback, but that is not a
+substitute for a successful execution trace.
+
+The local device-gated radix remains the production implementation: it is
+exact, stream-ordered without selector readback, and its skewed scatter
+already reaches 77.6% of the minimum-traffic bandwidth bound. No CUDA-oxide
+source was changed, and no compiled-query binary was run.

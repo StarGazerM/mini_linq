@@ -3,6 +3,8 @@
 //! Run the `gpu-h05` package's `blocked-run-oracle` binary with the pinned
 //! cuda-oxide toolchain. CPU sorting is used only here to construct expected
 //! answers; the production builder never downloads keys or sorts on CPU.
+//! Covers adaptive-sort boundaries, skew and deep prefixes against stable CPU
+//! row permutations, including every directory output and zeroed inactive tails.
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D};
 use gpu_blocked_run::{read_stats, Buffer, MemoryResource, RankView, Run, RunStats, BLOCK_ROWS};
@@ -39,13 +41,30 @@ fn check(
     input: Vec<i64>,
     payload_columns: usize,
 ) -> Result<(), Box<dyn Error>> {
-    let payloads: Vec<Vec<i64>> = (0..payload_columns)
+    check_columns(ctx, stream, name, vec![input], payload_columns, None, true)
+}
+
+fn check_columns(
+    ctx: &CudaContext,
+    stream: &CudaStream,
+    name: &str,
+    columns: Vec<Vec<i64>>,
+    payload_columns: usize,
+    supplied_domains: Option<Vec<(i64, i64)>>,
+    counted: bool,
+) -> Result<(), Box<dyn Error>> {
+    let input = &columns[0];
+    assert!(columns.iter().all(|column| column.len() == input.len()));
+    let payload_columns = payload_columns + columns.len() - 1;
+    let mut payloads: Vec<Vec<i64>> = (0..payload_columns)
         .map(|column| {
             (0..input.len())
                 .map(|row| {
                     // Every column identifies the input row differently, so this tests
                     // clustering as well as cross-column correspondence for duplicates.
-                    if column % 2 == 0 {
+                    if column == 0 {
+                        row as i64
+                    } else if column % 2 == 0 {
                         row as i64 * 17 + column as i64
                     } else {
                         -(row as i64) * 31 - column as i64
@@ -54,20 +73,44 @@ fn check(
                 .collect()
         })
         .collect();
-    let domain = input
-        .iter()
-        .min()
-        .zip(input.iter().max())
-        .map(|(&lo, &hi)| (lo, hi))
-        .unwrap_or((0, -1));
+    // Gather deeper keys too: the row-ID payload proves the permutation and
+    // these columns prove that every lexicographic level follows it.
+    for (level, column) in columns.iter().enumerate().skip(1) {
+        payloads[payload_columns - columns.len() + level] = column.clone();
+    }
+    let domains = supplied_domains.unwrap_or_else(|| {
+        columns
+            .iter()
+            .map(|column| {
+                column
+                    .iter()
+                    .min()
+                    .zip(column.iter().max())
+                    .map(|(&lo, &hi)| (lo, hi))
+                    .unwrap_or((0, -1))
+            })
+            .collect()
+    });
+    let padding = if counted { 7 } else { 0 };
     let mut padded = input.clone();
-    padded.extend([i64::MIN; 7]);
-    let device_keys = DeviceBuffer::from_host(stream, &padded)?;
+    padded.extend(std::iter::repeat_n(i64::MIN, padding));
+    let device_keys: Vec<DeviceBuffer<i64>> = columns
+        .iter()
+        .map(|column| {
+            let mut padded = column.clone();
+            padded.extend(std::iter::repeat_n(i64::MIN, padding));
+            DeviceBuffer::from_host(stream, &padded)
+        })
+        .collect::<Result<_, _>>()?;
+    let key_refs: Vec<&dyn ContiguousDeviceRange<i64>> = device_keys
+        .iter()
+        .map(|column| column as &dyn ContiguousDeviceRange<i64>)
+        .collect();
     let device_payloads: Vec<DeviceBuffer<i64>> = payloads
         .iter()
         .map(|column| {
             let mut padded = column.clone();
-            padded.extend([i64::MAX; 7]);
+            padded.extend(std::iter::repeat_n(i64::MAX, padding));
             DeviceBuffer::from_host(stream, &padded)
         })
         .collect::<Result<_, _>>()?;
@@ -81,19 +124,38 @@ fn check(
         0,
     )?);
     let count = Buffer::from_host_in(&memory, stream, &[input.len() as u32])?;
-    let run = Run::build(
-        ctx,
-        stream,
-        &memory,
-        &device_keys,
-        &refs,
-        domain,
-        Some(&count),
-    )?;
+    let run = if columns.len() == 1 {
+        Run::build(
+            ctx,
+            stream,
+            &memory,
+            key_refs[0],
+            &refs,
+            domains[0],
+            if counted { Some(&count) } else { None },
+        )?
+    } else {
+        Run::build_prefix(
+            ctx,
+            stream,
+            &memory,
+            &key_refs,
+            &refs,
+            &domains,
+            if counted { Some(&count) } else { None },
+        )?
+    };
     let stats = read_stats(&memory, stream, &[&run])?[0];
 
     let mut order: Vec<usize> = (0..input.len()).collect();
-    order.sort_by_key(|&row| input[row]);
+    let compare = |left: usize, right: usize| {
+        columns
+            .iter()
+            .map(|column| column[left].cmp(&column[right]))
+            .find(|order| !order.is_eq())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    };
+    order.sort_by(|&left, &right| compare(left, right).then(left.cmp(&right)));
     let sorted: Vec<i64> = order.iter().map(|&row| input[row]).collect();
     let actual_keys = run.keys.to_host_vec()?;
     assert_eq!(&actual_keys[..input.len()], sorted, "{name}: sorted keys");
@@ -104,8 +166,13 @@ fn check(
     assert_eq!(run.payloads.len(), payload_columns, "{name}: payload count");
     for (column, payload) in payloads.iter().enumerate() {
         let expected: Vec<_> = order.iter().map(|&row| payload[row]).collect();
+        let actual = run.payloads[column].to_host_vec()?;
+        assert!(
+            actual[input.len()..].iter().all(|&value| value == 0),
+            "{name}: payload {column} inactive tail"
+        );
         assert_eq!(
-            &run.payloads[column].to_host_vec()?[..input.len()],
+            &actual[..input.len()],
             expected,
             "{name}: payload column {column} / stable duplicate ordering"
         );
@@ -116,10 +183,19 @@ fn check(
         );
     }
     assert_eq!(
-        device_keys.to_host_vec(stream)?,
+        device_keys[0].to_host_vec(stream)?,
         padded,
         "{name}: input keys unchanged"
     );
+    for (level, device) in device_keys.iter().enumerate().skip(1) {
+        let mut expected = columns[level].clone();
+        expected.extend(std::iter::repeat_n(i64::MIN, padding));
+        assert_eq!(
+            device.to_host_vec(stream)?,
+            expected,
+            "{name}: prefix input level {level} unchanged"
+        );
+    }
 
     let mut unique = Vec::new();
     let mut offsets = Vec::new();
@@ -142,7 +218,7 @@ fn check(
             unique: unique.len() as u32,
             max_count,
             invalid: 0,
-            sorted: input.windows(2).all(|pair| pair[0] <= pair[1]) as u32,
+            sorted: (1..input.len()).all(|row| !compare(row - 1, row).is_gt()) as u32,
         },
         "{name}: stats"
     );
@@ -162,9 +238,28 @@ fn check(
         fences,
         "{name}: every 2048-row fence"
     );
+    assert!(
+        run.offsets.to_host_vec()?[offsets.len()..]
+            .iter()
+            .all(|&x| x == 0),
+        "{name}: offset tail"
+    );
+    assert!(
+        run.unique_keys.to_host_vec()?[unique.len()..]
+            .iter()
+            .all(|&x| x == 0),
+        "{name}: unique-key tail"
+    );
+    assert!(
+        run.fences.to_host_vec()?[fences.len()..]
+            .iter()
+            .all(|&x| x == 0),
+        "{name}: fence tail"
+    );
 
     let mut queries = vec![i64::MIN, i64::MAX, -1, 0, 1];
-    if let (Some(&min), Some(&max)) = (sorted.first(), sorted.last()) {
+    if !sorted.is_empty() || domains[0].0 <= domains[0].1 {
+        let (min, max) = domains[0];
         assert_eq!(
             (run.min_key, run.max_key),
             (min, max),
@@ -267,6 +362,27 @@ fn random_keys(n: usize, mut state: u64) -> Vec<i64> {
         .collect()
 }
 
+fn zipf_keys(n: usize, exponent: f64) -> Vec<i64> {
+    // Fixed finite support and seed keep this reproducible and inexpensive.
+    let mut total = 0.0;
+    let cumulative: Vec<f64> = (1..=257)
+        .map(|rank| {
+            total += (rank as f64).powf(-exponent);
+            total
+        })
+        .collect();
+    let mut state = 0x91e10da5c79e7b1du64;
+    (0..n)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let sample = (state >> 11) as f64 / ((1u64 << 53) as f64) * total;
+            cumulative.partition_point(|&value| value <= sample) as i64 - 128
+        })
+        .collect()
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let ctx = CudaContext::new(0)?;
     let stream = ctx.default_stream();
@@ -275,6 +391,149 @@ fn main() -> Result<(), Box<dyn Error>> {
         32 << 20,
         0,
     )?);
+    for n in [0usize, 1, 2, 7, 4096, 4097] {
+        check(
+            &ctx,
+            &stream,
+            &format!("reverse-boundary-{n}"),
+            (0..n).rev().map(|row| row as i64 - 2048).collect(),
+            2,
+        )?;
+        for levels in [3usize, 5] {
+            let columns: Vec<Vec<i64>> = (0..levels)
+                .map(|level| {
+                    let random = random_keys(n, 719 + level as u64);
+                    random
+                        .into_iter()
+                        .map(|key| match level {
+                            0 => -9, // Force all ordering into deeper prefix levels.
+                            1 => key.rem_euclid(3) - 2,
+                            2 => i64::MIN + key.rem_euclid(17),
+                            3 => i64::MAX - key.rem_euclid(11),
+                            _ => key.rem_euclid(5) - 4,
+                        })
+                        .collect()
+                })
+                .collect();
+            check_columns(
+                &ctx,
+                &stream,
+                &format!("prefix-{levels}-random-{n}"),
+                columns.clone(),
+                2,
+                None,
+                true,
+            )?;
+            let mut order: Vec<_> = (0..n).collect();
+            order.sort_by_key(|&row| columns.iter().map(|column| column[row]).collect::<Vec<_>>());
+            let sorted: Vec<Vec<i64>> = columns
+                .iter()
+                .map(|column| order.iter().map(|&row| column[row]).collect())
+                .collect();
+            check_columns(
+                &ctx,
+                &stream,
+                &format!("prefix-{levels}-sorted-{n}"),
+                sorted,
+                2,
+                None,
+                false,
+            )?;
+            let reversed: Vec<Vec<i64>> = columns
+                .iter()
+                .map(|column| order.iter().rev().map(|&row| column[row]).collect())
+                .collect();
+            check_columns(
+                &ctx,
+                &stream,
+                &format!("prefix-{levels}-reverse-{n}"),
+                reversed,
+                2,
+                None,
+                true,
+            )?;
+        }
+    }
+    // Two full-width secondary ranges force the non-packable fallback without
+    // allocating a huge first-level dense directory.
+    let wide: Vec<Vec<i64>> = vec![
+        (0..8193).map(|row| (row & 1) as i64).collect(),
+        (0..8193u32)
+            .map(|row| i64::MIN + row.wrapping_mul(2_654_435_761) as i64)
+            .collect(),
+        (0..8193u32)
+            .map(|row| i64::MAX - row.wrapping_mul(2_246_822_519) as i64)
+            .collect(),
+    ];
+    check_columns(&ctx, &stream, "non-packable-prefix", wide, 2, None, true)?;
+    let narrow: Vec<Vec<i64>> = (0..3)
+        .map(|level| {
+            (0..8193)
+                .map(|row| ((row * (level + 3)) % 7) as i64)
+                .collect()
+        })
+        .collect();
+    check_columns(
+        &ctx,
+        &stream,
+        "observed-ranges-not-domain-bounds",
+        narrow,
+        2,
+        Some(vec![(0, 64), (0, u32::MAX as i64), (0, u32::MAX as i64)]),
+        true,
+    )?;
+    for exponent in [1.0, 1.5] {
+        for n in [4096, 4097, 32769] {
+            check(
+                &ctx,
+                &stream,
+                &format!("zipf-{exponent}-{n}"),
+                zipf_keys(n, exponent),
+                2,
+            )?;
+        }
+    }
+    for n in [4096usize, 4097] {
+        let mut skew = vec![-7; n];
+        skew[0] = 64;
+        skew[n / 2] = -65;
+        check(&ctx, &stream, &format!("extreme-skew-{n}"), skew, 2)?;
+    }
+    for (name, input, domains, counted) in [
+        ("empty-active-valid-domain", vec![], vec![(-65, 65)], true),
+        (
+            "empty-capacity-valid-domain",
+            vec![],
+            vec![(-65, 65)],
+            false,
+        ),
+        (
+            "wide-domain-active",
+            vec![1, -1, 1, 0],
+            vec![(-65, 65)],
+            true,
+        ),
+        (
+            "wide-domain-full",
+            vec![1, -1, 1, 0],
+            vec![(-65, 65)],
+            false,
+        ),
+        (
+            "single-domain-min",
+            vec![i64::MIN; 7],
+            vec![(i64::MIN, i64::MIN)],
+            true,
+        ),
+        (
+            "single-domain-max",
+            vec![i64::MAX; 7],
+            vec![(i64::MAX, i64::MAX)],
+            false,
+        ),
+    ] {
+        check_columns(&ctx, &stream, name, vec![input], 2, Some(domains), counted)?;
+    }
     check(&ctx, &stream, "empty", Vec::new(), 0)?;
     check(&ctx, &stream, "empty-payload-columns", Vec::new(), 3)?;
     check(&ctx, &stream, "singleton-negative", vec![-17], 2)?;
@@ -315,7 +574,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         2,
     )?;
     check(&ctx, &stream, "no-payloads", random_keys(4097, 9123), 0)?;
-    for n in [31, 256, 257, 2047, 2048, 2049, 32771, 65537] {
+    for n in [
+        2, 7, 31, 256, 257, 2047, 2048, 2049, 4096, 4097, 32771, 65537,
+    ] {
         check(
             &ctx,
             &stream,

@@ -1,7 +1,7 @@
 //! GPU-built sorted, clustered runs with a dense rank directory.
 //!
-//! Construction scans only per-bitmap-word row totals and presence popcounts.
-//! Bins order original row IDs, or full prefix keys with row-ID tie-breaking.
+//! The dense directory scans only bitmap-word row totals and presence counts.
+//! Adaptive ordering preserves lexicographic keys with row-ID tie-breaking.
 //! Bounds are supplied from input metadata; active row counts and all stage
 //! totals stay on device. `read_stats` is the single build-completion readback.
 //! Inputs and consumers must be ordered on the supplied stream.
@@ -15,9 +15,9 @@
 //! Dense directories accept at most 2^32 key positions (including missing
 //! keys), and row counts must fit in u32. Sparse wider domains are rejected,
 //! not silently converted to a different lookup representation.
-//! Prefix runs bin the first key and heap-order each bin by the remaining keys,
-//! then original row ID. A global lexicographic check skips that work for already
-//! ordered inputs; only the first key owns the dense rank directory.
+//! Ordering is selected from device-measured ranges and descents: already
+//! sorted inputs skip sorting, up to 4096 rows use one shared-memory block,
+//! packable tuples use stable LSD radix, and wider tuples retain bin ordering.
 
 use cuda_core::{CudaContext, CudaEvent, CudaStream, DeviceCopy, LaunchConfig1D, PinnedHostBuffer};
 use rccl_memory::{
@@ -26,6 +26,26 @@ use rccl_memory::{
 };
 use std::{cell::RefCell, error::Error, io, rc::Rc, sync::Arc};
 
+mod radix;
+
+/// Internal runtime decision; never an IR property or an index ABI.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(crate) struct SortPlan {
+    pub method: u32,
+    pub bits: u32,
+    pub descents: u32,
+    pub begin_bit: u32,
+}
+unsafe impl DeviceCopy for SortPlan {}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct KeyRange {
+    min: u32,
+    max: u32,
+}
+unsafe impl DeviceCopy for KeyRange {}
 pub type MemoryResource = StatisticsMemoryResource<PoolMemoryResource<CudaMemoryResource>>;
 pub type Buffer<'a, T> = DeviceBuffer<'a, T, &'a MemoryResource>;
 
@@ -50,6 +70,8 @@ type BuildResult<T> = Result<T, Box<dyn Error>>;
 thread_local! {
     static CACHED_KERNELS: RefCell<Option<(Arc<CudaContext>, Rc<kernels::LoadedModule>)>> =
         const { RefCell::new(None) };
+    static CACHED_RADIX: RefCell<Option<(Arc<CudaContext>, Rc<radix::kernels::LoadedModule>)>> =
+        const { RefCell::new(None) };
 }
 
 fn cached_kernels(context: &Arc<CudaContext>) -> BuildResult<Rc<kernels::LoadedModule>> {
@@ -67,10 +89,24 @@ fn cached_kernels(context: &Arc<CudaContext>) -> BuildResult<Rc<kernels::LoadedM
     })
 }
 
+fn cached_radix(context: &Arc<CudaContext>) -> BuildResult<Rc<radix::kernels::LoadedModule>> {
+    CACHED_RADIX.with(|cache| {
+        if let Some((owner, module)) = cache.borrow().as_ref() {
+            if Arc::ptr_eq(owner, context) {
+                return Ok(Rc::clone(module));
+            }
+        }
+        let module = Rc::new(unsafe { radix::kernels::load(context)? });
+        *cache.borrow_mut() = Some((Arc::clone(context), Rc::clone(&module)));
+        Ok(module)
+    })
+}
+
 /// Load code before a timed build interval without retaining any query data.
 /// Run construction and scans also initialize this cache lazily when needed.
 pub fn prepare_kernels(context: &Arc<CudaContext>) -> BuildResult<()> {
-    cached_kernels(context).map(|_| ())
+    cached_kernels(context)?;
+    cached_radix(context).map(|_| ())
 }
 
 /// Cardinalities of a completed run; counts and row offsets use the same width.
@@ -131,6 +167,10 @@ impl Drop for PrefixUpload<'_> {
 
 /// Owning, immutable-after-build columns. Do not mutate directory buffers while
 /// a `RankView` is in use, or retain a view after dropping/replacing its buffers.
+///
+/// Rows are ordered lexicographically on every recorded key level, then by
+/// original row ID. Every construction method produces identical directories,
+/// payloads, fences, and zero-filled inactive tails.
 pub struct Run<'a> {
     pub keys: Buffer<'a, i64>,
     pub payloads: Vec<Buffer<'a, i64>>,
@@ -230,7 +270,7 @@ pub fn exclusive_scan<'a>(
 }
 
 impl<'a> Run<'a> {
-    /// Enqueue a stable counting-sort build without any host readback.
+    /// Enqueue a stable, device-selected build without any host readback.
     ///
     /// `domain` is an inclusive bound supplied by input metadata, not inferred
     /// by downloading keys. `row_count`, when present, supplies the active
@@ -249,9 +289,9 @@ impl<'a> Run<'a> {
         Self::build_inner(ctx, stream, memory, keys, payloads, domain, row_count, None)
     }
 
-    // Keep the single-key launch sequence identical to the original builder.
-    // A trie substitutes only its global order check and in-bin comparator;
-    // sorted input reaches the same directory/gather path with no LSD passes.
+    // Preserve the existing sorted directory/gather stages. Additional ordering
+    // launches gate on device state, so they neither sort nor read scratch for
+    // an already sorted input; selection never blocks the caller's stream.
     fn build_inner(
         ctx: &CudaContext,
         stream: &'a CudaStream,
@@ -290,6 +330,8 @@ impl<'a> Run<'a> {
         let module = cached_kernels(stream.context())
             .map_err(|e| invalid(format!("run kernels load: {e}")))?;
         let stats = DeviceBuffer::zeroed_in(memory, stream, 1)?;
+        let plan = allocate::<SortPlan>(memory, stream, 1)?;
+        let ranges = allocate::<KeyRange>(memory, stream, 1 + secondary.map_or(0, |s| s.len))?;
         let initialize = module.prepare_initialize(config(1))?;
         unsafe {
             module.initialize(
@@ -298,6 +340,9 @@ impl<'a> Run<'a> {
                 capacity,
                 row_count.map_or(core::ptr::null(), |c| ptr(c) as *const u32),
                 ptr(&stats),
+                ptr(&plan),
+                ptr(&ranges),
+                ranges.len(),
             )?;
         }
         let exclusive_scan = |values: &Buffer<'a, u32>| exclusive_scan(stream, memory, values);
@@ -312,12 +357,21 @@ impl<'a> Run<'a> {
                     domain,
                     secondary,
                     ptr(&stats),
+                    ptr(&plan),
                 )?;
             }
         } else {
             let check = module.prepare_sorted_check(config(n))?;
             unsafe {
-                module.sorted_check(stream, &check, &Input(keys), min_key, domain, ptr(&stats))?;
+                module.sorted_check(
+                    stream,
+                    &check,
+                    &Input(keys),
+                    min_key,
+                    domain,
+                    ptr(&stats),
+                    ptr(&plan),
+                )?;
             }
         }
         // Scratch is only partially initialized on the sorted path.
@@ -346,6 +400,15 @@ impl<'a> Run<'a> {
                 ptr(&bits),
             )?;
         }
+        let secondary_keys = secondary.unwrap_or(PrefixKeys {
+            first: PrefixColumn {
+                keys: core::ptr::null(),
+                min_key: 0,
+                domain: 0,
+            },
+            more: core::ptr::null(),
+            len: 0,
+        });
         let histogram = module.prepare_histogram(config(n))?;
         unsafe {
             module.histogram(
@@ -356,6 +419,8 @@ impl<'a> Run<'a> {
                 ptr(&stats),
                 bins_ptr,
                 ptr(&bits),
+                secondary_keys,
+                ptr(&ranges),
             )?;
         }
         let prefix = allocate::<u32>(memory, stream, words)?;
@@ -371,6 +436,9 @@ impl<'a> Run<'a> {
                 &bits,
                 ptr(&prefix),
                 ptr(&word_rows),
+                ptr(&plan),
+                ptr(&ranges),
+                ranges.len(),
             )?;
         }
         let _row_scan = exclusive_scan(&word_rows)?;
@@ -389,6 +457,16 @@ impl<'a> Run<'a> {
         }
         let permutation = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, n)?;
         let permutation_ptr = permutation.cu_deviceptr() as *mut u32;
+        // Capacity is only an upper bound. Actual small/radix selection remains
+        // on device, but capacities <=4096 cannot require radix scratch.
+        let radix_capacity = if n > 4096 { n } else { 0 };
+        let alternate = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, radix_capacity)?;
+        let alternate_ptr = alternate.cu_deviceptr() as *mut u32;
+        let packed = DeviceUninitBuffer::<u64, _>::new_in(memory, stream, radix_capacity)?;
+        let packed_alternate =
+            DeviceUninitBuffer::<u64, _>::new_in(memory, stream, radix_capacity)?;
+        let packed_ptr = packed.cu_deviceptr() as *mut u64;
+        let packed_alternate_ptr = packed_alternate.cu_deviceptr() as *mut u64;
         let scatter = module.prepare_scatter(config(n))?;
         unsafe {
             module.scatter(
@@ -401,45 +479,155 @@ impl<'a> Run<'a> {
                 ptr(&stats),
                 cursors_ptr,
                 permutation_ptr,
+                secondary_keys,
+                ptr(&plan),
+                ptr(&ranges),
+                packed_ptr,
             )?;
         }
-        if let Some(secondary) = secondary {
-            let order = module.prepare_order_prefix_bins(bounded_config(domain))?;
-            unsafe {
-                module.order_prefix_bins(
-                    stream,
-                    &order,
-                    bins_ptr,
-                    domain,
-                    &word_rows,
-                    ptr(&stats),
-                    min_key,
-                    &bits,
-                    &prefix,
-                    permutation_ptr,
-                    ptr(&offsets),
-                    ptr(&unique_keys),
-                    secondary,
-                )?;
+        let small = module.prepare_small_sort(LaunchConfig1D::new(1, THREADS, 4096 * 12))?;
+        unsafe {
+            module.small_sort(
+                stream,
+                &small,
+                &Input(keys),
+                secondary_keys,
+                ptr(&stats),
+                ptr(&plan),
+                permutation_ptr,
+                min_key,
+                ptr(&ranges),
+            )?;
+        }
+        if radix_capacity != 0 {
+            // Metadata bounds only cap submissions; observed device ranges gate
+            // unused passes and choose whether packing is possible.
+            let mut max_bits = 64 - (domain.saturating_sub(1) as u64).leading_zeros();
+            if let Some(keys) = secondary {
+                max_bits += if keys.len == 1 {
+                    64 - keys.first.domain.saturating_sub(1).leading_zeros()
+                } else {
+                    64
+                };
             }
-        } else {
-            let order = module.prepare_order_bins(bounded_config(domain))?;
+            let max_passes = max_bits.min(64).div_ceil(8);
+            let radix_module = cached_radix(stream.context())?;
+            let radix_bins =
+                DeviceUninitBuffer::<u32, _>::new_in(memory, stream, radix::HISTOGRAM_WORDS)?;
+            let lookback = DeviceUninitBuffer::<u64, _>::new_in(
+                memory,
+                stream,
+                n.div_ceil(radix::TILE) * 256,
+            )?;
+            let counter = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, 1)?;
+            let radix_bins_ptr = radix_bins.cu_deviceptr() as *mut u32;
+            let lookback_ptr = lookback.cu_deviceptr() as *mut u64;
+            let counter_ptr = counter.cu_deviceptr() as *mut u32;
+            let clear_radix = radix_module.prepare_radix_clear_histogram(LaunchConfig1D::new(
+                radix::PASSES as u32,
+                radix::THREADS,
+                0,
+            ))?;
+            let radix_histogram = radix_module.prepare_radix_histogram(LaunchConfig1D::new(
+                n.div_ceil(radix::TILE).clamp(1, 568) as u32,
+                radix::THREADS,
+                radix::HISTOGRAM_SHARED_BYTES,
+            ))?;
+            let radix_prefix = radix_module.prepare_radix_prefix_bins(LaunchConfig1D::new(
+                radix::PASSES as u32,
+                radix::THREADS,
+                radix::PREFIX_SHARED_BYTES,
+            ))?;
+            let radix_init = radix_module
+                .prepare_radix_init_pass(bounded_config(n.div_ceil(radix::TILE) * radix::DIGITS))?;
+            let radix_scatter = radix_module.prepare_radix_scatter(LaunchConfig1D::new(
+                n.div_ceil(radix::TILE).clamp(1, 568) as u32,
+                radix::THREADS,
+                radix::SCATTER_SHARED_BYTES,
+            ))?;
             unsafe {
-                module.order_bins(
+                radix_module.radix_clear_histogram(
                     stream,
-                    &order,
-                    bins_ptr,
-                    domain,
-                    &word_rows,
+                    &clear_radix,
+                    ptr(&plan),
                     ptr(&stats),
-                    min_key,
-                    &bits,
-                    &prefix,
-                    permutation_ptr,
-                    ptr(&offsets),
-                    ptr(&unique_keys),
+                    radix_bins_ptr,
                 )?;
+                radix_module.radix_histogram(
+                    stream,
+                    &radix_histogram,
+                    packed_ptr,
+                    ptr(&plan),
+                    ptr(&stats),
+                    radix_bins_ptr,
+                )?;
+                radix_module.radix_prefix_bins(
+                    stream,
+                    &radix_prefix,
+                    ptr(&plan),
+                    ptr(&stats),
+                    radix_bins_ptr,
+                )?;
+                for pass in 0..max_passes {
+                    radix_module.radix_init_pass(
+                        stream,
+                        &radix_init,
+                        pass,
+                        ptr(&plan),
+                        ptr(&stats),
+                        lookback_ptr,
+                        counter_ptr,
+                    )?;
+                    let (input_keys, input_values, output_keys, output_values) = if pass % 2 == 0 {
+                        (
+                            packed_ptr,
+                            permutation_ptr,
+                            packed_alternate_ptr,
+                            alternate_ptr,
+                        )
+                    } else {
+                        (
+                            packed_alternate_ptr,
+                            alternate_ptr,
+                            packed_ptr,
+                            permutation_ptr,
+                        )
+                    };
+                    radix_module.radix_scatter(
+                        stream,
+                        &radix_scatter,
+                        pass,
+                        input_keys,
+                        input_values,
+                        output_keys,
+                        output_values,
+                        ptr(&plan),
+                        ptr(&stats),
+                        radix_bins_ptr,
+                        lookback_ptr,
+                        counter_ptr,
+                    )?;
+                }
             }
+        }
+        let order = module.prepare_order_prefix_bins(bounded_config(domain))?;
+        unsafe {
+            module.order_prefix_bins(
+                stream,
+                &order,
+                bins_ptr,
+                domain,
+                &word_rows,
+                ptr(&stats),
+                min_key,
+                &bits,
+                &prefix,
+                permutation_ptr,
+                ptr(&offsets),
+                ptr(&unique_keys),
+                secondary_keys,
+                ptr(&plan),
+            )?;
         }
         let sorted_directory = module.prepare_sorted_directory(bounded_config(n))?;
         unsafe {
@@ -466,6 +654,8 @@ impl<'a> Run<'a> {
                 permutation_ptr,
                 ptr(&stats),
                 ptr(&sorted),
+                alternate_ptr,
+                ptr(&plan),
             )?;
         }
         let fences = allocate::<i64>(memory, stream, n.div_ceil(BLOCK_ROWS))?;
@@ -484,6 +674,8 @@ impl<'a> Run<'a> {
                     permutation_ptr,
                     ptr(&stats),
                     ptr(&output),
+                    alternate_ptr,
+                    ptr(&plan),
                 )?;
             }
             clustered.push(output);
@@ -507,8 +699,8 @@ impl<'a> Run<'a> {
     ///
     /// One check validates all domains and compares adjacent complete keys.
     /// Already ordered input uses the single-key sorted directory/copy path.
-    /// Otherwise the first key supplies counting-sort bins; each bin orders
-    /// deeper keys lexicographically, with original row ID breaking ties.
+    /// Otherwise small or packed-key ordering is selected on device. Only
+    /// non-packable tuples retain first-key bins with deeper-key heapsort.
     /// `keys` and the rank directory describe `keys[0]`; payload order is unchanged.
     pub fn build_prefix(
         ctx: &CudaContext,
@@ -692,7 +884,7 @@ fn allocate<'a, T: DeviceCopy>(
 
 #[cuda_device::cuda_module]
 mod kernels {
-    use super::{PrefixColumn, PrefixKeys, RunStats};
+    use super::{KeyRange, PrefixColumn, PrefixKeys, RunStats, SortPlan};
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
     use cuda_device::{
         device, kernel, launch_bounds, launch_contract, thread, warp, DynamicSharedArray,
@@ -701,7 +893,14 @@ mod kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn initialize(capacity: u32, count: *const u32, stats: *mut RunStats) {
+    pub unsafe fn initialize(
+        capacity: u32,
+        count: *const u32,
+        stats: *mut RunStats,
+        plan: *mut SortPlan,
+        ranges: *mut KeyRange,
+        levels: usize,
+    ) {
         if thread::index_1d().get() == 0 {
             let rows = if count.is_null() {
                 capacity
@@ -712,7 +911,23 @@ mod kernels {
                 (*stats).rows = rows.min(capacity);
                 (*stats).invalid = (rows > capacity) as u32;
                 (*stats).sorted = 1;
+                plan.write(SortPlan {
+                    method: 0,
+                    bits: 0,
+                    descents: 0,
+                    begin_bit: 0,
+                });
             }
+        }
+        let mut level = thread::index_1d().get();
+        while level < levels {
+            unsafe {
+                ranges.add(level).write(KeyRange {
+                    min: u32::MAX,
+                    max: 0,
+                });
+            }
+            level += 256;
         }
     }
 
@@ -728,11 +943,32 @@ mod kernels {
             }
         }
     }
+    // Each recorded domain fits u32. Warp reductions amortize global atomics
+    // while measuring the *observed* range rather than the supplied bound.
+    #[device]
+    unsafe fn observe_range(value: u32, active: bool, range: *mut KeyRange) {
+        let minimum = warp::redux_sync_min_u32(u32::MAX, if active { value } else { u32::MAX });
+        let maximum = warp::redux_sync_max_u32(u32::MAX, if active { value } else { 0 });
+        if warp::lane_id() == 0 {
+            unsafe {
+                DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*range).min))
+                    .fetch_min(minimum, AtomicOrdering::Relaxed);
+                DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*range).max))
+                    .fetch_max(maximum, AtomicOrdering::Relaxed);
+            }
+        }
+    }
 
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn sorted_check(keys: &[i64], min_key: i64, domain: usize, stats: *mut RunStats) {
+    pub unsafe fn sorted_check(
+        keys: &[i64],
+        min_key: i64,
+        domain: usize,
+        stats: *mut RunStats,
+        plan: *mut SortPlan,
+    ) {
         let i = thread::index_1d().get();
         let active = i < unsafe { (*stats).rows } as usize;
         let invalid = active && (keys[i] as u64).wrapping_sub(min_key as u64) >= domain as u64;
@@ -748,6 +984,8 @@ mod kernels {
                 if inverted_lanes != 0 {
                     DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).sorted))
                         .store(0, AtomicOrdering::Relaxed);
+                    DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*plan).descents))
+                        .fetch_add(inverted_lanes.count_ones(), AtomicOrdering::Relaxed);
                 }
             }
         }
@@ -762,6 +1000,7 @@ mod kernels {
         domain: usize,
         secondary: PrefixKeys,
         stats: *mut RunStats,
+        plan: *mut SortPlan,
     ) {
         let i = thread::index_1d().get();
         let active = i < unsafe { (*stats).rows } as usize;
@@ -770,9 +1009,13 @@ mod kernels {
         let mut equal = active && i != 0 && keys[i - 1] == keys[i];
         let mut level = 0;
         while level < secondary.len {
+            let column = unsafe { prefix_level(secondary, level) };
+            let value = if active {
+                unsafe { column.keys.add(i).read() }
+            } else {
+                column.min_key
+            };
             if active {
-                let column = unsafe { prefix_level(secondary, level) };
-                let value = unsafe { column.keys.add(i).read() };
                 invalid |= (value as u64).wrapping_sub(column.min_key as u64) >= column.domain;
                 if equal {
                     let previous = unsafe { column.keys.add(i - 1).read() };
@@ -793,6 +1036,8 @@ mod kernels {
                 if inverted_lanes != 0 {
                     DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).sorted))
                         .store(0, AtomicOrdering::Relaxed);
+                    DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*plan).descents))
+                        .fetch_add(inverted_lanes.count_ones(), AtomicOrdering::Relaxed);
                 }
             }
         }
@@ -911,16 +1156,43 @@ mod kernels {
         stats: *const RunStats,
         counts: *mut u32,
         bits: *mut u64,
+        secondary: PrefixKeys,
+        ranges: *mut KeyRange,
     ) {
         if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
             return;
         }
         let i = thread::index_1d().get();
-        if i < unsafe { (*stats).rows } as usize {
-            let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
+        let active = i < unsafe { (*stats).rows } as usize;
+        let bin = if active {
+            (keys[i] as u64).wrapping_sub(min_key as u64) as u32
+        } else {
+            0
+        };
+        unsafe {
+            observe_range(bin, active, ranges);
+        }
+        let mut level = 0;
+        while level < secondary.len {
+            let column = unsafe { prefix_level(secondary, level) };
+            let value = if active {
+                (unsafe { column.keys.add(i).read() } as u64).wrapping_sub(column.min_key as u64)
+                    as u32
+            } else {
+                0
+            };
+            unsafe {
+                observe_range(value, active, ranges.add(level + 1));
+            }
+            level += 1;
+        }
+        let active_lanes = warp::ballot_sync(u32::MAX, active);
+        let same = warp::match_any_sync(u32::MAX, bin) & active_lanes;
+        if active && warp::lane_id() == same.trailing_zeros() {
+            let bin = bin as usize;
             unsafe {
                 let previous = DeviceAtomicU32::from_ptr(counts.add(bin))
-                    .fetch_add(1, AtomicOrdering::Relaxed);
+                    .fetch_add(same.count_ones(), AtomicOrdering::Relaxed);
                 if previous == 0 {
                     DeviceAtomicU64::from_ptr(bits.add(bin >> 6))
                         .fetch_or(1u64 << (bin & 63), AtomicOrdering::Relaxed);
@@ -976,6 +1248,9 @@ mod kernels {
         bits: &[u64],
         prefix: *mut u32,
         word_rows: *mut u32,
+        plan: *mut SortPlan,
+        ranges: *const KeyRange,
+        levels: usize,
     ) {
         // One converged warp handles a bitmap word. Both 32-bin halves are
         // coalesced; only the 64x smaller word totals need a global scan.
@@ -989,6 +1264,29 @@ mod kernels {
                 }
             }
             return;
+        }
+        if word == 0 && lane == 0 {
+            let rows = unsafe { (*stats).rows };
+            let mut key_bits = 32 - rows.saturating_sub(1).leading_zeros();
+            let mut level = 0;
+            while level < levels {
+                let range = unsafe { ranges.add(level).read() };
+                key_bits += 32 - range.max.wrapping_sub(range.min).leading_zeros();
+                level += 1;
+            }
+            unsafe {
+                (*plan).bits = key_bits;
+                // Row IDs start in ascending order. Stable key-field passes
+                // preserve that low-bit order without redundant row-ID passes.
+                (*plan).begin_bit = 32 - rows.saturating_sub(1).leading_zeros();
+                (*plan).method = if rows <= 4096 {
+                    1
+                } else if key_bits <= 64 {
+                    2
+                } else {
+                    0
+                };
+            }
         }
         let first = word * 64 + lane as usize;
         let second = first + 32;
@@ -1034,6 +1332,40 @@ mod kernels {
         }
     }
 
+    #[device]
+    unsafe fn packed_row(
+        keys: &[i64],
+        min_key: i64,
+        secondary: PrefixKeys,
+        ranges: *const KeyRange,
+        rows: u32,
+        row: usize,
+    ) -> u64 {
+        let mut key = 0u64;
+        let mut level = 0;
+        while level <= secondary.len {
+            let column = if level == 0 {
+                PrefixColumn {
+                    keys: keys.as_ptr(),
+                    min_key,
+                    domain: 0,
+                }
+            } else {
+                unsafe { prefix_level(secondary, level - 1) }
+            };
+            let range = unsafe { ranges.add(level).read() };
+            let width = 32 - (range.max - range.min).leading_zeros();
+            if width != 0 {
+                let value = (unsafe { column.keys.add(row).read() } as u64)
+                    .wrapping_sub(column.min_key as u64);
+                key = (key << width) | (value - range.min as u64);
+            }
+            level += 1;
+        }
+        let row_bits = 32 - rows.saturating_sub(1).leading_zeros();
+        (key << row_bits) | row as u64
+    }
+
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
@@ -1045,11 +1377,29 @@ mod kernels {
         stats: *const RunStats,
         cursors: *mut u32,
         permutation: *mut u32,
+        secondary: PrefixKeys,
+        plan: *const SortPlan,
+        ranges: *const KeyRange,
+        packed: *mut u64,
     ) {
         if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
             return;
         }
         let i = thread::index_1d().get();
+        let method = unsafe { (*plan).method };
+        if method == 1 {
+            return;
+        }
+        if method == 2 {
+            if i < unsafe { (*stats).rows } as usize {
+                let key = unsafe { packed_row(keys, min_key, secondary, ranges, (*stats).rows, i) };
+                unsafe {
+                    packed.add(i).write(key);
+                    permutation.add(i).write(i as u32);
+                }
+            }
+            return;
+        }
         if i < unsafe { (*stats).rows } as usize && unsafe { (*stats).invalid } == 0 {
             let bin = (keys[i] as u64).wrapping_sub(min_key as u64) as usize;
             unsafe {
@@ -1062,88 +1412,204 @@ mod kernels {
         }
     }
 
-    // One thread owns each bin. A max heap gives ascending provenance in
-    // O(k log k), including bins larger than a block or the entire input.
     #[device]
-    #[inline(always)]
-    unsafe fn sift_down(values: *mut u32, mut root: usize, length: usize) {
-        let value = unsafe { values.add(root).read() };
-        while root < length / 2 {
-            let mut child = root * 2 + 1;
-            let mut child_value = unsafe { values.add(child).read() };
-            if child + 1 < length {
-                let right = unsafe { values.add(child + 1).read() };
-                if right > child_value {
-                    child += 1;
-                    child_value = right;
-                }
-            }
-            if value >= child_value {
-                break;
-            }
-            unsafe {
-                values.add(root).write(child_value);
-            }
-            root = child;
+    unsafe fn row_greater(keys: &[i64], secondary: PrefixKeys, a: u32, b: u32) -> bool {
+        if a == u32::MAX {
+            return b != u32::MAX;
         }
-        unsafe {
-            values.add(root).write(value);
+        if b == u32::MAX {
+            return false;
+        }
+        if keys[a as usize] != keys[b as usize] {
+            keys[a as usize] > keys[b as usize]
+        } else {
+            unsafe { prefix_greater(secondary, a, b) }
+        }
+    }
+
+    #[device]
+    unsafe fn small_packed_radix(
+        shared_keys: *mut u64,
+        rows: usize,
+        begin_bit: u32,
+        end_bit: u32,
+        permutation: *mut u32,
+    ) {
+        let tid = thread::threadIdx_x() as usize;
+        let lane = warp::lane_id();
+        let warp_id = tid / 32;
+        let counts = unsafe { shared_keys.add(4096) } as *mut u32;
+        let starts = unsafe { counts.add(2048) };
+        let scan_scratch = unsafe { starts.add(256) };
+        let mut shift = begin_bit;
+        while shift < end_bit {
+            let mut i = tid;
+            while i < 2048 {
+                unsafe {
+                    counts.add(i).write(0);
+                }
+                i += 256;
+            }
+            thread::sync_threads();
+            let mut keys = [0u64; 16];
+            let mut ranks = [0u32; 16];
+            let mut round = 0;
+            while round < 16 {
+                let row = warp_id * 512 + round * 32 + lane as usize;
+                let key = if row < rows {
+                    unsafe { shared_keys.add(row).read() }
+                } else {
+                    0
+                };
+                let digit = if row < rows {
+                    ((key >> shift) & 255) as u32
+                } else {
+                    256
+                };
+                let matches = warp::match_any_sync(u32::MAX, digit);
+                let leader = matches.trailing_zeros();
+                let mut before = 0;
+                if row < rows && lane == leader {
+                    let counter = unsafe { counts.add(warp_id * 256 + digit as usize) };
+                    before = unsafe { counter.read() };
+                    unsafe {
+                        counter.write(before + matches.count_ones());
+                    }
+                }
+                before = warp::shuffle_sync(u32::MAX, before, leader);
+                keys[round] = key;
+                ranks[round] = before + (matches & warp::lanemask_lt()).count_ones();
+                warp::sync_mask(u32::MAX);
+                round += 1;
+            }
+            thread::sync_threads();
+            let mut total = 0;
+            let mut owner = 0;
+            while owner < 8 {
+                let counter = unsafe { counts.add(owner * 256 + tid) };
+                let count = unsafe { counter.read() };
+                unsafe {
+                    counter.write(total);
+                }
+                total += count;
+                owner += 1;
+            }
+            let (base, _) = gpu_tiles::scan(total, scan_scratch);
+            unsafe {
+                starts.add(tid).write(base);
+            }
+            thread::sync_threads();
+            round = 0;
+            while round < 16 {
+                let row = warp_id * 512 + round * 32 + lane as usize;
+                if row < rows {
+                    let key = keys[round];
+                    let digit = ((key >> shift) & 255) as usize;
+                    let destination = unsafe {
+                        starts.add(digit).read() + counts.add(warp_id * 256 + digit).read()
+                    } + ranks[round];
+                    unsafe {
+                        shared_keys.add(destination as usize).write(key);
+                    }
+                }
+                round += 1;
+            }
+            thread::sync_threads();
+            shift += 8;
+        }
+        let row_mask = (1u64 << begin_bit) - 1;
+        let mut i = tid;
+        while i < rows {
+            unsafe {
+                permutation
+                    .add(i)
+                    .write((shared_keys.add(i).read() & row_mask) as u32);
+            }
+            i += 256;
         }
     }
 
     #[kernel]
     #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub unsafe fn order_bins(
-        bins: *const u32,
-        domain: usize,
-        word_rows: &[u32],
+    #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (49152, 49152))]
+    pub unsafe fn small_sort(
+        keys: &[i64],
+        secondary: PrefixKeys,
         stats: *const RunStats,
-        min_key: i64,
-        bits: &[u64],
-        prefix: &[u32],
+        plan: *const SortPlan,
         permutation: *mut u32,
-        offsets: *mut u32,
-        unique: *mut i64,
+        min_key: i64,
+        ranges: *const KeyRange,
     ) {
-        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 || (*plan).method != 1 } {
             return;
         }
-        let mut bin = thread::index_1d().get();
-        let stride = thread::gridDim_x() as usize * 256;
-        while bin < domain {
-            let begin = word_rows[bin >> 6] + unsafe { bins.add(bin).read() };
-            let end = if bin + 1 < domain {
-                word_rows[(bin + 1) >> 6] + unsafe { bins.add(bin + 1).read() }
-            } else {
-                unsafe { (*stats).rows }
-            };
-            if begin != end {
-                let mask = 1u64 << (bin & 63);
-                let rank = prefix[bin >> 6] + (bits[bin >> 6] & (mask - 1)).count_ones();
-                unsafe {
-                    offsets.add(rank as usize).write(begin);
-                    unique
-                        .add(rank as usize)
-                        .write((min_key as u64).wrapping_add(bin as u64) as i64);
-                    let values = permutation.add(begin as usize);
-                    let length = (end - begin) as usize;
-                    let mut parent = length / 2;
-                    while parent != 0 {
-                        parent -= 1;
-                        sift_down(values, parent, length);
-                    }
-                    let mut remaining = length;
-                    while remaining > 1 {
-                        remaining -= 1;
-                        let largest = values.read();
-                        values.write(values.add(remaining).read());
-                        values.add(remaining).write(largest);
-                        sift_down(values, 0, remaining);
-                    }
+        let rows = unsafe { (*stats).rows } as usize;
+        let size = rows.next_power_of_two();
+        let lane = thread::threadIdx_x() as usize;
+        let shared_keys = DynamicSharedArray::<u64>::get_raw() as *mut u64;
+        let values = unsafe { shared_keys.add(4096) } as *mut u32;
+        let packable = unsafe { (*plan).bits <= 64 };
+        let mut i = lane;
+        while i < size {
+            unsafe {
+                values
+                    .add(i)
+                    .write(if i < rows { i as u32 } else { u32::MAX });
+                if packable {
+                    shared_keys.add(i).write(if i < rows {
+                        packed_row(keys, min_key, secondary, ranges, rows as u32, i)
+                    } else {
+                        u64::MAX
+                    });
                 }
             }
-            bin += stride;
+            i += 256;
+        }
+        thread::sync_threads();
+        if packable {
+            unsafe {
+                small_packed_radix(
+                    shared_keys,
+                    rows,
+                    (*plan).begin_bit,
+                    (*plan).bits,
+                    permutation,
+                );
+            }
+            return;
+        }
+        let mut width = 2;
+        while width <= size {
+            let mut distance = width / 2;
+            while distance != 0 {
+                let mut i = lane;
+                while i < size {
+                    let other = i ^ distance;
+                    if i < other {
+                        let a = unsafe { values.add(i).read() };
+                        let b = unsafe { values.add(other).read() };
+                        let greater = unsafe { row_greater(keys, secondary, a, b) };
+                        if greater == (i & width == 0) {
+                            unsafe {
+                                values.add(i).write(b);
+                                values.add(other).write(a);
+                            }
+                        }
+                    }
+                    i += 256;
+                }
+                thread::sync_threads();
+                distance /= 2;
+            }
+            width *= 2;
+        }
+        let mut i = lane;
+        while i < rows {
+            unsafe {
+                permutation.add(i).write(values.add(i).read());
+            }
+            i += 256;
         }
     }
 
@@ -1222,6 +1688,7 @@ mod kernels {
         offsets: *mut u32,
         unique: *mut i64,
         secondary: PrefixKeys,
+        plan: *const SortPlan,
     ) {
         if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
             return;
@@ -1243,6 +1710,10 @@ mod kernels {
                     unique
                         .add(rank as usize)
                         .write((min_key as u64).wrapping_add(bin as u64) as i64);
+                    if (*plan).method != 0 {
+                        bin += stride;
+                        continue;
+                    }
                     let values = permutation.add(begin as usize);
                     let length = (end - begin) as usize;
                     let mut parent = length / 2;
@@ -1272,6 +1743,8 @@ mod kernels {
         permutation: *const u32,
         stats: *const RunStats,
         output: *mut i64,
+        alternate: *const u32,
+        plan: *const SortPlan,
     ) {
         let i = thread::index_1d().get();
         if i < input.len() {
@@ -1280,6 +1753,14 @@ mod kernels {
                 if unsafe { (*stats).sorted } != 0 {
                     input[i]
                 } else {
+                    let permutation = if unsafe {
+                        (*plan).method == 2
+                            && ((*plan).bits - (*plan).begin_bit).div_ceil(8) % 2 != 0
+                    } {
+                        alternate
+                    } else {
+                        permutation
+                    };
                     input[unsafe { permutation.add(i).read() } as usize]
                 }
             } else {

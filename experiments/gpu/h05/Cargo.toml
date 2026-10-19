@@ -3,6 +3,9 @@ name = "gpu-h05"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+rccl-probe = ["dep:rccl-cub"]
+
 [dependencies]
 cuda-core.workspace = true
 cuda-device.workspace = true
@@ -12,7 +15,17 @@ gpu-blocked-run = { path = "../blocked-run" }
 serde.workspace = true
 serde_json.workspace = true
 rccl-memory.workspace = true
+rccl-cub = { git = "https://github.com/StarGazerM/rccl.git", rev = "745f53cc8d447ec58033d97f4d13f2d7e2f7463a", optional = true }
 
 [[bin]]
 name = "blocked-run-oracle"
 path = "../blocked-run/src/bin/oracle.rs"
+
+[[bin]]
+name = "radix-probe"
+path = "../blocked-run/src/bin/radix_probe.rs"
+required-features = ["rccl-probe"]
+
+[[bin]]
+name = "sort-bench"
+path = "../blocked-run/src/bin/sort_bench.rs"

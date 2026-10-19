@@ -806,6 +806,7 @@ dependencies = [
  "cuda-host",
  "gpu-blocked-run",
  "gpu-tiles",
+ "rccl-cub",
  "rccl-memory",
  "serde",
  "serde_json",
@@ -1126,6 +1127,17 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "rccl-cub"
+version = "0.1.0"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=745f53cc8d447ec58033d97f4d13f2d7e2f7463a#745f53cc8d447ec58033d97f4d13f2d7e2f7463a"
+dependencies = [
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "rccl-memory",
+]
 
 [[package]]
 name = "rccl-memory"
