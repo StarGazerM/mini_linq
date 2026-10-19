@@ -1,0 +1,284 @@
+\section{Datalog language boundaries and migration contract}
+\label{sec:datalog-languages}
+This specification separates five checked languages above the unchanged CQ
+compiler. Structural checks do not discharge all semantic obligations.
+In this migration round, checks retain the existing exact choices: ordered SCCs, one covering
+variant per changing positive occurrence, deterministic layouts, and fixed
+insertion and negation-key policies. Admitting alternative strata, layouts,
+or evaluation schemes is a later change, not a consequence of this split.
+The default generated Rust must remain byte-identical to the captured baseline.
+
+\paragraph{Semantic domain and limits.}
+Each relation declares a model slot $M$; the base accepts only \code{set}.
+EDB hosts denote sets even when their physical traversal contains duplicates.
+Outputs denote sets, not their iteration order. Rust expressions are opaque,
+pure partial functions, with panic represented by $\bot$; purity and lawful
+provider operations are premises, not syntactic checks. A terminating,
+successful source denotes the stratified least fixpoint. Divergence has no
+completed result. Computed heads and finite generators do not by themselves
+guarantee a finite reachable domain. Refinement requires that a successful
+reference yield the same sets without a new panic; it does not require equal
+panic domains. Observers and their evaluation counts are outside this relational
+meaning. A different model requires a dialect meaning and a checked translation;
+no pass may silently change $M$.
+
+\subsection{DL-Surface}
+\paragraph{Grammar.} Raw tokens containing source syntax and supported sugar.
+\paragraph{Contract.} Surface passes check their own expansion; the generic
+raw-token language has no Datalog well-formedness judgment.
+\paragraph{Meaning.} Meaning is that of the translated DL-Source program.
+\paragraph{Recorded decisions.} None; surface syntax is eliminated before
+source parsing. In particular, parsing a later IR must not conditionally
+expand \code{if let}.
+\paragraph{Rewrite check.} Preserve unowned syntax and validate the owned
+expansion, including its binders and evaluation position.
+
+\subsection{DL-Source}
+\paragraph{Grammar.} Declarations (EDB bindings or IDB declarations, each with
+model \code{set}), ordered rules, outputs, and an optional observer. Bodies
+contain positive atoms, safe negative atoms, and written-order CQ Rust steps
+including \code{let}, \code{for}, and guards; heads may be computed.
+\paragraph{Contract.} Declared names, arities, types and outputs are consistent;
+head and negative variables are safely bound; signed dependencies are
+stratifiable. Aggregates and nested blocks remain outside this base language.
+Opaque Rust must not hide reads of evolving IDBs.
+\begin{mathpar}
+\Rule{WF-DL-Source}{\text{source safety, declarations and signed stratifiability}}
+ {\mathrm{WF}_{\mathrm{Source}}(P)}
+\end{mathpar}
+\paragraph{Meaning.} Evaluate components in dependency order, taking the
+inflationary least fixpoint of their immediate consequences, with lower
+components fixed. The total finite theorem in the incremental section applies
+under its premises; partial execution additionally has the obligations below.
+\paragraph{Recorded decisions.} Relation model, EDB bindings, written rule and
+Rust-step order, outputs and observer. No schedule or physical choices.
+\paragraph{Rewrite check.} This round uses exact source preservation, including
+Rust payloads and outputs; it does not provide a semantic equivalence solver.
+
+\subsection{DL-Strata}
+\paragraph{Grammar.} DL-Source plus an ordered list of components.
+\paragraph{Contract.} Check Source, then require exactly the deterministic
+ordered SCC decomposition of the signed dependency graph. Negative edges
+must point to already completed components. Coarser valid partitions are
+not admitted in this migration.
+\begin{mathpar}
+\Rule{WF-DL-Strata}{\mathrm{WF}_{\mathrm{Source}}(P)\quad
+ C=\mathrm{orderedSCC}(P)}{\mathrm{WF}_{\mathrm{Strata}}(P,C)}
+\end{mathpar}
+\paragraph{Meaning.} Sequential composition of component fixpoints, equal to
+the source meaning under the stratification premises.
+\paragraph{Recorded decisions.} Component membership and order.
+\paragraph{Rewrite check.} Preserve the source exactly and validate the exact
+component schedule; no alternative stratifier is authorized by this contract.
+
+\subsection{DL-Incremental}
+\paragraph{Grammar.} DL-Strata plus fresh delta declarations and ordered
+seed/step variants, each identifying its source rule and delta occurrence.
+\paragraph{Contract.} Check Strata, delta names and types, exact variant
+coverage, and erasure to the original rule. Every changing positive occurrence
+has exactly one variant; other changing occurrences read the accumulated
+relation. Seeds have no positive occurrence in the current component.
+\begin{mathpar}
+\Rule{WF-DL-Incremental}{\mathrm{WF}_{\mathrm{Strata}}(S)\quad
+ V\text{ is the exact checked covering expansion of }S}
+ {\mathrm{WF}_{\mathrm{Incremental}}(S,V)}
+\end{mathpar}
+\paragraph{Meaning.} Starting from the deduplicated seeds, each round reads
+immutable accumulated $A_r$ and delta $\Delta_r$, computes candidates $C_r$,
+and admits and publishes
+\[
+ \Delta_{r+1}=\mathrm{supp}(C_r)\setminus A_r,\qquad
+ A_{r+1}=A_r\cup\Delta_{r+1}.
+\]
+Stop when all component deltas are empty. These are set operations; the model
+slot does not authorize lattice subtraction or semiring differences.
+\paragraph{Recorded decisions.} Covering semi-naive scheme, delta names,
+variant identities and occurrence substitutions. Naive and disjoint exact
+schemes are not accepted merely because they are conceivable alternatives.
+\paragraph{Rewrite check.} Preserve the underlying Strata program and the
+exact checked variant schedule and declarations in this round.
+
+\paragraph{Frozen negation.}
+Let $B$ contain completed lower-component relations. Within the consuming
+component, a negative literal is a fixed predicate of the currently bound
+values, not a changing positive position. It is neither delta-substituted nor
+counted toward coverage. For total pure rules, the usual covering argument
+therefore applies with $B$ held fixed:
+\begin{mathpar}
+\Rule{DL-FrozenNegation}{B\text{ is complete and immutable}\quad
+ q_B\text{ is total and monotone in its positive current-component inputs}}
+ {q_B(R\cup\Delta)=q_B(R)\cup\bigcup_i V_{B,i}(R\cup\Delta,\Delta)}
+\end{mathpar}
+Wildcards are existentially projected out of negative membership keys;
+constant filters remain part of key construction. No rule above permits
+negation of a changing current-component relation.
+
+\paragraph{Partial Rust across rounds.}
+Erasure, body-order preservation and full-valuation coverage do not prove
+prefix safety: a partial expression can run on a prefix whose later atom is
+empty. The additional obligation is that every prefix evaluated by every
+generated variant is safe whenever the written-order reference succeeds,
+including seed execution and cross-round repetition. Per-hole CQ checks and
+Before facts constrain each call but do not discharge this multi-round
+obligation. The total finite fixpoint theorem is not claimed for arbitrary
+partial Rust. Executable panic/refinement cases provide evidence, not a proof
+for all opaque expressions.
+
+\subsection{DL-Storage}
+\paragraph{Grammar.} DL-Incremental plus canonical providers, EDB
+canonicalization, full and delta layouts (column permutation and key prefix),
+negative key sets, occurrence-to-read bindings, insertion and maintenance
+policies. Runtime host names are explicit where consumers need them.
+\paragraph{Contract.} Check Incremental and the deterministic layout choice;
+require fixed \code{hash\_set\_all\_columns} insertion and
+\code{hash\_set\_borrowed} negation policies. Every read binds to its expected
+structure and every structure has its recorded maintenance operation.
+\begin{mathpar}
+\Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
+ D\text{ equals the migration's fixed storage decisions for }I}
+ {\mathrm{WF}_{\mathrm{Storage}}(I,D)}
+\end{mathpar}
+\paragraph{Meaning.} Data refinement by $\alpha$: the canonical provider and
+each published full layout represent the same relation, delta layouts
+represent precisely the current fresh delta, and negative key sets represent
+the prescribed projection/filter of frozen inputs. Provider equality, hashing,
+cloning and membership laws remain premises on Rust implementations.
+\paragraph{Recorded decisions.} Providers, layout/read bindings,
+canonicalization, membership representation, insertion and publication
+maintenance. A structurally admissible but non-default layout is still rejected.
+\paragraph{Rewrite check.} Preserve Incremental and the exact storage plan;
+validate bindings and maintenance rather than silently reselecting them.
+
+\subsection{DL-Round}
+\paragraph{Grammar.} DL-Storage plus explicit component seed/step programs,
+complete embedded CQ holes, evaluation/admission/publication phases,
+termination test, observer placement, output conversion, and a CQ sub-pipeline
+and interface for each hole. This round accepts only the pull interface.
+A push-consumer interface is a possible extension, not an accepted base mode.
+\paragraph{Contract.} Check Storage, exact hole correspondence under recorded
+read bindings, seed/step ordering, fresh names, phase order, delta termination
+and outputs. Each hole must record a pull interface and a sub-pipeline ending
+in \code{mini\_linq::passes::print\_pull}. This checks the terminal invocation,
+not Rust tokens that do not yet exist; it does not certify arbitrary printers.
+\begin{mathpar}
+\Rule{WF-DL-Round}{\mathrm{WF}_{\mathrm{Storage}}(D)\quad
+ H\text{ implements the recorded variants and frozen keys}\quad
+ E\text{ evaluates, admits, then publishes the recorded structures}}
+ {\mathrm{WF}_{\mathrm{Round}}(D,H,E)}
+\end{mathpar}
+\paragraph{Meaning.} A state machine over storage: evaluations see the
+committed snapshot; admission rejects known and duplicate candidate heads;
+publication extends full structures and replaces every delta layout, including
+empty ones, before subsequent evaluation. Under provider and partial-Rust
+premises its $\alpha$-image refines the Incremental transition system.
+\paragraph{Recorded decisions.} All round orchestration and hole boundaries,
+including per-hole CQ invocation, observer position and output conversion.
+\paragraph{Rewrite check.} Base rewrites preserve the storage program and
+checked hole/round correspondence. Parallel execution is not a base flag:
+an extension owns partition, ownership, barriers, and its printer. Any execution
+annotation needs an erasure/refinement check, disjoint covering ownership and
+lawful merges. Round rewrites run before CQ hole expansion.
+
+\section{Datalog passes and crate plan}
+Each language crate owns \code{Program: Parse + ToTokens + Language}, its
+\code{contract::check} analysis and \code{check\_rewrite}. Each nonterminal
+pass library exports compilation and an independent correspondence check;
+the check must not call compilation. Thin macro wrappers use
+\code{cq\_stage::pass} or \code{cq\_stage::rewrite}. A Datalog-owned
+\code{DatalogConfiguration} resolves named phases to a generic
+\code{Pipeline}; it does not modify the CQ configuration or core crates.
+Direct pass entry uses the same arguments/remaining-pipeline protocol.
+
+\subsection{Surface if-let: tokens to tokens}
+Expand a matched pattern into the existing \code{for}/\code{match} generator
+at the same written position; the scrutinee is evaluated once per reached
+prefix and a mismatch yields no rows. Preserve bound variables and unowned
+syntax. This is an expansion check, not a Source parser side effect.
+\begin{mathpar}
+\Rule{CK-DL-IfLet}{t\text{ preserves the matched binders, scrutinee and position}}
+ {\mathrm{check}_{\mathrm{iflet}}(s,t)}
+\end{mathpar}
+Refinement is conditional on the ordinary opaque-Rust premises.
+
+\subsection{Stratify: Source to Strata}
+Construct the deterministic dependency SCC order. Independently check both
+contracts, exact source preservation and the required ordered components.
+\begin{mathpar}
+\Rule{CK-DL-Stratify}{\mathrm{WF}_{\mathrm{Strata}}(t)\quad
+ \mathrm{source}(t)=s}{\mathrm{check}_{\mathrm{stratify}}(s,t)}
+\end{mathpar}
+Refinement follows from freezing lower components, subject to the common
+termination and Rust premises.
+
+\subsection{Incremental: Strata to Incremental}
+Construct fresh delta declarations and the fixed covering expansion.
+Independently check exact base preservation, erasure, coverage and substitutions.
+\begin{mathpar}
+\Rule{CK-DL-Incremental}{\mathrm{WF}_{\mathrm{Incremental}}(t)\quad
+ \mathrm{strata}(t)=s}{\mathrm{check}_{\mathrm{incremental}}(s,t)}
+\end{mathpar}
+The total finite refinement uses DL-Delta and DL-FrozenNegation; partial Rust
+requires the additional prefix-safety obligation, not merely this check.
+
+\subsection{Storage: Incremental to Storage}
+Record the existing deterministic providers, layouts, bindings and policies.
+Independently check the exact base and storage decisions.
+\begin{mathpar}
+\Rule{CK-DL-Storage}{\mathrm{WF}_{\mathrm{Storage}}(t)\quad
+ \mathrm{incremental}(t)=s}{\mathrm{check}_{\mathrm{storage}}(s,t)}
+\end{mathpar}
+Refinement requires the stated $\alpha$ laws for the selected providers.
+
+\subsection{Fork: Storage to Round}
+Construct bound CQ holes and explicit rounds, carrying a sub-pipeline and
+interface for each hole. Independently check variant-to-hole correspondence,
+frozen-key construction, storage preservation and phase order.
+\begin{mathpar}
+\Rule{CK-DL-Fork}{\mathrm{WF}_{\mathrm{Round}}(t)\quad
+ \mathrm{storage}(t)=s}{\mathrm{check}_{\mathrm{fork}}(s,t)}
+\end{mathpar}
+Refinement is a storage-state simulation with the same partial-Rust premises.
+
+\subsection{Print rounds: Round to Rust}
+The sequential terminal printer emits bindings, rounds, admission, publication
+and outputs, plus one nested CQ macro invocation per hole. It never prints
+joins. CQ's selected terminal printer expands each hole later. Shared Datalog
+printing operations live in \code{cq-datalog-print}; extension printers reuse
+them. As with core terminal printers, there is no independent Rust equivalence
+checker: contract checks, baseline expansion comparison and executable oracle
+agreement supply evidence, not a general Rust refinement proof.
+
+\paragraph{Crate skeleton plan (inside \code{features/datalog}).}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Directory & Package\\
+\midrule
+\code{languages/dl-source} & \code{cq-lang-datalog-source}\\
+\code{languages/dl-strata} & \code{cq-lang-datalog-strata}\\
+\code{languages/dl-incremental} & \code{cq-lang-datalog-incremental}\\
+\code{languages/dl-storage} & \code{cq-lang-datalog-storage}\\
+\code{languages/dl-round} & \code{cq-lang-datalog-round}\\
+\code{passes/stratify} & \code{cq-datalog-stratify}\\
+\code{passes/incremental} & \code{cq-datalog-incremental}\\
+\code{passes/storage} & \code{cq-datalog-storage}\\
+\code{passes/fork} & \code{cq-datalog-fork}\\
+\code{passes/surface-if-let} & \code{cq-datalog-surface-if-let}\\
+\code{passes/print-rounds} & \code{cq-datalog-print-rounds}\\
+\code{print/} & \code{cq-datalog-print}\\
+\code{facade/macros} & \code{cq-datalog-macros}\\
+\code{facade/configuration} & \code{cq-datalog-configuration}\\
+\code{facade/cq-datalog} & \code{cq-datalog}\\
+\bottomrule
+\end{tabular}
+\end{center}
+Language dependencies follow the base-language chain and public CQ/stage/syntax
+interfaces; pass libraries depend on their endpoint languages and required
+public support. The facade owns defaults, configuration and macro re-exports.
+The configuration library imports the CQ default-queue helper from the fork
+producer; the generic CQ configuration and stage protocol remain unchanged.
+The separate \code{features/datalog-parallel} workspace owns all
+parallel-specific execution and printing code. This plan creates no compatibility
+aliases for the replaced monolithic language or hard-coded resume macros.
+New rules remain abstract in the traceability registry until real implementation
+markers exist; a marker establishes location, not proof of a semantic theorem.

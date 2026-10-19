@@ -168,3 +168,14 @@ STR-Witness	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Witne
 ST-Expand	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Expand:	Admit total segmented flattening of SortedRun ranges from a for producer without crossing partial steps.
 STR-SortedRun	implementation	runtime/cq-storage/src/sorted_run.rs	/// Formal rule STR-SortedRun:	Stable clustered runs preserve the occurrence bag and within-key order; exact directory lookup selects the matching range.
 EXT-SortedRuns	implementation	features/rewrites/passes/src/structures.rs	/// Formal rule EXT-SortedRuns:	Retype eligible one-level stream-keyed HashIndex payload providers while preserving Physical and coverage.
+WF-DL-Source	abstract	-	-	Specification checkpoint: source safety, set model and stratifiability; implementation marker pending.
+WF-DL-Strata	abstract	-	-	Specification checkpoint: exact ordered SCC schedule retained in this migration.
+WF-DL-Incremental	abstract	-	-	Specification checkpoint: exact covering variants and delta erasure; partial Rust remains conditional.
+DL-FrozenNegation	abstract	-	-	Total pure covering theorem with completed lower-component negative inputs frozen; not a partial-Rust proof.
+WF-DL-Storage	abstract	-	-	Specification checkpoint: exact deterministic storage, binding and maintenance decisions.
+WF-DL-Round	abstract	-	-	Specification checkpoint: hole correspondence, interfaces and evaluate/admit/publish schedule.
+CK-DL-IfLet	abstract	-	-	Specification checkpoint: independent surface expansion preserving binders and written position.
+CK-DL-Stratify	abstract	-	-	Specification checkpoint: exact source preservation and target Strata contract.
+CK-DL-Incremental	abstract	-	-	Specification checkpoint: exact Strata preservation and target covering expansion.
+CK-DL-Storage	abstract	-	-	Specification checkpoint: exact Incremental preservation and target storage contract.
+CK-DL-Fork	abstract	-	-	Specification checkpoint: exact Storage preservation and target Round correspondence.
