@@ -35,7 +35,9 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
         });
     }
     let mut variants = Vec::new();
-    for (rule, query) in source.rules.iter().enumerate() {
+    let mut target = source.clone();
+    target.desugar_if_let()?;
+    for (rule, query) in target.rules.iter().enumerate() {
         let positions = &analysis.changing_positions[rule];
         if positions.is_empty() {
             variants.push(Variant {
@@ -57,11 +59,10 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
             });
         }
     }
-    let mut target = source.clone();
     target.deltas = deltas;
     target.variants = Some(variants);
     (target.layouts, target.delta_layouts) =
-        choose_layouts(target.variants.as_ref().unwrap(), &source.rules);
+        choose_layouts(target.variants.as_ref().unwrap(), &target.rules);
     target.insertion = Some(syn::parse_quote!(hash_set_all_columns));
     target.negation_keys = Some(syn::parse_quote!(hash_set_borrowed));
     check(source, &target)?;
