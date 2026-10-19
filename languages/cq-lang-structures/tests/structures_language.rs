@@ -2,6 +2,249 @@
 use cq_lang_structures as structures;
 use quote::ToTokens;
 
+fn smallest_expand_program() -> structures::Program {
+    syn::parse_quote! { physical {
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+        l = pipe rename L@0 {a -> a,b -> b};
+        r = let rename R@1 {b -> b,c -> c};
+        s = let rename S@2 {a -> a,c -> c};
+        candidate = pipe probe smallest [b] l,r;
+        checked = pipe canon semi eager [a,c] candidate,s;
+        return checked as answer(a,b,c);
+    } structures {
+        r = ::cq_gpu::PrefixRun [b][c];
+        s = ::cq_gpu::PrefixRun [a][c];
+        l host scan = ::core::iter::Map<_, _> [];
+        r host scan = ::core::iter::Map<_, _> [];
+        s host scan = ::core::iter::Map<_, _> [];
+        r rows = ::std::vec::Vec<_>;
+        s rows = ::std::vec::Vec<_>;
+        checked canon = ::std::collections::HashSet<_>;
+        candidate stage = batch 256 expand;
+    } }
+}
+
+fn membership_bridge_program() -> structures::Program {
+    syn::parse_quote! { physical {
+        relation L(a:i64); relation R(a:i64,b:i64);
+        relation M(b:i64,tag:i64); relation S(b:i64,c:i64); relation T(c:i64,d:i64);
+        l = pipe rename L@0 {a -> a};
+        r = let rename R@1 {a -> a,b -> b};
+        m = pipe rename M@2 {b -> b,tag -> tag};
+        selected = let point select m if (tag = 7);
+        s = let rename S@3 {b -> b,c -> c};
+        t = let rename T@4 {c -> c,d -> d};
+        first = pipe probe first [a] l,r;
+        member = pipe probe first [b] first,selected;
+        after = pipe probe first [b] member,s;
+        last = pipe probe first [c] after,t;
+        out = pipe canon project last keep {a,b,c,d,tag};
+        return out as answer(a,b,c,d,tag);
+    } structures {
+        selected = ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>
+            [b] membership payload [b] constants {tag = 7};
+        r = ::cq_storage::SortedRun<_,_> [a];
+        s = ::cq_storage::SortedRun<_,_> [b];
+        t = ::cq_storage::SortedRun<_,_> [c];
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        m host scan = ::core::iter::Map<_,_> [];
+        m host selected = ::core::iter::Map<_,_> [tag];
+        s host scan = ::core::iter::Map<_,_> [];
+        t host scan = ::core::iter::Map<_,_> [];
+        out canon = ::std::collections::HashSet<_>;
+    } }
+}
+
+#[test]
+fn stages_cross_certified_bitmap_membership_with_recorded_constants() {
+    let mut program = membership_bridge_program();
+    program.structures.entries.extend([
+        syn::parse_quote!(first stage = batch 256 expand;),
+        syn::parse_quote!(after stage = batch 256 expand;),
+        syn::parse_quote!(last stage = batch 256 expand;),
+    ]);
+    let facts = structures::contract::check(&program).unwrap();
+    assert!(
+        facts
+            .membership
+            .contains(&("selected".into(), vec!["b".into()]))
+    );
+    assert_eq!(facts.stages.len(), 3);
+    assert!(!facts.expands.contains("member"));
+
+    // The bridge is a total step, not an independent expand-capable cursor.
+    program
+        .structures
+        .entries
+        .push(syn::parse_quote!(member stage = batch 256 expand;));
+    let error = structures::contract::check(&program)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("SortedRun"), "{error}");
+}
+
+#[test]
+fn stages_reject_uncertified_payload_probe_bridges() {
+    let mut program = membership_bridge_program();
+    program.structures.entries[0] = syn::parse_quote!(
+        selected = ::cq_storage::HashIndex<'_,_,_> [b] payload [b] constants {tag = 7};
+    );
+    structures::contract::check(&program).unwrap();
+    program.structures.entries.extend([
+        syn::parse_quote!(first stage = batch 256 expand;),
+        syn::parse_quote!(after stage = batch 256 expand;),
+    ]);
+    let error = structures::contract::check(&program)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cursor"), "{error}");
+}
+
+#[test]
+fn stage_membership_bridges_require_proven_constants_and_complete_keys() {
+    for entry in [
+        syn::parse_quote!(selected = ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>
+            [b] membership payload [b] constants {tag = 8};),
+        syn::parse_quote!(selected = ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>
+            [b] membership payload [b] constants {};),
+        syn::parse_quote!(selected = ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>
+            [b,tag] membership payload [b] constants {tag = 7};),
+    ] {
+        let mut program = membership_bridge_program();
+        program.structures.entries[0] = entry;
+        program.structures.entries.extend([
+            syn::parse_quote!(first stage = batch 256 expand;),
+            syn::parse_quote!(after stage = batch 256 expand;),
+        ]);
+        assert!(structures::contract::check(&program).is_err());
+    }
+}
+
+fn smallest_shared_prefixes() -> structures::Program {
+    let mut program = smallest_expand_program();
+    program
+        .physical
+        .program
+        .definitions
+        .insert(3, syn::parse_quote!(pre_r = pipe semi eager [b] l,r;));
+    program
+        .physical
+        .program
+        .definitions
+        .insert(4, syn::parse_quote!(pre_s = pipe semi eager [a] pre_r,s;));
+    program.physical.program.definitions[5] =
+        syn::parse_quote!(candidate = pipe probe smallest [b] pre_s,r;);
+    program.structures.entries.extend([
+        syn::parse_quote!(pre_r share = lookup r [b] first pre_r force candidate;),
+        syn::parse_quote!(pre_s share = lookup s [a] first pre_s force candidate;),
+        syn::parse_quote!(pre_r repr = tuples witness { r [b] at pre_r as ::cq_storage::RunCursor<'_, _> };),
+        syn::parse_quote!(pre_s repr = tuples witness { s [a] at pre_s as ::cq_storage::RunCursor<'_, _> };),
+    ]);
+    program
+}
+
+#[test]
+fn smallest_force_consumes_two_independent_directory_witnesses() {
+    let program = smallest_shared_prefixes();
+    let facts = structures::contract::check(&program).unwrap();
+    assert_eq!(facts.witnesses.len(), 2);
+    assert_eq!(facts.shares["pre_r"].force, "candidate");
+    assert_eq!(facts.shares["pre_s"].force, "candidate");
+    assert_eq!(
+        syn::parse2::<structures::Program>(program.to_token_stream()).unwrap(),
+        program
+    );
+}
+
+#[test]
+fn smallest_prefix_witness_requires_preserving_chain_and_no_escape() {
+    let mut escaped = smallest_shared_prefixes();
+    escaped.physical.program.definitions[4].canon = Some(Default::default());
+    escaped
+        .structures
+        .entries
+        .push(syn::parse_quote!(pre_s canon = ::std::collections::HashSet<_>;));
+    assert!(
+        structures::contract::check(&escaped)
+            .unwrap_err()
+            .to_string()
+            .contains("escapes")
+    );
+
+    let mut changed = smallest_shared_prefixes();
+    changed.physical.program.definitions[4] = syn::parse_quote!(pre_s = pipe semi eager [a] l,s;);
+    assert!(structures::contract::check(&changed).is_err());
+
+    let mut mismatch = smallest_shared_prefixes();
+    let entry = mismatch.structures.entries.last_mut().unwrap();
+    *entry = syn::parse_quote!(pre_s repr = tuples witness { r [b] at pre_s as ::cq_storage::RunCursor<'_, _> };);
+    assert!(structures::contract::check(&mismatch).is_err());
+}
+
+#[test]
+fn smallest_expansion_requires_two_recorded_prefix_run_candidates() {
+    let source = smallest_expand_program();
+    let facts = structures::contract::check(&source).unwrap();
+    assert_eq!(facts.stages["candidate"], 256);
+    assert!(facts.expands.contains("candidate"));
+    assert!(!facts.expands.contains("checked"));
+    assert_eq!(
+        syn::parse2::<structures::Program>(source.to_token_stream()).unwrap(),
+        source
+    );
+    for (index, entry) in [
+        (0, syn::parse_quote!(r = OtherTrie [b][c];)),
+        (1, syn::parse_quote!(s = OtherTrie [a][c];)),
+        (
+            0,
+            syn::parse_quote!(r = ::cq_storage::SortedRun<_, _> [b][c];),
+        ),
+    ] {
+        let mut missing = source.clone();
+        missing.structures.entries[index] = entry;
+        let error = structures::contract::check(&missing)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("PrefixRun candidate build on both sides"),
+            "{error}"
+        );
+        missing.structures.entries.pop();
+        structures::contract::check(&missing).unwrap();
+    }
+}
+
+#[test]
+fn smallest_expansion_rejects_missing_or_misshaped_candidate_facts() {
+    for (index, entry) in [
+        (0, syn::parse_quote!(r = ::cq_gpu::PrefixRun [b,c];)),
+        (1, syn::parse_quote!(s = ::cq_gpu::PrefixRun [c][a];)),
+        (1, syn::parse_quote!(s = ::cq_gpu::PrefixRun [a];)),
+    ] {
+        let mut missing = smallest_expand_program();
+        missing.structures.entries[index] = entry;
+        assert!(structures::contract::check(&missing).is_err());
+    }
+    let mut missing = smallest_expand_program();
+    missing.structures.entries.remove(1);
+    assert!(structures::contract::check(&missing).is_err());
+    let mut unrecorded = smallest_expand_program();
+    unrecorded.physical.program.definitions[3] =
+        syn::parse_quote!(candidate = pipe probe first [b] l,r;);
+    assert!(structures::contract::check(&unrecorded).is_err());
+    let mut second = smallest_expand_program();
+    second.structures.entries.pop();
+    second
+        .structures
+        .entries
+        .push(syn::parse_quote!(checked stage = batch 256 expand;));
+    let error = structures::contract::check(&second)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("expand requires a probe"), "{error}");
+}
+
 fn program() -> structures::Program {
     syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);

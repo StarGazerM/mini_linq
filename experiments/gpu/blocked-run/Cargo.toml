@@ -10,3 +10,6 @@ cuda-device.workspace = true
 cuda-host.workspace = true
 gpu-tiles = { path = "../tiles" }
 rccl-memory.workspace = true
+
+[dev-dependencies]
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }

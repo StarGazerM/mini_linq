@@ -4,11 +4,22 @@ use syn::{
     parse::{Parse, ParseStream},
 };
 
+pub(crate) const DEFAULT_RETRY_CAPACITY: usize = 1024;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum OutputPolicy {
+    #[default]
+    Resumable,
+    Retry,
+}
+
 /// Control choices do not alter any Structures representation decision.
 #[derive(Clone, Debug)]
 pub(crate) struct Options {
+    pub items: usize,
     pub frontier: u32,
     pub capacity: Option<Ident>,
+    pub output: OutputPolicy,
     pub datalog_keys: Vec<(Ident, Vec<syn::Type>)>,
     pub datalog_dictionary: Option<Ident>,
     pub datalog_pool: Option<Ident>,
@@ -17,8 +28,10 @@ pub(crate) struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            items: 4,
             frontier: 8,
             capacity: None,
+            output: OutputPolicy::default(),
             datalog_keys: Vec::new(),
             datalog_dictionary: None,
             datalog_pool: None,
@@ -45,12 +58,14 @@ impl Parse for Options {
                     let threads: LitInt = args.parse()?;
                     args.parse::<Token![,]>()?;
                     let items: LitInt = args.parse()?;
-                    if threads.base10_parse::<u32>()? != 256 || items.base10_parse::<u32>()? != 4 {
+                    let items = items.base10_parse::<usize>()?;
+                    if threads.base10_parse::<u32>()? != 256 || items != 4 {
                         return Err(syn::Error::new_spanned(
                             option,
                             "CQ_GPU_TILE: only tile(256,4) is supported",
                         ));
                     }
+                    options.items = items;
                 }
                 "frontier" => {
                     options.frontier = args.parse::<LitInt>()?.base10_parse()?;
@@ -66,6 +81,16 @@ impl Parse for Options {
                 }
                 "capacity" => {
                     options.capacity = Some(args.parse()?);
+                }
+                "output" => {
+                    let policy: Ident = args.parse()?;
+                    if policy != "retry" {
+                        return Err(syn::Error::new_spanned(
+                            policy,
+                            "CQ_GPU_OUTPUT_POLICY: only output(retry) is supported",
+                        ));
+                    }
+                    options.output = OutputPolicy::Retry;
                 }
                 "datalog_dictionary" => {
                     options.datalog_dictionary = Some(args.parse()?);

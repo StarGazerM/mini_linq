@@ -432,7 +432,7 @@ impl<'a> Printer<'a> {
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
         let access = self.keyed(&keyed.right, &columns)?;
-        let witness = self.forcing_witness(name);
+        let witness = self.forcing_witness(name, &right, &columns);
         let expand = self.analysis.expands.contains(name);
         let (lookup, payload, host): (TokenStream, Vec<String>, bool) = match &access {
             Access::Host(access) => (
@@ -609,7 +609,10 @@ impl<'a> Printer<'a> {
         let columns = sorted(&keyed.columns);
         let input = self.scan(&keyed.left)?;
         let Access::Built(structure) = self.keyed(&keyed.right, &columns)? else {
-            unreachable!("checked witness has a one-level built index");
+            return error(
+                &keyed.right,
+                "host retained lookup requires a one-level built index; PrefixRun directory witnesses require the GPU printer",
+            );
         };
         let key = self
             .stored_key(&right, &columns)

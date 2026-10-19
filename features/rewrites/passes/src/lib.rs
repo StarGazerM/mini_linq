@@ -28,4 +28,4 @@ mod structures;
 pub use physical::{
     build_host_reads, canon_prefixes, lazy_semijoins, merge_joins, smallest_intersections,
 };
-pub use structures::{hashed_runs, join_filter, retain_lookups, retype, sorted_runs};
+pub use structures::{expand_lookups, hashed_runs, join_filter, retain_lookups, retype, sorted_runs};

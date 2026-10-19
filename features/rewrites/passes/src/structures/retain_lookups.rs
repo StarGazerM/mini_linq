@@ -3,8 +3,8 @@ use proc_macro2::TokenStream;
 
 /// Record Copy range witnesses for eager semijoins with a later matching probe.
 ///
-/// Candidate generation only selects SortedRun payload builds; the language's
-/// structural contract independently proves key preservation and witness escape.
+/// Candidate generation selects SortedRun payloads and PrefixRun directories;
+/// the language independently proves integral prefixes, key preservation and escape.
 /// Existing representation choices are preserved, including positions carriers.
 pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -15,6 +15,7 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     }
     let facts = ir::contract::check(source)?;
     let definitions = &source.physical.program.definitions;
+    let candidates = ir::physical::candidate_prefixes(&source.physical, &facts.physical);
     let mut target = source.clone();
     for (index, first) in definitions.iter().enumerate() {
         let Operator::Semi(_, read) = &first.operator else {
@@ -34,11 +35,14 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             symbol_name(&entry.name) == build
                 && matches!(&entry.structure, Structure::Built { keyed, .. }
                     if keyed.membership.is_none()
-                        && keyed.level_names().as_slice() == std::slice::from_ref(&keys)
                         && matches!(&keyed.ty, syn::Type::Path(path)
                             if path.qself.is_none()
-                                && path.path.segments.last()
-                                    .is_some_and(|segment| segment.ident == "SortedRun")))
+                                && path.path.segments.last().is_some_and(|segment| {
+                                    (segment.ident == "SortedRun"
+                                        && keyed.level_names().as_slice() == std::slice::from_ref(&keys))
+                                        || (segment.ident == "PrefixRun"
+                                            && keyed.level_names().first() == Some(&keys))
+                                })))
         });
         if !eligible_build {
             continue;
@@ -47,12 +51,20 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             let Operator::Probe(_, probe) = &force.operator else {
                 continue;
             };
-            if symbol_name(&probe.right) != build
-                || probe.columns.len() != keys.len()
-                || !probe
-                    .columns
-                    .iter()
-                    .all(|column| keys.contains(&symbol_name(column)))
+            let candidate = candidates.iter().any(|candidate| {
+                symbol_name(candidate.reader) == symbol_name(&force.name)
+                    && candidate
+                        .sides
+                        .iter()
+                        .any(|(side, prefix)| side == &build && prefix == &keys)
+            });
+            if (!candidate
+                && (symbol_name(&probe.right) != build
+                    || probe.columns.len() != keys.len()
+                    || !probe
+                        .columns
+                        .iter()
+                        .all(|column| keys.contains(&symbol_name(column)))))
                 || facts
                     .shares
                     .get(&name)

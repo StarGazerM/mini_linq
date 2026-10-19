@@ -42,6 +42,16 @@ pub struct OutputView {
     pub count: *mut u64,
     pub error: *mut u32,
 }
+/// One checked retry readback; dependency failures never authorize replay.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub(crate) struct RetryMetadata {
+    pub rows: u64,
+    pub error: u32,
+    pub dependency_error: u32,
+}
+unsafe impl DeviceCopy for RetryMetadata {}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct MembershipView {
@@ -477,9 +487,12 @@ unsafe impl DeviceCopy for FusedSetView {}
 #[inline(always)]
 unsafe fn fused_observe(set: FusedSetView, outcome: usize, probes: usize) {
     let counters = unsafe { set.counters.add(thread::blockIdx_x() as usize % 568 * 6) };
-    unsafe { DeviceAtomicU64::from_ptr(counters.add(outcome)) }.fetch_add(1, AtomicOrdering::Relaxed);
-    unsafe { DeviceAtomicU64::from_ptr(counters.add(4)) }.fetch_add(probes as u64, AtomicOrdering::Relaxed);
-    unsafe { DeviceAtomicU64::from_ptr(counters.add(5)) }.fetch_max(probes as u64, AtomicOrdering::Relaxed);
+    unsafe { DeviceAtomicU64::from_ptr(counters.add(outcome)) }
+        .fetch_add(1, AtomicOrdering::Relaxed);
+    unsafe { DeviceAtomicU64::from_ptr(counters.add(4)) }
+        .fetch_add(probes as u64, AtomicOrdering::Relaxed);
+    unsafe { DeviceAtomicU64::from_ptr(counters.add(5)) }
+        .fetch_max(probes as u64, AtomicOrdering::Relaxed);
 }
 
 /// 0 = emitted/already present, 1 = retry after reconvergence, 2 = grow.
@@ -519,7 +532,12 @@ unsafe fn fused_try_emit<const N: usize>(
         let entry = unsafe { DeviceAtomicU64::from_ptr(set.slots.add(slot)) };
         let mut existing = entry.load(AtomicOrdering::Acquire);
         if existing == 0 {
-            match entry.compare_exchange(0, u64::MAX, AtomicOrdering::Acquire, AtomicOrdering::Acquire) {
+            match entry.compare_exchange(
+                0,
+                u64::MAX,
+                AtomicOrdering::Acquire,
+                AtomicOrdering::Acquire,
+            ) {
                 Ok(_) => {
                     // A ticket is one atomic operation, not a global CAS
                     // retry loop while holding this slot's publication lock.
@@ -529,17 +547,23 @@ unsafe fn fused_try_emit<const N: usize>(
                     if row >= output.capacity {
                         entry.store(0, AtomicOrdering::Release);
                         #[cfg(feature = "dedup-diagnostics")]
-                        unsafe { fused_observe(set, 3, probes + 1); }
+                        unsafe {
+                            fused_observe(set, 3, probes + 1);
+                        }
                         return 2;
                     }
                     let mut column = 0;
                     while column < N {
-                        unsafe { write_output(output, column, row, values[column]); }
+                        unsafe {
+                            write_output(output, column, row, values[column]);
+                        }
                         column += 1;
                     }
                     entry.store(row + 1, AtomicOrdering::Release);
                     #[cfg(feature = "dedup-diagnostics")]
-                    unsafe { fused_observe(set, 0, probes + 1); }
+                    unsafe {
+                        fused_observe(set, 0, probes + 1);
+                    }
                     return 0;
                 }
                 Err(value) => existing = value,
@@ -547,14 +571,19 @@ unsafe fn fused_try_emit<const N: usize>(
         }
         if existing == u64::MAX || existing == 0 {
             #[cfg(feature = "dedup-diagnostics")]
-            unsafe { fused_observe(set, 2, probes + 1); }
+            unsafe {
+                fused_observe(set, 2, probes + 1);
+            }
             return 1;
         }
         let mut same = true;
         let mut column = 0;
         while column < N {
-            if unsafe { (*output.columns.add(column)).add((existing - 1) as usize).read() }
-                != values[column]
+            if unsafe {
+                (*output.columns.add(column))
+                    .add((existing - 1) as usize)
+                    .read()
+            } != values[column]
             {
                 same = false;
                 break;
@@ -563,13 +592,17 @@ unsafe fn fused_try_emit<const N: usize>(
         }
         if same {
             #[cfg(feature = "dedup-diagnostics")]
-            unsafe { fused_observe(set, 1, probes + 1); }
+            unsafe {
+                fused_observe(set, 1, probes + 1);
+            }
             return 0;
         }
         slot = (slot + 1) & (set.capacity - 1);
         probes += 1;
     }
     #[cfg(feature = "dedup-diagnostics")]
-    unsafe { fused_observe(set, 3, probes); }
+    unsafe {
+        fused_observe(set, 3, probes);
+    }
     2
 }

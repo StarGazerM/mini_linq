@@ -1,7 +1,7 @@
 //! GPU-built sorted, clustered runs with a dense rank directory.
 //!
 //! Construction scans only per-bitmap-word row totals and presence popcounts.
-//! Atomic scatter is made stable by sorting original row IDs within each bin.
+//! Bins order original row IDs, or full prefix keys with row-ID tie-breaking.
 //! Bounds are supplied from input metadata; active row counts and all stage
 //! totals stay on device. `read_stats` is the single build-completion readback.
 //! Inputs and consumers must be ordered on the supplied stream.
@@ -15,8 +15,11 @@
 //! Dense directories accept at most 2^32 key positions (including missing
 //! keys), and row counts must fit in u32. Sparse wider domains are rejected,
 //! not silently converted to a different lookup representation.
+//! Prefix runs bin the first key and heap-order each bin by the remaining keys,
+//! then original row ID. A global lexicographic check skips that work for already
+//! ordered inputs; only the first key owns the dense rank directory.
 
-use cuda_core::{CudaContext, CudaStream, DeviceCopy, LaunchConfig1D};
+use cuda_core::{CudaContext, CudaEvent, CudaStream, DeviceCopy, LaunchConfig1D, PinnedHostBuffer};
 use rccl_memory::{
     ContiguousDeviceRange, CudaMemoryResource, DeviceBuffer, DeviceUninitBuffer,
     PoolMemoryResource, StatisticsMemoryResource,
@@ -78,11 +81,53 @@ pub struct RunStats {
     pub unique: u32,
     pub max_count: u32,
     pub invalid: u32,
-    /// One when active keys are nondecreasing, including empty runs.
+    /// One when the input already has the required key order (lexicographic
+    /// across every recorded level for a prefix run), including empty inputs.
     pub sorted: u32,
 }
 // SAFETY: this C-layout record consists only of u32 scalars.
 unsafe impl DeviceCopy for RunStats {}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct PrefixColumn {
+    keys: *const i64,
+    min_key: i64,
+    domain: u64,
+}
+// SAFETY: a C-layout device pointer and scalar bounds; inputs retain ownership.
+unsafe impl DeviceCopy for PrefixColumn {}
+
+// The common two-level trie needs no metadata allocation or transfer: its
+// only secondary column travels in the kernel parameter block.
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct PrefixKeys {
+    first: PrefixColumn,
+    more: *const PrefixColumn,
+    len: usize,
+}
+unsafe impl DeviceCopy for PrefixKeys {}
+
+// The metadata copy is enqueued, never waited on by the successful build.
+// Retaining pinned ownership avoids both pageable-copy stalls and a dangling
+// async source. An early drop waits only for this upload, not the later build.
+struct PrefixUpload<'a> {
+    host: PinnedHostBuffer<PrefixColumn>,
+    ready: Option<CudaEvent>,
+    stream: &'a CudaStream,
+}
+impl Drop for PrefixUpload<'_> {
+    fn drop(&mut self) {
+        let completed = if let Some(ready) = &self.ready {
+            ready.synchronize()
+        } else {
+            // Only an error before recording the upload event reaches here.
+            self.stream.synchronize()
+        };
+        self.stream.context().record_err(completed);
+    }
+}
 
 /// Owning, immutable-after-build columns. Do not mutate directory buffers while
 /// a `RankView` is in use, or retain a view after dropping/replacing its buffers.
@@ -97,6 +142,7 @@ pub struct Run<'a> {
     pub min_key: i64,
     pub max_key: i64,
     pub stats: Buffer<'a, RunStats>,
+    _prefix_upload: Option<PrefixUpload<'a>>,
 }
 
 /// Non-owning device ABI. Pointers address GPU memory, never host memory.
@@ -200,6 +246,22 @@ impl<'a> Run<'a> {
         domain: (i64, i64),
         row_count: Option<&Buffer<'_, u32>>,
     ) -> BuildResult<Self> {
+        Self::build_inner(ctx, stream, memory, keys, payloads, domain, row_count, None)
+    }
+
+    // Keep the single-key launch sequence identical to the original builder.
+    // A trie substitutes only its global order check and in-bin comparator;
+    // sorted input reaches the same directory/gather path with no LSD passes.
+    fn build_inner(
+        ctx: &CudaContext,
+        stream: &'a CudaStream,
+        memory: &'a MemoryResource,
+        keys: &dyn ContiguousDeviceRange<i64>,
+        payloads: &[&dyn ContiguousDeviceRange<i64>],
+        domain: (i64, i64),
+        row_count: Option<&Buffer<'_, u32>>,
+        secondary: Option<PrefixKeys>,
+    ) -> BuildResult<Self> {
         if ctx != stream.context().as_ref() || ctx != keys.context().as_ref() {
             return Err(invalid(
                 "context, stream and keys must share a CUDA context",
@@ -208,12 +270,7 @@ impl<'a> Run<'a> {
         let capacity =
             u32::try_from(keys.len()).map_err(|_| invalid("run row count exceeds u32::MAX"))?;
         keys.ensure_usable_on(stream)?;
-        for payload in payloads {
-            if payload.len() != keys.len() {
-                return Err(invalid("payload length differs from key length"));
-            }
-            payload.ensure_usable_on(stream)?;
-        }
+        validate_payloads(stream, keys.len(), payloads)?;
         if let Some(count) = row_count {
             count.ensure_usable_on(stream)?;
             if count.is_empty() {
@@ -244,12 +301,26 @@ impl<'a> Run<'a> {
             )?;
         }
         let exclusive_scan = |values: &Buffer<'a, u32>| exclusive_scan(stream, memory, values);
-        let check = module.prepare_sorted_check(config(n))?;
-        unsafe {
-            module.sorted_check(stream, &check, &Input(keys), min_key, domain, ptr(&stats))?;
+        if let Some(secondary) = secondary {
+            let check = module.prepare_prefix_sorted_check(config(n))?;
+            unsafe {
+                module.prefix_sorted_check(
+                    stream,
+                    &check,
+                    &Input(keys),
+                    min_key,
+                    domain,
+                    secondary,
+                    ptr(&stats),
+                )?;
+            }
+        } else {
+            let check = module.prepare_sorted_check(config(n))?;
+            unsafe {
+                module.sorted_check(stream, &check, &Input(keys), min_key, domain, ptr(&stats))?;
+            }
         }
-        // These scratch ranges are only partially initialized on the sorted
-        // path. Keep uninitialized ownership and expose raw pointers only.
+        // Scratch is only partially initialized on the sorted path.
         let bins = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, domain)?;
         let cursors = DeviceUninitBuffer::<u32, _>::new_in(memory, stream, domain)?;
         let bins_ptr = bins.cu_deviceptr() as *mut u32;
@@ -332,22 +403,43 @@ impl<'a> Run<'a> {
                 permutation_ptr,
             )?;
         }
-        let order = module.prepare_order_bins(bounded_config(domain))?;
-        unsafe {
-            module.order_bins(
-                stream,
-                &order,
-                bins_ptr,
-                domain,
-                &word_rows,
-                ptr(&stats),
-                min_key,
-                &bits,
-                &prefix,
-                permutation_ptr,
-                ptr(&offsets),
-                ptr(&unique_keys),
-            )?;
+        if let Some(secondary) = secondary {
+            let order = module.prepare_order_prefix_bins(bounded_config(domain))?;
+            unsafe {
+                module.order_prefix_bins(
+                    stream,
+                    &order,
+                    bins_ptr,
+                    domain,
+                    &word_rows,
+                    ptr(&stats),
+                    min_key,
+                    &bits,
+                    &prefix,
+                    permutation_ptr,
+                    ptr(&offsets),
+                    ptr(&unique_keys),
+                    secondary,
+                )?;
+            }
+        } else {
+            let order = module.prepare_order_bins(bounded_config(domain))?;
+            unsafe {
+                module.order_bins(
+                    stream,
+                    &order,
+                    bins_ptr,
+                    domain,
+                    &word_rows,
+                    ptr(&stats),
+                    min_key,
+                    &bits,
+                    &prefix,
+                    permutation_ptr,
+                    ptr(&offsets),
+                    ptr(&unique_keys),
+                )?;
+            }
         }
         let sorted_directory = module.prepare_sorted_directory(bounded_config(n))?;
         unsafe {
@@ -407,7 +499,94 @@ impl<'a> Run<'a> {
             min_key,
             max_key,
             stats,
+            _prefix_upload: None,
         })
+    }
+
+    /// Build a stable lexicographic prefix run entirely on device.
+    ///
+    /// One check validates all domains and compares adjacent complete keys.
+    /// Already ordered input uses the single-key sorted directory/copy path.
+    /// Otherwise the first key supplies counting-sort bins; each bin orders
+    /// deeper keys lexicographically, with original row ID breaking ties.
+    /// `keys` and the rank directory describe `keys[0]`; payload order is unchanged.
+    pub fn build_prefix(
+        ctx: &CudaContext,
+        stream: &'a CudaStream,
+        memory: &'a MemoryResource,
+        keys: &[&dyn ContiguousDeviceRange<i64>],
+        payloads: &[&dyn ContiguousDeviceRange<i64>],
+        domains: &[(i64, i64)],
+        row_count: Option<&Buffer<'_, u32>>,
+    ) -> BuildResult<Self> {
+        if keys.is_empty() || keys.len() != domains.len() {
+            return Err(invalid(
+                "prefix runs require nonempty keys with matching domains",
+            ));
+        }
+        let n = keys[0].len();
+        if keys.len() == 1 {
+            return Self::build(
+                ctx, stream, memory, keys[0], payloads, domains[0], row_count,
+            );
+        }
+        validate_payloads(stream, n, &keys[1..])?;
+        let mut secondary = PrefixKeys {
+            first: prefix_column(keys[1], domains[1])?,
+            more: core::ptr::null(),
+            len: keys.len() - 1,
+        };
+        if keys.len() == 2 {
+            return Self::build_inner(
+                ctx,
+                stream,
+                memory,
+                keys[0],
+                payloads,
+                domains[0],
+                row_count,
+                Some(secondary),
+            );
+        }
+        let mut host = PinnedHostBuffer::<PrefixColumn>::zeroed(stream.context(), keys.len() - 2)?;
+        for ((column, &key), &domain) in host
+            .as_mut_slice()
+            .iter_mut()
+            .zip(&keys[2..])
+            .zip(&domains[2..])
+        {
+            *column = prefix_column(key, domain)?;
+        }
+        let metadata = allocate::<PrefixColumn>(memory, stream, host.len())?;
+        let mut upload = PrefixUpload {
+            host,
+            ready: None,
+            stream,
+        };
+        // SAFETY: the pinned source remains owned by the returned Run until its
+        // completion event has finished; the destination is stream-ordered.
+        unsafe {
+            cuda_core::memory::memcpy_htod_async(
+                metadata.cu_deviceptr(),
+                upload.host.as_ptr(),
+                upload.host.num_bytes(),
+                stream.cu_stream(),
+            )?;
+        }
+        upload.ready = Some(stream.record_event(None)?);
+        secondary.more = metadata.cu_deviceptr() as *const PrefixColumn;
+        let mut run = Self::build_inner(
+            ctx,
+            stream,
+            memory,
+            keys[0],
+            payloads,
+            domains[0],
+            row_count,
+            Some(secondary),
+        )?;
+        run._prefix_upload = Some(upload);
+        Ok(run)
     }
 
     /// Borrow the run's rank directory as a copyable device ABI value.
@@ -422,6 +601,35 @@ impl<'a> Run<'a> {
             max_key: self.max_key,
         }
     }
+}
+
+fn prefix_column(
+    key: &dyn ContiguousDeviceRange<i64>,
+    (min_key, max_key): (i64, i64),
+) -> BuildResult<PrefixColumn> {
+    let span = (max_key as i128 - min_key as i128 + 1).max(0);
+    if span > MAX_DOMAIN_KEYS as i128 {
+        return Err(invalid("dense rank domain exceeds 2^32 key positions"));
+    }
+    Ok(PrefixColumn {
+        keys: key.cu_deviceptr() as *const i64,
+        min_key,
+        domain: span as u64,
+    })
+}
+
+fn validate_payloads(
+    stream: &CudaStream,
+    rows: usize,
+    payloads: &[&dyn ContiguousDeviceRange<i64>],
+) -> BuildResult<()> {
+    for payload in payloads {
+        if payload.len() != rows {
+            return Err(invalid("payload length differs from key length"));
+        }
+        payload.ensure_usable_on(stream)?;
+    }
+    Ok(())
 }
 
 /// Complete any number of stream-ordered builds with one metadata readback.
@@ -484,7 +692,7 @@ fn allocate<'a, T: DeviceCopy>(
 
 #[cuda_device::cuda_module]
 mod kernels {
-    use super::RunStats;
+    use super::{PrefixColumn, PrefixKeys, RunStats};
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
     use cuda_device::{
         device, kernel, launch_bounds, launch_contract, thread, warp, DynamicSharedArray,
@@ -529,6 +737,51 @@ mod kernels {
         let active = i < unsafe { (*stats).rows } as usize;
         let invalid = active && (keys[i] as u64).wrapping_sub(min_key as u64) >= domain as u64;
         let inversion = active && i != 0 && keys[i - 1] > keys[i];
+        let invalid_lanes = warp::ballot_sync(u32::MAX, invalid);
+        let inverted_lanes = warp::ballot_sync(u32::MAX, inversion);
+        if warp::lane_id() == 0 {
+            unsafe {
+                if invalid_lanes != 0 {
+                    DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).invalid))
+                        .store(1, AtomicOrdering::Relaxed);
+                }
+                if inverted_lanes != 0 {
+                    DeviceAtomicU32::from_ptr(core::ptr::addr_of_mut!((*stats).sorted))
+                        .store(0, AtomicOrdering::Relaxed);
+                }
+            }
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn prefix_sorted_check(
+        keys: &[i64],
+        min_key: i64,
+        domain: usize,
+        secondary: PrefixKeys,
+        stats: *mut RunStats,
+    ) {
+        let i = thread::index_1d().get();
+        let active = i < unsafe { (*stats).rows } as usize;
+        let mut invalid = active && (keys[i] as u64).wrapping_sub(min_key as u64) >= domain as u64;
+        let mut inversion = active && i != 0 && keys[i - 1] > keys[i];
+        let mut equal = active && i != 0 && keys[i - 1] == keys[i];
+        let mut level = 0;
+        while level < secondary.len {
+            if active {
+                let column = unsafe { prefix_level(secondary, level) };
+                let value = unsafe { column.keys.add(i).read() };
+                invalid |= (value as u64).wrapping_sub(column.min_key as u64) >= column.domain;
+                if equal {
+                    let previous = unsafe { column.keys.add(i - 1).read() };
+                    inversion = previous > value;
+                    equal = previous == value;
+                }
+            }
+            level += 1;
+        }
         let invalid_lanes = warp::ballot_sync(u32::MAX, invalid);
         let inverted_lanes = warp::ballot_sync(u32::MAX, inversion);
         if warp::lane_id() == 0 {
@@ -887,6 +1140,123 @@ mod kernels {
                         values.write(values.add(remaining).read());
                         values.add(remaining).write(largest);
                         sift_down(values, 0, remaining);
+                    }
+                }
+            }
+            bin += stride;
+        }
+    }
+
+    #[device]
+    #[inline(always)]
+    unsafe fn prefix_level(secondary: PrefixKeys, level: usize) -> PrefixColumn {
+        if level == 0 {
+            secondary.first
+        } else {
+            unsafe { secondary.more.add(level - 1).read() }
+        }
+    }
+
+    #[device]
+    #[inline(always)]
+    unsafe fn prefix_greater(secondary: PrefixKeys, a: u32, b: u32) -> bool {
+        let mut level = 0;
+        while level < secondary.len {
+            let keys = unsafe { prefix_level(secondary, level) }.keys;
+            let left = unsafe { keys.add(a as usize).read() };
+            let right = unsafe { keys.add(b as usize).read() };
+            if left != right {
+                return left > right;
+            }
+            level += 1;
+        }
+        // Original row IDs make equal complete keys stable, even though the
+        // histogram's atomic scatter itself is unordered.
+        a > b
+    }
+
+    #[device]
+    #[inline(always)]
+    unsafe fn sift_prefix_down(
+        values: *mut u32,
+        mut root: usize,
+        length: usize,
+        secondary: PrefixKeys,
+    ) {
+        let value = unsafe { values.add(root).read() };
+        while root < length / 2 {
+            let mut child = root * 2 + 1;
+            let mut child_value = unsafe { values.add(child).read() };
+            if child + 1 < length {
+                let right = unsafe { values.add(child + 1).read() };
+                if unsafe { prefix_greater(secondary, right, child_value) } {
+                    child += 1;
+                    child_value = right;
+                }
+            }
+            if !unsafe { prefix_greater(secondary, child_value, value) } {
+                break;
+            }
+            unsafe {
+                values.add(root).write(child_value);
+            }
+            root = child;
+        }
+        unsafe {
+            values.add(root).write(value);
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn order_prefix_bins(
+        bins: *const u32,
+        domain: usize,
+        word_rows: &[u32],
+        stats: *const RunStats,
+        min_key: i64,
+        bits: &[u64],
+        prefix: &[u32],
+        permutation: *mut u32,
+        offsets: *mut u32,
+        unique: *mut i64,
+        secondary: PrefixKeys,
+    ) {
+        if unsafe { (*stats).sorted != 0 || (*stats).invalid != 0 } {
+            return;
+        }
+        let mut bin = thread::index_1d().get();
+        let stride = thread::gridDim_x() as usize * 256;
+        while bin < domain {
+            let begin = word_rows[bin >> 6] + unsafe { bins.add(bin).read() };
+            let end = if bin + 1 < domain {
+                word_rows[(bin + 1) >> 6] + unsafe { bins.add(bin + 1).read() }
+            } else {
+                unsafe { (*stats).rows }
+            };
+            if begin != end {
+                let mask = 1u64 << (bin & 63);
+                let rank = prefix[bin >> 6] + (bits[bin >> 6] & (mask - 1)).count_ones();
+                unsafe {
+                    offsets.add(rank as usize).write(begin);
+                    unique
+                        .add(rank as usize)
+                        .write((min_key as u64).wrapping_add(bin as u64) as i64);
+                    let values = permutation.add(begin as usize);
+                    let length = (end - begin) as usize;
+                    let mut parent = length / 2;
+                    while parent != 0 {
+                        parent -= 1;
+                        sift_prefix_down(values, parent, length, secondary);
+                    }
+                    let mut remaining = length;
+                    while remaining > 1 {
+                        remaining -= 1;
+                        let largest = values.read();
+                        values.write(values.add(remaining).read());
+                        values.add(remaining).write(largest);
+                        sift_prefix_down(values, 0, remaining, secondary);
                     }
                 }
             }

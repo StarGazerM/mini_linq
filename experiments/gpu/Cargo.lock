@@ -741,6 +741,7 @@ dependencies = [
  "cuda-host",
  "gpu-tiles",
  "rccl-memory",
+ "syn 2.0.119",
 ]
 
 [[package]]

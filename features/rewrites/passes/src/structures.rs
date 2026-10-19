@@ -5,6 +5,8 @@ use syn::{Ident, Token, Type};
 
 mod retain_lookups;
 pub use retain_lookups::retain_lookups;
+mod expand_lookups;
+pub use expand_lookups::expand_lookups;
 
 #[derive(Clone, Copy)]
 enum Kind {

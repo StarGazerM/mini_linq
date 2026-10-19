@@ -3,8 +3,8 @@
 //! Physical's complete join key and reads are unchanged. A PrefixRun records
 //! its directory column as an index into the checked Structures row layout.
 //! Explicit choices may reorder singleton key levels; any displaced singleton
-//! prefix read receives its own recorded SortedRun. Later levels remain stable
-//! residual equalities. The terminal printer consumes these provider choices.
+//! prefix read receives its own recorded SortedRun. All recorded levels form a
+//! stable lexicographic trie; deeper reads binary-search within the prefix.
 use cq_lang_structures::{self as structures, Structure, symbol_name};
 use proc_macro2::TokenStream;
 use syn::parse::{Parse, ParseStream};
@@ -269,17 +269,19 @@ mod tests {
         );
         let reads = crate::compiler::validate(&target, &facts).unwrap();
         assert_eq!(reads[0].keys, ["x", "y"]);
-        assert_eq!(reads[0].source, "rank-point+residual");
+        assert_eq!(reads[0].source, "rank-point+binary-search");
         let generated = crate::compiler::compile(&target, crate::options::Options::default())
             .unwrap()
             .to_token_stream()
             .to_string();
-        let residual = quote!(
-            ::cq_gpu_runtime::run_column(__cq_gpu_run_view_r, 0usize, __build_row)
-                == __resume_registers[3usize] as i64
-        )
-        .to_string();
-        assert!(generated.contains(&residual));
+        assert!(generated.contains("prepare_prefix_run"));
+        assert!(
+            generated.contains("run_column (__cq_gpu_run_view_r , 0usize , __mid) < __prefix_key")
+        );
+        assert!(
+            generated.contains("run_column (__cq_gpu_run_view_r , 0usize , __mid) <= __prefix_key")
+        );
+        assert!(!generated.contains("while __candidate"));
     }
 
     #[test]
@@ -411,18 +413,21 @@ mod tests {
         assert_eq!(semi.source, "rank-point");
         let probe = reads.iter().find(|read| read.reader == "p").unwrap();
         assert_eq!(probe.keys, ["x", "y"]);
-        assert_eq!(probe.source, "rank-point+residual");
+        assert_eq!(probe.source, "rank-point+binary-search");
         let generated = crate::compiler::compile(&target, crate::options::Options::default())
             .unwrap()
             .to_token_stream()
             .to_string();
-        assert_eq!(generated.matches("prepare_run").count(), 3);
-        let residual = quote!(
-            ::cq_gpu_runtime::run_column(__cq_gpu_run_view_r, 0usize, __build_row)
-                == __resume_registers[3usize] as i64
-        )
-        .to_string();
-        assert!(generated.contains(&residual));
+        assert_eq!(generated.matches("prepare_run").count(), 2);
+        assert_eq!(generated.matches("prepare_prefix_run").count(), 1);
+        assert!(
+            generated
+                .contains("run_column (__cq_gpu_run_view_r , 0usize , __mid) < __contains_key")
+        );
+        assert!(generated.contains(
+            "run_column (__cq_gpu_run_view_r , 0usize , __contains_lo) == __contains_key"
+        ));
+        assert!(!generated.contains("while __candidate"));
         assert!(generated.contains("__cq_gpu_run_view_r_1 . rank"));
     }
 }

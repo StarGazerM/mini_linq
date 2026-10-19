@@ -81,7 +81,7 @@ pub fn print(input: TokenStream) -> TokenStream {
 }
 
 /// Explicit Structures rewrite selecting a rank-backed prefix representation.
-/// Remaining recorded key levels are exact residual predicates, not discarded.
+/// All recorded levels are sorted lexicographically and searched within their prefix.
 /// `prefix_runs(Supplier => supplier_key)` explicitly selects a singleton level
 /// by base relation or retained result. The selected column's layout index is
 /// recorded in PrefixRun's fourth const argument and must match its first level.

@@ -33,11 +33,12 @@ pub fn plan_b(data: &Rows) -> DeviceColumns<'_, Answer, For> {
         pipeline {
             plan = ::cq_planners::order(le);
             physical = [::cq_rewrites::build_host_reads];
-            // Supplier's directory is explicit; nation_key stays an exact residual,
-            // with a separate recorded nation run preserving the earlier semijoin.
+            // Supplier's directory is explicit; nation is searched exactly within
+            // that prefix. A separate nation run preserves the earlier semijoin.
             structures = [::cq_rewrites::sorted_runs, ::cq_gpu::prefix_runs(Supplier => supplier_key), ::cq_rewrites::retain_lookups,
+                ::cq_rewrites::expand_lookups(256),
                 ::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)];
-            print = ::cq_gpu::print(capacity(Lineitem));
+            print = ::cq_gpu::print(capacity(Lineitem), tile(256,4), frontier(8), directory(rank));
         }
         struct H05B;
         relation Customer(c_custkey:i64,c_nationkey:i64) = (&data.customer);

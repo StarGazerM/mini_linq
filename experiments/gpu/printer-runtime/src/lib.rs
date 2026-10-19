@@ -3,8 +3,12 @@
 //! Rust values retain pooled allocations, dictionaries and device status. Fixed
 //! capacity execution transfers no rows, counts, bounds or pointer arrays.
 //! General growth reads one four-byte suspension control word per attempt and
-//! resumes saved work without replay. Explicit `to_host` validates all retained
-//! ancestor statuses before decoding; capacities are never logical row counts.
+//! resumes saved work without replay. Explicit retry instead reads one checked
+//! 16-byte count/status summary per bounded attempt and replays at most once,
+//! at the exact candidate total. Retry requires immutable inputs and a pure
+//! query; canonicalization follows successful materialization, never an attempt.
+//! Explicit `to_host` validates all retained ancestor statuses before decoding;
+//! capacities are never logical row counts.
 //! Dense runs consume conservative loader/projection bounds and reject domains
 //! outside their recorded representation rather than downloading extrema.
 pub mod datalog;
@@ -43,6 +47,14 @@ pub struct Compacting;
 /// Exact head-tuple insertion before materialization, with resumable growth.
 pub struct Fused;
 pub struct DeviceSet<T, C = Plain, P = Staged>(PhantomData<(T, C, P)>);
+/// A stable lexicographic run over the recorded key levels, flattened in order.
+///
+/// Every active row is retained, with original input-row order breaking ties
+/// between equal complete keys. `PREFIX` is the original schema index of the
+/// leading directory key, not a key-level depth. Device columns keep their
+/// original schema indexes. Within each equal-key
+/// prefix, the next key is sorted, enabling bounded device binary searches.
+/// Construction uses integral key bounds and never reads rows or counts to host.
 pub struct PrefixRun<K, V, C, const PREFIX: usize>(PhantomData<(K, V, C)>);
 pub struct HashedRun<K, V>(PhantomData<(K, V)>);
 
@@ -254,8 +266,12 @@ impl Runtime {
     /// Limit hashed-run directories (also useful for collision stress tests).
     /// A smaller directory changes performance, never equality semantics.
     pub fn with_hashed_run_bucket_limit(mut self, buckets: usize) -> Result<Self> {
-        if !buckets.is_power_of_two() || buckets as u128 > gpu_blocked_run::MAX_DOMAIN_KEYS as u128 {
-            return Err(failure("CQ_GPU_HASH_BUCKETS", "bucket limit must be a power of two within the run domain"));
+        if !buckets.is_power_of_two() || buckets as u128 > gpu_blocked_run::MAX_DOMAIN_KEYS as u128
+        {
+            return Err(failure(
+                "CQ_GPU_HASH_BUCKETS",
+                "bucket limit must be a power of two within the run domain",
+            ));
         }
         self.hashed_run_bucket_limit = buckets;
         Ok(self)
@@ -778,28 +794,65 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         self.run_cache.insert((table, key_column), id);
         Ok(id)
     }
+    /// Build a lexicographic run from key levels flattened in recorded order.
+    /// Columns in the returned RunView retain original schema indexes, and its
+    /// rank directory addresses `keys[0]`. Equal tuples retain input-row order.
+    pub fn prepare_prefix_run(&mut self, table: TableId, keys: &[usize]) -> Result<RunId> {
+        let first = keys
+            .first()
+            .copied()
+            .ok_or_else(|| failure("CQ_GPU_PREFIX_KEYS", "prefix runs require at least one key"))?;
+        self.prepare_run_inner(table, Some(first), keys)
+    }
     pub fn prepare_hashed_run(&mut self, table: TableId, keys: &[usize]) -> Result<RunId> {
         if keys.len() < 2 {
-            return Err(failure("CQ_GPU_HASH_KEYS", "hashed runs require composite keys"));
+            return Err(failure(
+                "CQ_GPU_HASH_KEYS",
+                "hashed runs require composite keys",
+            ));
         }
         self.prepare_run_inner(table, None, keys)
     }
-    fn prepare_run_inner(&mut self, table: TableId, key_column: Option<usize>, keys: &[usize]) -> Result<RunId> {
+    fn prepare_run_inner(
+        &mut self,
+        table: TableId,
+        key_column: Option<usize>,
+        keys: &[usize],
+    ) -> Result<RunId> {
         let _nvtx = nvtx::range(c"index/run/build");
         let source = self.table(table)?;
-        let buckets = source.capacity.max(1).checked_next_power_of_two()
+        if keys.iter().any(|&key| key >= source.columns.len()) {
+            return Err(failure("CQ_GPU_KEY_COLUMN", "run key outside schema"));
+        }
+        let buckets = source
+            .capacity
+            .max(1)
+            .checked_next_power_of_two()
             .unwrap_or(self.runtime.hashed_run_bucket_limit)
             .min(self.runtime.hashed_run_bucket_limit);
         let bucket_mask = (buckets - 1) as u64;
         let domain = if let Some(key) = key_column {
-            *source.bounds.get(key).ok_or_else(|| failure("CQ_GPU_KEY_COLUMN", "run key outside schema"))?
+            *source
+                .bounds
+                .get(key)
+                .ok_or_else(|| failure("CQ_GPU_KEY_COLUMN", "run key outside schema"))?
         } else {
-            if keys.iter().any(|&key| key >= source.columns.len()) {
-                return Err(failure("CQ_GPU_KEY_COLUMN", "hashed run key outside schema"));
+            Bounds::Inclusive {
+                min: 0,
+                max: bucket_mask as i64,
             }
-            Bounds::Inclusive { min: 0, max: bucket_mask as i64 }
         };
         if domain.cardinality() > gpu_blocked_run::MAX_DOMAIN_KEYS as u128 {
+            return Err(failure(
+                "CQ_GPU_RUN_DOMAIN",
+                "dense rank domain exceeds 2^32 key positions",
+            ));
+        }
+        if key_column.is_some()
+            && keys.iter().any(|&key| {
+                source.bounds[key].cardinality() > gpu_blocked_run::MAX_DOMAIN_KEYS as u128
+            })
+        {
             return Err(failure(
                 "CQ_GPU_RUN_DOMAIN",
                 "dense rank domain exceeds 2^32 key positions",
@@ -844,13 +897,36 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             let slots = unsafe { Buffer::<u64>::uninitialized(runtime.pool.clone(), keys.len())? };
             let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
             for (index, &key) in keys.iter().enumerate() {
-                unsafe { runtime.kernels.initialize_pointer(runtime.stream(), &launch, slots.ptr(), index, key as u64)?; }
+                unsafe {
+                    runtime.kernels.initialize_pointer(
+                        runtime.stream(),
+                        &launch,
+                        slots.ptr(),
+                        index,
+                        key as u64,
+                    )?;
+                }
             }
-            let hashes = unsafe { Buffer::<i64>::uninitialized(runtime.pool.clone(), source.capacity)? };
-            let launch = runtime.kernels.prepare_hash_run_keys(config(source.capacity, 0))?;
-            unsafe { runtime.kernels.hash_run_keys(runtime.stream(), &launch, source.view(), slots.ptr(), keys.len(), bucket_mask, hashes.ptr())?; }
+            let hashes =
+                unsafe { Buffer::<i64>::uninitialized(runtime.pool.clone(), source.capacity)? };
+            let launch = runtime
+                .kernels
+                .prepare_hash_run_keys(config(source.capacity, 0))?;
+            unsafe {
+                runtime.kernels.hash_run_keys(
+                    runtime.stream(),
+                    &launch,
+                    source.view(),
+                    slots.ptr(),
+                    keys.len(),
+                    bucket_mask,
+                    hashes.ptr(),
+                )?;
+            }
             Some(hashes)
-        } else { None };
+        } else {
+            None
+        };
         let payloads: Vec<&dyn ContiguousDeviceRange<i64>> = columns
             .iter()
             .enumerate()
@@ -858,18 +934,44 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 (Some(index) != key_column).then_some(*column as &dyn ContiguousDeviceRange<i64>)
             })
             .collect();
-        let run = Run::build(
-            runtime.context(),
-            runtime.stream(),
-            runtime.pool.resource(),
-            key_column.map(|key| columns[key]).or(hashed_keys.as_ref()).expect("run key buffer"),
-            &payloads,
-            match domain {
-                Bounds::Empty => (0, -1),
-                Bounds::Inclusive { min, max } => (min, max),
-            },
-            Some(&count),
-        )
+        let run = if key_column.is_some() && !keys.is_empty() {
+            let prefix_keys: Vec<&dyn ContiguousDeviceRange<i64>> = keys
+                .iter()
+                .map(|&key| columns[key] as &dyn ContiguousDeviceRange<i64>)
+                .collect();
+            let domains: Vec<_> = keys
+                .iter()
+                .map(|&key| match source.bounds[key] {
+                    Bounds::Empty => (0, -1),
+                    Bounds::Inclusive { min, max } => (min, max),
+                })
+                .collect();
+            Run::build_prefix(
+                runtime.context(),
+                runtime.stream(),
+                runtime.pool.resource(),
+                &prefix_keys,
+                &payloads,
+                &domains,
+                Some(&count),
+            )
+        } else {
+            Run::build(
+                runtime.context(),
+                runtime.stream(),
+                runtime.pool.resource(),
+                key_column
+                    .map(|key| columns[key])
+                    .or(hashed_keys.as_ref())
+                    .expect("run key buffer"),
+                &payloads,
+                match domain {
+                    Bounds::Empty => (0, -1),
+                    Bounds::Inclusive { min, max } => (min, max),
+                },
+                Some(&count),
+            )
+        }
         .map_err(|e| failure("CQ_GPU_RUN_BUILD", e.to_string()))?;
         let pointers = unsafe { Buffer::uninitialized(runtime.pool.clone(), columns.len())? };
         let launch = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
@@ -906,7 +1008,12 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         self.record_timing(TimingStage::Build, start)?;
         self.tables[table.0].statuses.push(status);
         let id = RunId(self.runs.len());
-        self.runs.push(BuiltRun { run, pointers, len, bucket_mask });
+        self.runs.push(BuiltRun {
+            run,
+            pointers,
+            len,
+            bucket_mask,
+        });
         Ok(id)
     }
     pub fn execute_selection<F>(
@@ -980,6 +1087,73 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         self.record_timing(TimingStage::Kernel, start)?;
         Ok(self.add_table(table))
     }
+    /// Run a pure bounded query, retrying only its own capacity overflow once.
+    ///
+    /// Inputs must remain immutable and the callback must restart the complete
+    /// query, including resetting its frontier, on each invocation. Every
+    /// candidate must be counted even after writes exceed capacity. The second
+    /// attempt allocates exactly that total with fresh count/error metadata;
+    /// no partial rows are copied. Canonicalization belongs after this policy.
+    ///
+    /// Each attempt downloads one 16-byte summary of its count/error and all
+    /// retained dependency statuses, never rows. Dependency errors, other
+    /// output errors, and any second-attempt error/count change are terminal.
+    pub fn execute_retry<F>(
+        &mut self,
+        bounds: &[Bounds],
+        initial_capacity: usize,
+        mut launch: F,
+    ) -> Result<TableId>
+    where
+        F: FnMut(&CudaStream, OutputView) -> Result<()>,
+    {
+        check_rows(initial_capacity)?;
+        let runtime = self.runtime;
+        let start = runtime.stream().record_event(timing_flags())?;
+        let statuses = self.output_statuses();
+        let dependencies =
+            unsafe { Buffer::<u64>::uninitialized(runtime.pool.clone(), statuses.len())? };
+        let initialize = runtime.kernels.prepare_initialize_pointer(config(1, 0))?;
+        for (index, status) in statuses.iter().enumerate() {
+            unsafe {
+                runtime.kernels.initialize_pointer(
+                    runtime.stream(),
+                    &initialize,
+                    dependencies.ptr(),
+                    index,
+                    status.ptr() as u64,
+                )?;
+            }
+        }
+        let metadata = unsafe { Buffer::<RetryMetadata>::uninitialized(runtime.pool.clone(), 1)? };
+        let check = runtime.kernels.prepare_retry_metadata(config(1, 0))?;
+        let read_metadata = |output: &Output| -> Result<RetryMetadata> {
+            unsafe {
+                runtime.kernels.retry_metadata(
+                    runtime.stream(),
+                    &check,
+                    output.view(),
+                    dependencies.ptr(),
+                    dependencies.len(),
+                    metadata.ptr(),
+                )?;
+            }
+            record_host_wait(true);
+            Ok(metadata.to_host()?[0])
+        };
+
+        let mut output = allocate_output(runtime, bounds.len(), initial_capacity)?;
+        launch(runtime.stream(), output.view())?;
+        if let Some(capacity) = retry_capacity(read_metadata(&output)?, initial_capacity, None)? {
+            drop(output);
+            output = allocate_output(runtime, bounds.len(), capacity)?;
+            launch(runtime.stream(), output.view())?;
+            retry_capacity(read_metadata(&output)?, capacity, Some(capacity as u64))?;
+        }
+        let table = self.retain_output(output, bounds.to_vec(), statuses)?;
+        self.record_timing(TimingStage::Kernel, start)?;
+        Ok(self.add_table(table))
+    }
     /// Resume unfinished work; only one u32 control word crosses per attempt.
     pub fn execute_resumable<F>(
         &mut self,
@@ -991,29 +1165,61 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
     where
         F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
     {
-        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, false, false,
-            |stream, output, resume, _| launch(stream, output, resume))
+        self.execute_resumable_with_policy(
+            bounds,
+            initial_capacity,
+            state_words,
+            false,
+            false,
+            |stream, output, resume, _| launch(stream, output, resume),
+        )
     }
     pub fn execute_resumable_compacting<F>(
-        &mut self, bounds: &[Bounds], initial_capacity: usize, state_words: usize, mut launch: F,
+        &mut self,
+        bounds: &[Bounds],
+        initial_capacity: usize,
+        state_words: usize,
+        mut launch: F,
     ) -> Result<TableId>
     where
         F: FnMut(&CudaStream, OutputView, ResumeView) -> Result<()>,
     {
-        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, true, false,
-            |stream, output, resume, _| launch(stream, output, resume))
+        self.execute_resumable_with_policy(
+            bounds,
+            initial_capacity,
+            state_words,
+            true,
+            false,
+            |stream, output, resume, _| launch(stream, output, resume),
+        )
     }
     pub fn execute_resumable_fused<F>(
-        &mut self, bounds: &[Bounds], initial_capacity: usize, state_words: usize, launch: F,
+        &mut self,
+        bounds: &[Bounds],
+        initial_capacity: usize,
+        state_words: usize,
+        launch: F,
     ) -> Result<TableId>
     where
         F: FnMut(&CudaStream, OutputView, ResumeView, FusedSetView) -> Result<()>,
     {
-        self.execute_resumable_with_policy(bounds, initial_capacity, state_words, false, true, launch)
+        self.execute_resumable_with_policy(
+            bounds,
+            initial_capacity,
+            state_words,
+            false,
+            true,
+            launch,
+        )
     }
     fn execute_resumable_with_policy<F>(
-        &mut self, bounds: &[Bounds], initial_capacity: usize, state_words: usize,
-        compacting: bool, fused: bool, mut launch: F,
+        &mut self,
+        bounds: &[Bounds],
+        initial_capacity: usize,
+        state_words: usize,
+        compacting: bool,
+        fused: bool,
+        mut launch: F,
     ) -> Result<TableId>
     where
         F: FnMut(&CudaStream, OutputView, ResumeView, FusedSetView) -> Result<()>,
@@ -1030,18 +1236,30 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         };
         let mut output = allocate_output(runtime, width, initial_capacity.max(1))?;
         let allocate_set = |capacity: usize| -> Result<Buffer<u64>> {
-            let slots = capacity.checked_mul(2).and_then(usize::checked_next_power_of_two)
+            let slots = capacity
+                .checked_mul(2)
+                .and_then(usize::checked_next_power_of_two)
                 .ok_or_else(|| failure("CQ_GPU_SET_CAPACITY", "fused set capacity overflow"))?;
             Ok(Buffer::<u64>::zeroed(runtime.pool.clone(), slots)?)
         };
-        let mut set = if fused { Some(allocate_set(output.capacity)?) } else { None };
+        let mut set = if fused {
+            Some(allocate_set(output.capacity)?)
+        } else {
+            None
+        };
         #[cfg(feature = "dedup-diagnostics")]
-        let counters = if fused { Some(Buffer::<u64>::zeroed(runtime.pool.clone(), 568 * 6)?) } else { None };
+        let counters = if fused {
+            Some(Buffer::<u64>::zeroed(runtime.pool.clone(), 568 * 6)?)
+        } else {
+            None
+        };
         #[cfg(feature = "dedup-diagnostics")]
         let mut attempts = 0usize;
         loop {
             #[cfg(feature = "dedup-diagnostics")]
-            { attempts += 1; }
+            {
+                attempts += 1;
+            }
             let _nvtx = nvtx::range(c"resumable/attempt");
             unsafe {
                 cuda_core::memory::memset_d8_async(
@@ -1053,9 +1271,15 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             }
             let fused_view = FusedSetView {
                 slots: set.as_ref().map_or(std::ptr::null_mut(), |set| set.ptr()),
-                capacity: if fused { (output.capacity * 2).next_power_of_two() } else { 0 },
+                capacity: if fused {
+                    (output.capacity * 2).next_power_of_two()
+                } else {
+                    0
+                },
                 #[cfg(feature = "dedup-diagnostics")]
-                counters: counters.as_ref().map_or(std::ptr::null_mut(), |buffer| buffer.ptr()),
+                counters: counters
+                    .as_ref()
+                    .map_or(std::ptr::null_mut(), |buffer| buffer.ptr()),
             };
             launch(runtime.stream(), output.view(), resume, fused_view)?;
             record_host_wait(true);
@@ -1065,7 +1289,11 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             }
             if fused {
                 let clamp = runtime.kernels.prepare_fused_clamp(config(1, 0))?;
-                unsafe { runtime.kernels.fused_clamp(runtime.stream(), &clamp, output.view())?; }
+                unsafe {
+                    runtime
+                        .kernels
+                        .fused_clamp(runtime.stream(), &clamp, output.view())?;
+                }
             }
             if compacting {
                 let _nvtx = nvtx::range(c"resumable/compact");
@@ -1082,17 +1310,28 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 // A pending cooperative reservation can contain a whole
                 // 256-lane block, even when the completed prefix is tiny.
                 // Always leave room for it, or compaction could livelock.
-                let capacity = rows.saturating_mul(2)
+                let capacity = rows
+                    .saturating_mul(2)
                     .max(rows.saturating_add(256))
-                    .min(u32::MAX as usize).max(old_capacity);
+                    .min(u32::MAX as usize)
+                    .max(old_capacity);
                 if capacity <= rows {
-                    return Err(failure("CQ_GPU_OUTPUT_ROWS", "canonical output exceeds u32::MAX"));
+                    return Err(failure(
+                        "CQ_GPU_OUTPUT_ROWS",
+                        "canonical output exceeds u32::MAX",
+                    ));
                 }
                 output = allocate_output(runtime, width, capacity)?;
                 let source = work.table(distinct)?;
                 let append = runtime.kernels.prepare_append(config(rows, 0))?;
                 unsafe {
-                    runtime.kernels.append(runtime.stream(), &append, source.view(), width, output.view())?;
+                    runtime.kernels.append(
+                        runtime.stream(),
+                        &append,
+                        source.view(),
+                        width,
+                        output.view(),
+                    )?;
                 }
                 continue;
             }
@@ -1108,7 +1347,10 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 ));
             }
             let mut grown = allocate_output(runtime, width, capacity).map_err(|error| {
-                failure("CQ_GPU_RESUMABLE_ALLOCATION", format!("width={width}, capacity={capacity}: {error}"))
+                failure(
+                    "CQ_GPU_RESUMABLE_ALLOCATION",
+                    format!("width={width}, capacity={capacity}: {error}"),
+                )
             })?;
             for (source, destination) in output.columns.iter().zip(&grown.columns) {
                 unsafe {
@@ -1125,12 +1367,23 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
             if fused {
                 let slots = allocate_set(capacity)?;
                 let view = FusedSetView {
-                    slots: slots.ptr(), capacity: (capacity * 2).next_power_of_two(),
+                    slots: slots.ptr(),
+                    capacity: (capacity * 2).next_power_of_two(),
                     #[cfg(feature = "dedup-diagnostics")]
-                    counters: counters.as_ref().map_or(std::ptr::null_mut(), |buffer| buffer.ptr()),
+                    counters: counters
+                        .as_ref()
+                        .map_or(std::ptr::null_mut(), |buffer| buffer.ptr()),
                 };
                 let rehash = runtime.kernels.prepare_fused_rehash(config(capacity, 0))?;
-                unsafe { runtime.kernels.fused_rehash(runtime.stream(), &rehash, output.view(), width, view)?; }
+                unsafe {
+                    runtime.kernels.fused_rehash(
+                        runtime.stream(),
+                        &rehash,
+                        output.view(),
+                        width,
+                        view,
+                    )?;
+                }
                 set = Some(slots);
             }
         }
@@ -1138,13 +1391,24 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
         if let Some(counters) = counters {
             let mut totals = [0u64; 6];
             for block in counters.to_host()?.chunks_exact(6) {
-                for index in 0..5 { totals[index] += block[index]; }
+                for index in 0..5 {
+                    totals[index] += block[index];
+                }
                 totals[5] = totals[5].max(block[5]);
             }
             let rows = output.metadata.to_host()?[0].rows;
-            eprintln!("CQ_GPU_FUSED_DIAGNOSTIC width={width} initial_capacity={initial_capacity} capacity={} slots={} rows={rows} attempts={attempts} rehashes={} inserted={} duplicates={} busy={} full={} probes={} max_probes={}",
-                output.capacity, (output.capacity * 2).next_power_of_two(), attempts - 1,
-                totals[0], totals[1], totals[2], totals[3], totals[4], totals[5]);
+            eprintln!(
+                "CQ_GPU_FUSED_DIAGNOSTIC width={width} initial_capacity={initial_capacity} capacity={} slots={} rows={rows} attempts={attempts} rehashes={} inserted={} duplicates={} busy={} full={} probes={} max_probes={}",
+                output.capacity,
+                (output.capacity * 2).next_power_of_two(),
+                attempts - 1,
+                totals[0],
+                totals[1],
+                totals[2],
+                totals[3],
+                totals[4],
+                totals[5]
+            );
         }
         let table = self.complete_output(output, bounds.to_vec())?;
         self.record_timing(TimingStage::Kernel, start)?;
@@ -1158,16 +1422,9 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 .kernels
                 .validate_output(runtime.stream(), &check, output.view())?;
         }
-        let columns = output
-            .columns
-            .into_iter()
-            .zip(&bounds)
-            .map(|(column, &bound)| {
-                EncodedColumn::from_plain_buffer(column, output.metadata.clone(), 0, bound)
-                    .map(Arc::new)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let views = runtime.column_views(&columns)?;
+        self.retain_output(output, bounds, self.output_statuses())
+    }
+    fn output_statuses(&self) -> Vec<Arc<Buffer<OutputCount>>> {
         let mut statuses = Vec::new();
         for table in &self.tables {
             for status in table
@@ -1180,6 +1437,25 @@ impl<'runtime, 'data> Execution<'runtime, 'data> {
                 }
             }
         }
+        statuses
+    }
+    /// Retain an already validated output and its complete dependency history.
+    fn retain_output(
+        &self,
+        output: Output,
+        bounds: Vec<Bounds>,
+        mut statuses: Vec<Arc<Buffer<OutputCount>>>,
+    ) -> Result<Table> {
+        let columns = output
+            .columns
+            .into_iter()
+            .zip(&bounds)
+            .map(|(column, &bound)| {
+                EncodedColumn::from_plain_buffer(column, output.metadata.clone(), 0, bound)
+                    .map(Arc::new)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let views = self.runtime.column_views(&columns)?;
         statuses.push(output.metadata.clone());
         Ok(Table {
             columns,
@@ -1419,6 +1695,74 @@ impl<'runtime> Frontier<'runtime> {
         Ok(())
     }
 }
+/// Only a first-attempt capacity error with an exact, supported total can grow.
+fn retry_capacity(
+    metadata: RetryMetadata,
+    capacity: usize,
+    expected_rows: Option<u64>,
+) -> Result<Option<usize>> {
+    if metadata.dependency_error != 0 {
+        return Err(device_status_failure(metadata.dependency_error));
+    }
+    if metadata.error != 0 && (metadata.error != 4 || expected_rows.is_some()) {
+        return Err(device_status_failure(metadata.error));
+    }
+    if metadata.rows > u32::MAX as u64 {
+        return Err(device_status_failure(5));
+    }
+    if metadata.error == 4 {
+        if metadata.rows <= capacity as u64 {
+            return Err(device_status_failure(4));
+        }
+        return Ok(Some(metadata.rows as usize));
+    }
+    if metadata.rows > capacity as u64 {
+        return Err(device_status_failure(4));
+    }
+    if let Some(expected) = expected_rows {
+        if metadata.rows != expected {
+            return Err(failure(
+                "CQ_GPU_RETRY_COUNT",
+                format!(
+                    "pure retry changed candidate count from {expected} to {}",
+                    metadata.rows,
+                ),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn device_status_failure(error: u32) -> Error {
+    // Keep these diagnostics identical to device-columns' checked_count.
+    let (code, detail) = match error {
+        1 => (
+            "CQ_GPU_OUTPUT_OVERFLOW",
+            "logical output count exceeded u64",
+        ),
+        2 => (
+            "CQ_GPU_EXPANSION_OVERFLOW",
+            "tile expansion exceeded u32 offset domain",
+        ),
+        3 => (
+            "CQ_GPU_SET_FULL",
+            "exact device set exhausted its bounded probe table",
+        ),
+        4 => (
+            "CQ_GPU_OUTPUT_CAPACITY",
+            "logical output exceeds allocated capacity",
+        ),
+        5 => ("CQ_GPU_OUTPUT_ROWS", "output cardinality exceeds u32::MAX"),
+        6 => (
+            "CQ_GPU_MEMBERSHIP_DOMAIN",
+            "recorded membership bitmap budget exceeded",
+        ),
+        7 => ("CQ_GPU_RUN_BUILD", "invalid device run count or key domain"),
+        _ => ("CQ_GPU_KERNEL_ERROR", "unknown device error code"),
+    };
+    failure(code, detail)
+}
+
 fn check_rows(rows: usize) -> Result<()> {
     if rows > u32::MAX as usize {
         Err(failure(
@@ -1475,4 +1819,177 @@ fn decode_column(runtime: &Runtime, table: &Table, index: usize) -> Result<Buffe
         )?;
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::{Result, RetryMetadata, RuntimeError, retry_capacity};
+
+    fn error_code(result: Result<Option<usize>>) -> &'static str {
+        result.unwrap_err().downcast::<RuntimeError>().unwrap().code
+    }
+
+    #[test]
+    fn retry_metadata_is_one_small_readback() {
+        assert_eq!(std::mem::size_of::<RetryMetadata>(), 16);
+        assert_eq!(std::mem::align_of::<RetryMetadata>(), 8);
+    }
+
+    #[test]
+    fn retry_accepts_empty_underfull_and_exact_capacity_outputs() {
+        for (rows, capacity) in [(0, 0), (0, 1024), (17, 1024), (1024, 1024)] {
+            let metadata = RetryMetadata {
+                rows,
+                ..RetryMetadata::default()
+            };
+            assert_eq!(retry_capacity(metadata, capacity, None).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn retry_allocates_exact_total_including_zero_initial_capacity() {
+        for (rows, capacity) in [(1, 0), (1025, 1024), (65_537, 1024), (u32::MAX as u64, 0)] {
+            let metadata = RetryMetadata {
+                rows,
+                error: 4,
+                dependency_error: 0,
+            };
+            assert_eq!(
+                retry_capacity(metadata, capacity, None).unwrap(),
+                Some(rows as usize),
+            );
+        }
+    }
+
+    #[test]
+    fn retry_requires_a_consistent_current_capacity_error() {
+        for (rows, error) in [(2048, 0), (1024, 4), (0, 4)] {
+            let metadata = RetryMetadata {
+                rows,
+                error,
+                dependency_error: 0,
+            };
+            assert_eq!(
+                error_code(retry_capacity(metadata, 1024, None)),
+                "CQ_GPU_OUTPUT_CAPACITY",
+            );
+        }
+    }
+
+    #[test]
+    fn retry_preserves_every_non_capacity_output_error() {
+        for (error, expected_code) in [
+            (1, "CQ_GPU_OUTPUT_OVERFLOW"),
+            (2, "CQ_GPU_EXPANSION_OVERFLOW"),
+            (3, "CQ_GPU_SET_FULL"),
+            (5, "CQ_GPU_OUTPUT_ROWS"),
+            (6, "CQ_GPU_MEMBERSHIP_DOMAIN"),
+            (7, "CQ_GPU_RUN_BUILD"),
+            (99, "CQ_GPU_KERNEL_ERROR"),
+        ] {
+            for expected_rows in [None, Some(2048)] {
+                let metadata = RetryMetadata {
+                    rows: 2048,
+                    error,
+                    dependency_error: 0,
+                };
+                assert_eq!(
+                    error_code(retry_capacity(metadata, 1024, expected_rows)),
+                    expected_code,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retry_rejects_every_dependency_error_before_output_capacity() {
+        for (dependency_error, expected_code) in [
+            (1, "CQ_GPU_OUTPUT_OVERFLOW"),
+            (2, "CQ_GPU_EXPANSION_OVERFLOW"),
+            (3, "CQ_GPU_SET_FULL"),
+            (4, "CQ_GPU_OUTPUT_CAPACITY"),
+            (5, "CQ_GPU_OUTPUT_ROWS"),
+            (6, "CQ_GPU_MEMBERSHIP_DOMAIN"),
+            (7, "CQ_GPU_RUN_BUILD"),
+            (99, "CQ_GPU_KERNEL_ERROR"),
+        ] {
+            for error in [0, 4] {
+                for expected_rows in [None, Some(2048)] {
+                    let metadata = RetryMetadata {
+                        rows: 2048,
+                        error,
+                        dependency_error,
+                    };
+                    assert_eq!(
+                        error_code(retry_capacity(metadata, 1024, expected_rows)),
+                        expected_code,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retry_rejects_wrapped_counts_and_unsupported_row_totals() {
+        let wrapped = RetryMetadata {
+            rows: 0,
+            error: 1,
+            dependency_error: 0,
+        };
+        assert_eq!(
+            error_code(retry_capacity(wrapped, 1024, None)),
+            "CQ_GPU_OUTPUT_OVERFLOW",
+        );
+        for error in [0, 4, 5] {
+            let metadata = RetryMetadata {
+                rows: u32::MAX as u64 + 1,
+                error,
+                dependency_error: 0,
+            };
+            assert_eq!(
+                error_code(retry_capacity(metadata, 1024, None)),
+                "CQ_GPU_OUTPUT_ROWS",
+            );
+        }
+        let maximum = RetryMetadata {
+            rows: u32::MAX as u64,
+            ..RetryMetadata::default()
+        };
+        assert_eq!(
+            retry_capacity(maximum, u32::MAX as usize, None).unwrap(),
+            None,
+        );
+    }
+
+    #[test]
+    fn retry_second_attempt_must_match_the_first_total() {
+        let exact = RetryMetadata {
+            rows: 2048,
+            ..RetryMetadata::default()
+        };
+        assert_eq!(retry_capacity(exact, 2048, Some(2048)).unwrap(), None);
+        for rows in [0, 1024, 2047] {
+            let changed = RetryMetadata {
+                rows,
+                ..RetryMetadata::default()
+            };
+            assert_eq!(
+                error_code(retry_capacity(changed, 2048, Some(2048))),
+                "CQ_GPU_RETRY_COUNT",
+            );
+        }
+    }
+
+    #[test]
+    fn retry_second_capacity_failure_never_retries_again() {
+        let overflow = RetryMetadata {
+            rows: 4096,
+            error: 4,
+            dependency_error: 0,
+        };
+        assert_eq!(
+            error_code(retry_capacity(overflow, 2048, Some(2048))),
+            "CQ_GPU_OUTPUT_CAPACITY",
+        );
+    }
 }

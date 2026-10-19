@@ -1,8 +1,8 @@
 #[cuda_device::cuda_module]
 pub(crate) mod runtime_kernels {
     use crate::{
-        FrontierView, OutputCount, OutputView, TableView, column, column_stripe, flag_error,
-        reserve, table_len, write_output,
+        FrontierView, OutputCount, OutputView, RetryMetadata, TableView, column, column_stripe,
+        flag_error, reserve, table_len, write_output,
     };
     use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU64};
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
@@ -40,20 +40,60 @@ pub(crate) mod runtime_kernels {
             }
         }
     }
+    #[inline(always)]
+    unsafe fn validated_output_rows(output: OutputView) -> u64 {
+        let count = unsafe { output.count.read() };
+        // Capacity is checked only after all candidates have been counted, so
+        // it cannot mask a fatal error raised during the bounded launch.
+        if count > u32::MAX as u64 {
+            unsafe {
+                flag_error(output, 5);
+            }
+        } else if count > output.capacity {
+            unsafe {
+                flag_error(output, 4);
+            }
+        }
+        count
+    }
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn validate_output(output: OutputView) {
         if thread::index_1d().get() == 0 {
-            let count = unsafe { output.count.read() };
-            if count > u32::MAX as u64 {
-                unsafe {
-                    flag_error(output, 5);
+            unsafe {
+                validated_output_rows(output);
+            }
+        }
+    }
+    /// Check the current output and every retained table/run status together.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn retry_metadata(
+        output: OutputView,
+        dependencies: *const u64,
+        dependency_count: usize,
+        metadata: *mut RetryMetadata,
+    ) {
+        if thread::index_1d().get() == 0 {
+            let rows = unsafe { validated_output_rows(output) };
+            let mut dependency_error = 0;
+            let mut index = 0;
+            while index < dependency_count {
+                let status = unsafe { dependencies.add(index).read() } as *const OutputCount;
+                let error = unsafe { (*status).error };
+                if dependency_error == 0 {
+                    dependency_error = error;
                 }
-            } else if count > output.capacity {
-                unsafe {
-                    flag_error(output, 4);
-                }
+                index += 1;
+            }
+            unsafe {
+                metadata.write(RetryMetadata {
+                    rows,
+                    error: output.error.read(),
+                    dependency_error,
+                });
             }
         }
     }
@@ -71,7 +111,11 @@ pub(crate) mod runtime_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn hash_run_keys(
-        table: TableView, slots: *const u64, width: usize, mask: u64, output: *mut i64,
+        table: TableView,
+        slots: *const u64,
+        width: usize,
+        mask: u64,
+        output: *mut i64,
     ) {
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * 256;
@@ -84,7 +128,9 @@ pub(crate) mod runtime_kernels {
                 hash = crate::hashed_run_step(hash, unsafe { column(table, slot, row) });
                 index += 1;
             }
-            unsafe { output.add(row as usize).write((hash & mask) as i64); }
+            unsafe {
+                output.add(row as usize).write((hash & mask) as i64);
+            }
             row += stride;
         }
     }
@@ -267,7 +313,9 @@ pub(crate) mod runtime_kernels {
                     let mut hash = 0x9e37_79b9_7f4a_7c15u64;
                     let mut word = 0;
                     while word < width.max(1) {
-                        hash ^= if width == 0 { 0 } else {
+                        hash ^= if width == 0 {
+                            0
+                        } else {
                             unsafe { column(input, word, row) as u64 }
                         };
                         hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -282,18 +330,25 @@ pub(crate) mod runtime_kernels {
                         let mut state = entry.load(AtomicOrdering::Acquire);
                         if state == 0 {
                             match entry.compare_exchange(
-                                0, 1, AtomicOrdering::Acquire, AtomicOrdering::Relaxed,
+                                0,
+                                1,
+                                AtomicOrdering::Acquire,
+                                AtomicOrdering::Relaxed,
                             ) {
                                 Ok(_) => {
                                     let destination = if emit {
                                         unsafe { reserve(output, 1) }
-                                    } else { 0 };
+                                    } else {
+                                        0
+                                    };
                                     let mut col = 0;
                                     while col < width {
                                         let value = unsafe { column(input, col, row) };
                                         unsafe {
                                             keys.add(slot * width + col).write(value as u64);
-                                            if emit { write_output(output, col, destination, value); }
+                                            if emit {
+                                                write_output(output, col, destination, value);
+                                            }
                                         }
                                         col += 1;
                                     }
@@ -311,7 +366,8 @@ pub(crate) mod runtime_kernels {
                         let mut col = 0;
                         while col < width {
                             if unsafe {
-                                keys.add(slot * width + col).read() != column(input, col, row) as u64
+                                keys.add(slot * width + col).read()
+                                    != column(input, col, row) as u64
                             } {
                                 same = false;
                                 break;
@@ -326,7 +382,9 @@ pub(crate) mod runtime_kernels {
                         probes += 1;
                     }
                     if probes == capacity {
-                        unsafe { flag_error(output, 3); }
+                        unsafe {
+                            flag_error(output, 3);
+                        }
                         pending = false;
                     }
                 }
@@ -341,8 +399,13 @@ pub(crate) mod runtime_kernels {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn persistent_rehash(
-        old_keys: *const u64, old_slots: *const u64, old_capacity: usize,
-        keys: *mut u64, slots: *mut u64, capacity: usize, width: usize,
+        old_keys: *const u64,
+        old_slots: *const u64,
+        old_capacity: usize,
+        keys: *mut u64,
+        slots: *mut u64,
+        capacity: usize,
+        width: usize,
     ) {
         let mut old = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * 256;
@@ -351,7 +414,9 @@ pub(crate) mod runtime_kernels {
                 let mut hash = 0x9e37_79b9_7f4a_7c15u64;
                 let mut col = 0;
                 while col < width.max(1) {
-                    hash ^= if width == 0 { 0 } else {
+                    hash ^= if width == 0 {
+                        0
+                    } else {
                         unsafe { old_keys.add(old * width + col).read() }
                     };
                     hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -390,7 +455,9 @@ pub(crate) mod runtime_kernels {
         while row < unsafe { table_len(input) } {
             let mut col = 0;
             while col < width {
-                unsafe { write_output(output, col, offset + row, column(input, col, row)); }
+                unsafe {
+                    write_output(output, col, offset + row, column(input, col, row));
+                }
                 col += 1;
             }
             row += stride;
@@ -656,7 +723,9 @@ pub(crate) mod runtime_kernels {
     #[launch_contract(domain = 1, block = (256, 1, 1))]
     pub unsafe fn fused_clamp(output: OutputView) {
         if thread::index_1d().get() == 0 {
-            unsafe { output.count.write(output.count.read().min(output.capacity)); }
+            unsafe {
+                output.count.write(output.count.read().min(output.capacity));
+            }
         }
     }
     /// Rebuild only at growth boundaries; retained output rows are immutable.
@@ -678,7 +747,8 @@ pub(crate) mod runtime_kernels {
             let mut slot = hash as usize & (set.capacity - 1);
             loop {
                 if unsafe { DeviceAtomicU64::from_ptr(set.slots.add(slot)) }
-                    .compare_exchange_relaxed(0, row + 1).is_ok()
+                    .compare_exchange_relaxed(0, row + 1)
+                    .is_ok()
                 {
                     break;
                 }

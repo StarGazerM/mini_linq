@@ -24,9 +24,10 @@ pub(crate) fn forwarding(operator: &Operator) -> bool {
 
 pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, Share>> {
     let definitions = &program.physical.program.definitions;
+    let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
     let mut result = BTreeMap::new();
-    // ST-Share: Immutable one-level payload lookups have identical keys at
-    // their eager first demand and later forcing probe.
+    // ST-Share: Immutable payload lookups preserve their keys until the force.
+    // A recorded Smallest probe can force either candidate's directory prefix.
     for entry in &program.structures.entries {
         let Structure::Share {
             build,
@@ -69,8 +70,34 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         {
             return Err(fail());
         }
+        let candidate = candidates.iter().find(|candidate| {
+            symbol_name(candidate.reader) == share.force
+                && candidate
+                    .sides
+                    .iter()
+                    .any(|(build, prefix)| build == &share.build && prefix == &share.keys)
+        });
         let payload = facts.built.get(&share.build).into_iter().flatten().any(|(levels, ty)| {
-            levels.len() == 1 && levels[0] == share.keys && matches!(ty, syn::Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "HashIndex" || segment.ident == "SortedRun"))
+            let syn::Type::Path(path) = ty else { return false };
+            let Some(segment) = path.path.segments.last() else { return false };
+            if levels.len() == 1 && levels[0] == share.keys
+                && (segment.ident == "HashIndex" || segment.ident == "SortedRun")
+            {
+                return true;
+            }
+            candidate.is_some_and(|candidate| {
+                segment.ident == "PrefixRun"
+                    && levels.len() == 2
+                    && levels[0] == share.keys
+                    && levels[1] == [candidate.column.clone()]
+                    && share.keys.len() == 1
+                    && matches!(
+                        ungroup_type(&facts.physical.rows[&share.build].types[&share.keys[0]]),
+                        syn::Type::Path(path) if path.qself.is_none()
+                            && ["i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize"]
+                                .iter().any(|name| path.path.is_ident(name))
+                    )
+            })
         });
         if !payload
             || facts
@@ -87,9 +114,10 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         };
         if matches!(semi.choice, Some(physical::Choice::Lazy(_)))
             || symbol_name(&semi.right) != share.build
-            || symbol_name(&probe.right) != share.build
             || names(&semi.columns) != share.keys
-            || names(&probe.columns) != share.keys
+            || (candidate.is_none()
+                && (symbol_name(&probe.right) != share.build
+                    || names(&probe.columns) != share.keys))
         {
             return Err(fail());
         }

@@ -964,10 +964,36 @@ The displayed printer arguments are optional; these are their defaults.
 `frontier(0)` disables descriptor publication. The supported tile shape is
 256 threads × four items, and the supported directory is `rank`; other
 shapes/directories are rejected rather than silently ignored.
-`capacity(Relation)` additionally records an explicit output allocation bound
-from a named input relation. H05 records `capacity(Lineitem)`; its chained
-identity query records `capacity(Input)`. These are allocation contracts, not
-inferred functional dependencies, uniqueness or sortedness.
+Without `output(retry)`, `capacity(Relation)` additionally records an explicit
+output allocation bound from a named input relation. H05 records
+`capacity(Lineitem)`; its chained identity query records `capacity(Input)`.
+These are allocation contracts, not inferred functional dependencies, uniqueness
+or sortedness.
+
+`output(retry)` explicitly selects a bounded, no-resume kernel instead of the
+default resumable execution policy. Its initial output capacity is **1024 rows**
+unless `capacity(Relation)` supplies the named input's allocation size as an
+initial allocation hint, not a hard output bound. Generated output records
+`__CQ_GPU_OUTPUT_POLICY = "retry"` and `__CQ_GPU_RETRY_DEFAULT_CAPACITY = 1024`.
+Only `output(retry)` is accepted; other values and duplicate output options are
+rejected. Omitting the option preserves the existing execution policy.
+
+Retry requires immutable inputs and a deterministic exact candidate total
+across both launches. The first attempt traverses the entire stream and keeps
+counting candidates past capacity while skipping excess writes. Only output
+capacity overflow permits a retry: the runtime discards that partial result,
+allocates exactly the observed candidate total, resets the frontier, and
+relaunches the entire kernel **once**, without saved lane or shared-memory
+checkpoints. A non-overflow failure, including a CUDA or allocation failure,
+never triggers a retry; any second-attempt failure is returned. Both launches
+use the same input tables, bounds and query captures. Exact counting concerns
+pre-canon candidates, not distinct result rows. Canonicalization runs only after
+successful materialization, including when a recorded `DeviceSet` uses `Fused`
+or `Compacting`: explicit retry uses staged canon rather than fused insertion or
+suspension-time compaction. This changes scheduling, not exact set semantics.
+Compared with direct bounded execution, retry adds a checked host control/count
+readback for each attempt, even when the initial allocation fits; it does not
+download tuples.
 
 The extra recorded passes are necessary. The shorter
 `order(le)` + `sorted_runs` + `retain_lookups` pipeline still records host
@@ -980,11 +1006,110 @@ it records the existing first singleton integral level. An explicit
 `prefix_runs(Supplier => supplier_key)` selects a singleton level by base
 relation or retained-result name and moves it to the directory position.
 The provider's fourth const argument records that column's Structures layout
-index; the printer rejects disagreement with the first level. Other levels
-remain exact residual equalities. Displaced singleton-prefix reads receive
+index; the printer rejects disagreement with the first level. All recorded key
+columns, in level order, form a stable lexicographic trie, with original row ID
+as the final tie-break. A device-only blocked counting sort bins the first key,
+then heapsorts each bin lexicographically by the remaining recorded keys and
+original row ID; payloads are gathered once. Two-level prefixes pass their sole
+secondary-key descriptor inline as a copyable kernel argument, with no metadata
+allocation, copy or event. Prefixes with three or more levels upload the remaining
+secondary-key descriptors once with a stream-ordered asynchronous copy from pinned
+host memory. The returned run retains that pinned source and its upload-completion event;
+successful construction never waits. Dropping the upload owner waits only for
+its copy event (or the stream if event recording failed), keeping the source
+alive until the copy is complete. One all-level sortedness/domain check
+supplies the final build status, without host readbacks.
+Fully lexicographically sorted inputs take the ordinary
+adjacent-difference directory path: histogram clearing, histogram, scatter and
+in-bin ordering return immediately on sorted or invalid status. Prefix builds
+replace only `sorted_check` and `order_bins` with their prefix variants; all
+other launches and their order match the single-key pipeline. Both enqueue
+12 fixed launches plus one gather per payload and two exclusive scans (whose
+recursive launch counts depend on directory size), regardless of sortedness.
+There are no per-key passes, permutation composition, next-key gathers or merge
+launches. A one-level PrefixRun uses the ordinary single-key build.
+The host-only `build_sequence` test target checks this source-level launch and
+gating contract without loading CUDA or running the device oracle.
+Level one retains the blocked-run rank directory;
+deeper payload reads narrow that range with lower/upper-bound binary searches.
+A fully bound probe in a pure stream ending in recorded canon is realized as
+lane-local membership: duplicate witnesses cannot add an output value. Its final
+recorded level uses lower-bound plus equality, not a second expansion or an
+upper-bound search. This does not assume provider-key uniqueness; a supplier
+directory can still contain several distinct nations. Recorded levels never use
+a residual linear scan.
+Displaced singleton-prefix reads receive
 additional recorded one-level SortedRuns and retained Vec rows, rather than
 silently losing semijoins. B therefore preserves its nation-key semijoin while
 its full Supplier lookup uses the supplier-key directory.
+
+Recorded Physical `probe smallest` binary intersections require **both** candidate
+providers to be explicitly recorded `PrefixRun`s with levels `[prefix][v]`,
+where `v` is the singleton candidate column. Run structure selection and
+`prefix_runs` to record those sorted tries; a plain `SortedRun` is not an
+implicit fallback. Missing prerequisites produce `CQ_GPU_SMALLEST_TRIE`,
+naming the affected side and provider.
+
+For an adjacent supported probe/check pair (the second read may be `probe`
+or eager `semi`), generated kernels compare the two prefix-range lengths,
+expand the shorter range, and check each candidate in the other range with
+a boolean lower-bound/equality binary search. The second Physical read is
+not emitted as another expansion. Ordinary recorded 256-row expansion stages
+also honor `tile(256,4)`: root tiles hold 1024 rows, each nested descriptor holds
+1024 parents, and candidate chunks hold 1024 candidates. Smaller explicit stage
+batches retain their existing scalar-item shape. A certified membership-only
+probe with recorded constants is a total lane-local step, so it no longer blocks
+`expand_lookups` from recording subsequent range-expansion boundaries.
+
+When the staged intersection retains driver-row identity, its compact descriptor
+stores u32 driver row IDs and packed u16 parent slots: the low 15 bits select the
+parent and the high bit selects the shorter adjacency. Candidate execution
+reloads demanded driver columns from the resident table; copied driver-column
+bindings also reload, rather than adding i64 carrier arrays. Only demanded
+non-driver values (such as a literal binding used by the result) need i64
+carriers; unused bindings do not enlarge the descriptor. The other range's
+begin/end bounds are not stored: one selected-branch rank lookup recovers that
+prefix range per candidate before binary-search membership. Generated source
+therefore has four rank-point call sites for the minimal staged pair (two root
+lookups and two alternative candidate reprobe branches), not four executed
+lookups per candidate. Recorded witnesses can supply the root lookups; they do
+not eliminate this compact candidate-range reprobe. Unstaged serial traversal
+retains the original ranges and does not add the candidate reprobe.
+
+For the minimal two-driver-column intersection without extra carried values or
+witnesses, the descriptor occupies 3588 u32 words: two header words, 1024 range
+starts, 1025 exclusive offsets, one alignment word, 1024 driver row IDs, and
+512 words of packed parents. With 16 scratch words, generated dynamic shared
+memory is **14,416 bytes**, rather than 73,832 bytes for the former full-value,
+full-range layout with a separate stolen-task descriptor. A kernel with exactly
+one expansion descriptor uses the same scratch-plus-16 location for root and
+stolen tasks, without a second descriptor or claim-dispatch descriptor copy.
+This applies to bounded, retry and resumable execution; resumable execution still
+checkpoints shared state when suspending, while retry has no checkpoint state.
+Each additional demanded non-driver i64 value adds 8192 bytes at this tile size.
+These are generated-layout sizes,
+not new GPU resource measurements; the handwritten triangle kernel's measured
+14,468-byte footprint above includes its own scratch layout.
+
+The compact layout depends on recoverable driver-row identity and also applies
+to ordinary nested range expansions. Exact join-key bindings are reloaded from
+the selected run row, while residual/hash-collision keys retain their original
+bindings. Other demanded non-driver values and witness cursors remain carriers.
+An ordinary frame with only root identity occupies 3076 u32 words (12,304 bytes);
+Smallest additionally uses its packed parent/side array. Nested expansions keep
+separate live frames. If the root frame is the largest, stolen work reuses that
+area; later resumable frames receive disjoint copies rather than allocating
+another shared claim area. Otherwise the separate claim area remains necessary.
+Candidate-count scans reject any
+per-item count above `u32::MAX / 256` before their 256-lane scan; stripe totals
+accumulate in `u64` and descriptor totals must fit u32. Compact driver row IDs
+are checked to fit u32 rather than silently truncated. Each candidate chunk
+uses one output scan and reservation, with no second overflow scan. Default
+execution checkpoints the cooperative chunk for bounded grow-and-resume;
+explicit capacity retains its allocation contract unless `output(retry)` makes
+it an initial hint. Retry uses the same compact **14,416-byte** bounded shape
+without resume parameters or local checkpoint registers. Host token tests cover
+this generated control flow; these checks make no GPU timing claim.
 
 `hashed_runs` records one-level composite integral/bool/dictionary-key HashIndex
 providers as `cq_gpu_runtime::HashedRun<_, _>`. It follows `sorted_runs`, leaving
@@ -1001,16 +1126,17 @@ for memory control or deliberate collision testing without changing answers.
 | Host rename and relational select/point/range | Resident column scan and device comparisons; string equality uses the host's shared dictionary IDs. Ordinary tuple bindings explicitly take the upload path. |
 | `let` with one-level `SortedRun` | One blocked run, built on device using the recorded integral key. |
 | Explicit one-level composite `HashedRun` | Blocked run of deterministic hash buckets, with exact residual comparison of every key column. |
-| Explicit `PrefixRun` key levels | One prefix run, with exact residual comparisons at full-key reads. |
+| Explicit `PrefixRun` key levels | Stable lexicographic device build over all recorded keys; rank lookup on level one, binary-search range narrowing on deeper levels, then non-empty membership or narrowed-range expansion. |
+| Recorded `smallest` binary intersection with two explicit `[prefix][v]` `PrefixRun`s | Cooperative 1024-candidate chunks (four items per thread), shorter-range expansion and binary-search membership in the other range, rather than a second expansion. |
 | Integral membership-only provider | Budgeted exact bitmap, not an inferred payload run. |
 | Recorded `join_filter` | Budgeted bitmap prefilter on its recorded scan column, retaining the covering exact keyed read. |
 | Eager semi without a witness | Exact membership test at the recorded keyed read. |
-| `share` plus matching `repr witness` | Retained `(begin,end)` descriptor, consumed at the recorded forcing probe without reprobe. |
+| `share` plus matching `repr witness` | Retained `(begin,end)` descriptor, consumed at the recorded forcing probe without repeating its root lookup; compact staged `smallest` candidates separately reprobe the other prefix range as described above. |
 | Probe | Unstaged exhaustive lane-local range traversal; recorded batch/expand streams retain block scans, owner search and bounded cooperative expansion. `first` never implies uniqueness. |
 | `stage = batch N` / `expand` | Bounds cooperative work by the recorded batch; only explicit expand stages publish large descriptors to the bounded frontier. |
 | Project | Carries only demanded values to output. |
 | Recorded `DeviceSet<_>` canon | Exact device dedup; hash collisions never establish equality. |
-| Returned stream | Owned resident device columns, with an explicitly recorded capacity contract or bounded grow-and-resume execution. Tuple transfer requires `.to_host()`. |
+| Returned stream | Owned resident device columns, with an explicitly recorded capacity contract, bounded grow-and-resume execution, or explicit `output(retry)` count-and-relaunch execution. Tuple transfer requires `.to_host()`. |
 
 `DeviceSet<Row, Codec = Plain, Policy = Staged>` records both storage encoding
 and dedup scheduling. `Staged` retains standalone behavior: materialize all
@@ -1020,13 +1146,20 @@ into the compacted output; growth uses the checked distinct cardinality instead
 of raw candidate multiplicity. This policy adds a checked count transfer at
 compaction boundaries, but never transfers tuples. The Datalog fixed pipeline
 explicitly records `DeviceSet<_, Plain, Compacting>` through `retype`; the printer
-never infers the policy from a query or dataset. A future fused insertion policy
-can occupy this same policy parameter; unknown policies are rejected today.
+never infers the policy from a query or dataset. `Fused` records insertion during
+resumable execution; unknown policies are rejected. Explicit `output(retry)`
+overrides these canon schedules with post-kernel staged canonicalization so
+both attempts count the same candidates without fused or resumable state.
 
-Each generated kernel records its Structures keyed-read provenance. PrefixRun
-witnesses are not fabricated: the existing share contract admits only
-one-level payload providers, so multi-level Supplier reads retain their
-ordinary lookup behavior. Inputs must remain immutable during execution.
+Each generated kernel records its Structures keyed-read provenance. In addition
+to one-level payload providers, the existing `share` / `repr witness` contract
+admits an exact first-level prefix of an explicitly recorded `PrefixRun`.
+`retain_lookups` can retain both earlier eager prefix semis feeding a `smallest`
+intersection: each share names its own provider and prefix, and both force at
+the introducing `smallest` probe. The witnesses keep the existing
+`RunCursor<'_, _>` representation; the printer selects each by forcing probe,
+provider and prefix, not by forcing probe alone. No deeper-prefix or unrecorded
+witness is inferred. Inputs must remain immutable during execution.
 Resident `DeviceColumns<'data, Row, C = Plain>` hosts own their encoded columns,
 row metadata and string dictionary domain. Column allocations retain the
 shared pool, CUDA stream and context through reference-counted ownership:
@@ -1392,8 +1525,9 @@ query and its compiled consumer, excluding loading and final `.to_host()`.
 Each records **zero HtoD and zero DtoH calls**, no memcpy activity and no module
 loads; A/B contain 30/33 device memsets respectively. Their `_cuda_api_sum.csv`,
 `_cuda_gpu_kern_sum.csv` and attribution JSON retain the measured evidence.
-The explicit-capacity path has no control readback; generic grow-and-resume's
-permitted four-byte control flag remains a separate execution contract.
+The explicit-capacity path measured here does not use `output(retry)` and has
+no control readback; generic grow-and-resume's permitted four-byte control flag
+and retry's checked control/count reads are separate execution contracts.
 
 
 The following tables and `gpu_h05_compiled.results.json`, `.profile.json`,
@@ -1559,8 +1693,9 @@ above for current resident-code verification.
   `CQ_GPU_OPAQUE_BIND`. Nonliteral string captures are not supported.
   The printer oracle checks full tuples, boolean/integral captures, and
   once-only evaluation in both bounded and resumable paths.
-  Union/fallback blocks, merge, smallest traversal, opaque Rust binds/guards
-  and iterator generators are rejected.
+  Union/fallback blocks, merge, opaque Rust binds/guards and iterator generators
+  are rejected. Smallest traversal is supported only for the explicit
+  sorted-trie binary-intersection contract described above.
   Recorded eager anti reads and bridge-certified device negative membership
   use exact resident sets. The upstream generator form is rejected as
   `CQ_GPU_GENERATOR`, including unused definitions. `#[total]` is not
@@ -1569,7 +1704,7 @@ above for current resident-code verification.
   ordering or arbitrary string methods. Integer encoding is checked to fit
   signed 64 bits. A blocked rank domain cannot exceed 2^32 positions.
 - Ordinary multi-level providers are rejected; only explicitly recorded
-  `PrefixRun` has the residual-filter interpretation above. A recorded CPU
+  `PrefixRun` has the sorted-trie interpretation above. A recorded CPU
   canon provider is rejected; `retype(dedup => DeviceSet<_>)` is required.
 - Positional carriers, positional selection/read adapters and standalone keyset
   annotations are rejected. Multiple recorded
@@ -1583,13 +1718,19 @@ above for current resident-code verification.
   described above, not by a CQ operator. Existing cuda-oxide PTX/shared-memory
   and package-loader restrictions remain.
 - Finite device output cardinalities must fit the runtime's row-index domain.
-  An explicit `capacity(Relation)` is a checked allocation contract and never
-  establishes an unrecorded PK constraint. The default bounded-output path
+  Without `output(retry)`, an explicit `capacity(Relation)` is a checked
+  allocation contract and never establishes an unrecorded PK constraint.
+  The default bounded-output path
   saves each lane's program position, live values and expansion cursors,
   shared descriptors and claimed frontier-task identity. A failed output
   reservation leaves the output count unchanged. The runtime reads one
   32-bit control word per attempt, doubles capacity, preserves completed
   rows with a device-to-device copy, and resumes only unfinished work.
   It does not count then replay the stream or recompute completed rows.
-  Explicit `capacity(Relation)` uses the direct bounded kernel without this
-  per-attempt control readback; tuple transfer remains explicit in both paths.
+  Explicit `capacity(Relation)` without retry uses the direct bounded kernel
+  without this per-attempt control readback. `output(retry)` instead performs an
+  exact full candidate count, may relaunch once at that count only for capacity
+  overflow, and treats `capacity(Relation)` as an initial allocation hint.
+  Immutable inputs are required; other errors do not retry. Its checked
+  control/count readbacks remain required even with `completion(round)`.
+  Tuple transfer remains explicit for every policy.

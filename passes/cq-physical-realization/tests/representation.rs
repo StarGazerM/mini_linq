@@ -91,3 +91,64 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
     );
     assert!(!printed.contains("stage :: segmented"), "{printed}");
 }
+
+#[test]
+fn smallest_witness_selection_is_exact_and_host_prefix_retention_is_rejected() {
+    let program: cq_lang_structures::Program = syn::parse_quote! {
+        physical {
+            relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
+            l = pipe rename L@0 {a -> a,b -> b};
+            r = let rename R@1 {b -> b,c -> c};
+            s = let rename S@2 {a -> a,c -> c};
+            pre_r = pipe semi eager [b] l,r;
+            pre_s = pipe semi eager [a] pre_r,s;
+            candidate = pipe probe smallest [b] pre_s,r;
+            checked = pipe canon semi eager [a,c] candidate,s;
+            return checked as answer(a,b,c);
+        } structures {
+            l host scan = ::core::iter::Map<_, _> [];
+            r host scan = ::core::iter::Map<_, _> [];
+            s host scan = ::core::iter::Map<_, _> [];
+            r = ::cq_gpu::PrefixRun [b][c];
+            s = ::cq_gpu::PrefixRun [a][c];
+            r rows = ::std::vec::Vec<_>;
+            s rows = ::std::vec::Vec<_>;
+            checked canon = ::std::collections::HashSet<_>;
+            pre_r share = lookup r [b] first pre_r force candidate;
+            pre_s share = lookup s [a] first pre_s force candidate;
+            pre_r repr = tuples witness { r [b] at pre_r as ::cq_storage::RunCursor<'_, _> };
+            pre_s repr = tuples witness { s [a] at pre_s as ::cq_storage::RunCursor<'_, _> };
+        }
+    };
+    let analysis = cq_lang_structures::contract::check(&program).unwrap();
+    let context = cq_print::Context::new(&program, &analysis);
+    assert_eq!(context.carried_witnesses["pre_s"], ["pre_r", "pre_s"]);
+    for (build, key, first) in [("r", "b", "pre_r"), ("s", "a", "pre_s")] {
+        assert_eq!(
+            context.forcing_witness("candidate", build, &[key.into()]),
+            Some(context.witness_ident(first))
+        );
+    }
+    assert!(
+        context
+            .forcing_witness("checked", "s", &["a".into()])
+            .is_none()
+    );
+    assert!(
+        context
+            .forcing_witness("candidate", "r", &["a".into()])
+            .is_none()
+    );
+    assert!(
+        context
+            .forcing_witness("candidate", "l", &["b".into()])
+            .is_none()
+    );
+    let error = cq_physical_realization::compile(&program)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("PrefixRun directory witnesses require the GPU printer"),
+        "{error}"
+    );
+}

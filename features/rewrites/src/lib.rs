@@ -22,7 +22,9 @@
 //!
 //! `retain_lookups` takes no arguments and records a `share` decision and a
 //! `repr` witness for each eligible eager semijoin followed by a probe of the
-//! same SortedRun build and preserved keys. The cursor is
+//! same SortedRun build and preserved keys, or either singleton integral
+//! PrefixRun directory prefix of a recorded binary Smallest intersection.
+//! Both prefix witnesses force at the introducing probe. The cursor is
 //! `::cq_storage::RunCursor<'_, _>`; an existing positions representation is
 //! preserved. The Structures contract rejects witness escape across retained
 //! rows, canonicalization, opaque steps or other unsupported boundaries.
@@ -273,6 +275,17 @@ pub fn retain_lookups(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_structures::Program>(
         input.into(),
         cq_rewrite_passes::retain_lookups,
+    )
+    .into()
+}
+
+/// Record `stage = batch N expand` at probes whose builds expose length-known
+/// ranges, accepted only by the Structures stage contract. Opt-in.
+#[proc_macro]
+pub fn expand_lookups(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_structures::Program>(
+        input.into(),
+        cq_rewrite_passes::expand_lookups,
     )
     .into()
 }

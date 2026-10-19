@@ -1,6 +1,6 @@
 use crate::{
     compiler::{compile, validate},
-    options::Options,
+    options::{DEFAULT_RETRY_CAPACITY, Options, OutputPolicy},
     predicate::Constants,
 };
 use cq_lang_structures as ir;
@@ -27,6 +27,156 @@ fn shared() -> ir::Program {
 }
 
 #[test]
+fn ordinary_nested_expansions_use_four_item_tiles_and_compact_carriers() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation Customer(customer:i64,nation:i64);
+        relation Nation(nation:i64,region:i64);
+        relation Orders(customer:i64,order:i64);
+        relation Lines(order:i64,supplier:i64);
+        relation Supplier(supplier:i64,nation:i64);
+        c = pipe rename Customer@0 {customer -> customer,nation -> nation};
+        nr = let rename Nation@1 {nation -> nation,region -> region};
+        orders = let rename Orders@2 {customer -> customer,order -> order};
+        lines = let rename Lines@3 {order -> order,supplier -> supplier};
+        suppliers = let rename Supplier@4 {supplier -> supplier,nation -> nation};
+        n = pipe probe first [nation] c,nr;
+        o = pipe probe first [customer] n,orders;
+        l = pipe probe first [order] o,lines;
+        s = pipe probe first [nation,supplier] l,suppliers;
+        out = pipe canon project s keep {nation,order,supplier};
+        return out as answer(nation,order,supplier);
+    } structures {
+        c host scan = ::core::iter::Map<_,_> [];
+        nr host scan = ::core::iter::Map<_,_> [];
+        orders host scan = ::core::iter::Map<_,_> [];
+        lines host scan = ::core::iter::Map<_,_> [];
+        suppliers host scan = ::core::iter::Map<_,_> [];
+        nr = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [nation];
+        orders = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [customer];
+        lines = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [order];
+        suppliers = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,1> [supplier][nation];
+        n stage = batch 256 expand;
+        o stage = batch 256 expand;
+        l stage = batch 256 expand;
+        out canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    for options in [quote!(), quote!(capacity(Lines)), quote!(output(retry))] {
+        let generated = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        let compact = generated.split_whitespace().collect::<String>();
+        assert!(
+            compact.contains("dynamic_shared_range=(36976u32,36976u32)"),
+            "{generated}"
+        );
+        assert_eq!(compact.matches("tiles::scan(__count,").count(), 3);
+        assert_eq!(compact.matches("tiles::scan(__tile_count,").count(), 1);
+        assert_eq!(
+            compact.matches("while__contains_lo<__contains_hi").count(),
+            1
+        );
+        assert!(!compact.contains("__overflows"));
+        assert!(compact.contains("owner(__descriptor.add(1026usize),1024usizeasu32,"));
+        assert!(compact.contains("column(__driver,1usize,__driver_row)"));
+        assert!(compact.contains("run_column(__cq_gpu_run_view_lines,0usize,__build_row)"));
+        assert!(!compact.contains("as*muti64).add(__input_slot)"));
+        if compact.contains("execute_resumable") {
+            assert!(compact.contains("=*__descriptor.add(__word)"));
+        } else {
+            assert_eq!(compact.matches("unsafefncq_gpu_expand_").count(), 3);
+            assert!(!compact.contains("_out_s("));
+        }
+    }
+}
+
+#[test]
+fn nested_claim_reuse_keeps_room_for_maximum_descriptor_publication() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(b:i64,v:i64);
+        relation S(a:i64,v:i64); relation T(v:i64,w:i64);
+        l = pipe rename L@0 {a -> a,b -> b};
+        r = let rename R@1 {b -> b,v -> v};
+        s = let rename S@2 {a -> a,v -> v};
+        t = let rename T@3 {v -> v,w -> w};
+        candidate = pipe probe smallest [b] l,r;
+        checked = pipe probe first [a,v] candidate,s;
+        out = pipe canon probe first [v] checked,t;
+        return out as answer(a,b,v,w);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        s host scan = ::core::iter::Map<_,_> [];
+        t host scan = ::core::iter::Map<_,_> [];
+        r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [b][v];
+        s = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [a][v];
+        t = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [v];
+        candidate stage = batch 256 expand;
+        out canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    for options in [quote!(), quote!(capacity(L))] {
+        let generated = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        let compact = generated.split_whitespace().collect::<String>();
+        // Root=3588 words; child=3076. Its max-sized publication needs another
+        // 512 words of padding, but no separate 3588-word claim allocation.
+        assert!(
+            compact.contains("dynamic_shared_range=(28768u32,28768u32)"),
+            "{generated}"
+        );
+        assert!(compact.contains("let__descriptor=__scratch.add(16usize)"));
+        assert!(compact.contains("let__descriptor=__scratch.add(3604usize)"));
+    }
+}
+
+#[test]
+fn full_key_probe_uses_membership_only_when_canon_erases_duplicate_witnesses() {
+    for canon in [false, true] {
+        let mode = if canon {
+            quote!(pipe canon)
+        } else {
+            quote!(let)
+        };
+        let after = (!canon).then(|| quote!(out = pipe canon project p keep {x,y};));
+        let returned = if canon { quote!(p) } else { quote!(out) };
+        let dedup = if canon {
+            quote!(p canon = ::cq_gpu_runtime::DeviceSet<_>;)
+        } else {
+            quote!(p rows = ::std::vec::Vec<_>; out canon = ::cq_gpu_runtime::DeviceSet<_>;)
+        };
+        let source: ir::Program = syn::parse2(quote! { physical {
+            relation L(a:i64,b:i64); relation R(a:i64,b:i64);
+            l = pipe rename L@0 {a -> x,b -> y};
+            r = let rename R@1 {a -> x,b -> y};
+            p = #mode probe first [x,y] l,r;
+            #after
+            return #returned as answer(x,y);
+        } structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r host scan = ::core::iter::Map<_,_> [];
+            r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [x][y];
+            #dedup
+        }})
+        .unwrap();
+        let generated = compile(&source, syn::parse2(quote!(capacity(L))).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert_eq!(
+            generated.contains("while __contains_lo < __contains_hi"),
+            canon
+        );
+        assert_eq!(
+            generated.contains("while __cq_gpu_row_p < __cq_gpu_end_p"),
+            !canon
+        );
+        assert!(!generated.contains("while __candidate"));
+    }
+}
+
+#[test]
 fn composite_hashed_runs_require_recorded_type_and_check_every_key() {
     let mut source: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
@@ -42,15 +192,25 @@ fn composite_hashed_runs_require_recorded_type_and_check_every_key() {
         p canon = ::cq_gpu_runtime::DeviceSet<_>;
     }};
     for options in [quote!(), quote!(capacity(R))] {
-        let text = compile(&source, syn::parse2(options).unwrap()).unwrap().to_token_stream().to_string();
+        let text = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
         assert!(text.contains("prepare_hashed_run"), "{text}");
         assert_eq!(text.matches("hashed_run_step").count(), 2);
         assert!(text.contains("run_column (__cq_gpu_run_view_r , 0usize"));
         assert!(text.contains("run_column (__cq_gpu_run_view_r , 1usize"));
     }
-    let ir::Structure::Built { keyed, .. } = &mut source.structures.entries[3].structure else { unreachable!() };
-    keyed.ty = syn::parse_quote!(::cq_storage::HashIndex<'_,_,_>);
-    assert!(compile(&source, Options::default()).unwrap_err().to_string().contains("CQ_GPU_BUILD_TYPE"));
+    let ir::Structure::Built { keyed, .. } = &mut source.structures.entries[3].structure else {
+        unreachable!()
+    };
+    keyed.ty = syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>);
+    assert!(
+        compile(&source, Options::default())
+            .unwrap_err()
+            .to_string()
+            .contains("CQ_GPU_BUILD_TYPE")
+    );
 }
 
 #[test]
@@ -61,24 +221,74 @@ fn dedup_execution_policy_is_read_only_from_the_recorded_type() {
         (quote!(::cq_gpu_runtime::Fused), false, true),
     ] {
         let mut source = shared();
-        let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else { unreachable!() };
+        let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else {
+            unreachable!()
+        };
         *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For, #policy>);
-        let text = compile(&source, Options::default()).unwrap().to_token_stream().to_string();
-        assert_eq!(text.contains("execute_resumable_compacting"), compacting, "{text}");
+        let text = compile(&source, Options::default())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert_eq!(
+            text.contains("execute_resumable_compacting"),
+            compacting,
+            "{text}"
+        );
         assert_eq!(text.contains("execute_resumable_fused"), fused, "{text}");
         assert_eq!(text.contains("fused_emit"), fused, "{text}");
         if fused {
             assert!(!text.contains("__execution . dedup"), "{text}");
             let bounded = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
-                .unwrap().to_token_stream().to_string();
+                .unwrap()
+                .to_token_stream()
+                .to_string();
             assert!(bounded.contains("execute_resumable_fused"), "{bounded}");
             assert!(!bounded.contains("execute_bounded"), "{bounded}");
         }
     }
     let mut source = shared();
-    let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else { unreachable!() };
+    let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else {
+        unreachable!()
+    };
     *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::Plain, ::cq_gpu_runtime::UnknownPolicy>);
-    assert!(compile(&source, Options::default()).unwrap_err().to_string().contains("CQ_GPU_DEDUP_POLICY"));
+    assert!(
+        compile(&source, Options::default())
+            .unwrap_err()
+            .to_string()
+            .contains("CQ_GPU_DEDUP_POLICY")
+    );
+}
+
+#[test]
+fn retry_canonicalizes_recorded_policies_only_after_successful_execution() {
+    for policy in [
+        quote!(::cq_gpu_runtime::Staged),
+        quote!(::cq_gpu_runtime::Compacting),
+        quote!(::cq_gpu_runtime::Fused),
+    ] {
+        let mut source = shared();
+        let ir::Structure::Dedup { ty, .. } = &mut source.structures.entries[4].structure else {
+            unreachable!()
+        };
+        *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For, #policy>);
+        for options in [quote!(output(retry)), quote!(output(retry), capacity(R))] {
+            let generated = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_retry_kernel(&generated);
+            let compact = generated.split_whitespace().collect::<String>();
+            assert!(!compact.contains("fused_emit"), "{generated}");
+            assert!(!compact.contains("FusedView"), "{generated}");
+            assert!(!compact.contains("__fused"), "{generated}");
+            assert!(
+                compact.find("execute_retry(").unwrap()
+                    < compact.find("__execution.dedup(").unwrap(),
+                "canon must consume only the successful retry result: {generated}"
+            );
+            assert_eq!(compact.matches("__execution.dedup(").count(), 1);
+        }
+    }
 }
 
 #[test]
@@ -205,10 +415,6 @@ fn backend_rejection_codes_name_every_unsupported_operator() {
         (quote!(bad = pipe merge [x] l,b;), "CQ_GPU_MERGE"),
         (quote!(bad = pipe union l,b;), "CQ_GPU_UNION"),
         (quote!(bad = pipe anti lazy [x] l,b;), "CQ_GPU_ANTI_CHOICE"),
-        (
-            quote!(bad = pipe probe smallest [x] l,b;),
-            "CQ_GPU_SMALLEST",
-        ),
         (quote!(bad = pipe guard l if (true);), "CQ_GPU_OPAQUE_GUARD"),
         (
             quote!(bad = pipe bind l with z:i64 = (opaque(x));),
@@ -315,11 +521,38 @@ fn backend_rejection_codes_name_unsupported_recorded_storage() {
 
 #[test]
 fn printer_options_are_explicit_and_checked() {
+    assert_eq!(Options::default().items, 4);
+    assert_eq!(syn::parse2::<Options>(quote!()).unwrap().items, 4);
+    assert_eq!(Options::default().output, OutputPolicy::Resumable);
+    assert_eq!(
+        syn::parse2::<Options>(quote!()).unwrap().output,
+        OutputPolicy::Resumable
+    );
+    assert_eq!(
+        syn::parse2::<Options>(quote!(output(retry)))
+            .unwrap()
+            .output,
+        OutputPolicy::Retry
+    );
+    assert_eq!(DEFAULT_RETRY_CAPACITY, 1024);
     let options: Options = syn::parse2(quote!(tile(256, 4), frontier(0), directory(rank))).unwrap();
     assert_eq!(options.frontier, 0);
+    assert_eq!(options.items, 4);
     for (args, code) in [
         (quote!(tile(128, 4)), "CQ_GPU_TILE"),
+        (quote!(tile(256, 1)), "CQ_GPU_TILE"),
+        (quote!(tile(256, 8)), "CQ_GPU_TILE"),
         (quote!(directory(fences)), "CQ_GPU_DIRECTORY"),
+        (quote!(output(unknown)), "CQ_GPU_OUTPUT_POLICY"),
+        (quote!(output(resumable)), "CQ_GPU_OUTPUT_POLICY"),
+        (
+            quote!(output(retry), output(retry)),
+            "CQ_GPU_DUPLICATE_ARGUMENT",
+        ),
+        (
+            quote!(output(retry), output(unknown)),
+            "CQ_GPU_DUPLICATE_ARGUMENT",
+        ),
         (
             quote!(frontier(1), frontier(2)),
             "CQ_GPU_DUPLICATE_ARGUMENT",
@@ -348,8 +581,548 @@ fn dictionary_order_is_never_silently_integer_order() {
     );
 }
 
+fn smallest_intersection(second: proc_macro2::TokenStream) -> ir::Program {
+    syn::parse2(quote! { physical {
+        relation L(a:i64,b:i64); relation R(b:i64,v:i64); relation S(a:i64,v:i64);
+        l = pipe rename L@0 {a -> a,b -> b};
+        r = let rename R@1 {b -> b,v -> v};
+        s = let rename S@2 {a -> a,v -> v};
+        candidate = pipe probe smallest [b] l,r;
+        checked = pipe canon #second [a,v] candidate,s;
+        return checked as answer(a,b,v);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        s host scan = ::core::iter::Map<_,_> [];
+        r rows = ::std::vec::Vec<_>;
+        r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [b][v];
+        s rows = ::std::vec::Vec<_>;
+        s = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [a][v];
+        checked canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }})
+    .unwrap()
+}
+
+fn assert_smallest_cooperative_chunks(generated: &str) {
+    let compact = generated.split_whitespace().collect::<String>();
+    assert!(
+        compact.contains("__item<4usize") || compact.contains("__item+1<4usize"),
+        "{generated}"
+    );
+    assert!(
+        compact.contains("__input_slot=__item*256+__tid"),
+        "{generated}"
+    );
+    assert!(compact.contains("1024"), "{generated}");
+    assert!(compact.contains("__descriptor"), "{generated}");
+    assert!(compact.contains("__smallest_right=__root_parent&0x8000u16!=0"));
+    assert!(compact.contains("__root_parent&0x7fffu16"));
+    assert!(compact.contains("as*mutu16).add(__input_slot)="));
+    assert!(compact.contains("__input_slotasu16|((__smallest_rightasu16)<<15)"));
+    assert!(compact.contains("let__driver_row="));
+    for slot in [0usize, 1usize] {
+        assert!(
+            compact.contains(&format!(
+                "cq_gpu_runtime::column(__driver,{slot}usize,__driver_row)"
+            )),
+            "{generated}"
+        );
+    }
+    assert!(
+        compact.contains("let(__smallest_other_begin,__smallest_other_end)=if__valid"),
+        "{generated}"
+    );
+    for bound in ["__smallest_other_begin", "__smallest_other_end"] {
+        assert!(
+            !compact.split(';').any(|statement| {
+                statement.contains("__descriptor.add(") && statement.contains(&format!("={bound}"))
+            }),
+            "membership bounds must be reprobed, not stored: {generated}"
+        );
+    }
+    // Two root prefix lookups choose the side; each candidate executes only
+    // one of the two emitted branches that recover the other prefix range.
+    assert_eq!(compact.matches("blocked_run::point").count(), 4);
+    assert!(compact.contains("__count>u32::MAX/256"), "{generated}");
+    assert!(
+        compact.contains("__expansion_sum:u64") || compact.contains("__expansion_sum=0u64"),
+        "{generated}"
+    );
+    assert!(
+        compact.contains("__expansion_sum>u32::MAXasu64"),
+        "{generated}"
+    );
+    assert!(compact.contains("flag_error(__output,2)"), "{generated}");
+    assert!(!compact.contains("__overflows"), "{generated}");
+    assert!(
+        compact.contains("while__contains_lo<__contains_hi"),
+        "{generated}"
+    );
+    assert_eq!(
+        compact.matches("tiles::scan(__tile_count,").count(),
+        1,
+        "each generated candidate-chunk output path needs one count scan: {generated}"
+    );
+}
+
+fn assert_single_smallest_descriptor(generated: &str, carried_values: usize) {
+    let compact = generated.split_whitespace().collect::<String>();
+    // Header, starts, exclusive offsets, alignment, driver row IDs and packed
+    // u16 parent/side entries. Only demanded non-driver values add i64 arrays.
+    let descriptor_words = 2 + 1024 + 1025 + 1 + 1024 + 512 + carried_values * 2048;
+    let shared_bytes = (16 + descriptor_words) * 4;
+    assert!(
+        compact.contains(&format!(
+            "dynamic_shared_range=({shared_bytes}u32,{shared_bytes}u32)"
+        )),
+        "{generated}"
+    );
+    assert_eq!(
+        compact.matches("as*muti64).add(__input_slot)=").count(),
+        carried_values,
+        "driver columns must reload instead of becoming i64 carriers: {generated}"
+    );
+    let descriptors: Vec<_> = compact
+        .split("let__descriptor=__scratch.add(")
+        .skip(1)
+        .collect();
+    let minimum = if compact.contains("frontier_claim(") {
+        2
+    } else {
+        1
+    };
+    assert!(descriptors.len() >= minimum, "{generated}");
+    assert!(
+        descriptors.iter().all(|rest| rest.starts_with("16usize)")),
+        "root and stolen tasks must share one descriptor: {generated}"
+    );
+    assert!(
+        !compact.contains("=*__descriptor.add(__word)"),
+        "claim dispatch must not copy a second descriptor: {generated}"
+    );
+}
+
 #[test]
-fn recorded_prefix_run_preserves_all_residual_key_comparisons() {
+fn staged_smallest_capacity_uses_four_item_cooperative_chunks() {
+    for second in [quote!(probe first), quote!(semi eager)] {
+        let mut source = smallest_intersection(second);
+        source.structures.entries.push(syn::parse_quote! {
+            candidate stage = batch 256 expand;
+        });
+        let generated = compile(
+            &source,
+            syn::parse2(quote!(tile(256, 4), capacity(L))).unwrap(),
+        )
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+        assert_smallest_cooperative_chunks(&generated);
+        assert_single_smallest_descriptor(&generated, 0);
+        assert!(generated.contains("__tile_hits"), "{generated}");
+        assert!(generated.contains("__tile_values"), "{generated}");
+        assert!(generated.contains("__tile_count"), "{generated}");
+        assert_eq!(generated.matches("cq_gpu_runtime :: reserve (").count(), 1);
+        assert!(generated.contains("frontier_publish"), "{generated}");
+        assert!(generated.contains("frontier_claim"), "{generated}");
+        assert!(generated.contains("execute_bounded"), "{generated}");
+        assert!(!generated.contains("execute_resumable"), "{generated}");
+    }
+}
+
+fn assert_retry_kernel(generated: &str) {
+    let compact = generated.split_whitespace().collect::<String>();
+    assert!(
+        compact.contains("const__CQ_GPU_OUTPUT_POLICY:&str=\"retry\";"),
+        "{generated}"
+    );
+    assert!(
+        compact.contains("const__CQ_GPU_RETRY_DEFAULT_CAPACITY:usize=1024usize;"),
+        "{generated}"
+    );
+    assert!(compact.contains("execute_retry("), "{generated}");
+    for forbidden in [
+        "execute_resumable",
+        "execute_bounded",
+        "__resume",
+        "ResumeView",
+        "__checkpoint",
+        "__lane_checkpoint",
+        "__saved_shared",
+        "resume_reserve",
+    ] {
+        assert!(!compact.contains(forbidden), "{forbidden}: {generated}");
+    }
+    assert!(
+        compact.contains("|__stream,__output|{__pool.reset("),
+        "each launch must reset the frontier inside the callback: {generated}"
+    );
+    assert_eq!(compact.matches("__pool.reset(").count(), 1);
+}
+
+#[test]
+fn retry_smallest_uses_the_compact_bounded_kernel_and_initial_capacity_hint() {
+    for second in [quote!(probe first), quote!(semi eager)] {
+        let mut source = smallest_intersection(second);
+        source.structures.entries.push(syn::parse_quote! {
+            candidate stage = batch 256 expand;
+        });
+        for (options, capacity) in [
+            (quote!(output(retry)), "__CQ_GPU_RETRY_DEFAULT_CAPACITY"),
+            (
+                quote!(output(retry), capacity(L)),
+                "__execution.table_view(__cq_gpu_host_L)?.lenasusize",
+            ),
+        ] {
+            let generated = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_retry_kernel(&generated);
+            assert_smallest_cooperative_chunks(&generated);
+            assert_single_smallest_descriptor(&generated, 0);
+            let compact = generated.split_whitespace().collect::<String>();
+            assert!(
+                compact.contains("dynamic_shared_range=(14416u32,14416u32)"),
+                "{generated}"
+            );
+            assert!(
+                compact.contains(&format!("],{capacity},|__stream,__output|")),
+                "{generated}"
+            );
+            for token in [
+                "__tile_hits",
+                "__tile_values",
+                "__tile_count",
+                "frontier_publish",
+                "frontier_claim",
+            ] {
+                assert!(compact.contains(token), "{generated}");
+            }
+            assert_eq!(compact.matches("cq_gpu_runtime::reserve(").count(), 1);
+            assert!(!compact.contains("download"), "{generated}");
+        }
+    }
+}
+
+#[test]
+fn default_smallest_resumes_four_item_cooperative_chunks() {
+    for second in [quote!(probe first), quote!(semi eager)] {
+        let mut source = smallest_intersection(second.clone());
+        source.structures.entries.push(syn::parse_quote! {
+            candidate stage = batch 256 expand;
+        });
+        let generated = compile(&source, Options::default())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert_smallest_cooperative_chunks(&generated);
+        assert_single_smallest_descriptor(&generated, 0);
+        assert!(generated.contains("__tile_item"), "{generated}");
+        assert!(generated.contains("__resume_pc"), "{generated}");
+        assert!(generated.contains("__resume_registers"), "{generated}");
+        assert_eq!(
+            generated
+                .matches("cq_gpu_runtime :: resume_reserve (")
+                .count(),
+            1
+        );
+        assert!(generated.contains("execute_resumable"), "{generated}");
+        assert!(!generated.contains("execute_bounded"), "{generated}");
+        assert!(!generated.contains("execute_retry"), "{generated}");
+        assert!(!generated.contains("download"), "{generated}");
+    }
+}
+
+#[test]
+fn smallest_expands_one_chosen_side_and_binary_searches_the_other() {
+    for second in [quote!(probe first), quote!(semi eager)] {
+        let source = smallest_intersection(second);
+        for options in [quote!(), quote!(capacity(L))] {
+            let generated = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_eq!(generated.matches("prepare_prefix_run").count(), 2);
+            assert!(
+                generated.contains("prepare_prefix_run (__cq_gpu_table_r , & [0usize , 1usize])")
+            );
+            assert!(
+                generated.contains("prepare_prefix_run (__cq_gpu_table_s , & [0usize , 1usize])")
+            );
+            assert!(
+                generated.contains(
+                    &quote!(
+                        __smallest_right = __smallest_b_end - __smallest_b_begin
+                            < __smallest_a_end - __smallest_a_begin
+                    )
+                    .to_string()
+                ),
+                "{generated}"
+            );
+            assert!(generated.contains("if __smallest_right"), "{generated}");
+            assert!(generated.contains("__smallest_other_begin"), "{generated}");
+            assert!(generated.contains("__smallest_other_end"), "{generated}");
+            // Both prefix directories are consulted once; the checked read is
+            // consumed by the intersection, not emitted as a separate lookup.
+            assert_eq!(generated.matches("blocked_run :: point").count(), 2);
+            assert!(
+                generated.contains("while __contains_lo < __contains_hi"),
+                "{generated}"
+            );
+            assert!(generated.contains("__contains_lo ="), "{generated}");
+            assert!(generated.contains("__contains_hi ="), "{generated}");
+            assert!(!generated.contains("while __candidate"));
+            assert!(!generated.contains("while __cq_gpu_row_checked"));
+            assert!(!generated.contains("let mut __found"));
+        }
+    }
+}
+
+#[test]
+fn staged_smallest_reloads_roots_and_reprobes_membership_range() {
+    for second in [quote!(probe first), quote!(semi eager)] {
+        let mut source = smallest_intersection(second);
+        source
+            .structures
+            .entries
+            .push(syn::parse_quote!(candidate stage = batch 256 expand;));
+        for options in [quote!(), quote!(capacity(L))] {
+            let generated = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert!(generated.contains("frontier_publish"), "{generated}");
+            assert!(generated.contains("frontier_claim"), "{generated}");
+            assert_smallest_cooperative_chunks(&generated);
+            assert_single_smallest_descriptor(&generated, 0);
+            assert!(!generated.contains("while __cq_gpu_row_checked"));
+            assert_eq!(generated.matches("prepare_prefix_run").count(), 2);
+        }
+    }
+}
+
+#[test]
+fn compact_smallest_carries_only_demanded_non_driver_bindings() {
+    for (expression, demanded, carried_values, reloads) in [
+        (quote!(7), true, 1usize, 1usize),
+        (quote!(7), false, 0, 1),
+        (quote!(*a), true, 0, 2),
+    ] {
+        let output = if demanded {
+            quote!(a, b, v, extra)
+        } else {
+            quote!(a, b, v)
+        };
+        let source: ir::Program = syn::parse2(quote! { physical {
+            relation L(a:i64,b:i64); relation R(b:i64,v:i64); relation S(a:i64,v:i64);
+            l = pipe rename L@0 {a -> a,b -> b};
+            bound = pipe bind l with extra:i64 = (#expression);
+            r = let rename R@1 {b -> b,v -> v};
+            s = let rename S@2 {a -> a,v -> v};
+            candidate = pipe probe smallest [b] bound,r;
+            checked = pipe probe first [a,v] candidate,s;
+            output = pipe canon project checked keep {#output};
+            return output as answer(#output);
+        } structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r host scan = ::core::iter::Map<_,_> [];
+            s host scan = ::core::iter::Map<_,_> [];
+            r rows = ::std::vec::Vec<_>;
+            r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [b][v];
+            s rows = ::std::vec::Vec<_>;
+            s = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [a][v];
+            l stage = batch 256;
+            output canon = ::cq_gpu_runtime::DeviceSet<_>;
+        }})
+        .unwrap();
+        for options in [quote!(), quote!(capacity(L))] {
+            let generated = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert_smallest_cooperative_chunks(&generated);
+            assert_single_smallest_descriptor(&generated, carried_values);
+            let compact = generated.split_whitespace().collect::<String>();
+            assert_eq!(
+                compact
+                    .matches("cq_gpu_runtime::column(__driver,0usize,__driver_row)")
+                    .count(),
+                reloads,
+                "copied driver aliases must reload from the same column: {generated}"
+            );
+        }
+    }
+}
+
+#[test]
+fn compact_smallest_does_not_reload_a_reintroduced_constant() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation M(a:i64,b:i64);
+        relation R(b:i64,v:i64); relation S(a:i64,v:i64);
+        l = pipe rename L@0 {a -> a,b -> b};
+        live = pipe select l if (a = 1);
+        projected = pipe project live keep {b};
+        m = pipe rename M@1 {a -> a,b -> b};
+        member = let point select m if (a = 7);
+        restored = pipe probe first [b] projected,member;
+        r = let rename R@2 {b -> b,v -> v};
+        s = let rename S@3 {a -> a,v -> v};
+        candidate = pipe probe smallest [b] restored,r;
+        checked = pipe canon probe first [a,v] candidate,s;
+        return checked as answer(a,b,v);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        l stage = batch 256;
+        m host scan = ::core::iter::Map<_,_> [];
+        m host member = ::core::iter::Map<_,_> [a];
+        member = ::cq_storage::AdaptiveKeySet<_,::cq_storage::BorrowedI64TupleCodec,4096> [b]
+            membership payload [b] constants {a = 7};
+        r host scan = ::core::iter::Map<_,_> [];
+        s host scan = ::core::iter::Map<_,_> [];
+        r rows = ::std::vec::Vec<_>;
+        s rows = ::std::vec::Vec<_>;
+        r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [b][v];
+        s = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [a][v];
+        checked canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    for options in [quote!(), quote!(capacity(L))] {
+        let generated = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        let compact = generated.split_whitespace().collect::<String>();
+        assert!(!compact.contains("cq_gpu_runtime::column(__driver,0usize,__driver_row)"));
+        assert!(compact.contains("cq_gpu_runtime::column(__driver,1usize,__driver_row)"));
+    }
+}
+
+#[test]
+fn smallest_reuses_a_recorded_first_side_witness() {
+    let source: ir::Program = syn::parse_quote! { physical {
+        relation L(a:i64,b:i64); relation R(b:i64,v:i64); relation S(a:i64,v:i64);
+        l = pipe rename L@0 {a -> a,b -> b};
+        r = let rename R@1 {b -> b,v -> v};
+        s = let rename S@2 {a -> a,v -> v};
+        pre = pipe semi eager [b] l,r;
+        candidate = pipe probe smallest [b] pre,r;
+        checked = pipe canon probe first [a,v] candidate,s;
+        return checked as answer(a,b,v);
+    } structures {
+        l host scan = ::core::iter::Map<_,_> [];
+        r host scan = ::core::iter::Map<_,_> [];
+        s host scan = ::core::iter::Map<_,_> [];
+        r rows = ::std::vec::Vec<_>;
+        s rows = ::std::vec::Vec<_>;
+        r = ::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec> [b];
+        r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [b][v];
+        s = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [a][v];
+        pre share = lookup r [b] first pre force candidate;
+        pre repr = tuples witness { r [b] at pre as ::cq_storage::RunCursor<'_,_> };
+        candidate stage = batch 256 expand;
+        checked canon = ::cq_gpu_runtime::DeviceSet<_>;
+    }};
+    for options in [quote!(), quote!(capacity(L))] {
+        let generated = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        // One eager lookup and the second root prefix lookup, followed by
+        // two alternative candidate-range reprobe branches.
+        assert_eq!(generated.matches("blocked_run :: point").count(), 4);
+        assert!(generated.contains("__cq_gpu_run_view_r_1 . columns"));
+        assert!(generated.contains("__smallest_a_begin"));
+        assert!(generated.contains("while __contains_lo < __contains_hi"));
+    }
+}
+
+#[test]
+fn smallest_reuses_both_recorded_prefix_witnesses_at_the_introducing_probe() {
+    for second in [quote!(probe first), quote!(semi eager)] {
+        let source: ir::Program = syn::parse2(quote! { physical {
+            relation L(a:i64,b:i64); relation R(b:i64,v:i64); relation S(a:i64,v:i64);
+            l = pipe rename L@0 {a -> a,b -> b};
+            r = let rename R@1 {b -> b,v -> v};
+            s = let rename S@2 {a -> a,v -> v};
+            pre_r = pipe semi eager [b] l,r;
+            pre_s = pipe semi eager [a] pre_r,s;
+            candidate = pipe probe smallest [b] pre_s,r;
+            checked = pipe canon #second [a,v] candidate,s;
+            return checked as answer(a,b,v);
+        } structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r host scan = ::core::iter::Map<_,_> [];
+            s host scan = ::core::iter::Map<_,_> [];
+            r rows = ::std::vec::Vec<_>;
+            s rows = ::std::vec::Vec<_>;
+            r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [b][v];
+            s = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [a][v];
+            pre_r share = lookup r [b] first pre_r force candidate;
+            pre_r repr = tuples witness { r [b] at pre_r as ::cq_storage::RunCursor<'_,_> };
+            pre_s share = lookup s [a] first pre_s force candidate;
+            pre_s repr = tuples witness { s [a] at pre_s as ::cq_storage::RunCursor<'_,_> };
+            checked canon = ::cq_gpu_runtime::DeviceSet<_>;
+        }})
+        .unwrap();
+        for staged in [false, true] {
+            let mut source = source.clone();
+            if staged {
+                source.structures.entries.push(syn::parse_quote! {
+                    candidate stage = batch 256 expand;
+                });
+            }
+            for options in [quote!(), quote!(capacity(L))] {
+                let generated = compile(&source, syn::parse2(options).unwrap())
+                    .unwrap()
+                    .to_token_stream()
+                    .to_string();
+                assert_eq!(generated.matches("prepare_prefix_run").count(), 2);
+                // Eager semis supply both root prefix witnesses. Staged
+                // candidates recover the other range in one of two branches;
+                // unstaged serial traversal keeps the original ranges.
+                assert_eq!(
+                    generated.matches("blocked_run :: point").count(),
+                    if staged { 4 } else { 2 }
+                );
+                assert!(generated.contains("__smallest_a_begin"), "{generated}");
+                assert!(generated.contains("__smallest_b_begin"), "{generated}");
+                assert!(generated.contains("while __contains_lo < __contains_hi"));
+                assert!(!generated.contains("while __cq_gpu_row_checked"));
+            }
+        }
+    }
+}
+
+#[test]
+fn smallest_requires_explicit_prefix_runs_on_both_sides() {
+    for second in [quote!(probe first), quote!(semi eager)] {
+        for (entry, side, provider) in [(4, "side 1", "r"), (6, "side 2", "s")] {
+            let mut source = smallest_intersection(second.clone());
+            let ir::Structure::Built { keyed, .. } =
+                &mut source.structures.entries[entry].structure
+            else {
+                unreachable!()
+            };
+            // Even a recorded sorted run is not a sorted-trie candidate index.
+            keyed.ty =
+                syn::parse_quote!(::cq_storage::SortedRun<_,_,::cq_storage::BorrowedI64TupleCodec>);
+            for options in [quote!(), quote!(capacity(L))] {
+                let error = compile(&source, syn::parse2(options).unwrap())
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("CQ_GPU_SMALLEST_TRIE"), "{error}");
+                assert!(
+                    error.contains(&format!("{side} provider {provider}")),
+                    "{error}"
+                );
+                assert!(error.contains("selection"), "{error}");
+                assert!(error.contains("prefix_runs"), "{error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_prefix_run_binary_searches_before_expanding() {
     let source: ir::Program = syn::parse_quote! {physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
         l = pipe rename L@0 {a -> x,b -> y};
@@ -367,19 +1140,103 @@ fn recorded_prefix_run_preserves_all_residual_key_comparisons() {
     let reads = validate(&source, &facts).unwrap();
     assert_eq!(reads.len(), 1);
     assert_eq!(reads[0].keys, ["x", "y"]);
-    assert_eq!(reads[0].source, "rank-point+residual");
-    let generated = compile(&source, syn::parse2(quote!(capacity(R))).unwrap())
-        .unwrap()
-        .to_token_stream()
-        .to_string();
-    assert_eq!(generated.matches("prepare_run").count(), 1);
-    let residual = quote!(
-        ::cq_gpu_runtime::run_column(__cq_gpu_run_view_r, 1usize, __cq_gpu_row_p)
-            == __cq_gpu_tile_column_1
-    )
-    .to_string();
-    assert!(generated.contains(&residual));
-    assert!(generated.contains("while __cq_gpu_row_p < __cq_gpu_end_p"));
+    assert_eq!(reads[0].source, "rank-point+binary-search");
+    for options in [quote!(), quote!(capacity(R))] {
+        let generated = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert_eq!(generated.matches("prepare_prefix_run").count(), 1);
+        assert!(generated.contains("prepare_prefix_run (__cq_gpu_table_r , & [0usize , 1usize])"));
+        assert!(
+            generated.contains("run_column (__cq_gpu_run_view_r , 1usize , __mid) < __prefix_key")
+        );
+        assert!(
+            generated.contains("run_column (__cq_gpu_run_view_r , 1usize , __mid) <= __prefix_key")
+        );
+        assert!(!generated.contains("while __candidate"));
+        assert!(!generated.contains("== __cq_gpu_tile_column_1"));
+        assert!(generated.contains("(__prefix_begin , __prefix_end)"));
+    }
+}
+
+#[test]
+fn prefix_membership_narrows_each_recorded_column_without_residual_scan() {
+    for operation in [quote!(semi), quote!(anti)] {
+        for levels in [quote!([x][y][z]), quote!([x][y,z])] {
+            let source: ir::Program = syn::parse2(quote! { physical {
+                relation L(a:i64,b:i64,c:i64); relation R(a:i64,b:i64,c:i64);
+                l = pipe rename L@0 {a -> x,b -> y,c -> z};
+                r = let rename R@1 {a -> x,b -> y,c -> z};
+                p = pipe canon #operation eager [x,y,z] l,r;
+                return p as answer(x,y,z);
+            } structures {
+                l host scan = ::core::iter::Map<_,_> [];
+                r host scan = ::core::iter::Map<_,_> [];
+                r rows = ::std::vec::Vec<_>;
+                r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> #levels;
+                p canon = ::cq_gpu_runtime::DeviceSet<_>;
+            }})
+            .unwrap();
+            for options in [quote!(), quote!(capacity(L))] {
+                let generated = compile(&source, syn::parse2(options).unwrap())
+                    .unwrap()
+                    .to_token_stream()
+                    .to_string();
+                assert!(generated.contains(
+                    "prepare_prefix_run (__cq_gpu_table_r , & [0usize , 1usize , 2usize])"
+                ));
+                assert_eq!(generated.matches("while __lo < __hi").count(), 4);
+                for slot in [1usize, 2usize] {
+                    let lower = quote!(::cq_gpu_runtime::run_column(__cq_gpu_run_view_r, #slot, __mid) < __prefix_key).to_string();
+                    let upper = quote!(::cq_gpu_runtime::run_column(__cq_gpu_run_view_r, #slot, __mid) <= __prefix_key).to_string();
+                    assert!(generated.contains(&lower));
+                    assert!(generated.contains(&upper));
+                }
+                assert!(generated.contains("let __found ="));
+                assert!(!generated.contains("while __candidate"));
+                assert!(!generated.contains("let mut __found"));
+            }
+        }
+    }
+}
+
+#[test]
+fn prefix_reads_search_only_the_requested_levels() {
+    for (columns, rename, keys, searches) in [
+        (quote!(a:i64), quote!(a -> x), quote!(x), 0),
+        (quote!(a:i64,b:i64), quote!(a -> x,b -> y), quote!(x, y), 2),
+    ] {
+        let source: ir::Program = syn::parse2(quote! { physical {
+            relation L(#columns); relation R(a:i64,b:i64,c:i64);
+            l = pipe rename L@0 {#rename};
+            r = let rename R@1 {a -> x,b -> y,c -> z};
+            p = pipe canon semi eager [#keys] l,r;
+            return p as answer(#keys);
+        } structures {
+            l host scan = ::core::iter::Map<_,_> [];
+            r host scan = ::core::iter::Map<_,_> [];
+            r rows = ::std::vec::Vec<_>;
+            r = ::cq_gpu_runtime::PrefixRun<_,_,::cq_storage::BorrowedI64TupleCodec,0> [x][y][z];
+            p canon = ::cq_gpu_runtime::DeviceSet<_>;
+        }})
+        .unwrap();
+        for options in [quote!(), quote!(capacity(R))] {
+            let generated = compile(&source, syn::parse2(options).unwrap())
+                .unwrap()
+                .to_token_stream()
+                .to_string();
+            assert!(
+                generated.contains(
+                    "prepare_prefix_run (__cq_gpu_table_r , & [0usize , 1usize , 2usize])"
+                )
+            );
+            assert_eq!(generated.matches("blocked_run :: point").count(), 1);
+            assert_eq!(generated.matches("while __lo < __hi").count(), searches);
+            assert!(!generated.contains("run_column (__cq_gpu_run_view_r , 2usize , __mid)"));
+            assert!(!generated.contains("while __candidate"));
+        }
+    }
 }
 
 #[test]
@@ -623,6 +1480,9 @@ fn capacity_is_explicit_and_names_a_declared_input() {
     let options: Options = syn::parse2(quote!(capacity(invented))).unwrap();
     let error = compile(&shared(), options).unwrap_err().to_string();
     assert!(error.contains("CQ_GPU_CAPACITY"), "{error}");
+    let retry: Options = syn::parse2(quote!(output(retry), capacity(invented))).unwrap();
+    let error = compile(&shared(), retry).unwrap_err().to_string();
+    assert!(error.contains("CQ_GPU_CAPACITY"), "{error}");
     assert!(syn::parse2::<Options>(quote!(capacity(L), capacity(R))).is_err());
     assert!(syn::parse2::<Options>(quote!(completion(invented))).is_err());
 }
@@ -757,6 +1617,22 @@ fn selection_decodes_one_convergent_stripe_before_row_predicates() {
     assert!(!generated.contains("decode_tile_pair ("));
     assert!(!generated.contains("column (__driver"));
     assert!(!generated.contains("execute_resumable"));
+    for options in [
+        quote!(output(retry)),
+        quote!(output(retry), capacity(Arbitrary)),
+    ] {
+        let retry = compile(&source, syn::parse2(options).unwrap())
+            .unwrap()
+            .to_token_stream()
+            .to_string();
+        assert_retry_kernel(&retry);
+        assert!(!retry.contains("execute_selection"), "{retry}");
+        assert!(!retry.contains("__scatter"), "{retry}");
+        assert!(
+            retry.find("execute_retry").unwrap() < retry.find("__execution . dedup").unwrap(),
+            "{retry}"
+        );
+    }
 }
 
 #[test]
@@ -971,8 +1847,14 @@ fn closed_typed_scalar_binds_are_encoded_once_on_host() {
             scan host scan = ::core::iter::Map<_,_> [];
             output canon = ::cq_gpu_runtime::DeviceSet<_>;
         }};
-        for options in [Options::default(), syn::parse2(quote!(capacity(R))).unwrap()] {
-            let generated = compile(&source, options).unwrap().to_token_stream().to_string();
+        for options in [
+            Options::default(),
+            syn::parse2(quote!(capacity(R))).unwrap(),
+        ] {
+            let generated = compile(&source, options)
+                .unwrap()
+                .to_token_stream()
+                .to_string();
             let capture = quote!(let __cq_gpu_literal: #ty = #expression).to_string();
             assert_eq!(generated.matches(&capture).count(), 1, "{generated}");
             assert!(generated.contains("encode_value"));
@@ -993,8 +1875,15 @@ fn closed_capture_respects_written_bind_scope() {
         output canon = ::cq_gpu_runtime::DeviceSet<_>;
     }};
     let generated = compile(&source, Options::default())
-        .unwrap().to_token_stream().to_string();
-    assert_eq!(generated.matches("let __cq_gpu_literal : i32 = * x").count(), 1);
+        .unwrap()
+        .to_token_stream()
+        .to_string();
+    assert_eq!(
+        generated
+            .matches("let __cq_gpu_literal : i32 = * x")
+            .count(),
+        1
+    );
     assert!(generated.contains("Bounds :: singleton"));
 }
 
@@ -1077,9 +1966,14 @@ fn lossy_and_repeated_heads_canon_after_projection() {
     assert!(generated.contains("project_table (__cq_gpu_table_scan , & [0usize , 0usize])"));
     assert_eq!(generated.matches("__execution . dedup").count(), 2);
     assert!(generated.contains("into_columns :: < (i32 , i32 ,) , :: cq_gpu_runtime :: Delta >"));
-    let ir::Structure::HeadDedup { ty, .. } = &mut source.structures.entries[2].structure else { unreachable!() };
+    let ir::Structure::HeadDedup { ty, .. } = &mut source.structures.entries[2].structure else {
+        unreachable!()
+    };
     *ty = syn::parse_quote!(::cq_gpu_runtime::DeviceSet<_,::cq_gpu_runtime::Delta,::cq_gpu_runtime::Fused>);
-    let generated = compile(&source, Options::default()).unwrap().to_token_stream().to_string();
+    let generated = compile(&source, Options::default())
+        .unwrap()
+        .to_token_stream()
+        .to_string();
     assert!(generated.contains("cq_gpu_head_"));
     assert!(generated.contains("execute_resumable_fused"));
     assert_eq!(generated.matches("__execution . dedup").count(), 1);

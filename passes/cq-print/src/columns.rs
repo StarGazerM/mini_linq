@@ -193,12 +193,16 @@ impl Context<'_> {
         )
     }
 
-    /// Cursor consumed by this probe, if a sharing decision records one.
-    pub fn forcing_witness(&self, result: &str) -> Option<Ident> {
+    /// Cursor consumed for this exact build and prefix at a recorded force.
+    /// A Smallest force can consume independent cursors from both candidate sides.
+    pub fn forcing_witness(&self, result: &str, build: &str, keys: &[String]) -> Option<Ident> {
         self.analysis
             .witnesses
             .keys()
-            .find(|origin| self.analysis.shares[*origin].force == result)
+            .find(|origin| {
+                let share = &self.analysis.shares[*origin];
+                share.force == result && share.build == build && share.keys == keys
+            })
             .map(|origin| self.witness_ident(origin))
     }
 
