@@ -106,6 +106,12 @@ boundary without modifying the compiler. The module fallback is not retained.
 Rust also warns that `#[inline(always)]` is ignored on exported `#[device]`
 functions; the device backend's documented inline behavior and resource audit
 remain the relevant evidence, rather than suppressing that host warning.
+The resident integration also exposed a host-linker collision when two device
+libraries exported a kernel named `decode_column`: both emitted
+`cuda_oxide_codegen_v1_cuda_oxide_kernel_246e25db_decode_column`.
+The FastLanes consumer kernel is therefore named `fastlanes_decode_column`;
+kernel names must be distinct across these linked libraries. No toolchain
+source was changed.
 
 Cooperative tile helpers require exactly 256 converged threads. Scan needs eight
 shared u32 words and uses wrapping arithmetic; callers ensure expansion totals
@@ -649,10 +655,11 @@ and zero stack/spills. No CUDA C, NVRTC, or upstream checkout changes were used.
 ## Structures GPU terminal printer
 
 `printer` is the external proc-macro crate `cq-gpu`; `printer-runtime` owns
-column uploads, pooled blocked-run builds, output allocation, device
-canonicalization and downloads. `h05-compiled` authors the retail clauses
-twice, with fact-first and customer-first written orders. It does not call
-the hand-written H05 kernels.
+typed resident hosts, pooled blocked-run builds, output allocation and device
+canonicalization. `device-columns` (`gpu-device-columns`, re-exported through
+`cq_gpu_runtime`) owns the pooled column buffers and device codecs.
+`h05-compiled` authors the retail clauses twice, with fact-first and
+customer-first written orders. It does not call the hand-written H05 kernels.
 
 ```rust,ignore
 pipeline {
@@ -668,10 +675,14 @@ pipeline {
 }
 ```
 
-The three printer arguments are optional; the displayed values are their
-defaults. `frontier(0)` disables descriptor publication. The supported tile
-shape is 256 threads × four items, and the supported directory is `rank`;
-other shapes/directories are rejected rather than silently ignored.
+The displayed printer arguments are optional; these are their defaults.
+`frontier(0)` disables descriptor publication. The supported tile shape is
+256 threads × four items, and the supported directory is `rank`; other
+shapes/directories are rejected rather than silently ignored.
+`capacity(Relation)` additionally records an explicit output allocation bound
+from a named input relation. H05 records `capacity(Lineitem)`; its chained
+identity query records `capacity(Input)`. These are allocation contracts, not
+inferred functional dependencies, uniqueness or sortedness.
 
 The extra recorded passes are necessary. The shorter
 `order(le)` + `sorted_runs` + `retain_lookups` pipeline still records host
@@ -692,7 +703,7 @@ its full Supplier lookup uses the supplier-key directory.
 
 | Checked Structures/Physical fact | GPU realization |
 |---|---|
-| Host rename and relational select/point/range | Uploaded column scan and device comparisons; string equality uses per-run dictionary IDs. |
+| Host rename and relational select/point/range | Resident column scan and device comparisons; string equality uses the host's shared dictionary IDs. Ordinary tuple bindings explicitly take the upload path. |
 | `let` with one-level `SortedRun` | One blocked run, built on device using the recorded integral key. |
 | Explicit `PrefixRun` key levels | One prefix run, with exact residual comparisons at full-key reads. |
 | Integral membership-only provider | Budgeted exact bitmap, not an inferred payload run. |
@@ -703,19 +714,98 @@ its full Supplier lookup uses the supplier-key directory.
 | `stage = batch N` / `expand` | Bounds cooperative work by the recorded batch; only explicit expand stages publish large descriptors to the bounded frontier. |
 | Project | Carries only demanded values to output. |
 | Recorded `DeviceSet<_>` canon | Exact device dedup; hash collisions never establish equality. |
-| Returned stream | Capacity-checked device output; overflow counts all rows, grows and relaunches the pure stream. |
+| Returned stream | Owned resident device columns, with an explicitly recorded capacity contract or bounded grow-and-resume execution. Tuple transfer requires `.to_host()`. |
 
 Each generated kernel records its Structures keyed-read provenance. PrefixRun
 witnesses are not fabricated: the existing share contract admits only
 one-level payload providers, so multi-level Supplier reads retain their
 ordinary lookup behavior. Inputs must remain immutable during execution.
-Host tuple slices are columnized with a cache keyed by slice pointer, length,
-Rust row type and schema; the cache and shared string dictionary last for one
-execution, never across unrelated calls. Only the context, stream and allocator
-pool survive across calls. Pure projections share execution-owned uploaded
-columns; nonexpanding filtered streams compact stably with block counts and an
-exclusive scan. Run construction consumes the selected logical prefix, not
-unused output capacity. Answers are owned typed tuples.
+Resident `DeviceColumns<'data, Row, C = Plain>` hosts own their encoded columns,
+row metadata and string dictionary domain. Column allocations retain the
+shared pool, CUDA stream and context through reference-counted ownership:
+neither inputs nor answers borrow a temporary execution `Runtime`. Passing
+`&DeviceColumns` to another compiled query shares the allocation rather than
+columnizing or uploading it again. The terminal returns an owned device host,
+not a host iterator; `.to_host()?` is the explicit tuple-transfer boundary.
+The H05 loader deliberately drops its construction runtime before executing
+either plan. Ordinary tuple bindings still upload for that execution; they do
+not create a persistent cache keyed by host pointer.
+
+### Resident host codecs and recorded derived codecs
+
+Host compression is a property of the supplied value, not a printer decision
+and not an extra IR host-codec entry. The loader supplies `Codec::Plain`,
+`Codec::For`, `Codec::Delta` or `Codec::Dictionary` to `Runtime::upload_owned_rows`;
+device encoders prepare 1024-value FastLanes vectors. Generated loads consume
+the column/vector metadata through the device decoder. They do not first
+download or expand the whole relation to host tuples. H05 calls
+`detect_integer_codec` on each numeric column during loading; this estimates
+the actual vector widths and selects delta only when at most 1/16 adjacent
+transitions descend and delta is smaller including its base metadata.
+Region names use dictionary IDs. All six relations are loaded once using
+one `Dictionary` and runtime, so string equality has one compatible ID domain.
+`upload_owned_rows` uses `OwnedRowCodec` tuples and an owning string dictionary,
+returning `DeviceColumns<'static, Row>` without retaining a borrow of the
+source tuples. The separate `upload_rows` path preserves existing borrowed
+string hosts. The `'data` parameter tracks host string/binding compatibility,
+never an execution runtime lifetime.
+
+The 64-bit FastLanes layout has sixteen lanes and the `04261537` unified
+transposed ordering. A packed vector of width W consumes W × 128 data bytes.
+Each vector has a 32-byte `VectorHeader` recording its word offset, base,
+width, codec and valid-row count. Delta uses sixteen independent 64-value
+sequences with sixteen 64-bit restart bases, avoiding a whole-vector serial
+prefix dependency; its signed deltas are frame-of-reference packed.
+Host loading obtains the exact encoded extent before allocation. Derived
+outputs retain a conservative device allocation rather than reading their
+extent back merely to resize the answer.
+
+Derived storage is different: its codec is an explicit Structures provider
+fact, selected by a rewrite rather than guessed from a query or Rust host
+value. The default recorded device canon is plain:
+
+```rust,ignore
+::cq_rewrites::retype(dedup => ::cq_gpu_runtime::DeviceSet<_>)
+```
+
+Both H05 plans instead record packed frame-of-reference answers:
+
+```rust,ignore
+::cq_rewrites::retype(dedup =>
+    ::cq_gpu_runtime::DeviceSet<_, ::cq_gpu_runtime::For>)
+```
+
+Their return type is `DeviceColumns<'_, (i64, i64, i64), For>`. A second compiled
+identity query binds this device host and records an ordinary plain
+`DeviceSet<_>` answer. Only that second result is downloaded. This makes the
+packed-output-to-resident-input boundary part of every H05 exactness run,
+without changing either H05 clause order or its keyed-read facts.
+
+The design follows the register/tile decoding motivation in Afroozeh, Felius
+and Boncz, [*Accelerating GPU Data Processing using FastLanes Compression*,
+DaMoN 2024](https://doi.org/10.1145/3662010.3663450)
+([paper](https://ir.cwi.nl/pub/34260/34260.pdf)): keep compressed columns in
+VRAM and decode values where the query consumes them, rather than writing
+an entire decompressed relation back to global memory. The paper's speedups
+are not measurements of this Rust implementation. The 1024-value storage
+vector is not a requirement to keep 1024 decoded values live per thread.
+
+### Lifetime, VRAM and capacity errors
+
+All device buffers, including codec headers, payloads and scratch space, use
+the `rccl-memory` pool. No RCCL device algorithm, managed-memory spill, CPU
+fallback or out-of-core partitioner is introduced. The working set must fit
+VRAM: resident inputs plus indexes, transient encoding/build storage and
+output capacity all count. Compression of final columns alone does not bound
+peak memory. Allocation failure is reported as `CQ_GPU_VRAM_EXCEEDED`;
+reducing the dataset or explicitly chosen capacity is a caller decision,
+not an implicit change of query semantics.
+
+Pool/stream/context ownership follows the columns, so a device result can
+outlive the runtime that produced it and feed another query. Explicit capacity
+overflow is `CQ_GPU_OUTPUT_CAPACITY`, retained as device status and surfaced
+at the explicit download boundary; it is not a truncated successful answer.
+No tuple readback is required between the two compiled H05 calls.
 
 ### Running the compiled pipeline
 
@@ -724,26 +814,143 @@ source /data/rccl/scripts/oxide-env.sh
 cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin printer-smoke
 ./target/release/printer-smoke
 cargo oxide build --arch sm_89 -- --release -p gpu-h05-compiled --bin gpu-h05-compiled
-./target/release/gpu-h05-compiled /data/tpch-gpu/sf1 both compare/gpu_h05_compiled.results.json
-./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 both compare/gpu_h05_compiled.results.json
+./target/release/gpu-h05-compiled /data/tpch-gpu/sf1 both compare/gpu_h05_compiled.resident.results.json
+./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 both compare/gpu_h05_compiled.resident.results.json
 ```
 
 The standalone smoke compares GPU answers with the pull printer, including
-empty input. Each H05 plan checks exact sorted answers against the independent
-`answer.tsv` after one warmup and five measured runs. The input dictionary is
-decoded to host Strings before compilation's ordinary slice-binding path;
-the runtime constructs its own per-run dictionary. Date columns use integral
-days and the manifest is checked against the authored 1994 window.
-`total_ms` is GPU build + query kernel + dedup time, excluding host
-columnization, upload and answer download; `wall_ms` includes the full call.
-The original hand-written SF10 totals (A 6.2 ms, B 10.1 ms) remain in
-`compare/gpu_h05.results.json`. The fresh comparison below rebuilds both runners:
-the context-scoped blocked-run module cache also benefits the hand-written
-build path. Its samples are in `compare/gpu_h05_compiled.handwritten.results.json`.
+empty input. Each H05 plan and its chained compiled identity query check exact
+sorted answers against independent `answer.tsv` after one warmup and five
+measured runs. Region names are decoded from the input file dictionary once
+and assigned IDs in the shared resident dictionary during loading. Dates are
+integral days; the manifest must match the authored 1994 window.
 
-Measured on the RTX 6000 Ada, 2026-10-18. Every warmup and measured run is exact
-at SF1 (7,242 answers) and SF10 (72,983). Medians of five unprofiled runs after
-one warmup; phase medians need not sum to the median total:
+The resident JSON records, separately:
+
+- `one_time.host_load_ms`: projected-file and oracle loading.
+- `one_time.load_encode_ms`: runtime initialization, row preparation, upload
+  and device encoding, once for all six relations. Each relation also records
+  its `load_encode_ms` around `upload_owned_rows`, chosen codecs, row count,
+  logical `raw_bytes` and `fastlanes_bytes` including vector headers and
+  extent metadata. These byte counts are not allocator high-water marks,
+  PCIe counters or the size of host string allocations. Codec selection and
+  tuple preparation are in the all-relations load interval, not the narrower
+  per-relation `upload_owned_rows` interval.
+- `build_ms`, `kernel_ms`, `dedup_ms`, `total_ms`: runtime GPU timings for
+  the first compiled query; `wall_ms` is that resident call's host elapsed
+  time, excluding initial loading, the chained call and final download.
+- `calls`: individual warmup and measured call facts, including separate
+  wall/build/kernel/dedup/total values for the second compiled query, packed
+  answer allocation bytes, exactness and the final `download_ms`.
+  Resident result `raw_bytes` describes uncompressed capacity, not an implicit
+  readback of live row count; encoded answer storage may be conservative.
+
+The measured resident results are in `gpu_h05_compiled.resident.results.json`;
+the before/after comparison and evidence ledger are in
+`gpu_h05_compiled.resident.summary.json`. Profile separately from unprofiled samples:
+
+```sh
+CQ_GPU_PROFILE=1 nsys profile --trace=cuda --capture-range=cudaProfilerApi \
+  --capture-range-end=stop --force-overwrite=true -o compare/compiled_resident \
+  ./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 A \
+  compare/gpu_h05_compiled.resident.profile.results.json
+nsys stats --report cuda_gpu_kern_sum,cuda_api_sum --format csv \
+  compare/compiled_resident.nsys-rep
+ncu --target-processes all --kernel-name 'regex:cq_gpu_stream_0_r21' \
+  --launch-skip 1 --launch-count 1 \
+  --metrics dram__bytes.sum,gpu__time_duration.sum,dram__throughput.avg.pct_of_peak_sustained_elapsed \
+  --force-overwrite -o compare/compiled_resident \
+  ./target/release/gpu-h05-compiled /data/tpch-gpu/sf10 A \
+  compare/gpu_h05_compiled.resident.ncu.results.json
+/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9/bin/ptxas \
+  -v -arch=sm_89 target/oxide-ir/gpu_h05_compiled.ptx -o /dev/null
+```
+
+`CQ_GPU_PROFILE` brackets the first measured resident call and its chained
+query with CUDA profiler control APIs. Loading and the final explicit download
+are outside that capture range, so transfer absence can be checked directly
+rather than inferred from whole-process transfer totals.
+
+The codec oracle is a separate binary-only package to avoid the pinned
+cuda-oxide package-loader ambiguity:
+
+```sh
+cargo oxide build --arch sm_89 -- --release -p gpu-device-columns-oracle
+./target/release/gpu-device-columns-oracle
+```
+
+It compares independently constructed paper-layout bits and headers, not only
+encode/decode round trips, and exercises empty/partial vectors, signed extrema,
+all widths, per-lane delta restarts, and device-count-below-capacity encoding.
+
+#### Resident measurements (2026-10-18)
+
+RTX 6000 Ada, sm_89; one warmup and five unprofiled calls. Both H05 plans
+and their second compiled queries were exact in every SF1/SF10 call
+(7,242 / 72,983 distinct answers). The device codec oracle passed **534**
+cases; printer smoke/expansion oracles, all **30** printer tests including UI
+fixtures, and **3** dictionary unit tests passed.
+
+SF10 Plan A:
+
+| Per-call median | Before: re-upload | Resident FastLanes |
+|---|---:|---:|
+| Wall | 894.274 ms | 37.885 ms |
+| Build | 1.972 ms | 13.738 ms |
+| Kernel phase | 1.044 ms | 10.875 ms |
+| Dedup phase | 0.069 ms | 12.061 ms |
+
+Wall time improves **23.60×**. The phase scopes are not identical:
+resident kernel/dedup phases also initialize conservative-capacity buffers and
+encode persistent outputs. The separately profiled main kernel takes **1.741 ms**
+in nsys, not the 10.875-ms kernel phase. This implementation trades more device
+work for eliminating per-call host preparation/transfers; the phase regressions
+are not hidden. In the captured call pair, serial codec offset construction
+accounts for 15.715 ms and device memset for 19.441 ms.
+
+One-time SF10 load/encode is **1,825.256 ms**, including runtime setup,
+host column preparation, upload and completed GPU encoding; file/oracle loading
+is separately **1,519.972 ms**.
+
+| Relation | Raw column bytes | FastLanes bytes |
+|---|---:|---:|
+| customer | 24,000,000 | 1,218,896 |
+| orders | 360,000,000 | 74,534,136 |
+| lineitem | 959,776,832 | 176,211,664 |
+| supplier | 1,600,000 | 81,552 |
+| nation | 400 | 592 |
+| region | 80 | 592 |
+
+Small relations expand because vectors retain headers, lane bases and padded
+payloads. Byte accounting includes encoded data, per-vector headers and extent
+metadata, not pool reserve or host dictionary strings.
+
+Separate ncu kernel-replay captures measure main-kernel DRAM traffic falling
+from **532,209,024** to **205,408,896 bytes** (**61.40%** lower). The profiler
+kernel duration is 2.905 ms and is not substituted for unprofiled timing.
+`compiled_resident.ncu.csv` contains the hardware counters.
+
+The nsys CUDA-profiler capture covers the first measured query **and** its
+compiled consumer, excluding loading and final `.to_host()`. It records
+**zero HtoD and zero DtoH calls**, no memcpy activity, and 163 device memsets.
+Evidence is in `compiled_resident_cuda_api_sum.csv`,
+`compiled_resident_cuda_gpu_mem_time_sum.csv` and
+`compiled_resident_cuda_gpu_kern_sum.csv`. The explicit-capacity measured path
+also has no control readback; generic grow-and-resume's permitted four-byte
+control flag is a separate execution contract.
+
+
+The following tables and `gpu_h05_compiled.results.json`, `.profile.json`,
+`.resources.json` and `compiled_final.nsys.csv` are **historical,
+pre-resident** evidence, not results for the current resident implementation.
+The historical JSON entries are labeled accordingly; their recorded samples
+are preserved. The original hand-written SF10 totals (A 6.2 ms, B 10.1 ms)
+remain in `compare/gpu_h05.results.json`; the subsequent hand-written
+comparison is `compare/gpu_h05_compiled.handwritten.results.json`.
+
+Historical measurements on RTX 6000 Ada, 2026-10-18: every warmup and measured
+run was exact at SF1 (7,242 answers) and SF10 (72,983). Medians of five
+unprofiled runs after one warmup; phase medians need not sum to median total:
 
 | SF | Plan | Implementation | Build ms | Kernel ms | Dedup ms | Total ms |
 |---:|:---:|---|---:|---:|---:|---:|
@@ -770,8 +977,8 @@ Compiled SF10 A is **1.11×** the fresh hand-written kernel, below the requested
 1.3× bound against 0.94 ms, with zero spills. Its build is below both the fresh
 hand-written build and the original 4.9 ms reference. B's kernel falls from
 92.602 to 0.506 ms; its remaining build and traversal overhead is not hidden.
-Host columnization and upload still occur on every execution: only allocator
-capacity and kernel code objects are reused, never input contents.
+In these historical captures, host columnization and upload occurred on every
+execution; only allocator capacity and kernel code objects were reused.
 
 #### A diagnosis and emitter changes
 
@@ -830,7 +1037,7 @@ profiles, original results and intermediate stages are in
 
 #### Build/runtime changes and resources
 
-Pure projections now share immutable execution-owned column allocations.
+In the pre-resident implementation, pure projections shared execution-owned allocations.
 Filtered nonexpanding streams, including semijoins, use stable count/scan/scatter
 and inherit conservative source bounds. Runs allocate/gather only the selected
 logical prefix. Output count/error metadata uses one readback. Disabled
@@ -841,8 +1048,8 @@ capture loaded and unloaded CUDA modules **120 times over six executions**,
 with 33.359 ms in `cuModuleLoadData`. The pinned loader does not cache those
 modules. The experimental runtime now retains its module, and blocked-run
 caches its module by actual CUDA-context identity. These are code-object
-lifetimes, not changes to Structures or upstream cuda-oxide. Fresh executions
-still rebuild every recorded run and dictionary.
+lifetimes, not changes to Structures or upstream cuda-oxide. Those historical
+executions still rebuilt every recorded run and dictionary.
 The final compiled **both-plan** capture has 14 module loads across twelve
 executions, including per-call generated query modules and startup owners,
 versus 120 across six A executions before code-object retention. These are
@@ -878,8 +1085,9 @@ and a 20,000-answer fanout using a recorded scan join filter, retained witness,
 batch-32 expansion, frontier publication and output grow/relaunch.
 The smoke additionally checks an unstaged 4,097-row fanout (including output
 growth) and mutates its input in place before another execution, verifying that
-pool/module reuse does not retain stale input data. The 21 printer unit tests
-and all four compile-fail fixtures pass.
+pool/module reuse does not retain stale input data. The historical run passed
+21 printer unit tests and all four compile-fail fixtures; rerun the commands
+above for current resident-code verification.
 
 
 ### Supported domain and explicit rejections
@@ -906,5 +1114,13 @@ and all four compile-fail fixtures pass.
   restrictions described above still apply. The consumer is a separate
   package from both device libraries.
 - Finite device output cardinalities must fit the runtime's row-index domain.
-  Grow/relaunch preserves exhaustive answers, but repeats pure GPU work on
-  overflow; it does not assume unrecorded PK constraints.
+  An explicit `capacity(Relation)` is a checked allocation contract and never
+  establishes an unrecorded PK constraint. The default bounded-output path
+  saves each lane's program position, live values and expansion cursors,
+  shared descriptors and claimed frontier-task identity. A failed output
+  reservation leaves the output count unchanged. The runtime reads one
+  32-bit control word per attempt, doubles capacity, preserves completed
+  rows with a device-to-device copy, and resumes only unfinished work.
+  It does not count then replay the stream or recompute completed rows.
+  Explicit `capacity(Relation)` uses the direct bounded kernel without this
+  per-attempt control readback; tuple transfer remains explicit in both paths.

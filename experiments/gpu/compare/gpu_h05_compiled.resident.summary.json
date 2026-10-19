@@ -1,0 +1,61 @@
+{
+  "workload": "H05 SF10 Plan A, compiled",
+  "gpu": "NVIDIA RTX 6000 Ada Generation",
+  "architecture": "sm_89",
+  "timing_protocol": "one warmup, five unprofiled measured calls; phase medians do not necessarily sum to median wall",
+  "before": {
+    "source": "gpu_h05_compiled.results.json",
+    "storage": "host tuple encoding and upload on each call",
+    "wall_ms_median": 894.274052,
+    "build_ms_median": 1.9716800465248525,
+    "kernel_ms_median": 1.0442880392074585,
+    "dedup_ms_median": 0.0689919963479042,
+    "main_kernel_dram_bytes": 532209024
+  },
+  "after": {
+    "source": "gpu_h05_compiled.resident.results.json",
+    "storage": "persistent FastLanes DeviceColumns, recorded For result, explicit capacity(Lineitem)",
+    "wall_ms_median": 37.885481,
+    "build_ms_median": 13.738336235284805,
+    "kernel_ms_median": 10.874879837036133,
+    "dedup_ms_median": 12.06067180633545,
+    "main_kernel_dram_bytes": 205408896,
+    "main_kernel_nsys_ns": 1740779,
+    "main_kernel_ncu_ns": 2905088,
+    "host_file_load_ms": 1519.972077,
+    "one_time_load_encode_ms": 1825.255719,
+    "answer_rows": 72983,
+    "phase_scope": "kernel/dedup phases include resident output encoding and conservative-capacity allocation/initialization; these are broader than historical kernel/dedup phases"
+  },
+  "wall_speedup": 23.604664066426924,
+  "main_kernel_dram_reduction_percent": 61.40446953413552,
+  "relations": [
+    {"name":"customer","rows":1500000,"raw_bytes":24000000,"fastlanes_bytes":1218896},
+    {"name":"orders","rows":15000000,"raw_bytes":360000000,"fastlanes_bytes":74534136},
+    {"name":"lineitem","rows":59986052,"raw_bytes":959776832,"fastlanes_bytes":176211664},
+    {"name":"supplier","rows":100000,"raw_bytes":1600000,"fastlanes_bytes":81552},
+    {"name":"nation","rows":25,"raw_bytes":400,"fastlanes_bytes":592},
+    {"name":"region","rows":5,"raw_bytes":80,"fastlanes_bytes":592}
+  ],
+  "bytes_scope": "raw i64/dictionary-ID columns versus FastLanes payload, 32-byte vector headers and extent metadata; excludes allocator reserve and host dictionary strings",
+  "transfer_evidence": {
+    "capture": "first measured H05 A call plus second compiled identity query; loading and explicit final to_host outside capture",
+    "source": "compiled_resident_cuda_api_sum.csv",
+    "memory_source": "compiled_resident_cuda_gpu_mem_time_sum.csv",
+    "htod_calls": 0,
+    "dtoh_calls": 0,
+    "memcpy_activity_rows": 0,
+    "memset_activity_rows": 163,
+    "note": "The exported nsys database contains no CUPTI_ACTIVITY_KIND_MEMCPY table and the API summary contains no memcpy calls. General unbounded grow-and-resume queries may read a four-byte control flag; this explicit-capacity H05 capture does not."
+  },
+  "hardware_counter_evidence": "compiled_resident.ncu.csv",
+  "verification": {
+    "codec_oracle_cases": 534,
+    "codec_scope": "independent paper-layout headers and payload bits, all codecs, widths 0..64, empty and partial vectors, signed extrema, delta restarts, device-only re-encode",
+    "printer_smoke": "passed, including empty and 4097-row fanout with shifted keys",
+    "printer_oracle": "passed: multiword dedup/string decoding and 20000-row frontier expansion with resumable output growth",
+    "printer_tests": "30 passed including UI fixtures",
+    "dictionary_unit_tests": "3 passed",
+    "h05": "SF1 and SF10 both plans, all warmup/measured calls and chained queries exact; 7242 and 72983 distinct answers"
+  }
+}

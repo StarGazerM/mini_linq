@@ -11,6 +11,7 @@
     },
     "exact": true,
     "implementation": "cq_gpu::print",
+    "input_storage": "historical host tuple upload per execution; not resident FastLanes",
     "kernel_ms": {
       "median": 0.11369600147008896,
       "min": 0.1130239963531494
@@ -141,6 +142,7 @@
     },
     "exact": true,
     "implementation": "cq_gpu::print",
+    "input_storage": "historical host tuple upload per execution; not resident FastLanes",
     "kernel_ms": {
       "median": 0.1085439994931221,
       "min": 0.10751999914646149
@@ -265,6 +267,7 @@
     },
     "exact": true,
     "implementation": "cq_gpu::print",
+    "input_storage": "historical host tuple upload per execution; not resident FastLanes",
     "kernel_ms": {
       "median": 1.0442880392074585,
       "min": 1.04038405418396
@@ -436,6 +439,7 @@
     },
     "exact": true,
     "implementation": "cq_gpu::print",
+    "input_storage": "historical host tuple upload per execution; not resident FastLanes",
     "kernel_ms": {
       "median": 0.5061439871788025,
       "min": 0.4976640045642853
