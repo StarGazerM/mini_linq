@@ -1,5 +1,5 @@
 //! Authored schedules, independent expected CQ, and boundary mutations.
-use cq_datalog_fork::{Fork, check, compile, fork};
+use cq_datalog_fork::{Fork, PartitionSource, check, compile, fork};
 use cq_lang_cq::BodyItem;
 use cq_lang_datalog::Program;
 use quote::{ToTokens, quote};
@@ -60,6 +60,7 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     let lookup = &context.layouts[1].name;
     let lookup_host = &context.layouts[1].host;
     let keys = &stratum.keys[0].name;
+    let chunk = &stratum.steps[0].partition.as_ref().unwrap().chunk;
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
         relation Edge(x:i32,y:i32) = (#edge);
@@ -68,8 +69,9 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
         relation Recent(x:i32,y:i32) = (&#delta);
         relation #scan(x:i32,y:i32) = (&#scan_host);
         relation #lookup(x:i32,y:i32) = (&#lookup_host);
+        relation #chunk(x:i32,y:i32) = (#chunk);
         relation #name(x:i32,y:i32);
-        #name(*x,*z) :- Recent(x,y), #lookup(y,z), #[total] if !#keys.contains(&(z,));
+        #name(*x,*z) :- #chunk(x,y), #lookup(y,z), #[total] if !#keys.contains(&(z,));
     })
     .unwrap();
     assert_eq!(hole, &expected);
@@ -184,6 +186,19 @@ fn reverse_layout_permutes_schema_and_arguments_together() {
     let name = &layout.name;
     let expected: BodyItem = syn::parse_quote!(#name(y,z));
     assert_eq!(hole.query.body[1], expected);
+    for rule in target.context.strata[0]
+        .seeds
+        .iter()
+        .chain(&target.context.strata[0].steps)
+    {
+        let chunk = &rule.partition.as_ref().unwrap().chunk;
+        let declaration = target.holes[rule.hole]
+            .declarations
+            .iter()
+            .find(|declaration| declaration.name == *chunk)
+            .unwrap();
+        assert_eq!(declaration.columns, source.declarations[0].columns);
+    }
 }
 
 fn constant_schedule() -> Program {
@@ -403,8 +418,15 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
     let delta_name = &delta_probe.name;
     let all_delta = &context.delta_layouts[1].name;
     let probe_name = &probe.name;
-    let assign_scan = &context.layouts[4].name;
     let steps = &context.strata[0].steps;
+    let assign_scan = &steps
+        .iter()
+        .find(|rule| rule.variant == 4)
+        .unwrap()
+        .partition
+        .as_ref()
+        .unwrap()
+        .chunk;
     let earlier = &target.holes[steps.iter().find(|r| r.variant == 1).unwrap().hole];
     let expected_probe: BodyItem = syn::parse_quote!(#probe_name(from,heap));
     assert_eq!(earlier.query.body[1], expected_probe);
@@ -477,6 +499,8 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
     let fourth = &layouts[3].name;
     let delta = &target.context.delta_layouts[0].name;
     let stratum = &target.context.strata[0];
+    assert!(stratum.seeds[0].partition.is_none());
+    assert!(stratum.steps[0].partition.is_none());
     for (index, body) in [
         (
             stratum.seeds[0].hole,
@@ -514,18 +538,27 @@ fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
     let context = &target.context;
     assert_eq!(context.delta_layouts.len(), 4);
     assert_eq!(context.layouts.len(), 1);
-    let scan = &context.layouts[0].name;
     let constant = &context.delta_layouts[0].name;
     let keyed = &context.delta_layouts[1].name;
     let zero = &context.delta_layouts[2].name;
     let pair = &context.delta_layouts[3].name;
+    let steps = &context.strata[0].steps;
+    let chunks: Vec<_> = steps
+        .iter()
+        .map(|step| step.partition.as_ref().map(|partition| &partition.chunk))
+        .collect();
+    let recent = chunks[0].unwrap();
+    let scan2 = chunks[2].unwrap();
+    let scan3 = chunks[3].unwrap();
+    let scan4 = chunks[4].unwrap();
+    let scan5 = chunks[5].unwrap();
     let expected_bodies = [
-        quote!(Recent(x, y, z)),
+        quote!(#recent(x, y, z)),
         quote!(#constant(7,x,y)),
-        quote!(#scan(_,y,_), #keyed(y,x,z)),
-        quote!(#scan(_,y,_), if *y != 0, if 10 / *y > 0, #keyed(y,x,z)),
-        quote!(#scan(a,b,c), #zero(x,y,z)),
-        quote!(#scan(x,y,_), #pair(x,y,z)),
+        quote!(#scan2(_,y,_), #keyed(y,x,z)),
+        quote!(#scan3(_,y,_), if *y != 0, if 10 / *y > 0, #keyed(y,x,z)),
+        quote!(#scan4(a,b,c), #zero(x,y,z)),
+        quote!(#scan5(x,y,_), #pair(x,y,z)),
         quote!(#constant(7,x,x)),
     ];
     for (step, body) in context.strata[0].steps.iter().zip(expected_bodies) {
@@ -666,4 +699,154 @@ fn fork_preserves_generators_and_generated_join_values() {
     let hole = stratum.steps[0].hole;
     changed.holes[hole].query.body[2] = syn::parse_quote!(for y in [*x + 2]);
     assert!(check(&source, &changed).is_err());
+}
+
+#[test]
+fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
+    let source = authored();
+    let target = compile(&source).unwrap();
+    let stratum = &target.context.strata[0];
+    for (rule, expected_source) in [
+        (&stratum.seeds[0], PartitionSource::LayoutBucket(0)),
+        (&stratum.steps[0], PartitionSource::DeltaHost(2)),
+    ] {
+        let partition = rule.partition.as_ref().unwrap();
+        assert_eq!(partition.source, expected_source);
+        let hole = &target.holes[rule.hole];
+        let declaration = &hole.declarations[hole.declarations.len() - 2];
+        assert_eq!(declaration.name, partition.chunk);
+        assert_eq!(declaration.columns, source.declarations[0].columns);
+        let chunk = &partition.chunk;
+        assert_eq!(declaration.value, Some(syn::parse_quote!(= (#chunk))));
+        let BodyItem::Positive { atom } = &hole.query.body[0] else {
+            panic!("partition must remain the first positive atom");
+        };
+        assert_eq!(atom.relation, partition.chunk);
+        let BodyItem::Positive { atom: original } =
+            &source.variants.as_ref().unwrap()[rule.variant].query.body[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(atom.args, original.args);
+    }
+}
+
+#[test]
+fn checker_rejects_partition_metadata_and_chunk_binding_mutations() {
+    rejected(|target| target.context.strata[0].steps[0].partition = None);
+    rejected(|target| {
+        target.context.strata[0].steps[0]
+            .partition
+            .as_mut()
+            .unwrap()
+            .source = PartitionSource::DeltaHost(usize::MAX);
+    });
+    rejected(|target| {
+        target.context.strata[0].seeds[0]
+            .partition
+            .as_mut()
+            .unwrap()
+            .source = PartitionSource::LayoutBucket(1);
+    });
+    rejected(|target| {
+        target.context.strata[0].steps[0]
+            .partition
+            .as_mut()
+            .unwrap()
+            .chunk = syn::parse_quote!(Recent);
+    });
+    rejected(|target| {
+        let rule = &target.context.strata[0].steps[0];
+        let chunk = &rule.partition.as_ref().unwrap().chunk;
+        let declaration = target.holes[rule.hole]
+            .declarations
+            .iter_mut()
+            .find(|declaration| declaration.name == *chunk)
+            .unwrap();
+        declaration.value = Some(syn::parse_quote!(= (&#chunk)));
+    });
+    rejected(|target| {
+        let rule = &target.context.strata[0].steps[0];
+        if let BodyItem::Positive { atom } = &mut target.holes[rule.hole].query.body[0] {
+            atom.relation = syn::parse_quote!(Recent);
+        }
+    });
+}
+
+#[test]
+fn partition_rewrites_only_first_occurrence_of_a_self_join() {
+    let source: Program = syn::parse_quote! {
+        struct SelfJoin;
+        relation E(x:i32,y:i32) = (edges);
+        relation R(x:i32,y:i32);
+        output R;
+        R(*x,*z) :- E(x,y), E(a,z);
+        strata { component [R]; }
+        seminaive {
+            insert_new hash_set_all_columns;
+            negation_keys hash_set_borrowed;
+            delta R = D;
+            layout E [0,1] key 0;
+            variant 0 seed { R(*x,*z) :- E(x,y), E(a,z); }
+        }
+    };
+    let target = compile(&source).unwrap();
+    let rule = &target.context.strata[0].seeds[0];
+    let partition = rule.partition.as_ref().unwrap();
+    assert_eq!(partition.source, PartitionSource::LayoutBucket(0));
+    let chunk = &partition.chunk;
+    let layout = &target.context.layouts[0].name;
+    let hole = &target.holes[rule.hole];
+    let first: BodyItem = syn::parse_quote!(#chunk(x,y));
+    let second: BodyItem = syn::parse_quote!(#layout(a,z));
+    assert_eq!(
+        hole.query.body.iter().cloned().collect::<Vec<_>>(),
+        vec![first, second]
+    );
+    let mut changed = target.clone();
+    changed.holes[rule.hole].query.body[1] = syn::parse_quote!(#chunk(a,z));
+    assert!(check(&source, &changed).is_err());
+}
+
+#[test]
+fn a_leading_guard_does_not_move_a_scan_into_partition_position() {
+    let source: Program = syn::parse_quote! {
+        struct GuardFirst;
+        relation E(x:i32) = (edges);
+        relation R(x:i32);
+        output R;
+        R(*x) :- if enabled, E(x);
+        strata { component [R]; }
+        seminaive {
+            insert_new hash_set_all_columns;
+            negation_keys hash_set_borrowed;
+            delta R = D;
+            layout E [0] key 0;
+            variant 0 seed { R(*x) :- if enabled, E(x); }
+        }
+    };
+    let target = compile(&source).unwrap();
+    let rule = &target.context.strata[0].seeds[0];
+    assert!(rule.partition.is_none());
+    let layout = &target.context.layouts[0].name;
+    let expected: BodyItem = syn::parse_quote!(#layout(x));
+    assert_eq!(target.holes[rule.hole].query.body[1], expected);
+}
+
+#[test]
+fn chunk_bindings_are_fresh_per_rule_and_avoid_source_identifiers() {
+    let mut source = authored();
+    source.observer = Some(syn::parse_quote!(__cq_datalog_chunk_0));
+    let target = compile(&source).unwrap();
+    let chunks: Vec<_> = target.context.strata[0]
+        .seeds
+        .iter()
+        .chain(&target.context.strata[0].steps)
+        .map(|rule| rule.partition.as_ref().unwrap().chunk.clone())
+        .collect();
+    assert_eq!(chunks.len(), 2);
+    assert_ne!(chunks[0], chunks[1]);
+    for chunk in chunks {
+        assert_ne!(chunk, "__cq_datalog_chunk_0");
+    }
 }

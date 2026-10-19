@@ -10,8 +10,13 @@ publish = false
 name = "doop"
 path = "src/main.rs"
 
+[features]
+default = []
+phase-timing = ["cq-datalog/phase-timing"]
+
 [dependencies]
-ascent = { version = "0.8", default-features = false }
+ascent = { version = "0.8", default-features = false, features = ["par"] }
+rayon.workspace = true
 ahash = "0.8"
 cq-datalog.workspace = true
 mini-linq.workspace = true

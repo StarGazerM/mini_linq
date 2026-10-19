@@ -35,10 +35,12 @@ cq-datalog = { version = "0.0.0", path = "." }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }
+rayon = "1"
 
 [features]
 default = []
 counters = ["cq-storage/counters"]
+phase-timing = ["datalog-bridge/phase-timing"]
 
 [dependencies]
 cq-lang-datalog.workspace = true
@@ -53,6 +55,8 @@ cq-stage.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
+rayon.workspace = true
+ascent = { version = "0.8", default-features = false }
 
 [[test]]
 name = "counters"

@@ -6,7 +6,9 @@ use crate::{
     interner::{IStr, res, sym},
 };
 
-pub fn run(facts: Facts) -> Results {
+macro_rules! engine {
+    ($name:ident, $($mode:tt)*) => {
+pub fn $name(facts: Facts) -> Results {
     let (
         mainclass,
         method_simplename,
@@ -35,6 +37,7 @@ pub fn run(facts: Facts) -> Results {
         arrayindexpointsto,
         reachable,
     ) = cq_datalog::datalog! {
+        $($mode)*
         struct Doop;
         relation directsuperclass(c0: IStr, c1: IStr) = (facts.directsuperclass);
         relation directsuperinterface(c0: IStr, c1: IStr) = (facts.directsuperinterface);
@@ -605,3 +608,7 @@ pub fn run(facts: Facts) -> Results {
         reachable: reachable.collect(),
     }
 }
+    };
+}
+engine!(run,);
+engine!(run_parallel, parallel;);

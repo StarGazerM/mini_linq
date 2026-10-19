@@ -9,9 +9,11 @@ description = "Sequential Ascent differential oracle for feature-local Datalog"
 [features]
 default = []
 counters = ["cq-datalog/counters", "cq-storage/counters"]
+phase-timing = ["cq-datalog/phase-timing"]
 
 [dependencies]
-ascent = { version = "0.8", default-features = false }
+ascent = { version = "0.8", default-features = false, features = ["par"] }
+rayon.workspace = true
 cq-datalog = { path = ".." }
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-storage = { path = "../../../runtime/cq-storage" }

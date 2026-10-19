@@ -1,13 +1,13 @@
 //! Rust realization of the checked Datalog round context. CQ holes have already
 //! been expanded by the caller's continuation; this bridge alone owns loops.
 
-use cq_datalog_fork::{ExpandedFork, KeyRepresentation};
+use cq_datalog_fork::{ExpandedFork, KeyRepresentation, PartitionSource, RoundContext, RuleHole};
 use cq_syntax::rust;
-use proc_macro2::TokenStream;
-use quote::quote;
+use proc_macro2::{Span, TokenStream};
+use quote::{format_ident, quote};
 use syn::Ident;
 
-pub fn render(fork: ExpandedFork) -> TokenStream {
+pub fn render(fork: ExpandedFork, parallel: bool) -> TokenStream {
     let ExpandedFork { context, holes } = fork;
     let mut bindings = Vec::new();
     for relation in &context.relations {
@@ -87,12 +87,8 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
                 }
             }
         });
-        let emit = |rule: &cq_datalog_fork::RuleHole| {
-            let relation = &context.relations[rule.head];
-            insert_new(&relation.seen, &relation.next, &holes[rule.hole])
-        };
-        let seeds: Vec<_> = stratum.seeds.iter().map(emit).collect();
-        let steps: Vec<_> = stratum.steps.iter().map(emit).collect();
+        let seeds = evaluate(&stratum.seeds, &context, &holes, parallel);
+        let steps = evaluate(&stratum.steps, &context, &holes, parallel);
         let allocate: Vec<_> = stratum
             .members
             .iter()
@@ -157,15 +153,17 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
             .observer
             .as_ref()
             .map(|_| quote!((#observer)(#round, #nonempty);));
+        let seed_round = round_body(&allocate, seeds, &publish);
+        let step_round = round_body(&allocate, steps, &publish);
         // Keep borrowed lower-stratum key sets local: they cannot outlive this
         // component or delay moving the final output relation into its iterator.
         strata.push(quote!({
             #(#keys)*
-            #(#allocate)* #(#seeds)* #(#publish)*
+            #seed_round
             let mut #round = 0usize;
             while #nonempty != 0 {
                 #observe
-                #(#allocate)* #(#steps)* #(#publish)*
+                #step_round
                 #round += 1;
             }
         }));
@@ -198,6 +196,142 @@ pub fn render(fork: ExpandedFork) -> TokenStream {
         quote!((#(#outputs,)*))
     };
     quote!({ #(#bindings)* #bind_observer #(#strata)* #result })
+}
+
+/// Evaluate every hole against published immutable hosts, then admit in written
+/// hole and chunk order. Indexed parallel collection preserves the driving scan.
+fn evaluate(
+    rules: &[RuleHole],
+    context: &RoundContext,
+    holes: &[TokenStream],
+    parallel: bool,
+) -> (TokenStream, TokenStream) {
+    let mut declarations = Vec::new();
+    let mut evaluations = Vec::new();
+    let mut admissions = Vec::new();
+    let scope = Ident::new("__cq_scope", Span::mixed_site());
+    let source_name = Ident::new("__cq_source", Span::mixed_site());
+    let evaluator = Ident::new("__cq_evaluate", Span::mixed_site());
+    let grain = Ident::new("__cq_grain", Span::mixed_site());
+    let bucket = Ident::new("__cq_bucket", Span::mixed_site());
+    let admitted_chunk = Ident::new("__cq_admitted_chunk", Span::mixed_site());
+    // Timing builds materialize sequential candidates too, so the two phases
+    // can be measured independently. Ordinary sequential builds still stream.
+    let materialize = parallel || cfg!(feature = "phase-timing");
+    for rule in rules {
+        let candidates = format_ident!("__cq_candidates_{}", rule.hole, span = Span::mixed_site());
+        let invocation = &holes[rule.hole];
+        let head = &context.relations[rule.head];
+        let types: Vec<_> = head
+            .declaration
+            .columns
+            .iter()
+            .map(|column| &column.ty)
+            .collect();
+        let row = quote!((#(#types,)*));
+        let consume = if materialize {
+            quote!((#invocation).collect::<::std::vec::Vec<#row>>())
+        } else {
+            insert_new(&head.seen, &head.next, invocation)
+        };
+        let evaluation = if let Some(partition) = &rule.partition {
+            let chunk = &partition.chunk;
+            let (source, whole, relation, columns) = match partition.source {
+                PartitionSource::DeltaHost(index) => {
+                    let relation = &context.relations[index];
+                    let host = relation.delta_host.as_ref().expect("checked delta host");
+                    (
+                        quote!(#host.as_slice()),
+                        quote!(&#host),
+                        relation,
+                        (0..relation.declaration.arity()).collect::<Vec<_>>(),
+                    )
+                }
+                PartitionSource::LayoutBucket(index) => {
+                    let layout = &context.layouts[index];
+                    let host = &layout.host;
+                    (
+                        quote!(#host.get(&()).map_or(&[][..], |#bucket| #bucket.as_slice())),
+                        quote!(&#host),
+                        &context.relations[layout.relation],
+                        layout.columns.clone(),
+                    )
+                }
+            };
+            let input_types = columns.iter().map(|&i| &relation.declaration.columns[i].ty);
+            if parallel {
+                quote!({
+                    let #source_name = #source;
+                    let #evaluator = |#chunk: &[(#(#input_types,)*)]| { #consume };
+                    let #grain = ::core::cmp::max(1024, #source_name.len() / (4 * ::rayon::current_num_threads()));
+                    if #source_name.len() <= #grain {
+                        ::std::vec![#evaluator(#source_name)]
+                    } else {
+                        use ::rayon::prelude::*;
+                        #source_name.par_chunks(#grain).map(#evaluator).collect::<::std::vec::Vec<_>>()
+                    }
+                })
+            } else {
+                // The single whole-source chunk retains its original host kind,
+                // so ordinary sequential builds keep the same Rows realization.
+                let consume = if materialize {
+                    quote!(::std::vec![#consume])
+                } else {
+                    consume
+                };
+                quote!({ let #chunk = #whole; #consume })
+            }
+        } else if materialize {
+            quote!(::std::vec![#consume])
+        } else {
+            quote!({ #consume })
+        };
+        if parallel {
+            declarations.push(quote!(let mut #candidates = ::std::vec::Vec::new();));
+            evaluations.push(quote!(#scope.spawn(|_| { #candidates = #evaluation; });));
+        } else if materialize {
+            evaluations.push(quote!(let #candidates = #evaluation;));
+        } else {
+            evaluations.push(evaluation);
+        }
+        if materialize {
+            let insert = insert_new(&head.seen, &head.next, &quote!(#admitted_chunk));
+            admissions.push(quote!(for #admitted_chunk in #candidates { #insert }));
+        }
+    }
+    let evaluation = if parallel && !rules.is_empty() {
+        quote!(#(#declarations)* ::rayon::scope(|#scope| { #(#evaluations)* });)
+    } else {
+        quote!(#(#evaluations)*)
+    };
+    (evaluation, quote!(#(#admissions)*))
+}
+
+fn round_body(
+    allocate: &[TokenStream],
+    (evaluate, admit): (TokenStream, TokenStream),
+    publish: &[TokenStream],
+) -> TokenStream {
+    if cfg!(feature = "phase-timing") {
+        let phase_start = Ident::new("__cq_phase_start", Span::mixed_site());
+        let evaluation_time = Ident::new("__cq_evaluation_time", Span::mixed_site());
+        let admission_time = Ident::new("__cq_admission_time", Span::mixed_site());
+        quote! {
+            #(#allocate)*
+            let #phase_start = ::std::time::Instant::now();
+            #evaluate
+            let #evaluation_time = #phase_start.elapsed();
+            let #phase_start = ::std::time::Instant::now();
+            #admit
+            let #admission_time = #phase_start.elapsed();
+            let #phase_start = ::std::time::Instant::now();
+            #(#publish)*
+            ::std::eprintln!("datalog-phase evaluation_ns={} admission_ns={} publication_ns={}",
+                #evaluation_time.as_nanos(), #admission_time.as_nanos(), #phase_start.elapsed().as_nanos());
+        }
+    } else {
+        quote!(#(#allocate)* #evaluate #admit #(#publish)*)
+    }
 }
 
 // Every full layout is immutable while the round's holes run. Only admitted

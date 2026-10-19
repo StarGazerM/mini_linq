@@ -40,6 +40,45 @@
 //! these layouts; only a first-position unkeyed delta remains a `Vec` scan.
 //! Neither layout selection nor publication reorders written atoms or guards.
 //!
+//! # Opt-in parallel candidate evaluation
+//!
+//! Write `parallel;` before `struct` in [`datalog!`], [`stratified!`], or
+//! [`seminaive!`] and add a direct `rayon = "1"` dependency to the consuming
+//! crate. Sequential programs need no Rayon dependency or parallel trait bounds.
+//! Parallel execution uses the current Rayon pool, so callers can select a local
+//! pool with `rayon::ThreadPoolBuilder` and `pool.install(|| { ... })`.
+//!
+//! Only a positive atom at body position zero with a zero-column key can be
+//! partitioned. Its ordered source is either the current delta vector or the
+//! zero-key bucket of a full layout. Contiguous source chunks evaluate the same
+//! rewritten rule hole as sequential execution; only that first occurrence is
+//! replaced, including when the same relation occurs again in a self-join.
+//! Later atoms, keyed probes, guards, and generators keep their written order.
+//! The sequential one-chunk binding retains the original whole host, preserving
+//! its existing `Rows` realization without allocating or rehashing a wrapper.
+//! Empty, tiny, and ineligible sources use sequential evaluation.
+//!
+//! Workers produce candidate rows, not admissions. Chunk results are consumed
+//! in source order, and canonical insertion, layout updates, delta publication,
+//! and observer calls remain on the evaluating thread (the thread running the
+//! macro, which may itself be a Rayon pool thread). Output order is unspecified:
+//! ordinary EDB canonicalization uses randomized hashing. Given identical
+//! published source order (as in deterministic `counters` builds), parallel
+//! execution preserves the exact sequential output iterator sequence. An
+//! observer can retain ordinary mutable, non-`Send` state.
+//! Parallel mode requires shared inputs and Rust values captured by worker
+//! expressions to be `Sync`, and candidate rows to be `Send`; sequential mode
+//! adds neither requirement. Rust expressions must still be pure: their worker
+//! execution order is not an ordering guarantee for side effects. Worker panics
+//! propagate to the caller instead of yielding a partial result.
+//!
+//! The opt-in `phase-timing` Cargo feature is for profiling, not normal builds.
+//! It prints per-round `evaluation_ns`, `admission_ns`, and `publication_ns` to
+//! stderr. To separate those phases it materializes candidates in sequential
+//! mode too; use an uninstrumented build for sequential-regression/scaling
+//! measurements. Without the feature, sequential holes stream into admission
+//! and generated evaluation code contains no timing calls.
+//!
 //! `output A, B;` returns a tuple of owned `Vec::IntoIter`s in the written
 //! output order, even when dependency order differs. One output still returns
 //! its owned iterator directly. Outputs must be distinct declared EDBs or IDBs.
