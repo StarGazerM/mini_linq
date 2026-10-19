@@ -1,0 +1,5 @@
+error: CQ_GPU_GENERATOR: iterator generators are unsupported
+ --> tests/ui/generator.rs:7:13
+  |
+7 |             g = pipe bind l with for y:i64 = ([x, x + 1]);
+  |             ^

@@ -96,6 +96,7 @@ pub(super) fn combine(program: &mut Program, queries: Vec<Query>) -> syn::Result
                 .flat_map(|item| match item {
                     BodyItem::Positive { atom } => atom.variables().cloned().collect(),
                     BodyItem::Let(binding) => rust::bindings(&binding.pattern),
+                    BodyItem::For(binding) => rust::bindings(&binding.pattern),
                     _ => Vec::new(),
                 })
                 .map(|id| {
@@ -144,6 +145,7 @@ pub(super) fn combine(program: &mut Program, queries: Vec<Query>) -> syn::Result
             .into_iter()
             .filter_map(|item| match item {
                 BodyItem::Let(binding) => Some(rust::bindings(&binding.pattern)),
+                BodyItem::For(binding) => Some(rust::bindings(&binding.pattern)),
                 _ => None,
             })
             .flatten()
@@ -154,6 +156,7 @@ pub(super) fn combine(program: &mut Program, queries: Vec<Query>) -> syn::Result
             .flat_map(|item| match item {
                 BodyItem::Positive { atom } => atom.variables().cloned().collect(),
                 BodyItem::Let(binding) => rust::bindings(&binding.pattern),
+                BodyItem::For(binding) => rust::bindings(&binding.pattern),
                 _ => Vec::new(),
             })
             .map(|id| {
@@ -240,6 +243,21 @@ fn rename_body(
                 bound = local;
             }
             BodyItem::Let(binding) => {
+                rename_expression(&mut binding.expression, names, &bound);
+                let bindings = rust::bindings(&binding.pattern);
+                struct Pattern<'a>(&'a BTreeMap<String, Ident>);
+                impl VisitMut for Pattern<'_> {
+                    fn visit_pat_ident_mut(&mut self, pat: &mut syn::PatIdent) {
+                        if let Some(new) = self.0.get(&symbol_name(&pat.ident)) {
+                            pat.ident = new.clone();
+                        }
+                        visit_mut::visit_pat_ident_mut(self, pat);
+                    }
+                }
+                Pattern(names).visit_pat_mut(&mut binding.pattern);
+                bound.extend(bindings.iter().map(|id| (symbol_name(id), id.clone())));
+            }
+            BodyItem::For(binding) => {
                 rename_expression(&mut binding.expression, names, &bound);
                 let bindings = rust::bindings(&binding.pattern);
                 struct Pattern<'a>(&'a BTreeMap<String, Ident>);

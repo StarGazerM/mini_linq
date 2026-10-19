@@ -11,6 +11,9 @@ Op  ::= unit | rename R@path {..} | select ... | point select ... | range select
       | semi [eager|lazy] [K] l, r | anti [eager|lazy] [F] l, r
       | union [any|all] [fused] r1, r2, ... [BlockOrigin]
 \end{lstlisting}
+Bind retains RA's \code{bind r with [for] Pat [: Type] = (Expr)}
+and unchanged Environment suffix: the optional token is semantic, not a read
+mode. Generator Bind is streamed unnest, never an independent build target.
 
 \paragraph{Contract.} $\mathsf{PHeading}(t,A)$ checks:
 (1)~declarations, unique results, earlier operands, total one-to-one renames,
@@ -53,6 +56,9 @@ rejected. Physical checks neither IX demands nor canonical return evidence.
 \paragraph{Meaning.} Erasure to RA prime: probe and merge are joins, semi is a
 semijoin, point/range are selections, modes and canon flags are dropped, union
 and anti keep their origins. Modes and choices change evaluation, not meaning.
+Erasure retains the scalar/generator distinction, including in IX demand and
+Physical rewrite certificates. Item multiplicity cannot justify scalar
+uniqueness or literal inference.
 
 \paragraph{Recorded decisions.} \code{pipe} (one streamed read), \code{let}
 (retained, read more than once), \code{exists} (retained witness); \code{canon}

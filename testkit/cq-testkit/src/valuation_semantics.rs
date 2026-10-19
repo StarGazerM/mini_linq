@@ -329,7 +329,9 @@ fn execute(
                 .retain(|row| evaluate_predicate(&guard.condition, row)),
             vo::Step::Equality(eq, _) => result.rows.retain(|row| evaluate_equality(eq, row)),
             vo::Step::Constraint(c, _) => result.rows.retain(|row| evaluate_constraint(c, row)),
-            vo::Step::Let(..) => panic!("computed columns use compiled written-order Rust"),
+            vo::Step::Let(..) | vo::Step::For(..) => {
+                panic!("computed columns and generators use compiled written-order Rust")
+            }
             vo::Step::Reduce(reduce, _) => match &reduce.reduction {
                 vo::Reduction::With(_, support) => {
                     let mut left = table(&reduce.clause, body, root, &result, tables);

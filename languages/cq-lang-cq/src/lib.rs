@@ -200,12 +200,13 @@ impl Query {
 /// One source-ordered logical body clause.
 ///
 /// After guard recognition, residual Rust expressions retain their syntax as
-/// opaque partial functions. Lets
+/// opaque partial functions. Lets, finite pure generators,
 /// and guards share one written chain; relational steps alone may move earlier
 /// across that chain under the sufficient refinement check.
 ///
 /// ```text
 /// BodyItem ::= Atom | ["#[total]"] "if" RustExpr | "let" RustPat [":" RustType] "=" RustExpr
+///            | "for" RustPat "in" RustExpr
 ///            | Ident "!" "{" TokenTree* "}"
 ///            | "!" Atom | "agg" RustPat "=" Aggregator "(" [Ident ("," Ident)* [","]] ")" "in" Atom
 /// ```
@@ -221,6 +222,8 @@ pub enum BodyItem {
     Constraint(Constraint),
     Filter(Filter),
     Let(Box<Let>),
+    /// Formal rule CQ-For: Generator uses its written environment and introduces fresh pattern bindings.
+    For(Box<For>),
     Negation(Negation),
     Aggregate(Box<Aggregate>),
     /// Opaque extension text; an enclosing extension must expand it before CQ checking.
@@ -241,6 +244,8 @@ impl syn::parse::Parse for BodyItem {
             Self::Filter(input.parse()?)
         } else if input.peek(Token![let]) {
             Self::Let(input.parse()?)
+        } else if input.peek(Token![for]) {
+            Self::For(input.parse()?)
         } else if input.peek(Token![!]) {
             Self::Negation(input.parse()?)
         } else if input.peek(kw::agg) && !input.peek2(Token![!]) {
@@ -261,7 +266,7 @@ impl syn::parse::Parse for BodyItem {
         } else {
             return Err(cq_syntax::constraint::unexpected(
                 input,
-                "an atom, `if` Rust guard, `let` binding, or extension",
+                "an atom, `if` Rust guard, `let` binding, `for` generator, or extension",
             ));
         };
         if !input.is_empty() && !input.peek(Token![,]) && !input.peek(Token![;]) {
@@ -291,6 +296,7 @@ impl quote::ToTokens for BodyItem {
             }
             Self::Filter(x) => x.to_tokens(output),
             Self::Let(x) => x.to_tokens(output),
+            Self::For(x) => x.to_tokens(output),
             Self::Negation(x) => x.to_tokens(output),
             Self::Aggregate(x) => x.to_tokens(output),
             Self::Positive { atom } => atom.to_tokens(output),
@@ -307,6 +313,7 @@ impl PartialEq for BodyItem {
             (Self::Constraint(a), Self::Constraint(b)) => a == b,
             (Self::Filter(a), Self::Filter(b)) => a == b,
             (Self::Let(a), Self::Let(b)) => a == b,
+            (Self::For(a), Self::For(b)) => a == b,
             (Self::Negation(a), Self::Negation(b)) => a == b,
             (Self::Aggregate(a), Self::Aggregate(b)) => a == b,
             (Self::Positive { atom: a }, Self::Positive { atom: b }) => a == b,
@@ -319,7 +326,7 @@ impl PartialEq for BodyItem {
 }
 impl Eq for BodyItem {}
 
-pub use cq_syntax::{Filter, Let, TypeAnnotation};
+pub use cq_syntax::{Filter, For, Let, TypeAnnotation};
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Negation {
@@ -377,6 +384,10 @@ impl BodyItem {
                 bindings: Vec::new(),
             }),
             Self::Let(binding) => Some(RustStep {
+                free_variables: rust::free_variables(&binding.expression),
+                bindings: rust::bindings(&binding.pattern),
+            }),
+            Self::For(binding) => Some(RustStep {
                 free_variables: rust::free_variables(&binding.expression),
                 bindings: rust::bindings(&binding.pattern),
             }),
@@ -456,6 +467,10 @@ fn check_query(
         .flat_map(|item| match item {
             BodyItem::Positive { atom } => atom.variables().map(symbol_name).collect::<Vec<_>>(),
             BodyItem::Let(binding) => rust::bindings(&binding.pattern)
+                .iter()
+                .map(symbol_name)
+                .collect(),
+            BodyItem::For(binding) => rust::bindings(&binding.pattern)
                 .iter()
                 .map(symbol_name)
                 .collect(),
@@ -647,6 +662,25 @@ fn check_body(
                         return Err(syn::Error::new_spanned(
                             variable,
                             "let binding shadows an existing logical variable",
+                        ));
+                    }
+                }
+            }
+            // Check the same lexical freshness obligation as scalar let;
+            // Rust validates the pattern itself.
+            BodyItem::For(binding) => {
+                check_uses(&binding.expression, &body_variables, &forbidden)?;
+                for variable in rust::bindings(&binding.pattern) {
+                    if forbidden.contains(&symbol_name(&variable)) {
+                        return Err(syn::Error::new_spanned(
+                            variable,
+                            "branch-local variable cannot be rebound after its block",
+                        ));
+                    }
+                    if !body_variables.insert(symbol_name(&variable)) {
+                        return Err(syn::Error::new_spanned(
+                            variable,
+                            "for binding shadows an existing logical variable",
                         ));
                     }
                 }

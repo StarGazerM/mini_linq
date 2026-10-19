@@ -1,0 +1,1154 @@
+[
+  {
+    "answer_count": 72983,
+    "build_ms": {
+      "median": 1.8802879583090544,
+      "min": 1.8766400311142208
+    },
+    "calls": [
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04403200000524521,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04403200000524521,
+          "wall_ms": 0.06783
+        },
+        "download_ms": 2.424562,
+        "exact": true,
+        "iteration": 0,
+        "query": {
+          "build_ms": 2.498848008923233,
+          "dedup_ms": 0.2926720082759857,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 1.1856319904327393,
+          "raw_bytes": 1439665248,
+          "total_ms": 3.9771520076319575,
+          "wall_ms": 7.433874
+        },
+        "warmup": true
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.043007999658584595,
+          "kernel_ms": 0.0,
+          "total_ms": 0.043007999658584595,
+          "wall_ms": 0.066578
+        },
+        "download_ms": 2.40797,
+        "exact": true,
+        "iteration": 1,
+        "query": {
+          "build_ms": 1.898527988232672,
+          "dedup_ms": 0.03891199827194214,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 0.998687982559204,
+          "raw_bytes": 1439665248,
+          "total_ms": 2.9361279690638185,
+          "wall_ms": 3.079266
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.0432640016078949,
+          "kernel_ms": 0.0,
+          "total_ms": 0.0432640016078949,
+          "wall_ms": 0.06644699999999999
+        },
+        "download_ms": 2.402741,
+        "exact": true,
+        "iteration": 2,
+        "query": {
+          "build_ms": 1.8766400311142208,
+          "dedup_ms": 0.03891199827194214,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 1.0109119415283203,
+          "raw_bytes": 1439665248,
+          "total_ms": 2.926463970914483,
+          "wall_ms": 3.065479
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04499199986457825,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04499199986457825,
+          "wall_ms": 0.06788
+        },
+        "download_ms": 2.390307,
+        "exact": true,
+        "iteration": 3,
+        "query": {
+          "build_ms": 1.8776319678872824,
+          "dedup_ms": 0.03872000053524971,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 1.000383973121643,
+          "raw_bytes": 1439665248,
+          "total_ms": 2.916735941544175,
+          "wall_ms": 3.044249
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04320000112056732,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04320000112056732,
+          "wall_ms": 0.066397
+        },
+        "download_ms": 2.481642,
+        "exact": true,
+        "iteration": 4,
+        "query": {
+          "build_ms": 1.881279987283051,
+          "dedup_ms": 0.038784001022577286,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 1.0035200119018557,
+          "raw_bytes": 1439665248,
+          "total_ms": 2.923584000207484,
+          "wall_ms": 3.053938
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.040832001715898514,
+          "kernel_ms": 0.0,
+          "total_ms": 0.040832001715898514,
+          "wall_ms": 0.06386299999999999
+        },
+        "download_ms": 2.381439,
+        "exact": true,
+        "iteration": 5,
+        "query": {
+          "build_ms": 1.8802879583090544,
+          "dedup_ms": 0.038656000047922134,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 1.0035840272903442,
+          "raw_bytes": 1439665248,
+          "total_ms": 2.9225279856473207,
+          "wall_ms": 3.048647
+        },
+        "warmup": false
+      }
+    ],
+    "chain": "H05 packed DeviceColumns -> compiled identity query -> explicit download; no tuple download between queries",
+    "dedup_ms": {
+      "median": 0.038784001022577286,
+      "min": 0.038656000047922134
+    },
+    "download_ms": {
+      "median": 2.402741,
+      "min": 2.381439
+    },
+    "exact": true,
+    "implementation": "cq_gpu::print/resident",
+    "kernel_ms": {
+      "median": 1.0035200119018557,
+      "min": 0.998687982559204
+    },
+    "one_time": {
+      "bytes_scope": "raw_bytes is logical i64/dictionary-ID column bytes; fastlanes_bytes includes encoded column data, vector headers and extent metadata, not allocator capacity or host dictionary strings",
+      "host_load_ms": 1578.9359439999998,
+      "load_encode_ms": 1893.642046,
+      "relations": [
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 1218896,
+          "load_encode_ms": 16.197183,
+          "raw_bytes": 24000000,
+          "relation": "customer",
+          "rows": 1500000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For",
+            "For"
+          ],
+          "fastlanes_bytes": 74534136,
+          "load_encode_ms": 223.409022,
+          "raw_bytes": 360000000,
+          "relation": "orders",
+          "rows": 15000000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 176211664,
+          "load_encode_ms": 687.276212,
+          "raw_bytes": 959776832,
+          "relation": "lineitem",
+          "rows": 59986052
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 81552,
+          "load_encode_ms": 0.977231,
+          "raw_bytes": 1600000,
+          "relation": "supplier",
+          "rows": 100000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 592,
+          "load_encode_ms": 0.050525999999999995,
+          "raw_bytes": 400,
+          "relation": "nation",
+          "rows": 25
+        },
+        {
+          "codecs": [
+            "Delta",
+            "Dictionary"
+          ],
+          "fastlanes_bytes": 592,
+          "load_encode_ms": 0.050867,
+          "raw_bytes": 80,
+          "relation": "region",
+          "rows": 5
+        }
+      ],
+      "scope": "host_load_ms reads projected files and oracle; load_encode_ms includes Runtime creation, host row preparation, one-time upload and completed device encoding; relation load_encode_ms measures upload_owned_rows only"
+    },
+    "plan": "A",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        1.898527988232672,
+        1.8766400311142208,
+        1.8776319678872824,
+        1.881279987283051,
+        1.8802879583090544
+      ],
+      "dedup_ms": [
+        0.03891199827194214,
+        0.03891199827194214,
+        0.03872000053524971,
+        0.038784001022577286,
+        0.038656000047922134
+      ],
+      "download_ms": [
+        2.40797,
+        2.402741,
+        2.390307,
+        2.481642,
+        2.381439
+      ],
+      "kernel_ms": [
+        0.998687982559204,
+        1.0109119415283203,
+        1.000383973121643,
+        1.0035200119018557,
+        1.0035840272903442
+      ],
+      "total_ms": [
+        2.9361279690638185,
+        2.926463970914483,
+        2.916735941544175,
+        2.923584000207484,
+        2.9225279856473207
+      ],
+      "wall_ms": [
+        3.079266,
+        3.065479,
+        3.044249,
+        3.053938,
+        3.048647
+      ]
+    },
+    "sf": 10,
+    "timing_scope": "build/kernel/dedup/total are runtime GPU timings; wall_ms is the first resident compiled call, excluding one-time input load, the separately recorded second compiled call, and explicit final download; calls includes warmup and measured calls",
+    "total_ms": {
+      "median": 2.923584000207484,
+      "min": 2.916735941544175
+    },
+    "wall_ms": {
+      "median": 3.053938,
+      "min": 3.044249
+    },
+    "warmups": 1
+  },
+  {
+    "answer_count": 72983,
+    "build_ms": {
+      "median": 15.08950394578278,
+      "min": 15.061023972928524
+    },
+    "calls": [
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.041919998824596405,
+          "kernel_ms": 0.0,
+          "total_ms": 0.041919998824596405,
+          "wall_ms": 0.065406
+        },
+        "download_ms": 2.401688,
+        "exact": true,
+        "iteration": 0,
+        "query": {
+          "build_ms": 15.110752242617307,
+          "dedup_ms": 0.03788800165057182,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 0.4926399886608124,
+          "raw_bytes": 1439665248,
+          "total_ms": 15.641280232928692,
+          "wall_ms": 17.133526
+        },
+        "warmup": true
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04390399903059006,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04390399903059006,
+          "wall_ms": 0.066306
+        },
+        "download_ms": 2.405145,
+        "exact": true,
+        "iteration": 1,
+        "query": {
+          "build_ms": 15.08950394578278,
+          "dedup_ms": 0.03788800165057182,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 0.49276798963546753,
+          "raw_bytes": 1439665248,
+          "total_ms": 15.62015993706882,
+          "wall_ms": 15.776457
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04505600035190582,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04505600035190582,
+          "wall_ms": 0.06861099999999999
+        },
+        "download_ms": 2.403612,
+        "exact": true,
+        "iteration": 2,
+        "query": {
+          "build_ms": 15.10204782616347,
+          "dedup_ms": 0.03788800165057182,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 0.4904960095882416,
+          "raw_bytes": 1439665248,
+          "total_ms": 15.630431837402284,
+          "wall_ms": 15.851191
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.043007999658584595,
+          "kernel_ms": 0.0,
+          "total_ms": 0.043007999658584595,
+          "wall_ms": 0.06561600000000001
+        },
+        "download_ms": 2.460231,
+        "exact": true,
+        "iteration": 3,
+        "query": {
+          "build_ms": 15.073151910677552,
+          "dedup_ms": 0.036639999598264694,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 0.48444798588752747,
+          "raw_bytes": 1439665248,
+          "total_ms": 15.594239896163344,
+          "wall_ms": 15.743403999999998
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04105599969625473,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04105599969625473,
+          "wall_ms": 0.065375
+        },
+        "download_ms": 2.396368,
+        "exact": true,
+        "iteration": 4,
+        "query": {
+          "build_ms": 15.10288018360734,
+          "dedup_ms": 0.03686400130391121,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 0.4884479939937592,
+          "raw_bytes": 1439665248,
+          "total_ms": 15.62819217890501,
+          "wall_ms": 15.779664
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04012800008058548,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04012800008058548,
+          "wall_ms": 0.06356099999999999
+        },
+        "download_ms": 2.40733,
+        "exact": true,
+        "iteration": 5,
+        "query": {
+          "build_ms": 15.061023972928524,
+          "dedup_ms": 0.03494400158524513,
+          "fastlanes_bytes": 1445310456,
+          "kernel_ms": 0.47308799624443054,
+          "raw_bytes": 1439665248,
+          "total_ms": 15.5690559707582,
+          "wall_ms": 15.720481
+        },
+        "warmup": false
+      }
+    ],
+    "chain": "H05 packed DeviceColumns -> compiled identity query -> explicit download; no tuple download between queries",
+    "dedup_ms": {
+      "median": 0.03686400130391121,
+      "min": 0.03494400158524513
+    },
+    "download_ms": {
+      "median": 2.405145,
+      "min": 2.396368
+    },
+    "exact": true,
+    "implementation": "cq_gpu::print/resident",
+    "kernel_ms": {
+      "median": 0.4884479939937592,
+      "min": 0.47308799624443054
+    },
+    "one_time": {
+      "bytes_scope": "raw_bytes is logical i64/dictionary-ID column bytes; fastlanes_bytes includes encoded column data, vector headers and extent metadata, not allocator capacity or host dictionary strings",
+      "host_load_ms": 1578.9359439999998,
+      "load_encode_ms": 1893.642046,
+      "relations": [
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 1218896,
+          "load_encode_ms": 16.197183,
+          "raw_bytes": 24000000,
+          "relation": "customer",
+          "rows": 1500000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For",
+            "For"
+          ],
+          "fastlanes_bytes": 74534136,
+          "load_encode_ms": 223.409022,
+          "raw_bytes": 360000000,
+          "relation": "orders",
+          "rows": 15000000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 176211664,
+          "load_encode_ms": 687.276212,
+          "raw_bytes": 959776832,
+          "relation": "lineitem",
+          "rows": 59986052
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 81552,
+          "load_encode_ms": 0.977231,
+          "raw_bytes": 1600000,
+          "relation": "supplier",
+          "rows": 100000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 592,
+          "load_encode_ms": 0.050525999999999995,
+          "raw_bytes": 400,
+          "relation": "nation",
+          "rows": 25
+        },
+        {
+          "codecs": [
+            "Delta",
+            "Dictionary"
+          ],
+          "fastlanes_bytes": 592,
+          "load_encode_ms": 0.050867,
+          "raw_bytes": 80,
+          "relation": "region",
+          "rows": 5
+        }
+      ],
+      "scope": "host_load_ms reads projected files and oracle; load_encode_ms includes Runtime creation, host row preparation, one-time upload and completed device encoding; relation load_encode_ms measures upload_owned_rows only"
+    },
+    "plan": "B",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        15.08950394578278,
+        15.10204782616347,
+        15.073151910677552,
+        15.10288018360734,
+        15.061023972928524
+      ],
+      "dedup_ms": [
+        0.03788800165057182,
+        0.03788800165057182,
+        0.036639999598264694,
+        0.03686400130391121,
+        0.03494400158524513
+      ],
+      "download_ms": [
+        2.405145,
+        2.403612,
+        2.460231,
+        2.396368,
+        2.40733
+      ],
+      "kernel_ms": [
+        0.49276798963546753,
+        0.4904960095882416,
+        0.48444798588752747,
+        0.4884479939937592,
+        0.47308799624443054
+      ],
+      "total_ms": [
+        15.62015993706882,
+        15.630431837402284,
+        15.594239896163344,
+        15.62819217890501,
+        15.5690559707582
+      ],
+      "wall_ms": [
+        15.776457,
+        15.851191,
+        15.743403999999998,
+        15.779664,
+        15.720481
+      ]
+    },
+    "sf": 10,
+    "timing_scope": "build/kernel/dedup/total are runtime GPU timings; wall_ms is the first resident compiled call, excluding one-time input load, the separately recorded second compiled call, and explicit final download; calls includes warmup and measured calls",
+    "total_ms": {
+      "median": 15.62015993706882,
+      "min": 15.5690559707582
+    },
+    "wall_ms": {
+      "median": 15.776457,
+      "min": 15.720481
+    },
+    "warmups": 1
+  },
+  {
+    "answer_count": 7242,
+    "build_ms": {
+      "median": 0.49065600242465734,
+      "min": 0.4855359932407737
+    },
+    "calls": [
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04198399931192398,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04198399931192398,
+          "wall_ms": 0.06323100000000001
+        },
+        "download_ms": 0.25958699999999996,
+        "exact": true,
+        "iteration": 0,
+        "query": {
+          "build_ms": 0.7695359932258725,
+          "dedup_ms": 0.14556799829006195,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.21606400609016418,
+          "raw_bytes": 144029160,
+          "total_ms": 1.1311679976060987,
+          "wall_ms": 4.605468
+        },
+        "warmup": true
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.03993599861860275,
+          "kernel_ms": 0.0,
+          "total_ms": 0.03993599861860275,
+          "wall_ms": 0.060686000000000004
+        },
+        "download_ms": 0.255269,
+        "exact": true,
+        "iteration": 1,
+        "query": {
+          "build_ms": 0.49439999647438526,
+          "dedup_ms": 0.03404799848794937,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.13916799426078796,
+          "raw_bytes": 144029160,
+          "total_ms": 0.6676159892231226,
+          "wall_ms": 0.791866
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.037696000188589096,
+          "kernel_ms": 0.0,
+          "total_ms": 0.037696000188589096,
+          "wall_ms": 0.058392
+        },
+        "download_ms": 0.252654,
+        "exact": true,
+        "iteration": 2,
+        "query": {
+          "build_ms": 0.49065600242465734,
+          "dedup_ms": 0.03481600061058998,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.130048006772995,
+          "raw_bytes": 144029160,
+          "total_ms": 0.6555200098082423,
+          "wall_ms": 0.782017
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.03788800165057182,
+          "kernel_ms": 0.0,
+          "total_ms": 0.03788800165057182,
+          "wall_ms": 0.058452000000000004
+        },
+        "download_ms": 0.24971800000000002,
+        "exact": true,
+        "iteration": 3,
+        "query": {
+          "build_ms": 0.4973439956083894,
+          "dedup_ms": 0.03174399957060814,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.1292800009250641,
+          "raw_bytes": 144029160,
+          "total_ms": 0.6583679961040616,
+          "wall_ms": 0.777669
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04070400074124336,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04070400074124336,
+          "wall_ms": 0.061267999999999996
+        },
+        "download_ms": 0.259286,
+        "exact": true,
+        "iteration": 4,
+        "query": {
+          "build_ms": 0.4855359932407737,
+          "dedup_ms": 0.03276799991726875,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.12800000607967377,
+          "raw_bytes": 144029160,
+          "total_ms": 0.6463039992377162,
+          "wall_ms": 0.765005
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.035840000957250595,
+          "kernel_ms": 0.0,
+          "total_ms": 0.035840000957250595,
+          "wall_ms": 0.056609
+        },
+        "download_ms": 0.256331,
+        "exact": true,
+        "iteration": 5,
+        "query": {
+          "build_ms": 0.4873919980600476,
+          "dedup_ms": 0.031647998839616776,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.1311360001564026,
+          "raw_bytes": 144029160,
+          "total_ms": 0.650175997056067,
+          "wall_ms": 0.772218
+        },
+        "warmup": false
+      }
+    ],
+    "chain": "H05 packed DeviceColumns -> compiled identity query -> explicit download; no tuple download between queries",
+    "dedup_ms": {
+      "median": 0.03276799991726875,
+      "min": 0.031647998839616776
+    },
+    "download_ms": {
+      "median": 0.255269,
+      "min": 0.24971800000000002
+    },
+    "exact": true,
+    "implementation": "cq_gpu::print/resident",
+    "kernel_ms": {
+      "median": 0.130048006772995,
+      "min": 0.12800000607967377
+    },
+    "one_time": {
+      "bytes_scope": "raw_bytes is logical i64/dictionary-ID column bytes; fastlanes_bytes includes encoded column data, vector headers and extent metadata, not allocator capacity or host dictionary strings",
+      "host_load_ms": 151.147333,
+      "load_encode_ms": 309.622256,
+      "relations": [
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 122320,
+          "load_encode_ms": 2.764564,
+          "raw_bytes": 2400000,
+          "relation": "customer",
+          "rows": 150000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For",
+            "For"
+          ],
+          "fastlanes_bytes": 6891384,
+          "load_encode_ms": 20.96381,
+          "raw_bytes": 36000000,
+          "relation": "orders",
+          "rows": 1500000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 15379280,
+          "load_encode_ms": 64.666978,
+          "raw_bytes": 96019440,
+          "relation": "lineitem",
+          "rows": 6001215
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 8336,
+          "load_encode_ms": 0.11544099999999999,
+          "raw_bytes": 160000,
+          "relation": "supplier",
+          "rows": 10000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 592,
+          "load_encode_ms": 0.046359000000000004,
+          "raw_bytes": 400,
+          "relation": "nation",
+          "rows": 25
+        },
+        {
+          "codecs": [
+            "Delta",
+            "Dictionary"
+          ],
+          "fastlanes_bytes": 592,
+          "load_encode_ms": 0.045817,
+          "raw_bytes": 80,
+          "relation": "region",
+          "rows": 5
+        }
+      ],
+      "scope": "host_load_ms reads projected files and oracle; load_encode_ms includes Runtime creation, host row preparation, one-time upload and completed device encoding; relation load_encode_ms measures upload_owned_rows only"
+    },
+    "plan": "A",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        0.49439999647438526,
+        0.49065600242465734,
+        0.4973439956083894,
+        0.4855359932407737,
+        0.4873919980600476
+      ],
+      "dedup_ms": [
+        0.03404799848794937,
+        0.03481600061058998,
+        0.03174399957060814,
+        0.03276799991726875,
+        0.031647998839616776
+      ],
+      "download_ms": [
+        0.255269,
+        0.252654,
+        0.24971800000000002,
+        0.259286,
+        0.256331
+      ],
+      "kernel_ms": [
+        0.13916799426078796,
+        0.130048006772995,
+        0.1292800009250641,
+        0.12800000607967377,
+        0.1311360001564026
+      ],
+      "total_ms": [
+        0.6676159892231226,
+        0.6555200098082423,
+        0.6583679961040616,
+        0.6463039992377162,
+        0.650175997056067
+      ],
+      "wall_ms": [
+        0.791866,
+        0.782017,
+        0.777669,
+        0.765005,
+        0.772218
+      ]
+    },
+    "sf": 1,
+    "timing_scope": "build/kernel/dedup/total are runtime GPU timings; wall_ms is the first resident compiled call, excluding one-time input load, the separately recorded second compiled call, and explicit final download; calls includes warmup and measured calls",
+    "total_ms": {
+      "median": 0.6555200098082423,
+      "min": 0.6463039992377162
+    },
+    "wall_ms": {
+      "median": 0.777669,
+      "min": 0.765005
+    },
+    "warmups": 1
+  },
+  {
+    "answer_count": 7242,
+    "build_ms": {
+      "median": 1.4076799899339676,
+      "min": 1.3996160235255957
+    },
+    "calls": [
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.03993599861860275,
+          "kernel_ms": 0.0,
+          "total_ms": 0.03993599861860275,
+          "wall_ms": 0.06283000000000001
+        },
+        "download_ms": 0.281719,
+        "exact": true,
+        "iteration": 0,
+        "query": {
+          "build_ms": 1.3880000235512853,
+          "dedup_ms": 0.03379200026392937,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.11667200177907944,
+          "raw_bytes": 144029160,
+          "total_ms": 1.538464025594294,
+          "wall_ms": 2.7147780000000004
+        },
+        "warmup": true
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.03788800165057182,
+          "kernel_ms": 0.0,
+          "total_ms": 0.03788800165057182,
+          "wall_ms": 0.061989
+        },
+        "download_ms": 0.280968,
+        "exact": true,
+        "iteration": 1,
+        "query": {
+          "build_ms": 1.416224041953683,
+          "dedup_ms": 0.03379200026392937,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.1157120019197464,
+          "raw_bytes": 144029160,
+          "total_ms": 1.5657280441373587,
+          "wall_ms": 1.708171
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.03788800165057182,
+          "kernel_ms": 0.0,
+          "total_ms": 0.03788800165057182,
+          "wall_ms": 0.061327000000000007
+        },
+        "download_ms": 0.28212000000000004,
+        "exact": true,
+        "iteration": 2,
+        "query": {
+          "build_ms": 1.4090240113437176,
+          "dedup_ms": 0.03379200026392937,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.11468800157308578,
+          "raw_bytes": 144029160,
+          "total_ms": 1.5575040131807327,
+          "wall_ms": 1.701678
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.04198399931192398,
+          "kernel_ms": 0.0,
+          "total_ms": 0.04198399931192398,
+          "wall_ms": 0.064834
+        },
+        "download_ms": 0.277802,
+        "exact": true,
+        "iteration": 3,
+        "query": {
+          "build_ms": 1.3996160235255957,
+          "dedup_ms": 0.035840000957250595,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.11260800063610077,
+          "raw_bytes": 144029160,
+          "total_ms": 1.548064025118947,
+          "wall_ms": 1.6907269999999999
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.03791999816894531,
+          "kernel_ms": 0.0,
+          "total_ms": 0.03791999816894531,
+          "wall_ms": 0.060827
+        },
+        "download_ms": 0.274776,
+        "exact": true,
+        "iteration": 4,
+        "query": {
+          "build_ms": 1.4067840157076716,
+          "dedup_ms": 0.03612799942493439,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.11392000317573547,
+          "raw_bytes": 144029160,
+          "total_ms": 1.5568320183083415,
+          "wall_ms": 1.699213
+        },
+        "warmup": false
+      },
+      {
+        "chain": {
+          "build_ms": 0.0,
+          "dedup_ms": 0.03683200106024742,
+          "kernel_ms": 0.0,
+          "total_ms": 0.03683200106024742,
+          "wall_ms": 0.059815
+        },
+        "download_ms": 0.27701,
+        "exact": true,
+        "iteration": 5,
+        "query": {
+          "build_ms": 1.4076799899339676,
+          "dedup_ms": 0.03465599939227104,
+          "fastlanes_bytes": 144602616,
+          "kernel_ms": 0.11577600240707397,
+          "raw_bytes": 144029160,
+          "total_ms": 1.5581119917333126,
+          "wall_ms": 1.698302
+        },
+        "warmup": false
+      }
+    ],
+    "chain": "H05 packed DeviceColumns -> compiled identity query -> explicit download; no tuple download between queries",
+    "dedup_ms": {
+      "median": 0.03465599939227104,
+      "min": 0.03379200026392937
+    },
+    "download_ms": {
+      "median": 0.277802,
+      "min": 0.274776
+    },
+    "exact": true,
+    "implementation": "cq_gpu::print/resident",
+    "kernel_ms": {
+      "median": 0.11468800157308578,
+      "min": 0.11260800063610077
+    },
+    "one_time": {
+      "bytes_scope": "raw_bytes is logical i64/dictionary-ID column bytes; fastlanes_bytes includes encoded column data, vector headers and extent metadata, not allocator capacity or host dictionary strings",
+      "host_load_ms": 151.147333,
+      "load_encode_ms": 309.622256,
+      "relations": [
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 122320,
+          "load_encode_ms": 2.764564,
+          "raw_bytes": 2400000,
+          "relation": "customer",
+          "rows": 150000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For",
+            "For"
+          ],
+          "fastlanes_bytes": 6891384,
+          "load_encode_ms": 20.96381,
+          "raw_bytes": 36000000,
+          "relation": "orders",
+          "rows": 1500000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 15379280,
+          "load_encode_ms": 64.666978,
+          "raw_bytes": 96019440,
+          "relation": "lineitem",
+          "rows": 6001215
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 8336,
+          "load_encode_ms": 0.11544099999999999,
+          "raw_bytes": 160000,
+          "relation": "supplier",
+          "rows": 10000
+        },
+        {
+          "codecs": [
+            "Delta",
+            "For"
+          ],
+          "fastlanes_bytes": 592,
+          "load_encode_ms": 0.046359000000000004,
+          "raw_bytes": 400,
+          "relation": "nation",
+          "rows": 25
+        },
+        {
+          "codecs": [
+            "Delta",
+            "Dictionary"
+          ],
+          "fastlanes_bytes": 592,
+          "load_encode_ms": 0.045817,
+          "raw_bytes": 80,
+          "relation": "region",
+          "rows": 5
+        }
+      ],
+      "scope": "host_load_ms reads projected files and oracle; load_encode_ms includes Runtime creation, host row preparation, one-time upload and completed device encoding; relation load_encode_ms measures upload_owned_rows only"
+    },
+    "plan": "B",
+    "runs": 5,
+    "samples": {
+      "build_ms": [
+        1.416224041953683,
+        1.4090240113437176,
+        1.3996160235255957,
+        1.4067840157076716,
+        1.4076799899339676
+      ],
+      "dedup_ms": [
+        0.03379200026392937,
+        0.03379200026392937,
+        0.035840000957250595,
+        0.03612799942493439,
+        0.03465599939227104
+      ],
+      "download_ms": [
+        0.280968,
+        0.28212000000000004,
+        0.277802,
+        0.274776,
+        0.27701
+      ],
+      "kernel_ms": [
+        0.1157120019197464,
+        0.11468800157308578,
+        0.11260800063610077,
+        0.11392000317573547,
+        0.11577600240707397
+      ],
+      "total_ms": [
+        1.5657280441373587,
+        1.5575040131807327,
+        1.548064025118947,
+        1.5568320183083415,
+        1.5581119917333126
+      ],
+      "wall_ms": [
+        1.708171,
+        1.701678,
+        1.6907269999999999,
+        1.699213,
+        1.698302
+      ]
+    },
+    "sf": 1,
+    "timing_scope": "build/kernel/dedup/total are runtime GPU timings; wall_ms is the first resident compiled call, excluding one-time input load, the separately recorded second compiled call, and explicit final download; calls includes warmup and measured calls",
+    "total_ms": {
+      "median": 1.5575040131807327,
+      "min": 1.548064025118947
+    },
+    "wall_ms": {
+      "median": 1.699213,
+      "min": 1.6907269999999999
+    },
+    "warmups": 1
+  }
+]

@@ -90,6 +90,8 @@ cq-workload-corpus	manifest-target-test	kernel_prefix_greedy_coarse	features/wor
 cq-workload-corpus	manifest-target-test	kernel_prefix_greedy_fine	features/workloads/e2e/corpus/Cargo.toml
 cq-workload-corpus	manifest-target-test	kernel_elimination_coarse	features/workloads/e2e/corpus/Cargo.toml
 cq-workload-corpus	manifest-target-test	kernel_elimination_fine	features/workloads/e2e/corpus/Cargo.toml
+cq-workload-corpus	manifest-target-test	kernel_le	features/workloads/e2e/corpus/Cargo.toml
+cq-workload-corpus	manifest-target-test	kernel_le_runs	features/workloads/e2e/corpus/Cargo.toml
 cq-workloads	manifest-target-test	extended_catalog	features/workloads/Cargo.toml
 cq-workload-e2e	manifest-target-test	extended	features/workloads/e2e/Cargo.toml
 cq-rewrites	manifest-target-test	generated	features/rewrites/Cargo.toml

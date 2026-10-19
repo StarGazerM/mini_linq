@@ -1,0 +1,22 @@
+Command: /opt/nvidia/hpc_sdk/Linux_x86_64/25.5/cuda/12.9/bin/ptxas -v -arch=sm_89 target/oxide-ir/gpu_triangles.ptx -o /dev/null
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'triangle_initialize' for 'sm_89'
+ptxas info    : Function properties for triangle_initialize
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 8 registers, used 0 barriers, 364 bytes cmem[0]
+ptxas info    : Compile time = 1.787 ms
+ptxas info    : Compiling entry function 'triangles' for 'sm_89'
+ptxas info    : Function properties for triangles
+    104 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, used 1 barriers, 104 bytes cumulative stack size, 468 bytes cmem[0], 24 bytes cmem[2]
+ptxas info    : Compile time = 77.856 ms
+ptxas info    : Compiling entry function 'make_fences' for 'sm_89'
+ptxas info    : Function properties for make_fences
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers, 376 bytes cmem[0]
+ptxas info    : Compile time = 1.074 ms
+ptxas info    : Compiling entry function 'filter_wedges' for 'sm_89'
+ptxas info    : Function properties for filter_wedges
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 1 barriers, 448 bytes cmem[0]
+ptxas info    : Compile time = 6.518 ms

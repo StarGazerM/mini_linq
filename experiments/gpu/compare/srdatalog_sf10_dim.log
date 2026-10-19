@@ -1,0 +1,27 @@
+compile_s=0.007165
+>> CUDA Device: NVIDIA RTX 6000 Ada Generation (Compute 8.9)
+[Step 0 (simple)] Relations: Answer completed in 57473 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=dim iteration=0 load_s=2.303993 run_ms=57474.238559 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 58038 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=dim iteration=1 load_s=2.328168 run_ms=58038.175998 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 58041 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=dim iteration=2 load_s=2.311557 run_ms=58041.991337 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 58050 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=dim iteration=3 load_s=2.315818 run_ms=58050.669282 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 58156 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=dim iteration=4 load_s=2.432445 run_ms=58156.747970 Answer=72983
+[Step 0 (simple)] Relations: Answer completed in 58254 ms
+[Step 1 (simple)]  completed in 0 ms
+ >>>>>>>>>>>>>>>>> Answer : 72983
+sf=10 order=dim iteration=5 load_s=4.612029 run_ms=58254.405955 Answer=72983
+{"sf": 10, "order": "dim", "compile_s": 0.007164556009229273, "load_s": [2.328167694999138, 2.311556742992252, 2.3158182780025527, 2.4324454049929045, 4.6120288940146565], "run_ms": [58038.175997993676, 58041.99133699876, 58050.6692820054, 58156.74797000247, 58254.40595499822], "median_ms": 58050.6692820054, "min_ms": 58038.175997993676, "answer_count": 72983, "expected_count": 72983, "exact": true, "peak_vram_mib": 3248, "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound", "requested_var_order": ["r", "n", "c", "o", "d", "s"], "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Dim_DB_5817", "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05Dim_DB_5817/libH05Dim_DB_5817.so", "phase": "complete", "warmup_ms": 57474.238559021614, "warmup_load_s": 2.303993031993741}

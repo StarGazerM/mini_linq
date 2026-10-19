@@ -17,6 +17,7 @@ CQ-Expr	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Local stru
 CQ-Atom	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 CQ-Guard	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 CQ-Bind	implementation	languages/cq-lang-cq/src/lib.rs	fn check_query	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
+CQ-For	implementation	languages/cq-lang-cq/src/lib.rs	/// Formal rule CQ-For:	Check generator RHS in the incoming scope and extend it with fresh pattern names; finite purity is a host premise.
 RA-Unit	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 RA-Rename	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 RA-Join	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
@@ -24,6 +25,7 @@ RA-Semi	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structu
 RA-Project	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 RA-Select	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 RA-Extend	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
+RA-For	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule RA-For:	Check set-valued Bind heading, visible RHS and fresh item columns while retaining the generator tag.
 RA-Def	implementation	languages/cq-lang-ra/src/lib.rs	fn check_in	Local structural rule; its implementing function checks the stated premises and derives the conclusion.
 WF-CQ	implementation	languages/cq-lang-cq/src/lib.rs	/// Formal rule WF-CQ:	Check CQ declarations, positive scope, output arity and symbolic type availability.
 WF-NF	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule WF-NF:	Check CQ plus distinct bare arguments within each body atom.
@@ -50,9 +52,10 @@ A-Wildcard	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-W
 A-Constant	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Constant:	Replace a literal with a fresh atom column and an atom-position relational literal equality.
 A-Prefix	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Prefix:	Emit an opaque Rust binding immediately before its atom when its query inputs are already bound.
 A-Local	implementation	languages/cq-lang-cq/src/normal.rs	/// Formal rule A-Local:	Emit an opaque Rust binding after its atom, then a relational equality with the fresh atom column.
-D-Atom	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Atom:	Atom provides its columns and requires let-supplied columns.
+D-Atom	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Atom:	Atom provides its columns and requires scalar-let- or generator-supplied columns.
 D-Guard	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Guard:	Guard requires dependencies on the written prefix.
 D-Bind	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-Bind:	Binding provides pattern names and requires RHS prefix dependencies.
+D-For	implementation	passes/cq-order/src/lib.rs	/// Formal rule D-For:	Generator provides pattern names, requires RHS prefix dependencies and retains the opaque Rust Before chain.
 C-Ready	implementation	passes/cq-order/src/lib.rs	/// Formal rule C-Ready:	Require free-variable binders, the next node of one Rust chain and every source-before relational step.
 S-Written	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Written:	Written uses the complete normal-form body sequence.
 S-Connected	implementation	passes/cq-order/src/lib.rs	/// Formal rule S-Connected:	Ready atoms rank by shared names then clause index.
@@ -80,6 +83,8 @@ B-Root	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Root:	Ins
 B-Join	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Join:	Join a non-check subatom with the current prefix.
 C-Guard	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Guard:	Append an opaque guard to the prefix, seeding Unit if absent.
 C-Bind	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Bind:	Append an opaque pattern binding to the prefix without applying RA laws to it.
+C-For	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-For:	Append a generator-tagged Bind to the current prefix, seeding Unit if absent.
+P-For	implementation	passes/cq-physical-realization/src/operators.rs	/// Formal rule P-For:	Realize generator Bind as pull flat_map or a push nested loop without changing its scope or Before facts.
 E-ReduceWith	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-ReduceWith:	Semijoin current clause relations and replace only the target entry.
 C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:	Project head dependencies or the full heading under a computed head.
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
@@ -91,6 +96,8 @@ Plan-Generic	implementation	features/planners/plan/src/lib.rs	// Formal rule Pla
 Plan-Graph	implementation	features/planners/plan/src/lib.rs	// Formal rule Plan-Graph:	Hypergraph uses tree reductions only in acyclic scopes and exact block cuts in any scope.
 Plan-Transfer	implementation	features/planners/plan/src/lib.rs	/// Formal rule Plan-Transfer:	Robust predicate transfer on the written order: Masks forward pass, the stream's forward reductions by filtered children, then the backward pass from filtered sides, parents first, all before the stream.
 CK-Transfer	implementation	features/planners/plan/src/lib.rs	// Formal rule CK-Transfer:	The transfer schedule equals the one recomputed from the erased plan.
+Plan-Le	implementation	features/planners/plan/src/le.rs	// Formal rule Plan-Le:	Keep Written/Coarse's outer and Rust chain; probe bound keys in GYO ear order, delay coarse full-row expansion until demand, Before boundary, or scope exit; retain Masks reductions.
+CK-Le	implementation	features/planners/plan/src/le.rs	// Formal rule CK-Le:	Independently check normalized CQ identity, one non-introducing lookup before one coarse full expansion per inner occurrence, written column ownership, outer identity, recursive block contracts and Masks reductions.
 ST-Entry	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Entry:	Start surface expansion and the selected checked CQ pipeline.
 ST-Next	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Next:	Parse and transform a payload, then emit the selected next macro invocation.
 ST-Terminal	implementation	facade/mini-linq-macros/src/lib.rs	/// Formal rule ST-Terminal:	Print checked Structures to final Rust with an empty continuation.

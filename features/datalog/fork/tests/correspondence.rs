@@ -619,3 +619,51 @@ fn delta_layout_reorders_heterogeneous_declaration_and_arguments_together() {
     assert_eq!(hole.query.body[1], expected);
     check(&source, &target).unwrap();
 }
+
+#[test]
+fn fork_preserves_generators_and_generated_join_values() {
+    let source: Program = syn::parse_quote! {
+        struct Generated;
+        relation Seed(x:i32) = (seeds);
+        relation Link(x:i32,y:i32) = (links);
+        relation Reach(x:i32);
+        output Reach;
+        Reach(y) :- Seed(x), for y in [*x, *x];
+        Reach(*z) :- Reach(x), if *x < 3, for y in [*x + 1], Link(y,z);
+        strata { component [Reach]; }
+        seminaive {
+            insert_new hash_set_all_columns;
+            negation_keys hash_set_borrowed;
+            delta Reach = Recent;
+            layout Seed [0] key 0;
+            layout Link [0,1] key 0;
+            variant 0 seed { Reach(y) :- Seed(x), for y in [*x, *x]; }
+            variant 1 delta 0 {
+                Reach(*z) :- Recent(x), if *x < 3, for y in [*x + 1], Link(y,z);
+            }
+        }
+    };
+    let target = compile(&source).unwrap();
+    check(&source, &target).unwrap();
+    let stratum = &target.context.strata[0];
+    for step in stratum.seeds.iter().chain(&stratum.steps) {
+        let hole = &target.holes[step.hole];
+        cq_lang_cq::contract::check(hole).unwrap();
+        let original = &source.variants.as_ref().unwrap()[step.variant].query;
+        let generators = |query: &cq_lang_cq::Query| {
+            query
+                .body
+                .iter()
+                .filter_map(|item| match item {
+                    BodyItem::For(generator) => Some(generator.to_token_stream().to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(generators(&hole.query), generators(original));
+    }
+    let mut changed = target.clone();
+    let hole = stratum.steps[0].hole;
+    changed.holes[hole].query.body[2] = syn::parse_quote!(for y in [*x + 2]);
+    assert!(check(&source, &changed).is_err());
+}

@@ -1,0 +1,71 @@
+{
+  "sf": 1,
+  "order": "odscnr",
+  "compile_s": 40.08520123799099,
+  "load_s": [],
+  "run_ms": [],
+  "median_ms": null,
+  "min_ms": null,
+  "answer_count": 125,
+  "expected_count": 7242,
+  "exact": false,
+  "peak_vram_mib": 748,
+  "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+  "chosen_plans": [
+    {
+      "rule": "H05",
+      "var_order": [
+        "o",
+        "d",
+        "s",
+        "c",
+        "n",
+        "r"
+      ],
+      "clause_order": [
+        0,
+        1,
+        3,
+        4,
+        2,
+        5,
+        6,
+        7
+      ],
+      "join_vars": [
+        "c",
+        "n",
+        "o",
+        "r",
+        "s"
+      ],
+      "semijoin_patterns": "[]",
+      "body": [
+        "Atom(rel='Lineitem', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='o', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='s', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Atom(rel='Orders', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='o', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='d', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Filter(vars=('d',), code='return d >= 8766 && d < 9131;')",
+        "Atom(rel='Customer', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='n', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Atom(rel='Nation', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='n', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='r', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Atom(rel='Region', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='r', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='_c0', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+        "Filter(vars=('_c0',), code='return _c0 == 2;')",
+        "Atom(rel='Supplier', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='s', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='n', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+      ]
+    }
+  ],
+  "requested_var_order": [
+    "o",
+    "d",
+    "s",
+    "c",
+    "n",
+    "r"
+  ],
+  "requested_clause_order": null,
+  "semi_join": false,
+  "dimension_filters": false,
+  "mir_file": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_odscnr.mir.txt",
+  "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05odscnr_DB_2651",
+  "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/H05odscnr_DB_2651/libH05odscnr_DB_2651.so",
+  "phase": "iteration 0: run",
+  "error": "Traceback (most recent call last):\n  File \"/data/mini_linq-gpu/features/gpu/compare/srdatalog_h05.py\", line 197, in child\n    raise RuntimeError(f\"COUNT MISMATCH: Answer={count.value}, expected={result['expected_count']}\")\nRuntimeError: COUNT MISMATCH: Answer=125, expected=7242\n"
+}

@@ -232,7 +232,7 @@ conditions and relational readers can reduce the surviving count further.
 \Rule{STR-JoinFilter}{
  j\in\{\mathsf{probe}[K](l,b),\mathsf{semi}[K](l,b)\}\ \text{eager}\quad
  k\in K\quad k:\code{i64}\quad
- \mathsf{exactHashIndex}(b,K)\\
+ \mathsf{exactKeyIndex}(b,K)\in\{\code{HashIndex},\code{SortedRun}\}\\
  \mathsf{exclusiveSpine}_k(s,l)\quad
  \mathsf{totalBuild}(b)\quad
  \mathsf{marker}(s,k)=C\\
@@ -246,6 +246,12 @@ Here $\mathsf{exclusiveSpine}_k$ contains only one-use pipe renames,
 projections, declarative selections and left operands of eager probes and
 semijoins, each carrying $k$, without canon or fused scopes; the scan's
 lineage maps $k$ to a host column.
+Both admitted payload providers enumerate their exact distinct keys for filter
+construction. Retyping a hash build to a sorted run preserves this premise.
+A retained-cursor probe remains an exact covering read: its earlier eager
+semi performed the same-key lookup. The original covering operator and its
+exclusive-spine proof are retained, not redirected across an opaque Rust or
+canonical boundary.
 The recorded type is checked syntactically as a Rust type, and its capabilities
 are checked by rustc, rather than by a provider-name whitelist. External
 \code{retype(s join_filter => T)} changes only the recorded types of that scan.

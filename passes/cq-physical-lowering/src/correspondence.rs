@@ -45,7 +45,8 @@ pub fn check(source: &ix::Program, target: &physical::Program) -> syn::Result<()
             Operator::Point(_, s) | Operator::Range(_, s) => {
                 keys.get(&symbol_name(&s.input)).cloned()
             }
-            Operator::Bind(b) => keys.get(&symbol_name(&b.input)).cloned(),
+            Operator::Bind(b) if b.for_token.is_none() => keys.get(&symbol_name(&b.input)).cloned(),
+            Operator::Bind(_) => None,
             Operator::Guard(g) => keys.get(&symbol_name(&g.input)).cloned(),
             Operator::Project(p) => keys
                 .get(&symbol_name(&p.input))

@@ -367,3 +367,57 @@ fn suffix_constraints_preserve_finite_branch_domains() {
         }
     }
 }
+
+#[test]
+fn branch_generators_capture_written_environment_and_keep_kind() {
+    for separator in ["|", "else"] {
+        let (vo, ra) = plan(&format!(
+            "struct Q; relation R(a:i32); relation answer(b:i32); answer(b) :- R(a), {{ for b in 0..a }} {separator} {{ for b in 1..a }};"
+        ));
+        assert_eq!(
+            syn::parse2::<cq_lang_vo::Program>(vo.to_token_stream()).unwrap(),
+            vo
+        );
+        assert_eq!(
+            syn::parse2::<cq_lang_ra::Program>(ra.to_token_stream()).unwrap(),
+            ra
+        );
+        let generators: Vec<_> = ra
+            .plan
+            .definitions
+            .iter()
+            .enumerate()
+            .filter_map(|(i, d)| match &d.operator {
+                cq_lang_ra::Operator::Bind(b) if b.for_token.is_some() => Some((i, b)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(generators.len(), 2);
+        for (index, binding) in generators {
+            let environment = binding.environment.as_ref().unwrap();
+            assert!(environment.path.is_some());
+            assert_eq!(
+                environment
+                    .variables
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                ["a"]
+            );
+            let mut changed = ra.clone();
+            let cq_lang_ra::Operator::Bind(b) = &mut changed.plan.definitions[index].operator
+            else {
+                unreachable!()
+            };
+            b.for_token = None;
+            assert!(check(&vo, &changed).is_err());
+            let mut changed = ra.clone();
+            let cq_lang_ra::Operator::Bind(b) = &mut changed.plan.definitions[index].operator
+            else {
+                unreachable!()
+            };
+            b.environment.as_mut().unwrap().variables.clear();
+            assert!(check(&vo, &changed).is_err());
+        }
+    }
+}

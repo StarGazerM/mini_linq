@@ -1,0 +1,785 @@
+{
+  "query": "Triangle(a,b,c) <= E(a,b) & E(b,c) & E(a,c)",
+  "input_semantics": "directed set edges; no symmetrization or distinct-node filter",
+  "warmups": 1,
+  "measured_runs": 5,
+  "timing_scope": "srdatalog_run + synchronize; fresh DB each sample; includes KnowsLoad/index builds; excludes load/prepare/H2D",
+  "count_validation": "count-only agreement, not exported tuple comparison",
+  "duckdb_version": "v1.4.4 (Andium) 6ddac802ff",
+  "srdatalog_checkout": "/home/stargazermiao/workspace/srdatalog-python",
+  "srdatalog_revision": "fab849f672d43af2a6a1e8a1727ec065201e3720",
+  "example": "/home/stargazermiao/workspace/srdatalog-python/examples/lsqb_triangle_count.py",
+  "example_sha256": "feeb77060577bba9573007421ac271d2e68d8b74f985dc63123e6bed41c3d014",
+  "datasets": [
+    {
+      "dataset": "dblp",
+      "source": "/data/dataset/graph/com-dblp.ungraph.txt",
+      "source_bytes": 13931442,
+      "set_edges": "/tmp/triangles-reference-data/dblp.set.tsv",
+      "input_rows": 1049866,
+      "edge_count": 1049866,
+      "duplicates": 0,
+      "node_min": 0,
+      "node_max": 425956,
+      "wedges": 7064738,
+      "bfs_raw_triple_bytes": 84776856,
+      "bfs_raw_triple_gib": 0.07895459979772568,
+      "duckdb": {
+        "command": [
+          "/home/stargazermiao/.duckdb/cli/latest/duckdb",
+          "-batch",
+          "-json",
+          ":memory:"
+        ],
+        "threads": 24,
+        "query": "SELECT count(*) AS triangle_count FROM E ab JOIN E bc ON ab.dst = bc.src JOIN E ac ON ac.src = ab.src AND ac.dst = bc.dst;",
+        "answer_count": 2224385,
+        "counts": [
+          2224385,
+          2224385,
+          2224385,
+          2224385,
+          2224385,
+          2224385
+        ],
+        "warmup_ms": 103.0,
+        "run_ms": [
+          73.0,
+          81.0,
+          80.0,
+          73.0,
+          77.0
+        ],
+        "median_ms": 77.0,
+        "min_ms": 73.0,
+        "timer_resolution_ms": 1,
+        "total_reference_s": 0.6792661779909395,
+        "sql_file": "triangles_dblp.duckdb.sql",
+        "console_log": "triangles_dblp.duckdb.log"
+      },
+      "srdatalog": [
+        {
+          "dataset": "dblp",
+          "order": "default",
+          "requested_var_order": null,
+          "status": "ok",
+          "phase": "complete",
+          "compile_s": 44.82661784498487,
+          "load_s": [
+            0.027259858965408057,
+            0.027228327991906554,
+            0.02713391702855006,
+            0.027072408993262798,
+            0.027178832970093936
+          ],
+          "prepare_ms": [
+            2.854643971659243,
+            2.754470973741263,
+            2.71743000485003,
+            2.7329709846526384,
+            2.69953696988523
+          ],
+          "run_ms": [
+            6.61770801525563,
+            6.83804095024243,
+            6.543616997078061,
+            6.659739010501653,
+            6.610023963730782
+          ],
+          "counts": [
+            2224385,
+            2224385,
+            2224385,
+            2224385,
+            2224385,
+            2224385
+          ],
+          "expected_count": 2224385,
+          "answer_count": 2224385,
+          "count_exact": true,
+          "peak_vram_mib": 748,
+          "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+          "chosen_plans": [
+            {
+              "rule": "KnowsLoad",
+              "var_order": [
+                "x",
+                "y"
+              ],
+              "clause_order": [
+                0
+              ],
+              "join_vars": [],
+              "body": [
+                "Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            },
+            {
+              "rule": "TriangleJoin",
+              "var_order": [
+                "a",
+                "b",
+                "c"
+              ],
+              "clause_order": [
+                0,
+                1,
+                2
+              ],
+              "join_vars": [
+                "a",
+                "b",
+                "c"
+              ],
+              "body": [
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            }
+          ],
+          "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesdefault_DB_E844",
+          "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesdefault_DB_E844/libTrianglesdefault_DB_E844.so",
+          "warmup_ms": 12.088036979548633,
+          "warmup_load_s": 0.02915053302422166,
+          "warmup_prepare_ms": 5.087435012683272,
+          "median_ms": 6.61770801525563,
+          "min_ms": 6.543616997078061,
+          "returncode": 0,
+          "command": [
+            "/home/stargazermiao/workspace/srdatalog-python/.venv/bin/python3",
+            "-u",
+            "/data/mini_linq-gpu/features/gpu/compare/srdatalog_triangles.py",
+            "--dataset",
+            "dblp",
+            "--order",
+            "default",
+            "--srdatalog",
+            "/home/stargazermiao/workspace/srdatalog-python",
+            "--data-root",
+            "/tmp/triangles-reference-data",
+            "--jobs",
+            "8",
+            "--child-result",
+            "/data/mini_linq-gpu/features/gpu/compare/triangles_dblp_default.json",
+            "--expected-count",
+            "2224385"
+          ],
+          "console_log": "triangles_dblp_default.log"
+        },
+        {
+          "dataset": "dblp",
+          "order": "abc",
+          "requested_var_order": [
+            "a",
+            "b",
+            "c"
+          ],
+          "status": "ok",
+          "phase": "complete",
+          "compile_s": 44.22401995694963,
+          "load_s": [
+            0.02762182697188109,
+            0.027725214953534305,
+            0.02775165601633489,
+            0.027323774993419647,
+            0.027806189958937466
+          ],
+          "prepare_ms": [
+            2.8729280456900597,
+            2.900491002947092,
+            2.8947900282219052,
+            2.732147986534983,
+            2.742688055150211
+          ],
+          "run_ms": [
+            6.6664710175246,
+            6.5592650207690895,
+            6.546812015585601,
+            6.484952988103032,
+            6.523246003780514
+          ],
+          "counts": [
+            2224385,
+            2224385,
+            2224385,
+            2224385,
+            2224385,
+            2224385
+          ],
+          "expected_count": 2224385,
+          "answer_count": 2224385,
+          "count_exact": true,
+          "peak_vram_mib": 1286,
+          "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+          "chosen_plans": [
+            {
+              "rule": "KnowsLoad",
+              "var_order": [
+                "x",
+                "y"
+              ],
+              "clause_order": [
+                0
+              ],
+              "join_vars": [],
+              "body": [
+                "Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            },
+            {
+              "rule": "TriangleJoin",
+              "var_order": [
+                "a",
+                "b",
+                "c"
+              ],
+              "clause_order": [
+                0,
+                1,
+                2
+              ],
+              "join_vars": [
+                "a",
+                "b",
+                "c"
+              ],
+              "body": [
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            }
+          ],
+          "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesabc_DB_721D",
+          "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesabc_DB_721D/libTrianglesabc_DB_721D.so",
+          "warmup_ms": 12.236520007718354,
+          "warmup_load_s": 0.02900697203585878,
+          "warmup_prepare_ms": 4.713406029623002,
+          "median_ms": 6.546812015585601,
+          "min_ms": 6.484952988103032,
+          "returncode": 0,
+          "command": [
+            "/home/stargazermiao/workspace/srdatalog-python/.venv/bin/python3",
+            "-u",
+            "/data/mini_linq-gpu/features/gpu/compare/srdatalog_triangles.py",
+            "--dataset",
+            "dblp",
+            "--order",
+            "abc",
+            "--srdatalog",
+            "/home/stargazermiao/workspace/srdatalog-python",
+            "--data-root",
+            "/tmp/triangles-reference-data",
+            "--jobs",
+            "8",
+            "--child-result",
+            "/data/mini_linq-gpu/features/gpu/compare/triangles_dblp_abc.json",
+            "--expected-count",
+            "2224385"
+          ],
+          "console_log": "triangles_dblp_abc.log"
+        },
+        {
+          "dataset": "dblp",
+          "order": "bac",
+          "requested_var_order": [
+            "b",
+            "a",
+            "c"
+          ],
+          "status": "ok",
+          "phase": "complete",
+          "compile_s": 44.908494352013804,
+          "load_s": [
+            0.03328705200692639,
+            0.02777487604180351,
+            0.027598828019108623,
+            0.027995307988021523,
+            0.028094156994484365
+          ],
+          "prepare_ms": [
+            2.9417199548333883,
+            2.957310003694147,
+            2.8086939710192382,
+            2.8478290187194943,
+            3.0100909643806517
+          ],
+          "run_ms": [
+            5.876103998161852,
+            5.943634023424238,
+            5.686650983989239,
+            5.704766022972763,
+            5.857329000718892
+          ],
+          "counts": [
+            2224385,
+            2224385,
+            2224385,
+            2224385,
+            2224385,
+            2224385
+          ],
+          "expected_count": 2224385,
+          "answer_count": 2224385,
+          "count_exact": true,
+          "peak_vram_mib": 2206,
+          "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+          "chosen_plans": [
+            {
+              "rule": "KnowsLoad",
+              "var_order": [
+                "x",
+                "y"
+              ],
+              "clause_order": [
+                0
+              ],
+              "join_vars": [],
+              "body": [
+                "Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            },
+            {
+              "rule": "TriangleJoin",
+              "var_order": [
+                "b",
+                "a",
+                "c"
+              ],
+              "clause_order": [
+                0,
+                1,
+                2
+              ],
+              "join_vars": [
+                "a",
+                "b",
+                "c"
+              ],
+              "body": [
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            }
+          ],
+          "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesbac_DB_ED6E",
+          "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesbac_DB_ED6E/libTrianglesbac_DB_ED6E.so",
+          "warmup_ms": 11.92214502952993,
+          "warmup_load_s": 0.029392866999842227,
+          "warmup_prepare_ms": 4.9371240311302245,
+          "median_ms": 5.857329000718892,
+          "min_ms": 5.686650983989239,
+          "returncode": 0,
+          "command": [
+            "/home/stargazermiao/workspace/srdatalog-python/.venv/bin/python3",
+            "-u",
+            "/data/mini_linq-gpu/features/gpu/compare/srdatalog_triangles.py",
+            "--dataset",
+            "dblp",
+            "--order",
+            "bac",
+            "--srdatalog",
+            "/home/stargazermiao/workspace/srdatalog-python",
+            "--data-root",
+            "/tmp/triangles-reference-data",
+            "--jobs",
+            "8",
+            "--child-result",
+            "/data/mini_linq-gpu/features/gpu/compare/triangles_dblp_bac.json",
+            "--expected-count",
+            "2224385"
+          ],
+          "console_log": "triangles_dblp_bac.log"
+        }
+      ],
+      "best_order": "bac"
+    },
+    {
+      "dataset": "livejournal",
+      "source": "/data/dataset/graph/soc-LiveJournal/edge.facts",
+      "source_bytes": 1080597849,
+      "set_edges": "/tmp/triangles-reference-data/livejournal.set.tsv",
+      "input_rows": 68993773,
+      "edge_count": 68993773,
+      "duplicates": 0,
+      "node_min": 0,
+      "node_max": 4847570,
+      "wedges": 5915633945,
+      "bfs_raw_triple_bytes": 70987607340,
+      "bfs_raw_triple_gib": 66.11236123368144,
+      "duckdb": {
+        "command": [
+          "/home/stargazermiao/.duckdb/cli/latest/duckdb",
+          "-batch",
+          "-json",
+          ":memory:"
+        ],
+        "threads": 24,
+        "query": "SELECT count(*) AS triangle_count FROM E ab JOIN E bc ON ab.dst = bc.src JOIN E ac ON ac.src = ab.src AND ac.dst = bc.dst;",
+        "answer_count": 946400853,
+        "counts": [
+          946400853,
+          946400853,
+          946400853,
+          946400853,
+          946400853,
+          946400853
+        ],
+        "warmup_ms": 40319.0,
+        "run_ms": [
+          38947.0,
+          37299.0,
+          35368.0,
+          35078.0,
+          34679.0
+        ],
+        "median_ms": 35368.0,
+        "min_ms": 34679.0,
+        "timer_resolution_ms": 1,
+        "total_reference_s": 228.8214520579786,
+        "sql_file": "triangles_livejournal.duckdb.sql",
+        "console_log": "triangles_livejournal.duckdb.log"
+      },
+      "srdatalog": [
+        {
+          "dataset": "livejournal",
+          "order": "default",
+          "requested_var_order": null,
+          "status": "ok",
+          "phase": "complete",
+          "compile_s": 0.00558654498308897,
+          "load_s": [
+            2.122567020007409,
+            2.1891671890043654,
+            2.119418082991615,
+            2.1217942999792285,
+            2.3435203029657714
+          ],
+          "prepare_ms": [
+            306.55064003076404,
+            312.5626069959253,
+            310.3835469810292,
+            311.030954006128,
+            321.1280379910022
+          ],
+          "run_ms": [
+            2497.37841199385,
+            2576.5239659813233,
+            2577.8759450186044,
+            2520.6289750058204,
+            2582.277763984166
+          ],
+          "counts": [
+            946400853,
+            946400853,
+            946400853,
+            946400853,
+            946400853,
+            946400853
+          ],
+          "expected_count": 946400853,
+          "answer_count": 946400853,
+          "count_exact": true,
+          "peak_vram_mib": 5278,
+          "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+          "chosen_plans": [
+            {
+              "rule": "KnowsLoad",
+              "var_order": [
+                "x",
+                "y"
+              ],
+              "clause_order": [
+                0
+              ],
+              "join_vars": [],
+              "body": [
+                "Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            },
+            {
+              "rule": "TriangleJoin",
+              "var_order": [
+                "a",
+                "b",
+                "c"
+              ],
+              "clause_order": [
+                0,
+                1,
+                2
+              ],
+              "join_vars": [
+                "a",
+                "b",
+                "c"
+              ],
+              "body": [
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            }
+          ],
+          "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesdefault_DB_E844",
+          "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesdefault_DB_E844/libTrianglesdefault_DB_E844.so",
+          "warmup_ms": 2578.650683979504,
+          "warmup_load_s": 2.2184999029850587,
+          "warmup_prepare_ms": 318.43278399901465,
+          "median_ms": 2576.5239659813233,
+          "min_ms": 2497.37841199385,
+          "returncode": 0,
+          "command": [
+            "/home/stargazermiao/workspace/srdatalog-python/.venv/bin/python3",
+            "-u",
+            "/data/mini_linq-gpu/features/gpu/compare/srdatalog_triangles.py",
+            "--dataset",
+            "livejournal",
+            "--order",
+            "default",
+            "--srdatalog",
+            "/home/stargazermiao/workspace/srdatalog-python",
+            "--data-root",
+            "/tmp/triangles-reference-data",
+            "--jobs",
+            "8",
+            "--child-result",
+            "/data/mini_linq-gpu/features/gpu/compare/triangles_livejournal_default.json",
+            "--expected-count",
+            "946400853"
+          ],
+          "console_log": "triangles_livejournal_default.log"
+        },
+        {
+          "dataset": "livejournal",
+          "order": "abc",
+          "requested_var_order": [
+            "a",
+            "b",
+            "c"
+          ],
+          "status": "ok",
+          "phase": "complete",
+          "compile_s": 0.02890705200843513,
+          "load_s": [
+            3.832329307042528,
+            3.886652891000267,
+            3.69311424595071,
+            3.9772083910065703,
+            5.538485552009661
+          ],
+          "prepare_ms": [
+            417.3569710110314,
+            452.3541660164483,
+            435.9984979964793,
+            568.665130995214,
+            506.9043679977767
+          ],
+          "run_ms": [
+            2575.828941015061,
+            2631.8004420027137,
+            2505.797550023999,
+            2613.549047964625,
+            2573.4914840431884
+          ],
+          "counts": [
+            946400853,
+            946400853,
+            946400853,
+            946400853,
+            946400853,
+            946400853
+          ],
+          "expected_count": 946400853,
+          "answer_count": 946400853,
+          "count_exact": true,
+          "peak_vram_mib": 5278,
+          "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+          "chosen_plans": [
+            {
+              "rule": "KnowsLoad",
+              "var_order": [
+                "x",
+                "y"
+              ],
+              "clause_order": [
+                0
+              ],
+              "join_vars": [],
+              "body": [
+                "Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            },
+            {
+              "rule": "TriangleJoin",
+              "var_order": [
+                "a",
+                "b",
+                "c"
+              ],
+              "clause_order": [
+                0,
+                1,
+                2
+              ],
+              "join_vars": [
+                "a",
+                "b",
+                "c"
+              ],
+              "body": [
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            }
+          ],
+          "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesabc_DB_721D",
+          "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesabc_DB_721D/libTrianglesabc_DB_721D.so",
+          "warmup_ms": 2578.418993973173,
+          "warmup_load_s": 4.54161626502173,
+          "warmup_prepare_ms": 490.4071380151436,
+          "median_ms": 2575.828941015061,
+          "min_ms": 2505.797550023999,
+          "returncode": 0,
+          "command": [
+            "/home/stargazermiao/workspace/srdatalog-python/.venv/bin/python3",
+            "-u",
+            "/data/mini_linq-gpu/features/gpu/compare/srdatalog_triangles.py",
+            "--dataset",
+            "livejournal",
+            "--order",
+            "abc",
+            "--srdatalog",
+            "/home/stargazermiao/workspace/srdatalog-python",
+            "--data-root",
+            "/tmp/triangles-reference-data",
+            "--jobs",
+            "8",
+            "--child-result",
+            "/data/mini_linq-gpu/features/gpu/compare/triangles_livejournal_abc.json",
+            "--expected-count",
+            "946400853"
+          ],
+          "console_log": "triangles_livejournal_abc.log"
+        },
+        {
+          "dataset": "livejournal",
+          "order": "bac",
+          "requested_var_order": [
+            "b",
+            "a",
+            "c"
+          ],
+          "status": "ok",
+          "phase": "complete",
+          "compile_s": 0.011531525989994407,
+          "load_s": [
+            3.9209428309695795,
+            3.808109279954806,
+            4.281358624983113,
+            4.213427165988833,
+            2.5743933309568092
+          ],
+          "prepare_ms": [
+            423.99599199416116,
+            565.4378320323303,
+            541.6254780138843,
+            415.31177499564365,
+            339.13527301047
+          ],
+          "run_ms": [
+            1756.9380060303956,
+            1760.8714399975725,
+            1761.7409719969146,
+            1790.466839040164,
+            1760.952370997984
+          ],
+          "counts": [
+            946400853,
+            946400853,
+            946400853,
+            946400853,
+            946400853,
+            946400853
+          ],
+          "expected_count": 946400853,
+          "answer_count": 946400853,
+          "count_exact": true,
+          "peak_vram_mib": 9374,
+          "peak_vram_note": "whole GPU 0, 1 Hz sampled lower bound",
+          "chosen_plans": [
+            {
+              "rule": "KnowsLoad",
+              "var_order": [
+                "x",
+                "y"
+              ],
+              "clause_order": [
+                0
+              ],
+              "join_vars": [],
+              "body": [
+                "Atom(rel='KnowsInput', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='x', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='y', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            },
+            {
+              "rule": "TriangleJoin",
+              "var_order": [
+                "b",
+                "a",
+                "c"
+              ],
+              "clause_order": [
+                0,
+                1,
+                2
+              ],
+              "join_vars": [
+                "a",
+                "b",
+                "c"
+              ],
+              "body": [
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='b', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))",
+                "Atom(rel='Knows', args=(ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='a', const_value=None, const_cpp_expr=None, cpp_code=None), ClauseArg(kind=<ArgKind.LVAR: 'var'>, var_name='c', const_value=None, const_cpp_expr=None, cpp_code=None)), prov=Provenance(kind=<ProvenanceKind.USER: 'pkUser'>, parent_rule='', derived_from='', transform_pass=''))"
+              ]
+            }
+          ],
+          "project_dir": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesbac_DB_ED6E",
+          "artifact": "/data/mini_linq-gpu/features/gpu/compare/srdatalog_build/jit/Trianglesbac_DB_ED6E/libTrianglesbac_DB_ED6E.so",
+          "warmup_ms": 1777.4692180100828,
+          "warmup_load_s": 3.7931604650220834,
+          "warmup_prepare_ms": 485.6166089884937,
+          "median_ms": 1760.952370997984,
+          "min_ms": 1756.9380060303956,
+          "returncode": 0,
+          "command": [
+            "/home/stargazermiao/workspace/srdatalog-python/.venv/bin/python3",
+            "-u",
+            "/data/mini_linq-gpu/features/gpu/compare/srdatalog_triangles.py",
+            "--dataset",
+            "livejournal",
+            "--order",
+            "bac",
+            "--srdatalog",
+            "/home/stargazermiao/workspace/srdatalog-python",
+            "--data-root",
+            "/tmp/triangles-reference-data",
+            "--jobs",
+            "8",
+            "--child-result",
+            "/data/mini_linq-gpu/features/gpu/compare/triangles_livejournal_bac.json",
+            "--expected-count",
+            "946400853"
+          ],
+          "console_log": "triangles_livejournal_bac.log"
+        }
+      ],
+      "best_order": "bac"
+    }
+  ]
+}

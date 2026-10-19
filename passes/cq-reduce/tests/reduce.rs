@@ -577,3 +577,39 @@ fn reductions_preserve_and_check_independent_branch_metadata() {
         assert!(check(&source, &wrong, &options).is_err());
     }
 }
+
+#[test]
+fn reductions_preserve_generators_as_opaque_non_targets() {
+    use quote::ToTokens;
+    let source: valuation::Program = syn::parse_str(
+        "struct Q; relation R(a:i32); relation S(a:i32); relation answer(b:i32); answer(b) :- R(a), S(a), for b in 0..a; valuation { R@0(a); S@1(a); for b in 0..a; }"
+    ).unwrap();
+    for semijoins in [
+        Reductions::None,
+        Reductions::Tree,
+        Reductions::Hypergraph,
+        Reductions::Masks,
+    ] {
+        let options = Options { semijoins };
+        let target = compile(&source, &options).unwrap();
+        check(&source, &target, &options).unwrap();
+        assert_eq!(
+            syn::parse2::<valuation::Program>(target.to_token_stream()).unwrap(),
+            target
+        );
+        assert!(matches!(
+            target.valuation.steps.last(),
+            Some(valuation::Step::For(..))
+        ));
+        for step in &target.valuation.steps {
+            if let valuation::Step::Reduce(reduction, _) = step {
+                assert_ne!(reduction.clause(), 2);
+                let valuation::Reduction::With(_, support) = &reduction.reduction;
+                assert_ne!(support.clause(), 2);
+            }
+        }
+        let mut changed = target.clone();
+        changed.valuation.steps.pop();
+        assert!(check(&source, &changed, &options).is_err());
+    }
+}

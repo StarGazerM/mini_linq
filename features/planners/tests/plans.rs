@@ -3,6 +3,65 @@ use cq_testkit::{PassCase, SCENARIOS, cq_semantics, databases, semantics, valuat
 use quote::{ToTokens, quote};
 
 #[test]
+fn every_planner_preserves_generator_mode_and_written_chain() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q;
+        relation R(x:i32);
+        relation S(y:i32);
+        relation answer(x:i32,y:i32,z:i32);
+        answer(x,y,z) :- R(x), if opaque(x), for y in 0..*x,
+            S(y), for z in [*y, *y], if opaque(z);
+    };
+    for planner in Planner::ALL {
+        let target =
+            compile(&source, planner).unwrap_or_else(|error| panic!("{planner:?}: {error}"));
+        check(&source, &target).unwrap();
+        let generators: Vec<_> = target
+            .plan
+            .definitions
+            .iter()
+            .filter_map(|definition| match &definition.operator {
+                ra::Operator::Bind(binding) if binding.for_token.is_some() => Some(binding),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(generators.len(), 2, "{planner:?}");
+
+        let mut changed = target.clone();
+        let generator = changed
+            .plan
+            .definitions
+            .iter_mut()
+            .find_map(|definition| match &mut definition.operator {
+                ra::Operator::Bind(binding) if binding.for_token.is_some() => Some(binding),
+                _ => None,
+            })
+            .unwrap();
+        generator.for_token = None;
+        assert!(check(&source, &changed).is_err(), "{planner:?}");
+
+        let mut changed = compile_valuation(&source, planner).unwrap();
+        let generator = changed
+            .valuation
+            .steps
+            .iter()
+            .position(|step| matches!(step, vo::Step::For(..)))
+            .unwrap();
+        let guard = changed
+            .valuation
+            .steps
+            .iter()
+            .position(|step| matches!(step, vo::Step::Guard(..)))
+            .unwrap();
+        changed.valuation.steps.swap(generator, guard);
+        assert!(
+            check_valuation(&source, &changed, planner).is_err(),
+            "{planner:?}"
+        );
+    }
+}
+
+#[test]
 fn prefix_let_domain_keeps_hoisting_and_waits_before_full_reduction() {
     let source: cq::Program = syn::parse_quote! { struct Q; relation R(x:i32);
         answer(x) :- R(x), let k:i32 = std::convert::identity(*x), {if *k == 1} | {if *k == 2};
@@ -384,7 +443,7 @@ fn every_scenario_through_every_planner() {
             combinations += 1;
         }
     }
-    assert_eq!(combinations, 300);
+    assert_eq!(combinations, 330);
 }
 
 #[test]
@@ -421,6 +480,131 @@ fn pinned_vo_and_ra_decisions_for_each_planner() {
             check(&source, &syn::parse_str(&expected_ra).unwrap()).unwrap();
         }
     }
+}
+
+#[test]
+fn le_retail_and_block_schedule_fixtures() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for fixture in ["retail_h05", "retail_h09", "retail_d72_inner", "block"] {
+        let stem = format!("le_{fixture}");
+        let source =
+            syn::parse_str(&std::fs::read_to_string(root.join(format!("{stem}.cq"))).unwrap())
+                .unwrap();
+        let valuation = compile_valuation(&source, Planner::Le).unwrap();
+        let algebra = compile(&source, Planner::Le).unwrap();
+        assert_eq!(
+            format!("{}\n", valuation.to_token_stream()),
+            std::fs::read_to_string(root.join(format!("{stem}.vo"))).unwrap(),
+            "{stem}"
+        );
+        assert_eq!(
+            format!("{}\n", algebra.to_token_stream()),
+            std::fs::read_to_string(root.join(format!("{stem}.ra"))).unwrap(),
+            "{stem}"
+        );
+        check_valuation(&source, &valuation, Planner::Le).unwrap();
+        check(&source, &algebra).unwrap();
+    }
+}
+
+#[test]
+fn le_checks_lookup_expansion_and_rust_before_independently() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32); relation S(a:i32,b:i32); relation T(a:i32,c:i32);
+        answer(a,b,c) :- R(a), S(a,b), T(a,c), if keep!(b,c);
+    };
+    let target = compile_valuation(&source, Planner::Le).unwrap();
+    let analysis = vo::contract::check(&target).unwrap();
+    let phases: Vec<_> = target
+        .valuation
+        .steps
+        .iter()
+        .enumerate()
+        .filter_map(|(i, step)| match step {
+            vo::Step::Atom(a, _) => Some((a.clause(), analysis.introduces[i].len())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(phases, [(0, 1), (1, 0), (2, 0), (1, 1), (2, 1)]);
+    for position in [1, 3] {
+        let mut missing = target.clone();
+        missing.valuation.steps.remove(position);
+        assert!(check_valuation(&source, &missing, Planner::Le).is_err());
+    }
+    let mut late = target.clone();
+    let expansion = late.valuation.steps.remove(3);
+    late.valuation.steps.push(expansion);
+    assert!(check_valuation(&source, &late, Planner::Le).is_err());
+}
+
+#[test]
+fn le_generators_keep_written_ownership_in_outer_and_recursive_scopes() {
+    for body in [
+        quote!(for (x, y) in pairs(), R(x), S(x,y)),
+        quote!(R(x), for y in values(x), S(x,y)),
+        quote!(R(x), { for y in left(x), S(x,y) } | { for y in right(x), S(x,y) }),
+        quote!(R(x), { for y in left(x), S(x,y) } else { for y in right(x), S(x,y) }),
+    ] {
+        let source = syn::parse2(quote! {
+            struct Q;
+            relation R(x:i32); relation S(x:i32,y:i32);
+            relation answer(x:i32,y:i32);
+            answer(x,y) :- #body;
+        })
+        .unwrap();
+        let target = compile_valuation(&source, Planner::Le).unwrap();
+        check_valuation(&source, &target, Planner::Le).unwrap();
+        check(&source, &compile(&source, Planner::Le).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn le_generator_before_and_binder_mutations_are_rejected() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q;
+        relation R(x:i32); relation S(x:i32,y:i32); relation T(z:i32);
+        relation answer(x:i32,y:i32,z:i32);
+        answer(x,y,z) :- R(x), S(x,y), for z in values(x), T(z);
+    };
+    let target = compile_valuation(&source, Planner::Le).unwrap();
+    check_valuation(&source, &target, Planner::Le).unwrap();
+    let generator = target
+        .valuation
+        .steps
+        .iter()
+        .position(|step| matches!(step, vo::Step::For(..)))
+        .unwrap();
+    let expansion = target
+        .valuation
+        .steps
+        .iter()
+        .rposition(|step| matches!(step, vo::Step::Atom(a, _) if a.clause() == 1))
+        .unwrap();
+    assert!(expansion < generator);
+
+    // y is not a generator dependency: Before must still require S's full row.
+    let mut late = target.clone();
+    late.valuation.steps.swap(expansion, generator);
+    let error = check_valuation(&source, &late, Planner::Le).unwrap_err();
+    assert!(error.to_string().contains("Before condition"), "{error}");
+
+    // A relational occurrence cannot take ownership of the generator's z.
+    let mut stolen = target.clone();
+    let generated_atom = stolen
+        .valuation
+        .steps
+        .iter()
+        .rposition(|step| matches!(step, vo::Step::Atom(a, _) if a.clause() == 3))
+        .unwrap();
+    stolen.valuation.steps.swap(generator, generated_atom);
+    assert!(check_valuation(&source, &stolen, Planner::Le).is_err());
+
+    let mut changed = target.clone();
+    let vo::Step::For(binding, _) = &mut changed.valuation.steps[generator] else {
+        unreachable!()
+    };
+    binding.expression = syn::parse_quote!(different_values(x));
+    assert!(check_valuation(&source, &changed, Planner::Le).is_err());
 }
 
 #[test]

@@ -24,6 +24,8 @@ manifest += dependencies(CARGO, ["mini-linq", "cq-storage", "cq-load", "cq-workl
 fixtures = [(name, Path(__file__).parent / f"{name}.rs", needle)
             for name, needle in [
                 ("ordered", "OrderedRead"),
+                ("le_ordered", "OrderedRead"),
+                ("le_runs_ordered", "OrderedRead"),
                 ("leading_prefix", "leading declaration prefix"),
                 ("push_merge", "own_push: merge is unsupported"),
                 ("push_smallest", "own_push: probe smallest is unsupported"),

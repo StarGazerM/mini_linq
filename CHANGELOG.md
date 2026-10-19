@@ -7,6 +7,21 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Add the external `cq_gpu::print` Structures terminal printer and its pooled
+  host runtime in `experiments/gpu`: generic CUDA tile streams, exact recorded
+  keyed-read provenance, retained lookup witnesses, bounded segmented expansion
+  with an explicit frontier, budgeted membership bitmaps and exact multiword
+  device dedup. The CPU-neutral `cq_rewrites::build_host_reads` records retained
+  host modes; explicit `cq_gpu::prefix_runs` and `retype(dedup => DeviceSet<_>)`
+  record device representations rather than silently replacing CPU providers.
+  Nested macro expansion runs on CUDA; smoke agrees with pull, a 20,000-answer
+  fanout exercises frontier/grow/relaunch, and four compile-fail fixtures name
+  unsupported merge, union, non-integral build keys and opaque guards.
+  Compiled retail_h05 A/B match all 7,242 SF1 and 72,983 SF10 answers after one
+  warmup and five runs. SF10 median GPU totals are 19.039/117.689 ms versus
+  hand-written 6.2/10.1 ms: correctness is reproduced, performance is not.
+  Both final kernels use 40 registers with 44/36-byte spill stores/loads;
+  all measurements and the differing recorded Supplier prefix are documented.
 - Lookup&Expand sharing on the R/E/C back end (contract of record
   `/data/codex/gpu-le-reply.md`, confirmed by the GPU session). Structures gains
   `r share = lookup b [K] first s force p;` (ST-Share: the keyed read is
@@ -24,6 +39,19 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   builds. Pull printer carries the witness as a non-column item pruned at the
   forcing probe and realizes `expand` through `cq_storage::stage::segmented`;
   the push printer refuses both by name. Defaults record nothing.
+- Workload corpus adds `le` and `le_runs` planner-axis witnesses and two
+  224-configuration triangle kernel targets. A deterministic pairwise extender
+  preserves the original 80 handwritten witnesses and case lists; both families
+  now require all 367 axis pairs. Of 92 additional pairwise witnesses, 90 are
+  accepted; D85 LE/LE-runs merge-on-HashMap requires `OrderedRead` and is pinned
+  by two negative UI fixtures, matching the corpus's existing accepted-domain
+  policy. TPC-H benchmarking accepts `--config NAME` to measure `default`
+  alongside that named configuration, keeping separate uninstrumented timing
+  workers, existing DuckDB columns and exact oracle checks.
+  Three-job corpus gate: 3,440 passed, zero failed, 127.07 s wall time;
+  the compile-fail test includes all eleven rejection fixtures. SF1 five-run
+  benchmarks for both named configurations and their default baselines matched
+  DuckDB exactly on all thirteen queries (also gated at SF0.1).
 - Back end split into three recorded, checked layers (`doc/formal/backend.tex`;
   rules STR-Repr, ST-Total, ST-Stage, BK-Dual). Structures gains
   `r repr = tuples | positions {H lineage {..}, ..} owned [..];` (data
@@ -45,6 +73,23 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   push printer is ported to it and refuses `positions` explicitly. Join
   transport of positions (index payload = `RowId`) is deferred. Q6 gains a
   `staged` configuration (`positions` + `batch(1024)`).
+- Join filters admit `SortedRun` payload builds: both exact payload providers
+  enumerate the same distinct keys, so `sorted_runs` keeps existing join
+  filters. Generated TPC-H measurement workers use the workload crate's
+  recursion allowance so counter/timing wrappers can represent the full
+  iterator chain. Sorted-run payload construction counts copied occurrences,
+  not set-insertion attempts, matching HashIndex and the independent
+  operator-profile checks. All thirteen TPC-H-derived queries register
+  `le_runs` (`order(le)` with `sorted_runs`).
+- Add `cq_planners::order(le)`: early bound-key lookups in GYO ear order,
+  demand-delayed coarse full-row expansion, recursive block scheduling, and
+  the default Masks reducer. Independent CK-Le checks occurrence phases,
+  written column ownership, Rust Before obligations and normalized CQ
+  correspondence. Retail profiling accepts `--config le`.
+- Add payload-exact `SortedRun` storage with Copy borrowed lookup cursors,
+  stable key clustering and bounded integer rank directories. The external
+  `cq_rewrites::sorted_runs` Structures rewrite records eligible one-level
+  payload retyping without changing default representation selection.
 - Merge upstream measurement, feature lockfile and CI fixes through `7e5c2c6`
   while retaining readable workload cases, pairwise configurations, the triangle
   kernel and UI fixtures. Drop generated-corpus sharding: its two commits add

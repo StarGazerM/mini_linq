@@ -65,8 +65,10 @@ pub(super) fn build_in(
     } else {
         format!("{:?}", std::time::SystemTime::now())
     };
+    // Match the workload/corpus crate allowance: instrumented iterator chains
+    // add wrapper types and can exceed rustc's default layout-query depth.
     let source_text = format!(
-        "// Measurement build {:?}\n#[allow(unused_imports, unused_macros, dead_code)] #[path = {:?}] mod tpch_runtime;\n#[path = {source:?}] mod query;\n#[path = {:?}] mod comparison;\ninclude!({:?});\n",
+        "// Measurement build {:?}\n#![recursion_limit = \"512\"]\n#[allow(unused_imports, unused_macros, dead_code)] #[path = {:?}] mod tpch_runtime;\n#[path = {source:?}] mod query;\n#[path = {:?}] mod comparison;\ninclude!({:?});\n",
         build_stamp,
         root.join("src/tpch_runtime.rs"),
         root.join("xtask/src/tpch/comparison.rs"),

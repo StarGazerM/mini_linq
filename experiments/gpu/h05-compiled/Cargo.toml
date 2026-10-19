@@ -1,0 +1,18 @@
+[package]
+name = "gpu-h05-compiled"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+mini-linq = { path = "../../../facade/mini-linq" }
+cq-planners = { path = "../../../features/planners" }
+cq-rewrites = { path = "../../../features/rewrites" }
+cq-storage = { path = "../../../runtime/cq-storage" }
+cq-gpu = { path = "../printer" }
+cq-gpu-runtime = { path = "../printer-runtime" }
+cuda-core.workspace = true
+cuda-device.workspace = true
+cuda-host.workspace = true
+gpu-tiles = { path = "../tiles" }
+gpu-blocked-run = { path = "../blocked-run" }
+serde_json.workspace = true

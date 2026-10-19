@@ -178,6 +178,9 @@ fn owned_columns(rows: &Program) -> BTreeSet<String> {
                 cq_lang_cq::BodyItem::Let(binding) => {
                     output.extend(rust::bindings(&binding.pattern).iter().map(symbol_name));
                 }
+                cq_lang_cq::BodyItem::For(generator) => {
+                    output.extend(rust::bindings(&generator.pattern).iter().map(symbol_name));
+                }
                 cq_lang_cq::BodyItem::Block(block) => {
                     for branch in &block.branches {
                         collect(&branch.body, output);

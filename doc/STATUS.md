@@ -97,6 +97,150 @@ the default already filters the stream at its scan with the builds' key sets,
 and its probes then only hit, which is the SQL Server argument for omitting
 the top-down pass.
 
+## Lookup-expand route (`cq_planners::order(le)`)
+
+The external planner records existing VO subatoms: a no-new-name lookup on
+the currently bound join key, followed by one coarse full correlated row.
+Ready lookups follow the GYO ear order (then the Masks cyclic-core tree);
+the outer stream and Rust chain remain Written/Coarse. Expansions wait for
+column demand, a written Rust Before boundary, or scope exit. Opaque Rust
+retains its whole lexical environment through `FreeVariables::dependencies`.
+Blocks recurse without changing their interface or fallback ancestry.
+
+Coarse expansion is deliberate: CK-Le checks exactly one full expansion per
+non-stream occurrence, rather than claiming Fine's one-variable obligation.
+It independently checks the non-introducing lookup before that expansion and
+written column ownership; WF-VO checks first uses, complete rows and Rust
+boundaries, Masks checks reductions, and the final CQ→RA′ check remains active.
+No RA′, VO, Physical grammar, runtime feature, or core compiler dependency is
+added. `physical = [cq_rewrites::smallest_intersections]` remains the public
+intersection hook; this coarse planner does not manufacture Fine ranges or
+claim a worst-case-optimal join bound.
+
+The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
+as planner axes (538 new accepted configurations; the two D85 `merge_joins`
++ HashMap witnesses are excluded by the existing accepted-domain policy and
+pinned as negative UI fixtures); the corpus gate passes (3,440 tests).
+
+`le_runs` explicitly applies `sorted_runs`; core default selection is
+unchanged. Sorted-run retyping is limited to one-level HashIndex payload
+builds with a single stored borrowed i32/i64 key, selecting the integral
+codec eligible for the rank directory. Multi-column, non-integral and
+computed/owned keys stay hashed; the rewrite never selects NoDense
+binary-search runs. An integral key with an over-budget span can still fall
+back to binary search at runtime.
+
+Cursor retention is now upstream's `share` / `repr … witness` / `stage …
+expand` (ST-Share, STR-Witness, ST-Expand; `cq_rewrites::retain_lookups`),
+the R/E encoding agreed in `doc/GPU-LE-BACKEND-CODESIGN.md`; the earlier
+`p via cursor s;` hidden-field implementation was dropped. `le_runs` =
+`order(le)` + `sorted_runs` + `retain_lookups`. SF1 uninstrumented medians
+(`cargo xtask bench --tpch --sf 1 --runs 5 --config le_runs`, 2026-10-18,
+all 13 exact vs DuckDB):
+
+| Query | default | le_runs | ratio |
+|---|---:|---:|---:|
+| retail_h03 | 33.5 | 27.7 | 0.83 |
+| retail_h07 | 37.0 | 29.5 | 0.80 |
+| retail_h07_block | 34.8 | 28.4 | 0.82 |
+| retail_h08 | 31.6 | 27.1 | 0.86 |
+| retail_d19 / d27 / d85 / q06 / q19 | 21.2 / 17.2 / 28.9 / 25.6 / 36.3 | 20.8 / 17.5 / 29.4 / 26.0 / 35.2 | 0.97–1.02 |
+| retail_d72_inner | 182.5 | 193.6 | 1.06 |
+| retail_h09 | 164.2 | 186.6 | 1.14 |
+| retail_h21_positive | 89.6 | 105.6 | 1.18 |
+| retail_h05 | 32.6 | 41.0 | 1.26 |
+
+Same gains as the dropped encoding where a witness is retained on an
+integral-key build; the regressions are the cases without a Copy cursor
+(Supplier host fallback in H05, composite `HashIndex` keys in H09/D85) or
+with lookups that retain every row (H21). The earlier table below is kept as
+the record of the dropped implementation.
+
+Re-measured 2026-10-16 from `features/workloads`, sequentially with
+`cargo xtask profile --tpch --sf 1 --config default` then
+`cargo xtask profile --tpch --sf 1 --config le_runs`, with no concurrent
+checks or benchmark jobs. These are uninstrumented medians of 11 timed runs
+after warm-up, in ms; ratios are `le_runs/default` (lower is better).
+All 13 kernels were exact against DuckDB in both configurations, including
+the separate counter and timing workers; all independent build-count checks
+passed. The existing SF1 database and Parquet projections were reused.
+
+| Query | default | le_runs | Ratio | Change |
+|---|---:|---:|---:|---:|
+| retail_h03 | 39.813 | 31.195 | 0.784x | -21.6% |
+| retail_h05 | 33.053 | 42.664 | 1.291x | +29.1% |
+| retail_h07 | 36.098 | 30.200 | 0.837x | -16.3% |
+| retail_h07_block | 37.248 | 28.932 | 0.777x | -22.3% |
+| retail_h08 | 33.269 | 27.913 | 0.839x | -16.1% |
+| retail_h09 | 164.862 | 189.177 | 1.147x | +14.7% |
+| retail_h21_positive | 92.148 | 113.095 | 1.227x | +22.7% |
+| retail_d19 | 20.684 | 21.471 | 1.038x | +3.8% |
+| retail_d27 | 17.980 | 18.158 | 1.010x | +1.0% |
+| retail_d72_inner | 193.369 | 177.665 | 0.919x | -8.1% |
+| retail_d85 | 27.023 | 30.283 | 1.121x | +12.1% |
+| tpch_q06 | 28.419 | 31.262 | 1.100x | +10.0% |
+| tpch_q19 | 35.758 | 35.991 | 1.007x | +0.7% |
+
+The earlier NoDense runs measured H09 at 326.040 ms and D72-inner at
+329.832 ms. Their composite PartSupp keys now stay HashIndex. The H09
+profile actually builds 42,656 filtered PartSupp rows, not 800,000;
+D72-inner builds all 800,000. This fixes the unintended binary-search
+replacement, but does not make every LE schedule faster than default.
+
+Every remaining regression above 10% was inspected in
+`/data/codex/opprofile-evidence/<query>.{default,le_runs}.ours.txt` and the
+matching `.validation.json`:
+
+- **H05 (+29.1%):** Supplier is a host fallback, not an eligible retained
+  build: `r12` still tests the 10,000-key HashSet
+  `r11.fallback.supplier_key`, and `r20` probes the separate composite
+  HashIndex `r11.fallback.nation_key_supplier_key`. All 184,082 rows pass
+  the added supplier/order/customer/nation/region semijoins before the final
+  supplier probe retains 7,243. Residual-key support therefore does not remove
+  this particular second lookup. Order/customer built payload indexes use
+  integral-codec SortedRuns; order join-filter insertions still double from
+  46,008 to 92,016. The answer span grows 23.424 → 36.154 ms despite exclusive
+  build time falling 5.851 → 3.011 ms.
+- **H09 (+14.7%):** `r10` and `r17` both probe
+  `r3.index.part_key_supplier_key`, now a HashIndex rather than a NoDense
+  SortedRun. Both emit all 319,404 rows; default has one such expansion.
+  Supplier's host HashIndex still has an added non-filtering semi, and
+  Nation is read twice. The order-key payload build `r5` remains an
+  integral-codec SortedRun; its join-filter insertions double
+  287,490 → 574,980. The answer span is 120.231 → 153.650 ms. Instrumented
+  totals are nevertheless 207.327 → 203.368 ms because default instrumentation
+  overhead is +25.76%, versus +7.50%; these clocks cannot precisely apportion
+  the uninstrumented 24.315 ms regression.
+- **H21-positive (+22.7%):** `r9.index.order_key` is an integral-codec
+  SortedRun rather than default's HashIndex, while `r8.index.order_key`
+  remains the 729,413-key membership provider. Added `r11/r12` order semis
+  preserve all 356,794 outer rows, and `r14/r16` supplier/nation semis
+  preserve all 378,274 expanded rows. The `r9` join-filter insertions double
+  72,110 → 144,220. Exclusive build time falls 14.630 → 8.588 ms, but the
+  answer span grows 50.182 → 76.703 ms: saved build work does not pay for
+  the lookup/expansion schedule. Integral-codec eligibility alone does not
+  guarantee that a runtime key span fits the rank directory.
+- **D85 (+12.1%):** the composite Lineitem build
+  `r8.index.part_key_supplier_key` remains HashIndex. `r13` tests it before
+  `r16` expands it; the hash provider cannot retain a Copy run cursor.
+  `r12` and `r26` also access the 200,000-row Part host HashIndex twice,
+  versus one Part probe in default; early `r12` touches 24,238 rows before
+  composite-key filtering leaves 8,913. Both composite join filters double
+  insertions 8,913 → 17,826. Part's fallback build costs 8.372 ms exclusive
+  (default 7.807); the answer span grows 13.773 → 16.761 ms.
+- **Q06 (+10.0017%, rounded to +10.0% above):** there is no keyed provider
+  to retype or cursor to retain. Both profiles have the same three range
+  scans (6,001,215 → 909,455 → 248,078 → 114,160 rows), binds, and HashSet
+  dedup. The scan/bind span is 20.551 → 20.626 ms and the answer/dedup span
+  28.828 → 29.694 ms; instrumented totals differ only +3.0%.
+  [INFERENCE] The larger plain-run difference is measurement/code-layout
+  variability, not an observed representation regression; the operator
+  evidence does not establish its exact cause.
+
+Operator stream spans are inclusive and overlap; they are not additive
+exclusive costs. LE plus sorted runs remains an explicit CPU experiment,
+not a universal speedup or a saved-descriptor GPU implementation.
+
 ## Index building vs join processing (SF 1, one thread, planning excluded)
 
 DuckDB 1.5.5 with timers in `PhysicalHashJoin` (sink, combine, pointer-table
@@ -269,9 +413,13 @@ Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json
 Tooling notes: `tools/check_public_api.py` reads `ROOT/target/doc` regardless
 of `CARGO_TARGET_DIR`; the external gate needs `TMPDIR=/private/tmp` on macOS.
 
-Remaining Datalog work: rule-local aggregates; Ascent lattices and custom
-providers as explicit contracts; FlowLog comparison; partial-Rust multi-round
-refinement.
+Remaining Datalog work: rule-local aggregates; FlowLog comparison;
+partial-Rust multi-round refinement.
+
+On hold until the GPU-side storage work settles, so storage is designed once
+for both: lattices and custom providers; DOOP probe efficiency (flat value
+storage, batched/prefetched probes on Datalog hosts; probes are 43–46% of DOOP
+compute at `8dc918a`); geometric run merging.
 
 Pending core fix (approved to record, not yet designed): let lowering know a
 host is duplicate-free, or let a consumer own a query's deduplication, so

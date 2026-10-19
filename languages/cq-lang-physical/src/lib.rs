@@ -1070,7 +1070,8 @@ pub fn inherited_key(
         }
         Operator::Semi(_, k) | Operator::Anti(_, k) => key(&k.left),
         Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => key(&s.input),
-        Operator::Bind(b) => key(&b.input),
+        Operator::Bind(b) if b.for_token.is_none() => key(&b.input),
+        Operator::Bind(_) => None,
         Operator::Guard(g) => key(&g.input),
         Operator::Project(p) => key(&p.input).filter(|key| key.iter().all(|k| heading.contains(k))),
     }

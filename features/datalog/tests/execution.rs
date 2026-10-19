@@ -778,3 +778,55 @@ fn owned_delta_keys_and_later_zero_key_runs_preserve_guard_order() {
     );
     assert_eq!(flags.collect::<Vec<_>>(), [(7,)]);
 }
+
+#[test]
+fn nonrecursive_generators_join_generated_values_and_deduplicate() {
+    let seeds = [(1_i32,), (1,), (3,)];
+    let links = [(1_i32, 10_i32), (1, 10), (2, 20), (4, 40)];
+    let rows: Vec<_> = cq_datalog::datalog! {
+        struct Generated;
+        relation Seed(x:i32) = (seeds);
+        relation Link(x:i32,y:i32) = (links);
+        relation Answer(x:i32,y:i32);
+        output Answer;
+        Answer(value,*label) :- Seed(x),
+            for (value, keep) in [(*x, true), (*x + 1, true), (*x, false)],
+            if *keep, Link(value,label);
+    }
+    .collect();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([(1, 10), (2, 20), (4, 40)])
+    );
+}
+
+#[test]
+fn recursive_finite_generators_converge_and_join_generated_values() {
+    let seeds = [(0_i32,), (0,)];
+    let links = [(1_i32, 10_i32), (2, 20), (2, 20), (3, 30), (4, 40)];
+    let (reach, matched) = cq_datalog::datalog! {
+        struct GeneratedClosure;
+        relation Seed(x:i32) = (seeds);
+        relation Link(x:i32,y:i32) = (links);
+        relation Reach(x:i32);
+        relation Matched(x:i32,y:i32);
+        output Reach, Matched;
+        Reach(*x) :- Seed(x);
+        Reach(next) :- Reach(x), if *x < 4, for next in [*x + 1, *x + 1];
+        Matched(next,*label) :- Reach(x), for next in [*x + 1, *x + 1],
+            Link(next,label);
+    };
+    let reach: Vec<_> = reach.collect();
+    let matched: Vec<_> = matched.collect();
+    assert_eq!(reach.len(), 5);
+    assert_eq!(matched.len(), 4);
+    assert_eq!(
+        reach.into_iter().collect::<BTreeSet<_>>(),
+        (0..=4).map(|x| (x,)).collect()
+    );
+    assert_eq!(
+        matched.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([(1, 10), (2, 20), (3, 30), (4, 40)])
+    );
+}

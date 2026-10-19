@@ -8,7 +8,7 @@ Op ::= unit | rename R@path {source -> variable, ...}
      | natural_join l with r | semijoin l with r
      | project r keep {columns} | select r if (Theta)
      | guard r if (Expr) [Environment]
-     | bind r with Pat [: Type] = (Expr) [Environment]
+     | bind r with [for] Pat [: Type] = (Expr) [Environment]
      | union r1, r2, ... [BlockOrigin] | anti [F] l, r
 Environment ::= scope[names] [@path]
 BlockOrigin ::= block @path free[F] interface[I]
@@ -16,8 +16,12 @@ BlockOrigin ::= block @path free[F] interface[I]
 \end{lstlisting}
 Every \code{rename} carries the fixed source occurrence it realizes. Mathematically
 $o::=\mathbf1\mid\delta_m(R)\mid r\bowtie s\mid r\ltimes s\mid\pi_Ur\mid\sigma_\theta r
-\mid\operatorname{guard}_er\mid\operatorname{bind}_{N,e}r\mid\bigcup_jr_j\mid r\triangleright_Fs$,
+\mid\operatorname{guard}_er\mid\operatorname{bind}_{N,e}r
+\mid\operatorname{for}_{N,e}r\mid\bigcup_jr_j\mid r\triangleright_Fs$,
 and $\Delta(r)=(V,T,C)$ records sort, symbolic Rust types and computed columns.
+The optional \code{for} token distinguishes set-valued unnest from scalar
+extension within the same Bind operator; its absence preserves scalar meaning.
+The Environment syntax is unchanged. IX and Physical preserve this token.
 
 \paragraph{Contract.}
 \begin{mathpar}
@@ -41,6 +45,9 @@ and $\Delta(r)=(V,T,C)$ records sort, symbolic Rust types and computed columns.
 \Rule{RA-Extend}{\Delta(r).V=V\quad e\checkmark_V\quad N\cap V=\emptyset}
  {\Sigma;\Delta\vdash\operatorname{bind}_{N,e}r:V\cup N}
 
+\Rule{RA-For}{\Delta(r).V=V\quad e\checkmark_V\quad N=\set(\binds(p))\quad N\cap V=\emptyset}
+ {\Sigma;\Delta\vdash\operatorname{for}_{N,e}r:V\cup N}
+
 \Rule{RA-Union}{\forall j,\ H(r_j)=H}
  {H(\mathsf{union}(r_1,\ldots,r_n))=H\quad
  \sem{\mathsf{union}(r_1,\ldots,r_n)}=\bigcup_j\sem{r_j}}
@@ -63,6 +70,9 @@ block origin; (5)~an all-bare output has exactly its input heading, a computed
 output may use a subset; (6)~the Rust ancestry is a compatible chain, combined
 as a tree at unions. Types merge by restriction, preferring the left spelling;
 Rust establishes concrete type compatibility.
+Generator outputs are computed columns with item-derived types. A generator
+does not inherit a scalar literal value or a scalar-bind uniqueness proof:
+one input row may produce many distinct extensions (or none).
 
 \paragraph{Meaning.} Section~\ref{sec:denotation}'s partial operators over the
 DAG; a name denotes an immutable set and promises neither materialization nor
@@ -87,6 +97,8 @@ occurrence before a node in the source is before it in the target;
 (5)~union operand $j$ contains exactly branch $j$'s occurrences; a fallback
 operand antijoins the earlier original operands by reference; a negated operand
 contains exactly its branch, with no semijoin pushed into it.
+The scalar/generator tag is part of the Rust node payload in every structural
+certificate; changing only that tag is not a permitted rewrite.
 Admitted rewrites: join reordering and reassociation, selections and semijoins
 moved earlier, renamed results. The check is linear plus union-find and rejects
 any rewrite that adds or removes occurrences (no query minimization).

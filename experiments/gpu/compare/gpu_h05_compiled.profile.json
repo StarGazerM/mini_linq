@@ -1,0 +1,2835 @@
+{
+  "device": "NVIDIA RTX 6000 Ada / sm_89",
+  "date": "2026-10-18",
+  "measurement_scope": "Unprofiled CUDA-event medians are in results JSON. Nsight Systems summaries include one warmup plus five measured launches; Nsight Compute counters are one kernel-replay launch, not unprofiled timing. GPU jobs run sequentially.",
+  "ncu": {
+    "compiled_a_before": {
+      "dram__bytes.sum": {
+        "value": 994048256.0,
+        "unit": "byte"
+      },
+      "dram__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": 8.01,
+        "unit": "%"
+      },
+      "gpu__time_duration.sum": {
+        "value": 13611968.0,
+        "unit": "ns"
+      },
+      "sm__warps_active.avg.pct_of_peak_sustained_active": {
+        "value": 42.4,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_barrier_per_warp_active.pct": {
+        "value": 54.97,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct": {
+        "value": 11.62,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_wait_per_warp_active.pct": {
+        "value": 9.76,
+        "unit": "%"
+      }
+    },
+    "compiled_a_after": {
+      "dram__bytes.sum": {
+        "value": 532209024.0,
+        "unit": "byte"
+      },
+      "dram__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": 36.14,
+        "unit": "%"
+      },
+      "gpu__time_duration.sum": {
+        "value": 1616224.0,
+        "unit": "ns"
+      },
+      "sm__warps_active.avg.pct_of_peak_sustained_active": {
+        "value": 58.36,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_barrier_per_warp_active.pct": {
+        "value": 0.0,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct": {
+        "value": 62.32,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_wait_per_warp_active.pct": {
+        "value": 16.74,
+        "unit": "%"
+      }
+    },
+    "handwritten_a": {
+      "dram__bytes.sum": {
+        "value": 573238912.0,
+        "unit": "byte"
+      },
+      "dram__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": 39.65,
+        "unit": "%"
+      },
+      "gpu__time_duration.sum": {
+        "value": 1586624.0,
+        "unit": "ns"
+      },
+      "sm__warps_active.avg.pct_of_peak_sustained_active": {
+        "value": 66.48,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_barrier_per_warp_active.pct": {
+        "value": 26.01,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct": {
+        "value": 52.49,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_wait_per_warp_active.pct": {
+        "value": 10.44,
+        "unit": "%"
+      }
+    },
+    "compiled_b_after": {
+      "dram__bytes.sum": {
+        "value": 87557504.0,
+        "unit": "byte"
+      },
+      "dram__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": 13.21,
+        "unit": "%"
+      },
+      "gpu__time_duration.sum": {
+        "value": 727488.0,
+        "unit": "ns"
+      },
+      "sm__warps_active.avg.pct_of_peak_sustained_active": {
+        "value": 52.82,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_barrier_per_warp_active.pct": {
+        "value": 0.0,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct": {
+        "value": 75.89,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_wait_per_warp_active.pct": {
+        "value": 11.68,
+        "unit": "%"
+      }
+    },
+    "handwritten_b": {
+      "dram__bytes.sum": {
+        "value": 87058816.0,
+        "unit": "byte"
+      },
+      "dram__throughput.avg.pct_of_peak_sustained_elapsed": {
+        "value": 28.81,
+        "unit": "%"
+      },
+      "gpu__time_duration.sum": {
+        "value": 331648.0,
+        "unit": "ns"
+      },
+      "sm__warps_active.avg.pct_of_peak_sustained_active": {
+        "value": 32.81,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_barrier_per_warp_active.pct": {
+        "value": 20.6,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct": {
+        "value": 52.04,
+        "unit": "%"
+      },
+      "smsp__warp_issue_stalled_wait_per_warp_active.pct": {
+        "value": 11.34,
+        "unit": "%"
+      }
+    }
+  },
+  "nsys": {
+    "compiled_final": {
+      "kernels": [
+        {
+          "Time (%)": "37.1",
+          "Total Time (ns)": "35369040",
+          "Instances": "54",
+          "Avg (ns)": "654982.2",
+          "Med (ns)": "4224.5",
+          "Min (ns)": "928",
+          "Max (ns)": "5590086",
+          "StdDev (ns)": "1758391.0",
+          "Name": "order_bins"
+        },
+        {
+          "Time (%)": "15.5",
+          "Total Time (ns)": "14799045",
+          "Instances": "108",
+          "Avg (ns)": "137028.2",
+          "Med (ns)": "2304.0",
+          "Min (ns)": "1088",
+          "Max (ns)": "1202152",
+          "StdDev (ns)": "366713.3",
+          "Name": "gather"
+        },
+        {
+          "Time (%)": "9.3",
+          "Total Time (ns)": "8853119",
+          "Instances": "54",
+          "Avg (ns)": "163946.6",
+          "Med (ns)": "3360.5",
+          "Min (ns)": "1152",
+          "Max (ns)": "1432586",
+          "StdDev (ns)": "451991.7",
+          "Name": "sorted_directory"
+        },
+        {
+          "Time (%)": "6.5",
+          "Total Time (ns)": "6193770",
+          "Instances": "6",
+          "Avg (ns)": "1032295.0",
+          "Med (ns)": "1031799.0",
+          "Min (ns)": "1029351",
+          "Max (ns)": "1037543",
+          "StdDev (ns)": "2814.0",
+          "Name": "cq_gpu_stream_0_r21"
+        },
+        {
+          "Time (%)": "6.3",
+          "Total Time (ns)": "6007019",
+          "Instances": "54",
+          "Avg (ns)": "111241.1",
+          "Med (ns)": "5696.5",
+          "Min (ns)": "1152",
+          "Max (ns)": "878438",
+          "StdDev (ns)": "274996.7",
+          "Name": "sorted_starts"
+        },
+        {
+          "Time (%)": "5.9",
+          "Total Time (ns)": "5569959",
+          "Instances": "12",
+          "Avg (ns)": "464163.3",
+          "Med (ns)": "463971.5",
+          "Min (ns)": "443235",
+          "Max (ns)": "485540",
+          "StdDev (ns)": "21513.1",
+          "Name": "cq_gpu_stream_1_r7"
+        },
+        {
+          "Time (%)": "5.7",
+          "Total Time (ns)": "5454148",
+          "Instances": "12",
+          "Avg (ns)": "454512.3",
+          "Med (ns)": "454963.0",
+          "Min (ns)": "421027",
+          "Max (ns)": "485059",
+          "StdDev (ns)": "31516.0",
+          "Name": "cq_gpu_stream_0_r8"
+        },
+        {
+          "Time (%)": "4.8",
+          "Total Time (ns)": "4576224",
+          "Instances": "54",
+          "Avg (ns)": "84744.9",
+          "Med (ns)": "2784.0",
+          "Min (ns)": "1184",
+          "Max (ns)": "595620",
+          "StdDev (ns)": "187958.5",
+          "Name": "sorted_check"
+        },
+        {
+          "Time (%)": "3.2",
+          "Total Time (ns)": "3028916",
+          "Instances": "6",
+          "Avg (ns)": "504819.3",
+          "Med (ns)": "503507.0",
+          "Min (ns)": "499011",
+          "Max (ns)": "511492",
+          "StdDev (ns)": "5253.3",
+          "Name": "cq_gpu_stream_1_r19"
+        },
+        {
+          "Time (%)": "1.7",
+          "Total Time (ns)": "1601483",
+          "Instances": "54",
+          "Avg (ns)": "29657.1",
+          "Med (ns)": "1696.0",
+          "Min (ns)": "928",
+          "Max (ns)": "122080",
+          "StdDev (ns)": "47949.4",
+          "Name": "scatter"
+        },
+        {
+          "Time (%)": "1.2",
+          "Total Time (ns)": "1171624",
+          "Instances": "54",
+          "Avg (ns)": "21696.7",
+          "Med (ns)": "1696.0",
+          "Min (ns)": "928",
+          "Max (ns)": "122209",
+          "StdDev (ns)": "38392.2",
+          "Name": "histogram"
+        },
+        {
+          "Time (%)": "1.1",
+          "Total Time (ns)": "1093002",
+          "Instances": "54",
+          "Avg (ns)": "20240.8",
+          "Med (ns)": "1344.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "86465",
+          "StdDev (ns)": "31471.1",
+          "Name": "word_offsets"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "425763",
+          "Instances": "264",
+          "Avg (ns)": "1612.7",
+          "Med (ns)": "1312.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "4672",
+          "StdDev (ns)": "937.0",
+          "Name": "scan_blocks"
+        },
+        {
+          "Time (%)": "0.3",
+          "Total Time (ns)": "242882",
+          "Instances": "12",
+          "Avg (ns)": "20240.2",
+          "Med (ns)": "20144.0",
+          "Min (ns)": "11072",
+          "Max (ns)": "29633",
+          "StdDev (ns)": "9526.5",
+          "Name": "cq_gpu_stream_0_r5"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "177795",
+          "Instances": "114",
+          "Avg (ns)": "1559.6",
+          "Med (ns)": "1088.0",
+          "Min (ns)": "992",
+          "Max (ns)": "3424",
+          "StdDev (ns)": "942.1",
+          "Name": "add_prefix"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "150177",
+          "Instances": "12",
+          "Avg (ns)": "12514.8",
+          "Med (ns)": "12720.5",
+          "Min (ns)": "11616",
+          "Max (ns)": "13120",
+          "StdDev (ns)": "490.8",
+          "Name": "set_insert"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "114593",
+          "Instances": "54",
+          "Avg (ns)": "2122.1",
+          "Med (ns)": "1152.0",
+          "Min (ns)": "1088",
+          "Max (ns)": "10720",
+          "StdDev (ns)": "2679.3",
+          "Name": "fences"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "87840",
+          "Instances": "54",
+          "Avg (ns)": "1626.7",
+          "Med (ns)": "1184.0",
+          "Min (ns)": "928",
+          "Max (ns)": "5184",
+          "StdDev (ns)": "1270.9",
+          "Name": "clear_histogram"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "61344",
+          "Instances": "54",
+          "Avg (ns)": "1136.0",
+          "Med (ns)": "1088.0",
+          "Min (ns)": "928",
+          "Max (ns)": "2048",
+          "StdDev (ns)": "207.5",
+          "Name": "complete_stats"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "52257",
+          "Instances": "12",
+          "Avg (ns)": "4354.8",
+          "Med (ns)": "4400.0",
+          "Min (ns)": "4160",
+          "Max (ns)": "4481",
+          "StdDev (ns)": "123.2",
+          "Name": "extrema"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "50272",
+          "Instances": "54",
+          "Avg (ns)": "931.0",
+          "Med (ns)": "864.0",
+          "Min (ns)": "832",
+          "Max (ns)": "1248",
+          "StdDev (ns)": "114.7",
+          "Name": "initialize"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "28512",
+          "Instances": "12",
+          "Avg (ns)": "2376.0",
+          "Med (ns)": "2384.0",
+          "Min (ns)": "2336",
+          "Max (ns)": "2432",
+          "StdDev (ns)": "33.8",
+          "Name": "pack"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "22177",
+          "Instances": "12",
+          "Avg (ns)": "1848.1",
+          "Med (ns)": "1856.0",
+          "Min (ns)": "1792",
+          "Max (ns)": "1888",
+          "StdDev (ns)": "38.9",
+          "Name": "cq_gpu_stream_1_r3"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "22176",
+          "Instances": "12",
+          "Avg (ns)": "1848.0",
+          "Med (ns)": "1856.0",
+          "Min (ns)": "1792",
+          "Max (ns)": "2016",
+          "StdDev (ns)": "65.6",
+          "Name": "cq_gpu_stream_0_r3"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "20800",
+          "Instances": "12",
+          "Avg (ns)": "1733.3",
+          "Med (ns)": "1712.0",
+          "Min (ns)": "1664",
+          "Max (ns)": "2016",
+          "StdDev (ns)": "98.2",
+          "Name": "cq_gpu_stream_0_r2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "20256",
+          "Instances": "12",
+          "Avg (ns)": "1688.0",
+          "Med (ns)": "1696.0",
+          "Min (ns)": "1664",
+          "Max (ns)": "1728",
+          "StdDev (ns)": "24.1",
+          "Name": "cq_gpu_stream_1_r2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "13696",
+          "Instances": "12",
+          "Avg (ns)": "1141.3",
+          "Med (ns)": "1152.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "1152",
+          "StdDev (ns)": "15.8",
+          "Name": "membership_insert"
+        }
+      ],
+      "cuda_api": [
+        {
+          "Time (%)": "85.0",
+          "Total Time (ns)": "846668206",
+          "Num Calls": "384",
+          "Avg (ns)": "2204865.1",
+          "Med (ns)": "2965.5",
+          "Min (ns)": "2014",
+          "Max (ns)": "29446192",
+          "StdDev (ns)": "6195541.3",
+          "Name": "cuMemcpyHtoDAsync_v2"
+        },
+        {
+          "Time (%)": "9.2",
+          "Total Time (ns)": "91802452",
+          "Num Calls": "168",
+          "Avg (ns)": "546443.2",
+          "Med (ns)": "16466.5",
+          "Min (ns)": "7033",
+          "Max (ns)": "6412635",
+          "StdDev (ns)": "1531674.6",
+          "Name": "cuMemcpyDtoHAsync_v2"
+        },
+        {
+          "Time (%)": "1.7",
+          "Total Time (ns)": "17309752",
+          "Num Calls": "565",
+          "Avg (ns)": "30636.7",
+          "Med (ns)": "3076.0",
+          "Min (ns)": "351",
+          "Max (ns)": "1578624",
+          "StdDev (ns)": "164037.3",
+          "Name": "cuStreamSynchronize"
+        },
+        {
+          "Time (%)": "1.3",
+          "Total Time (ns)": "13119304",
+          "Num Calls": "8",
+          "Avg (ns)": "1639913.0",
+          "Med (ns)": "2221140.0",
+          "Min (ns)": "162812",
+          "Max (ns)": "2849800",
+          "StdDev (ns)": "1107892.9",
+          "Name": "cuMemFree_v2"
+        },
+        {
+          "Time (%)": "1.0",
+          "Total Time (ns)": "10232783",
+          "Num Calls": "685",
+          "Avg (ns)": "14938.4",
+          "Med (ns)": "351.0",
+          "Min (ns)": "210",
+          "Max (ns)": "1038770",
+          "StdDev (ns)": "106720.0",
+          "Name": "cuEventSynchronize"
+        },
+        {
+          "Time (%)": "0.7",
+          "Total Time (ns)": "6732789",
+          "Num Calls": "14",
+          "Avg (ns)": "480913.5",
+          "Med (ns)": "521765.0",
+          "Min (ns)": "196646",
+          "Max (ns)": "538832",
+          "StdDev (ns)": "103657.6",
+          "Name": "cuModuleLoadData"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "3729007",
+          "Num Calls": "1224",
+          "Avg (ns)": "3046.6",
+          "Med (ns)": "2575.0",
+          "Min (ns)": "2014",
+          "Max (ns)": "22253",
+          "StdDev (ns)": "1831.5",
+          "Name": "cuLaunchKernel"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "1831149",
+          "Num Calls": "8",
+          "Avg (ns)": "228893.6",
+          "Med (ns)": "236819.0",
+          "Min (ns)": "111263",
+          "Max (ns)": "375189",
+          "StdDev (ns)": "76367.1",
+          "Name": "cuMemAlloc_v2"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "1574155",
+          "Num Calls": "2100",
+          "Avg (ns)": "749.6",
+          "Med (ns)": "241.0",
+          "Min (ns)": "210",
+          "Max (ns)": "17122",
+          "StdDev (ns)": "1527.2",
+          "Name": "cuEventRecord"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "1362107",
+          "Num Calls": "504",
+          "Avg (ns)": "2702.6",
+          "Med (ns)": "2585.0",
+          "Min (ns)": "1532",
+          "Max (ns)": "7474",
+          "StdDev (ns)": "1017.2",
+          "Name": "cuMemsetD8Async"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "577518",
+          "Num Calls": "14",
+          "Avg (ns)": "41251.3",
+          "Med (ns)": "40428.0",
+          "Min (ns)": "26210",
+          "Max (ns)": "68681",
+          "StdDev (ns)": "9075.8",
+          "Name": "cuModuleUnload"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "415594",
+          "Num Calls": "457",
+          "Avg (ns)": "909.4",
+          "Med (ns)": "431.0",
+          "Min (ns)": "181",
+          "Max (ns)": "10120",
+          "StdDev (ns)": "1341.9",
+          "Name": "cuEventCreate"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "304542",
+          "Num Calls": "54",
+          "Avg (ns)": "5639.7",
+          "Med (ns)": "4889.0",
+          "Min (ns)": "4238",
+          "Max (ns)": "8637",
+          "StdDev (ns)": "1399.9",
+          "Name": "cuMemcpyDtoDAsync_v2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "123084",
+          "Num Calls": "457",
+          "Avg (ns)": "269.3",
+          "Med (ns)": "190.0",
+          "Min (ns)": "100",
+          "Max (ns)": "5841",
+          "StdDev (ns)": "358.3",
+          "Name": "cuEventDestroy_v2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "491",
+          "Num Calls": "1",
+          "Avg (ns)": "491.0",
+          "Med (ns)": "491.0",
+          "Min (ns)": "491",
+          "Max (ns)": "491",
+          "StdDev (ns)": "0.0",
+          "Name": "cuCtxSetCurrent"
+        }
+      ]
+    },
+    "handwritten_final": {
+      "kernels": [
+        {
+          "Time (%)": "28.2",
+          "Total Time (ns)": "17697783",
+          "Instances": "84",
+          "Avg (ns)": "210687.9",
+          "Med (ns)": "20752.0",
+          "Min (ns)": "1440",
+          "Max (ns)": "1199912",
+          "StdDev (ns)": "398207.2",
+          "Name": "gather"
+        },
+        {
+          "Time (%)": "16.9",
+          "Total Time (ns)": "10601677",
+          "Instances": "42",
+          "Avg (ns)": "252420.9",
+          "Med (ns)": "37216.0",
+          "Min (ns)": "3328",
+          "Max (ns)": "1438602",
+          "StdDev (ns)": "493926.5",
+          "Name": "sorted_directory"
+        },
+        {
+          "Time (%)": "13.0",
+          "Total Time (ns)": "8174261",
+          "Instances": "42",
+          "Avg (ns)": "194625.3",
+          "Med (ns)": "34752.5",
+          "Min (ns)": "4640",
+          "Max (ns)": "878790",
+          "StdDev (ns)": "308186.5",
+          "Name": "sorted_starts"
+        },
+        {
+          "Time (%)": "9.9",
+          "Total Time (ns)": "6201133",
+          "Instances": "24",
+          "Avg (ns)": "258380.5",
+          "Med (ns)": "257986.5",
+          "Min (ns)": "191554",
+          "Max (ns)": "326530",
+          "StdDev (ns)": "67835.7",
+          "Name": "filter_orders"
+        },
+        {
+          "Time (%)": "9.0",
+          "Total Time (ns)": "5655623",
+          "Instances": "6",
+          "Avg (ns)": "942603.8",
+          "Med (ns)": "942022.0",
+          "Min (ns)": "941511",
+          "Max (ns)": "945062",
+          "StdDev (ns)": "1400.7",
+          "Name": "plan_a"
+        },
+        {
+          "Time (%)": "8.6",
+          "Total Time (ns)": "5380005",
+          "Instances": "42",
+          "Avg (ns)": "128095.4",
+          "Med (ns)": "17200.5",
+          "Min (ns)": "3264",
+          "Max (ns)": "623108",
+          "StdDev (ns)": "212852.3",
+          "Name": "sorted_check"
+        },
+        {
+          "Time (%)": "3.0",
+          "Total Time (ns)": "1908237",
+          "Instances": "42",
+          "Avg (ns)": "45434.2",
+          "Med (ns)": "4192.0",
+          "Min (ns)": "1152",
+          "Max (ns)": "122593",
+          "StdDev (ns)": "53286.3",
+          "Name": "order_bins"
+        },
+        {
+          "Time (%)": "2.9",
+          "Total Time (ns)": "1828430",
+          "Instances": "42",
+          "Avg (ns)": "43534.0",
+          "Med (ns)": "4192.0",
+          "Min (ns)": "1152",
+          "Max (ns)": "140481",
+          "StdDev (ns)": "57136.1",
+          "Name": "scatter"
+        },
+        {
+          "Time (%)": "2.9",
+          "Total Time (ns)": "1807182",
+          "Instances": "6",
+          "Avg (ns)": "301197.0",
+          "Med (ns)": "300994.5",
+          "Min (ns)": "299619",
+          "Max (ns)": "302658",
+          "StdDev (ns)": "1246.9",
+          "Name": "plan_b"
+        },
+        {
+          "Time (%)": "2.2",
+          "Total Time (ns)": "1406986",
+          "Instances": "42",
+          "Avg (ns)": "33499.7",
+          "Med (ns)": "4192.0",
+          "Min (ns)": "1152",
+          "Max (ns)": "122625",
+          "StdDev (ns)": "43648.4",
+          "Name": "histogram"
+        },
+        {
+          "Time (%)": "1.8",
+          "Total Time (ns)": "1151368",
+          "Instances": "42",
+          "Avg (ns)": "27413.5",
+          "Med (ns)": "3168.0",
+          "Min (ns)": "1248",
+          "Max (ns)": "86368",
+          "StdDev (ns)": "35604.1",
+          "Name": "word_offsets"
+        },
+        {
+          "Time (%)": "0.6",
+          "Total Time (ns)": "356228",
+          "Instances": "216",
+          "Avg (ns)": "1649.2",
+          "Med (ns)": "1312.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "4608",
+          "StdDev (ns)": "1029.5",
+          "Name": "scan_blocks"
+        },
+        {
+          "Time (%)": "0.3",
+          "Total Time (ns)": "184418",
+          "Instances": "120",
+          "Avg (ns)": "1536.8",
+          "Med (ns)": "1088.0",
+          "Min (ns)": "1024",
+          "Max (ns)": "3424",
+          "StdDev (ns)": "935.0",
+          "Name": "add_prefix"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "150530",
+          "Instances": "42",
+          "Avg (ns)": "3584.0",
+          "Med (ns)": "1344.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "10304",
+          "StdDev (ns)": "3083.4",
+          "Name": "fences"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "78592",
+          "Instances": "12",
+          "Avg (ns)": "6549.3",
+          "Med (ns)": "6592.0",
+          "Min (ns)": "5984",
+          "Max (ns)": "7168",
+          "StdDev (ns)": "454.1",
+          "Name": "dedup_insert"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "78433",
+          "Instances": "42",
+          "Avg (ns)": "1867.5",
+          "Med (ns)": "1280.0",
+          "Min (ns)": "1152",
+          "Max (ns)": "5312",
+          "StdDev (ns)": "1407.8",
+          "Name": "clear_histogram"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "50080",
+          "Instances": "42",
+          "Avg (ns)": "1192.4",
+          "Med (ns)": "1088.0",
+          "Min (ns)": "960",
+          "Max (ns)": "2176",
+          "StdDev (ns)": "292.9",
+          "Name": "complete_stats"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "48481",
+          "Instances": "42",
+          "Avg (ns)": "1154.3",
+          "Med (ns)": "1088.0",
+          "Min (ns)": "864",
+          "Max (ns)": "2080",
+          "StdDev (ns)": "315.5",
+          "Name": "initialize"
+        }
+      ],
+      "cuda_api": [
+        {
+          "Time (%)": "39.3",
+          "Total Time (ns)": "74763991",
+          "Num Calls": "14",
+          "Avg (ns)": "5340285.1",
+          "Med (ns)": "422995.5",
+          "Min (ns)": "2195",
+          "Max (ns)": "26843436",
+          "StdDev (ns)": "9377650.9",
+          "Name": "cuMemcpyHtoDAsync_v2"
+        },
+        {
+          "Time (%)": "38.6",
+          "Total Time (ns)": "73281000",
+          "Num Calls": "84",
+          "Avg (ns)": "872392.9",
+          "Med (ns)": "57234.5",
+          "Min (ns)": "9098",
+          "Max (ns)": "7999245",
+          "StdDev (ns)": "2051729.2",
+          "Name": "cuMemcpyDtoHAsync_v2"
+        },
+        {
+          "Time (%)": "7.8",
+          "Total Time (ns)": "14811282",
+          "Num Calls": "15",
+          "Avg (ns)": "987418.8",
+          "Med (ns)": "1052687.0",
+          "Min (ns)": "1823",
+          "Max (ns)": "3199690",
+          "StdDev (ns)": "1027238.9",
+          "Name": "cuMemFree_v2"
+        },
+        {
+          "Time (%)": "5.6",
+          "Total Time (ns)": "10587812",
+          "Num Calls": "14",
+          "Avg (ns)": "756272.3",
+          "Med (ns)": "781292.0",
+          "Min (ns)": "340803",
+          "Max (ns)": "827525",
+          "StdDev (ns)": "120789.9",
+          "Name": "cuModuleLoadData"
+        },
+        {
+          "Time (%)": "4.8",
+          "Total Time (ns)": "9097414",
+          "Num Calls": "27",
+          "Avg (ns)": "336941.3",
+          "Med (ns)": "15479.0",
+          "Min (ns)": "14137",
+          "Max (ns)": "8684387",
+          "StdDev (ns)": "1668254.5",
+          "Name": "cuMemGetInfo_v2"
+        },
+        {
+          "Time (%)": "1.2",
+          "Total Time (ns)": "2209377",
+          "Num Calls": "930",
+          "Avg (ns)": "2375.7",
+          "Med (ns)": "2174.0",
+          "Min (ns)": "1963",
+          "Max (ns)": "9659",
+          "StdDev (ns)": "757.2",
+          "Name": "cuLaunchKernel"
+        },
+        {
+          "Time (%)": "1.0",
+          "Total Time (ns)": "1863096",
+          "Num Calls": "111",
+          "Avg (ns)": "16784.6",
+          "Med (ns)": "782.0",
+          "Min (ns)": "501",
+          "Max (ns)": "1529269",
+          "StdDev (ns)": "145056.0",
+          "Name": "cuStreamSynchronize"
+        },
+        {
+          "Time (%)": "0.8",
+          "Total Time (ns)": "1504150",
+          "Num Calls": "15",
+          "Avg (ns)": "100276.7",
+          "Med (ns)": "103909.0",
+          "Min (ns)": "2605",
+          "Max (ns)": "450883",
+          "StdDev (ns)": "117973.0",
+          "Name": "cuMemAlloc_v2"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "814903",
+          "Num Calls": "280",
+          "Avg (ns)": "2910.4",
+          "Med (ns)": "2405.0",
+          "Min (ns)": "1614",
+          "Max (ns)": "21872",
+          "StdDev (ns)": "1649.2",
+          "Name": "cuMemsetD8Async"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "340468",
+          "Num Calls": "78",
+          "Avg (ns)": "4365.0",
+          "Med (ns)": "4148.0",
+          "Min (ns)": "2805",
+          "Max (ns)": "9658",
+          "StdDev (ns)": "1474.0",
+          "Name": "cuMemcpyDtoDAsync_v2"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "329623",
+          "Num Calls": "881",
+          "Avg (ns)": "374.1",
+          "Med (ns)": "241.0",
+          "Min (ns)": "220",
+          "Max (ns)": "3106",
+          "StdDev (ns)": "413.7",
+          "Name": "cuEventRecord"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "283019",
+          "Num Calls": "14",
+          "Avg (ns)": "20215.6",
+          "Med (ns)": "14372.5",
+          "Min (ns)": "13225",
+          "Max (ns)": "75404",
+          "StdDev (ns)": "16728.0",
+          "Name": "cuModuleUnload"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "68035",
+          "Num Calls": "109",
+          "Avg (ns)": "624.2",
+          "Med (ns)": "331.0",
+          "Min (ns)": "220",
+          "Max (ns)": "3798",
+          "StdDev (ns)": "833.5",
+          "Name": "cuEventSynchronize"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "39001",
+          "Num Calls": "49",
+          "Avg (ns)": "795.9",
+          "Med (ns)": "812.0",
+          "Min (ns)": "291",
+          "Max (ns)": "2915",
+          "StdDev (ns)": "427.7",
+          "Name": "cuEventCreate"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "13793",
+          "Num Calls": "49",
+          "Avg (ns)": "281.5",
+          "Med (ns)": "191.0",
+          "Min (ns)": "100",
+          "Max (ns)": "721",
+          "StdDev (ns)": "205.0",
+          "Name": "cuEventDestroy_v2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "521",
+          "Num Calls": "1",
+          "Avg (ns)": "521.0",
+          "Med (ns)": "521.0",
+          "Min (ns)": "521",
+          "Max (ns)": "521",
+          "StdDev (ns)": "0.0",
+          "Name": "cuCtxSetCurrent"
+        }
+      ]
+    },
+    "compiled_before": {
+      "kernels": [
+        {
+          "Time (%)": "63.4",
+          "Total Time (ns)": "31232128",
+          "Instances": "6",
+          "Avg (ns)": "5205354.7",
+          "Med (ns)": "5125135.5",
+          "Min (ns)": "5085727",
+          "Max (ns)": "5562850",
+          "StdDev (ns)": "182764.4",
+          "Name": "cq_gpu_stream_0_r21"
+        },
+        {
+          "Time (%)": "8.5",
+          "Total Time (ns)": "4184827",
+          "Instances": "24",
+          "Avg (ns)": "174367.8",
+          "Med (ns)": "9552.5",
+          "Min (ns)": "1024",
+          "Max (ns)": "721829",
+          "StdDev (ns)": "296723.6",
+          "Name": "word_offsets"
+        },
+        {
+          "Time (%)": "6.6",
+          "Total Time (ns)": "3258100",
+          "Instances": "24",
+          "Avg (ns)": "135754.2",
+          "Med (ns)": "3040.0",
+          "Min (ns)": "832",
+          "Max (ns)": "539811",
+          "StdDev (ns)": "236077.9",
+          "Name": "clear_histogram"
+        },
+        {
+          "Time (%)": "6.1",
+          "Total Time (ns)": "3021876",
+          "Instances": "6",
+          "Avg (ns)": "503646.0",
+          "Med (ns)": "503635.0",
+          "Min (ns)": "502852",
+          "Max (ns)": "504708",
+          "StdDev (ns)": "651.6",
+          "Name": "cq_gpu_stream_0_r8"
+        },
+        {
+          "Time (%)": "4.4",
+          "Total Time (ns)": "2146477",
+          "Instances": "24",
+          "Avg (ns)": "89436.5",
+          "Med (ns)": "3968.0",
+          "Min (ns)": "832",
+          "Max (ns)": "350690",
+          "StdDev (ns)": "153041.4",
+          "Name": "order_bins"
+        },
+        {
+          "Time (%)": "2.8",
+          "Total Time (ns)": "1373384",
+          "Instances": "48",
+          "Avg (ns)": "28612.2",
+          "Med (ns)": "3408.0",
+          "Min (ns)": "992",
+          "Max (ns)": "139712",
+          "StdDev (ns)": "48268.4",
+          "Name": "gather"
+        },
+        {
+          "Time (%)": "2.8",
+          "Total Time (ns)": "1371593",
+          "Instances": "24",
+          "Avg (ns)": "57149.7",
+          "Med (ns)": "4336.0",
+          "Min (ns)": "864",
+          "Max (ns)": "222050",
+          "StdDev (ns)": "95460.1",
+          "Name": "scatter"
+        },
+        {
+          "Time (%)": "2.1",
+          "Total Time (ns)": "1046470",
+          "Instances": "24",
+          "Avg (ns)": "43602.9",
+          "Med (ns)": "5936.0",
+          "Min (ns)": "832",
+          "Max (ns)": "163009",
+          "StdDev (ns)": "69723.8",
+          "Name": "histogram"
+        },
+        {
+          "Time (%)": "0.7",
+          "Total Time (ns)": "325858",
+          "Instances": "24",
+          "Avg (ns)": "13577.4",
+          "Med (ns)": "6192.0",
+          "Min (ns)": "1088",
+          "Max (ns)": "42976",
+          "StdDev (ns)": "16403.3",
+          "Name": "sorted_check"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "221473",
+          "Instances": "24",
+          "Avg (ns)": "9228.0",
+          "Med (ns)": "2528.0",
+          "Min (ns)": "1088",
+          "Max (ns)": "32672",
+          "StdDev (ns)": "12757.8",
+          "Name": "sorted_starts"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "217601",
+          "Instances": "24",
+          "Avg (ns)": "9066.7",
+          "Med (ns)": "2800.0",
+          "Min (ns)": "1088",
+          "Max (ns)": "31616",
+          "StdDev (ns)": "12165.4",
+          "Name": "sorted_directory"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "183168",
+          "Instances": "6",
+          "Avg (ns)": "30528.0",
+          "Med (ns)": "30464.0",
+          "Min (ns)": "30240",
+          "Max (ns)": "31104",
+          "StdDev (ns)": "333.2",
+          "Name": "cq_gpu_stream_0_r5"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "182401",
+          "Instances": "96",
+          "Avg (ns)": "1900.0",
+          "Med (ns)": "1216.0",
+          "Min (ns)": "1056",
+          "Max (ns)": "6624",
+          "StdDev (ns)": "1710.1",
+          "Name": "scan_blocks"
+        },
+        {
+          "Time (%)": "0.3",
+          "Total Time (ns)": "133185",
+          "Instances": "36",
+          "Avg (ns)": "3699.6",
+          "Med (ns)": "3056.0",
+          "Min (ns)": "1408",
+          "Max (ns)": "8576",
+          "StdDev (ns)": "2347.2",
+          "Name": "extrema"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "74208",
+          "Instances": "48",
+          "Avg (ns)": "1546.0",
+          "Med (ns)": "992.0",
+          "Min (ns)": "960",
+          "Max (ns)": "3424",
+          "StdDev (ns)": "951.6",
+          "Name": "add_prefix"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "71328",
+          "Instances": "6",
+          "Avg (ns)": "11888.0",
+          "Med (ns)": "11888.0",
+          "Min (ns)": "11616",
+          "Max (ns)": "12224",
+          "StdDev (ns)": "216.8",
+          "Name": "set_insert"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "46816",
+          "Instances": "6",
+          "Avg (ns)": "7802.7",
+          "Med (ns)": "7760.0",
+          "Min (ns)": "7520",
+          "Max (ns)": "8192",
+          "StdDev (ns)": "235.5",
+          "Name": "cq_gpu_stream_0_r11"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "45888",
+          "Instances": "24",
+          "Avg (ns)": "1912.0",
+          "Med (ns)": "1120.0",
+          "Min (ns)": "992",
+          "Max (ns)": "5216",
+          "StdDev (ns)": "1489.4",
+          "Name": "fences"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "34880",
+          "Instances": "36",
+          "Avg (ns)": "968.9",
+          "Med (ns)": "976.0",
+          "Min (ns)": "800",
+          "Max (ns)": "1184",
+          "StdDev (ns)": "135.7",
+          "Name": "frontier_initialize"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "30720",
+          "Instances": "24",
+          "Avg (ns)": "1280.0",
+          "Med (ns)": "1280.0",
+          "Min (ns)": "992",
+          "Max (ns)": "1600",
+          "StdDev (ns)": "260.0",
+          "Name": "complete_stats"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "23104",
+          "Instances": "24",
+          "Avg (ns)": "962.7",
+          "Med (ns)": "928.0",
+          "Min (ns)": "800",
+          "Max (ns)": "1216",
+          "StdDev (ns)": "130.4",
+          "Name": "initialize"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "22273",
+          "Instances": "6",
+          "Avg (ns)": "3712.2",
+          "Med (ns)": "3648.5",
+          "Min (ns)": "3616",
+          "Max (ns)": "3936",
+          "StdDev (ns)": "123.0",
+          "Name": "cq_gpu_stream_0_r2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "21824",
+          "Instances": "6",
+          "Avg (ns)": "3637.3",
+          "Med (ns)": "3600.0",
+          "Min (ns)": "3552",
+          "Max (ns)": "3840",
+          "StdDev (ns)": "104.5",
+          "Name": "cq_gpu_stream_0_r3"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "13440",
+          "Instances": "6",
+          "Avg (ns)": "2240.0",
+          "Med (ns)": "2208.0",
+          "Min (ns)": "2176",
+          "Max (ns)": "2400",
+          "StdDev (ns)": "81.0",
+          "Name": "pack"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "6336",
+          "Instances": "6",
+          "Avg (ns)": "1056.0",
+          "Med (ns)": "1056.0",
+          "Min (ns)": "1024",
+          "Max (ns)": "1120",
+          "StdDev (ns)": "35.1",
+          "Name": "membership_insert"
+        }
+      ],
+      "cuda_api": [
+        {
+          "Time (%)": "69.9",
+          "Total Time (ns)": "437447236",
+          "Num Calls": "240",
+          "Avg (ns)": "1822696.8",
+          "Med (ns)": "3326.0",
+          "Min (ns)": "1984",
+          "Max (ns)": "26940450",
+          "StdDev (ns)": "5786821.9",
+          "Name": "cuMemcpyHtoDAsync_v2"
+        },
+        {
+          "Time (%)": "9.8",
+          "Total Time (ns)": "61383816",
+          "Num Calls": "42",
+          "Avg (ns)": "1461519.4",
+          "Med (ns)": "2190741.5",
+          "Min (ns)": "95102",
+          "Max (ns)": "2691876",
+          "StdDev (ns)": "1033553.1",
+          "Name": "cuMemFree_v2"
+        },
+        {
+          "Time (%)": "8.4",
+          "Total Time (ns)": "52520130",
+          "Num Calls": "162",
+          "Avg (ns)": "324198.3",
+          "Med (ns)": "218594.5",
+          "Min (ns)": "161790",
+          "Max (ns)": "2085715",
+          "StdDev (ns)": "394072.9",
+          "Name": "cuModuleLoadData"
+        },
+        {
+          "Time (%)": "5.6",
+          "Total Time (ns)": "34887963",
+          "Num Calls": "348",
+          "Avg (ns)": "100252.8",
+          "Med (ns)": "421.0",
+          "Min (ns)": "220",
+          "Max (ns)": "5562927",
+          "StdDev (ns)": "680557.2",
+          "Name": "cuEventSynchronize"
+        },
+        {
+          "Time (%)": "2.2",
+          "Total Time (ns)": "13707127",
+          "Num Calls": "414",
+          "Avg (ns)": "33109.0",
+          "Med (ns)": "2815.5",
+          "Min (ns)": "351",
+          "Max (ns)": "1602580",
+          "StdDev (ns)": "192981.4",
+          "Name": "cuStreamSynchronize"
+        },
+        {
+          "Time (%)": "1.5",
+          "Total Time (ns)": "9186801",
+          "Num Calls": "42",
+          "Avg (ns)": "218733.4",
+          "Med (ns)": "224425.0",
+          "Min (ns)": "97046",
+          "Max (ns)": "375710",
+          "StdDev (ns)": "67287.7",
+          "Name": "cuMemAlloc_v2"
+        },
+        {
+          "Time (%)": "1.4",
+          "Total Time (ns)": "8878794",
+          "Num Calls": "162",
+          "Avg (ns)": "54807.4",
+          "Med (ns)": "17117.5",
+          "Min (ns)": "10320",
+          "Max (ns)": "991209",
+          "StdDev (ns)": "182297.3",
+          "Name": "cuModuleUnload"
+        },
+        {
+          "Time (%)": "0.5",
+          "Total Time (ns)": "2816712",
+          "Num Calls": "162",
+          "Avg (ns)": "17387.1",
+          "Med (ns)": "9368.0",
+          "Min (ns)": "6352",
+          "Max (ns)": "138435",
+          "StdDev (ns)": "21850.6",
+          "Name": "cuMemcpyDtoHAsync_v2"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "2470808",
+          "Num Calls": "582",
+          "Avg (ns)": "4245.4",
+          "Med (ns)": "3056.0",
+          "Min (ns)": "2364",
+          "Max (ns)": "23164",
+          "StdDev (ns)": "2236.2",
+          "Name": "cuLaunchKernel"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "1033569",
+          "Num Calls": "1134",
+          "Avg (ns)": "911.4",
+          "Med (ns)": "281.0",
+          "Min (ns)": "220",
+          "Max (ns)": "29046",
+          "StdDev (ns)": "1773.5",
+          "Name": "cuEventRecord"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "1022571",
+          "Num Calls": "324",
+          "Avg (ns)": "3156.1",
+          "Med (ns)": "2915.0",
+          "Min (ns)": "1452",
+          "Max (ns)": "14628",
+          "StdDev (ns)": "1461.5",
+          "Name": "cuMemsetD8Async"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "299422",
+          "Num Calls": "234",
+          "Avg (ns)": "1279.6",
+          "Med (ns)": "796.0",
+          "Min (ns)": "210",
+          "Max (ns)": "16412",
+          "StdDev (ns)": "1630.0",
+          "Name": "cuEventCreate"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "174844",
+          "Num Calls": "24",
+          "Avg (ns)": "7285.2",
+          "Med (ns)": "6813.0",
+          "Min (ns)": "6051",
+          "Max (ns)": "11022",
+          "StdDev (ns)": "1307.1",
+          "Name": "cuMemcpyDtoDAsync_v2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "76356",
+          "Num Calls": "234",
+          "Avg (ns)": "326.3",
+          "Med (ns)": "295.0",
+          "Min (ns)": "90",
+          "Max (ns)": "3637",
+          "StdDev (ns)": "291.4",
+          "Name": "cuEventDestroy_v2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "7774",
+          "Num Calls": "5",
+          "Avg (ns)": "1554.8",
+          "Med (ns)": "1483.0",
+          "Min (ns)": "1312",
+          "Max (ns)": "2014",
+          "StdDev (ns)": "268.6",
+          "Name": "cuInit"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "431",
+          "Num Calls": "1",
+          "Avg (ns)": "431.0",
+          "Med (ns)": "431.0",
+          "Min (ns)": "431",
+          "Max (ns)": "431",
+          "StdDev (ns)": "0.0",
+          "Name": "cuCtxSetCurrent"
+        }
+      ]
+    },
+    "compiled_before_module_cache": {
+      "kernels": [
+        {
+          "Time (%)": "42.0",
+          "Total Time (ns)": "6233705",
+          "Instances": "6",
+          "Avg (ns)": "1038950.8",
+          "Med (ns)": "1037255.0",
+          "Min (ns)": "1033863",
+          "Max (ns)": "1046182",
+          "StdDev (ns)": "5446.8",
+          "Name": "cq_gpu_stream_0_r21"
+        },
+        {
+          "Time (%)": "36.7",
+          "Total Time (ns)": "5455620",
+          "Instances": "12",
+          "Avg (ns)": "454635.0",
+          "Med (ns)": "455043.5",
+          "Min (ns)": "422979",
+          "Max (ns)": "485219",
+          "StdDev (ns)": "31367.1",
+          "Name": "cq_gpu_stream_0_r8"
+        },
+        {
+          "Time (%)": "5.2",
+          "Total Time (ns)": "769093",
+          "Instances": "24",
+          "Avg (ns)": "32045.5",
+          "Med (ns)": "2704.0",
+          "Min (ns)": "928",
+          "Max (ns)": "121985",
+          "StdDev (ns)": "52949.6",
+          "Name": "order_bins"
+        },
+        {
+          "Time (%)": "4.4",
+          "Total Time (ns)": "659654",
+          "Instances": "24",
+          "Avg (ns)": "27485.6",
+          "Med (ns)": "6896.0",
+          "Min (ns)": "1216",
+          "Max (ns)": "96993",
+          "StdDev (ns)": "39836.4",
+          "Name": "sorted_starts"
+        },
+        {
+          "Time (%)": "3.0",
+          "Total Time (ns)": "443777",
+          "Instances": "24",
+          "Avg (ns)": "18490.7",
+          "Med (ns)": "2240.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "68672",
+          "StdDev (ns)": "29406.0",
+          "Name": "word_offsets"
+        },
+        {
+          "Time (%)": "1.6",
+          "Total Time (ns)": "243299",
+          "Instances": "12",
+          "Avg (ns)": "20274.9",
+          "Med (ns)": "20176.5",
+          "Min (ns)": "11104",
+          "Max (ns)": "29697",
+          "StdDev (ns)": "9529.6",
+          "Name": "cq_gpu_stream_0_r5"
+        },
+        {
+          "Time (%)": "1.5",
+          "Total Time (ns)": "215459",
+          "Instances": "132",
+          "Avg (ns)": "1632.3",
+          "Med (ns)": "1312.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "4704",
+          "StdDev (ns)": "973.6",
+          "Name": "scan_blocks"
+        },
+        {
+          "Time (%)": "1.3",
+          "Total Time (ns)": "198274",
+          "Instances": "24",
+          "Avg (ns)": "8261.4",
+          "Med (ns)": "6704.0",
+          "Min (ns)": "1760",
+          "Max (ns)": "17793",
+          "StdDev (ns)": "6466.3",
+          "Name": "sorted_directory"
+        },
+        {
+          "Time (%)": "0.8",
+          "Total Time (ns)": "117665",
+          "Instances": "48",
+          "Avg (ns)": "2451.4",
+          "Med (ns)": "2240.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "6304",
+          "StdDev (ns)": "1556.8",
+          "Name": "gather"
+        },
+        {
+          "Time (%)": "0.6",
+          "Total Time (ns)": "93632",
+          "Instances": "60",
+          "Avg (ns)": "1560.5",
+          "Med (ns)": "1088.0",
+          "Min (ns)": "1024",
+          "Max (ns)": "3424",
+          "StdDev (ns)": "932.2",
+          "Name": "add_prefix"
+        },
+        {
+          "Time (%)": "0.5",
+          "Total Time (ns)": "78497",
+          "Instances": "6",
+          "Avg (ns)": "13082.8",
+          "Med (ns)": "13008.5",
+          "Min (ns)": "12640",
+          "Max (ns)": "13760",
+          "StdDev (ns)": "407.4",
+          "Name": "set_insert"
+        },
+        {
+          "Time (%)": "0.5",
+          "Total Time (ns)": "69568",
+          "Instances": "24",
+          "Avg (ns)": "2898.7",
+          "Med (ns)": "2688.0",
+          "Min (ns)": "1216",
+          "Max (ns)": "5024",
+          "StdDev (ns)": "1369.0",
+          "Name": "sorted_check"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "35680",
+          "Instances": "24",
+          "Avg (ns)": "1486.7",
+          "Med (ns)": "1456.0",
+          "Min (ns)": "928",
+          "Max (ns)": "2112",
+          "StdDev (ns)": "456.9",
+          "Name": "scatter"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "35584",
+          "Instances": "24",
+          "Avg (ns)": "1482.7",
+          "Med (ns)": "1456.0",
+          "Min (ns)": "928",
+          "Max (ns)": "2112",
+          "StdDev (ns)": "452.0",
+          "Name": "histogram"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "28512",
+          "Instances": "24",
+          "Avg (ns)": "1188.0",
+          "Med (ns)": "1184.0",
+          "Min (ns)": "1088",
+          "Max (ns)": "1280",
+          "StdDev (ns)": "64.9",
+          "Name": "fences"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "28384",
+          "Instances": "24",
+          "Avg (ns)": "1182.7",
+          "Med (ns)": "1216.0",
+          "Min (ns)": "928",
+          "Max (ns)": "1632",
+          "StdDev (ns)": "174.4",
+          "Name": "clear_histogram"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "26848",
+          "Instances": "6",
+          "Avg (ns)": "4474.7",
+          "Med (ns)": "4480.0",
+          "Min (ns)": "4384",
+          "Max (ns)": "4544",
+          "StdDev (ns)": "76.8",
+          "Name": "extrema"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "26208",
+          "Instances": "24",
+          "Avg (ns)": "1092.0",
+          "Med (ns)": "1104.0",
+          "Min (ns)": "992",
+          "Max (ns)": "1248",
+          "StdDev (ns)": "62.1",
+          "Name": "complete_stats"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "22784",
+          "Instances": "24",
+          "Avg (ns)": "949.3",
+          "Med (ns)": "896.0",
+          "Min (ns)": "864",
+          "Max (ns)": "1152",
+          "StdDev (ns)": "111.1",
+          "Name": "initialize"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "22272",
+          "Instances": "12",
+          "Avg (ns)": "1856.0",
+          "Med (ns)": "1872.0",
+          "Min (ns)": "1792",
+          "Max (ns)": "1920",
+          "StdDev (ns)": "43.1",
+          "Name": "cq_gpu_stream_0_r3"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "21088",
+          "Instances": "12",
+          "Avg (ns)": "1757.3",
+          "Med (ns)": "1728.0",
+          "Min (ns)": "1664",
+          "Max (ns)": "2240",
+          "StdDev (ns)": "157.0",
+          "Name": "cq_gpu_stream_0_r2"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "14208",
+          "Instances": "6",
+          "Avg (ns)": "2368.0",
+          "Med (ns)": "2368.0",
+          "Min (ns)": "2336",
+          "Max (ns)": "2432",
+          "StdDev (ns)": "35.1",
+          "Name": "pack"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "6784",
+          "Instances": "6",
+          "Avg (ns)": "1130.7",
+          "Med (ns)": "1120.0",
+          "Min (ns)": "1120",
+          "Max (ns)": "1152",
+          "StdDev (ns)": "16.5",
+          "Name": "membership_insert"
+        }
+      ],
+      "cuda_api": [
+        {
+          "Time (%)": "85.1",
+          "Total Time (ns)": "443309571",
+          "Num Calls": "192",
+          "Avg (ns)": "2308904.0",
+          "Med (ns)": "3642.0",
+          "Min (ns)": "2034",
+          "Max (ns)": "30793722",
+          "StdDev (ns)": "6520135.7",
+          "Name": "cuMemcpyHtoDAsync_v2"
+        },
+        {
+          "Time (%)": "6.4",
+          "Total Time (ns)": "33359243",
+          "Num Calls": "120",
+          "Avg (ns)": "277993.7",
+          "Med (ns)": "274500.5",
+          "Min (ns)": "162411",
+          "Max (ns)": "513334",
+          "StdDev (ns)": "67970.3",
+          "Name": "cuModuleLoadData"
+        },
+        {
+          "Time (%)": "2.6",
+          "Total Time (ns)": "13398756",
+          "Num Calls": "283",
+          "Avg (ns)": "47345.4",
+          "Med (ns)": "3076.0",
+          "Min (ns)": "451",
+          "Max (ns)": "1576521",
+          "StdDev (ns)": "228252.4",
+          "Name": "cuStreamSynchronize"
+        },
+        {
+          "Time (%)": "2.0",
+          "Total Time (ns)": "10304770",
+          "Num Calls": "7",
+          "Avg (ns)": "1472110.0",
+          "Med (ns)": "2229731.0",
+          "Min (ns)": "187459",
+          "Max (ns)": "2483077",
+          "StdDev (ns)": "1072472.1",
+          "Name": "cuMemFree_v2"
+        },
+        {
+          "Time (%)": "1.3",
+          "Total Time (ns)": "6742591",
+          "Num Calls": "343",
+          "Avg (ns)": "19657.7",
+          "Med (ns)": "381.0",
+          "Min (ns)": "220",
+          "Max (ns)": "1047347",
+          "StdDev (ns)": "136362.5",
+          "Name": "cuEventSynchronize"
+        },
+        {
+          "Time (%)": "0.9",
+          "Total Time (ns)": "4475262",
+          "Num Calls": "84",
+          "Avg (ns)": "53276.9",
+          "Med (ns)": "10229.0",
+          "Min (ns)": "8346",
+          "Max (ns)": "436406",
+          "StdDev (ns)": "108811.9",
+          "Name": "cuMemcpyDtoHAsync_v2"
+        },
+        {
+          "Time (%)": "0.7",
+          "Total Time (ns)": "3517190",
+          "Num Calls": "120",
+          "Avg (ns)": "29309.9",
+          "Med (ns)": "23691.0",
+          "Min (ns)": "10961",
+          "Max (ns)": "152983",
+          "StdDev (ns)": "28706.7",
+          "Name": "cuModuleUnload"
+        },
+        {
+          "Time (%)": "0.4",
+          "Total Time (ns)": "2147414",
+          "Num Calls": "582",
+          "Avg (ns)": "3689.7",
+          "Med (ns)": "2825.5",
+          "Min (ns)": "2284",
+          "Max (ns)": "20709",
+          "StdDev (ns)": "2203.9",
+          "Name": "cuLaunchKernel"
+        },
+        {
+          "Time (%)": "0.3",
+          "Total Time (ns)": "1458516",
+          "Num Calls": "7",
+          "Avg (ns)": "208359.4",
+          "Med (ns)": "219060.0",
+          "Min (ns)": "107236",
+          "Max (ns)": "268755",
+          "StdDev (ns)": "57037.8",
+          "Name": "cuMemAlloc_v2"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "868063",
+          "Num Calls": "1025",
+          "Avg (ns)": "846.9",
+          "Med (ns)": "251.0",
+          "Min (ns)": "211",
+          "Max (ns)": "13967",
+          "StdDev (ns)": "1707.1",
+          "Name": "cuEventRecord"
+        },
+        {
+          "Time (%)": "0.2",
+          "Total Time (ns)": "798095",
+          "Num Calls": "252",
+          "Avg (ns)": "3167.0",
+          "Med (ns)": "2976.0",
+          "Min (ns)": "1573",
+          "Max (ns)": "8726",
+          "StdDev (ns)": "1149.9",
+          "Name": "cuMemsetD8Async"
+        },
+        {
+          "Time (%)": "0.1",
+          "Total Time (ns)": "285511",
+          "Num Calls": "229",
+          "Avg (ns)": "1246.8",
+          "Med (ns)": "631.0",
+          "Min (ns)": "191",
+          "Max (ns)": "6553",
+          "StdDev (ns)": "1431.7",
+          "Name": "cuEventCreate"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "164196",
+          "Num Calls": "24",
+          "Avg (ns)": "6841.5",
+          "Med (ns)": "6192.0",
+          "Min (ns)": "5901",
+          "Max (ns)": "9228",
+          "StdDev (ns)": "1226.5",
+          "Name": "cuMemcpyDtoDAsync_v2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "73011",
+          "Num Calls": "229",
+          "Avg (ns)": "318.8",
+          "Med (ns)": "240.0",
+          "Min (ns)": "90",
+          "Max (ns)": "5230",
+          "StdDev (ns)": "430.8",
+          "Name": "cuEventDestroy_v2"
+        },
+        {
+          "Time (%)": "0.0",
+          "Total Time (ns)": "501",
+          "Num Calls": "1",
+          "Avg (ns)": "501.0",
+          "Med (ns)": "501.0",
+          "Min (ns)": "501",
+          "Max (ns)": "501",
+          "StdDev (ns)": "0.0",
+          "Name": "cuCtxSetCurrent"
+        }
+      ]
+    }
+  },
+  "baseline_compiled_results": [
+    {
+      "answer_count": 7242,
+      "build_ms": {
+        "median": 7.130848050117493,
+        "min": 7.0713600516319275
+      },
+      "dedup_ms": {
+        "median": 0.6202239990234375,
+        "min": 0.6167359948158264
+      },
+      "exact": true,
+      "handwritten_sf10_total_ms": 6.2,
+      "implementation": "cq_gpu::print",
+      "kernel_ms": {
+        "median": 3.867456018924713,
+        "min": 3.859712064266205
+      },
+      "plan": "A",
+      "runs": 5,
+      "samples": {
+        "build_ms": [
+          7.1942079067230225,
+          7.0713600516319275,
+          7.330943942070007,
+          7.130848050117493,
+          7.092191994190216
+        ],
+        "dedup_ms": [
+          0.6202239990234375,
+          0.6167359948158264,
+          0.6289920210838318,
+          0.6282879710197449,
+          0.6183040142059326
+        ],
+        "kernel_ms": [
+          3.864512026309967,
+          3.9016639292240143,
+          3.9144000709056854,
+          3.859712064266205,
+          3.867456018924713
+        ],
+        "total_ms": [
+          11.678943932056429,
+          11.589759975671768,
+          11.874336034059525,
+          11.618848085403442,
+          11.577952027320862
+        ],
+        "wall_ms": [
+          253.988343,
+          254.642335,
+          257.430447,
+          263.667487,
+          258.042169
+        ]
+      },
+      "sf": 1,
+      "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+      "total_ms": {
+        "median": 11.618848085403442,
+        "min": 11.577952027320862
+      },
+      "wall_ms": {
+        "median": 257.430447,
+        "min": 253.988343
+      },
+      "warmups": 1,
+      "kernel_resources": {
+        "cq_gpu_stream_0_r11": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_0_r21": {
+          "stack_bytes": 40,
+          "spill_stores_bytes": 44,
+          "spill_loads_bytes": 36,
+          "registers": 40
+        },
+        "cq_gpu_stream_0_r3": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_0_r8": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_0_r5": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_0_r2": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 32
+        }
+      },
+      "main_kernel": "cq_gpu_stream_0_r21",
+      "regs": 40,
+      "spills": {
+        "stores_bytes": 44,
+        "loads_bytes": 36
+      },
+      "pipeline": {
+        "plan": "cq_planners::order(le)",
+        "physical": [
+          "cq_rewrites::build_host_reads"
+        ],
+        "structures": [
+          "cq_rewrites::sorted_runs",
+          "cq_gpu::prefix_runs",
+          "cq_rewrites::retain_lookups",
+          "cq_rewrites::retype(dedup => cq_gpu_runtime::DeviceSet<_>)"
+        ],
+        "print": "cq_gpu::print"
+      },
+      "ptxas_audit": "gpu_h05_compiled.ptxas.txt"
+    },
+    {
+      "answer_count": 7242,
+      "build_ms": {
+        "median": 8.361919820308685,
+        "min": 8.30703991651535
+      },
+      "dedup_ms": {
+        "median": 0.6312959790229797,
+        "min": 0.6176959872245789
+      },
+      "exact": true,
+      "handwritten_sf10_total_ms": 10.1,
+      "implementation": "cq_gpu::print",
+      "kernel_ms": {
+        "median": 5.683968007564545,
+        "min": 5.644767999649048
+      },
+      "plan": "B",
+      "runs": 5,
+      "samples": {
+        "build_ms": [
+          8.349408030509949,
+          9.035743951797484,
+          8.30703991651535,
+          8.371520042419434,
+          8.361919820308685
+        ],
+        "dedup_ms": [
+          0.6312959790229797,
+          0.6347519755363464,
+          0.638047993183136,
+          0.6296319961547852,
+          0.6176959872245789
+        ],
+        "kernel_ms": [
+          5.644767999649048,
+          5.659999966621399,
+          5.7354240119457245,
+          5.699136048555374,
+          5.683968007564545
+        ],
+        "total_ms": [
+          14.625472009181976,
+          15.33049589395523,
+          14.68051192164421,
+          14.700288087129591,
+          14.663583815097809
+        ],
+        "wall_ms": [
+          278.594268,
+          259.03998099999995,
+          258.031088,
+          262.710163,
+          259.317613
+        ]
+      },
+      "sf": 1,
+      "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+      "total_ms": {
+        "median": 14.68051192164421,
+        "min": 14.625472009181976
+      },
+      "wall_ms": {
+        "median": 259.317613,
+        "min": 258.031088
+      },
+      "warmups": 1,
+      "kernel_resources": {
+        "cq_gpu_stream_1_r7": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_1_r9": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_1_r2": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 32
+        },
+        "cq_gpu_stream_1_r19": {
+          "stack_bytes": 40,
+          "spill_stores_bytes": 44,
+          "spill_loads_bytes": 36,
+          "registers": 40
+        },
+        "cq_gpu_stream_1_r15": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_1_r3": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        }
+      },
+      "main_kernel": "cq_gpu_stream_1_r19",
+      "regs": 40,
+      "spills": {
+        "stores_bytes": 44,
+        "loads_bytes": 36
+      },
+      "pipeline": {
+        "plan": "cq_planners::order(le)",
+        "physical": [
+          "cq_rewrites::build_host_reads"
+        ],
+        "structures": [
+          "cq_rewrites::sorted_runs",
+          "cq_gpu::prefix_runs",
+          "cq_rewrites::retain_lookups",
+          "cq_rewrites::retype(dedup => cq_gpu_runtime::DeviceSet<_>)"
+        ],
+        "print": "cq_gpu::print"
+      },
+      "ptxas_audit": "gpu_h05_compiled.ptxas.txt"
+    },
+    {
+      "answer_count": 72983,
+      "build_ms": {
+        "median": 9.435487926006317,
+        "min": 9.414592146873474
+      },
+      "dedup_ms": {
+        "median": 0.6439359784126282,
+        "min": 0.6291840076446533
+      },
+      "exact": true,
+      "handwritten_sf10_total_ms": 6.2,
+      "implementation": "cq_gpu::print",
+      "kernel_ms": {
+        "median": 8.980031907558441,
+        "min": 8.966592252254486
+      },
+      "plan": "A",
+      "runs": 5,
+      "samples": {
+        "build_ms": [
+          9.435487926006317,
+          9.414592146873474,
+          9.619520246982574,
+          9.48336011171341,
+          9.41891211271286
+        ],
+        "dedup_ms": [
+          0.630079984664917,
+          0.6446400284767151,
+          0.7210239768028259,
+          0.6439359784126282,
+          0.6291840076446533
+        ],
+        "kernel_ms": [
+          8.966592252254486,
+          8.980031907558441,
+          9.476383924484253,
+          9.00710380077362,
+          8.968128114938736
+        ],
+        "total_ms": [
+          19.03216016292572,
+          19.03926408290863,
+          19.816928148269653,
+          19.134399890899658,
+          19.01622423529625
+        ],
+        "wall_ms": [
+          1079.851386,
+          1149.596006,
+          1166.923175,
+          1109.810406,
+          1164.580846
+        ]
+      },
+      "sf": 10,
+      "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+      "total_ms": {
+        "median": 19.03926408290863,
+        "min": 19.01622423529625
+      },
+      "wall_ms": {
+        "median": 1149.596006,
+        "min": 1079.851386
+      },
+      "warmups": 1,
+      "kernel_resources": {
+        "cq_gpu_stream_0_r11": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_0_r21": {
+          "stack_bytes": 40,
+          "spill_stores_bytes": 44,
+          "spill_loads_bytes": 36,
+          "registers": 40
+        },
+        "cq_gpu_stream_0_r3": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_0_r8": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_0_r5": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_0_r2": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 32
+        }
+      },
+      "main_kernel": "cq_gpu_stream_0_r21",
+      "regs": 40,
+      "spills": {
+        "stores_bytes": 44,
+        "loads_bytes": 36
+      },
+      "pipeline": {
+        "plan": "cq_planners::order(le)",
+        "physical": [
+          "cq_rewrites::build_host_reads"
+        ],
+        "structures": [
+          "cq_rewrites::sorted_runs",
+          "cq_gpu::prefix_runs",
+          "cq_rewrites::retain_lookups",
+          "cq_rewrites::retype(dedup => cq_gpu_runtime::DeviceSet<_>)"
+        ],
+        "print": "cq_gpu::print"
+      },
+      "ptxas_audit": "gpu_h05_compiled.ptxas.txt"
+    },
+    {
+      "answer_count": 72983,
+      "build_ms": {
+        "median": 24.371008217334747,
+        "min": 24.195392191410065
+      },
+      "dedup_ms": {
+        "median": 0.7298880219459534,
+        "min": 0.6611520051956177
+      },
+      "exact": true,
+      "handwritten_sf10_total_ms": 10.1,
+      "implementation": "cq_gpu::print",
+      "kernel_ms": {
+        "median": 92.6015052497387,
+        "min": 92.17721304297447
+      },
+      "plan": "B",
+      "runs": 5,
+      "samples": {
+        "build_ms": [
+          24.195392191410065,
+          24.371008217334747,
+          24.426144242286682,
+          24.599679708480835,
+          24.221503853797913
+        ],
+        "dedup_ms": [
+          0.8863040208816528,
+          0.7240639925003052,
+          0.6611520051956177,
+          0.7298880219459534,
+          0.7450559735298157
+        ],
+        "kernel_ms": [
+          92.70873793959618,
+          92.17721304297447,
+          92.6015052497387,
+          92.63158065080643,
+          92.50012671947479
+        ],
+        "total_ms": [
+          117.7904341518879,
+          117.27228525280952,
+          117.688801497221,
+          117.96114838123322,
+          117.46668654680252
+        ],
+        "wall_ms": [
+          1285.0361269999999,
+          1237.856592,
+          1248.306734,
+          1235.264354,
+          1242.538771
+        ]
+      },
+      "sf": 10,
+      "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+      "total_ms": {
+        "median": 117.688801497221,
+        "min": 117.27228525280952
+      },
+      "wall_ms": {
+        "median": 1242.538771,
+        "min": 1235.264354
+      },
+      "warmups": 1,
+      "kernel_resources": {
+        "cq_gpu_stream_1_r7": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_1_r9": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_1_r2": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 32
+        },
+        "cq_gpu_stream_1_r19": {
+          "stack_bytes": 40,
+          "spill_stores_bytes": 44,
+          "spill_loads_bytes": 36,
+          "registers": 40
+        },
+        "cq_gpu_stream_1_r15": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        },
+        "cq_gpu_stream_1_r3": {
+          "stack_bytes": 0,
+          "spill_stores_bytes": 0,
+          "spill_loads_bytes": 0,
+          "registers": 34
+        }
+      },
+      "main_kernel": "cq_gpu_stream_1_r19",
+      "regs": 40,
+      "spills": {
+        "stores_bytes": 44,
+        "loads_bytes": 36
+      },
+      "pipeline": {
+        "plan": "cq_planners::order(le)",
+        "physical": [
+          "cq_rewrites::build_host_reads"
+        ],
+        "structures": [
+          "cq_rewrites::sorted_runs",
+          "cq_gpu::prefix_runs",
+          "cq_rewrites::retain_lookups",
+          "cq_rewrites::retype(dedup => cq_gpu_runtime::DeviceSet<_>)"
+        ],
+        "print": "cq_gpu::print"
+      },
+      "ptxas_audit": "gpu_h05_compiled.ptxas.txt"
+    }
+  ],
+  "stages": [
+    {
+      "name": "lane-local traversal and selected prefix",
+      "measurements": [
+        {
+          "answer_count": 72983,
+          "build_ms": {
+            "median": 9.269439786672592,
+            "min": 8.926784098148346
+          },
+          "dedup_ms": {
+            "median": 0.5879359841346741,
+            "min": 0.5851200222969055
+          },
+          "exact": true,
+          "handwritten_sf10_total_ms": 6.2,
+          "implementation": "cq_gpu::print",
+          "kernel_ms": {
+            "median": 1.419263968244195,
+            "min": 1.4024960431270301
+          },
+          "plan": "A",
+          "runs": 5,
+          "samples": {
+            "build_ms": [
+              9.34396806359291,
+              8.926784098148346,
+              9.312160044908524,
+              8.9308160841465,
+              9.269439786672592
+            ],
+            "dedup_ms": [
+              0.5861120223999023,
+              0.5879359841346741,
+              0.5884159803390503,
+              0.5953599810600281,
+              0.5851200222969055
+            ],
+            "kernel_ms": [
+              1.419263968244195,
+              1.4024960431270301,
+              1.4201919976621866,
+              1.4089280678890646,
+              1.4211840126663446
+            ],
+            "total_ms": [
+              11.349344054237008,
+              10.91721612541005,
+              11.32076802290976,
+              10.935104133095592,
+              11.275743821635842
+            ],
+            "wall_ms": [
+              879.647189,
+              901.334787,
+              913.769177,
+              908.48276,
+              889.2333140000001
+            ]
+          },
+          "sf": 10,
+          "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+          "total_ms": {
+            "median": 11.275743821635842,
+            "min": 10.91721612541005
+          },
+          "wall_ms": {
+            "median": 901.334787,
+            "min": 879.647189
+          },
+          "warmups": 1
+        },
+        {
+          "answer_count": 72983,
+          "build_ms": {
+            "median": 26.368063777685165,
+            "min": 26.222400188446045
+          },
+          "dedup_ms": {
+            "median": 0.5855680108070374,
+            "min": 0.5842559933662415
+          },
+          "exact": true,
+          "handwritten_sf10_total_ms": 10.1,
+          "implementation": "cq_gpu::print",
+          "kernel_ms": {
+            "median": 0.5130239855498075,
+            "min": 0.5056319963186979
+          },
+          "plan": "B",
+          "runs": 5,
+          "samples": {
+            "build_ms": [
+              26.368063777685165,
+              26.60582384467125,
+              26.222400188446045,
+              26.33472004532814,
+              26.434624135494232
+            ],
+            "dedup_ms": [
+              0.5855680108070374,
+              0.5842559933662415,
+              0.585312008857727,
+              0.5869119763374329,
+              0.5997440218925476
+            ],
+            "kernel_ms": [
+              0.5159040223807096,
+              0.5130239855498075,
+              0.5056319963186979,
+              0.51916797272861,
+              0.5130239855498075
+            ],
+            "total_ms": [
+              27.469535810872912,
+              27.7031038235873,
+              27.31334419362247,
+              27.440799994394183,
+              27.547392142936587
+            ],
+            "wall_ms": [
+              914.5862030000001,
+              920.442973,
+              931.101832,
+              983.06039,
+              925.553915
+            ]
+          },
+          "sf": 10,
+          "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+          "total_ms": {
+            "median": 27.469535810872912,
+            "min": 27.31334419362247
+          },
+          "wall_ms": {
+            "median": 925.553915,
+            "min": 914.5862030000001
+          },
+          "warmups": 1
+        }
+      ]
+    },
+    {
+      "name": "stable semijoin selection and zero-copy projection",
+      "measurements": [
+        {
+          "answer_count": 72983,
+          "build_ms": {
+            "median": 8.321983946021646,
+            "min": 8.239423935767263
+          },
+          "dedup_ms": {
+            "median": 0.5881919860839844,
+            "min": 0.5801920294761658
+          },
+          "exact": true,
+          "handwritten_sf10_total_ms": 6.2,
+          "implementation": "cq_gpu::print",
+          "kernel_ms": {
+            "median": 1.045632004737854,
+            "min": 1.043455958366394
+          },
+          "plan": "A",
+          "runs": 5,
+          "samples": {
+            "build_ms": [
+              8.254880069755018,
+              8.321983946021646,
+              8.239423935767263,
+              8.342624075245112,
+              8.713408036157489
+            ],
+            "dedup_ms": [
+              0.5801920294761658,
+              0.5866559743881226,
+              0.6924800276756287,
+              0.7705280184745789,
+              0.5881919860839844
+            ],
+            "kernel_ms": [
+              1.043455958366394,
+              1.0444799661636353,
+              1.045632004737854,
+              1.0506240129470825,
+              1.0496000051498413
+            ],
+            "total_ms": [
+              9.878528057597578,
+              9.953119886573404,
+              9.977535968180746,
+              10.163776106666774,
+              10.351200027391315
+            ],
+            "wall_ms": [
+              922.7384360000001,
+              1005.0017300000001,
+              963.978431,
+              1027.919815,
+              947.854331
+            ]
+          },
+          "sf": 10,
+          "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+          "total_ms": {
+            "median": 9.977535968180746,
+            "min": 9.878528057597578
+          },
+          "wall_ms": {
+            "median": 963.978431,
+            "min": 922.7384360000001
+          },
+          "warmups": 1
+        },
+        {
+          "answer_count": 72983,
+          "build_ms": {
+            "median": 21.195040088612586,
+            "min": 21.050560271833092
+          },
+          "dedup_ms": {
+            "median": 0.6037759780883789,
+            "min": 0.594976007938385
+          },
+          "exact": true,
+          "handwritten_sf10_total_ms": 10.1,
+          "implementation": "cq_gpu::print",
+          "kernel_ms": {
+            "median": 0.5109760165214539,
+            "min": 0.502784013748169
+          },
+          "plan": "B",
+          "runs": 5,
+          "samples": {
+            "build_ms": [
+              21.290015725418925,
+              21.18438403122127,
+              21.205951822921634,
+              21.050560271833092,
+              21.195040088612586
+            ],
+            "dedup_ms": [
+              0.6037759780883789,
+              0.6598079800605774,
+              0.6031360030174255,
+              0.594976007938385,
+              0.6133440136909485
+            ],
+            "kernel_ms": [
+              0.5181440114974976,
+              0.502784013748169,
+              0.5150719881057739,
+              0.5109760165214539,
+              0.5089280009269714
+            ],
+            "total_ms": [
+              22.4119357150048,
+              22.346976025030017,
+              22.324159814044833,
+              22.15651229629293,
+              22.317312103230506
+            ],
+            "wall_ms": [
+              987.310279,
+              972.6163690000001,
+              1030.405598,
+              963.72671,
+              960.271972
+            ]
+          },
+          "sf": 10,
+          "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+          "total_ms": {
+            "median": 22.324159814044833,
+            "min": 22.15651229629293
+          },
+          "wall_ms": {
+            "median": 972.6163690000001,
+            "min": 960.271972
+          },
+          "warmups": 1
+        }
+      ]
+    },
+    {
+      "name": "resident code modules",
+      "measurements": [
+        {
+          "answer_count": 72983,
+          "build_ms": {
+            "median": 1.9649279899895191,
+            "min": 1.956895970273763
+          },
+          "dedup_ms": {
+            "median": 0.06755200028419495,
+            "min": 0.06675200164318085
+          },
+          "exact": true,
+          "implementation": "cq_gpu::print",
+          "kernel_ms": {
+            "median": 1.044319987297058,
+            "min": 1.0393600463867188
+          },
+          "plan": "A",
+          "runs": 5,
+          "samples": {
+            "build_ms": [
+              1.9632959924638271,
+              1.956895970273763,
+              1.9649279899895191,
+              1.9803199665620923,
+              1.9827200314030051
+            ],
+            "dedup_ms": [
+              0.0674239993095398,
+              0.06841599941253662,
+              0.06675200164318085,
+              0.06831999868154526,
+              0.06755200028419495
+            ],
+            "kernel_ms": [
+              1.0393600463867188,
+              1.0506240129470825,
+              1.044319987297058,
+              1.0424959659576416,
+              1.0475519895553589
+            ],
+            "total_ms": [
+              3.0700800381600857,
+              3.075935982633382,
+              3.075999978929758,
+              3.091135931201279,
+              3.097824021242559
+            ],
+            "wall_ms": [
+              871.991716,
+              884.973686,
+              895.910529,
+              892.055393,
+              887.813487
+            ]
+          },
+          "sf": 10,
+          "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+          "total_ms": {
+            "median": 3.075999978929758,
+            "min": 3.0700800381600857
+          },
+          "wall_ms": {
+            "median": 887.813487,
+            "min": 871.991716
+          },
+          "warmups": 1
+        },
+        {
+          "answer_count": 72983,
+          "build_ms": {
+            "median": 14.216415734961629,
+            "min": 14.196863702964038
+          },
+          "dedup_ms": {
+            "median": 0.06774400174617767,
+            "min": 0.0671359971165657
+          },
+          "exact": true,
+          "implementation": "cq_gpu::print",
+          "kernel_ms": {
+            "median": 0.5099520087242126,
+            "min": 0.5007359981536865
+          },
+          "plan": "B",
+          "runs": 5,
+          "samples": {
+            "build_ms": [
+              14.229663962032646,
+              14.196863702964038,
+              14.22899161837995,
+              14.200352312996984,
+              14.216415734961629
+            ],
+            "dedup_ms": [
+              0.06764800101518631,
+              0.06777600198984146,
+              0.06915199756622314,
+              0.06774400174617767,
+              0.0671359971165657
+            ],
+            "kernel_ms": [
+              0.5099520087242126,
+              0.5007359981536865,
+              0.5211520195007324,
+              0.5108159780502319,
+              0.5046399831771851
+            ],
+            "total_ms": [
+              14.807263971772045,
+              14.765375703107566,
+              14.819295635446906,
+              14.778912292793393,
+              14.78819171525538
+            ],
+            "wall_ms": [
+              899.355449,
+              883.283289,
+              879.467789,
+              953.398153,
+              900.111478
+            ]
+          },
+          "sf": 10,
+          "timing_scope": "GPU builds, query kernels and exact device dedup; host columnization, upload and answer download excluded; wall_ms includes all execution work",
+          "total_ms": {
+            "median": 14.78819171525538,
+            "min": 14.765375703107566
+          },
+          "wall_ms": {
+            "median": 899.355449,
+            "min": 879.467789
+          },
+          "warmups": 1
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "printer_unit_tests_passed": 21,
+    "compile_fail_fixtures_passed": 4,
+    "smoke_input_answer_counts": [
+      [
+        5,
+        4
+      ],
+      [
+        0,
+        0
+      ]
+    ],
+    "unstaged_fanout_answer_count": 4097,
+    "mutated_input_delta": 10000,
+    "oracle_multiword_answer_count": 3,
+    "oracle_staged_fanout_answer_count": 20000
+  }
+}

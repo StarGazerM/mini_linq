@@ -1,0 +1,11 @@
+Name,Instances,Total ms
+cuEventSynchronize,45,15.003962
+cuLaunchKernel,210,0.710336
+cuMemsetD8Async,33,0.125433
+cuEventRecord,164,0.110833
+cuEventCreate,30,0.017895
+cuProfilerStart,1,0.014217
+cuCtxSynchronize,1,0.008166
+cuEventDestroy_v2,30,0.007806
+cuStreamSynchronize,2,0.00521
+cuProfilerStop,1,0.000171

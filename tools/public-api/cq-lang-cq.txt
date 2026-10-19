@@ -267,8 +267,8 @@ cq_lang_cq::Atom	{"use":{"id":"cq_syntax::Atom","is_glob":false,"name":"Atom","s
 cq_lang_cq::Block	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_cq::Block::kind","cq_lang_cq::Block::branches"],"has_stripped_fields":false}}}}
 cq_lang_cq::Block::branches	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_cq::Branch","path":"Branch"}}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_lang_cq::Block::kind	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_cq::blocks::Kind","path":"Kind"}}}
-cq_lang_cq::BodyItem	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_cq::BodyItem::Block","cq_lang_cq::BodyItem::Equality","cq_lang_cq::BodyItem::Constraint","cq_lang_cq::BodyItem::Filter","cq_lang_cq::BodyItem::Let","cq_lang_cq::BodyItem::Negation","cq_lang_cq::BodyItem::Aggregate","cq_lang_cq::BodyItem::Extension","cq_lang_cq::BodyItem::Positive"]}}
-cq_lang_cq::BodyItem::Aggregate	{"variant":{"discriminant":null,"kind":{"tuple":[397]}}}
+cq_lang_cq::BodyItem	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_cq::BodyItem::Block","cq_lang_cq::BodyItem::Equality","cq_lang_cq::BodyItem::Constraint","cq_lang_cq::BodyItem::Filter","cq_lang_cq::BodyItem::Let","cq_lang_cq::BodyItem::For","cq_lang_cq::BodyItem::Negation","cq_lang_cq::BodyItem::Aggregate","cq_lang_cq::BodyItem::Extension","cq_lang_cq::BodyItem::Positive"]}}
+cq_lang_cq::BodyItem::Aggregate	{"variant":{"discriminant":null,"kind":{"tuple":[400]}}}
 cq_lang_cq::BodyItem::Aggregate::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_cq::Aggregate","path":"Aggregate"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
 cq_lang_cq::BodyItem::Block	{"variant":{"discriminant":null,"kind":{"tuple":[381]}}}
 cq_lang_cq::BodyItem::Block::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_cq::Block","path":"Block"}}}
@@ -281,9 +281,11 @@ cq_lang_cq::BodyItem::Extension::name	{"struct_field":{"resolved_path":{"args":n
 cq_lang_cq::BodyItem::Extension::tokens	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::TokenStream","path":"proc_macro2::TokenStream"}}}
 cq_lang_cq::BodyItem::Filter	{"variant":{"discriminant":null,"kind":{"tuple":[387]}}}
 cq_lang_cq::BodyItem::Filter::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_syntax::Filter","path":"Filter"}}}
+cq_lang_cq::BodyItem::For	{"variant":{"discriminant":null,"kind":{"tuple":[394]}}}
+cq_lang_cq::BodyItem::For::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_syntax::For","path":"For"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
 cq_lang_cq::BodyItem::Let	{"variant":{"discriminant":null,"kind":{"tuple":[390]}}}
 cq_lang_cq::BodyItem::Let::0	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_syntax::Let","path":"Let"}}}],"constraints":[]}},"id":"alloc::boxed::Box","path":"Box"}}}
-cq_lang_cq::BodyItem::Negation	{"variant":{"discriminant":null,"kind":{"tuple":[394]}}}
+cq_lang_cq::BodyItem::Negation	{"variant":{"discriminant":null,"kind":{"tuple":[397]}}}
 cq_lang_cq::BodyItem::Negation::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_cq::Negation","path":"Negation"}}}
 cq_lang_cq::BodyItem::Positive	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_lang_cq::BodyItem::Positive::atom"],"has_stripped_fields":false}}}}
 cq_lang_cq::BodyItem::Positive::atom	{"struct_field":{"resolved_path":{"args":null,"id":"cq_syntax::Atom","path":"Atom"}}}
@@ -296,6 +298,7 @@ cq_lang_cq::Constraint	{"use":{"id":"cq_syntax::constraint::Constraint","is_glob
 cq_lang_cq::Equality	{"use":{"id":"cq_syntax::equality::Equality","is_glob":false,"name":"Equality","source":"cq_syntax::Equality"}}
 cq_lang_cq::EqualityValue	{"use":{"id":"cq_syntax::equality::EqualityValue","is_glob":false,"name":"EqualityValue","source":"cq_syntax::EqualityValue"}}
 cq_lang_cq::Filter	{"use":{"id":"cq_syntax::Filter","is_glob":false,"name":"Filter","source":"cq_syntax::Filter"}}
+cq_lang_cq::For	{"use":{"id":"cq_syntax::For","is_glob":false,"name":"For","source":"cq_syntax::For"}}
 cq_lang_cq::Let	{"use":{"id":"cq_syntax::Let","is_glob":false,"name":"Let","source":"cq_syntax::Let"}}
 cq_lang_cq::Negation	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_cq::Negation::not_token","cq_lang_cq::Negation::atom"],"has_stripped_fields":false}}}}
 cq_lang_cq::Negation::atom	{"struct_field":{"resolved_path":{"args":null,"id":"cq_syntax::Atom","path":"Atom"}}}

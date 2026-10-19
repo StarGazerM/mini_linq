@@ -164,3 +164,50 @@ fn bounded_string_building_and_recursive_join_keys() {
     assert_eq!(actual.len(), 4);
     assert_eq!(actual, set(reference.word));
 }
+
+#[test]
+fn finite_generators_match_ascent_in_seed_and_recursive_rules() {
+    for seeds in [vec![], vec![(0_i32,), (0,), (2,)]] {
+        let links = [(1_i32, 10_i32), (2, 20), (2, 20), (3, 30), (4, 40)];
+        let (generated, reach, matched) = cq_datalog::datalog! {
+            struct Generated;
+            relation Seed(x:i32) = (&seeds);
+            relation Link(x:i32,y:i32) = (links);
+            relation Generated(x:i32);
+            relation Reach(x:i32);
+            relation Matched(x:i32,y:i32);
+            output Generated, Reach, Matched;
+            Generated(y) :- Seed(x), for y in [*x, *x + 1, *x];
+            Reach(*x) :- Generated(x);
+            Reach(y) :- Reach(x), if *x < 4, for y in [*x + 1, *x + 1];
+            Matched(y,*label) :- Reach(x), for y in [*x + 1, *x + 1], Link(y,label);
+        };
+        ascent::ascent! {
+            struct Reference;
+            relation seed(i32);
+            relation link(i32,i32);
+            relation generated(i32);
+            relation reach(i32);
+            relation matched(i32,i32);
+            generated(y) <-- seed(x), for y in [*x, *x + 1, *x];
+            reach(*x) <-- generated(x);
+            reach(y) <-- reach(x), if *x < 4, for y in [*x + 1, *x + 1];
+            matched(y,*label) <-- reach(x), for y in [*x + 1, *x + 1], link(y,label);
+        }
+        let mut reference = Reference {
+            seed: seeds,
+            link: links.to_vec(),
+            ..Default::default()
+        };
+        reference.run();
+        let generated: Vec<_> = generated.collect();
+        let reach: Vec<_> = reach.collect();
+        let matched: Vec<_> = matched.collect();
+        assert_eq!(generated.len(), set(&generated).len());
+        assert_eq!(reach.len(), set(&reach).len());
+        assert_eq!(matched.len(), set(&matched).len());
+        assert_eq!(set(generated), set(reference.generated));
+        assert_eq!(set(reach), set(reference.reach));
+        assert_eq!(set(matched), set(reference.matched));
+    }
+}

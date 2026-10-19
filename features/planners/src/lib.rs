@@ -27,6 +27,8 @@
 //! written, coarse
 //! written, fine
 //! hypergraph
+//! transfer
+//! le
 //! prefix connected, coarse
 //! prefix connected, fine
 //! prefix greedy, coarse
@@ -65,6 +67,7 @@
 //! | Written | Written clause order; coarse uses full atoms, fine splits each atom in place |
 //! | Hypergraph | Written/coarse plus the full upward/downward Yannakakis reducer when acyclic |
 //! | Transfer | Written/coarse plus robust predicate transfer: forward then backward semijoins along the reduction tree rooted at the stream |
+//! | LE | Written outer/Rust chain, early bound-key lookups in GYO ear order, demand-delayed coarse expansions, Masks reductions |
 //! | Prefix connected | Ready connected atoms before disconnected atoms, then written position |
 //! | Prefix greedy | Connected atoms, then smallest resulting heading width, then written position |
 //! | Elimination | Coarse ranks atoms by elimination variables; fine enumerates the reversed elimination order so connecting variables precede leaf products |
@@ -76,7 +79,7 @@
 //! stay on their base chain. These are deterministic heuristics without
 //! cardinality estimates or complexity claims.
 //!
-//! For library consumers, `Planner::ALL` lists the ten choices.
+//! For library consumers, `Planner::ALL` lists the eleven choices.
 //! `compile_valuation(&cq, planner)` returns complete VO text and
 //! `compile(&cq, planner)` returns RA′. `check_valuation(&cq, &vo, planner)` checks
 //! coverage, granularity, written-order obligations and complete tree reductions.
@@ -87,14 +90,16 @@
 //!
 //! The meaning is the Kleisli composition for `bottom + Set`: when the written
 //! reference returns, a target must return the same set without panic. A panicking
-//! reference admits either target outcome. Rust steps stay opaque and retain their
-//! relative order, free-variable binders and written relational predecessors.
+//! reference admits either target outcome. Rust lets, generators and guards stay
+//! opaque and retain their relative order, free-variable binders and written
+//! relational predecessors. LE completes prior expansions before each Rust step
+//! and leaves generated columns owned by their pattern bindings.
 //! Equality assumes Leibniz identity. Effects and evaluation counts lie outside
 //! this denotation.
 //!
 //! Tests use only the public `cq-testkit` package. They cover all 30 published
-//! scenarios through all ten planners, authored answers and independent CQ/VO/RA′
-//! oracles, 54 pinned VO/RA′ texts, rejected mutations and admitted free rankings,
+//! scenarios through all eleven planners, authored answers and independent CQ/VO/RA′
+//! oracles, pinned VO/RA′ texts, rejected mutations and admitted free rankings,
 //! named and explicit macro pipelines, and 200 deterministic partial Rust seeds
 //! (`0, 2, ..., 398`) executed under every planner against exact written-order
 //! Rust. The seed corpus covers division, remainder, overflow and unwrap in guards,
@@ -105,7 +110,8 @@
 //!
 //! `triangle`, `chain` (the public `oriented_chain` scenario), and `fine_triangle`
 //! are pinned for every planner in `tests/fixtures/`. The two triangle CQ inputs
-//! are identical; each planner's split determines its VO. Fixtures contain complete
+//! are identical; each planner's split determines its VO. LE additionally pins
+//! H05, H09, D72-inner and a recursive fallback block. Fixtures contain complete
 //! canonical token text and are compared byte for byte. An intentional fixture
 //! change can be captured with `cargo run --example pin_plans` and reviewed;
 //! ordinary tests never regenerate fixtures.

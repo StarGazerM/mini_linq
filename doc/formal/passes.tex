@@ -36,7 +36,7 @@ are not in $B$. Fresh $k$ starts at \code{__cq_i_j}. Cases are tried in order:
 \end{mathpar}
 Replace the atom by $\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
 Identities are relational clauses, not guards. Constraints, residual guards and
-lets are copied; branch bodies normalize recursively with fresh names; a
+lets and generators are copied; branch bodies normalize recursively with fresh names; a
 computed head becomes a final typed bind. In \code{R(x,f(x),g())}, the closed
 \code{g()} bind precedes the atom and the dependent \code{f(x)} bind follows it;
 these positions, not Rust argument order, define the written reference.
@@ -46,7 +46,7 @@ identity or a bind at the position Rust would evaluate it, so meanings are equal
 
 \subsection{Ordering: CQ$_{\rm NF}\to$ VO}
 \label{sec:planning-order}
-Let $T$ be let-supplied names and $B_w$ the written prefix. Clause $i$ provides
+Let $T$ be scalar-let- and generator-supplied names and $B_w$ the written prefix. Clause $i$ provides
 $\bar O_i$ and requires $R_i$:
 \begin{mathpar}
 \Rule{D-Atom}{c_i=A(\bar x)}
@@ -58,12 +58,23 @@ $\bar O_i$ and requires $R_i$:
 \Rule{D-Bind}{\bar N=\binds(p)\quad R=\uses(e,B_w)}
  {B_w;T\vdash\mathsf{let}\ p[:\tau]=e\triangleright(\bar N,R)}
 
+\Rule{D-For}{\bar N=\binds(p)\quad R=\uses(e,B_w)}
+ {B_w;T\vdash\mathsf{for}\ p\ \mathsf{in}\ e\triangleright(\bar N,R)}
+
 \Rule{C-Ready}{i\in U\quad R_i\subseteq B\\
  \neg\mathsf{Rust}(c_i)\ \lor\
  (i=\min\{j\in U\mid\mathsf{Rust}(c_j)\}\land
   \operatorname{Before}(i)\cap U=\emptyset)}
  {U;B\vdash i:\mathsf{ready}}
 \end{mathpar}
+Generators are Rust nodes for C-Ready, not atom occurrences or relational
+facts. They share scalar lets' opaque placement: dependencies must be bound,
+all earlier Rust nodes must execute first, and every source Before fact must
+already hold. Later atoms mentioning their outputs are input-dependent access
+patterns, not alternative binders. Incomplete atom checks remain Before
+requirements. Generators cannot be reduction targets, reduction supports or
+independent build targets; a block containing one is not Rust-free.
+This remains true for a closed expression or a generator yielding no names.
 Identities and constraints require their variables and provide none
 (D-Constraint). A Rust-free block provides its free/interface heading; a Rust
 block requires its free names and is Rust. Heuristics repeatedly place the
@@ -297,6 +308,10 @@ fixed occurrence paths.
  p_0=\mathsf{unitize}(p)\quad(D',s)=\emit(D,\operatorname{bind}_{pat[:\tau],e}p_0)}
  {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))}
 
+\Rule{C-For}{\mathsf{step}=\mathsf{For}(pat\ \mathsf{in}\ e)\quad\bar N=\binds(pat)\\
+ p_0=\mathsf{unitize}(p)\quad(D',s)=\emit(D,\operatorname{for}_{pat,e}p_0)}
+ {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))}
+
 \Rule{E-ReduceWith}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{with}\ j\\
  (D',s)=\emit(D,M(i)\ltimes_{\equiv}M(j))}
  {(D,M,p,B)\longrightarrow(D',M[i\mapsto s],p,B)}
@@ -306,7 +321,7 @@ fixed occurrence paths.
  {(D,M,p,B)\Downarrow(D',\mathsf{output}\ r\ \mathsf{as}\ h(\bar e))}
 
 \Rule{E-Constraint}{\vars(C)\subseteq\vars(R)\text{ for a complete earlier binder}\\
- \text{optimizing elaboration; no let-supplied column}}
+ \text{optimizing elaboration; no scalar-let- or generator-supplied column}}
  {C\text{ may select }R\text{ before joining};\quad
   \text{otherwise select the bound prefix}}
 
@@ -607,6 +622,32 @@ scan and filter without building; merge requires \code{OrderedRead}. Rows borrow
 host and built fields; computed columns and lookup keys are owned; canonicality
 never follows from a host type.
 
+\paragraph{Opaque generator realization.}
+Write $I_r$ for the input row stream and $\mathsf{extend}_p(\rho,v)$ for
+destructuring item $v$ and extending the row with the fresh pattern columns.
+The same checked Bind node has the following two realizations:
+\begin{mathpar}
+\Rule{P-For}{\mathsf{Bind}(r,p,e)\text{ carries the \code{for} token}\\
+ \mathsf{scopeOK}\quad\mathsf{preserveBefore}\quad\mathsf{finitePure}(e)}
+ {\mathsf{pull}:
+ I_r.\mathsf{flat\_map}(\rho\mapsto
+ \mathsf{into\_iter}(e(\rho)).\mathsf{map}(v\mapsto\mathsf{extend}_p(\rho,v)))\\
+ \mathsf{push}(k):
+ \mathsf{for}\ \rho\ \mathsf{in}\ I_r\
+ \{\mathsf{for}\ v\ \mathsf{in}\ e(\rho)\
+ \{k(\mathsf{extend}_p(\rho,v));\}\}}
+\end{mathpar}
+Both evaluate the RHS in the input environment, exactly at the opaque step;
+iteration stays inside that step's row scope. Generated item columns have
+the same owned-computed representation as scalar bind columns, while existing
+host references retain their origins. No collector, sorting or deduplication
+is inserted at the generator itself; existing canonical boundaries suffice.
+Absent the token, the scalar printer remains a one-row extension and must not
+call \code{IntoIterator}. A generator is a partial stage boundary, never a
+total kernel merely because its RHS is closed. Rust checks the iterator/item
+and lifetime obligations; the checker preserves the tag, dependencies and
+Before facts, while finite purity remains the host premise.
+
 \subsection{Facade compositions}
 With $N$ normalization, $O_{h,s}$ ordering, $R_{g,r}$ reduction, $E$ elaboration,
 and $S$ checked redundant-support absorption:
@@ -638,6 +679,19 @@ and $S$ checked redundant-support absorption:
 
 \Rule{CK-Transfer}{\mathsf{erase}(t)=v\quad t=\mathsf{transfer}(R_{None,Masks}(v))}
  {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
+
+\Rule{Plan-Le}{n=N(q)\quad v=O_{Written,Coarse}(n)\quad w=R_{None,Masks}(v)\\
+ \text{for each inner occurrence }R\text{ in GYO ear order:}\\
+ \mathsf{lookup}(R)=R(\bar b,\_)\ \text{at the first point its bound key }\bar b\text{ is available}\\
+ \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{at the latest point before }
+ \mathsf{firstUse}(\bar y)\lor\mathsf{Before}\text{ boundary}\lor\text{scope exit}}
+ {\code{cq_planners::order(le)}(q)=E(\mathsf{le}(w))}
+
+\Rule{CK-Le}{\mathsf{erase}(t)=n\quad
+ \forall R.\ \mathsf{lookup}(R)<\mathsf{expand}(R)\ \text{exactly once each}\\
+ \mathsf{columnsOwned}(t)=\mathsf{columnsOwned}(n)\quad \mathsf{outer}(t)=\mathsf{outer}(w)\\
+ \text{WF-VO}(t)\quad \mathsf{check}^{Masks}(t)}
+ {\mathsf{check}^{Le}(q,t)\Downarrow\ok}
 \end{mathpar}
 \code{order(transfer)} is robust predicate transfer (Zhao et al., SIGMOD'25) on
 the written left-deep order, a diverging route through the same public
@@ -653,6 +707,16 @@ exact semijoins, not Bloom filters; they materialize reduced relations, as
 RPT's filter creators do, before the unchanged join phase. Scopes containing
 opaque Rust keep only their Masks reductions: there the structural RA
 correspondence check rejects some sound transfer schedules.
+
+\code{order(le)} is the Lookup \& Expand decomposition of Birler, Kemper and
+Neumann (VLDB'24) as a VO construction: a lookup is a partial subatom that
+introduces no names (a semijoin of the stream prefix), an expansion is the
+later full subatom of the same occurrence. Lookups are placed in GYO ear order
+as soon as their bound key is available, expansions as late as demand, Rust
+Before boundaries or scope exit permit, so acyclic scopes form two-phase plans.
+Expansions are coarse full rows under an explicit CK-Le obligation, not Fine
+subatoms. Whether a later probe reuses the lookup's cursor is a Structures
+representation decision, not part of this plan.
 
 \code{plan} is left-deep in written order and defaults to checked Masks
 reduction: every scope, acyclic or cyclic, reduces its inner clauses along the

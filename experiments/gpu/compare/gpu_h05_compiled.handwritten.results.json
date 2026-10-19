@@ -1,0 +1,510 @@
+[
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 7242,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 0.27353599667549133,
+      "min": 0.2727360129356384
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.4607680141925812,
+      "min": 0.4567680060863495
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.09321600198745728,
+      "min": 0.09318400174379347
+    },
+    "max_expansion_rows": [
+      0,
+      0
+    ],
+    "max_m_over_t": 0.0,
+    "merge_block_limit": 4,
+    "orders_date_bytes": 0,
+    "orders_key_customer_bytes": 3641552,
+    "orders_rows": 227597,
+    "peak_mem_mib": 1028.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "A",
+    "pool_bytes": 938031248,
+    "probe_mode": "point",
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        59,
+        59,
+        59,
+        59,
+        59
+      ],
+      "build_ms": [
+        0.2784000039100647,
+        0.27353599667549133,
+        0.27587199211120605,
+        0.2727360129356384,
+        0.2727360129356384
+      ],
+      "dedup_ms": [
+        0.47539201378822327,
+        0.45875200629234314,
+        0.4607680141925812,
+        0.4720959961414337,
+        0.4567680060863495
+      ],
+      "kernel_ms": [
+        0.0942080020904541,
+        0.09318400174379347,
+        0.09321600198745728,
+        0.09318400174379347,
+        0.0939840003848076
+      ],
+      "peak_bytes": [
+        270072252,
+        270072252,
+        270072252,
+        270072252,
+        270072252
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ]
+      ],
+      "total_ms": [
+        0.8479999899864197,
+        0.8254719972610474,
+        0.8298559784889221,
+        0.8380159735679626,
+        0.8234879970550537
+      ]
+    },
+    "scan_gbps": 1030.074643331302,
+    "sf": 1,
+    "smem": 9216,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 0.8298559784889221,
+      "min": 0.8234879970550537
+    },
+    "unfiltered_orders": false,
+    "warmups": 1,
+    "kernel_resources": {
+      "stack_bytes": 0,
+      "spill_stores_bytes": 0,
+      "spill_loads_bytes": 0,
+      "registers": 36
+    },
+    "comparison_note": "Fresh rebuild with the shared context-scoped blocked-run code-module cache; historical hand-written results remain in gpu_h05.results.json."
+  },
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 7242,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 0.8312000036239624,
+      "min": 0.8258879780769348
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.46323201060295105,
+      "min": 0.45772799849510193
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.043007999658584595,
+      "min": 0.040991999208927155
+    },
+    "max_expansion_rows": [
+      413,
+      1660
+    ],
+    "max_m_over_t": 1.62109375,
+    "merge_block_limit": 4,
+    "orders_date_bytes": 0,
+    "orders_key_customer_bytes": 3641552,
+    "orders_rows": 227597,
+    "peak_mem_mib": 1028.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "B",
+    "pool_bytes": 938031248,
+    "probe_mode": "point",
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        75,
+        75,
+        75,
+        75,
+        75
+      ],
+      "build_ms": [
+        0.8312000036239624,
+        0.8349440097808838,
+        0.8282880187034607,
+        0.8258879780769348,
+        0.8330879807472229
+      ],
+      "dedup_ms": [
+        0.4689919948577881,
+        0.46297600865364075,
+        0.45772799849510193,
+        0.4669440090656281,
+        0.46323201060295105
+      ],
+      "kernel_ms": [
+        0.04198399931192398,
+        0.043007999658584595,
+        0.043007999658584595,
+        0.043007999658584595,
+        0.040991999208927155
+      ],
+      "peak_bytes": [
+        439948140,
+        439948140,
+        439948140,
+        439948140,
+        439948140
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ]
+      ],
+      "total_ms": [
+        1.3421759605407717,
+        1.3409279584884644,
+        1.3290239572525024,
+        1.3358399868011477,
+        1.3373119831085205
+      ]
+    },
+    "scan_gbps": null,
+    "sf": 1,
+    "smem": 33808,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 1.3373119831085205,
+      "min": 1.3290239572525024
+    },
+    "unfiltered_orders": false,
+    "warmups": 1,
+    "kernel_resources": {
+      "stack_bytes": 0,
+      "spill_stores_bytes": 0,
+      "spill_loads_bytes": 0,
+      "registers": 34
+    },
+    "comparison_note": "Fresh rebuild with the shared context-scoped blocked-run code-module cache; historical hand-written results remain in gpu_h05.results.json."
+  },
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 72983,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 2.335871934890747,
+      "min": 2.3340160846710205
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.47513601183891296,
+      "min": 0.4700160026550293
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.9429119825363159,
+      "min": 0.9400320053100586
+    },
+    "max_expansion_rows": [
+      0,
+      0
+    ],
+    "max_m_over_t": 0.0,
+    "merge_block_limit": 4,
+    "orders_date_bytes": 0,
+    "orders_key_customer_bytes": 36414704,
+    "orders_rows": 2275919,
+    "peak_mem_mib": 9722.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "A",
+    "pool_bytes": 8841377160,
+    "probe_mode": "point",
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        61,
+        61,
+        61,
+        61,
+        61
+      ],
+      "build_ms": [
+        2.3376638889312744,
+        2.3340160846710205,
+        2.3344318866729736,
+        2.335871934890747,
+        2.343935966491699
+      ],
+      "dedup_ms": [
+        0.5223360061645508,
+        0.4833280146121979,
+        0.47411200404167175,
+        0.4700160026550293,
+        0.47513601183891296
+      ],
+      "kernel_ms": [
+        0.9400320053100586,
+        0.9431040287017822,
+        0.9429119825363159,
+        0.942080020904541,
+        0.9431040287017822
+      ],
+      "peak_bytes": [
+        2700094932,
+        2700094932,
+        2700094932,
+        2700094932,
+        2700094932
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ],
+        [
+          "customer",
+          "supplier",
+          "orders_by_order"
+        ]
+      ],
+      "total_ms": [
+        3.800031900405884,
+        3.7604479789733887,
+        3.7514560222625732,
+        3.7479679584503174,
+        3.762176036834717
+      ]
+    },
+    "scan_gbps": 1017.8859212482588,
+    "sf": 10,
+    "smem": 9216,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 3.7604479789733887,
+      "min": 3.7479679584503174
+    },
+    "unfiltered_orders": false,
+    "warmups": 1,
+    "kernel_resources": {
+      "stack_bytes": 0,
+      "spill_stores_bytes": 0,
+      "spill_loads_bytes": 0,
+      "registers": 36
+    },
+    "comparison_note": "Fresh rebuild with the shared context-scoped blocked-run code-module cache; historical hand-written results remain in gpu_h05.results.json."
+  },
+  {
+    "allocation_scope": "iteration including exactness readback copies; peak bytes includes persistent outputs, excludes input uploads",
+    "answer_count": 72983,
+    "bandwidth_model_gbps": 960,
+    "build_algorithm": "device-detected sorted adjacency or bitmap-word prefix counting sort with stable provenance heapsort",
+    "build_ms": {
+      "median": 8.416511535644531,
+      "min": 8.410367965698242
+    },
+    "dedup_algorithm": "exact packed-triple u64 CAS set",
+    "dedup_ms": {
+      "median": 0.48025599122047424,
+      "min": 0.47494399547576904
+    },
+    "exact": true,
+    "expansion_policy": "fixed-depth in-tile loop; no cross-block stealing",
+    "frontier_spill_required": false,
+    "kernel_ms": {
+      "median": 0.30432000756263733,
+      "min": 0.3038719892501831
+    },
+    "max_expansion_rows": [
+      407,
+      1643
+    ],
+    "max_m_over_t": 1.6044921875,
+    "merge_block_limit": 4,
+    "orders_date_bytes": 0,
+    "orders_key_customer_bytes": 36414704,
+    "orders_rows": 2275919,
+    "peak_mem_mib": 9722.0,
+    "peak_mem_scope": "cuMemGetInfo sampled after combined build metadata and dedup submission; includes reserved pool",
+    "plan": "B",
+    "pool_bytes": 8841377160,
+    "probe_mode": "point",
+    "regs": null,
+    "runs": 5,
+    "samples": {
+      "allocation_count": [
+        77,
+        77,
+        77,
+        77,
+        77
+      ],
+      "build_ms": [
+        8.425760269165039,
+        8.413503646850586,
+        8.416511535644531,
+        8.691807746887207,
+        8.410367965698242
+      ],
+      "dedup_ms": [
+        0.4763840138912201,
+        0.48025599122047424,
+        0.47494399547576904,
+        0.48230400681495667,
+        0.4853760004043579
+      ],
+      "kernel_ms": [
+        0.3038719892501831,
+        0.3051519989967346,
+        0.30432000756263733,
+        0.3041279911994934,
+        0.30617600679397583
+      ],
+      "peak_bytes": [
+        4398164192,
+        4398164192,
+        4398164192,
+        4398164192,
+        4398164192
+      ],
+      "sorted_builds": [
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ],
+        [
+          "customer",
+          "supplier",
+          "lineitem"
+        ]
+      ],
+      "total_ms": [
+        9.206015586853027,
+        9.198911666870117,
+        9.195775985717773,
+        9.478240013122559,
+        9.201919555664062
+      ]
+    },
+    "scan_gbps": null,
+    "sf": 10,
+    "smem": 33808,
+    "sorted_path": "GPU adjacent-key nondecreasing check; device-gated histogram/scatter/heapsort; sorted adjacency builds bitmap and CSR",
+    "spills": null,
+    "total_ms": {
+      "median": 9.201919555664062,
+      "min": 9.195775985717773
+    },
+    "unfiltered_orders": false,
+    "warmups": 1,
+    "kernel_resources": {
+      "stack_bytes": 0,
+      "spill_stores_bytes": 0,
+      "spill_loads_bytes": 0,
+      "registers": 34
+    },
+    "comparison_note": "Fresh rebuild with the shared context-scoped blocked-run code-module cache; historical hand-written results remain in gpu_h05.results.json."
+  }
+]

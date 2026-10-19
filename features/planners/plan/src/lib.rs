@@ -28,7 +28,9 @@ use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Token};
 
-/// The ten supported planning passes. Ranking selects written IR at compile
+mod le;
+
+/// The eleven supported planning passes. Ranking selects written IR at compile
 /// time; it introduces no configuration carried into execution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Planner {
@@ -40,6 +42,8 @@ pub enum Planner {
     /// left-deep order: forward then backward semijoin transfer along the
     /// reduction tree rooted at the outer stream, before the join phase.
     Transfer,
+    /// Lookup early, expand full correlated rows at first demand, with Masks.
+    Le,
     PrefixConnectedCoarse,
     PrefixConnectedFine,
     PrefixGreedyCoarse,
@@ -49,11 +53,12 @@ pub enum Planner {
 }
 
 impl Planner {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::WrittenCoarse,
         Self::WrittenFine,
         Self::Hypergraph,
         Self::Transfer,
+        Self::Le,
         Self::PrefixConnectedCoarse,
         Self::PrefixConnectedFine,
         Self::PrefixGreedyCoarse,
@@ -68,6 +73,7 @@ impl Planner {
             Self::WrittenFine => "written_fine",
             Self::Hypergraph => "hypergraph",
             Self::Transfer => "transfer",
+            Self::Le => "le",
             Self::PrefixConnectedCoarse => "prefix_connected_coarse",
             Self::PrefixConnectedFine => "prefix_connected_fine",
             Self::PrefixGreedyCoarse => "prefix_greedy_coarse",
@@ -80,7 +86,7 @@ impl Planner {
     fn ordering(self) -> Options {
         // Formal rule Plan-Generic: Written/Fine records variable-at-a-time valuation steps.
         let (heuristic, split) = match self {
-            Self::WrittenCoarse | Self::Hypergraph | Self::Transfer => {
+            Self::WrittenCoarse | Self::Hypergraph | Self::Transfer | Self::Le => {
                 (Heuristic::Written, Split::Coarse)
             }
             Self::WrittenFine => (Heuristic::Written, Split::Fine),
@@ -107,7 +113,7 @@ impl Planner {
                 cq_reduce::Reductions::Hypergraph
             } else if self == Self::Hypergraph && cq::hypergraph::Analysis::of(source).acyclic {
                 cq_reduce::Reductions::Tree
-            } else if self == Self::Transfer {
+            } else if matches!(self, Self::Transfer | Self::Le) {
                 // The forward pass into the stream and the backward pass are
                 // added to the stream scope by `transfer`.
                 cq_reduce::Reductions::Masks
@@ -130,6 +136,9 @@ impl Parse for Planner {
         if kind == "transfer" {
             return Ok(Self::Transfer);
         }
+        if kind == "le" {
+            return Ok(Self::Le);
+        }
         let ranking = if kind == "prefix" {
             let ranking: Ident = input.parse()?;
             match ranking.to_string().as_str() {
@@ -147,7 +156,7 @@ impl Parse for Planner {
         } else {
             return Err(syn::Error::new_spanned(
                 kind,
-                "expected written, hypergraph, transfer, prefix, or elimination",
+                "expected written, hypergraph, transfer, le, prefix, or elimination",
             ));
         };
         input.parse::<Token![,]>()?;
@@ -178,6 +187,7 @@ impl ToTokens for Planner {
             Self::WrittenFine => quote!(written, fine),
             Self::Hypergraph => quote!(hypergraph),
             Self::Transfer => quote!(transfer),
+            Self::Le => quote!(le),
             Self::PrefixConnectedCoarse => quote!(prefix connected, coarse),
             Self::PrefixConnectedFine => quote!(prefix connected, fine),
             Self::PrefixGreedyCoarse => quote!(prefix greedy, coarse),
@@ -195,6 +205,11 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
     let ordering = planner.ordering();
     let ordered = cq_order::compile(&normal, &ordering)?;
     cq_order::check(&normal, &ordered, &ordering)?;
+    let ordered = if planner == Planner::Le {
+        le::compile(&ordered)?
+    } else {
+        ordered
+    };
     let reductions = planner.reductions(&normal);
     let reduced = cq_reduce::compile(&ordered, &reductions)?;
     cq_reduce::check(&ordered, &reduced, &reductions)?;
@@ -223,9 +238,12 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
     // correspondence check rejects some sound transfer schedules (a backward
     // reduction by a support already reduced by its target, with split
     // projected reads; fuzz seeds 91 and 97: "projection correlations differ").
-    let opaque = steps
-        .iter()
-        .any(|step| matches!(step, vo::Step::Guard(..) | vo::Step::Let(..)));
+    let opaque = steps.iter().any(|step| {
+        matches!(
+            step,
+            vo::Step::Guard(..) | vo::Step::Let(..) | vo::Step::For(..)
+        )
+    });
     let Some(root) = cq_reduce::outer(steps, &graph).filter(|_| !opaque) else {
         return Ok(reduced.clone());
     };
@@ -331,7 +349,11 @@ pub fn check_valuation(
         });
     }
     erase_reductions(&mut erased.valuation.steps);
-    cq_order::check(&normal, &erased, &planner.ordering())?;
+    if planner == Planner::Le {
+        le::check(&normal, &erased)?;
+    } else {
+        cq_order::check(&normal, &erased, &planner.ordering())?;
+    }
     if planner == Planner::Transfer {
         // Formal rule CK-Transfer: The transfer schedule equals the one recomputed from the erased plan.
         let reductions = planner.reductions(&normal);
@@ -448,6 +470,14 @@ fn written_steps(
             cq::BodyItem::Let(b) => {
                 bound.extend(cq::rust::bindings(&b.pattern).iter().map(cq::symbol_name));
                 vo::Step::Let(b.clone(), Default::default())
+            }
+            cq::BodyItem::For(generator) => {
+                bound.extend(
+                    cq::rust::bindings(&generator.pattern)
+                        .iter()
+                        .map(cq::symbol_name),
+                );
+                vo::Step::For(generator.clone(), Default::default())
             }
             _ => unreachable!("checked CQ normal form"),
         });

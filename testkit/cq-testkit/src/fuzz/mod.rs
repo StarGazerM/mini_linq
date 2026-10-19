@@ -1,8 +1,10 @@
 //! Seeded abstract queries and independent MiniLinq/SQL printers.
 //!
 //! This module never compiles or executes generated MiniLinq. The total lane
-//! has SQL semantics over bounded integers; partial terms use executable
-//! written-order refinement. Coverage counts properties once per case.
+//! has SQL semantics over bounded integers; partial terms and finite Rust
+//! generators use executable written-order refinement. Generators stay in the
+//! existing binding schedule, including dependency-aware minimization and scope
+//! checks. Coverage counts properties once per case.
 
 mod model;
 mod sql;
@@ -28,6 +30,14 @@ pub const FEATURE_TAGS: &[&str] = &[
     "arithmetic-guard",
     "boolean-guard",
     "arithmetic-let",
+    "for",
+    "for-range",
+    "for-inclusive-range",
+    "for-duplicates",
+    "for-empty",
+    "for-iterator-panic",
+    "partial-for",
+    "nested-for",
     "computed-head",
     "repeated-head-variable",
     "disconnected",

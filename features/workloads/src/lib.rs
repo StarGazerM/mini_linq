@@ -43,6 +43,8 @@
 //! cargo run -p cq-xtask --features oracle -- bench
 //! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 0.1
 //! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1
+//! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1 --runs 5 --config le
+//! cargo run -p cq-xtask --features oracle -- bench --tpch --sf 1 --runs 5 --config le_runs
 //! ```
 //!
 //! From the repository root: `python3 tools/check_external.py`.
